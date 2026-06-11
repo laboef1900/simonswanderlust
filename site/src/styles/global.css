@@ -1,3 +1,11 @@
+/*
+ * Tailwind 4 note: @theme tokens are only emitted into :root when some
+ * compiled class references them — a token "missing" from built CSS just
+ * means nothing uses it yet.
+ * Token semantics: navy = brand/structure (headings, borders, dark bands);
+ * ink = body text; canvas = page background; brand-red = accent/CTAs;
+ * brand-red-light = accent on dark/photo backgrounds.
+ */
 @import 'tailwindcss';
 @plugin '@tailwindcss/typography';
 
