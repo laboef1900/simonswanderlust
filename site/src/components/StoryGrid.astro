@@ -1,14 +1,20 @@
 ---
 import StoryCard from './StoryCard.astro';
-import type { Trip } from '../lib/trips';
+import { entryNumberOf, type Trip } from '../lib/trips';
 
 interface Props {
   trips: Trip[];
+  /** Full locale trip set used for chronological numbering; defaults to `trips`. */
+  numberingPool?: Trip[];
 }
 
-const { trips } = Astro.props;
+const { trips, numberingPool = trips } = Astro.props;
 ---
 
 <div class="grid auto-rows-[240px] gap-4 md:grid-cols-3">
-  {trips.map((trip, i) => <StoryCard trip={trip} featured={i === 0} />)}
+  {
+    trips.map((trip, i) => (
+      <StoryCard trip={trip} featured={i === 0} number={entryNumberOf(trip, numberingPool)} />
+    ))
+  }
 </div>

@@ -1,17 +1,21 @@
 ---
 import { Image } from 'astro:assets';
-import { dateLabel } from '../lib/format';
+import { dateLabel, entryLabel } from '../lib/format';
 import { localeOf, pathOf, type Trip } from '../lib/trips';
 
 interface Props {
   trip: Trip;
   /** Large card spanning 2 columns/rows in the grid. */
   featured?: boolean;
+  /** Chronological entry number (from entryNumberOf); omits the N° prefix when absent. */
+  number?: number;
 }
 
-const { trip, featured = false } = Astro.props;
+const { trip, featured = false, number } = Astro.props;
 const locale = localeOf(trip);
-const label = `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
+const label = [number !== undefined ? entryLabel(number) : null, `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`]
+  .filter(Boolean)
+  .join(' — ');
 ---
 
 <a
@@ -30,7 +34,7 @@ const label = `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
   />
   <div class="absolute inset-0 bg-gradient-to-t from-navy/80 via-navy/10 to-transparent"></div>
   <div class="absolute right-0 bottom-0 left-0 p-5 text-white">
-    <p class="text-[11px] font-semibold tracking-[0.2em] text-brand-red-light uppercase">{label}</p>
+    <p class="font-mono text-[11px] font-semibold tracking-[0.2em] text-brand-red-light uppercase">{label}</p>
     <h3 class:list={['mt-1 font-extrabold', featured ? 'text-2xl' : 'text-lg']}>
       {trip.data.title}
     </h3>

@@ -1,5 +1,6 @@
 ---
 import { getCollection } from 'astro:content';
+import Contours from './Contours.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
 import { aboutPath } from '../lib/paths';
 import { byLocale, pathOf } from '../lib/trips';
@@ -13,8 +14,9 @@ const t = useTranslations(locale);
 const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
 ---
 
-<footer class="bg-navy text-white">
-  <div class="mx-auto grid max-w-6xl gap-8 px-5 py-10 sm:grid-cols-3">
+<footer class="relative overflow-hidden bg-navy text-white">
+  <Contours />
+  <div class="relative mx-auto grid max-w-6xl gap-8 px-5 py-10 sm:grid-cols-3">
     <div>
       <p class="text-sm font-extrabold tracking-wide uppercase">{t('site.title')}</p>
       <p class="mt-1 text-sm text-white/60">{t('site.tagline')}</p>

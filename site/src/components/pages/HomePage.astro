@@ -4,10 +4,11 @@ import Base from '../../layouts/Base.astro';
 import FeaturedHero from '../FeaturedHero.astro';
 import MapTeaser from '../MapTeaser.astro';
 import RegionFilter from '../RegionFilter.astro';
+import RouteDivider from '../RouteDivider.astro';
 import StoryGrid from '../StoryGrid.astro';
 import { useTranslations, type Locale } from '../../i18n/ui';
 import { aboutPath } from '../../lib/paths';
-import { byLocale } from '../../lib/trips';
+import { byLocale, entryNumberOf } from '../../lib/trips';
 
 interface Props {
   locale: Locale;
@@ -25,7 +26,7 @@ const [featured, ...rest] = trips;
   locale={locale}
   alternates={{ de: '/', en: '/en/' }}
 >
-  {featured && <FeaturedHero trip={featured} />}
+  {featured && <FeaturedHero trip={featured} number={entryNumberOf(featured, trips)} />}
   <MapTeaser locale={locale} />
   <section id="stories" class="mx-auto max-w-6xl px-5 py-14">
     <div class="flex flex-wrap items-baseline justify-between gap-4">
@@ -34,10 +35,11 @@ const [featured, ...rest] = trips;
     </div>
     <div class="mt-6">
       {/* Single-story locale: grid repeats the hero story — duplicate beats an empty grid during migration. */}
-      <StoryGrid trips={rest.length > 0 ? rest : trips} />
+      <StoryGrid trips={rest.length > 0 ? rest : trips} numberingPool={trips} />
     </div>
   </section>
-  <section class="border-t border-navy/10">
+  <RouteDivider />
+  <section class="">
     <div class="mx-auto max-w-3xl px-5 py-14 text-center">
       <h2 class="text-xl font-extrabold text-navy">{t('nav.about')}</h2>
       <p class="mt-3 text-ink/80">{t('home.aboutTeaser.text')}</p>
