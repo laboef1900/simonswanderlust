@@ -1,0 +1,11 @@
+@import 'tailwindcss';
+@plugin '@tailwindcss/typography';
+
+@theme {
+  --color-canvas: #fbfbfd;
+  --color-navy: #142a42;
+  --color-ink: #16212e;
+  --color-brand-red: #d23b30;
+  --color-brand-red-light: #ff5a4e;
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+}
