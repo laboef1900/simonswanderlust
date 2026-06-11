@@ -66,7 +66,7 @@ Locale model: German is the default locale at root (no prefix); English under `/
 
 | Concern | Choice |
 |---|---|
-| Framework | Astro 5.x, static output |
+| Framework | Astro 6.x, static output (June 2026: create-astro ships v6; verified compatible with this design — content layer API, i18n config, MDX/RSS/sitemap all unchanged for our usage) |
 | Content | Astro content collections, MDX, zod-typed frontmatter |
 | Styling | Tailwind CSS 4 |
 | Interactivity | MapLibre GL JS as the only JS island (map page + mini-maps); everything else zero-JS |

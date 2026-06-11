@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A deployable Astro 5 skeleton of the new simonswanderlust.com — design system, DE/EN i18n, content model, home/story/region/about pages — rendering sample content with the approved editorial-magazine design.
+**Goal:** A deployable Astro skeleton of the new simonswanderlust.com — design system, DE/EN i18n, content model, home/story/region/about pages — rendering sample content with the approved editorial-magazine design.
+
+> **Version note (Task 1 outcome):** create-astro installed **Astro 6**, not 5. Reviewed against the v6 breaking-changes list and accepted: this plan already uses the v6 content layer API (`src/content.config.ts`, glob loader, `render(entry)`), the i18n config (`prefixDefaultLocale: false`) is unaffected, `image()` schema and mdx/rss/sitemap are unchanged. Requires Node ≥22.12 (local: v26). All "Astro 5" references below read as "Astro 6".
 
 **Architecture:** Static Astro 5 site in `site/` (repo subfolder). Content lives in MDX content collections (`src/content/trips/{de,en}/<slug>.mdx`), one file per trip per language, paired via `translationKey`. German is the default locale at root URLs; English under `/en/`. Shared page components (`HomePage`, `StoryPage`, …) render both locales so DE/EN can never drift apart. Zero client JavaScript in this phase (map island comes in Phase 3).
 
