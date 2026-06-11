@@ -32,6 +32,7 @@ const de = {
   'about.title': 'Über mich',
   'notFound.title': 'Seite nicht gefunden',
   'notFound.home': 'Zur Startseite',
+  'regions.filterLabel': 'Nach Region filtern',
 } as const;
 
 export type UIKey = keyof typeof de;
@@ -66,6 +67,7 @@ const en: Record<UIKey, string> = {
   'about.title': 'About me',
   'notFound.title': 'Page not found',
   'notFound.home': 'Back to home',
+  'regions.filterLabel': 'Filter by region',
 };
 
 export const ui: Record<Locale, Record<UIKey, string>> = { de, en };

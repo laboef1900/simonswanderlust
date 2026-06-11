@@ -1,0 +1,38 @@
+---
+import { Image } from 'astro:assets';
+import { dateLabel } from '../lib/format';
+import { localeOf, pathOf, type Trip } from '../lib/trips';
+
+interface Props {
+  trip: Trip;
+  /** Large card spanning 2 columns/rows in the grid. */
+  featured?: boolean;
+}
+
+const { trip, featured = false } = Astro.props;
+const locale = localeOf(trip);
+const label = `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
+---
+
+<a
+  href={pathOf(trip)}
+  class:list={[
+    'group relative block overflow-hidden rounded-lg',
+    featured ? 'md:col-span-2 md:row-span-2' : '',
+  ]}
+>
+  <Image
+    src={trip.data.heroImage}
+    alt={trip.data.title}
+    widths={[480, 768, 1200]}
+    sizes={featured ? '(min-width: 768px) 66vw, 100vw' : '(min-width: 768px) 33vw, 100vw'}
+    class="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+  />
+  <div class="absolute inset-0 bg-gradient-to-t from-navy/80 via-navy/10 to-transparent"></div>
+  <div class="absolute right-0 bottom-0 left-0 p-5 text-white">
+    <p class="text-[11px] font-semibold tracking-[0.2em] text-brand-red-light uppercase">{label}</p>
+    <h3 class:list={['mt-1 font-extrabold', featured ? 'text-2xl' : 'text-lg']}>
+      {trip.data.title}
+    </h3>
+  </div>
+</a>

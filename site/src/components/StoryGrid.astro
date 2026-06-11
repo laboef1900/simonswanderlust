@@ -1,0 +1,14 @@
+---
+import StoryCard from './StoryCard.astro';
+import type { Trip } from '../lib/trips';
+
+interface Props {
+  trips: Trip[];
+}
+
+const { trips } = Astro.props;
+---
+
+<div class="grid auto-rows-[240px] gap-4 md:grid-cols-3">
+  {trips.map((trip, i) => <StoryCard trip={trip} featured={i === 0} />)}
+</div>
