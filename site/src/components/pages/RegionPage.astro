@@ -27,7 +27,7 @@ const alternates = region
   <section class="mx-auto max-w-6xl px-5 py-14">
     <div class="flex flex-wrap items-baseline justify-between gap-4">
       <h1 class="text-3xl font-extrabold text-navy">{title}</h1>
-      <RegionFilter locale={locale} active={region} />
+      <RegionFilter locale={locale} active={region} allHref={regionsIndexPath(locale)} />
     </div>
     <div class="mt-6">
       <StoryGrid trips={trips} />

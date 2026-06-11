@@ -5,9 +5,11 @@ import { homePath, regionPath, regions, type Region } from '../lib/paths';
 interface Props {
   locale: Locale;
   active?: Region;
+  /** Where the "All" chip points; defaults to the home story grid. */
+  allHref?: string;
 }
 
-const { locale, active } = Astro.props;
+const { locale, active, allHref = homePath(locale) + '#stories' } = Astro.props;
 const t = useTranslations(locale);
 
 const chip = 'rounded-full border px-3 py-1 text-sm';
@@ -17,7 +19,7 @@ const off = 'border-navy/20 text-ink/70 hover:border-brand-red hover:text-brand-
 
 <nav aria-label={t('regions.filterLabel')} class="flex flex-wrap gap-2">
   <a
-    href={homePath(locale) + '#stories'}
+    href={allHref}
     aria-current={!active ? 'page' : undefined}
     class:list={[chip, active ? off : on]}
   >

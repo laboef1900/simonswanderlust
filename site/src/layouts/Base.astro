@@ -3,7 +3,7 @@ import '@fontsource-variable/inter';
 import '../styles/global.css';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
-import type { Locale } from '../i18n/ui';
+import { useTranslations, type Locale } from '../i18n/ui';
 
 interface Props {
   title: string;
@@ -14,6 +14,7 @@ interface Props {
 }
 
 const { title, description, locale, alternates } = Astro.props;
+const t = useTranslations(locale);
 const site = Astro.site ?? new URL('https://simonswanderlust.com');
 ---
 
@@ -22,14 +23,14 @@ const site = Astro.site ?? new URL('https://simonswanderlust.com');
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{title} – Simon's Wanderlust</title>
+    <title>{title} – {t('site.title')}</title>
     <meta name="description" content={description} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link
       rel="alternate"
       type="application/rss+xml"
       href={locale === 'en' ? '/en/rss.xml' : '/rss.xml'}
-      title="Simon's Wanderlust"
+      title={t('site.title')}
     />
     <link rel="canonical" href={new URL(Astro.url.pathname, site)} />
     {
