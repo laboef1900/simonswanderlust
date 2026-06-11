@@ -6,6 +6,6 @@ const intlLocale: Record<Locale, string> = { de: 'de-DE', en: 'en-US' };
 export function dateLabel(date: Date, locale: Locale): string {
   return date
     .toLocaleDateString(intlLocale[locale], { month: 'short', year: 'numeric' })
-    .replace('.', '')
+    .replace(/\./g, '')
     .toUpperCase();
 }

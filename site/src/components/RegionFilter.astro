@@ -16,12 +16,20 @@ const off = 'border-navy/20 text-ink/70 hover:border-brand-red hover:text-brand-
 ---
 
 <nav aria-label={t('regions.filterLabel')} class="flex flex-wrap gap-2">
-  <a href={homePath(locale) + '#stories'} class:list={[chip, active ? off : on]}>
+  <a
+    href={homePath(locale) + '#stories'}
+    aria-current={!active ? 'page' : undefined}
+    class:list={[chip, active ? off : on]}
+  >
     {t('home.filter.all')}
   </a>
   {
     regions.map((region) => (
-      <a href={regionPath(region, locale)} class:list={[chip, active === region ? on : off]}>
+      <a
+        href={regionPath(region, locale)}
+        aria-current={active === region ? 'page' : undefined}
+        class:list={[chip, active === region ? on : off]}
+      >
         {t(`region.${region}` as UIKey)}
       </a>
     ))
