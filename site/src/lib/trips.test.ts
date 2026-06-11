@@ -29,6 +29,12 @@ describe('trips helpers', () => {
     ]);
   });
 
+  it('equal-date entries keep stable input order', () => {
+    const a = fake('de/aaa', '2021-07-25', 'a');
+    const b = fake('de/bbb', '2021-07-25', 'b');
+    expect(byLocale([b, a], 'de').map((t) => t.id)).toEqual(['de/bbb', 'de/aaa']);
+  });
+
   it('finds the translation pair via translationKey', () => {
     expect(translationOf(rhodesDe, all)?.id).toBe('en/sun-and-adventure-on-rhodes');
     expect(translationOf(buchDe, all)).toBeUndefined();

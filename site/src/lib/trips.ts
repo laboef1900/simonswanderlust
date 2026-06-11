@@ -4,9 +4,12 @@ import type { Locale } from '../i18n/ui';
 export type Trip = CollectionEntry<'trips'>;
 
 export function localeOf(trip: Trip): Locale {
+  // Two-locale design: 'en/' prefix → EN, everything else → DE.
+  // If a third locale is ever added, update this function and the Locale union first.
   return trip.id.startsWith('en/') ? 'en' : 'de';
 }
 
+/** Strips the leading locale segment from a glob-loader entry id (e.g. 'de/slug' → 'slug'). */
 export function slugOf(trip: Trip): string {
   return trip.id.replace(/^(de|en)\//, '');
 }
