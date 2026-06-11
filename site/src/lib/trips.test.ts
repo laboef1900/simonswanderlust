@@ -47,4 +47,8 @@ describe('entryNumberOf', () => {
     expect(entryNumberOf(buchDe, all)).toBe(2);
     expect(entryNumberOf(rhodesEn, all)).toBe(1);
   });
+
+  it('returns 0 when the trip is missing from the pool', () => {
+    expect(entryNumberOf(rhodesDe, [buchDe])).toBe(0);
+  });
 });
