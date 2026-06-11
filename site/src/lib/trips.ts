@@ -31,3 +31,9 @@ export function translationOf(trip: Trip, all: Trip[]): Trip | undefined {
     (t) => t.data.translationKey === trip.data.translationKey && localeOf(t) !== localeOf(trip),
   );
 }
+
+/** 1-based chronological number (oldest = 1) of a trip within its locale's set. */
+export function entryNumberOf(trip: Trip, all: Trip[]): number {
+  const siblings = byLocale(all, localeOf(trip));
+  return siblings.length - siblings.findIndex((t) => t.id === trip.id);
+}

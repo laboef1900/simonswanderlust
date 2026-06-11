@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { byLocale, localeOf, pathOf, slugOf, translationOf, type Trip } from './trips';
+import { byLocale, entryNumberOf, localeOf, pathOf, slugOf, translationOf, type Trip } from './trips';
 
 function fake(id: string, date: string, translationKey: string): Trip {
   return { id, data: { date: new Date(date), translationKey } } as unknown as Trip;
@@ -38,5 +38,13 @@ describe('trips helpers', () => {
   it('finds the translation pair via translationKey', () => {
     expect(translationOf(rhodesDe, all)?.id).toBe('en/sun-and-adventure-on-rhodes');
     expect(translationOf(buchDe, all)).toBeUndefined();
+  });
+});
+
+describe('entryNumberOf', () => {
+  it('numbers chronologically, oldest = 1, within the trip locale', () => {
+    expect(entryNumberOf(rhodesDe, all)).toBe(1);
+    expect(entryNumberOf(buchDe, all)).toBe(2);
+    expect(entryNumberOf(rhodesEn, all)).toBe(1);
   });
 });

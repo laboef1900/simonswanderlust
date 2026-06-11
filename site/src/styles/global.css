@@ -16,4 +16,5 @@
   --color-brand-red: #d23b30;
   --color-brand-red-light: #ff5a4e;
   --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
 }

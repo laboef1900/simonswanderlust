@@ -34,6 +34,10 @@ const de = {
   'notFound.title': 'Seite nicht gefunden',
   'notFound.home': 'Zur Startseite',
   'regions.filterLabel': 'Nach Region filtern',
+  'story.stamp': 'EINREISE',
+  'stats.trips': 'REISEN',
+  'stats.countries': 'LÄNDER',
+  'stats.continents': 'KONTINENTE',
 } as const;
 
 export type UIKey = keyof typeof de;
@@ -70,6 +74,10 @@ const en: Record<UIKey, string> = {
   'notFound.title': 'Page not found',
   'notFound.home': 'Back to home',
   'regions.filterLabel': 'Filter by region',
+  'story.stamp': 'ARRIVED',
+  'stats.trips': 'TRIPS',
+  'stats.countries': 'COUNTRIES',
+  'stats.continents': 'CONTINENTS',
 };
 
 export const ui: Record<Locale, Record<UIKey, string>> = { de, en };

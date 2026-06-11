@@ -23,6 +23,7 @@
   "devDependencies": {
     "@astrojs/check": "^0.9.9",
     "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource/ibm-plex-mono": "^5.2.7",
     "@tailwindcss/typography": "^0.5.20",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
