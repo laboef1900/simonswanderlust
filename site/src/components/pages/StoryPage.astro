@@ -81,10 +81,12 @@ const label = `${entryLabel(number)} — ${dateLabel(trip.data.date, locale)} ·
       <Content />
     </article>
 
-    <RouteDivider />
+    <div class="mt-12">
+      <RouteDivider />
+    </div>
     <nav
       aria-label={t('story.pagination')}
-      class="mt-12 flex justify-between gap-4 text-sm"
+      class="mt-10 flex justify-between gap-4 text-sm"
     >
       <span>
         {
