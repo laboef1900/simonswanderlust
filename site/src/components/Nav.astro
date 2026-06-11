@@ -17,7 +17,7 @@ const t = useTranslations(locale);
     <a href={homePath(locale)} class="text-sm font-extrabold tracking-wide text-navy uppercase">
       {t('site.title')}
     </a>
-    <nav class="flex items-center gap-5 text-sm">
+    <nav aria-label={t('nav.ariaLabel')} class="flex items-center gap-5 text-sm">
       <a href={homePath(locale) + '#stories'} class="hover:text-brand-red">{t('nav.stories')}</a>
       <a href={aboutPath(locale)} class="hover:text-brand-red">{t('nav.about')}</a>
       <LangSwitcher locale={locale} alternates={alternates} />
