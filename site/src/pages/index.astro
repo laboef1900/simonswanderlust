@@ -1,13 +1,5 @@
 ---
-// Temporary verification page — replaced by the real HomePage in Task 9.
-import Base from '../layouts/Base.astro';
+import HomePage from '../components/pages/HomePage.astro';
 ---
 
-<Base
-  title="Reiseabenteuer"
-  description="Reiseabenteuer & Geschichten"
-  locale="de"
-  alternates={{ de: '/', en: '/en/' }}
->
-  <p class="p-10">layout check</p>
-</Base>
+<HomePage locale="de" />

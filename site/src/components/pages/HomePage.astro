@@ -1,0 +1,51 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import FeaturedHero from '../FeaturedHero.astro';
+import MapTeaser from '../MapTeaser.astro';
+import RegionFilter from '../RegionFilter.astro';
+import StoryGrid from '../StoryGrid.astro';
+import { useTranslations, type Locale } from '../../i18n/ui';
+import { aboutPath } from '../../lib/paths';
+import { byLocale } from '../../lib/trips';
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const t = useTranslations(locale);
+const trips = byLocale(await getCollection('trips'), locale);
+const [featured, ...rest] = trips;
+---
+
+<Base
+  title={t('home.title')}
+  description={t('site.tagline')}
+  locale={locale}
+  alternates={{ de: '/', en: '/en/' }}
+>
+  {featured && <FeaturedHero trip={featured} />}
+  <MapTeaser locale={locale} />
+  <section id="stories" class="mx-auto max-w-6xl px-5 py-14">
+    <div class="flex flex-wrap items-baseline justify-between gap-4">
+      <h2 class="text-2xl font-extrabold text-navy">{t('home.allStories')}</h2>
+      <RegionFilter locale={locale} />
+    </div>
+    <div class="mt-6">
+      <StoryGrid trips={rest.length > 0 ? rest : trips} />
+    </div>
+  </section>
+  <section class="border-t border-navy/10">
+    <div class="mx-auto max-w-3xl px-5 py-14 text-center">
+      <h2 class="text-xl font-extrabold text-navy">{t('nav.about')}</h2>
+      <p class="mt-3 text-ink/80">{t('home.aboutTeaser.text')}</p>
+      <a
+        href={aboutPath(locale)}
+        class="mt-4 inline-block text-sm font-medium text-brand-red hover:underline"
+      >
+        {t('home.aboutTeaser.cta')} →
+      </a>
+    </div>
+  </section>
+</Base>
