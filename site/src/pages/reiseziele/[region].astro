@@ -1,0 +1,15 @@
+---
+import RegionPage from '../../components/pages/RegionPage.astro';
+import { regionSlugs, regions } from '../../lib/paths';
+
+export function getStaticPaths() {
+  return regions.map((region) => ({
+    params: { region: regionSlugs[region].de },
+    props: { region },
+  }));
+}
+
+const { region } = Astro.props;
+---
+
+<RegionPage locale="de" region={region} />

@@ -1,0 +1,28 @@
+---
+import Base from '../../layouts/Base.astro';
+import { useTranslations, type Locale } from '../../i18n/ui';
+import { aboutPath } from '../../lib/paths';
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const t = useTranslations(locale);
+const intro =
+  locale === 'de'
+    ? 'Hier teile ich meine Leidenschaft fürs Reisen — Geschichten und Erinnerungen von den belebten Straßen Europas bis zu den geheimnisvollen Pfaden Südamerikas. Der vollständige Über-mich-Text wird in Phase 2 von der bestehenden Seite migriert.'
+    : 'Here I share my passion for travelling — stories and memories from the bustling streets of Europe to the mysterious trails of South America. The full about text will be migrated from the existing site in Phase 2.';
+---
+
+<Base
+  title={t('about.title')}
+  description={intro.slice(0, 150)}
+  locale={locale}
+  alternates={{ de: aboutPath('de'), en: aboutPath('en') }}
+>
+  <section class="mx-auto max-w-3xl px-5 py-14">
+    <h1 class="text-3xl font-extrabold text-navy">{t('about.title')}</h1>
+    <p class="prose prose-lg mt-6">{intro}</p>
+  </section>
+</Base>

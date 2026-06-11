@@ -1,0 +1,36 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import RegionFilter from '../RegionFilter.astro';
+import StoryGrid from '../StoryGrid.astro';
+import { useTranslations, type Locale, type UIKey } from '../../i18n/ui';
+import { regionPath, regionsIndexPath, type Region } from '../../lib/paths';
+import { byLocale } from '../../lib/trips';
+
+interface Props {
+  locale: Locale;
+  /** undefined = regions index page (all stories) */
+  region?: Region;
+}
+
+const { locale, region } = Astro.props;
+const t = useTranslations(locale);
+const all = byLocale(await getCollection('trips'), locale);
+const trips = region ? all.filter((trip) => trip.data.region === region) : all;
+const title = region ? t(`region.${region}` as UIKey) : t('regions.title');
+const alternates = region
+  ? { de: regionPath(region, 'de'), en: regionPath(region, 'en') }
+  : { de: regionsIndexPath('de'), en: regionsIndexPath('en') };
+---
+
+<Base title={title} description={`${title} – ${t('site.tagline')}`} locale={locale} alternates={alternates}>
+  <section class="mx-auto max-w-6xl px-5 py-14">
+    <div class="flex flex-wrap items-baseline justify-between gap-4">
+      <h1 class="text-3xl font-extrabold text-navy">{title}</h1>
+      <RegionFilter locale={locale} active={region} />
+    </div>
+    <div class="mt-6">
+      <StoryGrid trips={trips} />
+    </div>
+  </section>
+</Base>
