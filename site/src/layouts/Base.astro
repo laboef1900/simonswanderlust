@@ -25,6 +25,12 @@ const site = Astro.site ?? new URL('https://simonswanderlust.com');
     <title>{title} – Simon's Wanderlust</title>
     <meta name="description" content={description} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link
+      rel="alternate"
+      type="application/rss+xml"
+      href={locale === 'en' ? '/en/rss.xml' : '/rss.xml'}
+      title="Simon's Wanderlust"
+    />
     <link rel="canonical" href={new URL(Astro.url.pathname, site)} />
     {
       alternates && (

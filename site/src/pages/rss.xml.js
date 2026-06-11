@@ -9,6 +9,7 @@ export async function GET(context) {
     title: ui.de['site.title'],
     description: ui.de['site.tagline'],
     site: context.site,
+    customData: '<language>de</language>',
     items: trips.map((trip) => ({
       title: trip.data.title,
       pubDate: trip.data.date,

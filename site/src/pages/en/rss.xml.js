@@ -8,7 +8,8 @@ export async function GET(context) {
   return rss({
     title: ui.en['site.title'],
     description: ui.en['site.tagline'],
-    site: context.site,
+    site: new URL('/en/', context.site).href,
+    customData: '<language>en</language>',
     items: trips.map((trip) => ({
       title: trip.data.title,
       pubDate: trip.data.date,
