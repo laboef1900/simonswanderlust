@@ -1,0 +1,96 @@
+---
+import { Image } from 'astro:assets';
+import { getCollection, render } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import KeyFacts from '../KeyFacts.astro';
+import Toc from '../Toc.astro';
+import { useTranslations } from '../../i18n/ui';
+import { dateLabel } from '../../lib/format';
+import { byLocale, localeOf, pathOf, translationOf, type Trip } from '../../lib/trips';
+
+interface Props {
+  trip: Trip;
+}
+
+const { trip } = Astro.props;
+const locale = localeOf(trip);
+const t = useTranslations(locale);
+const { Content, headings } = await render(trip);
+
+const all = await getCollection('trips');
+const other = translationOf(trip, all);
+const siblings = byLocale(all, locale);
+const index = siblings.findIndex((s) => s.id === trip.id);
+const newer = index > 0 ? siblings[index - 1] : undefined;
+const older = index < siblings.length - 1 ? siblings[index + 1] : undefined;
+
+const alternates = other
+  ? locale === 'de'
+    ? { de: pathOf(trip), en: pathOf(other) }
+    : { de: pathOf(other), en: pathOf(trip) }
+  : undefined;
+const label = `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
+---
+
+<Base title={trip.data.title} description={trip.data.excerpt} locale={locale} alternates={alternates}>
+  <section class="relative h-[55vh] min-h-[360px]">
+    <Image
+      src={trip.data.heroImage}
+      alt={trip.data.title}
+      widths={[768, 1280, 1920]}
+      sizes="100vw"
+      loading="eager"
+      fetchpriority="high"
+      class="absolute inset-0 h-full w-full object-cover"
+    />
+    <div class="absolute inset-0 bg-gradient-to-t from-navy/85 via-transparent to-navy/20"></div>
+    <div class="absolute right-0 bottom-0 left-0">
+      <div class="mx-auto max-w-3xl px-5 pb-10 text-white">
+        <p class="text-xs font-semibold tracking-[0.25em] text-brand-red-light uppercase">{label}</p>
+        <h1 class="mt-2 text-3xl font-extrabold md:text-4xl">{trip.data.title}</h1>
+      </div>
+    </div>
+  </section>
+
+  <div class="mx-auto max-w-3xl px-5 py-10">
+    {
+      other && (
+        <p class="text-sm">
+          <a href={pathOf(other)} class="font-medium text-brand-red hover:underline">
+            {t('story.otherLang')} →
+          </a>
+        </p>
+      )
+    }
+    <Toc headings={headings} locale={locale} />
+    {
+      trip.data.keyFacts && (
+        <KeyFacts facts={trip.data.keyFacts} country={trip.data.country} locale={locale} />
+      )
+    }
+    <article class="prose prose-lg max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-a:text-brand-red">
+      <Content />
+    </article>
+
+    <nav class="mt-12 flex justify-between gap-4 border-t border-navy/10 pt-6 text-sm">
+      <span>
+        {
+          older && (
+            <a href={pathOf(older)} class="hover:text-brand-red">
+              ← {t('story.prev')}: {older.data.title}
+            </a>
+          )
+        }
+      </span>
+      <span class="text-right">
+        {
+          newer && (
+            <a href={pathOf(newer)} class="hover:text-brand-red">
+              {t('story.next')}: {newer.data.title} →
+            </a>
+          )
+        }
+      </span>
+    </nav>
+  </div>
+</Base>

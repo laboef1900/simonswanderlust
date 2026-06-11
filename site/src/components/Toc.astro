@@ -1,0 +1,30 @@
+---
+import type { MarkdownHeading } from 'astro';
+import { useTranslations, type Locale } from '../i18n/ui';
+
+interface Props {
+  headings: MarkdownHeading[];
+  locale: Locale;
+}
+
+const { headings, locale } = Astro.props;
+const t = useTranslations(locale);
+const items = headings.filter((h) => h.depth === 2);
+---
+
+{
+  items.length > 1 && (
+    <nav aria-label={t('story.toc')} class="my-8 rounded-lg border border-navy/15 p-5 text-sm">
+      <p class="font-bold text-navy">{t('story.toc')}</p>
+      <ul class="mt-2 space-y-1.5">
+        {items.map((h) => (
+          <li>
+            <a href={`#${h.slug}`} class="text-ink/80 hover:text-brand-red">
+              {h.text}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  )
+}

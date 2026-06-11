@@ -1,0 +1,14 @@
+---
+import { getCollection } from 'astro:content';
+import StoryPage from '../../components/pages/StoryPage.astro';
+import { byLocale, slugOf } from '../../lib/trips';
+
+export async function getStaticPaths() {
+  const trips = byLocale(await getCollection('trips'), 'en');
+  return trips.map((trip) => ({ params: { slug: slugOf(trip) }, props: { trip } }));
+}
+
+const { trip } = Astro.props;
+---
+
+<StoryPage trip={trip} />
