@@ -2,8 +2,8 @@
 .venv/
 .superpowers/
 .playwright-mcp/
-*.jpeg
-*.png
+/*.jpeg
+/*.png
 home-network.txt
 .env
 .env.*
