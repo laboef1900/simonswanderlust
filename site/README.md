@@ -1,5 +1,11 @@
 # Astro Starter Kit: Minimal
 
+## Before first build
+
+Hero images are not in git (no-binaries policy). Download them once:
+
+    ./scripts/fetch-sample-images.sh
+
 ```sh
 npm create astro@latest -- --template minimal
 ```
