@@ -33,6 +33,7 @@ const [featured, ...rest] = trips;
       <RegionFilter locale={locale} />
     </div>
     <div class="mt-6">
+      {/* Single-story locale: grid repeats the hero story — duplicate beats an empty grid during migration. */}
       <StoryGrid trips={rest.length > 0 ? rest : trips} />
     </div>
   </section>
