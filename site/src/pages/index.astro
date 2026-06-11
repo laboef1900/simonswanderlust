@@ -1,9 +1,12 @@
 ---
-import '../styles/global.css';
+import Base from '../layouts/Base.astro';
 ---
-<html lang="de">
-  <body class="bg-canvas text-ink font-sans">
-    <h1 class="text-navy font-extrabold">Token check</h1>
-    <p class="text-brand-red">red accent</p>
-  </body>
-</html>
+
+<Base
+  title="Reiseabenteuer"
+  description="Reiseabenteuer & Geschichten"
+  locale="de"
+  alternates={{ de: '/', en: '/en/' }}
+>
+  <p class="p-10">layout check</p>
+</Base>

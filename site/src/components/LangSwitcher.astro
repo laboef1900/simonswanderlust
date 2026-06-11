@@ -1,0 +1,23 @@
+---
+import type { Locale } from '../i18n/ui';
+import { homePath } from '../lib/paths';
+
+interface Props {
+  locale: Locale;
+  alternates?: { de: string; en: string };
+}
+
+const { locale, alternates } = Astro.props;
+const other: Locale = locale === 'de' ? 'en' : 'de';
+const otherHref = alternates ? alternates[other] : homePath(other);
+---
+
+<div class="flex items-center gap-1 text-xs font-semibold tracking-wide uppercase">
+  <span class={locale === 'de' ? 'text-navy' : 'text-ink/40'}>
+    {locale === 'de' ? 'DE' : <a href={otherHref} class="hover:text-brand-red">DE</a>}
+  </span>
+  <span class="text-ink/30">|</span>
+  <span class={locale === 'en' ? 'text-navy' : 'text-ink/40'}>
+    {locale === 'en' ? 'EN' : <a href={otherHref} class="hover:text-brand-red">EN</a>}
+  </span>
+</div>

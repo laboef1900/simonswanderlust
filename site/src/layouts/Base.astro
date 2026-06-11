@@ -1,0 +1,44 @@
+---
+import '@fontsource-variable/inter';
+import '../styles/global.css';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import type { Locale } from '../i18n/ui';
+
+interface Props {
+  title: string;
+  description: string;
+  locale: Locale;
+  /** Paths of this page in both languages; drives hreflang + language switcher. */
+  alternates?: { de: string; en: string };
+}
+
+const { title, description, locale, alternates } = Astro.props;
+const site = Astro.site ?? new URL('https://simonswanderlust.com');
+---
+
+<!doctype html>
+<html lang={locale}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title} – Simon's Wanderlust</title>
+    <meta name="description" content={description} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="canonical" href={new URL(Astro.url.pathname, site)} />
+    {
+      alternates && (
+        <>
+          <link rel="alternate" hreflang="de" href={new URL(alternates.de, site)} />
+          <link rel="alternate" hreflang="en" href={new URL(alternates.en, site)} />
+          <link rel="alternate" hreflang="x-default" href={new URL(alternates.de, site)} />
+        </>
+      )
+    }
+  </head>
+  <body class="bg-canvas font-sans text-ink antialiased">
+    <Nav locale={locale} alternates={alternates} />
+    <main><slot /></main>
+    <Footer locale={locale} />
+  </body>
+</html>

@@ -1,0 +1,54 @@
+---
+import { getCollection } from 'astro:content';
+import { useTranslations, type Locale } from '../i18n/ui';
+import { aboutPath } from '../lib/paths';
+import { byLocale, pathOf } from '../lib/trips';
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const t = useTranslations(locale);
+const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
+---
+
+<footer class="bg-navy text-white">
+  <div class="mx-auto grid max-w-6xl gap-8 px-5 py-10 sm:grid-cols-3">
+    <div>
+      <p class="text-sm font-extrabold tracking-wide uppercase">{t('site.title')}</p>
+      <p class="mt-1 text-sm text-white/60">{t('site.tagline')}</p>
+    </div>
+    <div>
+      <p class="text-xs font-semibold tracking-[0.15em] text-white/50 uppercase">
+        {t('footer.latest')}
+      </p>
+      <ul class="mt-2 space-y-1 text-sm">
+        {
+          latest.map((trip) => (
+            <li>
+              <a href={pathOf(trip)} class="hover:text-brand-red-light">
+                {trip.data.title}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+    <div>
+      <p class="text-xs font-semibold tracking-[0.15em] text-white/50 uppercase">
+        {t('footer.about')}
+      </p>
+      <ul class="mt-2 space-y-1 text-sm">
+        <li><a href={aboutPath(locale)} class="hover:text-brand-red-light">{t('nav.about')}</a></li>
+        <li>
+          <a
+            href="https://www.instagram.com/simonswanderlust"
+            rel="me noopener"
+            class="hover:text-brand-red-light">Instagram</a
+          >
+        </li>
+      </ul>
+    </div>
+  </div>
+</footer>
