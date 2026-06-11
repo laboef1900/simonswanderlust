@@ -14,4 +14,12 @@ describe('ui dictionaries', () => {
     expect(useTranslations('en')('nav.about')).toBe('About me');
     expect(useTranslations('en')('footer.latest')).toBe('Latest stories');
   });
+
+  it('no key has an empty-string value in any locale', () => {
+    for (const locale of locales) {
+      for (const [key, val] of Object.entries(ui[locale])) {
+        expect(val, `${locale}.${key}`).not.toBe('');
+      }
+    }
+  });
 });
