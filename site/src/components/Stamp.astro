@@ -1,0 +1,23 @@
+---
+import { useTranslations, type Locale } from '../i18n/ui';
+import { dateLabel } from '../lib/format';
+
+interface Props {
+  countryCode: string;
+  date: Date;
+  locale: Locale;
+}
+
+const { countryCode, date, locale } = Astro.props;
+const t = useTranslations(locale);
+---
+
+{/* Decorative: country + date are in the page's visible text already. */}
+<div
+  aria-hidden="true"
+  class="flex h-20 w-20 -rotate-12 flex-col items-center justify-center rounded-full border-2 border-dashed border-brand-red/80 text-brand-red/90"
+>
+  <span class="font-mono text-[8px] font-semibold tracking-[0.18em]">{t('story.stamp')}</span>
+  <span class="text-sm font-extrabold">{countryCode}</span>
+  <span class="font-mono text-[8px]">{dateLabel(date, locale)}</span>
+</div>

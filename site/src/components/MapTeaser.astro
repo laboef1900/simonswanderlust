@@ -1,5 +1,8 @@
 ---
+import { getCollection } from 'astro:content';
+import Contours from './Contours.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
+import { byLocale } from '../lib/trips';
 
 interface Props {
   locale: Locale;
@@ -7,11 +10,23 @@ interface Props {
 
 const { locale } = Astro.props;
 const t = useTranslations(locale);
+const trips = byLocale(await getCollection('trips'), locale);
+const countries = new Set(trips.map((trip) => trip.data.countryCode)).size;
+const continents = new Set(trips.map((trip) => trip.data.region)).size;
+const stats = [
+  `${trips.length} ${t('stats.trips')}`,
+  `${countries} ${t('stats.countries')}`,
+  `${continents} ${t('stats.continents')}`,
+].join(' · ');
 ---
 
-<section class="bg-navy text-white">
-  <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-10">
-    <h2 class="text-2xl font-extrabold">{t('home.mapTeaser.title')}</h2>
+<section class="relative overflow-hidden bg-navy text-white">
+  <Contours />
+  <div class="relative mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-10">
+    <div>
+      <h2 class="text-2xl font-extrabold">{t('home.mapTeaser.title')}</h2>
+      <p class="mt-1 font-mono text-xs tracking-[0.15em] text-brand-red-light">{stats}</p>
+    </div>
     <span class="rounded border border-white/30 px-4 py-2 text-sm text-white/70">
       {t('home.mapTeaser.cta')} — {t('home.mapTeaser.soon')}
     </span>
