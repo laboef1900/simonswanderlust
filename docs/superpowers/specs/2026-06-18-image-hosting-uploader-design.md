@@ -48,8 +48,11 @@ repository text-only.
    it emits precisely the formats/sizes/naming the blog expects. (Approach B,
    originals + `imgproxy` on-the-fly, is the documented future upgrade if infinite
    sizes from one original become desirable.)
-3. **EXIF/GPS is stripped by default.** Travel photos embed GPS and camera
-   metadata; the uploader removes all metadata (after applying orientation).
+3. **EXIF/metadata (including GPS) is preserved.** The full metadata of travel
+   photos — GPS coordinates, capture time, camera info, ICC profile — is kept in
+   the output variants by design (e.g. potentially useful for the Phase 3 travel
+   map). This is an intentional choice with a privacy trade-off: published images
+   will carry their original location data.
 4. **Two deliverables, one contract.** A small blog-side change and a separate
    uploader service, coupled only by the image-URL convention below, so either can
    be rebuilt without touching the other.
@@ -118,7 +121,8 @@ the `-{width}.{format}` suffix convention, and the widths/formats list.
   password or bearer token via env; served only over TLS behind the reverse proxy).
 - **`POST /upload`** — accepts the image file + a slug key (or derives one from the
   filename/date) + optional `alt`. Pipeline:
-  1. `sharp(...).rotate()` to apply EXIF orientation, then strip all metadata.
+  1. `sharp(...).rotate()` to apply EXIF orientation, and `.withMetadata()` to
+     **preserve** EXIF (incl. GPS), capture time, and the ICC profile in output.
   2. Read intrinsic width/height.
   3. Generate AVIF + WebP at 640/1280/1920 (skip widths ≥ the source width; never
      upscale). Quality ~ AVIF 50–60, WebP ~75 (tunable via env).
@@ -163,7 +167,8 @@ the `-{width}.{format}` suffix convention, and the widths/formats list.
   `heroImage` object; keep existing i18n/paths/trips/format suites green; `astro
   check` clean.
 - **Uploader:** unit-test the `sharp` pipeline (input fixture → expected variant
-  files, correct intrinsic dimensions, metadata stripped, no upscaling); endpoint
+  files, correct intrinsic dimensions, metadata preserved (EXIF/GPS present in
+  output), no upscaling); endpoint
   tests for auth + happy-path upload + rejection of non-images; a container smoke
   test (build image, upload a fixture, `curl` a variant and assert cache headers).
 
