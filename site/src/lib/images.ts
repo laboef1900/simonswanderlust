@@ -27,9 +27,11 @@ const FALLBACK_WIDTH = 1280;
 export function variantWidths(
   intrinsicWidth: number,
   widths: readonly number[] = IMAGE_WIDTHS,
-): number[] {
+): [number, ...number[]] {
   const smaller = widths.filter((w) => w < intrinsicWidth);
-  return [...smaller, intrinsicWidth];
+  const result: [number, ...number[]] = [intrinsicWidth];
+  result.unshift(...smaller);
+  return result;
 }
 
 /** Responsive srcset string for one format. */

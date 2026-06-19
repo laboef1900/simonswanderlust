@@ -24,6 +24,9 @@ describe('variantWidths', () => {
   it('returns only the intrinsic width when the source is smaller than all standards', () => {
     expect(variantWidths(500)).toEqual([500]);
   });
+  it('excludes a standard width that exactly equals the intrinsic', () => {
+    expect(variantWidths(1280)).toEqual([640, 1280]);
+  });
 });
 
 describe('srcset', () => {
@@ -49,5 +52,10 @@ describe('fallbackSrc', () => {
   });
   it('falls back to the largest available width otherwise', () => {
     expect(fallbackSrc(small)).toBe('https://img.simonswanderlust.com/trips/bucharest-2024/hero-768.webp');
+  });
+  it('uses 1280 webp when the intrinsic width is exactly 1280', () => {
+    expect(
+      fallbackSrc({ src: 'https://img.simonswanderlust.com/trips/x/hero', width: 1280, height: 800, alt: '' }),
+    ).toBe('https://img.simonswanderlust.com/trips/x/hero-1280.webp');
   });
 });
