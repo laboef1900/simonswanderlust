@@ -26,8 +26,7 @@ arrival stamps, dashed route dividers). See `docs/superpowers/specs/2026-06-11-b
     DE at root, EN under `/en/`. This is encoded and tested in `site/src/lib/paths.ts` and
     `trips.ts`, and mirrored by MDX filenames. **Never rename a slug or route** without
     explicit authorization — it breaks live URLs and SEO.
-3.  **No Binaries in Git** — Images and other binaries are gitignored. Hero images are fetched
-    by `site/scripts/fetch-sample-images.sh`. Root screenshots/`.jpeg`/`.png` are ignored too.
+3.  **No Binaries in Git** — Images and other binaries are gitignored. Hero images are hosted on the image server and referenced by URL in `heroImage` (see `docs/superpowers/specs/2026-06-18-image-hosting-uploader-design.md`). Root screenshots/`.jpeg`/`.png` are ignored too.
 4.  **No Secrets** — Never commit `.env`, API keys, or credentials.
 5.  **No Hardcoded UI Strings** — ALL user-facing copy lives in `site/src/i18n/ui.ts` for both
     locales (completeness-tested — this guards against the old site's German-in-English-footer bug).
@@ -67,7 +66,6 @@ All commands run from `site/`. No containers — this is a static toolchain.
 
 ```bash
 npm install                         # install deps (Node >= 22.12)
-./scripts/fetch-sample-images.sh    # one-time: download gitignored hero images
 npm run dev                         # dev server at http://localhost:4321
 npm run build                       # build static site to ./dist/
 npm run preview                     # preview the production build
@@ -89,8 +87,7 @@ blog/
     │   ├── lib/                                # tested helpers: paths, trips, format
     │   ├── components/pages/                   # shared per-page components
     │   ├── pages/                              # thin locale routes (de at root, en under /en/)
-    │   ├── layouts/  ·  styles/  ·  assets/
-    └── scripts/fetch-sample-images.sh
+    └── layouts/  ·  styles/  ·  assets/
 ```
 
 - **Logical boundaries over line counts** — keep cohesive logic together; don't fragment files.
