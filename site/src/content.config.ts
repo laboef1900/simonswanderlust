@@ -14,10 +14,10 @@ const trips = defineCollection({
       translationKey: z.string(),
       excerpt: z.string(),
       heroImage: z.object({
-        src: z.string().url(),
+        src: z.url(),
         width: z.number().int().positive(),
         height: z.number().int().positive(),
-        alt: z.string(),
+        alt: z.string().min(1),
       }),
       coordinates: z.object({ lat: z.number(), lng: z.number() }),
       stops: z.array(z.object({ name: z.string(), lat: z.number(), lng: z.number() })).optional(),
