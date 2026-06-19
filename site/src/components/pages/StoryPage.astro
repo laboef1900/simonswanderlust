@@ -1,5 +1,5 @@
 ---
-import { Image } from 'astro:assets';
+import RemoteImage from '../RemoteImage.astro';
 import { getCollection, render } from 'astro:content';
 import Base from '../../layouts/Base.astro';
 import KeyFacts from '../KeyFacts.astro';
@@ -37,10 +37,8 @@ const label = `${entryLabel(number)} — ${dateLabel(trip.data.date, locale)} ·
 
 <Base title={trip.data.title} description={trip.data.excerpt} locale={locale} alternates={alternates}>
   <section class="relative h-[55vh] min-h-[360px]">
-    <Image
-      src={trip.data.heroImage}
-      alt={trip.data.title}
-      widths={[768, 1280, 1920]}
+    <RemoteImage
+      image={trip.data.heroImage}
       sizes="100vw"
       loading="eager"
       fetchpriority="high"

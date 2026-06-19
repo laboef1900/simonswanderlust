@@ -1,5 +1,5 @@
 ---
-import { Image } from 'astro:assets';
+import RemoteImage from './RemoteImage.astro';
 import { dateLabel, entryLabel } from '../lib/format';
 import { localeOf, pathOf, type Trip } from '../lib/trips';
 
@@ -25,10 +25,9 @@ const label = [number !== undefined ? entryLabel(number) : null, `${dateLabel(tr
     featured ? 'md:col-span-2 md:row-span-2' : '',
   ]}
 >
-  <Image
-    src={trip.data.heroImage}
+  <RemoteImage
+    image={trip.data.heroImage}
     alt=""
-    widths={[480, 768, 1200]}
     sizes={featured ? '(min-width: 768px) 66vw, 100vw' : '(min-width: 768px) 33vw, 100vw'}
     class="h-full w-full object-cover transition duration-300 group-hover:scale-105"
   />
