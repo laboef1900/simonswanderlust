@@ -1,0 +1,31 @@
+---
+import { srcset, fallbackSrc, type RemoteHeroImage } from '../lib/images';
+
+interface Props {
+  image: RemoteHeroImage;
+  /** Responsive sizes attribute, e.g. "100vw" or "(min-width: 768px) 33vw, 100vw". */
+  sizes: string;
+  /** Overrides image.alt; pass "" for decorative images whose caption is adjacent text. */
+  alt?: string;
+  loading?: 'eager' | 'lazy';
+  fetchpriority?: 'high' | 'auto' | 'low';
+  class?: string;
+}
+
+const { image, sizes, alt, loading = 'lazy', fetchpriority, class: className } = Astro.props;
+---
+
+<picture>
+  <source type="image/avif" srcset={srcset(image, 'avif')} sizes={sizes} />
+  <source type="image/webp" srcset={srcset(image, 'webp')} sizes={sizes} />
+  <img
+    src={fallbackSrc(image)}
+    alt={alt ?? image.alt}
+    width={image.width}
+    height={image.height}
+    loading={loading}
+    fetchpriority={fetchpriority}
+    decoding="async"
+    class={className}
+  />
+</picture>
