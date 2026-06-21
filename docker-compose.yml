@@ -1,0 +1,11 @@
+services:
+  images:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://img.simonswanderlust.com}
+      AUTH_TOKEN: ${AUTH_TOKEN:?set AUTH_TOKEN in .env}
+    volumes:
+      - ./data/images:/data/images
+    restart: unless-stopped
