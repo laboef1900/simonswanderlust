@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Image Uploader</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+      label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }
+      input { width: 100%; padding: 0.5rem; }
+      button { margin-top: 1rem; padding: 0.6rem 1rem; font-weight: 600; }
+      pre { background: #f4f4f6; padding: 1rem; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>Image Uploader</h1>
+    <label for="token">Auth token</label>
+    <input id="token" type="password" placeholder="Bearer token" />
+    <label for="key">Key (e.g. trips/bucharest-2024/hero)</label>
+    <input id="key" type="text" />
+    <label for="alt">Alt text</label>
+    <input id="alt" type="text" />
+    <label for="file">Photo</label>
+    <input id="file" type="file" accept="image/*" />
+    <button id="go">Upload</button>
+    <h2>heroImage snippet</h2>
+    <pre id="out">—</pre>
+    <script>
+      document.getElementById('go').addEventListener('click', async () => {
+        const out = document.getElementById('out');
+        const file = document.getElementById('file').files[0];
+        if (!file) { out.textContent = 'Pick a file first.'; return; }
+        const fd = new FormData();
+        fd.append('key', document.getElementById('key').value);
+        fd.append('alt', document.getElementById('alt').value);
+        fd.append('file', file);
+        out.textContent = 'Uploading…';
+        try {
+          const res = await fetch('/upload', {
+            method: 'POST',
+            headers: { authorization: 'Bearer ' + document.getElementById('token').value },
+            body: fd,
+          });
+          const body = await res.json();
+          out.textContent = res.ok ? body.snippet : 'Error: ' + (body.error || res.status);
+        } catch (e) {
+          out.textContent = 'Error: ' + e;
+        }
+      });
+    </script>
+  </body>
+</html>
