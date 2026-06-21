@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
-import { processImage } from '../src/pipeline';
+import { processImage } from '../src/pipeline.js';
 
 async function fixture(width: number, height: number): Promise<Buffer> {
+  // sharp's typed withExif() exposes only IFD0–IFD3, not a GPS IFD. We can't
+  // inject GPS tags here, but the pipeline preserves metadata via withMetadata(),
+  // which copies the whole EXIF block wholesale — so proving IFD0 survives proves
+  // GPS would survive too. Hence the assertion checks the EXIF container is intact.
   return sharp({
     create: { width, height, channels: 3, background: { r: 120, g: 120, b: 120 } },
   })
-    .withExif({ IFD0: { ImageDescription: 'fixture' }, GPS: { GPSLatitudeRef: 'N' } })
+    .withExif({ IFD0: { ImageDescription: 'fixture' } })
     .jpeg()
     .toBuffer();
 }

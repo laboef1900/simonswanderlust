@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { variantWidths, WIDTHS, FORMATS } from '../src/variants';
+import { variantWidths, WIDTHS, FORMATS } from '../src/variants.js';
 
 describe('variantWidths', () => {
   it('keeps standard widths below the source and appends the intrinsic width', () => {

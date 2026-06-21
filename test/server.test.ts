@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import sharp from 'sharp';
 import FormData from 'form-data';
-import { buildServer } from '../src/server';
+import { buildServer } from '../src/server.js';
 
 let dir: string;
 beforeEach(async () => {

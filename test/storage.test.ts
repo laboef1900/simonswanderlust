@@ -2,8 +2,8 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { storeVariants } from '../src/storage';
-import type { ProcessResult } from '../src/pipeline';
+import { storeVariants } from '../src/storage.js';
+import type { ProcessResult } from '../src/pipeline.js';
 
 const result: ProcessResult = {
   width: 2000,

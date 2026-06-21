@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAuthorized } from '../src/auth';
+import { isAuthorized } from '../src/auth.js';
 
 describe('isAuthorized', () => {
   it('accepts the correct bearer token', () => {
