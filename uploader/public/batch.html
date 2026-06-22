@@ -42,7 +42,7 @@
       let picked = []; // { file, slug, altEn, altDe, width, height, captionError }
 
       const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-      const tag = (src, w, h, alt) => `<RemoteImage src="${esc(src)}" width={${w}} height={${h}} alt="${esc(alt)}" />`;
+      const tag = (src, w, h, alt) => `<BodyImage src="${esc(src)}" width={${w}} height={${h}} alt="${esc(alt)}" />`;
 
       $('suggest').addEventListener('click', async () => {
         const token = $('token').value;

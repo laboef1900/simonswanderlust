@@ -50,7 +50,7 @@ The main `/admin/` page uploads one hero image. For a post's other photos, open
 2. Enter your token + a shared prefix (e.g. `trips/rhodes-2021`), pick several photos.
 3. Click **Suggest** — the local model proposes a slug and German + English alt text per photo.
 4. Review/edit each row, then **Upload all**.
-5. Paste the returned `<RemoteImage>` snippets (DE into the German post, EN into the English post).
+5. Paste the returned `<BodyImage>` snippets (DE into the German post, EN into the English post). `BodyImage` is registered globally for MDX in the blog's `StoryPage`, so no import is needed.
 
 The model runs on your machine via LM Studio; nothing is sent to a cloud service.
 Alt text is generated natively in each language, not machine-translated.

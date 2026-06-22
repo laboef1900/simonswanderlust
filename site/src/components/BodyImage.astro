@@ -1,0 +1,34 @@
+---
+/**
+ * Inline body image for MDX post bodies (NOT the hero — that's RemoteImage
+ * with the heroImage object). Takes flat props so a post can drop in a single
+ * tag, matching the snippet the uploader's batch page emits:
+ *   <BodyImage src="…" width={1600} height={1067} alt="…" />
+ * Registered globally for MDX via <Content components={{ BodyImage }} /> in
+ * StoryPage, so authors don't import it per file.
+ * @ai-context docs/superpowers/specs/2026-06-22-ai-batch-image-uploader-design.md
+ */
+import RemoteImage from './RemoteImage.astro';
+import type { RemoteHeroImage } from '../lib/images';
+
+interface Props {
+  src: string;
+  width: number;
+  height: number;
+  alt: string;
+  /** Overrides the default sizes (article column is max-w-3xl ≈ 720px wide). */
+  sizes?: string;
+}
+
+const {
+  src,
+  width,
+  height,
+  alt,
+  sizes = '(min-width: 768px) 720px, 100vw',
+} = Astro.props;
+
+const image: RemoteHeroImage = { src, width, height, alt };
+---
+
+<RemoteImage image={image} sizes={sizes} loading="lazy" class="rounded-lg" />
