@@ -7,7 +7,7 @@ import sharp from 'sharp';
 import { processImage } from './pipeline.js';
 import { storeVariants } from './storage.js';
 import { isAuthorized } from './auth.js';
-import { captionImage, type Caption } from './caption.js';
+import type { Caption } from './caption.js';
 
 export type Captioner = (jpeg: Buffer) => Promise<Caption>;
 
@@ -88,23 +88,23 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     for await (const part of req.parts()) {
       if (part.type !== 'file') continue;
       const buf = await part.toBuffer();
-      if (!part.mimetype.startsWith('image/')) continue;
 
-      let width = 0;
-      let height = 0;
-      try {
-        const probe = await sharp(buf, { failOn: 'none' }).rotate().toBuffer({ resolveWithObject: true });
-        width = probe.info.width;
-        height = probe.info.height;
-      } catch {
-        continue; // not a decodable image
-      }
-
-      const row = { filename: part.filename, slug: '', altEn: '', altDe: '', width, height } as {
+      const row = { filename: part.filename, slug: '', altEn: '', altDe: '', width: 0, height: 0 } as {
         filename: string; slug: string; altEn: string; altDe: string; width: number; height: number; captionError?: boolean;
       };
 
-      if (!captioner) {
+      let decodable = part.mimetype.startsWith('image/');
+      if (decodable) {
+        try {
+          const probe = await sharp(buf, { failOn: 'none' }).rotate().toBuffer({ resolveWithObject: true });
+          row.width = probe.info.width;
+          row.height = probe.info.height;
+        } catch {
+          decodable = false;
+        }
+      }
+
+      if (!decodable || !captioner) {
         row.captionError = true;
       } else {
         try {

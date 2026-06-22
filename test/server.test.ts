@@ -131,4 +131,20 @@ describe('POST /suggest', () => {
     });
     expect(res.json().results[0].captionError).toBe(true);
   });
+
+  it('returns one row per file part even when a file is undecodable (preserves index alignment)', async () => {
+    const captioner = async (): Promise<Caption> => ({ altEn: 'A', altDe: 'B', slug: 'a-b' });
+    const form = new FormData();
+    form.append('file', await jpeg(), { filename: 'good.jpg', contentType: 'image/jpeg' });
+    form.append('file', Buffer.from('not a real image'), { filename: 'bad.jpg', contentType: 'image/jpeg' });
+    const res = await appWith(captioner).inject({
+      method: 'POST', url: '/suggest',
+      headers: { ...form.getHeaders(), authorization: 'Bearer secret' }, payload: form,
+    });
+    expect(res.statusCode).toBe(200);
+    const rows = res.json().results;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ filename: 'good.jpg', slug: 'a-b', width: 1000, height: 800 });
+    expect(rows[1]).toMatchObject({ filename: 'bad.jpg', captionError: true, width: 0, height: 0 });
+  });
 });
