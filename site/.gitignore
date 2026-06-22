@@ -26,5 +26,5 @@ public/favicon.ico
 # jetbrains setting folder
 .idea/
 
-# downloaded by scripts/fetch-sample-images.sh — no binaries in git
+# hero images are hosted remotely — no binaries in git
 src/assets/trips/

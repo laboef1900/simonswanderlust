@@ -4,7 +4,7 @@ import { glob } from 'astro/loaders';
 
 const trips = defineCollection({
   loader: glob({ pattern: '**/*.mdx', base: './src/content/trips' }),
-  schema: ({ image }) =>
+  schema: () =>
     z.object({
       title: z.string(),
       date: z.coerce.date(),
@@ -13,7 +13,12 @@ const trips = defineCollection({
       region: z.enum(['europe', 'north-america', 'south-america']),
       translationKey: z.string(),
       excerpt: z.string(),
-      heroImage: image(),
+      heroImage: z.object({
+        src: z.url(),
+        width: z.number().int().positive(),
+        height: z.number().int().positive(),
+        alt: z.string().min(1),
+      }),
       coordinates: z.object({ lat: z.number(), lng: z.number() }),
       stops: z.array(z.object({ name: z.string(), lat: z.number(), lng: z.number() })).optional(),
       route: z.string().optional(),

@@ -1,5 +1,5 @@
 ---
-import { Image } from 'astro:assets';
+import RemoteImage from './RemoteImage.astro';
 import { useTranslations } from '../i18n/ui';
 import { coordsLabel, dateLabel, entryLabel } from '../lib/format';
 import { localeOf, pathOf, type Trip } from '../lib/trips';
@@ -22,10 +22,8 @@ const label = [
 ---
 
 <section class="relative h-[70vh] min-h-[420px]">
-  <Image
-    src={trip.data.heroImage}
-    alt={trip.data.title}
-    widths={[768, 1280, 1920]}
+  <RemoteImage
+    image={trip.data.heroImage}
     sizes="100vw"
     loading="eager"
     fetchpriority="high"

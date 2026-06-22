@@ -3,12 +3,6 @@
 The Astro 6 rebuild of [simonswanderlust.com](https://simonswanderlust.com) (DE/EN travel blog).
 Design spec and phase plans live in `../docs/superpowers/`.
 
-## Before first build
-
-Hero images are not in git (no-binaries policy). Download them once:
-
-    ./scripts/fetch-sample-images.sh
-
 ## Commands
 
 | Command | Action |
@@ -22,7 +16,7 @@ Hero images are not in git (no-binaries policy). Download them once:
 
 ## Structure
 
-- `src/content/trips/{de,en}/<slug>.mdx` — one story per language; filenames are the live WordPress slugs (SEO contract — never rename)
+- `src/content/trips/{de,en}/<slug>.mdx` — one story per language; filenames are the live WordPress slugs (SEO contract — never rename). `heroImage` is a remote URL object `{src,width,height,alt}` served by the image server (no binaries in git).
 - `src/i18n/ui.ts` — ALL UI strings, both locales (completeness-tested; no hardcoded strings in components)
 - `src/lib/` — tested helpers: paths (live WP slugs), trips (locale/pairing), format
 - `src/components/pages/` — shared per-page components rendered by thin locale routes in `src/pages/`
