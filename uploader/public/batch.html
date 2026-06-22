@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Batch Image Uploader</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+      label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }
+      input, textarea { width: 100%; padding: 0.4rem; box-sizing: border-box; }
+      button { margin-top: 1rem; padding: 0.6rem 1rem; font-weight: 600; }
+      .row { display: grid; grid-template-columns: 120px 1fr; gap: 0.75rem; border: 1px solid #ddd; padding: 0.75rem; margin: 0.75rem 0; }
+      .row img { width: 120px; height: auto; border-radius: 4px; }
+      .row .err { color: #b00; font-size: 0.85rem; }
+      .fields { display: grid; gap: 0.4rem; }
+      pre { background: #f4f4f6; padding: 1rem; white-space: pre-wrap; }
+      .nav a { font-size: 0.9rem; }
+    </style>
+  </head>
+  <body>
+    <p class="nav"><a href="/admin/">← Single hero upload</a></p>
+    <h1>Batch Image Uploader</h1>
+    <p>For a post's body photos. The hero image is uploaded separately on the main page.</p>
+
+    <label for="token">Auth token</label>
+    <input id="token" type="password" placeholder="Bearer token" />
+    <label for="prefix">Shared key prefix (e.g. trips/rhodes-2021)</label>
+    <input id="prefix" type="text" />
+    <label for="files">Photos</label>
+    <input id="files" type="file" accept="image/*" multiple />
+    <button id="suggest">Suggest alt + slugs</button>
+
+    <div id="rows"></div>
+    <button id="upload" style="display:none">Upload all</button>
+
+    <h2>Snippets</h2>
+    <pre id="out">—</pre>
+
+    <script>
+      const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
+      const $ = (id) => document.getElementById(id);
+      let picked = []; // { file, slug, altEn, altDe, width, height, captionError }
+
+      const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+      const tag = (src, w, h, alt) => `<RemoteImage src="${esc(src)}" width={${w}} height={${h}} alt="${esc(alt)}" />`;
+
+      $('suggest').addEventListener('click', async () => {
+        const token = $('token').value;
+        const files = [...$('files').files].filter((f) => f.type.startsWith('image/'));
+        if (!files.length) { $('out').textContent = 'Pick at least one image.'; return; }
+        const fd = new FormData();
+        fd.append('prefix', $('prefix').value);
+        for (const f of files) fd.append('file', f);
+        $('out').textContent = 'Captioning…';
+        let results = [];
+        try {
+          const res = await fetch('/suggest', { method: 'POST', headers: { authorization: 'Bearer ' + token }, body: fd });
+          if (!res.ok) { $('out').textContent = 'Suggest failed: ' + res.status; return; }
+          results = (await res.json()).results;
+        } catch (e) { $('out').textContent = 'Suggest error: ' + e; return; }
+
+        picked = files.map((file, i) => {
+          const r = results[i] || {};
+          return { file, slug: r.slug || '', altEn: r.altEn || '', altDe: r.altDe || '', width: r.width || 0, height: r.height || 0, captionError: !!r.captionError };
+        });
+        renderRows();
+        $('upload').style.display = picked.length ? 'inline-block' : 'none';
+        $('out').textContent = picked.some((p) => p.captionError) ? 'Some photos had no AI suggestion — fill them in manually.' : 'Review and edit, then Upload all.';
+      });
+
+      function renderRows() {
+        const host = $('rows');
+        host.innerHTML = '';
+        picked.forEach((p, i) => {
+          const div = document.createElement('div');
+          div.className = 'row';
+          const thumb = URL.createObjectURL(p.file);
+          div.innerHTML =
+            `<img src="${thumb}" alt="" />` +
+            `<div class="fields">` +
+            (p.captionError ? `<div class="err">No AI suggestion for this photo.</div>` : '') +
+            `<label>Slug (key suffix)</label><input data-i="${i}" data-k="slug" value="${esc(p.slug)}" />` +
+            `<label>Alt — German</label><textarea data-i="${i}" data-k="altDe" rows="2">${esc(p.altDe)}</textarea>` +
+            `<label>Alt — English</label><textarea data-i="${i}" data-k="altEn" rows="2">${esc(p.altEn)}</textarea>` +
+            `<small>${p.width}×${p.height}</small>` +
+            `</div>`;
+          host.appendChild(div);
+        });
+        host.querySelectorAll('[data-i]').forEach((el) => {
+          el.addEventListener('input', () => { picked[+el.dataset.i][el.dataset.k] = el.value; });
+        });
+      }
+
+      $('upload').addEventListener('click', async () => {
+        const token = $('token').value;
+        const prefix = $('prefix').value.trim().replace(/\/+$/, '');
+        const keys = picked.map((p) => prefix + '/' + p.slug.trim());
+        for (const k of keys) if (!KEY_RE.test(k)) { $('out').textContent = 'Invalid key: ' + k; return; }
+        const dup = keys.find((k, i) => keys.indexOf(k) !== i);
+        if (dup) { $('out').textContent = 'Duplicate key: ' + dup + ' — slugs must be unique.'; return; }
+
+        const blocks = [];
+        for (let i = 0; i < picked.length; i++) {
+          const p = picked[i];
+          const fd = new FormData();
+          fd.append('key', keys[i]);
+          fd.append('alt', p.altEn);
+          fd.append('file', p.file);
+          let body;
+          try {
+            const res = await fetch('/upload', { method: 'POST', headers: { authorization: 'Bearer ' + token }, body: fd });
+            body = await res.json();
+            if (!res.ok) { blocks.push(`# ${keys[i]} — ERROR: ${body.error || res.status}`); continue; }
+          } catch (e) { blocks.push(`# ${keys[i]} — ERROR: ${e}`); continue; }
+          blocks.push(
+            `# ${keys[i]}\n` +
+            `# DE:\n${tag(body.src, body.width, body.height, p.altDe)}\n` +
+            `# EN:\n${tag(body.src, body.width, body.height, p.altEn)}`
+          );
+        }
+        $('out').textContent = blocks.join('\n\n');
+      });
+    </script>
+  </body>
+</html>

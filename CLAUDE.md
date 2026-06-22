@@ -1,18 +1,26 @@
 # CLAUDE.md
 
 Guidance for AI coding assistants (Claude, Gemini, Codex) working in this repository.
-Derived from `../TEMPLATE.md`, tailored to this project. This is a **static site** — the
-template's backend, Docker, database, auth/RBAC, and SRE sections do not apply and were
-intentionally omitted to avoid misinforming future sessions.
+Derived from `../TEMPLATE.md`, tailored to this project. This repo is a **monorepo** with two
+parts: `site/` is an Astro 6 **static site** (the template's database, auth/RBAC, and SRE
+sections do not apply to it — it builds to a static `dist/`); `uploader/` is a small
+self-hosted **Node/Fastify + sharp image service** (Docker and a server runtime DO apply there).
+The static-site rules below describe `site/` unless a rule names `uploader/` explicitly.
 
 ## Project Overview
 
 **Simon's Wanderlust** (`simonswanderlust.com`) — a bilingual (DE/EN) personal travel blog.
 This repo is the **Astro 6 static-site rebuild** of the current WordPress + Elementor site.
 
-**Architecture:** Single Astro 6 project under `site/`. No backend, database, or server
-runtime — `npm run build` emits a static `dist/` deployed to a CDN (target: Cloudflare Pages).
-Content is authored as MDX content collections; UI is Astro components + Tailwind 4.
+**Architecture:** The blog is a single Astro 6 project under `site/` — no backend or server
+runtime; `npm run build` emits a static `dist/` deployed to a CDN (target: Cloudflare Pages).
+Content is authored as MDX content collections; UI is Astro components + Tailwind 4. A separate
+self-hosted **image uploader** (Node 22 + Fastify 5 + sharp, Dockerized) lives under `uploader/`:
+it optimizes uploaded photos into responsive AVIF/WebP variants and returns paste-ready
+`heroImage` / `<RemoteImage>` snippets (with optional local-AI alt text via LM Studio). It is
+deployed to Simon's own server, NOT to Cloudflare. See `uploader/README.md` and the specs
+`docs/superpowers/specs/2026-06-18-image-hosting-uploader-design.md` +
+`docs/superpowers/specs/2026-06-22-ai-batch-image-uploader-design.md`.
 
 **Design language:** Editorial magazine + "refined brand" voice, with an "Expedition Log"
 flavor layer (mono coordinates from frontmatter, N°XX entry numbers, contour textures,
@@ -80,14 +88,19 @@ blog/
 ├── CLAUDE.md                       # this file
 ├── docs/superpowers/              # design spec + phase plans (source of truth for scope)
 ├── *.md                           # blog platform research (WordPress vs Astro, etc.)
-└── site/                          # the Astro project
-    ├── src/
-    │   ├── content/trips/{de,en}/<slug>.mdx   # one story per language; filename = live WP slug
-    │   ├── i18n/ui.ts                          # ALL UI strings, both locales (completeness-tested)
-    │   ├── lib/                                # tested helpers: paths, trips, format
-    │   ├── components/pages/                   # shared per-page components
-    │   ├── pages/                              # thin locale routes (de at root, en under /en/)
-    └── layouts/  ·  styles/  ·  assets/
+├── site/                          # the Astro project (static blog)
+│   └── src/
+│       ├── content/trips/{de,en}/<slug>.mdx   # one story per language; filename = live WP slug
+│       ├── i18n/ui.ts                          # ALL UI strings, both locales (completeness-tested)
+│       ├── lib/                                # tested helpers: paths, trips, format, images
+│       ├── components/pages/                   # shared per-page components
+│       ├── pages/                              # thin locale routes (de at root, en under /en/)
+│       └── layouts/  ·  styles/  ·  assets/
+└── uploader/                      # self-hosted image service (Node/Fastify/sharp, Docker)
+    ├── src/                       #   variants · pipeline · storage · auth · server · main · cli · caption
+    ├── public/                    #   index.html (hero upload) · batch.html (AI batch uploader)
+    ├── test/                      #   Vitest suites (no live LM Studio needed)
+    └── Dockerfile · docker-compose.yml · README.md
 ```
 
 - **Logical boundaries over line counts** — keep cohesive logic together; don't fragment files.
