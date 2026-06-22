@@ -4,7 +4,7 @@ services:
   blog:
     build: ./site
     ports:
-      - "8080:80"
+      - "${BLOG_PORT:-8090}:80"
     restart: unless-stopped
 
   images:
