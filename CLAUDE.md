@@ -13,12 +13,13 @@ The static-site rules below describe `site/` unless a rule names `uploader/` exp
 This repo is the **Astro 6 static-site rebuild** of the current WordPress + Elementor site.
 
 **Architecture:** The blog is a single Astro 6 project under `site/` — no backend or server
-runtime; `npm run build` emits a static `dist/` deployed to a CDN (target: Cloudflare Pages).
-Content is authored as MDX content collections; UI is Astro components + Tailwind 4. A separate
-self-hosted **image uploader** (Node 22 + Fastify 5 + sharp, Dockerized) lives under `uploader/`:
-it optimizes uploaded photos into responsive AVIF/WebP variants and returns paste-ready
-`heroImage` / `<RemoteImage>` snippets (with optional local-AI alt text via LM Studio). It is
-deployed to Simon's own server, NOT to Cloudflare. See `uploader/README.md` and the specs
+runtime; `npm run build` emits a static `dist/`. It is **self-hosted via Docker** (an nginx
+container serves the build) alongside the uploader; both are wired in the root
+`docker-compose.yml`. Content is authored as MDX content collections; UI is Astro components +
+Tailwind 4. A separate **image uploader** (Node 22 + Fastify 5 + sharp, Dockerized) lives under
+`uploader/`: it optimizes uploaded photos into responsive AVIF/WebP variants and returns
+paste-ready `heroImage` / `<RemoteImage>` / `<BodyImage>` snippets (with optional local-AI alt
+text via LM Studio). Both run on Simon's own server. See `uploader/README.md` and the specs
 `docs/superpowers/specs/2026-06-18-image-hosting-uploader-design.md` +
 `docs/superpowers/specs/2026-06-22-ai-batch-image-uploader-design.md`.
 
@@ -54,7 +55,7 @@ arrival stamps, dashed route dividers). See `docs/superpowers/specs/2026-06-11-b
 | **Fonts** | Inter Variable (sans), IBM Plex Mono (expedition-log accents) |
 | **Tests** | Vitest |
 | **Type-check** | `@astrojs/check` (`astro check`) |
-| **Deploy target** | Static `dist/` → Cloudflare Pages (Phase 4) |
+| **Deploy target** | Self-hosted Docker: `site/` built + served by nginx, `uploader/` Fastify — both via root `docker-compose.yml` |
 
 ### Design Tokens (`site/src/styles/global.css`, Tailwind 4 `@theme`)
 - `--color-canvas: #fbfbfd` (page bg) · `--color-navy: #142a42` (brand/structure)
@@ -160,5 +161,6 @@ Use comments to leave hints for future sessions:
 
 - **Done:** Phase 1 (skeleton) + Phase 1b (expedition-log layer) — merged to `main`.
 - **Remaining:** Phase 2 = WordPress content migration (18 posts via the open REST API);
-  Phase 3 = MapLibre travel map (`/karte/` + `/en/map/`); Phase 4 = Cloudflare Pages deploy
-  + DNS cutover. Each phase gets its own plan in `docs/superpowers/plans/`.
+  Phase 3 = MapLibre travel map (`/karte/` + `/en/map/`); Phase 4 = self-hosted Docker deploy
+  (blog nginx + uploader via root `docker-compose.yml`) + DNS cutover. Each phase gets its own
+  plan in `docs/superpowers/plans/`.

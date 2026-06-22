@@ -7,6 +7,7 @@
 home-network.txt
 .env
 .env.*
+!.env.example
 
 # non-blog notes (AI YouTube channel) — kept local, out of the blog repo
 ai-youtube-channel/

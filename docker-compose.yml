@@ -1,0 +1,23 @@
+# Full self-hosted stack: the static blog (nginx) + the image uploader service.
+# Copy .env.example to .env and set AUTH_TOKEN before `docker compose up -d --build`.
+services:
+  blog:
+    build: ./site
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+
+  images:
+    build: ./uploader
+    ports:
+      - "3000:3000"
+    environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://img.simonswanderlust.com}
+      AUTH_TOKEN: ${AUTH_TOKEN:?set AUTH_TOKEN in .env}
+      LMSTUDIO_BASE_URL: ${LMSTUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
+      LMSTUDIO_MODEL: ${LMSTUDIO_MODEL:-qwen/qwen3-vl-4b}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./uploader/data/images:/data/images
+    restart: unless-stopped
