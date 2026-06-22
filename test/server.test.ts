@@ -5,6 +5,7 @@ import { join, relative } from 'node:path';
 import sharp from 'sharp';
 import FormData from 'form-data';
 import { buildServer } from '../src/server.js';
+import type { Caption } from '../src/caption.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -79,5 +80,55 @@ describe('buildServer config', () => {
     const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', authToken: 'secret' });
     await expect(srv.ready()).resolves.toBeDefined();
     await srv.close();
+  });
+});
+
+function appWith(captioner?: (jpeg: Buffer) => Promise<Caption>) {
+  return buildServer({ storageDir: dir, baseUrl: 'https://img.simonswanderlust.com', authToken: 'secret', captioner });
+}
+
+describe('POST /suggest', () => {
+  it('401 without auth', async () => {
+    const form = new FormData();
+    form.append('file', await jpeg(), { filename: 'a.jpg', contentType: 'image/jpeg' });
+    const res = await appWith().inject({ method: 'POST', url: '/suggest', headers: form.getHeaders(), payload: form });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns suggestions + dimensions from the captioner', async () => {
+    const captioner = async (): Promise<Caption> => ({ altEn: 'Old town', altDe: 'Altstadt', slug: 'old-town' });
+    const form = new FormData();
+    form.append('file', await jpeg(), { filename: 'a.jpg', contentType: 'image/jpeg' });
+    const res = await appWith(captioner).inject({
+      method: 'POST', url: '/suggest',
+      headers: { ...form.getHeaders(), authorization: 'Bearer secret' }, payload: form,
+    });
+    expect(res.statusCode).toBe(200);
+    const rows = res.json().results;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ filename: 'a.jpg', slug: 'old-town', altEn: 'Old town', altDe: 'Altstadt', width: 1000, height: 800 });
+  });
+
+  it('degrades a row (captionError) when the captioner throws, keeping dimensions', async () => {
+    const captioner = async (): Promise<Caption> => { throw new Error('lmstudio down'); };
+    const form = new FormData();
+    form.append('file', await jpeg(), { filename: 'a.jpg', contentType: 'image/jpeg' });
+    const res = await appWith(captioner).inject({
+      method: 'POST', url: '/suggest',
+      headers: { ...form.getHeaders(), authorization: 'Bearer secret' }, payload: form,
+    });
+    expect(res.statusCode).toBe(200);
+    const row = res.json().results[0];
+    expect(row).toMatchObject({ captionError: true, slug: '', altEn: '', altDe: '', width: 1000, height: 800 });
+  });
+
+  it('marks rows captionError when no captioner is configured', async () => {
+    const form = new FormData();
+    form.append('file', await jpeg(), { filename: 'a.jpg', contentType: 'image/jpeg' });
+    const res = await appWith().inject({
+      method: 'POST', url: '/suggest',
+      headers: { ...form.getHeaders(), authorization: 'Bearer secret' }, payload: form,
+    });
+    expect(res.json().results[0].captionError).toBe(true);
   });
 });
