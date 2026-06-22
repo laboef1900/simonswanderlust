@@ -6,6 +6,10 @@ services:
     environment:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://img.simonswanderlust.com}
       AUTH_TOKEN: ${AUTH_TOKEN:?set AUTH_TOKEN in .env}
+      LMSTUDIO_BASE_URL: ${LMSTUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
+      LMSTUDIO_MODEL: ${LMSTUDIO_MODEL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data/images:/data/images
     restart: unless-stopped
