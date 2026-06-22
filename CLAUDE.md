@@ -129,6 +129,9 @@ This repo uses the **superpowers** workflow: specs and phase plans live in
 `docs/superpowers/` and are the source of truth for what's in scope. Read the relevant
 plan before implementing.
 
+**Authoring a post?** See `docs/authoring-workflow.md` — how to upload photos via the
+uploader, write the DE/EN MDX in GitHub, and publish (rebuild the blog container).
+
 ### Verify Before Use (Prevent Hallucinations)
 - **Dependencies & APIs** — Never assume a package is installed or that a method exists. Check
   `site/package.json` and the actual exported API (local types/source) before calling.
