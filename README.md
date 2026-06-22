@@ -40,6 +40,21 @@ snippet to paste into the post's frontmatter.
 Uploaded variants are written to `./data/images/` on the host (a Docker volume),
 so they survive container restarts. `./data/` is git-ignored.
 
+## Batch uploader (a post's body photos)
+
+The main `/admin/` page uploads one hero image. For a post's other photos, open
+`/admin/batch.html`:
+
+1. Make sure **LM Studio** is running with a vision model (e.g. `qwen/qwen3-vl-4b`)
+   and its server is on `:1234`. (Optional — without it you can still fill fields by hand.)
+2. Enter your token + a shared prefix (e.g. `trips/rhodes-2021`), pick several photos.
+3. Click **Suggest** — the local model proposes a slug and German + English alt text per photo.
+4. Review/edit each row, then **Upload all**.
+5. Paste the returned `<RemoteImage>` snippets (DE into the German post, EN into the English post).
+
+The model runs on your machine via LM Studio; nothing is sent to a cloud service.
+Alt text is generated natively in each language, not machine-translated.
+
 **Manage the container:**
 
 ```bash
