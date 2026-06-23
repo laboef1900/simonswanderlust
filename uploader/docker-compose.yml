@@ -11,5 +11,5 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./data/images:/data/images
+      - ./data:/data
     restart: unless-stopped

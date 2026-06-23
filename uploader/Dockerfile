@@ -11,7 +11,7 @@ RUN node scripts/copy-fonts.mjs
 
 ENV STORAGE_DIR=/data/images
 ENV PORT=3000
-VOLUME ["/data/images"]
+VOLUME ["/data"]
 EXPOSE 3000
 
 CMD ["npm", "start"]
