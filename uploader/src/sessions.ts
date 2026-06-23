@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import type { DbPool } from './db.js';
 
 export function hashToken(raw: string): string {
   return createHash('sha256').update(raw).digest('hex');
@@ -43,8 +44,6 @@ export function memorySessionStore(): SessionStore {
     },
   };
 }
-
-import type { DbPool } from './db.js';
 
 interface SessionRow { id: string; user_id: string; expires_at: Date }
 

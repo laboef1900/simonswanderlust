@@ -1,4 +1,5 @@
 import { randomBytes, scryptSync, timingSafeEqual, randomUUID } from 'node:crypto';
+import type { DbPool } from './db.js';
 
 const N = 16384;
 const R = 8;
@@ -79,8 +80,6 @@ export function memoryUserStore(): UserStore {
   };
 }
 
-import type { DbPool } from './db.js';
-
 interface UserRow { id: string; username: string; password_hash: string; is_admin: boolean; created_at: Date }
 function rowToUser(r: UserRow): User {
   return { id: r.id, username: r.username, passwordHash: r.password_hash, isAdmin: r.is_admin, createdAt: r.created_at };
@@ -90,11 +89,15 @@ export function pgUserStore(pool: DbPool): UserStore {
   return {
     async count() {
       const { rows } = await pool.query<{ n: string }>('SELECT count(*)::text AS n FROM users');
-      return Number(rows[0]!.n);
+      const row = rows[0];
+      if (!row) throw new Error('COUNT query returned no rows');
+      return Number(row.n);
     },
     async countAdmins() {
       const { rows } = await pool.query<{ n: string }>('SELECT count(*)::text AS n FROM users WHERE is_admin');
-      return Number(rows[0]!.n);
+      const row = rows[0];
+      if (!row) throw new Error('COUNT query returned no rows');
+      return Number(row.n);
     },
     async findByUsername(username) {
       const { rows } = await pool.query<UserRow>('SELECT * FROM users WHERE lower(username) = lower($1) LIMIT 1', [username]);
@@ -115,7 +118,9 @@ export function pgUserStore(pool: DbPool): UserStore {
           'INSERT INTO users (id, username, password_hash, is_admin) VALUES ($1,$2,$3,$4) RETURNING *',
           [id, username, hashPassword(password), isAdmin],
         );
-        return rowToUser(rows[0]!);
+        const row = rows[0];
+        if (!row) throw new Error('INSERT RETURNING returned no rows');
+        return rowToUser(row);
       } catch (e) {
         if ((e as { code?: string }).code === '23505') throw new UserExistsError('username already exists');
         throw e;
