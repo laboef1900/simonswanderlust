@@ -18,13 +18,21 @@
     "@astrojs/sitemap": "^3.7.3",
     "@tailwindcss/vite": "^4.3.0",
     "astro": "^6.4.6",
-    "tailwindcss": "^4.3.0"
+    "gray-matter": "^4.0.3",
+    "hastscript": "^9.0.1",
+    "pg": "^8.22.0",
+    "rehype-parse": "^9.0.1",
+    "rehype-stringify": "^10.0.1",
+    "tailwindcss": "^4.3.0",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.1.0"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.9",
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@tailwindcss/typography": "^0.5.20",
+    "@types/pg": "^8.20.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
   }
