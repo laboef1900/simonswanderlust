@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LLM Settings · Simon's Wanderlust</title>
+    <link rel="stylesheet" href="/admin/admin.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="masthead-inner">
+        <p class="eyebrow">Expedition Log · Image Station</p>
+        <h1>LLM settings</h1>
+        <p class="lede">
+          Configure the local vision model used for alt-text suggestions. Saved here and applied
+          immediately — no redeploy. Defaults come from the server's environment.
+        </p>
+        <nav><a href="/admin/">← Hero upload</a> <a href="/admin/batch.html">Batch uploader</a></nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="card">
+        <label for="token">Auth token</label>
+        <input id="token" type="password" placeholder="Bearer token" />
+
+        <label for="baseUrl">LM Studio base URL</label>
+        <input id="baseUrl" type="text" placeholder="http://host.docker.internal:1234/v1" />
+
+        <label for="model">Model</label>
+        <select id="model"></select>
+        <input id="modelManual" type="text" placeholder="…or type a model id" />
+
+        <label for="timeout">Caption timeout (ms)</label>
+        <input id="timeout" type="number" min="1000" max="600000" />
+
+        <label for="maxEdge">Max image edge (px)</label>
+        <input id="maxEdge" type="number" min="256" max="4096" />
+
+        <label for="prompt">Caption prompt</label>
+        <textarea id="prompt" rows="8"></textarea>
+
+        <button id="test">Test connection</button>
+        <button id="save">Save</button>
+      </section>
+
+      <div class="route" aria-hidden="true">
+        <span class="dot"></span><span class="seg"></span>
+        <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>
+        <span class="seg"></span><span class="ring"></span>
+      </div>
+
+      <p class="section-label">Status</p>
+      <pre id="out">—</pre>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const authed = () => ({ authorization: 'Bearer ' + $('token').value.trim() });
+
+      function fill(s) {
+        $('baseUrl').value = s.lmBaseUrl || '';
+        $('timeout').value = s.captionTimeoutMs ?? '';
+        $('maxEdge').value = s.captionMaxEdge ?? '';
+        $('prompt').value = s.captionPrompt || '';
+        const sel = $('model');
+        if (![...sel.options].some((o) => o.value === s.lmModel)) {
+          sel.add(new Option(s.lmModel, s.lmModel));
+        }
+        sel.value = s.lmModel;
+      }
+
+      async function loadModels() {
+        try {
+          const res = await fetch('/settings/models?baseUrl=' + encodeURIComponent($('baseUrl').value.trim()), { headers: authed() });
+          const { models } = await res.json();
+          const sel = $('model');
+          const keep = sel.value;
+          sel.innerHTML = '';
+          for (const m of models) sel.add(new Option(m, m));
+          if (keep && ![...sel.options].some((o) => o.value === keep)) sel.add(new Option(keep, keep));
+          if (keep) sel.value = keep;
+        } catch { /* leave the manual field */ }
+      }
+
+      async function init() {
+        if (!$('token').value.trim()) { $('out').textContent = 'Enter your auth token to load settings.'; return; }
+        try {
+          const res = await fetch('/settings', { headers: authed() });
+          if (!res.ok) { $('out').textContent = 'Could not load settings: ' + res.status; return; }
+          fill(await res.json());
+          await loadModels();
+          $('out').textContent = 'Loaded. Edit and Save, or Test connection.';
+        } catch (e) { $('out').textContent = 'Error: ' + e; }
+      }
+      $('token').addEventListener('change', init);
+
+      function chosenModel() { return $('modelManual').value.trim() || $('model').value; }
+
+      $('test').addEventListener('click', async () => {
+        $('out').textContent = 'Testing…';
+        try {
+          const res = await fetch('/settings/test', {
+            method: 'POST', headers: { ...authed(), 'content-type': 'application/json' },
+            body: JSON.stringify({ baseUrl: $('baseUrl').value.trim(), model: chosenModel() }),
+          });
+          const r = await res.json();
+          $('out').textContent = r.reachable
+            ? 'Reachable. Model ' + (r.modelPresent ? 'is available ✓' : 'NOT found — pick another') + '.'
+            : 'Not reachable: ' + (r.error || 'unknown error');
+        } catch (e) { $('out').textContent = 'Error: ' + e; }
+      });
+
+      $('save').addEventListener('click', async () => {
+        $('out').textContent = 'Saving…';
+        const payload = {
+          lmBaseUrl: $('baseUrl').value.trim(),
+          lmModel: chosenModel(),
+          captionTimeoutMs: Number($('timeout').value),
+          captionMaxEdge: Number($('maxEdge').value),
+          captionPrompt: $('prompt').value,
+        };
+        try {
+          const res = await fetch('/settings', {
+            method: 'POST', headers: { ...authed(), 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const r = await res.json();
+          if (!res.ok) { $('out').textContent = 'Not saved: ' + (r.error || res.status); return; }
+          fill(r);
+          $('out').textContent = 'Saved. New settings apply to the next suggestion.';
+        } catch (e) { $('out').textContent = 'Error: ' + e; }
+      });
+    </script>
+  </body>
+</html>
