@@ -18,18 +18,23 @@ you're authoring from** — captioning happens in your browser, calling LM Studi
 `http://localhost:1234` (set on the LLM settings page). No suggestions? You can always type the
 alt text by hand.
 
+**Sign in first** — open `/admin/` (`https://simonswanderlust.com/admin/` or locally
+`http://localhost:3000/admin/`). If this is a brand-new deployment, the first visit to `/login`
+prompts you to create the initial admin account. After signing in, all admin pages work via the
+session cookie — no token to paste.
+
 **Hero image** (one per post) — open the uploader admin:
 
-- `https://simonswanderlust.com/admin/` (locally: `http://localhost:8090/admin/`) — the admin
+- `https://simonswanderlust.com/admin/` (locally: `http://localhost:3000/admin/`) — the admin
   panel runs on the site's own domain under `/admin/`, WordPress-style (the site's nginx proxies
-  it to the uploader). The uploader's own `:3000/admin/` still works too.
-- Enter the token (`grep AUTH_TOKEN .env`), a **key** like `trips/<slug>/hero`, alt text, pick the photo, **Upload**.
+  it to the uploader).
+- Enter a **key** like `trips/<slug>/hero`, alt text, pick the photo, **Upload**.
 - Copy the returned `heroImage:` YAML block.
 
 **Body / gallery photos** (the rest) — open the batch page:
 
 - `…/admin/batch.html`
-- Enter the token + a shared **prefix** like `trips/<slug>`, pick several photos, **Suggest**.
+- Enter a shared **prefix** like `trips/<slug>`, pick several photos, **Suggest**.
 - The local model proposes a slug + **German and English** alt text per photo; review/edit.
 - **Upload all**, then copy the `<BodyImage …>` snippets (one DE, one EN per photo).
 
