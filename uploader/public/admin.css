@@ -1,0 +1,189 @@
+/*
+ * Admin UI styling — mirrors the blog's editorial / "expedition-log" identity
+ * (see blog site/src/styles/global.css). Inter + IBM Plex Mono are loaded via
+ * a <link> in each page, with system fallbacks if the network is unavailable.
+ */
+:root {
+  --canvas: #fbfbfd;
+  --navy: #142a42;
+  --ink: #16212e;
+  --red: #d23b30;
+  --red-light: #ff5a4e;
+  --line: rgba(20, 42, 66, 0.15);
+  --sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--sans);
+  line-height: 1.55;
+}
+
+/* ---- masthead (navy band) ---- */
+.masthead { background: var(--navy); color: #fff; padding: 1.6rem 1.25rem; }
+.masthead-inner { max-width: 880px; margin: 0 auto; }
+.eyebrow {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--red-light);
+}
+.masthead h1 {
+  margin: 0.35rem 0 0;
+  font-size: clamp(1.5rem, 4vw, 2rem);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.masthead .lede {
+  margin: 0.45rem 0 0;
+  max-width: 56ch;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.95rem;
+}
+.masthead nav { margin-top: 0.95rem; display: flex; flex-wrap: wrap; gap: 1.25rem; }
+.masthead nav a {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #fff;
+  text-decoration: none;
+  padding-bottom: 2px;
+  border-bottom: 1px solid transparent;
+}
+.masthead nav a:hover { color: var(--red-light); border-bottom-color: var(--red-light); }
+
+/* ---- layout ---- */
+main { max-width: 880px; margin: 0 auto; padding: 1.75rem 1.25rem 3rem; }
+
+.card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+  padding: 1.25rem 1.35rem;
+}
+
+.help { margin: 0 0 1.25rem; color: rgba(22, 33, 46, 0.7); font-size: 0.92rem; }
+
+code { font-family: var(--mono); font-size: 0.88em; }
+
+/* ---- form controls ---- */
+label {
+  display: block;
+  margin: 1rem 0 0.35rem;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--navy);
+}
+.card > label:first-of-type { margin-top: 0; }
+
+input, textarea {
+  width: 100%;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: #fff;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 0.95rem;
+}
+textarea { resize: vertical; }
+input:focus, textarea:focus { outline: 2px solid var(--red); outline-offset: 1px; border-color: var(--red); }
+
+input[type='file'] { padding: 0.45rem; cursor: pointer; }
+input[type='file']::file-selector-button {
+  margin-right: 0.8rem;
+  padding: 0.45rem 0.8rem;
+  border: 0;
+  border-radius: 0.4rem;
+  background: var(--navy);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+input[type='file']::file-selector-button:hover { background: var(--red); }
+
+button {
+  margin-top: 1.25rem;
+  padding: 0.7rem 1.3rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: var(--red);
+  color: #fff;
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+button:hover { background: var(--red-light); }
+button:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+
+/* ---- signature: dashed route divider (matches the blog's RouteDivider) ---- */
+.route { display: flex; align-items: center; gap: 0.5rem; margin: 2rem 0 1.25rem; }
+.route .dot { height: 6px; width: 6px; border-radius: 9999px; background: var(--red); }
+.route .ring { height: 6px; width: 6px; border-radius: 9999px; border: 2px solid var(--red); background: var(--canvas); }
+.route .seg { flex: 1; border-top: 2px dashed var(--line); }
+.route svg { color: rgba(22, 33, 46, 0.4); }
+
+.section-label {
+  margin: 0 0 0.6rem;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--red);
+}
+
+/* ---- output (expedition-log readout) ---- */
+pre {
+  margin: 0;
+  padding: 1rem 1.1rem;
+  border-radius: 0.5rem;
+  background: var(--navy);
+  color: #e7eef6;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---- batch rows ---- */
+.row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 1rem;
+  margin: 1rem 0;
+  padding: 1rem;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+}
+.row img { width: 120px; height: auto; border-radius: 0.4rem; }
+.fields { display: grid; gap: 0.15rem; }
+.fields label { margin: 0.6rem 0 0.25rem; }
+.fields label:first-child { margin-top: 0; }
+.err { color: var(--red); font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.03em; }
+small { color: rgba(22, 33, 46, 0.6); font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.04em; }
+
+@media (max-width: 560px) {
+  .row { grid-template-columns: 1fr; }
+  .row img { width: 100%; max-width: 220px; }
+}

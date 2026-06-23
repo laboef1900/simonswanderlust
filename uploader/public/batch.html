@@ -3,38 +3,56 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Batch Image Uploader</title>
-    <style>
-      body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
-      label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }
-      input, textarea { width: 100%; padding: 0.4rem; box-sizing: border-box; }
-      button { margin-top: 1rem; padding: 0.6rem 1rem; font-weight: 600; }
-      .row { display: grid; grid-template-columns: 120px 1fr; gap: 0.75rem; border: 1px solid #ddd; padding: 0.75rem; margin: 0.75rem 0; }
-      .row img { width: 120px; height: auto; border-radius: 4px; }
-      .row .err { color: #b00; font-size: 0.85rem; }
-      .fields { display: grid; gap: 0.4rem; }
-      pre { background: #f4f4f6; padding: 1rem; white-space: pre-wrap; }
-      .nav a { font-size: 0.9rem; }
-    </style>
+    <title>Batch Uploader · Simon's Wanderlust</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body>
-    <p class="nav"><a href="/admin/">← Single hero upload</a></p>
-    <h1>Batch Image Uploader</h1>
-    <p>For a post's body photos. The hero image is uploaded separately on the main page.</p>
+    <header class="masthead">
+      <div class="masthead-inner">
+        <p class="eyebrow">Expedition Log · Image Station</p>
+        <h1>Batch uploader</h1>
+        <p class="lede">
+          Upload a post's body photos. A local vision model suggests German + English alt text
+          and a slug for each — review, then paste the <code>BodyImage</code> snippets into the
+          post. The hero image is uploaded separately.
+        </p>
+        <nav><a href="/admin/">← Hero upload</a></nav>
+      </div>
+    </header>
 
-    <label for="token">Auth token</label>
-    <input id="token" type="password" placeholder="Bearer token" />
-    <label for="prefix">Shared key prefix (e.g. trips/rhodes-2021)</label>
-    <input id="prefix" type="text" />
-    <label for="files">Photos</label>
-    <input id="files" type="file" accept="image/*" multiple />
-    <button id="suggest">Suggest alt + slugs</button>
+    <main>
+      <section class="card">
+        <label for="token">Auth token</label>
+        <input id="token" type="password" placeholder="Bearer token" />
+        <label for="prefix">Shared key prefix — e.g. trips/rhodes-2021</label>
+        <input id="prefix" type="text" />
+        <label for="files">Photos</label>
+        <input id="files" type="file" accept="image/*" multiple />
+        <button id="suggest">Suggest alt + slugs</button>
+      </section>
 
-    <div id="rows"></div>
-    <button id="upload" style="display:none">Upload all</button>
+      <div id="rows"></div>
+      <button id="upload" style="display:none">Upload all</button>
 
-    <h2>Snippets</h2>
-    <pre id="out">—</pre>
+      <div class="route" aria-hidden="true">
+        <span class="dot"></span>
+        <span class="seg"></span>
+        <svg width="16" height="16" viewBox="0 0 16 16">
+          <path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" />
+        </svg>
+        <span class="seg"></span>
+        <span class="ring"></span>
+      </div>
+
+      <p class="section-label">Snippets</p>
+      <pre id="out">—</pre>
+    </main>
 
     <script>
       const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;

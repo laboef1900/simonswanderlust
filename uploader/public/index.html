@@ -3,29 +3,55 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Image Uploader</title>
-    <style>
-      body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
-      label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }
-      input { width: 100%; padding: 0.5rem; }
-      button { margin-top: 1rem; padding: 0.6rem 1rem; font-weight: 600; }
-      pre { background: #f4f4f6; padding: 1rem; white-space: pre-wrap; }
-    </style>
+    <title>Image Station · Simon's Wanderlust</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body>
-    <h1>Image Uploader</h1>
-    <p style="font-size:0.9rem"><a href="/admin/batch.html">Batch upload a post's body photos →</a></p>
-    <label for="token">Auth token</label>
-    <input id="token" type="password" placeholder="Bearer token" />
-    <label for="key">Key (e.g. trips/bucharest-2024/hero)</label>
-    <input id="key" type="text" />
-    <label for="alt">Alt text</label>
-    <input id="alt" type="text" />
-    <label for="file">Photo</label>
-    <input id="file" type="file" accept="image/*" />
-    <button id="go">Upload</button>
-    <h2>heroImage snippet</h2>
-    <pre id="out">—</pre>
+    <header class="masthead">
+      <div class="masthead-inner">
+        <p class="eyebrow">Expedition Log · Image Station</p>
+        <h1>Hero image</h1>
+        <p class="lede">
+          Upload one cover photo for a post. It's optimized into responsive AVIF/WebP and
+          returns a <code>heroImage</code> snippet to paste into the post's frontmatter.
+        </p>
+        <nav><a href="/admin/batch.html">Batch uploader →</a></nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="card">
+        <label for="token">Auth token</label>
+        <input id="token" type="password" placeholder="Bearer token" />
+        <label for="key">Key — e.g. trips/bucharest-2024/hero</label>
+        <input id="key" type="text" />
+        <label for="alt">Alt text</label>
+        <input id="alt" type="text" />
+        <label for="file">Photo</label>
+        <input id="file" type="file" accept="image/*" />
+        <button id="go">Upload</button>
+      </section>
+
+      <div class="route" aria-hidden="true">
+        <span class="dot"></span>
+        <span class="seg"></span>
+        <svg width="16" height="16" viewBox="0 0 16 16">
+          <path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" />
+        </svg>
+        <span class="seg"></span>
+        <span class="ring"></span>
+      </div>
+
+      <p class="section-label">heroImage snippet</p>
+      <pre id="out">—</pre>
+    </main>
+
     <script>
       document.getElementById('go').addEventListener('click', async () => {
         const out = document.getElementById('out');
