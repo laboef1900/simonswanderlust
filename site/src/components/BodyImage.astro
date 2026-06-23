@@ -31,4 +31,6 @@ const {
 const image: RemoteHeroImage = { src, width, height, alt };
 ---
 
-<RemoteImage image={image} sizes={sizes} loading="lazy" class="rounded-lg" />
+<figure class="my-8">
+  <RemoteImage image={image} sizes={sizes} loading="lazy" class="block w-full rounded-lg" />
+</figure>
