@@ -5,11 +5,32 @@ services:
       - "3000:3000"
     environment:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://img.simonswanderlust.com}
-      AUTH_TOKEN: ${AUTH_TOKEN:?set AUTH_TOKEN in .env}
+      DATABASE_URL: ${DATABASE_URL:-postgres://images:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/images}
       LMSTUDIO_BASE_URL: ${LMSTUDIO_BASE_URL:-http://localhost:1234/v1}
       LMSTUDIO_MODEL: ${LMSTUDIO_MODEL:-qwen/qwen3-vl-4b}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/data
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-images}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-images}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-images} -d ${POSTGRES_DB:-images}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:
