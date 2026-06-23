@@ -43,3 +43,37 @@ export function memorySessionStore(): SessionStore {
     },
   };
 }
+
+import type { DbPool } from './db.js';
+
+interface SessionRow { id: string; user_id: string; expires_at: Date }
+
+export function pgSessionStore(pool: DbPool): SessionStore {
+  return {
+    async create(userId, ttlMs) {
+      const raw = randomBytes(32).toString('hex');
+      const id = hashToken(raw);
+      const expiresAt = new Date(Date.now() + ttlMs);
+      await pool.query('INSERT INTO sessions (id, user_id, expires_at) VALUES ($1,$2,$3)', [id, userId, expiresAt]);
+      return raw;
+    },
+    async find(rawToken) {
+      if (!rawToken) return null;
+      const id = hashToken(rawToken);
+      const { rows } = await pool.query<SessionRow>('SELECT id, user_id, expires_at FROM sessions WHERE id = $1', [id]);
+      const row = rows[0];
+      if (!row) return null;
+      if (row.expires_at.getTime() <= Date.now()) {
+        await pool.query('DELETE FROM sessions WHERE id = $1', [id]);
+        return null;
+      }
+      return { id: row.id, userId: row.user_id, expiresAt: row.expires_at };
+    },
+    async destroy(rawToken) {
+      if (rawToken) await pool.query('DELETE FROM sessions WHERE id = $1', [hashToken(rawToken)]);
+    },
+    async sweepExpired() {
+      await pool.query('DELETE FROM sessions WHERE expires_at <= now()');
+    },
+  };
+}

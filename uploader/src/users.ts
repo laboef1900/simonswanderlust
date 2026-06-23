@@ -78,3 +78,51 @@ export function memoryUserStore(): UserStore {
     async remove(id) { byId.delete(id); },
   };
 }
+
+import type { DbPool } from './db.js';
+
+interface UserRow { id: string; username: string; password_hash: string; is_admin: boolean; created_at: Date }
+function rowToUser(r: UserRow): User {
+  return { id: r.id, username: r.username, passwordHash: r.password_hash, isAdmin: r.is_admin, createdAt: r.created_at };
+}
+
+export function pgUserStore(pool: DbPool): UserStore {
+  return {
+    async count() {
+      const { rows } = await pool.query<{ n: string }>('SELECT count(*)::text AS n FROM users');
+      return Number(rows[0]!.n);
+    },
+    async countAdmins() {
+      const { rows } = await pool.query<{ n: string }>('SELECT count(*)::text AS n FROM users WHERE is_admin');
+      return Number(rows[0]!.n);
+    },
+    async findByUsername(username) {
+      const { rows } = await pool.query<UserRow>('SELECT * FROM users WHERE lower(username) = lower($1) LIMIT 1', [username]);
+      return rows[0] ? rowToUser(rows[0]) : null;
+    },
+    async findById(id) {
+      const { rows } = await pool.query<UserRow>('SELECT * FROM users WHERE id = $1', [id]);
+      return rows[0] ? rowToUser(rows[0]) : null;
+    },
+    async list() {
+      const { rows } = await pool.query<UserRow>('SELECT * FROM users ORDER BY created_at ASC');
+      return rows.map(rowToUser);
+    },
+    async create({ username, password, isAdmin }) {
+      const id = randomUUID();
+      try {
+        const { rows } = await pool.query<UserRow>(
+          'INSERT INTO users (id, username, password_hash, is_admin) VALUES ($1,$2,$3,$4) RETURNING *',
+          [id, username, hashPassword(password), isAdmin],
+        );
+        return rowToUser(rows[0]!);
+      } catch (e) {
+        if ((e as { code?: string }).code === '23505') throw new UserExistsError('username already exists');
+        throw e;
+      }
+    },
+    async remove(id) {
+      await pool.query('DELETE FROM users WHERE id = $1', [id]);
+    },
+  };
+}
