@@ -20,10 +20,25 @@ window.Auth = (function () {
   function renderHeader(s) {
     const el = document.getElementById('whoami');
     if (!el) return;
-    const adminLink = s.isAdmin ? ' · <a href="/admin/users.html">Users</a>' : '';
-    el.innerHTML = 'Logged in as <strong>' + s.username + '</strong>' + adminLink +
-      ' · <a href="#" id="logoutLink">Logout</a>';
-    document.getElementById('logoutLink').addEventListener('click', (e) => { e.preventDefault(); logout(); });
+    el.textContent = '';
+    el.appendChild(document.createTextNode('Logged in as '));
+    const strong = document.createElement('strong');
+    strong.textContent = s.username;
+    el.appendChild(strong);
+    if (s.isAdmin) {
+      el.appendChild(document.createTextNode(' · '));
+      const usersLink = document.createElement('a');
+      usersLink.href = '/admin/users.html';
+      usersLink.textContent = 'Users';
+      el.appendChild(usersLink);
+    }
+    el.appendChild(document.createTextNode(' · '));
+    const logoutLink = document.createElement('a');
+    logoutLink.href = '#';
+    logoutLink.id = 'logoutLink';
+    logoutLink.textContent = 'Logout';
+    logoutLink.addEventListener('click', (e) => { e.preventDefault(); logout(); });
+    el.appendChild(logoutLink);
   }
   return { status, ensureAuthed, logout, renderHeader };
 })();

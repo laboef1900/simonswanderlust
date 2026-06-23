@@ -57,6 +57,7 @@
             btn.textContent = 'Remove';
             btn.addEventListener('click', async () => {
               const d = await fetch('/users/' + u.id, { method: 'DELETE' });
+              if (d.status === 401) { location.href = '/login'; return; }
               if (d.ok) { load(); } else { const r = await d.json().catch(() => ({})); $('out').textContent = r.error || ('Failed: ' + d.status); }
             });
             li.appendChild(btn);
@@ -70,6 +71,7 @@
         const isAdmin = $('isAdmin').checked;
         if (!username || !password) { $('out').textContent = 'Enter a username and password.'; return; }
         const res = await fetch('/users', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password, isAdmin }) });
+        if (res.status === 401) { location.href = '/login'; return; }
         if (res.ok) { $('out').textContent = 'Added ' + username + '.'; $('username').value = ''; $('password').value = ''; $('isAdmin').checked = false; load(); }
         else { const r = await res.json().catch(() => ({})); $('out').textContent = r.error || ('Failed: ' + res.status); }
       });
