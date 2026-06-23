@@ -84,6 +84,14 @@ AUTH_TOKEN=$(openssl rand -hex 32) STORAGE_DIR=./data/images \
 # -> "image uploader listening on :3000", admin at http://localhost:3000/admin/
 ```
 
+## LLM settings
+
+Open `/admin/settings.html`. Configure the LM Studio base URL, model (dropdown populated from
+`/v1/models`, or type one), caption timeout, max image edge, and the caption prompt. **Test
+connection** checks LM Studio is reachable and the model is present; **Save** persists to
+`SETTINGS_PATH` (default `/data/settings.json`, on the volume) and applies immediately — no
+restart. The `LMSTUDIO_*` / `CAPTION_*` env vars seed the defaults until you save.
+
 ---
 
 ## Deploy to your server
