@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdir, rm, rename, symlink, readdir, stat } from 'node:fs/promises';
+import { mkdir, rm, rename, symlink, readdir, stat, readlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 
@@ -41,9 +41,14 @@ export async function buildAndDeploy() {
     const tmpLink = join(RELEASES_DIR, `.current.${stamp}`);
     await symlink(dest, tmpLink);
     await rename(tmpLink, join(RELEASES_DIR, 'current'));
-    // prune old releases (keep last 3)
+    // prune old releases (keep last 3), never deleting the live release
     const all = (await readdir(releases)).sort();
-    for (const old of all.slice(0, -3)) await rm(join(releases, old), { recursive: true, force: true });
+    let live = '';
+    try { live = (await readlink(join(RELEASES_DIR, 'current'))).split('/').pop() ?? ''; } catch { /* no current yet */ }
+    for (const old of all.slice(0, -3)) {
+      if (old === live) continue;
+      await rm(join(releases, old), { recursive: true, force: true });
+    }
     return stamp;
   } finally {
     building = false;
@@ -54,14 +59,14 @@ function serve() {
   const server = createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
       let ok = false;
-      try { ok = (await stat(join(RELEASES_DIR, 'current'))).isSymbolicLink?.() ?? true; } catch { ok = false; }
+      try { ok = (await stat(join(RELEASES_DIR, 'current'))).isDirectory(); } catch { ok = false; }
       res.writeHead(ok ? 200 : 503).end(ok ? 'ok' : 'no build yet');
       return;
     }
     if (req.method === 'POST' && req.url === '/build') {
       if (!isAuthorized(req.headers['x-build-secret'], SECRET)) { res.writeHead(401).end('unauthorized'); return; }
-      try { const stamp = await buildAndDeploy(); res.writeHead(200).end(JSON.stringify({ ok: true, release: stamp })); }
-      catch (e) { res.writeHead(500).end(JSON.stringify({ ok: false, error: String(e) })); }
+      try { const stamp = await buildAndDeploy(); res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, release: stamp })); }
+      catch (e) { res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: false, error: String(e) })); }
       return;
     }
     res.writeHead(404).end('not found');
