@@ -46,10 +46,10 @@ export async function loadUser(req: FastifyRequest, users: UserStore, sessions: 
 }
 
 export async function requireAuth(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-  if (!req.authUser) reply.code(401).send({ error: 'unauthorized' });
+  if (!req.authUser) { reply.code(401).send({ error: 'unauthorized' }); return; }
 }
 
 export async function requireAdmin(req: FastifyRequest, reply: FastifyReply): Promise<void> {
   if (!req.authUser) { reply.code(401).send({ error: 'unauthorized' }); return; }
-  if (!req.authUser.isAdmin) reply.code(403).send({ error: 'forbidden' });
+  if (!req.authUser.isAdmin) { reply.code(403).send({ error: 'forbidden' }); return; }
 }

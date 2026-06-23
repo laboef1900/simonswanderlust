@@ -5,7 +5,7 @@ services:
       - "3000:3000"
     environment:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://img.simonswanderlust.com}
-      DATABASE_URL: ${DATABASE_URL:-postgres://images:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/images}
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-images}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-images}}
       LMSTUDIO_BASE_URL: ${LMSTUDIO_BASE_URL:-http://localhost:1234/v1}
       LMSTUDIO_MODEL: ${LMSTUDIO_MODEL:-qwen/qwen3-vl-4b}
     extra_hosts:

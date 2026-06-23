@@ -207,6 +207,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send({ username: user.username, isAdmin: user.isAdmin });
   });
 
+  // @ai-note: login rate-limiting/throttling would slot in here (deferred — see docs/superpowers/specs/2026-06-23-uploader-auth-design.md). Add before exposing beyond a trusted network.
   app.post('/login', async (req, reply) => {
     const b = (req.body ?? {}) as { username?: unknown; password?: unknown };
     const username = String(b.username ?? '').trim();
