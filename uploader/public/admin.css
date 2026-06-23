@@ -228,3 +228,8 @@ small { color: rgba(22, 33, 46, 0.6); font-family: var(--mono); font-size: 0.72r
   .row { grid-template-columns: 1fr; }
   .row img { width: 100%; max-width: 220px; }
 }
+
+.muted { color: #6b7280; font-size: 0.9rem; margin-top: 0.5rem; }
+#list { list-style: none; padding: 0; }
+#list li { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0; border-bottom: 1px dashed #d1d5db; }
+#list li button { margin-left: auto; }

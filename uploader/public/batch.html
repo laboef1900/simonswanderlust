@@ -21,13 +21,12 @@
           <a href="/admin/batch.html" aria-current="page">Batch uploader</a>
           <a href="/admin/settings.html">LLM settings</a>
         </nav>
+        <p class="muted" id="whoami"></p>
       </div>
     </header>
 
     <main>
       <section class="card">
-        <label for="token">Auth token</label>
-        <input id="token" type="password" placeholder="Bearer token" />
         <label for="prefix">Shared key prefix — e.g. trips/rhodes-2021</label>
         <input id="prefix" type="text" />
         <label for="files">Photos</label>
@@ -52,6 +51,7 @@
       <pre id="out">—</pre>
     </main>
 
+    <script src="/admin/auth.js"></script>
     <script src="/admin/llm.js"></script>
     <script>
       const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
@@ -62,16 +62,15 @@
       const tag = (src, w, h, alt) => `<BodyImage src="${esc(src)}" width={${w}} height={${h}} alt="${esc(alt)}" />`;
 
       $('suggest').addEventListener('click', async () => {
-        const token = $('token').value.trim();
         const files = [...$('files').files].filter((f) => f.type.startsWith('image/'));
         if (!files.length) { $('out').textContent = 'Pick at least one image.'; return; }
-        if (!token) { $('out').textContent = 'Enter your auth token first.'; return; }
 
         // Read the LLM config (model, prompt, base URL, max edge) from the server,
         // then call LM Studio DIRECTLY from this browser — the model runs locally.
         let cfg;
         try {
-          const r = await fetch('/settings', { headers: { authorization: 'Bearer ' + token } });
+          const r = await fetch('/settings');
+          if (r.status === 401) { location.href = '/login'; return; }
           if (!r.ok) { $('out').textContent = 'Could not load settings: ' + r.status; return; }
           cfg = await r.json();
         } catch (e) { $('out').textContent = 'Settings error: ' + e; return; }
@@ -122,7 +121,6 @@
       }
 
       $('upload').addEventListener('click', async () => {
-        const token = $('token').value;
         const prefix = $('prefix').value.trim().replace(/\/+$/, '');
         const keys = picked.map((p) => prefix + '/' + p.slug.trim());
         for (const k of keys) if (!KEY_RE.test(k)) { $('out').textContent = 'Invalid key: ' + k; return; }
@@ -138,7 +136,8 @@
           fd.append('file', p.file);
           let body;
           try {
-            const res = await fetch('/upload', { method: 'POST', headers: { authorization: 'Bearer ' + token }, body: fd });
+            const res = await fetch('/upload', { method: 'POST', body: fd });
+            if (res.status === 401) { location.href = '/login'; return; }
             body = await res.json();
             if (!res.ok) { blocks.push(`# ${keys[i]} — ERROR: ${body.error || res.status}`); continue; }
           } catch (e) { blocks.push(`# ${keys[i]} — ERROR: ${e}`); continue; }
@@ -150,6 +149,7 @@
         }
         $('out').textContent = blocks.join('\n\n');
       });
+      (async () => { const s = await Auth.ensureAuthed(); if (s) Auth.renderHeader(s); })();
     </script>
   </body>
 </html>

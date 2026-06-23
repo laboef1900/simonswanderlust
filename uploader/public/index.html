@@ -20,13 +20,12 @@
           <a href="/admin/batch.html">Batch uploader</a>
           <a href="/admin/settings.html">LLM settings</a>
         </nav>
+        <p class="muted" id="whoami"></p>
       </div>
     </header>
 
     <main>
       <section class="card">
-        <label for="token">Auth token</label>
-        <input id="token" type="password" placeholder="Bearer token" />
         <label for="key">Key — e.g. trips/bucharest-2024/hero</label>
         <input id="key" type="text" />
         <label for="alt">Alt text</label>
@@ -50,6 +49,7 @@
       <pre id="out">—</pre>
     </main>
 
+    <script src="/admin/auth.js"></script>
     <script>
       document.getElementById('go').addEventListener('click', async () => {
         const out = document.getElementById('out');
@@ -63,15 +63,16 @@
         try {
           const res = await fetch('/upload', {
             method: 'POST',
-            headers: { authorization: 'Bearer ' + document.getElementById('token').value },
             body: fd,
           });
+          if (res.status === 401) { location.href = '/login'; return; }
           const body = await res.json();
           out.textContent = res.ok ? body.snippet : 'Error: ' + (body.error || res.status);
         } catch (e) {
           out.textContent = 'Error: ' + e;
         }
       });
+      (async () => { const s = await Auth.ensureAuthed(); if (s) Auth.renderHeader(s); })();
     </script>
   </body>
 </html>

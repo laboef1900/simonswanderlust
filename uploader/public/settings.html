@@ -22,14 +22,12 @@
           <a href="/admin/batch.html">Batch uploader</a>
           <a href="/admin/settings.html" aria-current="page">LLM settings</a>
         </nav>
+        <p class="muted" id="whoami"></p>
       </div>
     </header>
 
     <main>
       <section class="card">
-        <label for="token">Auth token</label>
-        <input id="token" type="password" placeholder="Bearer token" />
-
         <label for="baseUrl">LM Studio base URL (as this browser reaches it)</label>
         <input id="baseUrl" type="text" placeholder="http://localhost:1234/v1" />
 
@@ -60,10 +58,10 @@
       <pre id="out">—</pre>
     </main>
 
+    <script src="/admin/auth.js"></script>
     <script src="/admin/llm.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
-      const authed = () => ({ authorization: 'Bearer ' + $('token').value.trim() });
 
       function fill(s) {
         $('baseUrl').value = s.lmBaseUrl || '';
@@ -77,40 +75,53 @@
         sel.value = s.lmModel;
       }
 
+      // Repopulate the dropdown from a live model list, preserving the current
+      // selection even if LM Studio isn't serving it (so a saved/manual id survives).
+      function populateModels(models) {
+        const sel = $('model');
+        const keep = sel.value;
+        sel.innerHTML = '';
+        for (const m of models) sel.add(new Option(m, m));
+        if (keep && ![...sel.options].some((o) => o.value === keep)) sel.add(new Option(keep, keep));
+        if (keep) sel.value = keep;
+      }
+
       async function loadModels() {
         try {
-          const models = await LLM.listModels($('baseUrl').value.trim());
-          const sel = $('model');
-          const keep = sel.value;
-          sel.innerHTML = '';
-          for (const m of models) sel.add(new Option(m, m));
-          if (keep && ![...sel.options].some((o) => o.value === keep)) sel.add(new Option(keep, keep));
-          if (keep) sel.value = keep;
+          populateModels(await LLM.listModels($('baseUrl').value.trim()));
         } catch { /* LM Studio not reachable from here — leave the manual field */ }
       }
 
       async function init() {
-        if (!$('token').value.trim()) { $('out').textContent = 'Enter your auth token to load settings.'; return; }
         try {
-          const res = await fetch('/settings', { headers: authed() });
+          const res = await fetch('/settings');
+          if (res.status === 401) { location.href = '/login'; return; }
           if (!res.ok) { $('out').textContent = 'Could not load settings: ' + res.status; return; }
           fill(await res.json());
           await loadModels();
           $('out').textContent = 'Loaded. Edit and Save, or Test connection.';
         } catch (e) { $('out').textContent = 'Error: ' + e; }
       }
-      $('token').addEventListener('change', init);
 
       function chosenModel() { return $('modelManual').value.trim() || $('model').value; }
 
       $('test').addEventListener('click', async () => {
         $('out').textContent = 'Testing from this browser…';
-        const model = chosenModel();
         try {
           const models = await LLM.listModels($('baseUrl').value.trim());
-          const present = models.includes(model);
-          $('out').textContent =
-            'Reachable from this browser. Model ' + (present ? 'is available ✓' : 'NOT found — pick another') + '.';
+          populateModels(models); // refresh the dropdown so whatever LM Studio serves is selectable
+          const model = chosenModel();
+          if (models.includes(model)) {
+            $('out').textContent = 'Reachable from this browser. Model "' + model + '" is available ✓';
+          } else if (models.length) {
+            $('out').textContent =
+              'Reachable, but "' + (model || '(none selected)') + '" is not being served. Available now: ' +
+              models.join(', ') + ' — pick one above (the dropdown was just refreshed).';
+          } else {
+            $('out').textContent =
+              'Reachable, but LM Studio is serving no models. Load your vision model in LM Studio ' +
+              '(and enable "Serve on Local Network"), then Test again.';
+          }
         } catch (e) {
           $('out').textContent = 'Not reachable from this browser: ' + e + ' — is LM Studio running here and serving on the network?';
         }
@@ -125,17 +136,36 @@
           captionMaxEdge: Number($('maxEdge').value),
           captionPrompt: $('prompt').value,
         };
+        let res;
         try {
-          const res = await fetch('/settings', {
-            method: 'POST', headers: { ...authed(), 'content-type': 'application/json' },
+          res = await fetch('/settings', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify(payload),
           });
-          const r = await res.json();
-          if (!res.ok) { $('out').textContent = 'Not saved: ' + (r.error || res.status); return; }
-          fill(r);
-          $('out').textContent = 'Saved. New settings apply to the next suggestion.';
-        } catch (e) { $('out').textContent = 'Error: ' + e; }
+        } catch (e) {
+          $('out').textContent = 'Could not send the save request (' + e + '). ' +
+            'Open this page over http://localhost:3000/admin/settings.html (not a file:// path), and try Chrome if Safari blocks it.';
+          return;
+        }
+        if (res.status === 401) { location.href = '/login'; return; }
+        const body = await res.text();
+        let r;
+        try { r = JSON.parse(body); }
+        catch {
+          $('out').textContent = 'Server replied with non-JSON (HTTP ' + res.status + ', ' +
+            (res.headers.get('content-type') || 'no content-type') + '): ' + body.slice(0, 200);
+          return;
+        }
+        if (!res.ok) { $('out').textContent = 'Not saved: ' + (r.error || res.status); return; }
+        fill(r);
+        $('out').textContent = 'Saved. New settings apply to the next suggestion.';
       });
+      (async () => {
+        const s = await Auth.ensureAuthed();
+        if (!s) return;
+        Auth.renderHeader(s);
+        await init();
+      })();
     </script>
   </body>
 </html>

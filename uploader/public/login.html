@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sign in · Simon's Wanderlust</title>
+    <link rel="stylesheet" href="/admin/admin.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="masthead-inner">
+        <p class="eyebrow">Expedition Log · Image Station</p>
+        <h1 id="title">Sign in</h1>
+        <p class="lede" id="lede">Enter your username and password.</p>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <label for="username">Username</label>
+        <input id="username" type="text" autocomplete="username" />
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" />
+        <button id="submit">Sign in</button>
+        <p class="section-label">Status</p>
+        <pre id="out">—</pre>
+      </section>
+    </main>
+    <script src="/admin/auth.js"></script>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let needsSetup = false;
+      async function init() {
+        const s = await Auth.status();
+        if (s.authenticated) { location.href = '/admin/'; return; }
+        needsSetup = !!s.needsSetup;
+        if (needsSetup) {
+          $('title').textContent = 'Create the first admin';
+          $('lede').textContent = 'No accounts exist yet. Create the first administrator account.';
+          $('submit').textContent = 'Create admin';
+          $('password').setAttribute('autocomplete', 'new-password');
+        }
+      }
+      $('submit').addEventListener('click', async () => {
+        const username = $('username').value.trim();
+        const password = $('password').value;
+        if (!username || !password) { $('out').textContent = 'Enter a username and password.'; return; }
+        $('out').textContent = needsSetup ? 'Creating…' : 'Signing in…';
+        const res = await fetch(needsSetup ? '/setup' : '/login', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        if (res.ok) { location.href = '/admin/'; return; }
+        const r = await res.json().catch(() => ({}));
+        $('out').textContent = r.error || ('Failed: ' + res.status);
+      });
+      init();
+    </script>
+  </body>
+</html>

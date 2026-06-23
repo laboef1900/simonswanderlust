@@ -19,7 +19,8 @@ container serves the build) alongside the uploader; both are wired in the root
 Tailwind 4. A separate **image uploader** (Node 22 + Fastify 5 + sharp, Dockerized) lives under
 `uploader/`: it optimizes uploaded photos into responsive AVIF/WebP variants and returns
 paste-ready `heroImage` / `<RemoteImage>` / `<BodyImage>` snippets (with optional local-AI alt
-text via LM Studio). Both run on Simon's own server. See `uploader/README.md` and the specs
+text via LM Studio). Access is gated by username/password accounts stored in Postgres, with
+HttpOnly session cookies. Both run on Simon's own server. See `uploader/README.md` and the specs
 `docs/superpowers/specs/2026-06-18-image-hosting-uploader-design.md` +
 `docs/superpowers/specs/2026-06-22-ai-batch-image-uploader-design.md`.
 
@@ -98,7 +99,7 @@ blog/
 │       ├── pages/                              # thin locale routes (de at root, en under /en/)
 │       └── layouts/  ·  styles/  ·  assets/
 └── uploader/                      # self-hosted image service (Node/Fastify/sharp, Docker)
-    ├── src/                       #   variants · pipeline · storage · auth · server · main · cli · caption
+    ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · caption · settings
     ├── public/                    #   index.html (hero upload) · batch.html (AI batch uploader)
     ├── test/                      #   Vitest suites (no live LM Studio needed)
     └── Dockerfile · docker-compose.yml · README.md

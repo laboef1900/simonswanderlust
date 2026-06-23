@@ -5,9 +5,11 @@ import { join, relative } from 'node:path';
 import sharp from 'sharp';
 import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
-import type { Caption, CaptionConfig } from '../src/caption.js';
+import type { Caption } from '../src/caption.js';
 import { validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
+import { memoryUserStore, type UserStore } from '../src/users.js';
+import { memorySessionStore, type SessionStore } from '../src/sessions.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -22,13 +24,24 @@ function fakeStore(init: Settings = SETTINGS): SettingsStore {
   let cur = { ...init };
   return { get: () => ({ ...cur }), update: (p) => { cur = validate({ ...cur, ...p }); return { ...cur }; } };
 }
-function build(extra: Partial<ServerConfig> = {}) {
-  return buildServer({
-    storageDir: dir, baseUrl: 'https://img.simonswanderlust.com', authToken: 'secret',
-    settings: fakeStore(), ...extra,
+
+interface Built { app: ReturnType<typeof buildServer>; users: UserStore; sessions: SessionStore; }
+function build(extra: Partial<ServerConfig> = {}): Built {
+  const users = (extra.users as UserStore) ?? memoryUserStore();
+  const sessions = (extra.sessions as SessionStore) ?? memorySessionStore();
+  const app = buildServer({
+    storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
+    users, sessions, settings: fakeStore(), ...extra,
   });
+  return { app, users, sessions };
 }
-function app() { return build(); }
+
+// Seed a user and return a Cookie header value for an authenticated session.
+async function authed(b: Built, opts: { isAdmin?: boolean; username?: string } = {}) {
+  const u = await b.users.create({ username: opts.username ?? 'simon', password: 'pw', isAdmin: opts.isAdmin ?? true });
+  const token = await b.sessions.create(u.id, 60_000);
+  return { user: u, cookie: { sid: token } };
+}
 
 async function jpeg(): Promise<Buffer> {
   return sharp({ create: { width: 1000, height: 800, channels: 3, background: '#444' } }).jpeg().toBuffer();
@@ -39,29 +52,33 @@ describe('POST /upload', () => {
     const form = new FormData();
     form.append('key', 'trips/t/hero');
     form.append('file', await jpeg(), { filename: 't.jpg', contentType: 'image/jpeg' });
-    const res = await app().inject({ method: 'POST', url: '/upload', headers: form.getHeaders(), payload: form });
+    const res = await build().app.inject({ method: 'POST', url: '/upload', headers: form.getHeaders(), payload: form });
     expect(res.statusCode).toBe(401);
   });
 
   it('400 for a non-image', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
     const form = new FormData();
     form.append('key', 'trips/t/hero');
     form.append('file', Buffer.from('not an image'), { filename: 't.txt', contentType: 'text/plain' });
-    const res = await app().inject({
+    const res = await b.app.inject({
       method: 'POST', url: '/upload',
-      headers: { ...form.getHeaders(), authorization: 'Bearer secret' }, payload: form,
+      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
     });
     expect(res.statusCode).toBe(400);
   });
 
   it('200 + snippet for a valid upload', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
     const form = new FormData();
     form.append('key', 'trips/bucharest-2024/hero');
     form.append('alt', 'Old town');
     form.append('file', await jpeg(), { filename: 't.jpg', contentType: 'image/jpeg' });
-    const res = await app().inject({
+    const res = await b.app.inject({
       method: 'POST', url: '/upload',
-      headers: { ...form.getHeaders(), authorization: 'Bearer secret' }, payload: form,
+      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
@@ -70,18 +87,19 @@ describe('POST /upload', () => {
   });
 
   it('serves stored variants with a long immutable cache header', async () => {
-    const a = app();
+    const b = build();
+    const { cookie } = await authed(b);
     const form = new FormData();
     form.append('key', 'trips/cache/hero');
     form.append('alt', 'c');
     form.append('file', await jpeg(), { filename: 't.jpg', contentType: 'image/jpeg' });
-    const up = await a.inject({
+    const up = await b.app.inject({
       method: 'POST', url: '/upload',
-      headers: { ...form.getHeaders(), authorization: 'Bearer secret' }, payload: form,
+      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
     });
     expect(up.statusCode).toBe(200);
     const file = (up.json().files as string[]).find((f) => f.endsWith('.webp'))!;
-    const res = await a.inject({ method: 'GET', url: '/' + file });
+    const res = await b.app.inject({ method: 'GET', url: '/' + file });
     expect(res.statusCode).toBe(200);
     expect(res.headers['cache-control']).toContain('max-age=31536000');
     expect(res.headers['cache-control']).toContain('immutable');
@@ -90,8 +108,8 @@ describe('POST /upload', () => {
 
 describe('buildServer config', () => {
   it('boots with a relative storageDir (resolves it to absolute)', async () => {
-    const rel = relative(process.cwd(), dir); // @fastify/static rejects relative roots
-    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', authToken: 'secret', settings: fakeStore() });
+    const rel = relative(process.cwd(), dir);
+    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore() });
     await expect(srv.ready()).resolves.toBeDefined();
     await srv.close();
   });
@@ -103,39 +121,45 @@ describe('POST /suggest', () => {
   it('401 without auth', async () => {
     const form = new FormData();
     form.append('file', await jpeg(), { filename: 'a.jpg', contentType: 'image/jpeg' });
-    const res = await app().inject({ method: 'POST', url: '/suggest', headers: form.getHeaders(), payload: form });
+    const res = await build().app.inject({ method: 'POST', url: '/suggest', headers: form.getHeaders(), payload: form });
     expect(res.statusCode).toBe(401);
   });
 
   it('returns suggestions + dimensions', async () => {
+    const b = build({ captionImpl: okCaption });
+    const { cookie } = await authed(b);
     const form = new FormData();
     form.append('file', await jpeg(), { filename: 'a.jpg', contentType: 'image/jpeg' });
-    const res = await build({ captionImpl: okCaption }).inject({
+    const res = await b.app.inject({
       method: 'POST', url: '/suggest',
-      headers: { ...form.getHeaders(), authorization: 'Bearer secret' }, payload: form,
+      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().results[0]).toMatchObject({ filename: 'a.jpg', slug: 'old-town', altEn: 'Old town', altDe: 'Altstadt', width: 1000, height: 800 });
   });
 
   it('degrades a row when captioning throws, keeping dimensions', async () => {
+    const b = build({ captionImpl: async () => { throw new Error('down'); } });
+    const { cookie } = await authed(b);
     const form = new FormData();
     form.append('file', await jpeg(), { filename: 'a.jpg', contentType: 'image/jpeg' });
-    const res = await build({ captionImpl: async () => { throw new Error('down'); } }).inject({
+    const res = await b.app.inject({
       method: 'POST', url: '/suggest',
-      headers: { ...form.getHeaders(), authorization: 'Bearer secret' }, payload: form,
+      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().results[0]).toMatchObject({ captionError: true, slug: '', width: 1000, height: 800 });
   });
 
   it('returns one row per file part even when a file is undecodable', async () => {
+    const b = build({ captionImpl: okCaption });
+    const { cookie } = await authed(b);
     const form = new FormData();
     form.append('file', await jpeg(), { filename: 'good.jpg', contentType: 'image/jpeg' });
     form.append('file', Buffer.from('not a real image'), { filename: 'bad.jpg', contentType: 'image/jpeg' });
-    const res = await build({ captionImpl: okCaption }).inject({
+    const res = await b.app.inject({
       method: 'POST', url: '/suggest',
-      headers: { ...form.getHeaders(), authorization: 'Bearer secret' }, payload: form,
+      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
     });
     const rows = res.json().results;
     expect(rows).toHaveLength(2);
@@ -149,29 +173,34 @@ describe('settings endpoints', () => {
     (async () => ({ ok: true, json: async () => ({ data: ids.map((id) => ({ id })) }) })) as unknown as typeof fetch;
 
   it('GET /settings 401 without auth, returns current with auth', async () => {
-    expect((await app().inject({ method: 'GET', url: '/settings' })).statusCode).toBe(401);
-    const res = await app().inject({ method: 'GET', url: '/settings', headers: { authorization: 'Bearer secret' } });
+    expect((await build().app.inject({ method: 'GET', url: '/settings' })).statusCode).toBe(401);
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({ method: 'GET', url: '/settings', cookies: cookie });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ lmModel: 'qwen/qwen3-vl-4b', captionMaxEdge: 768 });
   });
 
   it('POST /settings persists valid changes', async () => {
-    const a = app();
-    const res = await a.inject({
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({
       method: 'POST', url: '/settings',
-      headers: { authorization: 'Bearer secret', 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
       payload: { lmModel: 'new-model', captionMaxEdge: 1024 },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().lmModel).toBe('new-model');
-    const after = await a.inject({ method: 'GET', url: '/settings', headers: { authorization: 'Bearer secret' } });
+    const after = await b.app.inject({ method: 'GET', url: '/settings', cookies: cookie });
     expect(after.json().captionMaxEdge).toBe(1024);
   });
 
   it('POST /settings 400 on invalid', async () => {
-    const res = await app().inject({
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({
       method: 'POST', url: '/settings',
-      headers: { authorization: 'Bearer secret', 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
       payload: { lmBaseUrl: 'ftp://nope' },
     });
     expect(res.statusCode).toBe(400);
@@ -179,16 +208,20 @@ describe('settings endpoints', () => {
   });
 
   it('GET /settings/models returns ids from LM Studio', async () => {
-    const res = await build({ fetchImpl: modelsFetch(['a', 'b']) }).inject({
-      method: 'GET', url: '/settings/models', headers: { authorization: 'Bearer secret' },
+    const b = build({ fetchImpl: modelsFetch(['a', 'b']) });
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({
+      method: 'GET', url: '/settings/models', cookies: cookie,
     });
     expect(res.json().models).toEqual(['a', 'b']);
   });
 
   it('GET /settings/models degrades to empty + error on failure', async () => {
     const failing = (async () => { throw new Error('econn'); }) as unknown as typeof fetch;
-    const res = await build({ fetchImpl: failing }).inject({
-      method: 'GET', url: '/settings/models', headers: { authorization: 'Bearer secret' },
+    const b = build({ fetchImpl: failing });
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({
+      method: 'GET', url: '/settings/models', cookies: cookie,
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().models).toEqual([]);
@@ -196,11 +229,102 @@ describe('settings endpoints', () => {
   });
 
   it('POST /settings/test reports reachable + modelPresent', async () => {
-    const res = await build({ fetchImpl: modelsFetch(['qwen/qwen3-vl-4b']) }).inject({
+    const b = build({ fetchImpl: modelsFetch(['qwen/qwen3-vl-4b']) });
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({
       method: 'POST', url: '/settings/test',
-      headers: { authorization: 'Bearer secret', 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
       payload: { model: 'qwen/qwen3-vl-4b' },
     });
     expect(res.json()).toMatchObject({ ok: true, reachable: true, modelPresent: true });
+  });
+});
+
+describe('auth endpoints', () => {
+  it('GET /auth/status reports needsSetup on an empty store', async () => {
+    const b = build();
+    const res = await b.app.inject({ method: 'GET', url: '/auth/status' });
+    expect(res.json()).toMatchObject({ authenticated: false, needsSetup: true });
+  });
+
+  it('POST /setup creates the first admin and sets a cookie; second call 409s', async () => {
+    const b = build();
+    const res = await b.app.inject({
+      method: 'POST', url: '/setup',
+      headers: { 'content-type': 'application/json' },
+      payload: { username: 'simon', password: 'pw' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ username: 'simon', isAdmin: true });
+    expect(res.headers['set-cookie']).toMatch(/sid=/);
+    const again = await b.app.inject({
+      method: 'POST', url: '/setup',
+      headers: { 'content-type': 'application/json' },
+      payload: { username: 'x', password: 'y' },
+    });
+    expect(again.statusCode).toBe(409);
+  });
+
+  it('POST /login succeeds with correct creds, generic 401 otherwise', async () => {
+    const b = build();
+    await b.users.create({ username: 'simon', password: 'pw', isAdmin: false });
+    const ok = await b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'Simon', password: 'pw' } });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.headers['set-cookie']).toMatch(/sid=/);
+    const wrong = await b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'simon', password: 'bad' } });
+    expect(wrong.statusCode).toBe(401);
+    const unknown = await b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'ghost', password: 'pw' } });
+    expect(unknown.statusCode).toBe(401);
+  });
+
+  it('GET /auth/status returns the logged-in user', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: true, username: 'simon' });
+    const res = await b.app.inject({ method: 'GET', url: '/auth/status', cookies: cookie });
+    expect(res.json()).toMatchObject({ authenticated: true, username: 'simon', isAdmin: true });
+  });
+
+  it('POST /logout clears the session', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const out = await b.app.inject({ method: 'POST', url: '/logout', cookies: cookie });
+    expect(out.statusCode).toBe(200);
+    const after = await b.app.inject({ method: 'GET', url: '/settings', cookies: cookie });
+    expect(after.statusCode).toBe(401);
+  });
+});
+
+describe('user management', () => {
+  it('GET /users requires admin (403 for author)', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    expect((await b.app.inject({ method: 'GET', url: '/users', cookies: cookie })).statusCode).toBe(403);
+  });
+
+  it('admin can list, add and remove users', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: true, username: 'admin' });
+    const add = await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'bob', password: 'pw', isAdmin: false } });
+    expect(add.statusCode).toBe(200);
+    const list = await b.app.inject({ method: 'GET', url: '/users', cookies: cookie });
+    expect(list.json().map((u: { username: string }) => u.username)).toContain('bob');
+    const bobId = list.json().find((u: { username: string; id: string }) => u.username === 'bob').id;
+    expect((await b.app.inject({ method: 'DELETE', url: `/users/${bobId}`, cookies: cookie })).statusCode).toBe(200);
+  });
+
+  it('rejects deleting yourself and the last admin', async () => {
+    const b = build();
+    const me = await b.users.create({ username: 'admin', password: 'pw', isAdmin: true });
+    const token = await b.sessions.create(me.id, 60_000);
+    const res = await b.app.inject({ method: 'DELETE', url: `/users/${me.id}`, cookies: { sid: token } });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('POST /users 409 on duplicate username', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: true, username: 'admin' });
+    await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'bob', password: 'pw', isAdmin: false } });
+    const dup = await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'BOB', password: 'pw', isAdmin: false } });
+    expect(dup.statusCode).toBe(409);
   });
 });
