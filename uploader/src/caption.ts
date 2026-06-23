@@ -8,12 +8,13 @@ export interface CaptionConfig {
   baseUrl: string;            // e.g. http://host.docker.internal:1234/v1
   model: string;              // e.g. qwen/qwen3-vl-4b
   timeoutMs?: number;         // default 60000
+  prompt?: string;            // default DEFAULT_PROMPT
   fetchImpl?: typeof fetch;   // injected in tests
 }
 
 export class CaptionError extends Error {}
 
-const PROMPT = [
+export const DEFAULT_PROMPT = [
   'You are writing alt text for a photo on a travel blog.',
   'Look at the image and respond with ONLY a JSON object, no prose, no code fences:',
   '{"altEn": "...", "altDe": "...", "slug": "..."}',
@@ -67,7 +68,7 @@ export async function captionImage(jpeg: Buffer, cfg: CaptionConfig): Promise<Ca
           {
             role: 'user',
             content: [
-              { type: 'text', text: PROMPT },
+              { type: 'text', text: cfg.prompt ?? DEFAULT_PROMPT },
               { type: 'image_url', image_url: { url: dataUrl } },
             ],
           },

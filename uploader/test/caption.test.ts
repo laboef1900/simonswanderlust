@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { slugify, parseCaption, captionImage, CaptionError } from '../src/caption.js';
+import { slugify, parseCaption, captionImage, CaptionError, DEFAULT_PROMPT } from '../src/caption.js';
 
 describe('slugify', () => {
   it('lowercases, strips diacritics, and dashes non-alphanumerics', () => {
@@ -47,5 +47,27 @@ describe('captionImage', () => {
     const fetchImpl = (async () => ({ ok: false, status: 500 })) as unknown as typeof fetch;
     await expect(captionImage(Buffer.from('x'), { baseUrl: 'http://h/v1', model: 'm', fetchImpl }))
       .rejects.toBeInstanceOf(CaptionError);
+  });
+});
+
+describe('captionImage prompt', () => {
+  const ok = {
+    ok: true,
+    json: async () => ({ choices: [{ message: { content: '{"altEn":"A","altDe":"B","slug":"c-d"}' } }] }),
+  };
+  function capture() {
+    const calls: any[] = [];
+    const fetchImpl = (async (_url: string, init: any) => { calls.push(JSON.parse(init.body)); return ok; }) as unknown as typeof fetch;
+    return { calls, fetchImpl };
+  }
+  it('sends DEFAULT_PROMPT when no prompt is given', async () => {
+    const { calls, fetchImpl } = capture();
+    await captionImage(Buffer.from('x'), { baseUrl: 'http://h/v1', model: 'm', fetchImpl });
+    expect(calls[0].messages[0].content[0].text).toBe(DEFAULT_PROMPT);
+  });
+  it('sends a custom prompt when provided', async () => {
+    const { calls, fetchImpl } = capture();
+    await captionImage(Buffer.from('x'), { baseUrl: 'http://h/v1', model: 'm', prompt: 'CUSTOM', fetchImpl });
+    expect(calls[0].messages[0].content[0].text).toBe('CUSTOM');
   });
 });
