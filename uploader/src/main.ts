@@ -1,21 +1,22 @@
 import { dirname, join } from 'node:path';
 import { buildServer } from './server.js';
 import { createSettingsStore, defaultsFromEnv } from './settings.js';
-
-const authToken = process.env.AUTH_TOKEN ?? '';
-if (!authToken) {
-  console.error('AUTH_TOKEN is required; refusing to start without it.');
-  process.exit(1);
-}
+import { memoryUserStore } from './users.js';
+import { memorySessionStore } from './sessions.js';
 
 const storageDir = process.env.STORAGE_DIR ?? '/data/images';
 const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(storageDir), 'settings.json');
 const settings = createSettingsStore({ path: settingsPath, defaults: defaultsFromEnv(process.env) });
 
+// @ai-note: Task 7 replaces these in-memory stores with Postgres-backed ones (pgUserStore / pgSessionStore).
+const users = memoryUserStore();
+const sessions = memorySessionStore();
+
 const app = buildServer({
   storageDir,
   baseUrl: process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com',
-  authToken,
+  users,
+  sessions,
   settings,
 });
 

@@ -3,17 +3,24 @@ import { dirname, join, resolve } from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
+import cookie from '@fastify/cookie';
 import sharp from 'sharp';
 import { processImage } from './pipeline.js';
 import { storeVariants } from './storage.js';
-import { isAuthorized } from './auth.js';
+import { verifyPassword, type UserStore, UserExistsError } from './users.js';
+import type { SessionStore } from './sessions.js';
+import {
+  SESSION_TTL_MS, loadUser, requireAuth, requireAdmin,
+  setSessionCookie, clearSessionCookie, isSecureRequest, SESSION_COOKIE,
+} from './authn.js';
 import { captionImage, type Caption, type CaptionConfig } from './caption.js';
 import { SettingsError, type SettingsStore } from './settings.js';
 
 export interface ServerConfig {
   storageDir: string;
   baseUrl: string;
-  authToken: string;
+  users: UserStore;
+  sessions: SessionStore;
   settings: SettingsStore;
   captionImpl?: (jpeg: Buffer, cfg: CaptionConfig) => Promise<Caption>;
   fetchImpl?: typeof fetch;
@@ -32,8 +39,12 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // @fastify/static requires an absolute root; tolerate a relative STORAGE_DIR
   // (e.g. ./data/images from env) by resolving against the process cwd.
   const storageDir = resolve(cfg.storageDir);
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, trustProxy: true });
+  const { users, sessions } = cfg;
+  app.register(cookie);
   app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024 } });
+  app.decorateRequest('authUser', null);
+  app.addHook('onRequest', async (req) => { req.authUser = await loadUser(req, users, sessions); });
 
   const here = dirname(fileURLToPath(import.meta.url));
   app.register(fastifyStatic, { root: join(here, '..', 'public'), prefix: '/admin/' });
@@ -51,10 +62,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   app.get('/', (_req, reply) => reply.redirect('/admin/'));
 
-  app.post('/upload', async (req, reply) => {
-    if (!isAuthorized(req.headers.authorization, cfg.authToken)) {
-      return reply.code(401).send({ error: 'unauthorized' });
-    }
+  app.post('/upload', { preHandler: requireAuth }, async (req, reply) => {
     let key = '';
     let alt = '';
     let buf: Buffer | undefined;
@@ -83,10 +91,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   const captionImpl = cfg.captionImpl ?? captionImage;
   const doFetch = cfg.fetchImpl ?? fetch;
 
-  app.post('/suggest', async (req, reply) => {
-    if (!isAuthorized(req.headers.authorization, cfg.authToken)) {
-      return reply.code(401).send({ error: 'unauthorized' });
-    }
+  app.post('/suggest', { preHandler: requireAuth }, async (req, reply) => {
     const s = cfg.settings.get();
     const maxEdge = s.captionMaxEdge;
     const results: Array<{
@@ -137,13 +142,11 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send({ results });
   });
 
-  app.get('/settings', async (req, reply) => {
-    if (!isAuthorized(req.headers.authorization, cfg.authToken)) return reply.code(401).send({ error: 'unauthorized' });
+  app.get('/settings', { preHandler: requireAuth }, async (_req, reply) => {
     return reply.send(cfg.settings.get());
   });
 
-  app.post('/settings', async (req, reply) => {
-    if (!isAuthorized(req.headers.authorization, cfg.authToken)) return reply.code(401).send({ error: 'unauthorized' });
+  app.post('/settings', { preHandler: requireAuth }, async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     const partial: Record<string, unknown> = {};
     if (b.lmBaseUrl !== undefined) partial.lmBaseUrl = String(b.lmBaseUrl).trim();
@@ -159,8 +162,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     }
   });
 
-  app.get('/settings/models', async (req, reply) => {
-    if (!isAuthorized(req.headers.authorization, cfg.authToken)) return reply.code(401).send({ error: 'unauthorized' });
+  app.get('/settings/models', { preHandler: requireAuth }, async (req, reply) => {
     const q = (req.query ?? {}) as { baseUrl?: string };
     const baseUrl = q.baseUrl?.trim() || cfg.settings.get().lmBaseUrl;
     try {
@@ -170,8 +172,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     }
   });
 
-  app.post('/settings/test', async (req, reply) => {
-    if (!isAuthorized(req.headers.authorization, cfg.authToken)) return reply.code(401).send({ error: 'unauthorized' });
+  app.post('/settings/test', { preHandler: requireAuth }, async (req, reply) => {
     const b = (req.body ?? {}) as { baseUrl?: string; model?: string };
     const s = cfg.settings.get();
     const baseUrl = b.baseUrl?.trim() || s.lmBaseUrl;
@@ -183,6 +184,79 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     } catch (e) {
       return reply.send({ ok: false, reachable: false, modelPresent: false, error: (e as Error).message });
     }
+  });
+
+  app.get('/login', (_req, reply) => reply.sendFile('login.html'));
+
+  app.get('/auth/status', async (req) => {
+    if (req.authUser) {
+      return { authenticated: true, username: req.authUser.username, isAdmin: req.authUser.isAdmin, needsSetup: false };
+    }
+    return { authenticated: false, needsSetup: (await users.count()) === 0 };
+  });
+
+  app.post('/setup', async (req, reply) => {
+    if ((await users.count()) > 0) return reply.code(409).send({ error: 'setup already complete' });
+    const b = (req.body ?? {}) as { username?: unknown; password?: unknown };
+    const username = String(b.username ?? '').trim();
+    const password = String(b.password ?? '');
+    if (!username || !password) return reply.code(400).send({ error: 'username and password are required' });
+    const user = await users.create({ username, password, isAdmin: true });
+    const token = await sessions.create(user.id, SESSION_TTL_MS);
+    setSessionCookie(reply, token, isSecureRequest(req));
+    return reply.send({ username: user.username, isAdmin: user.isAdmin });
+  });
+
+  app.post('/login', async (req, reply) => {
+    const b = (req.body ?? {}) as { username?: unknown; password?: unknown };
+    const username = String(b.username ?? '').trim();
+    const password = String(b.password ?? '');
+    const user = await users.findByUsername(username);
+    if (!user || !verifyPassword(password, user.passwordHash)) {
+      return reply.code(401).send({ error: 'invalid username or password' });
+    }
+    const token = await sessions.create(user.id, SESSION_TTL_MS);
+    setSessionCookie(reply, token, isSecureRequest(req));
+    return reply.send({ username: user.username, isAdmin: user.isAdmin });
+  });
+
+  app.post('/logout', { preHandler: requireAuth }, async (req, reply) => {
+    const token = req.cookies?.[SESSION_COOKIE];
+    if (token) await sessions.destroy(token);
+    clearSessionCookie(reply);
+    return reply.send({ ok: true });
+  });
+
+  app.get('/users', { preHandler: requireAdmin }, async () => {
+    const list = await users.list();
+    return list.map((u) => ({ id: u.id, username: u.username, isAdmin: u.isAdmin, createdAt: u.createdAt }));
+  });
+
+  app.post('/users', { preHandler: requireAdmin }, async (req, reply) => {
+    const b = (req.body ?? {}) as { username?: unknown; password?: unknown; isAdmin?: unknown };
+    const username = String(b.username ?? '').trim();
+    const password = String(b.password ?? '');
+    const isAdmin = Boolean(b.isAdmin);
+    if (!username || !password) return reply.code(400).send({ error: 'username and password are required' });
+    try {
+      const user = await users.create({ username, password, isAdmin });
+      return reply.send({ id: user.id, username: user.username, isAdmin: user.isAdmin, createdAt: user.createdAt });
+    } catch (e) {
+      if (e instanceof UserExistsError) return reply.code(409).send({ error: 'username already exists' });
+      throw e;
+    }
+  });
+
+  app.delete('/users/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    if (req.authUser && req.authUser.id === id) return reply.code(409).send({ error: 'you cannot delete your own account' });
+    const target = await users.findById(id);
+    if (!target) return reply.code(404).send({ error: 'user not found' });
+    if (target.isAdmin && (await users.countAdmins()) <= 1) {
+      return reply.code(409).send({ error: 'cannot remove the last admin' });
+    }
+    await users.remove(id);
+    return reply.send({ ok: true });
   });
 
   return app;
