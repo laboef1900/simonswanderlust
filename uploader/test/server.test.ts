@@ -148,3 +148,28 @@ describe('POST /suggest', () => {
     expect(rows[1]).toMatchObject({ filename: 'bad.jpg', captionError: true, width: 0, height: 0 });
   });
 });
+
+describe('POST /convert', () => {
+  it('401 without auth', async () => {
+    const form = new FormData();
+    form.append('file', await jpeg(), { filename: 'a.jpg', contentType: 'image/jpeg' });
+    const res = await app().inject({ method: 'POST', url: '/convert', headers: form.getHeaders(), payload: form });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('converts each jpg to a downloadable .webp', async () => {
+    const form = new FormData();
+    form.append('file', await jpeg(), { filename: 'photo.jpg', contentType: 'image/jpeg' });
+    const res = await app().inject({
+      method: 'POST', url: '/convert',
+      headers: { ...form.getHeaders(), authorization: 'Bearer secret' }, payload: form,
+    });
+    expect(res.statusCode).toBe(200);
+    const results = res.json().results;
+    expect(results).toHaveLength(1);
+    expect(results[0].name).toBe('photo.webp');
+    const meta = await sharp(Buffer.from(results[0].base64, 'base64')).metadata();
+    expect(meta.format).toBe('webp');
+    expect(meta.width).toBe(1000);
+  });
+});

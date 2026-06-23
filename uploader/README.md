@@ -55,6 +55,13 @@ The main `/admin/` page uploads one hero image. For a post's other photos, open
 The model runs on your machine via LM Studio; nothing is sent to a cloud service.
 Alt text is generated natively in each language, not machine-translated.
 
+## Convert (JPG → WebP)
+
+A standalone utility, separate from the blog pipeline: open `/admin/convert.html`, enter the
+token, and select images — they convert to **full-resolution WebP** automatically (orientation
+and EXIF/GPS preserved), with a download link per file. Stores nothing on the server and
+produces no responsive variants — just format conversion. (`POST /convert`.)
+
 **Manage the container:**
 
 ```bash

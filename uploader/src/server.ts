@@ -7,6 +7,7 @@ import sharp from 'sharp';
 import { processImage } from './pipeline.js';
 import { storeVariants } from './storage.js';
 import { isAuthorized } from './auth.js';
+import { convertToWebp } from './convert.js';
 import type { Caption } from './caption.js';
 
 export type Captioner = (jpeg: Buffer) => Promise<Caption>;
@@ -124,6 +125,28 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       results.push(row);
     }
 
+    return reply.send({ results });
+  });
+
+  // Standalone JPG→WebP converter (full resolution, metadata preserved). Stores
+  // nothing; returns each converted file as base64 for the browser to download.
+  app.post('/convert', async (req, reply) => {
+    if (!isAuthorized(req.headers.authorization, cfg.authToken)) {
+      return reply.code(401).send({ error: 'unauthorized' });
+    }
+    const results: Array<{ name: string; base64: string }> = [];
+    for await (const part of req.parts()) {
+      if (part.type !== 'file') continue;
+      const buf = await part.toBuffer();
+      if (!part.mimetype.startsWith('image/')) continue;
+      try {
+        const webp = await convertToWebp(buf);
+        const base = (part.filename || 'image').replace(/\.[^.]*$/, '');
+        results.push({ name: `${base}.webp`, base64: webp.toString('base64') });
+      } catch {
+        // skip an undecodable file rather than failing the whole batch
+      }
+    }
     return reply.send({ results });
   });
 
