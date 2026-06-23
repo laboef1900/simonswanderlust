@@ -1,7 +1,7 @@
 import { unified } from 'unified';
 import rehypeParse from 'rehype-parse';
 import rehypeStringify from 'rehype-stringify';
-import { visit } from 'unist-util-visit';
+import { visit, SKIP } from 'unist-util-visit';
 import { h } from 'hastscript';
 import { srcset, fallbackSrc, type RemoteHeroImage } from './images.js';
 
@@ -30,12 +30,29 @@ function pictureNode(image: RemoteHeroImage) {
 export function transformBodyImages(html: string, images: Record<string, ImageDims>): string {
   const tree = unified().use(rehypeParse, { fragment: true }).parse(html);
   visit(tree, 'element', (node, index, parent) => {
-    if (node.tagName !== 'img' || !parent || index === null || index === undefined) return;
-    const src = node.properties?.src as string | undefined;
-    if (!src || !images[src]) return;
-    const dims = images[src];
-    const alt = (node.properties?.alt as string) ?? '';
-    parent.children[index] = pictureNode({ src, alt, width: dims.width, height: dims.height });
+    if (index === null || index === undefined || !parent) return;
+    if (node.tagName === 'p') {
+      const kids = node.children.filter((c) => !(c.type === 'text' && /^\s*$/.test((c as { value: string }).value)));
+      const only = kids.length === 1 ? kids[0] : undefined;
+      if (only && only.type === 'element' && (only as { tagName: string }).tagName === 'img') {
+        const imgNode = only as typeof node;
+        const src = imgNode.properties?.src as string | undefined;
+        if (src && images[src]) {
+          const d = images[src];
+          const alt = (imgNode.properties?.alt as string) ?? '';
+          parent.children[index] = pictureNode({ src, alt, width: d.width, height: d.height });
+          return SKIP;
+        }
+      }
+      return;
+    }
+    if (node.tagName === 'img') {
+      const src = node.properties?.src as string | undefined;
+      if (!src || !images[src]) return;
+      const d = images[src];
+      const alt = (node.properties?.alt as string) ?? '';
+      parent.children[index] = pictureNode({ src, alt, width: d.width, height: d.height });
+    }
   });
   return unified().use(rehypeStringify, { allowDangerousHtml: true }).stringify(tree);
 }

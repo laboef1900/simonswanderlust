@@ -1,10 +1,11 @@
 import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import matter from 'gray-matter';
 import pg from 'pg';
 
-const CONTENT = join(process.cwd(), 'src/content/trips');
+const CONTENT = join(dirname(fileURLToPath(import.meta.url)), '..', 'src/content/trips');
 
 /** Convert MDX body to Markdown: <BodyImage .../> → ![alt](src), collecting {src:{width,height}}. */
 export function mdxBodyToMarkdown(body) {

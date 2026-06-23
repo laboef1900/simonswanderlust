@@ -15,6 +15,12 @@ describe('transformBodyImages', () => {
     expect(out).toContain('alt="A caption"');
     expect(out).toContain('class="block w-full rounded-lg"');
   });
+  it('unwraps the <p> when a known <img> is its sole meaningful child', () => {
+    const out = transformBodyImages('<p><img src="https://img/x/y" alt="A caption"></p>', images);
+    expect(out).toContain('<figure');
+    expect(out).not.toMatch(/<p>\s*<figure/);
+    expect(out).not.toContain('<img src="https://img/x/y"');
+  });
   it('leaves an unknown image untouched', () => {
     const out = transformBodyImages('<img src="https://other/z" alt="z">', {});
     expect(out).toContain('<img src="https://other/z"');

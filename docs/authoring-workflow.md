@@ -3,10 +3,15 @@
 How to write a new travel post, add its photos, and get it live. Three stages:
 **(1) upload the photos**, **(2) write the post in GitHub**, **(3) publish (rebuild)**.
 
-The golden rule that shapes everything: **text lives in git, images do not.** Posts are
-MDX files committed to the repo; photos are uploaded to the self-hosted **image uploader**,
+Since Phase A, **post content lives in Postgres** — not baked into the Docker image. The
+`blog-builder` service reads from Postgres at rebuild time, so new or updated posts are published
+by importing them into the database and triggering a rebuild via the builder's HTTP endpoint.
+Photos are still kept out of git and Postgres: they go to the self-hosted **image uploader**,
 which stores optimized variants on the server and serves them from
 `https://img.simonswanderlust.com`. A post only ever references image **URLs**.
+
+> **Phase B (upcoming):** an in-admin editor will let you author and publish directly from the
+> browser, without touching GitHub or running `curl` manually.
 
 ---
 
