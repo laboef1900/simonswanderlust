@@ -77,15 +77,20 @@
         sel.value = s.lmModel;
       }
 
+      // Repopulate the dropdown from a live model list, preserving the current
+      // selection even if LM Studio isn't serving it (so a saved/manual id survives).
+      function populateModels(models) {
+        const sel = $('model');
+        const keep = sel.value;
+        sel.innerHTML = '';
+        for (const m of models) sel.add(new Option(m, m));
+        if (keep && ![...sel.options].some((o) => o.value === keep)) sel.add(new Option(keep, keep));
+        if (keep) sel.value = keep;
+      }
+
       async function loadModels() {
         try {
-          const models = await LLM.listModels($('baseUrl').value.trim());
-          const sel = $('model');
-          const keep = sel.value;
-          sel.innerHTML = '';
-          for (const m of models) sel.add(new Option(m, m));
-          if (keep && ![...sel.options].some((o) => o.value === keep)) sel.add(new Option(keep, keep));
-          if (keep) sel.value = keep;
+          populateModels(await LLM.listModels($('baseUrl').value.trim()));
         } catch { /* LM Studio not reachable from here — leave the manual field */ }
       }
 
@@ -105,18 +110,31 @@
 
       $('test').addEventListener('click', async () => {
         $('out').textContent = 'Testing from this browser…';
-        const model = chosenModel();
         try {
           const models = await LLM.listModels($('baseUrl').value.trim());
-          const present = models.includes(model);
-          $('out').textContent =
-            'Reachable from this browser. Model ' + (present ? 'is available ✓' : 'NOT found — pick another') + '.';
+          populateModels(models); // refresh the dropdown so whatever LM Studio serves is selectable
+          const model = chosenModel();
+          if (models.includes(model)) {
+            $('out').textContent = 'Reachable from this browser. Model "' + model + '" is available ✓';
+          } else if (models.length) {
+            $('out').textContent =
+              'Reachable, but "' + (model || '(none selected)') + '" is not being served. Available now: ' +
+              models.join(', ') + ' — pick one above (the dropdown was just refreshed).';
+          } else {
+            $('out').textContent =
+              'Reachable, but LM Studio is serving no models. Load your vision model in LM Studio ' +
+              '(and enable "Serve on Local Network"), then Test again.';
+          }
         } catch (e) {
           $('out').textContent = 'Not reachable from this browser: ' + e + ' — is LM Studio running here and serving on the network?';
         }
       });
 
       $('save').addEventListener('click', async () => {
+        // An empty token makes authed() build the header value "Bearer " (trailing
+        // space, no token) — an invalid HTTP field-value that Safari rejects up front
+        // with "SyntaxError: The string did not match the expected pattern." Guard it.
+        if (!$('token').value.trim()) { $('out').textContent = 'Enter your auth token first (top of the form), then Save.'; return; }
         $('out').textContent = 'Saving…';
         const payload = {
           lmBaseUrl: $('baseUrl').value.trim(),
@@ -125,16 +143,28 @@
           captionMaxEdge: Number($('maxEdge').value),
           captionPrompt: $('prompt').value,
         };
+        let res;
         try {
-          const res = await fetch('/settings', {
+          res = await fetch('/settings', {
             method: 'POST', headers: { ...authed(), 'content-type': 'application/json' },
             body: JSON.stringify(payload),
           });
-          const r = await res.json();
-          if (!res.ok) { $('out').textContent = 'Not saved: ' + (r.error || res.status); return; }
-          fill(r);
-          $('out').textContent = 'Saved. New settings apply to the next suggestion.';
-        } catch (e) { $('out').textContent = 'Error: ' + e; }
+        } catch (e) {
+          $('out').textContent = 'Could not send the save request (' + e + '). Check the auth token, ' +
+            'open this page over http://localhost:3000/admin/settings.html (not a file:// path), and try Chrome if Safari blocks it.';
+          return;
+        }
+        const body = await res.text();
+        let r;
+        try { r = JSON.parse(body); }
+        catch {
+          $('out').textContent = 'Server replied with non-JSON (HTTP ' + res.status + ', ' +
+            (res.headers.get('content-type') || 'no content-type') + '): ' + body.slice(0, 200);
+          return;
+        }
+        if (!res.ok) { $('out').textContent = 'Not saved: ' + (r.error || res.status); return; }
+        fill(r);
+        $('out').textContent = 'Saved. New settings apply to the next suggestion.';
       });
     </script>
   </body>
