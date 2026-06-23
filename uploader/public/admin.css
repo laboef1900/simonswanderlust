@@ -1,8 +1,31 @@
 /*
  * Admin UI styling — mirrors the blog's editorial / "expedition-log" identity
- * (see blog site/src/styles/global.css). Inter + IBM Plex Mono are loaded via
- * a <link> in each page, with system fallbacks if the network is unavailable.
+ * (see blog site/src/styles/global.css). Inter + IBM Plex Mono are self-hosted
+ * (served from /admin/fonts/, copied from node_modules at build — no CDN), with
+ * system fallbacks if a file is missing.
  */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/admin/fonts/inter-latin-wght-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/admin/fonts/ibm-plex-mono-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/admin/fonts/ibm-plex-mono-latin-600-normal.woff2') format('woff2');
+}
+
 :root {
   --canvas: #fbfbfd;
   --navy: #142a42;

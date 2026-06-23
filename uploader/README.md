@@ -96,6 +96,10 @@ AUTH_TOKEN=$(openssl rand -hex 32) STORAGE_DIR=./data/images \
    `https://img.simonswanderlust.com` → `127.0.0.1:3000`, terminating TLS there.
 5. Open `https://img.simonswanderlust.com/admin/` and upload.
 
+When run as part of the full stack (the repo's root `docker-compose.yml`), the site's nginx also
+proxies `/admin/` (and `/upload`, `/suggest`) to this service, so the panel is reachable at
+`https://simonswanderlust.com/admin/` — WordPress-style, on the main domain.
+
 ## Batch (Phase 2 migration)
 
 ```bash

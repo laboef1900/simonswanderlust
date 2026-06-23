@@ -5,6 +5,8 @@ services:
     build: ./site
     ports:
       - "${BLOG_PORT:-8090}:80"
+    depends_on:
+      - images
     restart: unless-stopped
 
   images:

@@ -17,7 +17,9 @@ AI alt-text suggestions, LM Studio must be running with `qwen/qwen3-vl-4b` on `:
 
 **Hero image** (one per post) — open the uploader admin:
 
-- `https://img.simonswanderlust.com/admin/` (locally: `http://localhost:3000/admin/`)
+- `https://simonswanderlust.com/admin/` (locally: `http://localhost:8090/admin/`) — the admin
+  panel runs on the site's own domain under `/admin/`, WordPress-style (the site's nginx proxies
+  it to the uploader). The uploader's own `:3000/admin/` still works too.
 - Enter the token (`grep AUTH_TOKEN .env`), a **key** like `trips/<slug>/hero`, alt text, pick the photo, **Upload**.
 - Copy the returned `heroImage:` YAML block.
 
