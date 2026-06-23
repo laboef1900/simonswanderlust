@@ -12,8 +12,10 @@
         <p class="eyebrow">Expedition Log · Image Station</p>
         <h1>LLM settings</h1>
         <p class="lede">
-          Configure the local vision model used for alt-text suggestions. Saved here and applied
-          immediately — no redeploy. Defaults come from the server's environment.
+          Configure the local vision model used for alt-text suggestions. Captioning runs in
+          <em>this browser</em> against the base URL below (your machine's LM Studio), so set it
+          to where LM Studio listens here — usually <code>http://localhost:1234/v1</code>. Saved
+          settings apply immediately; no redeploy.
         </p>
         <nav>
           <a href="/admin/">Hero upload</a>
@@ -28,8 +30,8 @@
         <label for="token">Auth token</label>
         <input id="token" type="password" placeholder="Bearer token" />
 
-        <label for="baseUrl">LM Studio base URL</label>
-        <input id="baseUrl" type="text" placeholder="http://host.docker.internal:1234/v1" />
+        <label for="baseUrl">LM Studio base URL (as this browser reaches it)</label>
+        <input id="baseUrl" type="text" placeholder="http://localhost:1234/v1" />
 
         <label for="model">Model</label>
         <select id="model"></select>
@@ -58,6 +60,7 @@
       <pre id="out">—</pre>
     </main>
 
+    <script src="/admin/llm.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       const authed = () => ({ authorization: 'Bearer ' + $('token').value.trim() });
@@ -76,15 +79,14 @@
 
       async function loadModels() {
         try {
-          const res = await fetch('/settings/models?baseUrl=' + encodeURIComponent($('baseUrl').value.trim()), { headers: authed() });
-          const { models } = await res.json();
+          const models = await LLM.listModels($('baseUrl').value.trim());
           const sel = $('model');
           const keep = sel.value;
           sel.innerHTML = '';
           for (const m of models) sel.add(new Option(m, m));
           if (keep && ![...sel.options].some((o) => o.value === keep)) sel.add(new Option(keep, keep));
           if (keep) sel.value = keep;
-        } catch { /* leave the manual field */ }
+        } catch { /* LM Studio not reachable from here — leave the manual field */ }
       }
 
       async function init() {
@@ -102,17 +104,16 @@
       function chosenModel() { return $('modelManual').value.trim() || $('model').value; }
 
       $('test').addEventListener('click', async () => {
-        $('out').textContent = 'Testing…';
+        $('out').textContent = 'Testing from this browser…';
+        const model = chosenModel();
         try {
-          const res = await fetch('/settings/test', {
-            method: 'POST', headers: { ...authed(), 'content-type': 'application/json' },
-            body: JSON.stringify({ baseUrl: $('baseUrl').value.trim(), model: chosenModel() }),
-          });
-          const r = await res.json();
-          $('out').textContent = r.reachable
-            ? 'Reachable. Model ' + (r.modelPresent ? 'is available ✓' : 'NOT found — pick another') + '.'
-            : 'Not reachable: ' + (r.error || 'unknown error');
-        } catch (e) { $('out').textContent = 'Error: ' + e; }
+          const models = await LLM.listModels($('baseUrl').value.trim());
+          const present = models.includes(model);
+          $('out').textContent =
+            'Reachable from this browser. Model ' + (present ? 'is available ✓' : 'NOT found — pick another') + '.';
+        } catch (e) {
+          $('out').textContent = 'Not reachable from this browser: ' + e + ' — is LM Studio running here and serving on the network?';
+        }
       });
 
       $('save').addEventListener('click', async () => {

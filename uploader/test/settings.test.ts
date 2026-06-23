@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { createSettingsStore, defaultsFromEnv, SettingsError, type Settings } from '../src/settings.js';
 
 const DEFAULTS: Settings = {
-  lmBaseUrl: 'http://host.docker.internal:1234/v1',
+  lmBaseUrl: 'http://localhost:1234/v1',
   lmModel: 'qwen/qwen3-vl-4b',
   captionTimeoutMs: 60000,
   captionMaxEdge: 768,
@@ -19,7 +19,7 @@ describe('defaultsFromEnv', () => {
   it('reads env with fallbacks', () => {
     const s = defaultsFromEnv({ LMSTUDIO_MODEL: 'foo' } as NodeJS.ProcessEnv);
     expect(s.lmModel).toBe('foo');
-    expect(s.lmBaseUrl).toBe('http://host.docker.internal:1234/v1');
+    expect(s.lmBaseUrl).toBe('http://localhost:1234/v1');
     expect(s.captionTimeoutMs).toBe(60000);
     expect(s.captionMaxEdge).toBe(768);
     expect(s.captionPrompt.length).toBeGreaterThan(0);

@@ -19,7 +19,7 @@ export interface SettingsStore {
 
 export function defaultsFromEnv(env: NodeJS.ProcessEnv): Settings {
   return {
-    lmBaseUrl: env.LMSTUDIO_BASE_URL ?? 'http://host.docker.internal:1234/v1',
+    lmBaseUrl: env.LMSTUDIO_BASE_URL ?? 'http://localhost:1234/v1',
     lmModel: env.LMSTUDIO_MODEL ?? 'qwen/qwen3-vl-4b',
     captionTimeoutMs: Number(env.CAPTION_TIMEOUT_MS ?? 60000),
     captionMaxEdge: Number(env.CAPTION_MAX_EDGE ?? 768),

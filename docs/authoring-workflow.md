@@ -12,8 +12,11 @@ which stores optimized variants on the server and serves them from
 
 ## Stage 1 — Upload the photos (do this first)
 
-The uploader must be running (`docker compose up -d` brings it up with the blog), and for the
-AI alt-text suggestions, LM Studio must be running with `qwen/qwen3-vl-4b` on `:1234`.
+The uploader must be running (`docker compose up -d` brings it up with the blog). For the AI
+alt-text suggestions, LM Studio must be running with `qwen/qwen3-vl-4b` **on the same machine
+you're authoring from** — captioning happens in your browser, calling LM Studio directly at
+`http://localhost:1234` (set on the LLM settings page). No suggestions? You can always type the
+alt text by hand.
 
 **Hero image** (one per post) — open the uploader admin:
 

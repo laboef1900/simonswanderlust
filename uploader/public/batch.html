@@ -52,6 +52,7 @@
       <pre id="out">—</pre>
     </main>
 
+    <script src="/admin/llm.js"></script>
     <script>
       const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
       const $ = (id) => document.getElementById(id);
@@ -61,27 +62,40 @@
       const tag = (src, w, h, alt) => `<BodyImage src="${esc(src)}" width={${w}} height={${h}} alt="${esc(alt)}" />`;
 
       $('suggest').addEventListener('click', async () => {
-        const token = $('token').value;
+        const token = $('token').value.trim();
         const files = [...$('files').files].filter((f) => f.type.startsWith('image/'));
         if (!files.length) { $('out').textContent = 'Pick at least one image.'; return; }
-        const fd = new FormData();
-        fd.append('prefix', $('prefix').value);
-        for (const f of files) fd.append('file', f);
-        $('out').textContent = 'Captioning…';
-        let results = [];
-        try {
-          const res = await fetch('/suggest', { method: 'POST', headers: { authorization: 'Bearer ' + token }, body: fd });
-          if (!res.ok) { $('out').textContent = 'Suggest failed: ' + res.status; return; }
-          results = (await res.json()).results;
-        } catch (e) { $('out').textContent = 'Suggest error: ' + e; return; }
+        if (!token) { $('out').textContent = 'Enter your auth token first.'; return; }
 
-        picked = files.map((file, i) => {
-          const r = results[i] || {};
-          return { file, slug: r.slug || '', altEn: r.altEn || '', altDe: r.altDe || '', width: r.width || 0, height: r.height || 0, captionError: !!r.captionError };
-        });
+        // Read the LLM config (model, prompt, base URL, max edge) from the server,
+        // then call LM Studio DIRECTLY from this browser — the model runs locally.
+        let cfg;
+        try {
+          const r = await fetch('/settings', { headers: { authorization: 'Bearer ' + token } });
+          if (!r.ok) { $('out').textContent = 'Could not load settings: ' + r.status; return; }
+          cfg = await r.json();
+        } catch (e) { $('out').textContent = 'Settings error: ' + e; return; }
+
+        picked = [];
+        let anyErr = false;
+        for (let i = 0; i < files.length; i++) {
+          $('out').textContent = 'Captioning ' + (i + 1) + '/' + files.length + ' locally via ' + cfg.lmBaseUrl + ' …';
+          const file = files[i];
+          const row = { file, slug: '', altEn: '', altDe: '', width: 0, height: 0, captionError: false };
+          try {
+            const prep = await LLM.prepImage(file, cfg.captionMaxEdge);
+            row.width = prep.width;
+            row.height = prep.height;
+            const c = await LLM.caption(cfg.lmBaseUrl, cfg.lmModel, cfg.captionPrompt, prep.dataUrl, cfg.captionTimeoutMs);
+            row.slug = c.slug; row.altEn = c.altEn; row.altDe = c.altDe;
+          } catch (e) { row.captionError = true; anyErr = true; }
+          picked.push(row);
+        }
         renderRows();
         $('upload').style.display = picked.length ? 'inline-block' : 'none';
-        $('out').textContent = picked.some((p) => p.captionError) ? 'Some photos had no AI suggestion — fill them in manually.' : 'Review and edit, then Upload all.';
+        $('out').textContent = anyErr
+          ? 'Some photos had no AI suggestion — is LM Studio running on this machine (serving on ' + cfg.lmBaseUrl + ')? Fill those in manually.'
+          : 'Review and edit, then Upload all.';
       });
 
       function renderRows() {
