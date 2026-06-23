@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdir, rm, rename, symlink, readdir, stat, readlink } from 'node:fs/promises';
+import { cp, mkdir, rm, rename, symlink, readdir, stat, readlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 
@@ -27,7 +27,14 @@ function runAstroBuild(outDir) {
   });
 }
 
-/** Build into a fresh release dir, then atomically flip the `current` symlink. */
+/** Build into a fresh release dir, then atomically flip the `current` symlink.
+ *
+ * @ai-note Astro's prerender step writes to a `.prerender/` tmp dir relative to
+ * `getOutDirWithinCwd(outDir)`. When outDir is outside CWD (e.g. on a Docker
+ * volume at /srv/blog), Astro falls back to `/app/.astro/.prerender/` and then
+ * tries to `rename()` assets into the volume — failing with EXDEV (cross-device).
+ * Fix: build into a CWD-local tmp dir first, then `cp -r` to the volume.
+ */
 export async function buildAndDeploy() {
   if (building) throw new Error('a build is already running');
   building = true;
@@ -35,8 +42,13 @@ export async function buildAndDeploy() {
     const releases = join(RELEASES_DIR, 'releases');
     await mkdir(releases, { recursive: true });
     const stamp = `${Date.now()}-${process.pid}`;
+    // Build into a CWD-local tmp so Astro's prerender rename stays on-device.
+    const buildTmp = join(APP_DIR, '.build-tmp', stamp);
+    await runAstroBuild(buildTmp);
+    // Copy the finished build to the volume release dir, then clean up the tmp.
     const dest = join(releases, stamp);
-    await runAstroBuild(dest);
+    await cp(buildTmp, dest, { recursive: true });
+    await rm(buildTmp, { recursive: true, force: true });
     // atomic swap: write a temp symlink then rename over `current`
     const tmpLink = join(RELEASES_DIR, `.current.${stamp}`);
     await symlink(dest, tmpLink);
