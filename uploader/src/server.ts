@@ -7,19 +7,26 @@ import sharp from 'sharp';
 import { processImage } from './pipeline.js';
 import { storeVariants } from './storage.js';
 import { isAuthorized } from './auth.js';
-import type { Caption } from './caption.js';
-
-export type Captioner = (jpeg: Buffer) => Promise<Caption>;
+import { captionImage, type Caption, type CaptionConfig } from './caption.js';
+import { SettingsError, type SettingsStore } from './settings.js';
 
 export interface ServerConfig {
   storageDir: string;
   baseUrl: string;
   authToken: string;
-  captioner?: Captioner;
-  captionMaxEdge?: number;
+  settings: SettingsStore;
+  captionImpl?: (jpeg: Buffer, cfg: CaptionConfig) => Promise<Caption>;
+  fetchImpl?: typeof fetch;
 }
 
 const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
+
+async function fetchModelIds(baseUrl: string, doFetch: typeof fetch): Promise<string[]> {
+  const res = await doFetch(`${baseUrl.replace(/\/+$/, '')}/models`, { method: 'GET' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const body = (await res.json()) as { data?: Array<{ id?: string }> };
+  return (body.data ?? []).map((m) => m.id).filter((id): id is string => Boolean(id));
+}
 
 export function buildServer(cfg: ServerConfig): FastifyInstance {
   // @fastify/static requires an absolute root; tolerate a relative STORAGE_DIR
@@ -73,13 +80,15 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send(stored);
   });
 
-  const captioner = cfg.captioner;
-  const maxEdge = cfg.captionMaxEdge ?? 768;
+  const captionImpl = cfg.captionImpl ?? captionImage;
+  const doFetch = cfg.fetchImpl ?? fetch;
 
   app.post('/suggest', async (req, reply) => {
     if (!isAuthorized(req.headers.authorization, cfg.authToken)) {
       return reply.code(401).send({ error: 'unauthorized' });
     }
+    const s = cfg.settings.get();
+    const maxEdge = s.captionMaxEdge;
     const results: Array<{
       filename: string; slug: string; altEn: string; altDe: string;
       width: number; height: number; captionError?: boolean;
@@ -88,7 +97,6 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     for await (const part of req.parts()) {
       if (part.type !== 'file') continue;
       const buf = await part.toBuffer();
-
       const row = { filename: part.filename, slug: '', altEn: '', altDe: '', width: 0, height: 0 } as {
         filename: string; slug: string; altEn: string; altDe: string; width: number; height: number; captionError?: boolean;
       };
@@ -104,7 +112,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         }
       }
 
-      if (!decodable || !captioner) {
+      if (!decodable) {
         row.captionError = true;
       } else {
         try {
@@ -113,7 +121,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
             .resize({ width: maxEdge, height: maxEdge, fit: 'inside', withoutEnlargement: true })
             .jpeg({ quality: 80 })
             .toBuffer();
-          const c = await captioner(small);
+          const c = await captionImpl(small, {
+            baseUrl: s.lmBaseUrl, model: s.lmModel, timeoutMs: s.captionTimeoutMs, prompt: s.captionPrompt,
+          });
           row.slug = c.slug;
           row.altEn = c.altEn;
           row.altDe = c.altDe;
@@ -125,6 +135,54 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     }
 
     return reply.send({ results });
+  });
+
+  app.get('/settings', async (req, reply) => {
+    if (!isAuthorized(req.headers.authorization, cfg.authToken)) return reply.code(401).send({ error: 'unauthorized' });
+    return reply.send(cfg.settings.get());
+  });
+
+  app.post('/settings', async (req, reply) => {
+    if (!isAuthorized(req.headers.authorization, cfg.authToken)) return reply.code(401).send({ error: 'unauthorized' });
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const partial: Record<string, unknown> = {};
+    if (b.lmBaseUrl !== undefined) partial.lmBaseUrl = String(b.lmBaseUrl).trim();
+    if (b.lmModel !== undefined) partial.lmModel = String(b.lmModel).trim();
+    if (b.captionTimeoutMs !== undefined) partial.captionTimeoutMs = Number(b.captionTimeoutMs);
+    if (b.captionMaxEdge !== undefined) partial.captionMaxEdge = Number(b.captionMaxEdge);
+    if (b.captionPrompt !== undefined) partial.captionPrompt = String(b.captionPrompt);
+    try {
+      return reply.send(cfg.settings.update(partial));
+    } catch (e) {
+      if (e instanceof SettingsError) return reply.code(400).send({ error: e.message });
+      throw e;
+    }
+  });
+
+  app.get('/settings/models', async (req, reply) => {
+    if (!isAuthorized(req.headers.authorization, cfg.authToken)) return reply.code(401).send({ error: 'unauthorized' });
+    const q = (req.query ?? {}) as { baseUrl?: string };
+    const baseUrl = q.baseUrl?.trim() || cfg.settings.get().lmBaseUrl;
+    try {
+      return reply.send({ models: await fetchModelIds(baseUrl, doFetch) });
+    } catch (e) {
+      return reply.send({ models: [], error: (e as Error).message });
+    }
+  });
+
+  app.post('/settings/test', async (req, reply) => {
+    if (!isAuthorized(req.headers.authorization, cfg.authToken)) return reply.code(401).send({ error: 'unauthorized' });
+    const b = (req.body ?? {}) as { baseUrl?: string; model?: string };
+    const s = cfg.settings.get();
+    const baseUrl = b.baseUrl?.trim() || s.lmBaseUrl;
+    const model = b.model?.trim() || s.lmModel;
+    try {
+      const ids = await fetchModelIds(baseUrl, doFetch);
+      const modelPresent = ids.includes(model);
+      return reply.send({ ok: modelPresent, reachable: true, modelPresent });
+    } catch (e) {
+      return reply.send({ ok: false, reachable: false, modelPresent: false, error: (e as Error).message });
+    }
   });
 
   return app;

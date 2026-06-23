@@ -27,7 +27,7 @@ export function defaultsFromEnv(env: NodeJS.ProcessEnv): Settings {
   };
 }
 
-function validate(s: Settings): Settings {
+export function validate(s: Settings): Settings {
   let url: URL;
   try {
     url = new URL(s.lmBaseUrl);
