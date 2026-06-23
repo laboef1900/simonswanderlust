@@ -71,19 +71,37 @@ body {
   color: rgba(255, 255, 255, 0.72);
   font-size: 0.95rem;
 }
-.masthead nav { margin-top: 0.95rem; display: flex; flex-wrap: wrap; gap: 1.25rem; }
+/* Tab bar: pills make it read as navigation, with the current page in brand-red. */
+.masthead nav {
+  margin-top: 1.1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 1rem;
+}
 .masthead nav a {
   font-family: var(--mono);
   font-size: 0.7rem;
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #fff;
+  color: rgba(255, 255, 255, 0.82);
   text-decoration: none;
-  padding-bottom: 2px;
-  border-bottom: 1px solid transparent;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 9999px;
 }
-.masthead nav a:hover { color: var(--red-light); border-bottom-color: var(--red-light); }
+.masthead nav a:hover {
+  color: #fff;
+  border-color: var(--red-light);
+}
+.masthead nav a[aria-current='page'] {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+  cursor: default;
+}
 
 /* ---- layout ---- */
 main { max-width: 880px; margin: 0 auto; padding: 1.75rem 1.25rem 3rem; }
