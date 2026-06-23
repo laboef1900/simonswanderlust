@@ -44,11 +44,15 @@ export async function buildAndDeploy() {
     const stamp = `${Date.now()}-${process.pid}`;
     // Build into a CWD-local tmp so Astro's prerender rename stays on-device.
     const buildTmp = join(APP_DIR, '.build-tmp', stamp);
-    await runAstroBuild(buildTmp);
-    // Copy the finished build to the volume release dir, then clean up the tmp.
     const dest = join(releases, stamp);
-    await cp(buildTmp, dest, { recursive: true });
-    await rm(buildTmp, { recursive: true, force: true });
+    try {
+      await runAstroBuild(buildTmp);
+      // Copy the finished build to the volume release dir.
+      await cp(buildTmp, dest, { recursive: true });
+    } finally {
+      // Always clean up the tmp dir, even if the build or copy failed.
+      await rm(buildTmp, { recursive: true, force: true });
+    }
     // atomic swap: write a temp symlink then rename over `current`
     const tmpLink = join(RELEASES_DIR, `.current.${stamp}`);
     await symlink(dest, tmpLink);
