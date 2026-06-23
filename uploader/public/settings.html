@@ -22,14 +22,12 @@
           <a href="/admin/batch.html">Batch uploader</a>
           <a href="/admin/settings.html" aria-current="page">LLM settings</a>
         </nav>
+        <p class="muted" id="whoami"></p>
       </div>
     </header>
 
     <main>
       <section class="card">
-        <label for="token">Auth token</label>
-        <input id="token" type="password" placeholder="Bearer token" />
-
         <label for="baseUrl">LM Studio base URL (as this browser reaches it)</label>
         <input id="baseUrl" type="text" placeholder="http://localhost:1234/v1" />
 
@@ -60,10 +58,10 @@
       <pre id="out">—</pre>
     </main>
 
+    <script src="/admin/auth.js"></script>
     <script src="/admin/llm.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
-      const authed = () => ({ authorization: 'Bearer ' + $('token').value.trim() });
 
       function fill(s) {
         $('baseUrl').value = s.lmBaseUrl || '';
@@ -95,16 +93,15 @@
       }
 
       async function init() {
-        if (!$('token').value.trim()) { $('out').textContent = 'Enter your auth token to load settings.'; return; }
         try {
-          const res = await fetch('/settings', { headers: authed() });
+          const res = await fetch('/settings');
+          if (res.status === 401) { location.href = '/login'; return; }
           if (!res.ok) { $('out').textContent = 'Could not load settings: ' + res.status; return; }
           fill(await res.json());
           await loadModels();
           $('out').textContent = 'Loaded. Edit and Save, or Test connection.';
         } catch (e) { $('out').textContent = 'Error: ' + e; }
       }
-      $('token').addEventListener('change', init);
 
       function chosenModel() { return $('modelManual').value.trim() || $('model').value; }
 
@@ -131,10 +128,6 @@
       });
 
       $('save').addEventListener('click', async () => {
-        // An empty token makes authed() build the header value "Bearer " (trailing
-        // space, no token) — an invalid HTTP field-value that Safari rejects up front
-        // with "SyntaxError: The string did not match the expected pattern." Guard it.
-        if (!$('token').value.trim()) { $('out').textContent = 'Enter your auth token first (top of the form), then Save.'; return; }
         $('out').textContent = 'Saving…';
         const payload = {
           lmBaseUrl: $('baseUrl').value.trim(),
@@ -146,14 +139,15 @@
         let res;
         try {
           res = await fetch('/settings', {
-            method: 'POST', headers: { ...authed(), 'content-type': 'application/json' },
+            method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify(payload),
           });
         } catch (e) {
-          $('out').textContent = 'Could not send the save request (' + e + '). Check the auth token, ' +
-            'open this page over http://localhost:3000/admin/settings.html (not a file:// path), and try Chrome if Safari blocks it.';
+          $('out').textContent = 'Could not send the save request (' + e + '). ' +
+            'Open this page over http://localhost:3000/admin/settings.html (not a file:// path), and try Chrome if Safari blocks it.';
           return;
         }
+        if (res.status === 401) { location.href = '/login'; return; }
         const body = await res.text();
         let r;
         try { r = JSON.parse(body); }
@@ -166,6 +160,12 @@
         fill(r);
         $('out').textContent = 'Saved. New settings apply to the next suggestion.';
       });
+      (async () => {
+        const s = await Auth.ensureAuthed();
+        if (!s) return;
+        Auth.renderHeader(s);
+        await init();
+      })();
     </script>
   </body>
 </html>

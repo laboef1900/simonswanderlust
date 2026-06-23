@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Users · Simon's Wanderlust</title>
+    <link rel="stylesheet" href="/admin/admin.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="masthead-inner">
+        <p class="eyebrow">Expedition Log · Image Station</p>
+        <h1>Users</h1>
+        <p class="muted" id="whoami"></p>
+        <nav>
+          <a href="/admin/">Hero upload</a>
+          <a href="/admin/batch.html">Batch uploader</a>
+          <a href="/admin/settings.html">LLM settings</a>
+          <a href="/admin/users.html" aria-current="page">Users</a>
+        </nav>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <h2>Add a user</h2>
+        <label for="username">Username</label>
+        <input id="username" type="text" autocomplete="off" />
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="new-password" />
+        <label><input id="isAdmin" type="checkbox" /> Administrator</label>
+        <button id="add">Add user</button>
+        <p class="section-label">Status</p>
+        <pre id="out">—</pre>
+      </section>
+      <section class="card">
+        <h2>Existing users</h2>
+        <ul id="list"></ul>
+      </section>
+    </main>
+    <script src="/admin/auth.js"></script>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let me = null;
+      async function load() {
+        const res = await fetch('/users');
+        if (res.status === 401) { location.href = '/login'; return; }
+        if (res.status === 403) { location.href = '/admin/'; return; }
+        const users = await res.json();
+        const ul = $('list');
+        ul.innerHTML = '';
+        for (const u of users) {
+          const li = document.createElement('li');
+          const role = u.isAdmin ? 'admin' : 'author';
+          li.textContent = u.username + ' (' + role + ') ';
+          if (!(me && u.username === me.username)) {
+            const btn = document.createElement('button');
+            btn.textContent = 'Remove';
+            btn.addEventListener('click', async () => {
+              const d = await fetch('/users/' + u.id, { method: 'DELETE' });
+              if (d.ok) { load(); } else { const r = await d.json().catch(() => ({})); $('out').textContent = r.error || ('Failed: ' + d.status); }
+            });
+            li.appendChild(btn);
+          }
+          ul.appendChild(li);
+        }
+      }
+      $('add').addEventListener('click', async () => {
+        const username = $('username').value.trim();
+        const password = $('password').value;
+        const isAdmin = $('isAdmin').checked;
+        if (!username || !password) { $('out').textContent = 'Enter a username and password.'; return; }
+        const res = await fetch('/users', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password, isAdmin }) });
+        if (res.ok) { $('out').textContent = 'Added ' + username + '.'; $('username').value = ''; $('password').value = ''; $('isAdmin').checked = false; load(); }
+        else { const r = await res.json().catch(() => ({})); $('out').textContent = r.error || ('Failed: ' + res.status); }
+      });
+      (async () => {
+        me = await Auth.ensureAuthed({ admin: true });
+        if (!me) return;
+        Auth.renderHeader(me);
+        load();
+      })();
+    </script>
+  </body>
+</html>
