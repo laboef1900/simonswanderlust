@@ -1,5 +1,6 @@
+import { dirname, join } from 'node:path';
 import { buildServer } from './server.js';
-import { captionImage } from './caption.js';
+import { createSettingsStore, defaultsFromEnv } from './settings.js';
 
 const authToken = process.env.AUTH_TOKEN ?? '';
 if (!authToken) {
@@ -7,17 +8,15 @@ if (!authToken) {
   process.exit(1);
 }
 
-const lmBaseUrl = process.env.LMSTUDIO_BASE_URL ?? 'http://host.docker.internal:1234/v1';
-const lmModel = process.env.LMSTUDIO_MODEL ?? 'qwen/qwen3-vl-4b';
-const captionTimeoutMs = Number(process.env.CAPTION_TIMEOUT_MS ?? 60000);
-const captionMaxEdge = Number(process.env.CAPTION_MAX_EDGE ?? 768);
+const storageDir = process.env.STORAGE_DIR ?? '/data/images';
+const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(storageDir), 'settings.json');
+const settings = createSettingsStore({ path: settingsPath, defaults: defaultsFromEnv(process.env) });
 
 const app = buildServer({
-  storageDir: process.env.STORAGE_DIR ?? '/data/images',
+  storageDir,
   baseUrl: process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com',
   authToken,
-  captionMaxEdge,
-  captioner: (jpeg) => captionImage(jpeg, { baseUrl: lmBaseUrl, model: lmModel, timeoutMs: captionTimeoutMs }),
+  settings,
 });
 
 const port = Number(process.env.PORT ?? 3000);
