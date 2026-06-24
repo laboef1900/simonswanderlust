@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Posts · Simon's Wanderlust</title>
+    <link rel="stylesheet" href="/admin/admin.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="masthead-inner">
+        <p class="eyebrow">Expedition Log · Image Station</p>
+        <h1>Posts</h1>
+        <p class="lede">Manage DE/EN post pairs — create drafts, edit content, and publish to the live blog.</p>
+        <nav>
+          <a href="/admin/">Hero upload</a>
+          <a href="/admin/batch.html">Batch uploader</a>
+          <a href="/admin/settings.html">LLM settings</a>
+          <a href="/admin/users.html">Users</a>
+          <a href="/admin/posts.html" aria-current="page">Posts</a>
+        </nav>
+        <p class="muted" id="whoami"></p>
+      </div>
+    </header>
+
+    <main>
+      <section class="card">
+        <div class="posts-toolbar">
+          <a href="/admin/editor.html" class="btn-new">+ New post</a>
+          <button id="exportAll">Export all</button>
+        </div>
+        <p id="loadMsg" class="muted">Loading…</p>
+        <table id="postsTable" class="posts-table" style="display:none">
+          <thead>
+            <tr>
+              <th>Title (DE)</th>
+              <th>Status</th>
+              <th>Updated</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="postsList"></tbody>
+        </table>
+      </section>
+
+      <div class="route" aria-hidden="true">
+        <span class="dot"></span><span class="seg"></span>
+        <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>
+        <span class="seg"></span><span class="ring"></span>
+      </div>
+
+      <p class="section-label">Status</p>
+      <pre id="out">—</pre>
+    </main>
+
+    <script src="/admin/auth.js"></script>
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      async function load() {
+        const res = await fetch('/posts');
+        if (res.status === 401) { location.href = '/login'; return; }
+        if (!res.ok) { $('out').textContent = 'Could not load posts: ' + res.status; return; }
+        const posts = await res.json();
+        $('loadMsg').style.display = 'none';
+        const tbody = $('postsList');
+        tbody.innerHTML = '';
+        if (!posts.length) {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 4;
+          td.textContent = 'No posts yet. Create one with + New post.';
+          td.style.textAlign = 'center';
+          td.style.color = '#6b7280';
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+        } else {
+          for (const p of posts) {
+            const tr = document.createElement('tr');
+
+            const tdTitle = document.createElement('td');
+            tdTitle.textContent = p.titleDe || '(untitled)';
+            tr.appendChild(tdTitle);
+
+            const tdStatus = document.createElement('td');
+            const badge = document.createElement('span');
+            const safeStatus = ['draft', 'published'].includes(p.status) ? p.status : 'draft';
+            badge.className = 'status-badge status-' + safeStatus;
+            badge.textContent = p.status;
+            tdStatus.appendChild(badge);
+            tr.appendChild(tdStatus);
+
+            const tdUpdated = document.createElement('td');
+            tdUpdated.className = 'posts-date';
+            if (p.updatedAt) {
+              tdUpdated.textContent = new Date(p.updatedAt).toLocaleDateString('en-GB', { year: 'numeric', month: 'short', day: 'numeric' });
+            }
+            tr.appendChild(tdUpdated);
+
+            const tdActions = document.createElement('td');
+            const editLink = document.createElement('a');
+            editLink.href = '/admin/editor.html?tk=' + encodeURIComponent(p.translationKey);
+            editLink.textContent = 'Edit';
+            editLink.className = 'action-link';
+            tdActions.appendChild(editLink);
+            tr.appendChild(tdActions);
+
+            tbody.appendChild(tr);
+          }
+        }
+        $('postsTable').style.display = 'table';
+        $('out').textContent = posts.length + ' post(s) loaded.';
+      }
+
+      $('exportAll').addEventListener('click', async () => {
+        $('out').textContent = 'Exporting…';
+        const res = await fetch('/export', { method: 'POST' });
+        if (res.status === 401) { location.href = '/login'; return; }
+        const body = await res.json().catch(() => ({}));
+        $('out').textContent = res.ok
+          ? 'Export done: ' + body.count + ' files'
+          : 'Export failed: ' + (body.error || res.status);
+      });
+
+      (async () => {
+        const s = await Auth.ensureAuthed();
+        if (!s) return;
+        Auth.renderHeader(s);
+        await load();
+      })();
+    </script>
+  </body>
+</html>

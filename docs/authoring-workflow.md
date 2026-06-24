@@ -1,17 +1,14 @@
 # Authoring & Publishing Workflow
 
 How to write a new travel post, add its photos, and get it live. Three stages:
-**(1) upload the photos**, **(2) write the post in GitHub**, **(3) publish (rebuild)**.
+**(1) upload the photos**, **(2) write and publish via the in-admin editor**, **(3) rebuild (automatic on Publish)**.
 
-Since Phase A, **post content lives in Postgres** — not baked into the Docker image. The
-`blog-builder` service reads from Postgres at rebuild time, so new or updated posts are published
-by importing them into the database and triggering a rebuild via the builder's HTTP endpoint.
-Photos are still kept out of git and Postgres: they go to the self-hosted **image uploader**,
-which stores optimized variants on the server and serves them from
-`https://img.simonswanderlust.com`. A post only ever references image **URLs**.
-
-> **Phase B (upcoming):** an in-admin editor will let you author and publish directly from the
-> browser, without touching GitHub or running `curl` manually.
+**Post content lives in Postgres** — not in git or baked into the Docker image. The in-admin
+editor (Phase B) is the authoring interface: you write DE and EN content directly in the browser
+and hit **Publish** to trigger a rebuild. Photos are kept out of git and Postgres: they go to
+the self-hosted **image uploader**, which stores optimized variants on the server and serves them
+from `https://img.simonswanderlust.com`. A post only ever references image **URLs** — and you
+can upload images inline from the editor without visiting a separate page.
 
 ---
 
@@ -28,100 +25,102 @@ alt text by hand.
 prompts you to create the initial admin account. After signing in, all admin pages work via the
 session cookie — no token to paste.
 
-**Hero image** (one per post) — open the uploader admin:
+**Hero image** (one per post) — you can upload it directly from the editor (see Stage 2), or
+use the standalone upload page first:
 
-- `https://simonswanderlust.com/admin/` (locally: `http://localhost:3000/admin/`) — the admin
-  panel runs on the site's own domain under `/admin/`, WordPress-style (the site's nginx proxies
-  it to the uploader).
-- Enter a **key** like `trips/<slug>/hero`, alt text, pick the photo, **Upload**.
-- Copy the returned `heroImage:` YAML block.
+- `https://simonswanderlust.com/admin/` (locally: `http://localhost:3000/admin/`) — enter a
+  **key** like `trips/<slug>/hero`, alt text, pick the photo, **Upload**.
+- Copy the returned `heroImage:` YAML values to paste into the editor's hero fields.
 
-**Body / gallery photos** (the rest) — open the batch page:
+**Body / gallery photos** (the rest) — you can upload inline from the editor, or pre-upload in
+bulk via the batch page:
 
 - `…/admin/batch.html`
 - Enter a shared **prefix** like `trips/<slug>`, pick several photos, **Suggest**.
 - The local model proposes a slug + **German and English** alt text per photo; review/edit.
-- **Upload all**, then copy the `<BodyImage …>` snippets (one DE, one EN per photo).
+- **Upload all**, then copy the `<BodyImage …>` snippets (one DE, one EN per photo) into the
+  editor's body fields.
 
 > Key naming: use `trips/<slug>/<name>` (lowercase `a–z 0–9 / _ -`). The `<slug>` should match
-> the post's filename (below). Upload before publishing, or the URLs 404.
+> the post slug (below). Upload before publishing, or the URLs 404.
 
 ---
 
-## Stage 2 — Write the post in GitHub
+## Stage 2 — Write and publish via the in-admin editor
 
-> **Coming in Phase B:** an in-admin editor will replace this stage. For now, writing MDX in
-> GitHub is the authoring path.
+The in-admin editor at `/admin/posts.html` is the authoring interface — no GitHub or `curl`
+needed. Content is stored in **Postgres**; MDX files are generated automatically as backups.
 
-Each post is **two MDX files** — one per language — under `site/src/content/trips/`:
+### Create a new post
 
-- German: `site/src/content/trips/de/<slug>.mdx`  → lives at `simonswanderlust.com/<slug>/`
-- English: `site/src/content/trips/en/<slug>.mdx` → lives at `simonswanderlust.com/en/<slug>/`
+1. Sign in and open **Posts** (`/admin/posts.html`).
+2. Click **New post** — the editor opens at `/admin/editor.html`.
+3. Fill in the **German** tab first (the slug is set here and locked once saved):
 
-**The filename IS the live URL slug** — it must match the existing WordPress slug exactly and
-must never be renamed (SEO contract). Link the two languages with the same `translationKey`.
+   | Field | Notes |
+   |-------|-------|
+   | **Slug** | Must match the live WordPress slug exactly — it becomes the URL (`/<slug>/`). Locked after first save. |
+   | **Title** | DE page title |
+   | **Date** | Publication / travel date (YYYY-MM-DD) |
+   | **Country** | Localized country name |
+   | **Country code** | ISO-3166 alpha-2 (e.g. `GR`) |
+   | **Region** | `europe` \| `north-america` \| `south-america` |
+   | **Excerpt** | 1-2 sentence summary |
+   | **Hero image** | Paste the `src` URL, width, height, and alt text from the uploader; or use the inline **Upload** button next to the hero fields |
+   | **Coordinates** | `lat`, `lng` decimal |
+   | **Body** | Markdown (EasyMDE editor). Use `<BodyImage src="…" width={…} height={…} alt="…" />` tags to embed photos — paste snippets from the batch page, or upload inline via the body toolbar. |
 
-In GitHub: open the repo → navigate to the folder → **Add file → Create new file** → name it
-`<slug>.mdx` → paste the content → **Commit** (to `main`, or a branch + PR). Repeat for the
-other language.
+4. Switch to the **English** tab and fill in the EN fields (title, excerpt, alt text, body).
+   The slug and shared fields (date, countryCode, region, coordinates) carry over automatically.
+5. Click **Save draft** — both locale rows are written to Postgres. The post is not yet live.
 
-### Frontmatter (all required unless marked optional)
+### Publish
 
-```yaml
----
-title: 'Griechenland: Sonne und Abenteuer Rhodos'   # page title
-date: 2021-07-25                                     # publication / travel date
-country: 'Griechenland'                              # localized country name
-countryCode: 'GR'                                    # ISO-3166 alpha-2
-region: 'europe'                                     # europe | north-america | south-america
-translationKey: 'rhodes-2021'                        # SAME value in the DE and EN file
-excerpt: 'Eine Woche Sonne, Meer und Altstadtgassen.' # 1-2 sentence summary
-heroImage:                                           # ← paste from the uploader's /admin/
-  src: 'https://img.simonswanderlust.com/trips/rhodes-2021/hero'
-  width: 2560
-  height: 965
-  alt: 'Küste von Rhodos im Sommerlicht'             # in the page's language
-coordinates: { lat: 36.4341, lng: 28.2176 }
-# optional:
-# stops: [{ name: 'Lindos', lat: 36.09, lng: 28.09 }]
-# route: 'Rhodos-Stadt → Lindos → Prasonisi'
-# keyFacts: { 'Beste Reisezeit': 'Mai–Oktober', 'Dauer': '7 Tage' }
----
+Click **Publish** — this marks both locale rows as published and triggers the `blog-builder`
+rebuild automatically. Wait for the confirmation toast, then verify the post is live at
+`/<slug>/` and `/en/<slug>/`.
+
+> The `blog-builder` rebuild is the same process as the manual `curl` call in Stage 3 — the
+> Publish button just fires it for you.
+
+### Edit an existing post
+
+Open **Posts**, find the post, click **Edit**. Changes take effect after the next **Publish**.
+Saving without publishing updates the draft but leaves the live site unchanged.
+
+### Export / backup
+
+The **Export all** button (Posts list) writes MDX backup files for all published posts to
+`/data/backup` on the server. These are reference copies — Postgres is the source of truth.
+
+### Body images
+
+`<BodyImage>` tags in the body render as responsive `<picture>` elements (AVIF + WebP, multiple
+sizes) — the same as in the MDX era. Paste the tag directly; no import is needed. Use the
+**DE body** tab for German alt text and the **EN body** tab for English alt text (same image
+URL, language-appropriate alt):
+
 ```
-
-### Body
-
-Markdown (headings, lists, links, etc.). To place a photo, paste the matching `<BodyImage>`
-snippet from the batch page — **DE snippet into the German file, EN snippet into the English
-file** (same image, language-appropriate alt):
-
-```mdx
-## Altstadt und Strände
-
-Wir starteten in der Altstadt …
-
 <BodyImage src="https://img.simonswanderlust.com/trips/rhodes-2021/old-town" width={1600} height={1067} alt="Gepflasterte Gasse in der Altstadt von Rhodos" />
-
-Danach ging es an den Strand …
 ```
-
-`BodyImage` is registered globally for post bodies (in `StoryPage.astro`), so **no import is
-needed** — just paste the tag. It renders a responsive `<picture>` (AVIF + WebP, multiple sizes).
 
 ---
 
-## Stage 3 — Publish (trigger a rebuild)
+## Stage 3 — How the rebuild works
 
-The blog is a **static site** served by an nginx container. Since Phase A, content lives in
-**Postgres** — not in the Docker image. The site is built at runtime by a long-running
-**`blog-builder`** service (`site/build-server.mjs`) that runs `astro build` on demand and writes
-the output into a shared `blog-dist` volume that the `blog` nginx container serves.
+The **Publish** button in the editor triggers a rebuild automatically — you don't need to run
+`curl` manually under normal authoring conditions. This section explains what happens under the
+hood and how to trigger a rebuild manually if needed.
 
-**`docker compose up -d --build blog` no longer rebuilds the content.** Rebuilding the blog
+The blog is a **static site** served by an nginx container. Content lives in **Postgres** — not
+in the Docker image. The site is built at runtime by a long-running **`blog-builder`** service
+(`site/build-server.mjs`) that runs `astro build` on demand and writes the output into a shared
+`blog-dist` volume that the `blog` nginx container serves.
+
+**`docker compose up -d --build blog` does not rebuild the content.** Rebuilding the blog
 image only updates the Astro/template code, not the post data.
 
-To publish content changes after committing and importing them into Postgres, trigger a rebuild
-via the `blog-builder`'s secret-gated HTTP endpoint (from the server):
+To trigger a rebuild manually (e.g. from the server, or after a template code change):
 
 ```bash
 curl -X POST http://localhost:3001/build \
@@ -131,26 +130,22 @@ curl -X POST http://localhost:3001/build \
 The service logs progress to stdout (`docker compose logs -f blog-builder`) and atomically swaps
 in the new build when complete.
 
-> **Phase B:** an in-admin Publish button will trigger this rebuild automatically — no manual
-> `curl` needed.
-
 Notes:
 
 - **Images don't need a rebuild.** They're served by the uploader independently — uploading or
   re-uploading a photo is live immediately. Only content (text) changes need a rebuild.
 - **Re-uploading the same key overwrites** the variants (immutable cache means you may need a
   hard refresh / cache bust to see a replaced image).
-- **New environment variables** required for the blog stack: `DATABASE_URL` (Postgres connection
+- **Required environment variables** for the blog stack: `DATABASE_URL` (Postgres connection
   string) and `BUILD_SECRET` (secret for the build trigger endpoint). See `uploader/.env.example`.
 
 ---
 
 ## Quick checklist
 
-- [ ] Photos uploaded (hero via `/admin/`, body via `/admin/batch.html`); snippets copied.
-- [ ] `site/src/content/trips/de/<slug>.mdx` created — frontmatter + `heroImage` + body with DE `<BodyImage>` tags.
-- [ ] `site/src/content/trips/en/<slug>.mdx` created — same `translationKey`, EN alt, EN `<BodyImage>` tags.
-- [ ] Slug matches the live WordPress slug (never renamed).
-- [ ] Committed to GitHub and imported into Postgres.
-- [ ] On the server: trigger a rebuild (`curl -X POST http://localhost:3001/build -H "Authorization: Bearer $BUILD_SECRET"`).
+- [ ] Photos uploaded — hero and body images via the editor's inline upload, or pre-uploaded via `/admin/` (hero) and `/admin/batch.html` (batch); snippets/URLs ready.
+- [ ] In the editor: DE tab filled — slug (matches live WordPress slug, never renamed), title, date, country, countryCode, region, excerpt, heroImage fields, body with DE `<BodyImage>` tags.
+- [ ] In the editor: EN tab filled — title, excerpt, EN alt texts, EN body with EN `<BodyImage>` tags.
+- [ ] **Save draft** — both locale rows written to Postgres.
+- [ ] **Publish** — rebuild triggered automatically.
 - [ ] Verify the post renders at `/<slug>/` and `/en/<slug>/`, hero + body images load.

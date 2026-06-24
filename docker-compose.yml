@@ -40,6 +40,8 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-images}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-images}}
       LMSTUDIO_BASE_URL: ${LMSTUDIO_BASE_URL:-http://localhost:1234/v1}
       LMSTUDIO_MODEL: ${LMSTUDIO_MODEL:-qwen/qwen3-vl-4b}
+      BUILD_SECRET: ${BUILD_SECRET:?set BUILD_SECRET in .env}
+      BUILDER_URL: ${BUILDER_URL:-http://blog-builder:4000}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

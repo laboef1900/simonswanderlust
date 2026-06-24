@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgUserStore, UserExistsError } from '../src/users.js';
 import { pgSessionStore } from '../src/sessions.js';
+import { pgPostStore } from '../src/posts.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -30,5 +31,26 @@ maybe('postgres stores (integration)', () => {
     expect((await sessions.find(token))?.userId).toBe(u.id);
     const expired = await sessions.create(u.id, -1);
     expect(await sessions.find(expired)).toBeNull();
+  });
+});
+
+maybe('pgPostStore (integration)', () => {
+  it('round-trips a pair, publishes, and enforces slug immutability', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    const base = {
+      translationKey: '', status: 'draft' as const,
+      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    };
+    const created = await store.upsertDraft(base);
+    expect((await store.get(created.translationKey))?.de.slug).toBe('de-slug');
+    await store.publish(created.translationKey);
+    expect((await store.get(created.translationKey))?.status).toBe('published');
+    await expect(store.upsertDraft({ ...created, status: 'published', de: { ...base.de, slug: 'renamed' } })).rejects.toThrow();
+    await pool.end();
   });
 });

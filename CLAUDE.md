@@ -17,17 +17,19 @@ This repo is the **Astro 6 static-site rebuild** of the current WordPress + Elem
 Docker** alongside the uploader; both are wired in the root `docker-compose.yml`. UI is Astro
 components + Tailwind 4.
 
-**Content pipeline (Phase A):** `trips` content is loaded from **Postgres** at build time by a
-custom Astro Content Layer loader (`site/src/lib/postgres-loader.ts`). The Zod schema and entry
-`id`s (`de/<slug>` / `en/<slug>`) are unchanged, so `paths.ts`/`trips.ts` work unmodified. Post
-bodies are Markdown; body images render as responsive `<picture>` via
-`site/src/lib/body-images.ts`. The blog is **not** built at Docker image-build time — a
-long-running **`blog-builder`** service (`site/build-server.mjs`) runs `astro build` from
-Postgres at runtime, writing the static output into a shared **`blog-dist`** volume that the
-`blog` nginx container serves. A content change is live after triggering a rebuild (the in-admin
-Publish button is **Phase B**, not yet built). Required env vars for the blog stack:
-**`DATABASE_URL`** and **`BUILD_SECRET`** (see `uploader/.env.example`). Consequence: `npx astro
-check` and `npm run build` both require a reachable Postgres.
+**Content pipeline (Phase A + B):** `trips` content is authored via the **in-admin editor**
+(`/admin/posts.html` + `/admin/editor.html`) and stored in **Postgres** — not edited as MDX in
+git. The Astro Content Layer loader (`site/src/lib/postgres-loader.ts`) reads from Postgres at
+build time; the Zod schema and entry `id`s (`de/<slug>` / `en/<slug>`) are unchanged, so
+`paths.ts`/`trips.ts` work unmodified. Post bodies are Markdown; body images render as
+responsive `<picture>` via `site/src/lib/body-images.ts`. The blog is **not** built at Docker
+image-build time — a long-running **`blog-builder`** service (`site/build-server.mjs`) runs
+`astro build` from Postgres at runtime, writing the static output into a shared **`blog-dist`**
+volume that the `blog` nginx container serves. The in-admin **Publish** button triggers a
+rebuild automatically; MDX backups can be exported to `/data/backup` via **Export all**. Required
+env vars for the blog stack: **`DATABASE_URL`** and **`BUILD_SECRET`** (see
+`uploader/.env.example`). Consequence: `npx astro check` and `npm run build` both require a
+reachable Postgres.
 
 A separate **image uploader** (Node 22 + Fastify 5 + sharp, Dockerized) lives under `uploader/`:
 it optimizes uploaded photos into responsive AVIF/WebP variants and returns paste-ready
@@ -121,7 +123,7 @@ blog/
 │       ├── pages/                              # thin locale routes (de at root, en under /en/)
 │       └── layouts/  ·  styles/  ·  assets/
 └── uploader/                      # self-hosted image service (Node/Fastify/sharp, Docker)
-    ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · caption · settings
+    ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · caption · settings · posts · publish · export
     ├── public/                    #   index.html (hero upload) · batch.html (AI batch uploader)
     ├── test/                      #   Vitest suites (no live LM Studio needed)
     └── Dockerfile · docker-compose.yml · README.md
@@ -153,8 +155,8 @@ This repo uses the **superpowers** workflow: specs and phase plans live in
 plan before implementing.
 
 **Authoring a post?** See `docs/authoring-workflow.md` — how to upload photos via the
-uploader, write the post (currently still MDX-in-GitHub; an admin editor arrives in Phase B),
-and trigger a rebuild via the `blog-builder` service.
+uploader and write/publish via the in-admin editor (Postgres is the source of truth; MDX files
+are export-only backups).
 
 ### Verify Before Use (Prevent Hallucinations)
 - **Dependencies & APIs** — Never assume a package is installed or that a method exists. Check
@@ -189,7 +191,9 @@ Use comments to leave hints for future sessions:
 - **Done:** Phase 1 (skeleton) + Phase 1b (expedition-log layer) — merged to `main`.
 - **Done:** Phase A (Postgres CMS foundation) — Postgres Content Layer loader, body-image
   pipeline, runtime `blog-builder` service, compose/volume wiring — merged to `main`.
-- **Remaining:** Phase B = in-admin editor + Publish button (content authoring from the admin
-  UI; MDX export); Phase 2 = WordPress content migration — 18 posts, **now targeting Postgres**
-  directly (not MDX files); Phase 3 = MapLibre travel map (`/karte/` + `/en/map/`); Phase 4 =
-  DNS cutover. Each phase gets its own plan in `docs/superpowers/plans/`.
+- **Done:** Phase B (in-admin editor) — DE/EN tabbed editor (EasyMDE), slug-lock, inline photo
+  upload, Save draft, Publish (triggers rebuild), Export all (MDX backups to `/data/backup`) —
+  merged to `main`.
+- **Remaining:** Phase 2 = WordPress content migration — 18 posts, targeting Postgres directly
+  (not MDX files); Phase 3 = MapLibre travel map (`/karte/` + `/en/map/`); Phase 4 = DNS
+  cutover. Each phase gets its own plan in `docs/superpowers/plans/`.
