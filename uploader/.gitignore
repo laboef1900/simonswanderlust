@@ -4,3 +4,6 @@ data/
 *.log
 public/fonts/
 public/vendor/
+
+# Local scratch (WordPress export, etc.) — never commit
+tmp/
