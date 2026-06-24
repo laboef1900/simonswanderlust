@@ -108,3 +108,77 @@ export function memoryPostStore(): PostStore {
     },
   };
 }
+
+import type { DbPool } from './db.js';
+
+interface PostRow {
+  translation_key: string; locale: Locale; slug: string; title: string; date: Date | string;
+  country: string; country_code: string; region: string; excerpt: string;
+  hero_image: HeroImage; coordinates: { lat: number; lng: number };
+  stops: PostShared['stops'] | null; route: string | null; key_facts: Record<string, string> | null;
+  body_markdown: string; images: Record<string, ImageDims>; status: 'draft' | 'published'; updated_at: Date;
+}
+
+function rowLocale(r: PostRow): PostLocale {
+  return { locale: r.locale, slug: r.slug, title: r.title, excerpt: r.excerpt, heroImage: r.hero_image, bodyMarkdown: r.body_markdown, images: r.images ?? {} };
+}
+function rowShared(r: PostRow): PostShared {
+  const d = r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10);
+  return { date: d, country: r.country, countryCode: r.country_code, region: r.region, coordinates: r.coordinates, ...(r.stops ? { stops: r.stops } : {}), ...(r.route ? { route: r.route } : {}), ...(r.key_facts ? { keyFacts: r.key_facts } : {}) };
+}
+
+export function pgPostStore(pool: DbPool): PostStore {
+  async function writeLocale(tk: string, status: string, shared: PostShared, p: PostLocale) {
+    await pool.query(
+      `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
+         excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now())
+       ON CONFLICT (locale, slug) DO UPDATE SET
+         translation_key=EXCLUDED.translation_key, title=EXCLUDED.title, date=EXCLUDED.date, country=EXCLUDED.country,
+         country_code=EXCLUDED.country_code, region=EXCLUDED.region, excerpt=EXCLUDED.excerpt, hero_image=EXCLUDED.hero_image,
+         coordinates=EXCLUDED.coordinates, stops=EXCLUDED.stops, route=EXCLUDED.route, key_facts=EXCLUDED.key_facts,
+         body_markdown=EXCLUDED.body_markdown, images=EXCLUDED.images, updated_at=now()`,
+      [randomUUID(), tk, p.locale, p.slug, p.title, shared.date, shared.country, shared.countryCode, shared.region,
+       p.excerpt, JSON.stringify(p.heroImage), JSON.stringify(shared.coordinates),
+       shared.stops ? JSON.stringify(shared.stops) : null, shared.route ?? null, shared.keyFacts ? JSON.stringify(shared.keyFacts) : null,
+       p.bodyMarkdown, JSON.stringify(p.images), status],
+    );
+  }
+  return {
+    async list() {
+      const { rows } = await pool.query<PostRow>(`SELECT * FROM posts ORDER BY updated_at DESC`);
+      const byKey = new Map<string, { de?: PostRow; en?: PostRow }>();
+      for (const r of rows) { const e = byKey.get(r.translation_key) ?? {}; e[r.locale] = r; byKey.set(r.translation_key, e); }
+      return [...byKey.entries()].map(([tk, e]) => ({
+        translationKey: tk, titleDe: e.de?.title ?? '', slugDe: e.de?.slug ?? '', slugEn: e.en?.slug ?? '',
+        status: (e.de?.status ?? e.en?.status ?? 'draft') as 'draft' | 'published',
+        updatedAt: new Date(Math.max(e.de?.updated_at?.getTime() ?? 0, e.en?.updated_at?.getTime() ?? 0)),
+      }));
+    },
+    async get(tk) {
+      const { rows } = await pool.query<PostRow>(`SELECT * FROM posts WHERE translation_key = $1`, [tk]);
+      const de = rows.find((r) => r.locale === 'de'); const en = rows.find((r) => r.locale === 'en');
+      if (!de || !en) return null;
+      return { translationKey: tk, status: de.status, shared: rowShared(de), de: rowLocale(de), en: rowLocale(en) };
+    },
+    async upsertDraft(pair) {
+      const tk = pair.translationKey || randomUUID();
+      const existing = await this.get(tk);
+      for (const locale of ['de', 'en'] as Locale[]) {
+        const { rows } = await pool.query<{ translation_key: string }>(`SELECT translation_key FROM posts WHERE locale=$1 AND slug=$2`, [locale, pair[locale].slug]);
+        if (rows[0] && rows[0].translation_key !== tk) throw new PostError(`slug "${pair[locale].slug}" already in use for ${locale}`);
+        if (existing && existing.status === 'published' && existing[locale].slug !== pair[locale].slug) throw new PostError('cannot change the slug of a published post');
+      }
+      const status = existing?.status ?? 'draft';
+      await writeLocale(tk, status, pair.shared, { ...pair.de, locale: 'de' });
+      await writeLocale(tk, status, pair.shared, { ...pair.en, locale: 'en' });
+      const saved = await this.get(tk);
+      if (!saved) throw new PostError('failed to save post');
+      return saved;
+    },
+    async publish(tk) {
+      const res = await pool.query(`UPDATE posts SET status='published', updated_at=now() WHERE translation_key=$1`, [tk]);
+      if (res.rowCount === 0) throw new PostError('post not found');
+    },
+  };
+}
