@@ -1,0 +1,57 @@
+import { describe, expect, it } from 'vitest';
+import { memoryPostStore, PostError, type PostPair } from '../src/posts.js';
+
+function pair(overrides: Partial<PostPair> = {}): PostPair {
+  const loc = (locale: 'de' | 'en', slug: string, title: string) => ({
+    locale, slug, title, excerpt: 'x',
+    heroImage: { src: 'https://img/h', width: 768, height: 512, alt: 'a' },
+    bodyMarkdown: '## Hi', images: {},
+  });
+  return {
+    translationKey: '', status: 'draft',
+    shared: { date: '2024-10-03', country: 'Rumänien', countryCode: 'RO', region: 'europe', coordinates: { lat: 44.4, lng: 26.1 } },
+    de: loc('de', 'bukarest', 'Bukarest'), en: loc('en', 'bucharest', 'Bucharest'),
+    ...overrides,
+  };
+}
+
+describe('memoryPostStore', () => {
+  it('creates a pair with a generated translationKey and lists it', async () => {
+    const s = memoryPostStore();
+    const created = await s.upsertDraft(pair());
+    expect(created.translationKey).toMatch(/.+/);
+    const list = await s.list();
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ titleDe: 'Bukarest', slugDe: 'bukarest', slugEn: 'bucharest', status: 'draft' });
+  });
+
+  it('get returns the full pair; update preserves the key', async () => {
+    const s = memoryPostStore();
+    const created = await s.upsertDraft(pair());
+    const updated = await s.upsertDraft({ ...created, de: { ...created.de, title: 'Bukarest 2' } });
+    expect(updated.translationKey).toBe(created.translationKey);
+    expect((await s.get(created.translationKey))?.de.title).toBe('Bukarest 2');
+  });
+
+  it('publish flips both rows to published', async () => {
+    const s = memoryPostStore();
+    const c = await s.upsertDraft(pair());
+    await s.publish(c.translationKey);
+    expect((await s.get(c.translationKey))?.status).toBe('published');
+  });
+
+  it('rejects changing a slug once published', async () => {
+    const s = memoryPostStore();
+    const c = await s.upsertDraft(pair());
+    await s.publish(c.translationKey);
+    await expect(s.upsertDraft({ ...c, status: 'published', de: { ...c.de, slug: 'renamed' } }))
+      .rejects.toBeInstanceOf(PostError);
+  });
+
+  it('rejects a duplicate (locale, slug) across posts', async () => {
+    const s = memoryPostStore();
+    await s.upsertDraft(pair());
+    await expect(s.upsertDraft(pair({ de: { ...pair().de, slug: 'bukarest' }, en: { ...pair().en, slug: 'other' } })))
+      .rejects.toBeInstanceOf(PostError);
+  });
+});
