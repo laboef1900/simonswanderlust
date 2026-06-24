@@ -9,7 +9,8 @@ function bodyToMdx(p: PostLocale): string {
   return p.bodyMarkdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt: string, src: string) => {
     const dims = p.images[src];
     if (!dims) return `![${alt}](${src})`;
-    return `<BodyImage src="${src}" width={${dims.width}} height={${dims.height}} alt="${alt}" />`;
+    const escapedAlt = alt.replace(/"/g, '&quot;');
+    return `<BodyImage src="${src}" width={${dims.width}} height={${dims.height}} alt="${escapedAlt}" />`;
   });
 }
 

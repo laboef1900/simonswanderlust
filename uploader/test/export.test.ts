@@ -20,4 +20,16 @@ describe('renderPostToMdx', () => {
     expect(mdx).toContain('<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />');
     expect(mdx).not.toContain('![Gasse]');
   });
+
+  it('escapes double-quotes in body image alt text', () => {
+    const pairWithQuote: PostPair = {
+      translationKey: 'k1', status: 'published',
+      shared: { date: '2024-10-03', country: 'Test', countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 }, keyFacts: {} },
+      de: { locale: 'de', slug: 'test', title: 'Test', excerpt: 'E', heroImage: { src: 'https://img/h', width: 768, height: 512, alt: 'Alt' }, bodyMarkdown: 'Intro\n\n![He said "hi"](https://img/x/y)\n', images: { 'https://img/x/y': { width: 1600, height: 1067 } } },
+      en: { locale: 'en', slug: 'test', title: 'Test', excerpt: 'E', heroImage: { src: 'https://img/h', width: 768, height: 512, alt: 'Alt' }, bodyMarkdown: 'Intro', images: {} },
+    };
+    const mdx = renderPostToMdx(pairWithQuote, 'de');
+    expect(mdx).toContain('alt="He said &quot;hi&quot;"');
+    expect(mdx).not.toContain('alt="He said "hi""');
+  });
 });
