@@ -15,6 +15,9 @@ import {
 } from './authn.js';
 import { captionImage, type Caption, type CaptionConfig } from './caption.js';
 import { SettingsError, type SettingsStore } from './settings.js';
+import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair } from './posts.js';
+import { exportPost, exportAll } from './export.js';
+import { triggerBuild, type BuildResult } from './publish.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -22,8 +25,13 @@ export interface ServerConfig {
   users: UserStore;
   sessions: SessionStore;
   settings: SettingsStore;
+  posts: PostStore;
+  builderUrl: string;
+  buildSecret: string;
+  backupDir: string;
   captionImpl?: (jpeg: Buffer, cfg: CaptionConfig) => Promise<Caption>;
   fetchImpl?: typeof fetch;
+  triggerImpl?: (builderUrl: string, secret: string) => Promise<BuildResult>;
 }
 
 const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
@@ -258,6 +266,52 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     }
     await users.remove(id);
     return reply.send({ ok: true });
+  });
+
+  const { posts } = cfg;
+  const doBuild = cfg.triggerImpl ?? ((u, s) => triggerBuild(u, s));
+
+  app.get('/posts', { preHandler: requireAuth }, async () => posts.list());
+
+  app.get('/posts/:tk', { preHandler: requireAuth }, async (req, reply) => {
+    const pair = await posts.get((req.params as { tk: string }).tk);
+    if (!pair) return reply.code(404).send({ error: 'post not found' });
+    return reply.send(pair);
+  });
+
+  const upsert = async (req: { body: unknown }, reply: import('fastify').FastifyReply, tk: string) => {
+    const pair = { ...(req.body as PostPair), translationKey: tk };
+    try {
+      validateDraft(pair);
+      return reply.send(await posts.upsertDraft(pair));
+    } catch (e) {
+      if (e instanceof PostError) return reply.code(/already in use|published/.test(e.message) ? 409 : 400).send({ error: e.message });
+      throw e;
+    }
+  };
+  app.post('/posts', { preHandler: requireAuth }, (req, reply) => upsert(req, reply, ''));
+  app.put('/posts/:tk', { preHandler: requireAuth }, (req, reply) => upsert(req, reply, (req.params as { tk: string }).tk));
+
+  app.post('/posts/:tk/publish', { preHandler: requireAuth }, async (req, reply) => {
+    const tk = (req.params as { tk: string }).tk;
+    const pair = await posts.get(tk);
+    if (!pair) return reply.code(404).send({ error: 'post not found' });
+    try { validateForPublish(pair); } catch (e) {
+      if (e instanceof PostError) return reply.code(400).send({ error: e.message });
+      throw e;
+    }
+    await posts.publish(tk);
+    const published = await posts.get(tk);
+    const build = await doBuild(cfg.builderUrl, cfg.buildSecret);
+    if (published) await exportPost(published, cfg.backupDir).catch(() => { /* best-effort backup */ });
+    return reply.send({ published: true, build });
+  });
+
+  app.post('/export', { preHandler: requireAuth }, async (_req, reply) => {
+    const list = await posts.list();
+    const pairs = (await Promise.all(list.map((s) => posts.get(s.translationKey)))).filter((p): p is PostPair => p !== null);
+    const files = await exportAll(pairs, cfg.backupDir);
+    return reply.send({ ok: true, count: files.length });
   });
 
   return app;

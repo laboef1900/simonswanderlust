@@ -10,6 +10,7 @@ import { validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
 import { memoryUserStore, type UserStore } from '../src/users.js';
 import { memorySessionStore, type SessionStore } from '../src/sessions.js';
+import { memoryPostStore, type PostStore } from '../src/posts.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -25,15 +26,21 @@ function fakeStore(init: Settings = SETTINGS): SettingsStore {
   return { get: () => ({ ...cur }), update: (p) => { cur = validate({ ...cur, ...p }); return { ...cur }; } };
 }
 
-interface Built { app: ReturnType<typeof buildServer>; users: UserStore; sessions: SessionStore; }
+interface Built { app: ReturnType<typeof buildServer>; users: UserStore; sessions: SessionStore; posts: PostStore; }
 function build(extra: Partial<ServerConfig> = {}): Built {
   const users = (extra.users as UserStore) ?? memoryUserStore();
   const sessions = (extra.sessions as SessionStore) ?? memorySessionStore();
-  const app = buildServer({
+  const posts = (extra.posts as PostStore) ?? memoryPostStore();
+  const built = buildServer({
     storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
-    users, sessions, settings: fakeStore(), ...extra,
+    users, sessions, settings: fakeStore(),
+    posts,
+    builderUrl: 'http://builder:4000', buildSecret: 'bs',
+    backupDir: dir + '/backup',
+    triggerImpl: extra.triggerImpl ?? (async () => ({ ok: true, release: 'r1' })),
+    ...extra,
   });
-  return { app, users, sessions };
+  return { app: built, users, sessions, posts };
 }
 
 // Seed a user and return a Cookie header value for an authenticated session.
@@ -109,7 +116,7 @@ describe('POST /upload', () => {
 describe('buildServer config', () => {
   it('boots with a relative storageDir (resolves it to absolute)', async () => {
     const rel = relative(process.cwd(), dir);
-    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore() });
+    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), posts: memoryPostStore(), builderUrl: 'http://builder:4000', buildSecret: 'bs', backupDir: dir + '/backup', triggerImpl: async () => ({ ok: true }) });
     await expect(srv.ready()).resolves.toBeDefined();
     await srv.close();
   });
@@ -326,5 +333,39 @@ describe('user management', () => {
     await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'bob', password: 'pw', isAdmin: false } });
     const dup = await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'BOB', password: 'pw', isAdmin: false } });
     expect(dup.statusCode).toBe(409);
+  });
+});
+
+describe('posts editor', () => {
+  const sample = () => ({
+    translationKey: '', status: 'draft',
+    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de', slug: 'de-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+  });
+
+  it('GET /posts 401 without auth', async () => {
+    expect((await build().app.inject({ method: 'GET', url: '/posts' })).statusCode).toBe(401);
+  });
+
+  it('create → list → publish (triggers the builder)', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    expect(created.statusCode).toBe(200);
+    const tk = created.json().translationKey;
+    const list = await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie });
+    expect(list.json()).toHaveLength(1);
+    const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(pub.statusCode).toBe(200);
+    expect(pub.json()).toMatchObject({ published: true, build: { ok: true, release: 'r1' } });
+  });
+
+  it('publish rejects an incomplete post (400)', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const bad = sample(); bad.de.excerpt = '';
+    const c = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: bad });
+    const tk = c.json().translationKey;
+    const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(pub.statusCode).toBe(400);
   });
 });
