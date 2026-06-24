@@ -39,7 +39,7 @@ async function buildLocale(
     if (!url || !/^https?:\/\//.test(url)) continue;
     try {
       const r = await rehost(url, `trips/${p.slug}/${nameFromUrl(url)}`, alt);
-      body = body.replace(full, `![${alt}](${r.src})`);
+      body = body.replaceAll(full, `![${alt}](${r.src})`);
       images[r.src] = { width: r.width, height: r.height };
     } catch (e) { warnings.push(`image ${url} for ${p.slug}: ${(e as Error).message}`); }
   }

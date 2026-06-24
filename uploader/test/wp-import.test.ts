@@ -23,6 +23,49 @@ describe('importWxr', () => {
     expect(pair!.de.images['https://img/x']).toEqual({ width: 100, height: 80 });
   });
 
+  it('rewrites all occurrences of a duplicated body image ref', async () => {
+    const dupXml = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/"
+  xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/"
+  xmlns:wp="http://wordpress.org/export/1.2/">
+<channel>
+  <item>
+    <title>Dup DE</title>
+    <wp:post_name><![CDATA[dup-test]]></wp:post_name>
+    <wp:post_type><![CDATA[post]]></wp:post_type>
+    <wp:status><![CDATA[publish]]></wp:status>
+    <wp:post_date><![CDATA[2021-07-25 00:00:00]]></wp:post_date>
+    <excerpt:encoded><![CDATA[]]></excerpt:encoded>
+    <content:encoded><![CDATA[<p>First</p><img src="https://wp/dup.jpg"><p>Second</p><img src="https://wp/dup.jpg">]]></content:encoded>
+    <category domain="language" nicename="de"><![CDATA[Deutsch]]></category>
+    <category domain="post_translations" nicename="pll_dup"><![CDATA[pll_dup]]></category>
+  </item>
+  <item>
+    <title>Dup EN</title>
+    <wp:post_name><![CDATA[dup-test-en]]></wp:post_name>
+    <wp:post_type><![CDATA[post]]></wp:post_type>
+    <wp:status><![CDATA[publish]]></wp:status>
+    <wp:post_date><![CDATA[2021-07-25 00:00:00]]></wp:post_date>
+    <excerpt:encoded><![CDATA[]]></excerpt:encoded>
+    <content:encoded><![CDATA[<p>First</p><img src="https://wp/dup.jpg"><p>Second</p><img src="https://wp/dup.jpg">]]></content:encoded>
+    <category domain="language" nicename="en"><![CDATA[English]]></category>
+    <category domain="post_translations" nicename="pll_dup"><![CDATA[pll_dup]]></category>
+  </item>
+</channel>
+</rss>`;
+    const dupRehost = async (_url: string, _key: string, _alt: string) => ({ src: 'https://img/dup', width: 10, height: 10 });
+    const store = memoryPostStore();
+    await importWxr(dupXml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: dupRehost });
+    const tk = (await store.list())[0]!.translationKey;
+    const pair = await store.get(tk);
+    const deBody = pair!.de.bodyMarkdown;
+    // both occurrences rewritten
+    expect(deBody.split('https://img/dup').length - 1).toBe(2);
+    // no original WP URL remains
+    expect(deBody).not.toContain('https://wp/dup.jpg');
+  });
+
   it('is idempotent (re-run updates, no duplicate) and skips published posts', async () => {
     const store = memoryPostStore();
     await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
