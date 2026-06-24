@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import sharp from 'sharp';
@@ -367,5 +368,33 @@ describe('posts editor', () => {
     const tk = c.json().translationKey;
     const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
     expect(pub.statusCode).toBe(400);
+  });
+});
+
+describe('WordPress import', () => {
+  it('401 without auth', async () => {
+    const form = new FormData();
+    form.append('file', '<rss></rss>', { filename: 'x.xml', contentType: 'text/xml' });
+    const res = await build().app.inject({ method: 'POST', url: '/import', headers: form.getHeaders(), payload: form });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('imports the fixture export as drafts', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const xml = readFileSync('test/fixtures/wxr-sample.xml', 'utf8');
+    const form = new FormData();
+    form.append('file', xml, { filename: 'export.xml', contentType: 'text/xml' });
+    const res = await b.app.inject({ method: 'POST', url: '/import', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ imported: 1, skipped: 0 });
+    expect((await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json()).toHaveLength(1);
+  });
+
+  it('400 on a non-WXR upload', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const form = new FormData();
+    form.append('file', 'just text', { filename: 'x.xml', contentType: 'text/xml' });
+    const res = await b.app.inject({ method: 'POST', url: '/import', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
+    expect(res.statusCode).toBe(400);
   });
 });

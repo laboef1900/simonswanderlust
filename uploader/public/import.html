@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Import · Simon's Wanderlust</title>
+    <link rel="stylesheet" href="/admin/admin.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="masthead-inner">
+        <p class="eyebrow">Expedition Log · Image Station</p>
+        <h1>WordPress Import</h1>
+        <p class="lede">Upload a WordPress export (.xml) file to import posts as drafts. Already-published posts are skipped; existing drafts are updated.</p>
+        <nav>
+          <a href="/admin/">Hero upload</a>
+          <a href="/admin/batch.html">Batch uploader</a>
+          <a href="/admin/settings.html">LLM settings</a>
+          <a href="/admin/users.html">Users</a>
+          <a href="/admin/posts.html">Posts</a>
+          <a href="/admin/import.html" aria-current="page">Import</a>
+        </nav>
+        <p class="muted" id="whoami"></p>
+      </div>
+    </header>
+
+    <main>
+      <section class="card">
+        <label for="wxr">WordPress export file (.xml)</label>
+        <input type="file" id="wxr" accept=".xml" />
+        <button id="importBtn">Import</button>
+      </section>
+
+      <div class="route" aria-hidden="true">
+        <span class="dot"></span><span class="seg"></span>
+        <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>
+        <span class="seg"></span><span class="ring"></span>
+      </div>
+
+      <p class="section-label">Status</p>
+      <pre id="out">—</pre>
+      <div id="results" style="display:none">
+        <p id="counts"></p>
+        <ul id="warnings"></ul>
+        <p><a href="/admin/posts.html">Go to Posts to review drafts</a></p>
+      </div>
+    </main>
+
+    <script src="/admin/auth.js"></script>
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      $('importBtn').addEventListener('click', async () => {
+        const file = $('wxr').files[0];
+        if (!file) { $('out').textContent = 'Please select a .xml file first.'; return; }
+
+        $('importBtn').disabled = true;
+        $('out').textContent = 'Importing…';
+        $('results').style.display = 'none';
+
+        const form = new FormData();
+        form.append('file', file);
+
+        let res;
+        try {
+          res = await fetch('/import', { method: 'POST', body: form });
+        } catch (e) {
+          $('out').textContent = 'Request failed: ' + e;
+          $('importBtn').disabled = false;
+          return;
+        }
+
+        if (res.status === 401) { location.href = '/login'; return; }
+
+        $('importBtn').disabled = false;
+
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          $('out').textContent = 'Import failed (' + res.status + '): ' + (body.error || 'unknown error');
+          return;
+        }
+
+        const data = await res.json();
+        $('out').textContent = 'Done.';
+
+        // render counts
+        $('counts').textContent =
+          'Imported: ' + data.imported + '  |  Updated: ' + data.updated + '  |  Skipped: ' + data.skipped;
+
+        // render warnings (XSS-safe: createElement + textContent only)
+        const ul = $('warnings');
+        ul.innerHTML = '';
+        if (data.warnings && data.warnings.length) {
+          for (const w of data.warnings) {
+            const li = document.createElement('li');
+            li.textContent = w;
+            ul.appendChild(li);
+          }
+        }
+
+        $('results').style.display = '';
+      });
+
+      (async () => {
+        const s = await Auth.ensureAuthed();
+        if (!s) return;
+        Auth.renderHeader(s);
+      })();
+    </script>
+  </body>
+</html>
