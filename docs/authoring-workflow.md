@@ -12,6 +12,29 @@ can upload images inline from the editor without visiting a separate page.
 
 ---
 
+## Importing existing WordPress content (one-time)
+
+If you have an existing WordPress site with posts to migrate, you can import them directly
+into Postgres without manually re-authoring each one:
+
+1. **Export from WordPress** — WordPress admin → Tools → Export → select "All content" → download
+   the `.xml` file (WXR format).
+2. **Sign in to the uploader admin** — `/admin/` (the same login that manages posts and photos).
+3. **Import** — Open the **Posts** tab, click **Import**, select the WXR file, and upload.
+4. **What happens** — The importer parses the export, downloads hero + body images from the live
+   WordPress site (so the old site must be reachable during import), stores optimized variants
+   through the uploader's pipeline, and creates **draft posts** in Postgres. Slugs are preserved
+   exactly — DE posts at the root, EN under `/en/`. Structured travel fields (country, region,
+   coordinates, keyFacts) are filled with placeholder values — open each draft in the editor to
+   enrich them. Images are already re-hosted, so no manual re-upload is needed.
+5. **Refine and publish** — Open each draft in the editor, review the imported content, fill in
+   missing details, and hit **Publish** when ready.
+
+**Note:** The import is **idempotent by slug** — re-importing the same WXR will not overwrite
+published posts or duplicate existing drafts. Only draft posts from this import are refreshed.
+
+---
+
 ## Stage 1 — Upload the photos (do this first)
 
 The uploader must be running (`docker compose up -d` brings it up with the blog). For the AI
