@@ -84,7 +84,8 @@
 
             const tdStatus = document.createElement('td');
             const badge = document.createElement('span');
-            badge.className = 'status-badge status-' + p.status;
+            const safeStatus = ['draft', 'published'].includes(p.status) ? p.status : 'draft';
+            badge.className = 'status-badge status-' + safeStatus;
             badge.textContent = p.status;
             tdStatus.appendChild(badge);
             tr.appendChild(tdStatus);

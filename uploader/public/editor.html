@@ -210,6 +210,9 @@
           const tab = btn.dataset.tab;
           $('tab-de').style.display = tab === 'de' ? '' : 'none';
           $('tab-en').style.display = tab === 'en' ? '' : 'none';
+          // CodeMirror can't measure width when the panel is hidden; refresh on reveal
+          if (tab === 'en') enMDE.codemirror.refresh();
+          if (tab === 'de') deMDE.codemirror.refresh();
         });
       });
 
@@ -378,7 +381,7 @@
 
         return {
           translationKey: currentTk || undefined,
-          status: 'draft',
+          status: isPublished ? 'published' : 'draft',
           shared,
           de,
           en,
@@ -507,6 +510,8 @@
 
         populateLocale('de', post.de);
         populateLocale('en', post.en);
+        // EN tab is hidden on load; refresh its CodeMirror so it renders at full width when shown
+        enMDE.codemirror.refresh();
 
         // Derive slug from the DE locale slug (not the DE title so we don't overwrite)
         if (post.de && post.de.slug) {
