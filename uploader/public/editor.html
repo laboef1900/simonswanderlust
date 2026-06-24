@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Post Editor · Simon's Wanderlust</title>
+    <link rel="stylesheet" href="/admin/admin.css" />
+    <link rel="stylesheet" href="/admin/vendor/easymde.min.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="masthead-inner">
+        <p class="eyebrow">Expedition Log · Image Station</p>
+        <h1 id="pageTitle">New post</h1>
+        <nav>
+          <a href="/admin/">Hero upload</a>
+          <a href="/admin/batch.html">Batch uploader</a>
+          <a href="/admin/settings.html">LLM settings</a>
+          <a href="/admin/users.html">Users</a>
+          <a href="/admin/posts.html">Posts</a>
+        </nav>
+        <p class="muted" id="whoami"></p>
+      </div>
+    </header>
+
+    <main>
+      <!-- Slug / URL preview -->
+      <section class="card">
+        <label for="slugField">Slug (auto-derived from DE title · locked once published)</label>
+        <div class="slug-preview">
+          <span class="slug-base">simonswanderlust.com/</span><input id="slugField" type="text" placeholder="derived-from-de-title" />
+        </div>
+        <p id="slugError" class="err" style="display:none"></p>
+      </section>
+
+      <!-- Shared frontmatter -->
+      <section class="card">
+        <h2 class="card-heading">Shared frontmatter</h2>
+
+        <label for="fmDate">Date</label>
+        <input id="fmDate" type="date" />
+
+        <label for="fmCountry">Country</label>
+        <input id="fmCountry" type="text" placeholder="e.g. Greece" />
+
+        <label for="fmCountryCode">Country code (2 letters)</label>
+        <input id="fmCountryCode" type="text" maxlength="2" placeholder="GR" style="text-transform:uppercase" />
+
+        <label for="fmRegion">Region</label>
+        <select id="fmRegion">
+          <option value="">— select —</option>
+          <option value="europe">Europe</option>
+          <option value="north-america">North America</option>
+          <option value="south-america">South America</option>
+        </select>
+
+        <div class="form-row-2">
+          <div>
+            <label for="fmLat">Latitude</label>
+            <input id="fmLat" type="number" step="any" placeholder="37.9755" />
+          </div>
+          <div>
+            <label for="fmLng">Longitude</label>
+            <input id="fmLng" type="number" step="any" placeholder="23.7348" />
+          </div>
+        </div>
+
+        <label for="fmRoute">Route (optional)</label>
+        <input id="fmRoute" type="text" placeholder="e.g. Athens → Rhodes" />
+
+        <div id="keyFactsContainer">
+          <p class="section-label" style="margin-top:1.25rem">Key facts (optional)</p>
+          <div id="keyFactsList"></div>
+          <button type="button" id="addKeyFact" class="btn-secondary">+ Add key fact</button>
+        </div>
+
+        <label for="fmStops">Stops (optional, comma-separated)</label>
+        <input id="fmStops" type="text" placeholder="Athens, Rhodes Town, Lindos" />
+      </section>
+
+      <!-- DE/EN tabs -->
+      <div class="tabs-bar">
+        <button type="button" class="tab-btn active" data-tab="de">Deutsch (DE)</button>
+        <button type="button" class="tab-btn" data-tab="en">English (EN)</button>
+      </div>
+
+      <!-- DE locale -->
+      <section id="tab-de" class="card locale-tab">
+        <h2 class="card-heading">Deutsch</h2>
+
+        <label for="deTitle">Title</label>
+        <input id="deTitle" type="text" placeholder="Reiseberichte aus …" />
+
+        <label for="deExcerpt">Excerpt</label>
+        <textarea id="deExcerpt" rows="3" placeholder="Eine kurze Zusammenfassung…"></textarea>
+
+        <label>Hero image</label>
+        <div class="hero-picker">
+          <input id="deHeroFile" type="file" accept="image/*" />
+          <input id="deHeroAlt" type="text" placeholder="Alt text (DE)" />
+          <button type="button" id="deHeroUpload" class="btn-secondary">Upload hero</button>
+          <p id="deHeroStatus" class="muted"></p>
+          <input id="deHeroSrc" type="hidden" />
+          <input id="deHeroWidth" type="hidden" />
+          <input id="deHeroHeight" type="hidden" />
+        </div>
+
+        <label>Body (Markdown)</label>
+        <textarea id="deBody"></textarea>
+
+        <div class="body-img-row">
+          <input id="deBodyImgFile" type="file" accept="image/*" />
+          <input id="deBodyImgAlt" type="text" placeholder="Alt text (DE)" />
+          <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert body image</button>
+          <p id="deBodyImgStatus" class="muted"></p>
+        </div>
+      </section>
+
+      <!-- EN locale -->
+      <section id="tab-en" class="card locale-tab" style="display:none">
+        <h2 class="card-heading">English</h2>
+
+        <label for="enTitle">Title</label>
+        <input id="enTitle" type="text" placeholder="Travel stories from …" />
+
+        <label for="enExcerpt">Excerpt</label>
+        <textarea id="enExcerpt" rows="3" placeholder="A short summary…"></textarea>
+
+        <label>Hero image</label>
+        <div class="hero-picker">
+          <input id="enHeroFile" type="file" accept="image/*" />
+          <input id="enHeroAlt" type="text" placeholder="Alt text (EN)" />
+          <button type="button" id="enHeroUpload" class="btn-secondary">Upload hero</button>
+          <p id="enHeroStatus" class="muted"></p>
+          <input id="enHeroSrc" type="hidden" />
+          <input id="enHeroWidth" type="hidden" />
+          <input id="enHeroHeight" type="hidden" />
+        </div>
+
+        <label>Body (Markdown)</label>
+        <textarea id="enBody"></textarea>
+
+        <div class="body-img-row">
+          <input id="enBodyImgFile" type="file" accept="image/*" />
+          <input id="enBodyImgAlt" type="text" placeholder="Alt text (EN)" />
+          <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert body image</button>
+          <p id="enBodyImgStatus" class="muted"></p>
+        </div>
+      </section>
+
+      <!-- Actions -->
+      <div class="editor-actions card">
+        <button id="saveDraft">Save draft</button>
+        <button id="publishBtn" class="btn-publish">Publish</button>
+        <p id="actionStatus" class="muted"></p>
+        <p id="actionError" class="err" style="display:none"></p>
+      </div>
+
+      <div class="route" aria-hidden="true">
+        <span class="dot"></span><span class="seg"></span>
+        <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>
+        <span class="seg"></span><span class="ring"></span>
+      </div>
+    </main>
+
+    <script src="/admin/auth.js"></script>
+    <script src="/admin/vendor/easymde.min.js"></script>
+    <script>
+      'use strict';
+      const $ = (id) => document.getElementById(id);
+
+      // ---- state ----
+      let currentTk = null;       // translationKey, null = new post
+      let isPublished = false;    // slug is locked once published
+      const deImages = {};        // src → {width, height}
+      const enImages = {};
+
+      // ---- slugify ----
+      function slugify(str) {
+        return str
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[̀-ͯ]/g, '')  // strip combining diacritics
+          .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .replace(/-{2,}/g, '-')
+          || 'untitled';
+      }
+
+      // ---- EasyMDE instances ----
+      const deMDE = new EasyMDE({
+        element: $('deBody'),
+        spellChecker: false,
+        autosave: { enabled: false },
+        toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'],
+      });
+      const enMDE = new EasyMDE({
+        element: $('enBody'),
+        spellChecker: false,
+        autosave: { enabled: false },
+        toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'],
+      });
+
+      // ---- tabs ----
+      document.querySelectorAll('.tab-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+          const tab = btn.dataset.tab;
+          $('tab-de').style.display = tab === 'de' ? '' : 'none';
+          $('tab-en').style.display = tab === 'en' ? '' : 'none';
+        });
+      });
+
+      // ---- slug derivation from DE title ----
+      $('deTitle').addEventListener('input', () => {
+        if (isPublished) return;
+        $('slugField').value = slugify($('deTitle').value);
+      });
+
+      // ---- key facts (optional rows) ----
+      function addKeyFactRow(label = '', value = '') {
+        const row = document.createElement('div');
+        row.className = 'keyfact-row';
+
+        const lInput = document.createElement('input');
+        lInput.type = 'text';
+        lInput.placeholder = 'Label';
+        lInput.className = 'keyfact-label';
+        lInput.value = label;
+
+        const vInput = document.createElement('input');
+        vInput.type = 'text';
+        vInput.placeholder = 'Value';
+        vInput.className = 'keyfact-value';
+        vInput.value = value;
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'btn-remove';
+        remove.textContent = '×';
+        remove.addEventListener('click', () => row.remove());
+
+        row.appendChild(lInput);
+        row.appendChild(vInput);
+        row.appendChild(remove);
+        $('keyFactsList').appendChild(row);
+      }
+
+      $('addKeyFact').addEventListener('click', () => addKeyFactRow());
+
+      function collectKeyFacts() {
+        const rows = $('keyFactsList').querySelectorAll('.keyfact-row');
+        if (!rows.length) return undefined;
+        const obj = {};
+        rows.forEach((r) => {
+          const l = r.querySelector('.keyfact-label').value.trim();
+          const v = r.querySelector('.keyfact-value').value.trim();
+          if (l) obj[l] = v;
+        });
+        return Object.keys(obj).length ? obj : undefined;
+      }
+
+      // ---- hero upload ----
+      async function uploadHero(locale) {
+        const slug = $('slugField').value.trim();
+        if (!slug) { showErr('Set the slug before uploading a hero image.'); return; }
+        const fileInput = $(locale + 'HeroFile');
+        const altInput = $(locale + 'HeroAlt');
+        const statusEl = $(locale + 'HeroStatus');
+        const file = fileInput.files[0];
+        if (!file) { statusEl.textContent = 'Pick a file first.'; return; }
+
+        statusEl.textContent = 'Uploading…';
+        const fd = new FormData();
+        fd.append('key', 'trips/' + slug + '/hero');
+        fd.append('alt', altInput.value);
+        fd.append('file', file);
+
+        const res = await fetch('/upload', { method: 'POST', body: fd });
+        if (res.status === 401) { location.href = '/login'; return; }
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
+
+        $(locale + 'HeroSrc').value = body.src;
+        $(locale + 'HeroWidth').value = body.width;
+        $(locale + 'HeroHeight').value = body.height;
+        statusEl.textContent = 'Hero uploaded: ' + body.src;
+      }
+
+      $('deHeroUpload').addEventListener('click', () => uploadHero('de'));
+      $('enHeroUpload').addEventListener('click', () => uploadHero('en'));
+
+      // ---- body image upload + insert ----
+      async function uploadBodyImg(locale) {
+        const slug = $('slugField').value.trim();
+        if (!slug) { showErr('Set the slug before uploading a body image.'); return; }
+        const fileInput = $(locale + 'BodyImgFile');
+        const altInput = $(locale + 'BodyImgAlt');
+        const statusEl = $(locale + 'BodyImgStatus');
+        const file = fileInput.files[0];
+        if (!file) { statusEl.textContent = 'Pick a file first.'; return; }
+
+        const imgSlug = file.name.replace(/\.[^.]+$/, '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+        statusEl.textContent = 'Uploading…';
+
+        const fd = new FormData();
+        fd.append('key', 'trips/' + slug + '/' + imgSlug);
+        fd.append('alt', altInput.value);
+        fd.append('file', file);
+
+        const res = await fetch('/upload', { method: 'POST', body: fd });
+        if (res.status === 401) { location.href = '/login'; return; }
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
+
+        // Record dims into the locale-specific images map
+        const imagesMap = locale === 'de' ? deImages : enImages;
+        imagesMap[body.src] = { width: body.width, height: body.height };
+
+        // Insert markdown at cursor in the matching EasyMDE instance
+        const mde = locale === 'de' ? deMDE : enMDE;
+        const md = '![' + (altInput.value || '') + '](' + body.src + ')';
+        mde.codemirror.replaceSelection(md);
+
+        statusEl.textContent = 'Inserted: ' + body.src;
+        fileInput.value = '';
+        altInput.value = '';
+      }
+
+      $('deBodyImgUpload').addEventListener('click', () => uploadBodyImg('de'));
+      $('enBodyImgUpload').addEventListener('click', () => uploadBodyImg('en'));
+
+      // ---- assemble PostPair payload ----
+      function buildPayload() {
+        const shared = {
+          date: $('fmDate').value || undefined,
+          country: $('fmCountry').value.trim() || undefined,
+          countryCode: $('fmCountryCode').value.trim().toUpperCase() || undefined,
+          region: $('fmRegion').value || undefined,
+          coordinates: ($('fmLat').value && $('fmLng').value)
+            ? { lat: parseFloat($('fmLat').value), lng: parseFloat($('fmLng').value) }
+            : undefined,
+          route: $('fmRoute').value.trim() || undefined,
+          keyFacts: collectKeyFacts(),
+          stops: $('fmStops').value.trim()
+            ? $('fmStops').value.split(',').map((s) => s.trim()).filter(Boolean)
+            : undefined,
+        };
+
+        // Remove undefined keys for a clean payload
+        Object.keys(shared).forEach((k) => shared[k] === undefined && delete shared[k]);
+
+        function localeObj(loc) {
+          const heroSrc = $(loc + 'HeroSrc').value;
+          const heroW = parseInt($(loc + 'HeroWidth').value, 10);
+          const heroH = parseInt($(loc + 'HeroHeight').value, 10);
+          const heroAlt = $(loc + 'HeroAlt').value.trim();
+          const mde = loc === 'de' ? deMDE : enMDE;
+          return {
+            locale: loc,
+            slug: loc === 'de' ? $('slugField').value.trim() : undefined,  // slugEn derived server-side or same
+            title: $(loc + 'Title').value.trim(),
+            excerpt: $(loc + 'Excerpt').value.trim(),
+            heroImage: heroSrc
+              ? { src: heroSrc, width: heroW || 0, height: heroH || 0, alt: heroAlt }
+              : undefined,
+            bodyMarkdown: mde.value(),
+            images: loc === 'de' ? { ...deImages } : { ...enImages },
+          };
+        }
+
+        const de = localeObj('de');
+        const en = localeObj('en');
+        Object.keys(de).forEach((k) => de[k] === undefined && delete de[k]);
+        Object.keys(en).forEach((k) => en[k] === undefined && delete en[k]);
+
+        return {
+          translationKey: currentTk || undefined,
+          status: 'draft',
+          shared,
+          de,
+          en,
+        };
+      }
+
+      // ---- error helpers ----
+      function showErr(msg) {
+        const el = $('actionError');
+        el.textContent = msg;
+        el.style.display = msg ? '' : 'none';
+      }
+
+      function setStatus(msg) { $('actionStatus').textContent = msg; }
+
+      // ---- save draft ----
+      $('saveDraft').addEventListener('click', async () => {
+        showErr('');
+        setStatus('Saving…');
+        const payload = buildPayload();
+        const url = currentTk ? '/posts/' + encodeURIComponent(currentTk) : '/posts';
+        const method = currentTk ? 'PUT' : 'POST';
+        const res = await fetch(url, {
+          method,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (res.status === 401) { location.href = '/login'; return; }
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showErr((body.error || ('Save failed: ' + res.status)));
+          setStatus('');
+          return;
+        }
+        // On first save, capture the new translationKey and update the URL
+        if (!currentTk && body.translationKey) {
+          currentTk = body.translationKey;
+          const url2 = new URL(location.href);
+          url2.searchParams.set('tk', currentTk);
+          history.replaceState(null, '', url2.toString());
+          $('pageTitle').textContent = 'Edit post';
+        }
+        setStatus('Saved draft.');
+      });
+
+      // ---- publish ----
+      $('publishBtn').addEventListener('click', async () => {
+        if (!currentTk) {
+          showErr('Save as draft first.');
+          return;
+        }
+        showErr('');
+        setStatus('Building…');
+        const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/publish', { method: 'POST' });
+        if (res.status === 401) { location.href = '/login'; return; }
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showErr(body.error || ('Publish failed: ' + res.status));
+          setStatus('');
+          return;
+        }
+        if (body.build && !body.build.ok) {
+          showErr('Build error: ' + (body.build.error || 'unknown'));
+          setStatus('');
+          return;
+        }
+        const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
+        setStatus('Published ✓' + release);
+        isPublished = true;
+        $('slugField').disabled = true;
+      });
+
+      // ---- load existing post ----
+      function populateKeyFacts(facts) {
+        $('keyFactsList').innerHTML = '';
+        if (!facts || typeof facts !== 'object') return;
+        Object.entries(facts).forEach(([l, v]) => addKeyFactRow(l, v));
+      }
+
+      function populateLocale(loc, data) {
+        if (!data) return;
+        $(loc + 'Title').value = data.title || '';
+        $(loc + 'Excerpt').value = data.excerpt || '';
+        const mde = loc === 'de' ? deMDE : enMDE;
+        mde.value(data.bodyMarkdown || '');
+        if (data.heroImage) {
+          $(loc + 'HeroSrc').value = data.heroImage.src || '';
+          $(loc + 'HeroWidth').value = data.heroImage.width || '';
+          $(loc + 'HeroHeight').value = data.heroImage.height || '';
+          $(loc + 'HeroAlt').value = data.heroImage.alt || '';
+          $(loc + 'HeroStatus').textContent = data.heroImage.src ? 'Hero: ' + data.heroImage.src : '';
+        }
+        if (data.images && typeof data.images === 'object') {
+          const map = loc === 'de' ? deImages : enImages;
+          Object.assign(map, data.images);
+        }
+      }
+
+      async function loadPost(tk) {
+        setStatus('Loading…');
+        const res = await fetch('/posts/' + encodeURIComponent(tk));
+        if (res.status === 401) { location.href = '/login'; return; }
+        if (!res.ok) {
+          showErr('Could not load post: ' + res.status);
+          setStatus('');
+          return;
+        }
+        const post = await res.json();
+        currentTk = post.translationKey || tk;
+        isPublished = post.status === 'published';
+
+        $('pageTitle').textContent = 'Edit post';
+
+        const shared = post.shared || {};
+        if (shared.date) $('fmDate').value = shared.date;
+        if (shared.country) $('fmCountry').value = shared.country;
+        if (shared.countryCode) $('fmCountryCode').value = shared.countryCode;
+        if (shared.region) $('fmRegion').value = shared.region;
+        if (shared.coordinates) {
+          $('fmLat').value = shared.coordinates.lat || '';
+          $('fmLng').value = shared.coordinates.lng || '';
+        }
+        if (shared.route) $('fmRoute').value = shared.route;
+        if (shared.stops) $('fmStops').value = Array.isArray(shared.stops) ? shared.stops.join(', ') : shared.stops;
+        populateKeyFacts(shared.keyFacts);
+
+        populateLocale('de', post.de);
+        populateLocale('en', post.en);
+
+        // Derive slug from the DE locale slug (not the DE title so we don't overwrite)
+        if (post.de && post.de.slug) {
+          $('slugField').value = post.de.slug;
+        }
+
+        if (isPublished) {
+          $('slugField').disabled = true;
+        }
+
+        setStatus('Loaded post ' + currentTk + (isPublished ? ' (published — slug locked)' : '') + '.');
+      }
+
+      // ---- init ----
+      (async () => {
+        const s = await Auth.ensureAuthed();
+        if (!s) return;
+        Auth.renderHeader(s);
+
+        const params = new URLSearchParams(location.search);
+        const tk = params.get('tk');
+        if (tk) {
+          await loadPost(tk);
+        } else {
+          setStatus('New post. Fill in the fields and Save draft.');
+        }
+      })();
+    </script>
+  </body>
+</html>
