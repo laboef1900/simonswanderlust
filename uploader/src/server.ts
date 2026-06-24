@@ -324,6 +324,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       return reply.code(400).send({ error: 'not a WordPress export (.xml) file' });
     }
     const summary = await importWxr(xml, { postStore: cfg.posts, storageDir: cfg.storageDir, baseUrl: cfg.baseUrl });
+    if (summary.imported === 0 && summary.updated === 0 && summary.skipped === 0) {
+      return reply.code(400).send({ error: 'no importable posts found in export' });
+    }
     return reply.send(summary);
   });
 

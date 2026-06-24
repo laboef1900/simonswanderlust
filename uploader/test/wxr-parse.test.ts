@@ -15,4 +15,22 @@ describe('parseWxr', () => {
     expect(posts.find((p) => p.locale === 'en')!.slug).toBe('rhodes-adventure');
     expect(attachments.get('100')).toBe('https://wp.example/uploads/hero.jpg');
   });
+
+  it('skips (not crashes) a published post that has a language but no post_translations group', () => {
+    const noGroupWxr = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:wp="http://wordpress.org/export/1.2/" xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <item>
+      <title>Non-bilingual post</title>
+      <wp:post_type><![CDATA[post]]></wp:post_type>
+      <wp:status><![CDATA[publish]]></wp:status>
+      <wp:post_name><![CDATA[non-bilingual-post]]></wp:post_name>
+      <wp:post_date><![CDATA[2021-08-01 10:00:00]]></wp:post_date>
+      <category domain="language" nicename="de"><![CDATA[Deutsch]]></category>
+    </item>
+  </channel>
+</rss>`;
+    expect(() => parseWxr(noGroupWxr)).not.toThrow();
+    expect(parseWxr(noGroupWxr).posts).toHaveLength(0);
+  });
 });
