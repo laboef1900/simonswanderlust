@@ -26,9 +26,13 @@
     <main>
       <!-- Slug / URL preview -->
       <section class="card">
-        <label for="slugField">Slug (auto-derived from DE title · locked once published)</label>
+        <label for="slugFieldDe">DE slug (auto-derived from DE title · locked once published)</label>
         <div class="slug-preview">
-          <span class="slug-base">simonswanderlust.com/</span><input id="slugField" type="text" placeholder="derived-from-de-title" />
+          <span class="slug-base">simonswanderlust.com/</span><input id="slugFieldDe" type="text" placeholder="derived-from-de-title" />
+        </div>
+        <label for="slugFieldEn" style="margin-top:0.75rem">EN slug (auto-derived from EN title · locked once published)</label>
+        <div class="slug-preview">
+          <span class="slug-base">simonswanderlust.com/en/</span><input id="slugFieldEn" type="text" placeholder="derived-from-en-title" />
         </div>
         <p id="slugError" class="err" style="display:none"></p>
       </section>
@@ -73,9 +77,6 @@
           <div id="keyFactsList"></div>
           <button type="button" id="addKeyFact" class="btn-secondary">+ Add key fact</button>
         </div>
-
-        <label for="fmStops">Stops (optional, comma-separated)</label>
-        <input id="fmStops" type="text" placeholder="Athens, Rhodes Town, Lindos" />
       </section>
 
       <!-- DE/EN tabs -->
@@ -216,10 +217,14 @@
         });
       });
 
-      // ---- slug derivation from DE title ----
+      // ---- slug derivation from locale titles ----
       $('deTitle').addEventListener('input', () => {
         if (isPublished) return;
-        $('slugField').value = slugify($('deTitle').value);
+        $('slugFieldDe').value = slugify($('deTitle').value);
+      });
+      $('enTitle').addEventListener('input', () => {
+        if (isPublished) return;
+        $('slugFieldEn').value = slugify($('enTitle').value);
       });
 
       // ---- key facts (optional rows) ----
@@ -267,8 +272,9 @@
 
       // ---- hero upload ----
       async function uploadHero(locale) {
-        const slug = $('slugField').value.trim();
-        if (!slug) { showErr('Set the slug before uploading a hero image.'); return; }
+        const slugFieldId = locale === 'de' ? 'slugFieldDe' : 'slugFieldEn';
+        const slug = $(slugFieldId).value.trim();
+        if (!slug) { showErr('Set the ' + locale.toUpperCase() + ' slug before uploading a hero image.'); return; }
         const fileInput = $(locale + 'HeroFile');
         const altInput = $(locale + 'HeroAlt');
         const statusEl = $(locale + 'HeroStatus');
@@ -297,8 +303,9 @@
 
       // ---- body image upload + insert ----
       async function uploadBodyImg(locale) {
-        const slug = $('slugField').value.trim();
-        if (!slug) { showErr('Set the slug before uploading a body image.'); return; }
+        const slugFieldId = locale === 'de' ? 'slugFieldDe' : 'slugFieldEn';
+        const slug = $(slugFieldId).value.trim();
+        if (!slug) { showErr('Set the ' + locale.toUpperCase() + ' slug before uploading a body image.'); return; }
         const fileInput = $(locale + 'BodyImgFile');
         const altInput = $(locale + 'BodyImgAlt');
         const statusEl = $(locale + 'BodyImgStatus');
@@ -347,15 +354,13 @@
             : undefined,
           route: $('fmRoute').value.trim() || undefined,
           keyFacts: collectKeyFacts(),
-          stops: $('fmStops').value.trim()
-            ? $('fmStops').value.split(',').map((s) => s.trim()).filter(Boolean)
-            : undefined,
         };
 
         // Remove undefined keys for a clean payload
         Object.keys(shared).forEach((k) => shared[k] === undefined && delete shared[k]);
 
         function localeObj(loc) {
+          const slugFieldId = loc === 'de' ? 'slugFieldDe' : 'slugFieldEn';
           const heroSrc = $(loc + 'HeroSrc').value;
           const heroW = parseInt($(loc + 'HeroWidth').value, 10);
           const heroH = parseInt($(loc + 'HeroHeight').value, 10);
@@ -363,7 +368,7 @@
           const mde = loc === 'de' ? deMDE : enMDE;
           return {
             locale: loc,
-            slug: loc === 'de' ? $('slugField').value.trim() : undefined,  // slugEn derived server-side or same
+            slug: $(slugFieldId).value.trim(),
             title: $(loc + 'Title').value.trim(),
             excerpt: $(loc + 'Excerpt').value.trim(),
             heroImage: heroSrc
@@ -451,7 +456,8 @@
         const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
         setStatus('Published ✓' + release);
         isPublished = true;
-        $('slugField').disabled = true;
+        $('slugFieldDe').disabled = true;
+        $('slugFieldEn').disabled = true;
       });
 
       // ---- load existing post ----
@@ -505,7 +511,6 @@
           $('fmLng').value = shared.coordinates.lng || '';
         }
         if (shared.route) $('fmRoute').value = shared.route;
-        if (shared.stops) $('fmStops').value = Array.isArray(shared.stops) ? shared.stops.join(', ') : shared.stops;
         populateKeyFacts(shared.keyFacts);
 
         populateLocale('de', post.de);
@@ -513,13 +518,13 @@
         // EN tab is hidden on load; refresh its CodeMirror so it renders at full width when shown
         enMDE.codemirror.refresh();
 
-        // Derive slug from the DE locale slug (not the DE title so we don't overwrite)
-        if (post.de && post.de.slug) {
-          $('slugField').value = post.de.slug;
-        }
+        // Populate each locale's slug from the loaded post (never re-derive over a stored value)
+        if (post.de && post.de.slug) $('slugFieldDe').value = post.de.slug;
+        if (post.en && post.en.slug) $('slugFieldEn').value = post.en.slug;
 
         if (isPublished) {
-          $('slugField').disabled = true;
+          $('slugFieldDe').disabled = true;
+          $('slugFieldEn').disabled = true;
         }
 
         setStatus('Loaded post ' + currentTk + (isPublished ? ' (published — slug locked)' : '') + '.');

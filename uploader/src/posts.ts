@@ -21,7 +21,10 @@ export interface PostSummary {
   translationKey: string; titleDe: string; slugDe: string; slugEn: string;
   status: 'draft' | 'published'; updatedAt: Date;
 }
-export class PostError extends Error {}
+export class PostError extends Error {
+  code?: string;
+  constructor(message: string, code?: string) { super(message); this.code = code; }
+}
 
 export interface PostStore {
   list(): Promise<PostSummary[]>;
@@ -51,6 +54,7 @@ function validateLocale(p: PostLocale): void {
   if (!p.title.trim()) throw new PostError(`${p.locale}: title required`);
   if (!p.excerpt.trim()) throw new PostError(`${p.locale}: excerpt required`);
   if (!p.bodyMarkdown.trim()) throw new PostError(`${p.locale}: body required`);
+  if (!p.heroImage) throw new PostError(`${p.locale}: heroImage required`);
   const h = p.heroImage;
   try { new URL(h.src); } catch { throw new PostError(`${p.locale}: heroImage.src must be a URL`); }
   if (!Number.isInteger(h.width) || h.width <= 0 || !Number.isInteger(h.height) || h.height <= 0) {
@@ -91,9 +95,9 @@ export function memoryPostStore(): PostStore {
       const key = pair.translationKey || randomUUID();
       const existing = byKey.get(key);
       for (const locale of ['de', 'en'] as Locale[]) {
-        if (slugTaken(locale, pair[locale].slug, key)) throw new PostError(`slug "${pair[locale].slug}" already in use for ${locale}`);
+        if (slugTaken(locale, pair[locale].slug, key)) throw new PostError(`slug "${pair[locale].slug}" already in use for ${locale}`, 'duplicate_slug');
         if (existing && existing.status === 'published' && existing[locale].slug !== pair[locale].slug) {
-          throw new PostError('cannot change the slug of a published post');
+          throw new PostError('cannot change the slug of a published post', 'slug_locked');
         }
       }
       const stored: Stored = { ...structuredClone(pair), translationKey: key, status: existing?.status ?? 'draft', updatedAt: new Date() };
@@ -166,8 +170,8 @@ export function pgPostStore(pool: DbPool): PostStore {
       const existing = await this.get(tk);
       for (const locale of ['de', 'en'] as Locale[]) {
         const { rows } = await pool.query<{ translation_key: string }>(`SELECT translation_key FROM posts WHERE locale=$1 AND slug=$2`, [locale, pair[locale].slug]);
-        if (rows[0] && rows[0].translation_key !== tk) throw new PostError(`slug "${pair[locale].slug}" already in use for ${locale}`);
-        if (existing && existing.status === 'published' && existing[locale].slug !== pair[locale].slug) throw new PostError('cannot change the slug of a published post');
+        if (rows[0] && rows[0].translation_key !== tk) throw new PostError(`slug "${pair[locale].slug}" already in use for ${locale}`, 'duplicate_slug');
+        if (existing && existing.status === 'published' && existing[locale].slug !== pair[locale].slug) throw new PostError('cannot change the slug of a published post', 'slug_locked');
       }
       const status = existing?.status ?? 'draft';
       await writeLocale(tk, status, pair.shared, { ...pair.de, locale: 'de' });

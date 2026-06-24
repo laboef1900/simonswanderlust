@@ -118,7 +118,7 @@
         if (res.status === 401) { location.href = '/login'; return; }
         const body = await res.json().catch(() => ({}));
         $('out').textContent = res.ok
-          ? 'Export done: ' + (body.message || JSON.stringify(body))
+          ? 'Export done: ' + body.count + ' files'
           : 'Export failed: ' + (body.error || res.status);
       });
 

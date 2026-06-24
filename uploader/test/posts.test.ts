@@ -69,4 +69,9 @@ describe('post validation', () => {
     expect(() => validateForPublish(pair({ en: { ...pair().en, excerpt: '' } }))).toThrow(PostError);
     expect(() => validateForPublish(pair({ de: { ...pair().de, heroImage: { ...pair().de.heroImage, alt: '' } } }))).toThrow(PostError);
   });
+  it('publish throws PostError (not TypeError) when heroImage is missing', () => {
+    const noHero = pair({ de: { ...pair().de, heroImage: undefined as never } });
+    expect(() => validateForPublish(noHero)).toThrow(PostError);
+    expect(() => validateForPublish(noHero)).not.toThrow(TypeError);
+  });
 });

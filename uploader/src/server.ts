@@ -285,7 +285,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       validateDraft(pair);
       return reply.send(await posts.upsertDraft(pair));
     } catch (e) {
-      if (e instanceof PostError) return reply.code(/already in use|published/.test(e.message) ? 409 : 400).send({ error: e.message });
+      if (e instanceof PostError) return reply.code(e.code === 'duplicate_slug' || e.code === 'slug_locked' ? 409 : 400).send({ error: e.message });
       throw e;
     }
   };
