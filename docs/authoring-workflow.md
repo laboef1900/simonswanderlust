@@ -3,10 +3,15 @@
 How to write a new travel post, add its photos, and get it live. Three stages:
 **(1) upload the photos**, **(2) write the post in GitHub**, **(3) publish (rebuild)**.
 
-The golden rule that shapes everything: **text lives in git, images do not.** Posts are
-MDX files committed to the repo; photos are uploaded to the self-hosted **image uploader**,
+Since Phase A, **post content lives in Postgres** — not baked into the Docker image. The
+`blog-builder` service reads from Postgres at rebuild time, so new or updated posts are published
+by importing them into the database and triggering a rebuild via the builder's HTTP endpoint.
+Photos are still kept out of git and Postgres: they go to the self-hosted **image uploader**,
 which stores optimized variants on the server and serves them from
 `https://img.simonswanderlust.com`. A post only ever references image **URLs**.
+
+> **Phase B (upcoming):** an in-admin editor will let you author and publish directly from the
+> browser, without touching GitHub or running `curl` manually.
 
 ---
 
@@ -18,18 +23,23 @@ you're authoring from** — captioning happens in your browser, calling LM Studi
 `http://localhost:1234` (set on the LLM settings page). No suggestions? You can always type the
 alt text by hand.
 
+**Sign in first** — open `/admin/` (`https://simonswanderlust.com/admin/` or locally
+`http://localhost:3000/admin/`). If this is a brand-new deployment, the first visit to `/login`
+prompts you to create the initial admin account. After signing in, all admin pages work via the
+session cookie — no token to paste.
+
 **Hero image** (one per post) — open the uploader admin:
 
-- `https://simonswanderlust.com/admin/` (locally: `http://localhost:8090/admin/`) — the admin
+- `https://simonswanderlust.com/admin/` (locally: `http://localhost:3000/admin/`) — the admin
   panel runs on the site's own domain under `/admin/`, WordPress-style (the site's nginx proxies
-  it to the uploader). The uploader's own `:3000/admin/` still works too.
-- Enter the token (`grep AUTH_TOKEN .env`), a **key** like `trips/<slug>/hero`, alt text, pick the photo, **Upload**.
+  it to the uploader).
+- Enter a **key** like `trips/<slug>/hero`, alt text, pick the photo, **Upload**.
 - Copy the returned `heroImage:` YAML block.
 
 **Body / gallery photos** (the rest) — open the batch page:
 
 - `…/admin/batch.html`
-- Enter the token + a shared **prefix** like `trips/<slug>`, pick several photos, **Suggest**.
+- Enter a shared **prefix** like `trips/<slug>`, pick several photos, **Suggest**.
 - The local model proposes a slug + **German and English** alt text per photo; review/edit.
 - **Upload all**, then copy the `<BodyImage …>` snippets (one DE, one EN per photo).
 
@@ -39,6 +49,9 @@ alt text by hand.
 ---
 
 ## Stage 2 — Write the post in GitHub
+
+> **Coming in Phase B:** an in-admin editor will replace this stage. For now, writing MDX in
+> GitHub is the authoring path.
 
 Each post is **two MDX files** — one per language — under `site/src/content/trips/`:
 
@@ -97,30 +110,38 @@ needed** — just paste the tag. It renders a responsive `<picture>` (AVIF + Web
 
 ---
 
-## Stage 3 — Publish (rebuild the blog)
+## Stage 3 — Publish (trigger a rebuild)
 
-The blog is a **static site** served by an nginx container; it is built at image-build time, so
-a content change is live only after the blog image is rebuilt. There is **no auto-deploy yet**
-(see below). On the server:
+The blog is a **static site** served by an nginx container. Since Phase A, content lives in
+**Postgres** — not in the Docker image. The site is built at runtime by a long-running
+**`blog-builder`** service (`site/build-server.mjs`) that runs `astro build` on demand and writes
+the output into a shared `blog-dist` volume that the `blog` nginx container serves.
+
+**`docker compose up -d --build blog` no longer rebuilds the content.** Rebuilding the blog
+image only updates the Astro/template code, not the post data.
+
+To publish content changes after committing and importing them into Postgres, trigger a rebuild
+via the `blog-builder`'s secret-gated HTTP endpoint (from the server):
 
 ```bash
-git pull                              # fetch the new/edited MDX from GitHub
-docker compose up -d --build blog     # rebuild + restart only the blog container
+curl -X POST http://localhost:3001/build \
+  -H "Authorization: Bearer $BUILD_SECRET"
 ```
+
+The service logs progress to stdout (`docker compose logs -f blog-builder`) and atomically swaps
+in the new build when complete.
+
+> **Phase B:** an in-admin Publish button will trigger this rebuild automatically — no manual
+> `curl` needed.
 
 Notes:
 
 - **Images don't need a rebuild.** They're served by the uploader independently — uploading or
-  re-uploading a photo is live immediately. Only **text/MDX** changes need the blog rebuild.
+  re-uploading a photo is live immediately. Only content (text) changes need a rebuild.
 - **Re-uploading the same key overwrites** the variants (immutable cache means you may need a
   hard refresh / cache bust to see a replaced image).
-
-### Optional: automate publishing
-
-Right now publishing is the manual `git pull && docker compose up -d --build blog` above. If you
-want a push-to-publish flow, options are: a GitHub Actions workflow that SSHes to the server and
-runs that command on every push to `main`, or a small webhook listener on the server. Ask and
-this can be added as its own small task.
+- **New environment variables** required for the blog stack: `DATABASE_URL` (Postgres connection
+  string) and `BUILD_SECRET` (secret for the build trigger endpoint). See `uploader/.env.example`.
 
 ---
 
@@ -130,6 +151,6 @@ this can be added as its own small task.
 - [ ] `site/src/content/trips/de/<slug>.mdx` created — frontmatter + `heroImage` + body with DE `<BodyImage>` tags.
 - [ ] `site/src/content/trips/en/<slug>.mdx` created — same `translationKey`, EN alt, EN `<BodyImage>` tags.
 - [ ] Slug matches the live WordPress slug (never renamed).
-- [ ] Committed to GitHub.
-- [ ] On the server: `git pull && docker compose up -d --build blog`.
+- [ ] Committed to GitHub and imported into Postgres.
+- [ ] On the server: trigger a rebuild (`curl -X POST http://localhost:3001/build -H "Authorization: Bearer $BUILD_SECRET"`).
 - [ ] Verify the post renders at `/<slug>/` and `/en/<slug>/`, hero + body images load.

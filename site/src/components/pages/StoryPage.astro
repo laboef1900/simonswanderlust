@@ -1,6 +1,5 @@
 ---
 import RemoteImage from '../RemoteImage.astro';
-import BodyImage from '../BodyImage.astro';
 import { getCollection, render } from 'astro:content';
 import Base from '../../layouts/Base.astro';
 import KeyFacts from '../KeyFacts.astro';
@@ -77,7 +76,7 @@ const label = `${entryLabel(number)} — ${dateLabel(trip.data.date, locale)} ·
       )
     }
     <article class="prose prose-lg max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-a:text-brand-red">
-      <Content components={{ BodyImage }} />
+      <Content />
     </article>
 
     <div class="mt-12">

@@ -2,11 +2,33 @@
 # Copy .env.example to .env and set POSTGRES_PASSWORD before `docker compose up -d --build`.
 services:
   blog:
-    build: ./site
+    image: nginx:alpine
     ports:
       - "${BLOG_PORT:-8090}:80"
+    volumes:
+      - ./site/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - blog-dist:/srv/blog:ro
     depends_on:
-      - images
+      blog-builder:
+        condition: service_healthy
+    restart: unless-stopped
+
+  blog-builder:
+    build: ./site
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-images}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-images}}
+      BUILD_SECRET: ${BUILD_SECRET:?set BUILD_SECRET in .env}
+    volumes:
+      - blog-dist:/srv/blog
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('node:fs').statSync('/srv/blog/current')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
     restart: unless-stopped
 
   images:
@@ -44,3 +66,4 @@ services:
 
 volumes:
   pgdata:
+  blog-dist:

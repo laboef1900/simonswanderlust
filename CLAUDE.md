@@ -2,25 +2,38 @@
 
 Guidance for AI coding assistants (Claude, Gemini, Codex) working in this repository.
 Derived from `../TEMPLATE.md`, tailored to this project. This repo is a **monorepo** with two
-parts: `site/` is an Astro 6 **static site** (the template's database, auth/RBAC, and SRE
-sections do not apply to it — it builds to a static `dist/`); `uploader/` is a small
-self-hosted **Node/Fastify + sharp image service** (Docker and a server runtime DO apply there).
-The static-site rules below describe `site/` unless a rule names `uploader/` explicitly.
+parts: `site/` is an Astro 6 **static site** (the template's auth/RBAC and SRE sections do not
+apply to it — it builds to a static `dist/`; content is loaded from Postgres at build time);
+`uploader/` is a small self-hosted **Node/Fastify + sharp image service** (Docker and a server
+runtime DO apply there). The static-site rules below describe `site/` unless a rule names
+`uploader/` explicitly.
 
 ## Project Overview
 
 **Simon's Wanderlust** (`simonswanderlust.com`) — a bilingual (DE/EN) personal travel blog.
 This repo is the **Astro 6 static-site rebuild** of the current WordPress + Elementor site.
 
-**Architecture:** The blog is a single Astro 6 project under `site/` — no backend or server
-runtime; `npm run build` emits a static `dist/`. It is **self-hosted via Docker** (an nginx
-container serves the build) alongside the uploader; both are wired in the root
-`docker-compose.yml`. Content is authored as MDX content collections; UI is Astro components +
-Tailwind 4. A separate **image uploader** (Node 22 + Fastify 5 + sharp, Dockerized) lives under
-`uploader/`: it optimizes uploaded photos into responsive AVIF/WebP variants and returns
-paste-ready `heroImage` / `<RemoteImage>` / `<BodyImage>` snippets (with optional local-AI alt
-text via LM Studio). Access is gated by username/password accounts stored in Postgres, with
-HttpOnly session cookies. Both run on Simon's own server. See `uploader/README.md` and the specs
+**Architecture:** The blog is a single Astro 6 project under `site/`. It is **self-hosted via
+Docker** alongside the uploader; both are wired in the root `docker-compose.yml`. UI is Astro
+components + Tailwind 4.
+
+**Content pipeline (Phase A):** `trips` content is loaded from **Postgres** at build time by a
+custom Astro Content Layer loader (`site/src/lib/postgres-loader.ts`). The Zod schema and entry
+`id`s (`de/<slug>` / `en/<slug>`) are unchanged, so `paths.ts`/`trips.ts` work unmodified. Post
+bodies are Markdown; body images render as responsive `<picture>` via
+`site/src/lib/body-images.ts`. The blog is **not** built at Docker image-build time — a
+long-running **`blog-builder`** service (`site/build-server.mjs`) runs `astro build` from
+Postgres at runtime, writing the static output into a shared **`blog-dist`** volume that the
+`blog` nginx container serves. A content change is live after triggering a rebuild (the in-admin
+Publish button is **Phase B**, not yet built). Required env vars for the blog stack:
+**`DATABASE_URL`** and **`BUILD_SECRET`** (see `uploader/.env.example`). Consequence: `npx astro
+check` and `npm run build` both require a reachable Postgres.
+
+A separate **image uploader** (Node 22 + Fastify 5 + sharp, Dockerized) lives under `uploader/`:
+it optimizes uploaded photos into responsive AVIF/WebP variants and returns paste-ready
+`heroImage` / `<RemoteImage>` / `<BodyImage>` snippets (with optional local-AI alt text via LM
+Studio). Access is gated by username/password accounts stored in Postgres, with HttpOnly session
+cookies. Both run on Simon's own server. See `uploader/README.md` and the specs
 `docs/superpowers/specs/2026-06-18-image-hosting-uploader-design.md` +
 `docs/superpowers/specs/2026-06-22-ai-batch-image-uploader-design.md`.
 
@@ -51,7 +64,7 @@ arrival stamps, dashed route dividers). See `docs/superpowers/specs/2026-06-11-b
 |-------|-----------|
 | **Framework** | Astro 6 (static output, `trailingSlash: 'always'`) |
 | **Styling** | Tailwind 4 (via `@tailwindcss/vite`), `@tailwindcss/typography` |
-| **Content** | MDX content collections (`@astrojs/mdx`) under `src/content/trips/{de,en}/` |
+| **Content** | Postgres (loaded at build time by `site/src/lib/postgres-loader.ts`); MDX files remain the authoring source and are migrated into Postgres via `site/scripts/migrate-stub-posts.mjs` |
 | **i18n** | Astro i18n routing — `defaultLocale: 'de'` (no prefix), `en` under `/en/` |
 | **Fonts** | Inter Variable (sans), IBM Plex Mono (expedition-log accents) |
 | **Tests** | Vitest |
@@ -72,16 +85,20 @@ arrival stamps, dashed route dividers). See `docs/superpowers/specs/2026-06-11-b
 
 ## Build & Development
 
-All commands run from `site/`. No containers — this is a static toolchain.
+All commands run from `site/`. No containers needed for the static toolchain itself.
 
 ```bash
 npm install                         # install deps (Node >= 22.12)
 npm run dev                         # dev server at http://localhost:4321
-npm run build                       # build static site to ./dist/
+npm run build                       # build static site to ./dist/ (requires DATABASE_URL)
 npm run preview                     # preview the production build
 npm test                            # Vitest suites (i18n, paths, trips, format)
-npx astro check                     # type-check .astro/.ts
+npx astro check                     # type-check .astro/.ts (requires DATABASE_URL — loader runs)
 ```
+
+> **Note:** `npm run build` and `npx astro check` both invoke the Postgres Content Layer loader,
+> so a reachable Postgres instance with `DATABASE_URL` set is required. Unit tests (`npm test`)
+> do not hit the database.
 
 ## Repository Structure
 
@@ -91,10 +108,15 @@ blog/
 ├── docs/superpowers/              # design spec + phase plans (source of truth for scope)
 ├── *.md                           # blog platform research (WordPress vs Astro, etc.)
 ├── site/                          # the Astro project (static blog)
+│   ├── build-server.mjs           #   runtime build server (blog-builder service; secret-gated trigger → astro build)
+│   ├── scripts/migrate-stub-posts.mjs  # one-off: import MDX stubs into Postgres
 │   └── src/
-│       ├── content/trips/{de,en}/<slug>.mdx   # one story per language; filename = live WP slug
+│       ├── content/trips/{de,en}/<slug>.mdx   # MDX source files (authoring reference; content served from Postgres)
+│       ├── content.config.ts                   # Zod schema for trips (unchanged from MDX era)
 │       ├── i18n/ui.ts                          # ALL UI strings, both locales (completeness-tested)
 │       ├── lib/                                # tested helpers: paths, trips, format, images
+│       │   ├── postgres-loader.ts              #   Astro Content Layer loader — syncs trips from Postgres at build time
+│       │   └── body-images.ts                  #   transforms Markdown body: renders <BodyImage> as responsive <picture>
 │       ├── components/pages/                   # shared per-page components
 │       ├── pages/                              # thin locale routes (de at root, en under /en/)
 │       └── layouts/  ·  styles/  ·  assets/
@@ -131,7 +153,8 @@ This repo uses the **superpowers** workflow: specs and phase plans live in
 plan before implementing.
 
 **Authoring a post?** See `docs/authoring-workflow.md` — how to upload photos via the
-uploader, write the DE/EN MDX in GitHub, and publish (rebuild the blog container).
+uploader, write the post (currently still MDX-in-GitHub; an admin editor arrives in Phase B),
+and trigger a rebuild via the `blog-builder` service.
 
 ### Verify Before Use (Prevent Hallucinations)
 - **Dependencies & APIs** — Never assume a package is installed or that a method exists. Check
@@ -164,7 +187,9 @@ Use comments to leave hints for future sessions:
 ## Project Status & Remaining Phases
 
 - **Done:** Phase 1 (skeleton) + Phase 1b (expedition-log layer) — merged to `main`.
-- **Remaining:** Phase 2 = WordPress content migration (18 posts via the open REST API);
-  Phase 3 = MapLibre travel map (`/karte/` + `/en/map/`); Phase 4 = self-hosted Docker deploy
-  (blog nginx + uploader via root `docker-compose.yml`) + DNS cutover. Each phase gets its own
-  plan in `docs/superpowers/plans/`.
+- **Done:** Phase A (Postgres CMS foundation) — Postgres Content Layer loader, body-image
+  pipeline, runtime `blog-builder` service, compose/volume wiring — merged to `main`.
+- **Remaining:** Phase B = in-admin editor + Publish button (content authoring from the admin
+  UI; MDX export); Phase 2 = WordPress content migration — 18 posts, **now targeting Postgres**
+  directly (not MDX files); Phase 3 = MapLibre travel map (`/karte/` + `/en/map/`); Phase 4 =
+  DNS cutover. Each phase gets its own plan in `docs/superpowers/plans/`.
