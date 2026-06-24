@@ -18,6 +18,7 @@ import { SettingsError, type SettingsStore } from './settings.js';
 import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair } from './posts.js';
 import { exportPost, exportAll } from './export.js';
 import { triggerBuild, type BuildResult } from './publish.js';
+import { importWxr } from './wp-import.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -312,6 +313,21 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const pairs = (await Promise.all(list.map((s) => posts.get(s.translationKey)))).filter((p): p is PostPair => p !== null);
     const files = await exportAll(pairs, cfg.backupDir);
     return reply.send({ ok: true, count: files.length });
+  });
+
+  app.post('/import', { preHandler: requireAuth }, async (req, reply) => {
+    let xml = '';
+    for await (const part of req.parts()) {
+      if (part.type === 'file') xml = (await part.toBuffer()).toString('utf8');
+    }
+    if (!xml.includes('<rss') || !xml.includes('wordpress.org/export')) {
+      return reply.code(400).send({ error: 'not a WordPress export (.xml) file' });
+    }
+    const summary = await importWxr(xml, { postStore: cfg.posts, storageDir: cfg.storageDir, baseUrl: cfg.baseUrl });
+    if (summary.imported === 0 && summary.updated === 0 && summary.skipped === 0) {
+      return reply.code(400).send({ error: 'no importable posts found in export' });
+    }
+    return reply.send(summary);
   });
 
   return app;

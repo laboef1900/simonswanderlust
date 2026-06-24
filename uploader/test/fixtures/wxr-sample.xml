@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/"
+  xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/"
+  xmlns:wp="http://wordpress.org/export/1.2/">
+<channel>
+  <item>
+    <title>Hero Bild</title>
+    <wp:post_id><![CDATA[100]]></wp:post_id>
+    <wp:post_type><![CDATA[attachment]]></wp:post_type>
+    <wp:status><![CDATA[inherit]]></wp:status>
+    <wp:attachment_url><![CDATA[https://wp.example/uploads/hero.jpg]]></wp:attachment_url>
+  </item>
+  <item>
+    <title>Rhodos Abenteuer</title>
+    <wp:post_id><![CDATA[1]]></wp:post_id>
+    <wp:post_name><![CDATA[rhodos-abenteuer]]></wp:post_name>
+    <wp:post_date><![CDATA[2021-07-25 09:00:00]]></wp:post_date>
+    <wp:post_type><![CDATA[post]]></wp:post_type>
+    <wp:status><![CDATA[publish]]></wp:status>
+    <excerpt:encoded><![CDATA[Kurzfassung DE]]></excerpt:encoded>
+    <content:encoded><![CDATA[<div class="elementor-widget"><h2>Überschrift</h2><p>Ein Absatz.</p><img src="https://wp.example/uploads/body.jpg" alt="Strand" /></div>]]></content:encoded>
+    <category domain="language" nicename="de"><![CDATA[Deutsch]]></category>
+    <category domain="post_translations" nicename="pll_grp1"><![CDATA[pll_grp1]]></category>
+    <wp:postmeta><wp:meta_key><![CDATA[_thumbnail_id]]></wp:meta_key><wp:meta_value><![CDATA[100]]></wp:meta_value></wp:postmeta>
+  </item>
+  <item>
+    <title>Rhodes Adventure</title>
+    <wp:post_id><![CDATA[2]]></wp:post_id>
+    <wp:post_name><![CDATA[rhodes-adventure]]></wp:post_name>
+    <wp:post_date><![CDATA[2021-07-25 09:00:00]]></wp:post_date>
+    <wp:post_type><![CDATA[post]]></wp:post_type>
+    <wp:status><![CDATA[publish]]></wp:status>
+    <excerpt:encoded><![CDATA[Short EN]]></excerpt:encoded>
+    <content:encoded><![CDATA[<div class="elementor-widget"><h2>Heading</h2><p>A paragraph.</p></div>]]></content:encoded>
+    <category domain="language" nicename="en"><![CDATA[English]]></category>
+    <category domain="post_translations" nicename="pll_grp1"><![CDATA[pll_grp1]]></category>
+    <wp:postmeta><wp:meta_key><![CDATA[_thumbnail_id]]></wp:meta_key><wp:meta_value><![CDATA[100]]></wp:meta_value></wp:postmeta>
+  </item>
+  <item>
+    <title>A draft, ignore me</title>
+    <wp:post_name><![CDATA[draft-post]]></wp:post_name>
+    <wp:post_type><![CDATA[post]]></wp:post_type>
+    <wp:status><![CDATA[draft]]></wp:status>
+    <category domain="language" nicename="de"><![CDATA[Deutsch]]></category>
+    <category domain="post_translations" nicename="pll_grp2"><![CDATA[pll_grp2]]></category>
+  </item>
+</channel>
+</rss>

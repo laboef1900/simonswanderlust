@@ -123,8 +123,8 @@ blog/
 │       ├── pages/                              # thin locale routes (de at root, en under /en/)
 │       └── layouts/  ·  styles/  ·  assets/
 └── uploader/                      # self-hosted image service (Node/Fastify/sharp, Docker)
-    ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · caption · settings · posts · publish · export
-    ├── public/                    #   index.html (hero upload) · batch.html (AI batch uploader)
+    ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · caption · settings · posts · publish · export · wxr-parse · wp-content · wp-images · wp-import
+    ├── public/                    #   index.html (hero upload) · batch.html (AI batch uploader) · import.html (WordPress import)
     ├── test/                      #   Vitest suites (no live LM Studio needed)
     └── Dockerfile · docker-compose.yml · README.md
 ```
@@ -194,6 +194,7 @@ Use comments to leave hints for future sessions:
 - **Done:** Phase B (in-admin editor) — DE/EN tabbed editor (EasyMDE), slug-lock, inline photo
   upload, Save draft, Publish (triggers rebuild), Export all (MDX backups to `/data/backup`) —
   merged to `main`.
-- **Remaining:** Phase 2 = WordPress content migration — 18 posts, targeting Postgres directly
-  (not MDX files); Phase 3 = MapLibre travel map (`/karte/` + `/en/map/`); Phase 4 = DNS
+- **Done:** Phase 2 (WordPress import) — in-admin WXR importer; upload WP export → draft posts
+  created with slugs preserved and images re-hosted.
+- **Remaining:** Phase 3 = MapLibre travel map (`/karte/` + `/en/map/`); Phase 4 = DNS
   cutover. Each phase gets its own plan in `docs/superpowers/plans/`.
