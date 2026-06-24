@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { memoryPostStore, PostError, type PostPair } from '../src/posts.js';
+import { memoryPostStore, PostError, validateDraft, validateForPublish, type PostPair } from '../src/posts.js';
 
 function pair(overrides: Partial<PostPair> = {}): PostPair {
   const loc = (locale: 'de' | 'en', slug: string, title: string) => ({
@@ -53,5 +53,20 @@ describe('memoryPostStore', () => {
     await s.upsertDraft(pair());
     await expect(s.upsertDraft(pair({ de: { ...pair().de, slug: 'bukarest' }, en: { ...pair().en, slug: 'other' } })))
       .rejects.toBeInstanceOf(PostError);
+  });
+});
+
+describe('post validation', () => {
+  it('draft requires only a DE title and valid slugs', () => {
+    expect(() => validateDraft(pair({ de: { ...pair().de, title: '' } }))).toThrow(PostError);
+    expect(() => validateDraft(pair({ de: { ...pair().de, slug: 'Bad Slug' } }))).toThrow(PostError);
+    expect(() => validateDraft(pair())).not.toThrow();
+  });
+  it('publish requires both locales complete and schema-valid', () => {
+    expect(() => validateForPublish(pair())).not.toThrow();
+    expect(() => validateForPublish(pair({ shared: { ...pair().shared, countryCode: 'ROU' } }))).toThrow(PostError);
+    expect(() => validateForPublish(pair({ shared: { ...pair().shared, region: 'mars' as never } }))).toThrow(PostError);
+    expect(() => validateForPublish(pair({ en: { ...pair().en, excerpt: '' } }))).toThrow(PostError);
+    expect(() => validateForPublish(pair({ de: { ...pair().de, heroImage: { ...pair().de.heroImage, alt: '' } } }))).toThrow(PostError);
   });
 });

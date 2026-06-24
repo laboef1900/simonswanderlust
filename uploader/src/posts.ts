@@ -32,6 +32,46 @@ export interface PostStore {
 
 interface Stored extends PostPair { updatedAt: Date }
 
+const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+const REGIONS = ['europe', 'north-america', 'south-america'];
+
+function checkSlug(slug: string): void {
+  if (!SLUG_RE.test(slug)) throw new PostError(`invalid slug "${slug}" (lowercase a-z, 0-9, hyphen)`);
+}
+
+export function validateDraft(pair: PostPair): void {
+  if (!pair.de.title.trim()) throw new PostError('a German title is required to start a draft');
+  for (const locale of ['de', 'en'] as Locale[]) {
+    if (pair[locale].slug) checkSlug(pair[locale].slug);
+  }
+}
+
+function validateLocale(p: PostLocale): void {
+  checkSlug(p.slug);
+  if (!p.title.trim()) throw new PostError(`${p.locale}: title required`);
+  if (!p.excerpt.trim()) throw new PostError(`${p.locale}: excerpt required`);
+  if (!p.bodyMarkdown.trim()) throw new PostError(`${p.locale}: body required`);
+  const h = p.heroImage;
+  try { new URL(h.src); } catch { throw new PostError(`${p.locale}: heroImage.src must be a URL`); }
+  if (!Number.isInteger(h.width) || h.width <= 0 || !Number.isInteger(h.height) || h.height <= 0) {
+    throw new PostError(`${p.locale}: heroImage needs positive integer width/height`);
+  }
+  if (!h.alt.trim()) throw new PostError(`${p.locale}: heroImage.alt required`);
+}
+
+export function validateForPublish(pair: PostPair): void {
+  const s = pair.shared;
+  if (s.countryCode.length !== 2) throw new PostError('countryCode must be 2 letters');
+  if (!REGIONS.includes(s.region)) throw new PostError(`region must be one of ${REGIONS.join(', ')}`);
+  if (typeof s.coordinates?.lat !== 'number' || typeof s.coordinates?.lng !== 'number') {
+    throw new PostError('coordinates must be numbers');
+  }
+  if (!s.country.trim()) throw new PostError('country required');
+  if (!s.date.trim()) throw new PostError('date required');
+  validateLocale(pair.de);
+  validateLocale(pair.en);
+}
+
 export function memoryPostStore(): PostStore {
   const byKey = new Map<string, Stored>();
   const slugTaken = (locale: Locale, slug: string, exceptKey: string) =>
