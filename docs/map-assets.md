@@ -37,14 +37,18 @@ The map assets are served from a directory specified by the `MAP_ASSETS_DIR` env
 
 3. **Set the environment variable** in your `.env` (or Docker environment):
    ```
-   MAP_ASSETS_DIR=/data/map
+   MAP_ASSETS_DIR=./map-assets
    ```
 
 4. **Serve via nginx** — The `blog` container's nginx config mounts `MAP_ASSETS_DIR` and serves it at `/map/`:
    ```nginx
+   # Self-hosted map assets (basemap .pmtiles + glyph .pbf fonts).
+   # HTTP range requests are required for PMTiles random-access reads.
    location /map/ {
-     alias <MAP_ASSETS_DIR>/;
-     autoindex off;
+       alias /usr/share/nginx/map/;
+       add_header Accept-Ranges bytes;
+       types { application/octet-stream pmtiles; application/x-protobuf pbf; }
+       try_files $uri =404;
    }
    ```
    The site will request the basemap at URLs like `GET /map/basemap.pmtiles` (with HTTP range requests for tiled access).
@@ -67,7 +71,7 @@ For development on a local machine without the full production basemap:
 
 4. **Set the environment variable:**
    ```bash
-   export MAP_ASSETS_DIR=site/public/map
+   export MAP_ASSETS_DIR=./map-assets
    ```
 
 5. **Run the dev server:**

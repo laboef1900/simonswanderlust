@@ -17,18 +17,34 @@ const geometry = tripGeometry(trip);
 </section>
 <script>
   import { initMiniMap } from '../scripts/travel-map';
+  import type { TripGeometry } from '../lib/map-data';
+
   const el = document.getElementById('mini-map');
   if (el && el.dataset.geometry) {
-    const geometry = JSON.parse(el.dataset.geometry);
-    const obs = new IntersectionObserver((entries, o) => {
-      for (const e of entries) {
-        if (e.isIntersecting) {
-          o.disconnect();
-          el.innerHTML = '';  // clear the fallback link before mounting the map
-          try { initMiniMap(el, geometry); } catch (err) { console.error('mini-map init failed', err); }
+    let geometry: TripGeometry | null = null;
+    try {
+      geometry = JSON.parse(el.dataset.geometry) as TripGeometry;
+    } catch (err) {
+      console.error('mini-map: failed to parse geometry', err);
+      // leave the fallback link in place
+    }
+    if (geometry !== null) {
+      const fallbackHTML = el.innerHTML;
+      const obs = new IntersectionObserver((entries, o) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            o.disconnect();
+            el.innerHTML = '';  // clear the fallback link before mounting the map
+            try {
+              initMiniMap(el, geometry!);
+            } catch (err) {
+              console.error('mini-map: init failed', err);
+              el.innerHTML = fallbackHTML;  // restore the fallback link
+            }
+          }
         }
-      }
-    }, { rootMargin: '200px' });
-    obs.observe(el);
+      }, { rootMargin: '200px' });
+      obs.observe(el);
+    }
   }
 </script>
