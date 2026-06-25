@@ -76,6 +76,28 @@ export function validateForPublish(pair: PostPair): void {
   validateLocale(pair.en);
 }
 
+const PLACEHOLDER_HERO: HeroImage = { src: '', width: 0, height: 0, alt: '' };
+
+/**
+ * Fill the NOT-NULL columns the editor can omit on a partial draft save
+ * (`coordinates`, `heroImage`) so a draft can never write NULL (Postgres 23502).
+ * The placeholders match the WordPress-import defaults and still fail
+ * `validateForPublish` until the author completes them.
+ */
+function draftWithDefaults(pair: PostPair): PostPair {
+  const fillLocale = (l: PostLocale): PostLocale => ({
+    ...l,
+    heroImage: l.heroImage ?? PLACEHOLDER_HERO,
+    images: l.images ?? {},
+  });
+  return {
+    ...pair,
+    shared: { ...pair.shared, coordinates: pair.shared.coordinates ?? { lat: 0, lng: 0 } },
+    de: fillLocale(pair.de),
+    en: fillLocale(pair.en),
+  };
+}
+
 export function memoryPostStore(): PostStore {
   const byKey = new Map<string, Stored>();
   const slugTaken = (locale: Locale, slug: string, exceptKey: string) =>
@@ -92,6 +114,7 @@ export function memoryPostStore(): PostStore {
       return p ? structuredClone({ translationKey: p.translationKey, status: p.status, shared: p.shared, de: p.de, en: p.en }) : null;
     },
     async upsertDraft(pair) {
+      pair = draftWithDefaults(pair);
       const key = pair.translationKey || randomUUID();
       const existing = byKey.get(key);
       for (const locale of ['de', 'en'] as Locale[]) {
@@ -166,6 +189,7 @@ export function pgPostStore(pool: DbPool): PostStore {
       return { translationKey: tk, status: de.status, shared: rowShared(de), de: rowLocale(de), en: rowLocale(en) };
     },
     async upsertDraft(pair) {
+      pair = draftWithDefaults(pair);
       const tk = pair.translationKey || randomUUID();
       const existing = await this.get(tk);
       for (const locale of ['de', 'en'] as Locale[]) {

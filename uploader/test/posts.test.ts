@@ -75,3 +75,22 @@ describe('post validation', () => {
     expect(() => validateForPublish(noHero)).not.toThrow(TypeError);
   });
 });
+
+describe('upsertDraft fills NOT-NULL defaults on a partial draft', () => {
+  it('defaults missing coordinates and heroImage so a partial save cannot NULL a column', async () => {
+    const store = memoryPostStore();
+    // A payload the editor can produce for an imported draft (coords blanked):
+    // coordinates and heroImage omitted entirely.
+    const partial = {
+      translationKey: '',
+      status: 'draft',
+      shared: { date: '2024-09-29', country: '', countryCode: 'XX', region: 'europe' },
+      de: { locale: 'de', slug: 'partial-de', title: 'X', excerpt: '', bodyMarkdown: '', images: {} },
+      en: { locale: 'en', slug: 'partial-en', title: 'Y', excerpt: '', bodyMarkdown: '', images: {} },
+    } as unknown as PostPair;
+    const saved = await store.upsertDraft(partial);
+    expect(saved.shared.coordinates).toEqual({ lat: 0, lng: 0 });
+    expect(saved.de.heroImage).toEqual({ src: '', width: 0, height: 0, alt: '' });
+    expect(saved.en.heroImage).toEqual({ src: '', width: 0, height: 0, alt: '' });
+  });
+});

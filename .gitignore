@@ -11,3 +11,6 @@ home-network.txt
 
 # non-blog notes (AI YouTube channel) — kept local, out of the blog repo
 ai-youtube-channel/
+
+# Runtime map basemap + glyphs (binaries, served by nginx) — never commit
+/map-assets/
