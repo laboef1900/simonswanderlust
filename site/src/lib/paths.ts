@@ -18,6 +18,10 @@ export function aboutPath(locale: Locale): string {
   return locale === 'en' ? '/en/about-me/' : '/uber-mich/';
 }
 
+export function mapPath(locale: Locale): string {
+  return locale === 'en' ? '/en/map/' : '/karte/';
+}
+
 export function regionsIndexPath(locale: Locale): string {
   return locale === 'en' ? '/en/destinations/' : '/reiseziele/';
 }

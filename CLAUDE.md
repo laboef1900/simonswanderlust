@@ -116,11 +116,13 @@ blog/
 │       ├── content/trips/{de,en}/<slug>.mdx   # MDX source files (authoring reference; content served from Postgres)
 │       ├── content.config.ts                   # Zod schema for trips (unchanged from MDX era)
 │       ├── i18n/ui.ts                          # ALL UI strings, both locales (completeness-tested)
-│       ├── lib/                                # tested helpers: paths, trips, format, images
+│       ├── lib/                                # tested helpers: paths, trips, format, images, map data
 │       │   ├── postgres-loader.ts              #   Astro Content Layer loader — syncs trips from Postgres at build time
-│       │   └── body-images.ts                  #   transforms Markdown body: renders <BodyImage> as responsive <picture>
+│       │   ├── body-images.ts                  #   transforms Markdown body: renders <BodyImage> as responsive <picture>
+│       │   └── map-data.ts                     #   export tripPins() and tripGeometry() for map layers
 │       ├── components/pages/                   # shared per-page components
 │       ├── pages/                              # thin locale routes (de at root, en under /en/)
+│       ├── scripts/travel-map.ts               #   MapLibre GL island; initializes full map and mini-maps
 │       └── layouts/  ·  styles/  ·  assets/
 └── uploader/                      # self-hosted image service (Node/Fastify/sharp, Docker)
     ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · caption · settings · posts · publish · export · wxr-parse · wp-content · wp-images · wp-import
@@ -196,5 +198,8 @@ Use comments to leave hints for future sessions:
   merged to `main`.
 - **Done:** Phase 2 (WordPress import) — in-admin WXR importer; upload WP export → draft posts
   created with slugs preserved and images re-hosted.
-- **Remaining:** Phase 3 = MapLibre travel map (`/karte/` + `/en/map/`); Phase 4 = DNS
-  cutover. Each phase gets its own plan in `docs/superpowers/plans/`.
+- **Done:** Phase 3 (MapLibre travel map) — map page (`/karte/` + `/en/map/`) plotting all trips as
+  pins with popups; homepage `MapTeaser` wired to the map; per-story lazy mini-maps (pin + stops);
+  self-hosted PMTiles basemap (zero third-party requests), served at `/map/` by nginx; progressive
+  enhancement with text/link fallback — merged to `main`.
+- **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details.

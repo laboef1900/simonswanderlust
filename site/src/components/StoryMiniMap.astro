@@ -1,0 +1,50 @@
+---
+import { useTranslations, type Locale } from '../i18n/ui';
+import { mapPath } from '../lib/paths';
+import { tripGeometry } from '../lib/map-data';
+import type { Trip } from '../lib/trips';
+
+interface Props { trip: Trip; locale: Locale }
+const { trip, locale } = Astro.props;
+const t = useTranslations(locale);
+const geometry = tripGeometry(trip);
+---
+<section class="my-8">
+  <h2 class="text-sm font-bold text-navy">{t('map.miniLabel')}</h2>
+  <div id="mini-map" class="mt-2 h-64 w-full rounded-lg bg-navy/5" data-geometry={JSON.stringify(geometry)}>
+    <a class="block p-4 text-brand-red hover:underline" href={mapPath(locale)}>{t('map.viewOnMap')}</a>
+  </div>
+</section>
+<script>
+  import { initMiniMap } from '../scripts/travel-map';
+  import type { TripGeometry } from '../lib/map-data';
+
+  const el = document.getElementById('mini-map');
+  if (el && el.dataset.geometry) {
+    let geometry: TripGeometry | null = null;
+    try {
+      geometry = JSON.parse(el.dataset.geometry) as TripGeometry;
+    } catch (err) {
+      console.error('mini-map: failed to parse geometry', err);
+      // leave the fallback link in place
+    }
+    if (geometry !== null) {
+      const fallbackHTML = el.innerHTML;
+      const obs = new IntersectionObserver((entries, o) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            o.disconnect();
+            el.innerHTML = '';  // clear the fallback link before mounting the map
+            try {
+              initMiniMap(el, geometry!);
+            } catch (err) {
+              console.error('mini-map: init failed', err);
+              el.innerHTML = fallbackHTML;  // restore the fallback link
+            }
+          }
+        }
+      }, { rootMargin: '200px' });
+      obs.observe(el);
+    }
+  }
+</script>

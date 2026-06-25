@@ -1,0 +1,70 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import { useTranslations, type Locale } from '../../i18n/ui';
+import { byLocale, pathOf } from '../../lib/trips';
+import { tripPins } from '../../lib/map-data';
+import { mapPath } from '../../lib/paths';
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const t = useTranslations(locale);
+const all = await getCollection('trips');
+const trips = byLocale(all, locale);
+const geojson = tripPins(all, locale);
+---
+
+<Base
+  title={t('map.title')}
+  description={t('map.intro')}
+  locale={locale}
+  alternates={{ de: mapPath('de'), en: mapPath('en') }}
+>
+  <section class="mx-auto max-w-6xl px-5 py-10">
+    <h1 class="text-3xl font-extrabold text-navy">{t('map.title')}</h1>
+    <p class="mt-1 text-ink/70">{t('map.intro')}</p>
+    <div
+      id="map"
+      class="mt-6 h-[70vh] w-full rounded-lg bg-navy/5"
+      data-geojson={JSON.stringify(geojson)}
+      data-readstory={t('map.readStory')}
+    ></div>
+    <noscript>
+      <p class="mt-2 text-sm text-ink/60">{t('map.intro')}</p>
+    </noscript>
+    <nav class="mt-8" aria-label={t('map.fallbackHeading')}>
+      <h2 class="text-lg font-bold text-navy">{t('map.fallbackHeading')}</h2>
+      <ul class="mt-2 grid gap-1">
+        {
+          trips.map((trip) => (
+            <li>
+              <a class="text-brand-red hover:underline" href={pathOf(trip)}>
+                {trip.data.title}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </nav>
+  </section>
+</Base>
+
+<script>
+  import { initFullMap } from '../../scripts/travel-map';
+
+  const el = document.getElementById('map');
+  if (el && el.dataset.geojson) {
+    try {
+      initFullMap(
+        el,
+        JSON.parse(el.dataset.geojson) as import('../../lib/map-data').PinCollection,
+        { readStory: el.dataset.readstory ?? '' },
+      );
+    } catch (err) {
+      console.error('map init failed', err);
+    }
+  }
+</script>
