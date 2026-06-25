@@ -510,8 +510,8 @@
         if (shared.countryCode) $('fmCountryCode').value = shared.countryCode;
         if (shared.region) $('fmRegion').value = shared.region;
         if (shared.coordinates) {
-          $('fmLat').value = shared.coordinates.lat || '';
-          $('fmLng').value = shared.coordinates.lng || '';
+          $('fmLat').value = shared.coordinates.lat ?? '';
+          $('fmLng').value = shared.coordinates.lng ?? '';
         }
         if (shared.route) $('fmRoute').value = shared.route;
         populateKeyFacts(shared.keyFacts);
