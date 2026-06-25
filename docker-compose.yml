@@ -8,6 +8,7 @@ services:
     volumes:
       - ./site/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - blog-dist:/srv/blog:ro
+      - ${MAP_ASSETS_DIR:-./map-assets}:/usr/share/nginx/map:ro
     depends_on:
       blog-builder:
         condition: service_healthy

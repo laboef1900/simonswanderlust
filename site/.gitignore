@@ -28,3 +28,6 @@ public/favicon.ico
 
 # hero images are hosted remotely — no binaries in git
 src/assets/trips/
+
+# Runtime map assets (self-hosted basemap + glyphs) — never commit (binaries)
+public/map/
