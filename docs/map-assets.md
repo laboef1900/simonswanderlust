@@ -6,17 +6,45 @@ The travel map (`/karte/` and `/en/map/`) uses a self-hosted vector tileset inst
 
 The map renders a **Protomaps planet PMTiles file** (`basemap.pmtiles`) and glyph fonts, both served by the `blog` nginx container at `/map/`. The build process is **independent of the basemap files** — if they are not present, the map displays a text/link fallback instead. This enables local development without needing the full production basemap.
 
-## Getting the Basemap
+## Getting the Basemap (exact recipe)
 
-1. **Download a PMTiles file** — Obtain a Protomaps planet extract capped at zoom level **8–10** (covers country/region detail without excessive file size):
-   - [Protomaps Downloads](https://protomaps.com/downloads) — extract by region or download the full planet and subset it.
-   - Aim for a file in the **500 MB–2 GB** range depending on your region.
+The full Protomaps planet is ~136 GB, so we **extract a low-zoom whole-world slice**
+(`z0–8`, ~520 MB) directly from it over HTTP range requests — no full download, no build
+toolchain. `z8` gives city-level detail and matches the per-story mini-map's zoom; raise
+`--maxzoom` for more detail at the cost of size (z6 ≈ 45 MB, z7 ≈ 186 MB, z8 ≈ 520 MB,
+z9 ≈ 2 GB).
 
-2. **Name it** — Rename the file to `basemap.pmtiles`.
+1. **Install the `pmtiles` CLI** (the maintained Protomaps tool):
+   ```bash
+   brew install pmtiles          # macOS; see github.com/protomaps/go-pmtiles for other OSes
+   ```
 
-3. **Get glyph fonts** — Download Protomaps-compatible glyph font files (`.pbf` format):
-   - Check the [protomaps-themes-base](https://github.com/protomaps/protomaps-themes-base) repository for pre-built font glyphs.
-   - Or use [fonttools](https://github.com/fonttools/fonttools) to build your own from `.ttf` files.
+2. **Find the latest planet build key** (dated `YYYYMMDD.pmtiles`; the index lists every build):
+   ```bash
+   curl -s https://build-metadata.protomaps.dev/builds.json \
+     | python3 -c "import sys,json; print(json.load(sys.stdin)[-1]['key'])"
+   # e.g. 20260624.pmtiles  (a v4 tileset — matches protomaps-themes-base@4.x)
+   ```
+
+3. **Extract the whole-world z0–8 basemap** (replace the dated key from step 2):
+   ```bash
+   pmtiles extract https://build.protomaps.com/20260624.pmtiles \
+     <MAP_ASSETS_DIR>/basemap.pmtiles --maxzoom=8
+   pmtiles show <MAP_ASSETS_DIR>/basemap.pmtiles   # verify: tile type mvt, max zoom 8
+   ```
+
+4. **Get the glyph fonts** — the theme requests three stacks (**Noto Sans Regular / Medium /
+   Italic**); their `.pbf` glyphs live in `protomaps/basemaps-assets`:
+   ```bash
+   git clone --depth 1 https://github.com/protomaps/basemaps-assets.git /tmp/pm-assets
+   mkdir -p <MAP_ASSETS_DIR>/fonts
+   for f in "Noto Sans Regular" "Noto Sans Medium" "Noto Sans Italic"; do
+     cp -R "/tmp/pm-assets/fonts/$f" "<MAP_ASSETS_DIR>/fonts/"
+   done
+   ```
+
+   The result is `<MAP_ASSETS_DIR>/basemap.pmtiles` + `<MAP_ASSETS_DIR>/fonts/<stack>/<range>.pbf`,
+   served at `/map/basemap.pmtiles` and `/map/fonts/<stack>/<range>.pbf`.
 
 ## Deployment Setup
 
