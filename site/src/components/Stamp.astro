@@ -1,23 +1,73 @@
 ---
 import { useTranslations, type Locale } from '../i18n/ui';
-import { dateLabel } from '../lib/format';
+import { regionShape, stampStyle } from '../lib/stamp';
 
 interface Props {
   countryCode: string;
+  country: string;
   date: Date;
+  region: string;
   locale: Locale;
 }
 
-const { countryCode, date, locale } = Astro.props;
+const { countryCode, country, date, region, locale } = Astro.props;
 const t = useTranslations(locale);
+const shape = regionShape(region);
+const { ink, border, rotation } = stampStyle(countryCode);
+
+const code = countryCode.toUpperCase();
+const name = country.toUpperCase();
+const status = t('story.stamp');
+const pad = (n: number) => String(n).padStart(2, '0');
+const when = `${pad(date.getUTCDate())} ${pad(date.getUTCMonth() + 1)} ${date.getUTCFullYear()}`;
+const dash = border === 'dashed' ? '5 3' : undefined;
+const styleVars = `--ink:${ink};--rot:${rotation}deg`;
+const topId = `stamp-top-${code}`;
+const botId = `stamp-bot-${code}`;
 ---
 
 {/* Decorative: country + date are in the page's visible text already. */}
-<div
-  aria-hidden="true"
-  class="flex h-20 w-20 -rotate-12 flex-col items-center justify-center rounded-full border-2 border-dashed border-brand-red/80 text-brand-red/90"
->
-  <span class="font-mono text-[8px] font-semibold tracking-[0.18em]">{t('story.stamp')}</span>
-  <span class="text-sm font-extrabold">{countryCode}</span>
-  <span class="font-mono text-[8px]">{dateLabel(date, locale)}</span>
-</div>
+{
+  shape === 'circle' ? (
+    <svg class="stamp" style={styleVars} viewBox="0 0 100 100" width="86" height="86" aria-hidden="true" role="presentation">
+      <defs>
+        <path id={topId} d="M 16,50 A 34,34 0 0 1 84,50" fill="none" />
+        <path id={botId} d="M 18,50 A 32,32 0 0 0 82,50" fill="none" />
+      </defs>
+      <circle cx="50" cy="50" r="46" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray={dash} />
+      {border === 'double' && <circle cx="50" cy="50" r="40" fill="none" stroke="currentColor" stroke-width="1" />}
+      <text font-size="9" letter-spacing="1.2" fill="currentColor">
+        <textPath href={`#${topId}`} startOffset="50%" text-anchor="middle">{name}</textPath>
+      </text>
+      <text font-size="6.5" letter-spacing="2" fill="currentColor">
+        <textPath href={`#${botId}`} startOffset="50%" text-anchor="middle">★ {status} ★</textPath>
+      </text>
+      <text x="50" y="40" text-anchor="middle" font-size="11" fill="currentColor">✈</text>
+      <text x="50" y="60" text-anchor="middle" font-size="12" font-weight="800" fill="currentColor">{when}</text>
+    </svg>
+  ) : (
+    <svg class="stamp" style={styleVars} viewBox="0 0 124 72" width="124" height="72" aria-hidden="true" role="presentation">
+      <rect x="3" y="3" width="118" height="66" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray={dash} />
+      {border === 'double' && <rect x="7" y="7" width="110" height="58" fill="none" stroke="currentColor" stroke-width="1" />}
+      <circle cx="20" cy="19" r="10" fill="none" stroke="currentColor" stroke-width="1" />
+      <text x="20" y="22" text-anchor="middle" font-size="8" font-weight="800" fill="currentColor">{code}</text>
+      <text x="104" y="23" text-anchor="middle" font-size="12" fill="currentColor">✈</text>
+      <text x="64" y="42" text-anchor="middle" font-size="8.5" letter-spacing="1.2" fill="currentColor">{name}</text>
+      <text x="64" y="60" text-anchor="middle" font-size="13" font-weight="800" fill="currentColor">{when}</text>
+    </svg>
+  )
+}
+
+<style>
+  .stamp {
+    color: var(--ink);
+    opacity: 0.82;
+    mix-blend-mode: multiply;
+    filter: blur(0.3px);
+    transform: rotate(var(--rot));
+  }
+  .stamp text {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    text-transform: uppercase;
+  }
+</style>
