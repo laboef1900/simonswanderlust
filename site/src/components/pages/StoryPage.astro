@@ -68,7 +68,7 @@ const label = `${entryLabel(number)} — ${dateLabel(trip.data.date, locale)} ·
           )
         }
       </p>
-      <Stamp countryCode={trip.data.countryCode} date={trip.data.date} locale={locale} />
+      <Stamp countryCode={trip.data.countryCode} country={trip.data.country} date={trip.data.date} region={trip.data.region} locale={locale} />
     </div>
     <Toc headings={headings} locale={locale} />
     {
