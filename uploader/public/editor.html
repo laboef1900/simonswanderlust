@@ -403,7 +403,9 @@
       function setStatus(msg) { $('actionStatus').textContent = msg; }
 
       // ---- save draft ----
-      $('saveDraft').addEventListener('click', async () => {
+      // Persists the current on-screen form. Returns true on success so Publish
+      // can save first and validate exactly what's on screen.
+      async function doSaveDraft() {
         showErr('');
         setStatus('Saving…');
         const payload = buildPayload();
@@ -414,12 +416,12 @@
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(payload),
         });
-        if (res.status === 401) { location.href = '/login'; return; }
+        if (res.status === 401) { location.href = '/login'; return false; }
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
           showErr((body.error || ('Save failed: ' + res.status)));
           setStatus('');
-          return;
+          return false;
         }
         // On first save, capture the new translationKey and update the URL
         if (!currentTk && body.translationKey) {
@@ -430,15 +432,16 @@
           $('pageTitle').textContent = 'Edit post';
         }
         setStatus('Saved draft.');
-      });
+        return true;
+      }
+      $('saveDraft').addEventListener('click', () => { doSaveDraft(); });
 
       // ---- publish ----
       $('publishBtn').addEventListener('click', async () => {
-        if (!currentTk) {
-          showErr('Save as draft first.');
-          return;
-        }
-        showErr('');
+        // Save the on-screen form FIRST so publish validates what's on screen
+        // (not a stale last-saved value) — e.g. a country just typed in.
+        const saved = await doSaveDraft();
+        if (!saved) return;
         setStatus('Building…');
         const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/publish', { method: 'POST' });
         if (res.status === 401) { location.href = '/login'; return; }
