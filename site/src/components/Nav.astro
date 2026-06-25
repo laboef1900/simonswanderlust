@@ -1,6 +1,6 @@
 ---
 import { useTranslations, type Locale } from '../i18n/ui';
-import { aboutPath, homePath } from '../lib/paths';
+import { aboutPath, homePath, mapPath } from '../lib/paths';
 import LangSwitcher from './LangSwitcher.astro';
 
 interface Props {
@@ -19,6 +19,7 @@ const t = useTranslations(locale);
     </a>
     <nav aria-label={t('nav.ariaLabel')} class="flex items-center gap-5 text-sm">
       <a href={homePath(locale) + '#stories'} class="hover:text-brand-red">{t('nav.stories')}</a>
+      <a href={mapPath(locale)} class="hover:text-brand-red">{t('nav.map')}</a>
       <a href={aboutPath(locale)} class="hover:text-brand-red">{t('nav.about')}</a>
       <LangSwitcher locale={locale} alternates={alternates} />
     </nav>
