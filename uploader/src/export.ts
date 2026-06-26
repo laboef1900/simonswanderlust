@@ -2,7 +2,9 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Locale, PostLocale, PostPair } from './posts.js';
 
-const q = (s: string) => `'${s.replace(/'/g, "\\'")}'`;
+// YAML single-quoted scalar: a literal quote is escaped by doubling it ('' ),
+// never with a backslash. Mirrors storage.ts so exported MDX re-parses cleanly.
+const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
 /** Turn markdown body images back into <BodyImage> tags using the images map. */
 function bodyToMdx(p: PostLocale): string {
