@@ -69,6 +69,15 @@ describe('post validation', () => {
     expect(() => validateForPublish(pair({ en: { ...pair().en, excerpt: '' } }))).toThrow(PostError);
     expect(() => validateForPublish(pair({ de: { ...pair().de, heroImage: { ...pair().de.heroImage, alt: '' } } }))).toThrow(PostError);
   });
+  it('publish rejects out-of-range coordinates', () => {
+    expect(() => validateForPublish(pair({ shared: { ...pair().shared, coordinates: { lat: 91, lng: 0 } } }))).toThrow(/lat/);
+    expect(() => validateForPublish(pair({ shared: { ...pair().shared, coordinates: { lat: -91, lng: 0 } } }))).toThrow(/lat/);
+    expect(() => validateForPublish(pair({ shared: { ...pair().shared, coordinates: { lat: 0, lng: 181 } } }))).toThrow(/lng/);
+    expect(() => validateForPublish(pair({ shared: { ...pair().shared, coordinates: { lat: 0, lng: -181 } } }))).toThrow(/lng/);
+    expect(() => validateForPublish(pair({ shared: { ...pair().shared, coordinates: { lat: NaN, lng: 0 } } }))).toThrow(PostError);
+    // boundary values are valid
+    expect(() => validateForPublish(pair({ shared: { ...pair().shared, coordinates: { lat: -90, lng: 180 } } }))).not.toThrow();
+  });
   it('publish throws PostError (not TypeError) when heroImage is missing', () => {
     const noHero = pair({ de: { ...pair().de, heroImage: undefined as never } });
     expect(() => validateForPublish(noHero)).toThrow(PostError);

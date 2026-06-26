@@ -36,6 +36,17 @@ describe('storeVariants', () => {
     ]);
   });
 
+  it('rejects keys that try to escape the storage dir (path traversal)', async () => {
+    for (const bad of ['../evil', 'trips/../../etc/x', '/abs/path', 'trips/./x', 'a\\b']) {
+      await expect(
+        storeVariants(bad, 'a', result, { storageDir: dir, baseUrl: 'https://img.example' }),
+      ).rejects.toThrow(/key/i);
+    }
+    // nothing should have been written outside the storage dir
+    const files = await readdir(dir);
+    expect(files).toEqual([]);
+  });
+
   it('returns the heroImage YAML snippet', async () => {
     const stored = await storeVariants('trips/x/hero', "O'Brien's view", result, {
       storageDir: dir,

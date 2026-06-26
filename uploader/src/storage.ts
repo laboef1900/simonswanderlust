@@ -15,12 +15,25 @@ export interface StoredImage {
   snippet: string;
 }
 
+// Central chokepoint for every write path (direct /upload AND the WordPress
+// re-host path, which bypasses the route-level KEY_RE check). A key is a
+// relative slug-segment path; reject anything that could escape storageDir.
+// @ai-warning: do not loosen this to allow '.' — it is what blocks `../` traversal.
+const SAFE_KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
+
+export function assertSafeKey(key: string): void {
+  if (!SAFE_KEY_RE.test(key) || key.includes('..') || key.includes('//')) {
+    throw new Error(`unsafe storage key "${key}" (lowercase a-z, 0-9, / _ - only; no traversal)`);
+  }
+}
+
 export async function storeVariants(
   key: string,
   alt: string,
   result: ProcessResult,
   { storageDir, baseUrl }: StorageOptions,
 ): Promise<StoredImage> {
+  assertSafeKey(key);
   const files: string[] = [];
   for (const v of result.variants) {
     const rel = `${key}-${v.width}.${v.format}`;
