@@ -122,6 +122,17 @@ When run as part of the full stack (the repo's root `docker-compose.yml`), the s
 proxies `/admin/` (and `/upload`, `/suggest`) to this service, so the panel is reachable at
 `https://simonswanderlust.com/admin/` — WordPress-style, on the main domain.
 
+### Security notes
+
+- **Always run behind the TLS-terminating reverse proxy.** The app trusts `X-Forwarded-*`
+  (so per-IP login throttling and the cookie `secure` flag work); your proxy MUST set
+  `X-Forwarded-Proto`. Do not expose port 3000 directly to the internet.
+- **Auth endpoints are rate-limited** per client IP (`/login`, `/setup`) to slow brute-force.
+- **Publishing is admin-only.** Non-admin accounts can create and edit drafts but cannot publish
+  to the public site or change a published slug; only admins can publish.
+- **WordPress import is SSRF-guarded.** Remote image fetches reject internal/loopback addresses,
+  time out, and cap the download size; imported slugs are validated before anything is written.
+
 ## Batch (Phase 2 migration)
 
 ```bash
