@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DEFAULT_PROMPT } from './caption.js';
 
@@ -62,7 +62,11 @@ export function createSettingsStore({ path, defaults }: { path: string; defaults
     update: (partial) => {
       const merged = validate({ ...current, ...partial });
       mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, JSON.stringify(merged, null, 2));
+      // Atomic write: a crash mid-write must not corrupt the live file. Write a
+      // sibling temp (same dir → same filesystem) then rename over the target.
+      const tmp = `${path}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify(merged, null, 2));
+      renameSync(tmp, path);
       current = merged;
       return { ...current };
     },
