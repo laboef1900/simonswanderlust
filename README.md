@@ -37,6 +37,17 @@ cp uploader/.env.example .env        # set POSTGRES_PASSWORD, DATABASE_URL, BUIL
 docker compose up -d --build         # blog (nginx) + blog-builder + uploader + Postgres
 ```
 
+On a server you can run the **released images from GHCR** instead of building locally — set
+`IMAGE_TAG` in `.env` (defaults to the current release) and:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+The images are `ghcr.io/laboef1900/simonswanderlust-{uploader,blog-builder}` (published on each
+`vX.Y.Z` tag by `.github/workflows/release.yml`). If the packages are private, `docker login
+ghcr.io` first.
+
 Then open `/login` on the uploader to create the first admin account, write a post in the editor,
 and hit **Publish**. The blog rebuilds and nginx serves it.
 
