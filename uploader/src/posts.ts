@@ -38,8 +38,13 @@ interface Stored extends PostPair { updatedAt: Date }
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 const REGIONS = ['europe', 'north-america', 'south-america'];
 
+/** True for a slug safe to use in a URL and as a storage path segment. */
+export function isSafeSlug(slug: string): boolean {
+  return SLUG_RE.test(slug);
+}
+
 function checkSlug(slug: string): void {
-  if (!SLUG_RE.test(slug)) throw new PostError(`invalid slug "${slug}" (lowercase a-z, 0-9, hyphen)`);
+  if (!isSafeSlug(slug)) throw new PostError(`invalid slug "${slug}" (lowercase a-z, 0-9, hyphen)`);
 }
 
 export function validateDraft(pair: PostPair): void {
@@ -69,6 +74,12 @@ export function validateForPublish(pair: PostPair): void {
   if (!REGIONS.includes(s.region)) throw new PostError(`region must be one of ${REGIONS.join(', ')}`);
   if (typeof s.coordinates?.lat !== 'number' || typeof s.coordinates?.lng !== 'number') {
     throw new PostError('coordinates must be numbers');
+  }
+  if (!Number.isFinite(s.coordinates.lat) || s.coordinates.lat < -90 || s.coordinates.lat > 90) {
+    throw new PostError('coordinates.lat must be between -90 and 90');
+  }
+  if (!Number.isFinite(s.coordinates.lng) || s.coordinates.lng < -180 || s.coordinates.lng > 180) {
+    throw new PostError('coordinates.lng must be between -180 and 180');
   }
   if (!s.country.trim()) throw new PostError('country required');
   if (!s.date.trim()) throw new PostError('date required');

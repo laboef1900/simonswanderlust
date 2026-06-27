@@ -66,6 +66,46 @@ describe('importWxr', () => {
     expect(deBody).not.toContain('https://wp/dup.jpg');
   });
 
+  it('skips a group whose slug is unsafe (path-traversal defense) without storing it', async () => {
+    const evilXml = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/"
+  xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/"
+  xmlns:wp="http://wordpress.org/export/1.2/">
+<channel>
+  <item>
+    <title>Evil DE</title>
+    <wp:post_name><![CDATA[../../../etc/evil]]></wp:post_name>
+    <wp:post_type><![CDATA[post]]></wp:post_type>
+    <wp:status><![CDATA[publish]]></wp:status>
+    <wp:post_date><![CDATA[2021-07-25 00:00:00]]></wp:post_date>
+    <excerpt:encoded><![CDATA[]]></excerpt:encoded>
+    <content:encoded><![CDATA[<p>x</p>]]></content:encoded>
+    <category domain="language" nicename="de"><![CDATA[Deutsch]]></category>
+    <category domain="post_translations" nicename="pll_evil"><![CDATA[pll_evil]]></category>
+  </item>
+  <item>
+    <title>Evil EN</title>
+    <wp:post_name><![CDATA[ok-en]]></wp:post_name>
+    <wp:post_type><![CDATA[post]]></wp:post_type>
+    <wp:status><![CDATA[publish]]></wp:status>
+    <wp:post_date><![CDATA[2021-07-25 00:00:00]]></wp:post_date>
+    <excerpt:encoded><![CDATA[]]></excerpt:encoded>
+    <content:encoded><![CDATA[<p>x</p>]]></content:encoded>
+    <category domain="language" nicename="en"><![CDATA[English]]></category>
+    <category domain="post_translations" nicename="pll_evil"><![CDATA[pll_evil]]></category>
+  </item>
+</channel>
+</rss>`;
+    const store = memoryPostStore();
+    const rehostSpy = async () => { throw new Error('rehost must not be called for an unsafe slug'); };
+    const s = await importWxr(evilXml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: rehostSpy });
+    expect(s.imported).toBe(0);
+    expect(s.skipped).toBe(1);
+    expect(s.warnings.join(' ')).toMatch(/slug/i);
+    expect(await store.list()).toHaveLength(0);
+  });
+
   it('is idempotent (re-run updates, no duplicate) and skips published posts', async () => {
     const store = memoryPostStore();
     await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });

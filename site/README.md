@@ -1,7 +1,13 @@
 # simonswanderlust.com — site
 
 The Astro 6 rebuild of [simonswanderlust.com](https://simonswanderlust.com) (DE/EN travel blog).
-Design spec and phase plans live in `../docs/superpowers/`.
+Architecture overview in [`../ARCHITECTURE.md`](../ARCHITECTURE.md); design spec and phase plans
+live in `../docs/superpowers/`.
+
+Content is **loaded from Postgres at build time** (`src/lib/postgres-loader.ts`), not from git —
+the MDX files under `src/content/trips/` are an authoring reference / export-only backup. A
+long-running `blog-builder` (`build-server.mjs`) runs `astro build` from the database and atomically
+publishes the result; nginx serves it. See `../ARCHITECTURE.md` for the full pipeline.
 
 ## Commands
 
@@ -16,7 +22,7 @@ Design spec and phase plans live in `../docs/superpowers/`.
 
 ## Structure
 
-- `src/content/trips/{de,en}/<slug>.mdx` — one story per language; filenames are the live WordPress slugs (SEO contract — never rename). `heroImage` is a remote URL object `{src,width,height,alt}` served by the image server (no binaries in git).
+- `src/content/trips/{de,en}/<slug>.mdx` — authoring reference / backup; the `id`s (`de/<slug>`, `en/<slug>`) and filenames are the live WordPress slugs (SEO contract — never rename). `heroImage` is a remote URL object `{src,width,height,alt}` served by the image server (no binaries in git).
 - `src/i18n/ui.ts` — ALL UI strings, both locales (completeness-tested; no hardcoded strings in components)
-- `src/lib/` — tested helpers: paths (live WP slugs), trips (locale/pairing), format
+- `src/lib/` — tested helpers: `postgres-loader` (Content Layer loader), `paths`/`trips` (live WP slugs, locale pairing), `format`, `images`, `map-data`, and `body-images` (renders body images as responsive `<picture>` **and sanitizes the DB-sourced HTML** — see [`../SECURITY.md`](../SECURITY.md))
 - `src/components/pages/` — shared per-page components rendered by thin locale routes in `src/pages/`

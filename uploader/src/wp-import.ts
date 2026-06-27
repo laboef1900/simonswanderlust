@@ -1,7 +1,7 @@
 import { parseWxr, type ParsedPost } from './wxr-parse.js';
 import { htmlToMarkdown } from './wp-content.js';
 import { rehostImage, type RehostResult } from './wp-images.js';
-import type { ImageDims, PostLocale, PostPair, PostStore } from './posts.js';
+import { isSafeSlug, type ImageDims, type PostLocale, type PostPair, type PostStore } from './posts.js';
 
 export interface ImportSummary { imported: number; updated: number; skipped: number; warnings: string[] }
 export interface ImportDeps {
@@ -63,6 +63,12 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
     const de = members.find((m) => m.locale === 'de');
     const en = members.find((m) => m.locale === 'en');
     if (!de || !en) { summary.skipped++; summary.warnings.push(`group ${group}: missing ${de ? 'en' : 'de'} translation (${members.map((m) => m.slug).join(', ')})`); continue; }
+    // @ai-warning: validate slugs at the import boundary BEFORE re-hosting images
+    // or writing to the DB — an unsafe slug would otherwise become a storage path
+    // segment (traversal) and a live URL.
+    if (!isSafeSlug(de.slug) || !isSafeSlug(en.slug)) {
+      summary.skipped++; summary.warnings.push(`group ${group}: unsafe slug (${de.slug} / ${en.slug}) — skipped`); continue;
+    }
     const prior = bySlug.get(de.slug) ?? bySlug.get(en.slug);
     if (prior?.status === 'published') { summary.skipped++; summary.warnings.push(`${de.slug}/${en.slug}: already published — not overwritten`); continue; }
     try {

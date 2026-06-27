@@ -19,6 +19,7 @@ import { validateDraft, validateForPublish, PostError, type PostStore, type Post
 import { exportPost, exportAll } from './export.js';
 import { triggerBuild, type BuildResult } from './publish.js';
 import { importWxr } from './wp-import.js';
+import { fixedWindowLimiter, rateLimitPreHandler, type RateLimiter } from './rate-limit.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -33,23 +34,49 @@ export interface ServerConfig {
   captionImpl?: (jpeg: Buffer, cfg: CaptionConfig) => Promise<Caption>;
   fetchImpl?: typeof fetch;
   triggerImpl?: (builderUrl: string, secret: string) => Promise<BuildResult>;
+  loginLimiter?: RateLimiter;
 }
+
+const MODELS_FETCH_TIMEOUT_MS = 15_000;
 
 const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
 
 async function fetchModelIds(baseUrl: string, doFetch: typeof fetch): Promise<string[]> {
-  const res = await doFetch(`${baseUrl.replace(/\/+$/, '')}/models`, { method: 'GET' });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const body = (await res.json()) as { data?: Array<{ id?: string }> };
-  return (body.data ?? []).map((m) => m.id).filter((id): id is string => Boolean(id));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MODELS_FETCH_TIMEOUT_MS);
+  try {
+    const res = await doFetch(`${baseUrl.replace(/\/+$/, '')}/models`, { method: 'GET', signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = (await res.json()) as { data?: Array<{ id?: string }> };
+    return (body.data ?? []).map((m) => m.id).filter((id): id is string => Boolean(id));
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function buildServer(cfg: ServerConfig): FastifyInstance {
   // @fastify/static requires an absolute root; tolerate a relative STORAGE_DIR
   // (e.g. ./data/images from env) by resolving against the process cwd.
   const storageDir = resolve(cfg.storageDir);
+  // @ai-warning: trustProxy makes Fastify read X-Forwarded-* (so req.ip and the
+  // cookie `secure` flag reflect the real client). This is correct ONLY behind a
+  // trusted reverse proxy that sets X-Forwarded-Proto; if the container is ever
+  // exposed directly, clients could spoof those headers.
   const app = Fastify({ logger: false, trustProxy: true });
   const { users, sessions } = cfg;
+
+  // Baseline security headers on every response. CSP is intentionally omitted:
+  // the admin pages use inline scripts, so a strict policy would need nonces.
+  app.addHook('onSend', async (_req, reply) => {
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('X-Frame-Options', 'DENY');
+    reply.header('Referrer-Policy', 'no-referrer');
+  });
+
+  // Per-IP throttle for the unauthenticated auth endpoints (brute-force defense).
+  const loginLimiter = cfg.loginLimiter ?? fixedWindowLimiter({ max: 10, windowMs: 900_000 });
+  const limitAuth = rateLimitPreHandler(loginLimiter);
+
   app.register(cookie);
   app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024 } });
   app.decorateRequest('authUser', null);
@@ -204,7 +231,16 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return { authenticated: false, needsSetup: (await users.count()) === 0 };
   });
 
-  app.post('/setup', async (req, reply) => {
+  // Serialize setup so the count()-then-create() check is atomic across
+  // concurrent requests (closes the first-admin TOCTOU). Per-app instance.
+  let setupChain: Promise<unknown> = Promise.resolve();
+  const withSetupLock = <T>(fn: () => Promise<T>): Promise<T> => {
+    const run = setupChain.then(fn, fn);
+    setupChain = run.then(() => undefined, () => undefined);
+    return run;
+  };
+
+  app.post('/setup', { preHandler: limitAuth }, async (req, reply) => withSetupLock(async () => {
     if ((await users.count()) > 0) return reply.code(409).send({ error: 'setup already complete' });
     const b = (req.body ?? {}) as { username?: unknown; password?: unknown };
     const username = String(b.username ?? '').trim();
@@ -214,10 +250,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const token = await sessions.create(user.id, SESSION_TTL_MS);
     setSessionCookie(reply, token, isSecureRequest(req));
     return reply.send({ username: user.username, isAdmin: user.isAdmin });
-  });
+  }));
 
-  // @ai-note: login rate-limiting/throttling would slot in here (deferred — see docs/superpowers/specs/2026-06-23-uploader-auth-design.md). Add before exposing beyond a trusted network.
-  app.post('/login', async (req, reply) => {
+  app.post('/login', { preHandler: limitAuth }, async (req, reply) => {
     const b = (req.body ?? {}) as { username?: unknown; password?: unknown };
     const username = String(b.username ?? '').trim();
     const password = String(b.password ?? '');
@@ -293,7 +328,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   app.post('/posts', { preHandler: requireAuth }, (req, reply) => upsert(req, reply, ''));
   app.put('/posts/:tk', { preHandler: requireAuth }, (req, reply) => upsert(req, reply, (req.params as { tk: string }).tk));
 
-  app.post('/posts/:tk/publish', { preHandler: requireAuth }, async (req, reply) => {
+  // @ai-warning: publishing pushes content to the PUBLIC static site, so it is
+  // admin-only. Authors may create/edit drafts (requireAuth) but not publish.
+  app.post('/posts/:tk/publish', { preHandler: requireAdmin }, async (req, reply) => {
     const tk = (req.params as { tk: string }).tk;
     const pair = await posts.get(tk);
     if (!pair) return reply.code(404).send({ error: 'post not found' });

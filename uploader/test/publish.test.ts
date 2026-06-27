@@ -22,4 +22,13 @@ describe('triggerBuild', () => {
     expect(r.ok).toBe(false);
     expect(r.error).toContain('econn');
   });
+  it('aborts and returns ok:false when the builder hangs past the timeout', async () => {
+    const hang = ((_url: string, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+      })) as unknown as typeof fetch;
+    const r = await triggerBuild('http://b:4000', 's', hang, 10);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/tim(e|ed) ?out|abort/i);
+  });
 });

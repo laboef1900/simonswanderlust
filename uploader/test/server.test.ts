@@ -12,6 +12,7 @@ import type { Settings, SettingsStore } from '../src/settings.js';
 import { memoryUserStore, type UserStore } from '../src/users.js';
 import { memorySessionStore, type SessionStore } from '../src/sessions.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
+import { fixedWindowLimiter } from '../src/rate-limit.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -300,6 +301,34 @@ describe('auth endpoints', () => {
     const after = await b.app.inject({ method: 'GET', url: '/settings', cookies: cookie });
     expect(after.statusCode).toBe(401);
   });
+
+  it('rate-limits repeated login attempts from the same client (429)', async () => {
+    const b = build({ loginLimiter: fixedWindowLimiter({ max: 2, windowMs: 60_000 }) });
+    await b.users.create({ username: 'simon', password: 'pw', isAdmin: false });
+    const login = () => b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'simon', password: 'bad' } });
+    expect((await login()).statusCode).toBe(401);
+    expect((await login()).statusCode).toBe(401);
+    expect((await login()).statusCode).toBe(429); // 3rd attempt blocked
+  });
+
+  it('serializes concurrent /setup so only one admin is created (no TOCTOU)', async () => {
+    const b = build();
+    const [a, c] = await Promise.all([
+      b.app.inject({ method: 'POST', url: '/setup', headers: { 'content-type': 'application/json' }, payload: { username: 'first', password: 'pw' } }),
+      b.app.inject({ method: 'POST', url: '/setup', headers: { 'content-type': 'application/json' }, payload: { username: 'second', password: 'pw' } }),
+    ]);
+    const codes = [a.statusCode, c.statusCode].sort();
+    expect(codes).toEqual([200, 409]);
+    expect(await b.users.count()).toBe(1);
+  });
+});
+
+describe('security headers', () => {
+  it('sets nosniff + frame protection on responses', async () => {
+    const res = await build().app.inject({ method: 'GET', url: '/auth/status' });
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['x-frame-options']).toBe('DENY');
+  });
 });
 
 describe('user management', () => {
@@ -359,6 +388,16 @@ describe('posts editor', () => {
     const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
     expect(pub.statusCode).toBe(200);
     expect(pub.json()).toMatchObject({ published: true, build: { ok: true, release: 'r1' } });
+  });
+
+  it('publish is admin-only: a non-admin author gets 403', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    expect(created.statusCode).toBe(200); // authors may still create/edit drafts
+    const tk = created.json().translationKey;
+    const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(pub.statusCode).toBe(403);
   });
 
   it('publish rejects an incomplete post (400)', async () => {

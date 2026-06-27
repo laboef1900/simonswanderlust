@@ -21,6 +21,20 @@ describe('renderPostToMdx', () => {
     expect(mdx).not.toContain('![Gasse]');
   });
 
+  it('escapes single-quotes in YAML frontmatter by doubling them (valid YAML)', () => {
+    const pairWithApostrophe: PostPair = {
+      translationKey: 'k1', status: 'published',
+      shared: { date: '2024-10-03', country: "Côte d'Ivoire", countryCode: 'CI', region: 'europe', coordinates: { lat: 0, lng: 0 } },
+      de: { locale: 'de', slug: 'test', title: "Simon's Reise", excerpt: 'E', heroImage: { src: 'https://img/h', width: 768, height: 512, alt: 'Alt' }, bodyMarkdown: 'Intro', images: {} },
+      en: { locale: 'en', slug: 'test', title: 'Test', excerpt: 'E', heroImage: { src: 'https://img/h', width: 768, height: 512, alt: 'Alt' }, bodyMarkdown: 'Intro', images: {} },
+    };
+    const mdx = renderPostToMdx(pairWithApostrophe, 'de');
+    // YAML single-quoted strings escape a quote by doubling it, never with a backslash.
+    expect(mdx).toContain("title: 'Simon''s Reise'");
+    expect(mdx).toContain("country: 'Côte d''Ivoire'");
+    expect(mdx).not.toContain("\\'");
+  });
+
   it('escapes double-quotes in body image alt text', () => {
     const pairWithQuote: PostPair = {
       translationKey: 'k1', status: 'published',

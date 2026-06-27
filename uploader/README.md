@@ -1,8 +1,9 @@
 # simonswanderlust-images
 
-Self-hosted image uploader for the Astro blog. Uploads a photo, generates
-responsive AVIF/WebP variants (EXIF/GPS preserved), stores them on disk, and
-returns a `heroImage` YAML snippet to paste into a post.
+Self-hosted image uploader **and admin CMS** for the Astro blog: uploads a photo and generates
+responsive AVIF/WebP variants (EXIF/GPS preserved), and also hosts the in-admin editor, WordPress
+import, and AI alt-text. How it fits the rest of the stack: [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
+Security model: [`../SECURITY.md`](../SECURITY.md).
 
 ## Contract
 
@@ -121,6 +122,19 @@ running the model on the server instead.)
 When run as part of the full stack (the repo's root `docker-compose.yml`), the site's nginx also
 proxies `/admin/` (and `/upload`, `/suggest`) to this service, so the panel is reachable at
 `https://simonswanderlust.com/admin/` — WordPress-style, on the main domain.
+
+### Security notes
+
+Full details in [`../SECURITY.md`](../SECURITY.md); the essentials:
+
+- **Always run behind the TLS-terminating reverse proxy.** The app trusts `X-Forwarded-*`
+  (so per-IP login throttling and the cookie `secure` flag work); your proxy MUST set
+  `X-Forwarded-Proto`. Do not expose port 3000 directly to the internet.
+- **Auth endpoints are rate-limited** per client IP (`/login`, `/setup`) to slow brute-force.
+- **Publishing is admin-only.** Non-admin accounts can create and edit drafts but cannot publish
+  to the public site or change a published slug; only admins can publish.
+- **WordPress import is SSRF-guarded.** Remote image fetches reject internal/loopback addresses,
+  time out, and cap the download size; imported slugs are validated before anything is written.
 
 ## Batch (Phase 2 migration)
 
