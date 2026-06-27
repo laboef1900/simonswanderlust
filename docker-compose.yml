@@ -1,5 +1,9 @@
 # Full self-hosted stack: the static blog (nginx) + the image uploader service + Postgres.
-# Copy .env.example to .env and set POSTGRES_PASSWORD before `docker compose up -d --build`.
+# Copy .env.example to .env (set POSTGRES_PASSWORD, BUILD_SECRET). On the server:
+#   docker compose pull && docker compose up -d     # run the released GHCR images
+# For local development, add --build to build the images from source instead:
+#   docker compose up -d --build
+# Pin the published image version with IMAGE_TAG in .env (default below).
 services:
   blog:
     image: nginx:alpine
@@ -15,6 +19,9 @@ services:
     restart: unless-stopped
 
   blog-builder:
+    # Released image (pulled on the server). `build` is kept so local dev can
+    # still `docker compose up -d --build` and tag the result as this image.
+    image: ghcr.io/laboef1900/simonswanderlust-blog-builder:${IMAGE_TAG:-0.2.0}
     build: ./site
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-images}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-images}}
@@ -33,6 +40,7 @@ services:
     restart: unless-stopped
 
   images:
+    image: ghcr.io/laboef1900/simonswanderlust-uploader:${IMAGE_TAG:-0.2.0}
     build: ./uploader
     ports:
       - "3000:3000"
