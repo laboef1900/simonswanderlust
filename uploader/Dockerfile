@@ -1,18 +1,33 @@
-FROM node:22-slim
+# syntax=docker/dockerfile:1
+
+# Base images are build ARGs so they can be swapped for Docker Hardened Images
+# without touching the build logic, e.g.:
+#   --build-arg NODE_BUILD=dhi.io/<ns>/dhi-node:22-dev   (has npm + shell)
+#   --build-arg NODE_RUNTIME=dhi.io/<ns>/dhi-node:22     (minimal, non-root)
+# Defaults keep the image buildable with no subscription.
+ARG NODE_BUILD=node:22-slim
+ARG NODE_RUNTIME=node:22-slim
+
+# --- build stage: install prod deps and vendor the admin-UI assets ---
+FROM ${NODE_BUILD} AS build
 WORKDIR /app
-
 COPY package.json package-lock.json* ./
-RUN npm install --omit=dev
-
+RUN npm ci --omit=dev
 COPY . .
+# Self-host the admin UI webfonts + EasyMDE (copied from node_modules; not in git).
+RUN node scripts/copy-fonts.mjs && node scripts/copy-easymde.mjs
 
-# Self-host the admin UI webfonts (copied from node_modules; not committed to git).
-RUN node scripts/copy-fonts.mjs
-RUN node scripts/copy-easymde.mjs
-
-ENV STORAGE_DIR=/data/images
-ENV PORT=3000
+# --- runtime stage: no build tooling; runs the prebuilt app tree ---
+FROM ${NODE_RUNTIME}
+WORKDIR /app
+ENV NODE_ENV=production \
+    STORAGE_DIR=/data/images \
+    PORT=3000
+COPY --from=build /app ./
 VOLUME ["/data"]
 EXPOSE 3000
-
-CMD ["npm", "start"]
+# The runtime base may be distroless (no npm), so invoke node directly; tsx is a
+# production dependency that runs the TypeScript entrypoint.
+# @ai-note: a DHI runtime is non-root, so /data must be writable by that user
+# (chown the mounted volume or run an init container).
+CMD ["node", "--import", "tsx", "src/main.ts"]
