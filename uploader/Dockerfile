@@ -5,13 +5,16 @@
 #   --build-arg NODE_BUILD=dhi.io/<ns>/dhi-node:22-dev   (has npm + shell)
 #   --build-arg NODE_RUNTIME=dhi.io/<ns>/dhi-node:22     (minimal, non-root)
 # Defaults keep the image buildable with no subscription.
+# @ai-warning: NODE_BUILD and NODE_RUNTIME must share the same OS/libc family —
+# sharp's native binary is installed in the build stage and copied into the
+# runtime, so a Debian build + Alpine/musl runtime (or vice versa) breaks it.
 ARG NODE_BUILD=node:22-slim
 ARG NODE_RUNTIME=node:22-slim
 
 # --- build stage: install prod deps and vendor the admin-UI assets ---
 FROM ${NODE_BUILD} AS build
 WORKDIR /app
-COPY package.json package-lock.json* ./
+COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY . .
 # Self-host the admin UI webfonts + EasyMDE (copied from node_modules; not in git).

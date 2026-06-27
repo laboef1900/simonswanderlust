@@ -8,7 +8,8 @@
 #   --build-arg NODE_RUNTIME=dhi.io/<ns>/dhi-node:22-dev
 # @ai-warning: this service runs `npx astro build` AT RUNTIME, so NODE_RUNTIME
 # must keep the toolchain (Node + npm + shell) — use the DHI *-dev (SDK) variant,
-# NOT the minimal/distroless runtime.
+# NOT the minimal/distroless runtime. Keep NODE_BUILD and NODE_RUNTIME on the
+# same OS/libc family (node_modules, incl. sharp's native binary, is copied across).
 ARG NODE_BUILD=node:22-slim
 ARG NODE_RUNTIME=node:22-slim
 
