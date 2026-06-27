@@ -1,8 +1,9 @@
 # simonswanderlust-images
 
-Self-hosted image uploader for the Astro blog. Uploads a photo, generates
-responsive AVIF/WebP variants (EXIF/GPS preserved), stores them on disk, and
-returns a `heroImage` YAML snippet to paste into a post.
+Self-hosted image uploader **and admin CMS** for the Astro blog: uploads a photo and generates
+responsive AVIF/WebP variants (EXIF/GPS preserved), and also hosts the in-admin editor, WordPress
+import, and AI alt-text. How it fits the rest of the stack: [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
+Security model: [`../SECURITY.md`](../SECURITY.md).
 
 ## Contract
 
@@ -123,6 +124,8 @@ proxies `/admin/` (and `/upload`, `/suggest`) to this service, so the panel is r
 `https://simonswanderlust.com/admin/` — WordPress-style, on the main domain.
 
 ### Security notes
+
+Full details in [`../SECURITY.md`](../SECURITY.md); the essentials:
 
 - **Always run behind the TLS-terminating reverse proxy.** The app trusts `X-Forwarded-*`
   (so per-IP login throttling and the cookie `secure` flag work); your proxy MUST set

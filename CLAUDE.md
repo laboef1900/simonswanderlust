@@ -202,4 +202,9 @@ Use comments to leave hints for future sessions:
   pins with popups; homepage `MapTeaser` wired to the map; per-story lazy mini-maps (pin + stops);
   self-hosted PMTiles basemap (zero third-party requests), served at `/map/` by nginx; progressive
   enhancement with text/link fallback — merged to `main`.
+- **Done:** Security hardening — auth rate-limiting, admin-only publish, SSRF/timeout/size-cap on
+  remote fetches, path-traversal guards, body-HTML sanitization, security headers (branch
+  `feature/security-hardening`). See `SECURITY.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details.
+
+Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.
