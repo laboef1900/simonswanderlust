@@ -48,6 +48,28 @@ The images are `ghcr.io/laboef1900/simonswanderlust-{uploader,blog-builder}` (pu
 `vX.Y.Z` tag by `.github/workflows/release.yml`). If the packages are private, `docker login
 ghcr.io` first.
 
+### Hardened base images (Docker Hardened Images)
+
+The stack runs on **DHI** images (minimal, low-CVE, non-root):
+
+- **`blog`** pulls `dhi.io/nginx` directly (non-root, listens on `:8080`).
+- **`uploader`** and **`blog-builder`** are *built* on `dhi.io/node` bases. Because that build
+  happens in CI, the release workflow logs in to `dhi.io` using repo secrets **`DHI_USERNAME`**
+  and **`DHI_TOKEN`** (a dhi.io access token) — add these before tagging a release, or the build
+  can't pull the DHI bases.
+
+On the server you must therefore `docker login dhi.io` (so `docker compose pull` can fetch the
+nginx image), and — because the uploader runtime runs **non-root (uid 1000)** — make its data
+bind-mount writable once:
+
+```bash
+docker login dhi.io
+mkdir -p uploader/data && sudo chown -R 1000:1000 uploader/data
+docker compose pull && docker compose up -d
+```
+
+(blog-builder's DHI base is root, so `/srv/blog` needs no change.)
+
 Then open `/login` on the uploader to create the first admin account, write a post in the editor,
 and hit **Publish**. The blog rebuilds and nginx serves it.
 
