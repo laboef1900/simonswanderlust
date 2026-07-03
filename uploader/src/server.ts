@@ -233,6 +233,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (b.captionTimeoutMs !== undefined) partial.captionTimeoutMs = Number(b.captionTimeoutMs);
     if (b.captionMaxEdge !== undefined) partial.captionMaxEdge = Number(b.captionMaxEdge);
     if (b.captionPrompt !== undefined) partial.captionPrompt = String(b.captionPrompt);
+    if (b.backupSchedule !== undefined) partial.backupSchedule = String(b.backupSchedule);
+    if (b.backupRetention !== undefined) partial.backupRetention = Number(b.backupRetention);
     try {
       return reply.send(cfg.settings.update(partial));
     } catch (e) {

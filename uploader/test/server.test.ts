@@ -242,6 +242,30 @@ describe('settings endpoints', () => {
     expect(res.json().error).toBeTruthy();
   });
 
+  it('POST /settings persists backup schedule + retention', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({
+      method: 'POST', url: '/settings',
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { backupSchedule: 'daily', backupRetention: 5 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ backupSchedule: 'daily', backupRetention: 5 });
+  });
+
+  it('POST /settings 400 on invalid backup retention', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({
+      method: 'POST', url: '/settings',
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { backupRetention: 0 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBeTruthy();
+  });
+
   it('GET /settings/models returns ids from LM Studio', async () => {
     const b = build({ fetchImpl: modelsFetch(['a', 'b']) });
     const { cookie } = await authed(b);

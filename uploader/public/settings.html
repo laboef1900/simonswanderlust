@@ -44,6 +44,28 @@
         <button id="save">Save</button>
       </section>
 
+      <section class="card" id="backupCard" hidden>
+        <h2>Site &amp; database</h2>
+
+        <label for="backupSchedule">Database backup schedule</label>
+        <select id="backupSchedule">
+          <option value="off">Off</option>
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+        </select>
+
+        <label for="backupRetention">Backups to keep</label>
+        <input id="backupRetention" type="number" min="1" max="100" />
+
+        <button id="backupNow">Back up now</button>
+        <button id="rebuild">Rebuild site now</button>
+
+        <p class="section-label">Last backup</p>
+        <pre id="backupStatus">—</pre>
+        <p class="section-label">Backup files</p>
+        <ul id="backupFiles"></ul>
+      </section>
+
       <div class="route" aria-hidden="true">
         <span class="dot"></span><span class="seg"></span>
         <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>
@@ -64,6 +86,8 @@
         $('timeout').value = s.captionTimeoutMs ?? '';
         $('maxEdge').value = s.captionMaxEdge ?? '';
         $('prompt').value = s.captionPrompt || '';
+        $('backupSchedule').value = s.backupSchedule || 'off';
+        $('backupRetention').value = s.backupRetention ?? 14;
         const sel = $('model');
         if (![...sel.options].some((o) => o.value === s.lmModel)) {
           sel.add(new Option(s.lmModel, s.lmModel));
@@ -131,6 +155,8 @@
           captionTimeoutMs: Number($('timeout').value),
           captionMaxEdge: Number($('maxEdge').value),
           captionPrompt: $('prompt').value,
+          backupSchedule: $('backupSchedule').value,
+          backupRetention: Number($('backupRetention').value),
         };
         let res;
         try {
@@ -156,10 +182,47 @@
         fill(r);
         $('out').textContent = 'Saved. New settings apply to the next suggestion.';
       });
+
+      function renderBackups(data) {
+        const st = data.state || {};
+        $('backupStatus').textContent = st.lastError
+          ? 'FAILED at ' + st.lastAttemptAt + ': ' + st.lastError
+          : st.lastSuccessAt ? 'OK at ' + st.lastSuccessAt : 'No backup yet.';
+        const ul = $('backupFiles');
+        ul.innerHTML = '';
+        for (const f of data.files || []) {
+          const li = document.createElement('li');
+          const a = document.createElement('a');
+          a.href = '/backups/' + encodeURIComponent(f.name);
+          a.textContent = f.name + ' (' + Math.round(f.size / 1024) + ' kB)';
+          li.appendChild(a);
+          ul.appendChild(li);
+        }
+      }
+
+      async function loadBackups() {
+        const res = await fetch('/backups');
+        if (res.ok) renderBackups(await res.json());
+      }
+
+      $('backupNow').addEventListener('click', async () => {
+        $('backupStatus').textContent = 'Backing up…';
+        const res = await fetch('/backups', { method: 'POST' });
+        if (!res.ok) { $('backupStatus').textContent = 'Backup failed: HTTP ' + res.status; return; }
+        await loadBackups();
+      });
+
+      $('rebuild').addEventListener('click', async () => {
+        $('out').textContent = 'Rebuilding the site — this takes a minute…';
+        const res = await fetch('/rebuild', { method: 'POST' });
+        const r = await res.json().catch(() => ({}));
+        $('out').textContent = r.ok ? 'Rebuilt: release ' + r.release : 'Rebuild failed: ' + (r.error || res.status);
+      });
       (async () => {
         const s = await Auth.ensureAuthed();
         if (!s) return;
         Auth.renderHeader(s);
+        if (s.isAdmin) { $('backupCard').hidden = false; await loadBackups(); }
         await init();
       })();
     </script>
