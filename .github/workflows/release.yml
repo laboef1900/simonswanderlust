@@ -43,13 +43,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Needed to pull the Docker Hardened Image base images used by the
-      # Dockerfiles' NODE_BUILD/NODE_RUNTIME build-args below.
-      # Requires repo secrets DHI_USERNAME + DHI_TOKEN (a dhi.io access token).
+      # Dockerfiles' NODE_BUILD/NODE_RUNTIME build-args below. Requires the repo
+      # variable DHI_USERNAME (not sensitive) + secret DHI_TOKEN (a dhi.io access token).
       - name: Log in to dhi.io (Docker Hardened Images)
         uses: docker/login-action@v3
         with:
           registry: dhi.io
-          username: ${{ secrets.DHI_USERNAME }}
+          username: ${{ vars.DHI_USERNAME }}
           password: ${{ secrets.DHI_TOKEN }}
 
       - name: Image metadata (tags + labels)

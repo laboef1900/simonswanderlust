@@ -54,9 +54,9 @@ The stack runs on **DHI** images (minimal, low-CVE, non-root):
 
 - **`blog`** pulls `dhi.io/nginx` directly (non-root, listens on `:8080`).
 - **`uploader`** and **`blog-builder`** are *built* on `dhi.io/node` bases. Because that build
-  happens in CI, the release workflow logs in to `dhi.io` using repo secrets **`DHI_USERNAME`**
-  and **`DHI_TOKEN`** (a dhi.io access token) — add these before tagging a release, or the build
-  can't pull the DHI bases.
+  happens in CI, the release workflow logs in to `dhi.io` using the repo variable
+  **`DHI_USERNAME`** (not sensitive) and secret **`DHI_TOKEN`** (a dhi.io access token) — add both
+  before tagging a release, or the build can't pull the DHI bases.
 
 On the server you must therefore `docker login dhi.io` (so `docker compose pull` can fetch the
 nginx image), and — because the uploader runtime runs **non-root (uid 1000)** — make its data
