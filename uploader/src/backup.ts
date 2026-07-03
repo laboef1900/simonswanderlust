@@ -1,9 +1,10 @@
-import { gzipSync } from 'node:zlib';
+import { gzipSync, gunzipSync } from 'node:zlib';
 import {
   mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import type { BackupSchedule } from './settings.js';
+import type { DbPool } from './db.js';
 
 export const DUMP_VERSION = 1;
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
@@ -113,4 +114,48 @@ export function createDbBackup(opts: { db: Queryable; dir: string; retention: ()
       return { ...state };
     },
   };
+}
+
+interface Dump {
+  version: number;
+  createdAt: string;
+  tables: { users: Record<string, unknown>[]; posts: Record<string, unknown>[] };
+}
+
+const asJsonb = (v: unknown): string | null => (v == null ? null : JSON.stringify(v));
+
+/** Restore a dump inside one transaction. Deleting users cascades to sessions
+ * (FK ON DELETE CASCADE), so every login is invalidated. */
+export async function restoreDatabase(pool: DbPool, filePath: string): Promise<{ users: number; posts: number }> {
+  const dump = JSON.parse(gunzipSync(readFileSync(filePath)).toString('utf8')) as Dump;
+  if (dump.version !== DUMP_VERSION) throw new BackupError(`unsupported dump version ${dump.version}`);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM posts');
+    await client.query('DELETE FROM users');
+    for (const u of dump.tables.users) {
+      await client.query(
+        'INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES ($1,$2,$3,$4,$5)',
+        [u.id, u.username, u.password_hash, u.is_admin, u.created_at],
+      );
+    }
+    for (const p of dump.tables.posts) {
+      await client.query(
+        `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
+           excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15::jsonb,$16,$17::jsonb,$18,$19,$20)`,
+        [p.id, p.translation_key, p.locale, p.slug, p.title, p.date, p.country, p.country_code, p.region,
+         p.excerpt, asJsonb(p.hero_image), asJsonb(p.coordinates), asJsonb(p.stops), p.route,
+         asJsonb(p.key_facts), p.body_markdown, asJsonb(p.images), p.status, p.created_at, p.updated_at],
+      );
+    }
+    await client.query('COMMIT');
+    return { users: dump.tables.users.length, posts: dump.tables.posts.length };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 }
