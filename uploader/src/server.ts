@@ -82,6 +82,12 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       reply.header('X-Frame-Options', 'DENY');
       reply.header('Referrer-Policy', 'no-referrer');
     }
+    // Override MIME types for /map/ assets; setHeaders hooks don't fire for 206
+    // responses. Use the URL path to determine file type.
+    if (url.startsWith('/map/')) {
+      if (url.endsWith('.pmtiles')) reply.header('content-type', 'application/octet-stream');
+      else if (url.endsWith('.pbf')) reply.header('content-type', 'application/x-protobuf');
+    }
   });
 
   // Per-IP throttle for the unauthenticated auth endpoints (brute-force defense).
@@ -119,6 +125,17 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     redirect: true,          // /foo -> 301 /foo/ (trailingSlash: 'always' contract)
     index: 'index.html',
   });
+
+  // Self-hosted basemap + glyphs (was nginx's /map/ block). PMTiles needs HTTP
+  // range reads; @fastify/send provides them. MIME types are set via onSend hook
+  // (setHeaders doesn't fire for 206 responses). The mime db knows neither .pmtiles nor .pbf.
+  if (cfg.mapDir) {
+    app.register(fastifyStatic, {
+      root: resolve(cfg.mapDir),
+      prefix: '/map/',
+      decorateReply: false,
+    });
+  }
 
   app.post('/upload', { preHandler: requireAuth }, async (req, reply) => {
     let key = '';

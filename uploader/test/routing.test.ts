@@ -114,3 +114,31 @@ describe('host routing', () => {
     expect(blog.headers['x-content-type-options']).toBe('nosniff');
   });
 });
+
+describe('/map/ assets', () => {
+  it('serves .pmtiles with octet-stream MIME and supports range requests', async () => {
+    await mkdir(join(dir, 'map'), { recursive: true });
+    await writeFile(join(dir, 'map', 'basemap.pmtiles'), 'PMTILESDATA');
+    await release('r1', { 'index.html': 'home', '404.html': 'nf' });
+    const app = build();
+    const full = await app.inject({ method: 'GET', url: '/map/basemap.pmtiles', headers: { host: MAIN } });
+    expect(full.statusCode).toBe(200);
+    expect(full.headers['content-type']).toBe('application/octet-stream');
+    expect(full.headers['accept-ranges']).toBe('bytes');
+    const part = await app.inject({
+      method: 'GET', url: '/map/basemap.pmtiles',
+      headers: { host: MAIN, range: 'bytes=0-3' },
+    });
+    expect(part.statusCode).toBe(206);
+    expect(part.body).toBe('PMTI');
+  });
+
+  it('serves glyph .pbf with the protobuf MIME type', async () => {
+    await mkdir(join(dir, 'map', 'fonts'), { recursive: true });
+    await writeFile(join(dir, 'map', 'fonts', '0-255.pbf'), 'PBF');
+    await release('r1', { 'index.html': 'home', '404.html': 'nf' });
+    const res = await build().inject({ method: 'GET', url: '/map/fonts/0-255.pbf', headers: { host: MAIN } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('application/x-protobuf');
+  });
+});
