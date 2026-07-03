@@ -125,7 +125,12 @@ running the model on the server instead.)
 5. Point your reverse proxy (nginx/Caddy/Traefik) at the container, terminating TLS: **both**
    `https://simonswanderlust.com` **and** `https://img.simonswanderlust.com` → `127.0.0.1:3000`.
    One Fastify process serves both domains — a host-header check (`IMG_HOST`) picks image-variant
-   serving vs. the blog/admin, so each domain behaves exactly as before the merge.
+   serving vs. the blog/admin, so each domain behaves exactly as before the merge. **The proxy
+   must forward the original, verbatim `Host` header for both domains** (nginx:
+   `proxy_set_header Host $host;` — do not rely on the default, which some nginx configs override
+   with `$proxy_host`/the upstream name). If the `Host` header reaching the app isn't exactly
+   `img.simonswanderlust.com`, image URLs silently fall through to the blog/admin routing instead
+   of serving image variants.
 6. Open `https://simonswanderlust.com/login` to create the first admin account, then upload.
 
 The admin panel is reachable directly at `https://simonswanderlust.com/admin/` — the same process

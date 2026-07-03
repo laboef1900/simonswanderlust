@@ -83,12 +83,20 @@ preserved. Verified end-to-end against a published post carrying an XSS payload.
 
 ## Transport, headers & proxy
 
-- Every response carries `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and
-  `Referrer-Policy: no-referrer`. (CSP is intentionally omitted because the admin pages use inline
+- Every response carries `X-Content-Type-Options: nosniff`. `X-Frame-Options: DENY` and
+  `Referrer-Policy: no-referrer` are added only on the admin/API surface (`/admin`, `/login`,
+  `/logout`, `/auth`, `/setup`, `/settings`, `/users`, `/posts`, `/upload`, `/suggest`, `/import`,
+  `/export`, `/backups`, `/rebuild`, `/health`); public blog pages carry only `nosniff`, at parity
+  with the old nginx config. (CSP is intentionally omitted because the admin pages use inline
   scripts; a strict policy would need nonces.)
 - The app sets `trustProxy`, so it reads `X-Forwarded-*` for the client IP (rate limiting) and the
   cookie `Secure` flag. **It must run behind a TLS-terminating reverse proxy that sets
   `X-Forwarded-Proto`**, and port 3000 must not be exposed directly to the internet.
+- **The proxy must forward the original, verbatim `Host` header for both domains**
+  (`simonswanderlust.com` and `img.simonswanderlust.com`) — nginx: `proxy_set_header Host $host;`.
+  Image-vs-blog/admin routing is a single Fastify process that dispatches on the `Host` header
+  (`IMG_HOST`); a proxy that rewrites `Host` (e.g. nginx's default `$proxy_host` behavior) breaks
+  every image URL by routing image requests into the blog/admin handler instead.
 
 ## Secrets
 

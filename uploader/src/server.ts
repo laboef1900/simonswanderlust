@@ -121,7 +121,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // The public blog: static output of the last release. `current` is a symlink
   // flipped atomically by the builder; paths are joined per request, so a flip
   // takes effect immediately without re-registering.
-  const currentDir = join(cfg.siteDir, 'current');
+  const currentDir = join(resolve(cfg.siteDir), 'current');
   app.register(fastifyStatic, {
     root: currentDir,
     prefix: '/',
@@ -227,6 +227,11 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   app.post('/settings', { preHandler: requireAuth }, async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
+    // Backup schedule/retention govern what gets written to disk and retained —
+    // restrict them to admins, same trust boundary as /rebuild and /backups.
+    if ((b.backupSchedule !== undefined || b.backupRetention !== undefined) && !req.authUser?.isAdmin) {
+      return reply.code(403).send({ error: 'backup settings are admin-only' });
+    }
     const partial: Record<string, unknown> = {};
     if (b.lmBaseUrl !== undefined) partial.lmBaseUrl = String(b.lmBaseUrl).trim();
     if (b.lmModel !== undefined) partial.lmModel = String(b.lmModel).trim();

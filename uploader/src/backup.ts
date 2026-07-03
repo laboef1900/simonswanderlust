@@ -28,7 +28,17 @@ function atomicWrite(path: string, data: Buffer | string): void {
  * belong in backups) as one gzipped, versioned JSON file. Returns the filename. */
 export async function dumpDatabase(db: Queryable, dir: string, now: Date = new Date()): Promise<string> {
   const users = (await db.query('SELECT * FROM users ORDER BY created_at')).rows;
-  const posts = (await db.query('SELECT * FROM posts ORDER BY created_at')).rows;
+  // @ai-warning: node-postgres parses `date` (a DATE column) as a LOCAL-midnight
+  // JS Date; JSON.stringify then serializes it in UTC, shifting the calendar day
+  // west of UTC (e.g. Europe/Berlin: 2026-01-01 -> "2025-12-31T23:00:00.000Z").
+  // Export it as text via to_char so the dump — and the eventual restore — carry
+  // the exact calendar date instead of a shifted timestamp.
+  const posts = (await db.query(
+    `SELECT id, translation_key, locale, slug, title, to_char(date, 'YYYY-MM-DD') AS date, country,
+       country_code, region, excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown,
+       images, status, created_at, updated_at
+     FROM posts ORDER BY created_at`,
+  )).rows;
   const iso = now.toISOString();
   const stamp = `${iso.slice(0, 10).replace(/-/g, '')}-${iso.slice(11, 19).replace(/:/g, '')}`;
   const name = `db-${stamp}.json.gz`;

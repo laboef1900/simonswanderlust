@@ -254,6 +254,28 @@ describe('settings endpoints', () => {
     expect(res.json()).toMatchObject({ backupSchedule: 'daily', backupRetention: 5 });
   });
 
+  it('POST /settings 403s a non-admin changing backup settings', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    const res = await b.app.inject({
+      method: 'POST', url: '/settings',
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { backupSchedule: 'daily' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('POST /settings allows a non-admin to change non-backup fields', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    const res = await b.app.inject({
+      method: 'POST', url: '/settings',
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { lmModel: 'x' },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
   it('POST /settings 400 on invalid backup retention', async () => {
     const b = build();
     const { cookie } = await authed(b);

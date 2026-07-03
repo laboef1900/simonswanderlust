@@ -25,6 +25,13 @@ const sessions = pgSessionStore(pool);
 const posts = pgPostStore(pool);
 
 const baseUrl = process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com';
+let imgHost: string;
+try {
+  imgHost = process.env.IMG_HOST ?? new URL(baseUrl).host;
+} catch {
+  console.error(`PUBLIC_BASE_URL is not a valid URL (set IMG_HOST explicitly): ${baseUrl}`);
+  process.exit(1);
+}
 const siteDir = process.env.SITE_DIR ?? '/data/site';
 const builder = createSiteBuilder({
   siteAppDir: process.env.SITE_APP_DIR ?? '/app/site',
@@ -41,7 +48,7 @@ const dbBackup = createDbBackup({
 const housekeeping = () => {
   void sessions.sweepExpired().catch(() => {});
   if (isBackupDue(dbBackup.state(), settings.get().backupSchedule, Date.now())) {
-    void dbBackup.runNow();
+    void dbBackup.runNow().then((s) => { if (s.lastError) console.error('scheduled backup failed:', s.lastError); });
   }
 };
 setInterval(housekeeping, 3_600_000).unref();
@@ -49,7 +56,7 @@ setInterval(housekeeping, 3_600_000).unref();
 const app = buildServer({
   storageDir,
   baseUrl,
-  imgHost: process.env.IMG_HOST ?? new URL(baseUrl).host,
+  imgHost,
   siteDir,
   mapDir: process.env.MAP_DIR ?? '/map-assets',
   users,

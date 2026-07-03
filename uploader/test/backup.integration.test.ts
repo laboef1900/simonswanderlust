@@ -1,3 +1,5 @@
+process.env.TZ = 'Europe/Berlin';
+
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -53,6 +55,12 @@ maybe('backup round-trip (Postgres)', () => {
     expect((await pool.query('SELECT count(*) AS n FROM sessions')).rows[0].n).toBe('0');
     const list = await posts.list();
     expect(list.length).toBe(1);
+
+    // Date fidelity: with TZ=Europe/Berlin, a naive `SELECT *` would parse the
+    // `date` column as local midnight and JSON.stringify would shift it a day
+    // west in UTC, so the restored row would carry the wrong calendar date.
+    const dateText = (await pool.query("SELECT to_char(date,'YYYY-MM-DD') AS d FROM posts LIMIT 1")).rows[0].d;
+    expect(dateText).toBe(base.shared.date);
   });
 
   it('rejects an unsupported dump version without touching data', async () => {
