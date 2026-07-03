@@ -95,13 +95,19 @@ export function createDbBackup(opts: { db: Queryable; dir: string; retention: ()
       state.lastAttemptAt = new Date().toISOString();
       try {
         await dumpDatabase(opts.db, opts.dir);
-        pruneBackups(opts.dir, opts.retention());
         state.lastSuccessAt = new Date().toISOString();
         delete state.lastError;
+        try {
+          pruneBackups(opts.dir, opts.retention());
+        } catch (e) {
+          state.lastError = `prune failed: ${(e as Error).message}`;
+        }
       } catch (e) {
         state.lastError = (e as Error).message;
       } finally {
-        writeState(opts.dir, state);
+        // Best-effort: a failed state write must neither wedge the in-flight
+        // flag nor reject (callers fire-and-forget runNow).
+        try { writeState(opts.dir, state); } catch { /* state write failed */ }
         running = false;
       }
       return { ...state };

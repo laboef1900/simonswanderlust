@@ -89,4 +89,13 @@ describe('createDbBackup.runNow', () => {
     expect(s.lastAttemptAt).toBeTruthy();
     expect(s.lastSuccessAt).toBeUndefined();
   });
+
+  it('keeps the successful dump when prune fails, and stays runnable', async () => {
+    const b = createDbBackup({ db: fakeDb(), dir, retention: () => { throw new Error('boom'); } });
+    const s = await b.runNow();
+    expect(s.lastSuccessAt).toBeTruthy();
+    expect(s.lastError).toContain('prune failed: boom');
+    const s2 = await b.runNow(); // flag was freed — a second run still works
+    expect(s2.lastAttemptAt).toBeTruthy();
+  });
 });
