@@ -83,10 +83,12 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       reply.header('Referrer-Policy', 'no-referrer');
     }
     // Override MIME types for /map/ assets; setHeaders hooks don't fire for 206
-    // responses. Use the URL path to determine file type.
-    if (url.startsWith('/map/')) {
-      if (url.endsWith('.pmtiles')) reply.header('content-type', 'application/octet-stream');
-      else if (url.endsWith('.pbf')) reply.header('content-type', 'application/x-protobuf');
+    // responses. Match on the path only (ignore query strings) and skip error
+    // responses so e.g. a 404 body keeps its own Content-Type.
+    const path = url.split('?', 1)[0] ?? url;
+    if (path.startsWith('/map/') && reply.statusCode < 400) {
+      if (path.endsWith('.pmtiles')) reply.header('content-type', 'application/octet-stream');
+      else if (path.endsWith('.pbf')) reply.header('content-type', 'application/x-protobuf');
     }
   });
 

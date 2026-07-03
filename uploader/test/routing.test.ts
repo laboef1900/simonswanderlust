@@ -133,6 +133,15 @@ describe('/map/ assets', () => {
     expect(part.body).toBe('PMTI');
   });
 
+  it('applies the pmtiles MIME override even with a query string', async () => {
+    await mkdir(join(dir, 'map'), { recursive: true });
+    await writeFile(join(dir, 'map', 'basemap.pmtiles'), 'PMTILESDATA');
+    await release('r1', { 'index.html': 'home', '404.html': 'nf' });
+    const res = await build().inject({ method: 'GET', url: '/map/basemap.pmtiles?v=1', headers: { host: MAIN } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('application/octet-stream');
+  });
+
   it('serves glyph .pbf with the protobuf MIME type', async () => {
     await mkdir(join(dir, 'map', 'fonts'), { recursive: true });
     await writeFile(join(dir, 'map', 'fonts', '0-255.pbf'), 'PBF');
