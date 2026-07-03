@@ -1,4 +1,4 @@
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { buildServer } from './server.js';
 import { createSettingsStore, defaultsFromEnv } from './settings.js';
 import { createPool, ensureSchema } from './db.js';
@@ -32,7 +32,9 @@ try {
   console.error(`PUBLIC_BASE_URL is not a valid URL (set IMG_HOST explicitly): ${baseUrl}`);
   process.exit(1);
 }
-const siteDir = process.env.SITE_DIR ?? '/data/site';
+// Resolve once so a relative SITE_DIR (dev) can't produce broken relative
+// symlink targets in the builder or an invalid @fastify/static root.
+const siteDir = resolve(process.env.SITE_DIR ?? '/data/site');
 const builder = createSiteBuilder({
   siteAppDir: process.env.SITE_APP_DIR ?? '/app/site',
   releasesRoot: siteDir,

@@ -155,9 +155,13 @@
           captionTimeoutMs: Number($('timeout').value),
           captionMaxEdge: Number($('maxEdge').value),
           captionPrompt: $('prompt').value,
-          backupSchedule: $('backupSchedule').value,
-          backupRetention: Number($('backupRetention').value),
         };
+        // Backup settings are admin-only server-side (403 otherwise); the card
+        // is only shown to admins, so send those fields only when it's visible.
+        if (!$('backupCard').hidden) {
+          payload.backupSchedule = $('backupSchedule').value;
+          payload.backupRetention = Number($('backupRetention').value);
+        }
         let res;
         try {
           res = await fetch('/settings', {

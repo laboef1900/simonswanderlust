@@ -276,6 +276,23 @@ describe('settings endpoints', () => {
     expect(res.statusCode).toBe(200);
   });
 
+  it('POST /settings accepts the non-admin page-shaped save (all LLM fields, no backup fields)', async () => {
+    // Mirrors what settings.html sends for a non-admin: the backup card is
+    // hidden, so backupSchedule/backupRetention are omitted from the payload.
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    const res = await b.app.inject({
+      method: 'POST', url: '/settings',
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: {
+        lmBaseUrl: 'http://lm:1234/v1', lmModel: 'qwen/qwen3-vl-4b',
+        captionTimeoutMs: 60000, captionMaxEdge: 768, captionPrompt: 'P',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ lmModel: 'qwen/qwen3-vl-4b', captionMaxEdge: 768 });
+  });
+
   it('POST /settings 400 on invalid backup retention', async () => {
     const b = build();
     const { cookie } = await authed(b);
