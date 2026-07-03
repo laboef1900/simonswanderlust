@@ -5,6 +5,7 @@ import { createPool, ensureSchema } from './db.js';
 import { pgUserStore } from './users.js';
 import { pgSessionStore } from './sessions.js';
 import { pgPostStore } from './posts.js';
+import { createSiteBuilder } from './build.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -25,15 +26,25 @@ const posts = pgPostStore(pool);
 // Periodically drop expired session rows (best-effort).
 setInterval(() => { void sessions.sweepExpired().catch(() => {}); }, 3_600_000).unref();
 
+// @ai-note: this is a minimal stopgap so `main.ts` keeps compiling against the
+// new ServerConfig shape (Task 3 of docs/superpowers/plans/2026-07-03-single-app-container.md).
+// Task 10 replaces this block wholesale with the full builder/backup/scheduler wiring.
+const baseUrl = process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com';
+const builder = createSiteBuilder({
+  siteAppDir: process.env.SITE_APP_DIR ?? '/app/site',
+  releasesRoot: process.env.SITE_DIR ?? '/data/site',
+});
+
 const app = buildServer({
   storageDir,
-  baseUrl: process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com',
+  baseUrl,
+  imgHost: process.env.IMG_HOST ?? new URL(baseUrl).host,
+  siteDir: process.env.SITE_DIR ?? '/data/site',
   users,
   sessions,
   settings,
   posts,
-  builderUrl: process.env.BUILDER_URL ?? 'http://blog-builder:4000',
-  buildSecret: process.env.BUILD_SECRET ?? '',
+  builder,
   backupDir: process.env.BACKUP_DIR ?? '/data/backup',
 });
 

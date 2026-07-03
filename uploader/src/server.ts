@@ -17,7 +17,7 @@ import { captionImage, type Caption, type CaptionConfig } from './caption.js';
 import { SettingsError, type SettingsStore } from './settings.js';
 import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair } from './posts.js';
 import { exportPost, exportAll } from './export.js';
-import { triggerBuild, type BuildResult } from './publish.js';
+import type { SiteBuilder } from './build.js';
 import { importWxr } from './wp-import.js';
 import { fixedWindowLimiter, rateLimitPreHandler, type RateLimiter } from './rate-limit.js';
 
@@ -28,12 +28,13 @@ export interface ServerConfig {
   sessions: SessionStore;
   settings: SettingsStore;
   posts: PostStore;
-  builderUrl: string;
-  buildSecret: string;
+  imgHost: string;   // Host header that serves image variants (img subdomain)
+  siteDir: string;   // release root; the blog is served from `${siteDir}/current`
+  mapDir?: string;   // PMTiles/glyph assets; omit to disable /map/
+  builder: SiteBuilder;
   backupDir: string;
   captionImpl?: (jpeg: Buffer, cfg: CaptionConfig) => Promise<Caption>;
   fetchImpl?: typeof fetch;
-  triggerImpl?: (builderUrl: string, secret: string) => Promise<BuildResult>;
   loginLimiter?: RateLimiter;
 }
 
@@ -305,7 +306,6 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   const { posts } = cfg;
-  const doBuild = cfg.triggerImpl ?? ((u, s) => triggerBuild(u, s));
 
   app.get('/posts', { preHandler: requireAuth }, async () => posts.list());
 
@@ -340,10 +340,15 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     }
     await posts.publish(tk);
     const published = await posts.get(tk);
-    const build = await doBuild(cfg.builderUrl, cfg.buildSecret);
+    const build = await cfg.builder.build();
     if (published) await exportPost(published, cfg.backupDir).catch(() => { /* best-effort backup */ });
     return reply.send({ published: true, build });
   });
+
+  app.get('/health', async () => ({ ok: true }));
+
+  // Replaces the old secret-gated POST /build on the builder container.
+  app.post('/rebuild', { preHandler: requireAdmin }, async () => cfg.builder.build());
 
   app.post('/export', { preHandler: requireAuth }, async (_req, reply) => {
     const list = await posts.list();

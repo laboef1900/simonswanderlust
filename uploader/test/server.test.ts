@@ -13,6 +13,7 @@ import { memoryUserStore, type UserStore } from '../src/users.js';
 import { memorySessionStore, type SessionStore } from '../src/sessions.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { fixedWindowLimiter } from '../src/rate-limit.js';
+import type { SiteBuilder, BuildOutcome } from '../src/build.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -29,6 +30,17 @@ function fakeStore(init: Settings = SETTINGS): SettingsStore {
   return { get: () => ({ ...cur }), update: (p) => { cur = validate({ ...cur, ...p }); return { ...cur }; } };
 }
 
+function stubBuilder(outcome: BuildOutcome = { ok: true, release: 'r1' }) {
+  const calls: number[] = [];
+  return {
+    calls,
+    builder: {
+      build: async () => { calls.push(1); return outcome; },
+      hasRelease: () => true,
+    } satisfies SiteBuilder,
+  };
+}
+
 interface Built { app: ReturnType<typeof buildServer>; users: UserStore; sessions: SessionStore; posts: PostStore; }
 function build(extra: Partial<ServerConfig> = {}): Built {
   const users = (extra.users as UserStore) ?? memoryUserStore();
@@ -38,9 +50,9 @@ function build(extra: Partial<ServerConfig> = {}): Built {
     storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
     users, sessions, settings: fakeStore(),
     posts,
-    builderUrl: 'http://builder:4000', buildSecret: 'bs',
+    imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'),
+    builder: (extra.builder as SiteBuilder) ?? stubBuilder().builder,
     backupDir: dir + '/backup',
-    triggerImpl: extra.triggerImpl ?? (async () => ({ ok: true, release: 'r1' })),
     ...extra,
   });
   return { app: built, users, sessions, posts };
@@ -119,7 +131,7 @@ describe('POST /upload', () => {
 describe('buildServer config', () => {
   it('boots with a relative storageDir (resolves it to absolute)', async () => {
     const rel = relative(process.cwd(), dir);
-    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), posts: memoryPostStore(), builderUrl: 'http://builder:4000', buildSecret: 'bs', backupDir: dir + '/backup', triggerImpl: async () => ({ ok: true }) });
+    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), posts: memoryPostStore(), imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup' });
     await expect(srv.ready()).resolves.toBeDefined();
     await srv.close();
   });
@@ -451,5 +463,50 @@ describe('WordPress import', () => {
     const res = await b.app.inject({ method: 'POST', url: '/import', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('no importable posts found in export');
+  });
+});
+
+describe('POST /rebuild and GET /health', () => {
+  // Copied from the `posts editor` describe block's post-pair fixture, used
+  // by the existing publish tests.
+  const sample = () => ({
+    translationKey: '', status: 'draft',
+    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de', slug: 'de-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+  });
+
+  it('health is public', async () => {
+    const res = await build().app.inject({ method: 'GET', url: '/health' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+  });
+
+  it('rebuild is admin-only', async () => {
+    const b = build();
+    expect((await b.app.inject({ method: 'POST', url: '/rebuild' })).statusCode).toBe(401);
+    const { cookie } = await authed(b, { isAdmin: false });
+    expect((await b.app.inject({ method: 'POST', url: '/rebuild', cookies: cookie })).statusCode).toBe(403);
+  });
+
+  it('rebuild triggers the builder and returns its outcome', async () => {
+    const s = stubBuilder({ ok: true, release: 'r9' });
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({ method: 'POST', url: '/rebuild', cookies: cookie });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, release: 'r9' });
+    expect(s.calls.length).toBe(1);
+  });
+
+  it('publish reports a failed build without unpublishing', async () => {
+    const s = stubBuilder({ ok: false, error: 'a build is already running' });
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().build).toEqual({ ok: false, error: 'a build is already running' });
   });
 });
