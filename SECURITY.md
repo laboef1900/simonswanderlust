@@ -1,8 +1,11 @@
 # Security model
 
-This documents how the self-hosted CMS + image service (`uploader/`) and the static blog (`site/`)
-are protected. The static site itself is just files served by nginx; the interesting surface is the
-**uploader** (auth, uploads, database, remote fetches) and the **build pipeline**.
+This documents how the self-hosted app (`uploader/`, which now also serves the static blog built
+from `site/`) is protected. A single Fastify process serves everything — the admin CMS, the image
+service, the public blog, and the runtime Astro build — so the interesting surface is the whole
+**app** (auth, uploads, database, remote fetches, the build pipeline, and now DB backups). See
+[Single app container](#single-app-container) for what that topology change does and doesn't
+change about the security posture.
 
 ## Threat model
 
@@ -89,10 +92,44 @@ preserved. Verified end-to-end against a published post carrying an XSS payload.
 
 ## Secrets
 
-- `DATABASE_URL` and `BUILD_SECRET` are provided via environment (compose `.env`), never committed.
-  `.env`, credentials, and binaries are git-ignored.
-- The rebuild trigger (`POST /build`) is authorized by a **constant-time** comparison of
-  `x-build-secret` (`timingSafeEqual`); an unset secret fails closed (builds cannot be triggered).
+- `DATABASE_URL` is provided via environment (compose `.env`), never committed. `.env`,
+  credentials, and binaries are git-ignored.
+- The rebuild trigger (`POST /rebuild`) and the DB backup routes (`GET`/`POST /backups`,
+  `GET /backups/:name`) are gated by `requireAdmin` — no separate shared secret; the retired
+  `BUILD_SECRET` / `x-build-secret` mechanism no longer exists.
+
+## Single app container
+
+The stack runs as **one application container + Postgres** (WordPress-style), replacing the
+previous four-container split (nginx / a secret-gated build server / uploader / db). This is a
+deliberate trade-off, not an oversight:
+
+- **Accepted:** the app process can write the served web root (inherent to serving the blog and
+  running the build from the same process that handles uploads and admin auth) — the
+  `rehype-sanitize` build chokepoint (below) still runs on all content-derived HTML, but a fully
+  compromised app process could write files to the release directory directly. Public-site
+  availability is now coupled to app + db health rather than sitting behind nginx, which used to
+  keep serving stale files even if the backend went down; this is mitigated by boot only rebuilding
+  when no release exists yet, so restarts are seconds. All public traffic (blog, images, admin)
+  now terminates in the same process that parses uploads and WordPress (WXR) imports, mitigated by
+  the controls documented elsewhere on this page: auth, rate limiting, `safeFetch` (SSRF guards),
+  size caps, and `assertSafeKey` (path-traversal guards).
+- **Preserved:** the runtime still runs as a **non-root user (uid 1000)** on a minimal image with
+  no shell or package manager (Astro is spawned via plain `node`, not `npx`/`npm`, which is what
+  keeps the merged image minimal); `db` still has no published port; a TLS-terminating reverse
+  proxy is still required in front; every app-level control on this page (auth, rate limiting,
+  sanitization, SSRF/traversal guards) is unchanged.
+
+### Database backups
+
+- Backup dumps (`/data/backup/db/db-*.json.gz`) contain the `users` table **including scrypt
+  password hashes** — treat backup files as sensitive, same as the database itself. `sessions` are
+  **never** dumped (disposable, and token hashes don't belong in a backup).
+- The download route (`GET /backups/:name`) is **admin-only** and validates the filename against a
+  strict pattern (`^db-\d{8}-\d{6}\.json\.gz$`) before touching the filesystem — no path traversal.
+- Restore is **CLI-only** (`tsx src/cli.ts restore <file>`, run inside the container), never a web
+  route, because it's destructive: it deletes and re-inserts `users` and `posts` in one
+  transaction. Deleting `users` cascades to `sessions`, so a restore invalidates every login.
 
 ## Known limitations
 
