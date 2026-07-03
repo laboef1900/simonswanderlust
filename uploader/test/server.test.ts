@@ -1,8 +1,9 @@
 import { describe, expect, it, beforeEach } from 'vitest';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import type { BackupState, DbBackup } from '../src/backup.js';
 import sharp from 'sharp';
 import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
@@ -41,6 +42,17 @@ function stubBuilder(outcome: BuildOutcome = { ok: true, release: 'r1' }) {
   };
 }
 
+function stubBackup(dir = '/tmp/none') {
+  let state: BackupState = {};
+  const backup: DbBackup = {
+    dir,
+    runNow: async () => { state = { lastAttemptAt: 'a', lastSuccessAt: 's' }; return { ...state }; },
+    list: () => [{ name: 'db-20260703-120000.json.gz', size: 3 }],
+    state: () => ({ ...state }),
+  };
+  return { backup };
+}
+
 interface Built { app: ReturnType<typeof buildServer>; users: UserStore; sessions: SessionStore; posts: PostStore; }
 function build(extra: Partial<ServerConfig> = {}): Built {
   const users = (extra.users as UserStore) ?? memoryUserStore();
@@ -53,6 +65,7 @@ function build(extra: Partial<ServerConfig> = {}): Built {
     imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'),
     builder: (extra.builder as SiteBuilder) ?? stubBuilder().builder,
     backupDir: dir + '/backup',
+    dbBackup: (extra.dbBackup as DbBackup) ?? stubBackup().backup,
     ...extra,
   });
   return { app: built, users, sessions, posts };
@@ -131,7 +144,7 @@ describe('POST /upload', () => {
 describe('buildServer config', () => {
   it('boots with a relative storageDir (resolves it to absolute)', async () => {
     const rel = relative(process.cwd(), dir);
-    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), posts: memoryPostStore(), imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup' });
+    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), posts: memoryPostStore(), imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup });
     await expect(srv.ready()).resolves.toBeDefined();
     await srv.close();
   });
@@ -508,5 +521,45 @@ describe('POST /rebuild and GET /health', () => {
     const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
     expect(res.statusCode).toBe(200);
     expect(res.json().build).toEqual({ ok: false, error: 'a build is already running' });
+  });
+});
+
+describe('backup routes', () => {
+  it('are admin-only', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false });
+    for (const [method, url] of [['GET', '/backups'], ['POST', '/backups'], ['GET', '/backups/db-20260703-120000.json.gz']] as const) {
+      expect((await b.app.inject({ method, url })).statusCode).toBe(401);
+      expect((await b.app.inject({ method, url, cookies: cookie })).statusCode).toBe(403);
+    }
+  });
+
+  it('lists state + files and runs a backup on demand', async () => {
+    const b = build({ dbBackup: stubBackup().backup });
+    const { cookie } = await authed(b);
+    const run = await b.app.inject({ method: 'POST', url: '/backups', cookies: cookie });
+    expect(run.statusCode).toBe(200);
+    expect(run.json().lastSuccessAt).toBe('s');
+    const list = await b.app.inject({ method: 'GET', url: '/backups', cookies: cookie });
+    expect(list.json().files[0].name).toBe('db-20260703-120000.json.gz');
+  });
+
+  it('downloads only well-formed backup filenames from the backup dir', async () => {
+    const backupDir = join(dir, 'dbbackups');
+    await mkdir(backupDir, { recursive: true });
+    await writeFile(join(backupDir, 'db-20260703-120000.json.gz'), 'gzbytes');
+    const b = build({ dbBackup: { ...stubBackup(backupDir).backup, dir: backupDir } });
+    const { cookie } = await authed(b);
+    const ok = await b.app.inject({ method: 'GET', url: '/backups/db-20260703-120000.json.gz', cookies: cookie });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.headers['content-type']).toBe('application/gzip');
+    expect(ok.headers['content-disposition']).toContain('attachment');
+    for (const evil of ['..%2Fsettings.json', 'state.json', 'db-1.json.gz']) {
+      const res = await b.app.inject({ method: 'GET', url: `/backups/${evil}`, cookies: cookie });
+      expect([400, 404]).toContain(res.statusCode);
+      expect(res.statusCode).not.toBe(200);
+    }
+    const missing = await b.app.inject({ method: 'GET', url: '/backups/db-20990101-000000.json.gz', cookies: cookie });
+    expect(missing.statusCode).toBe(404);
   });
 });

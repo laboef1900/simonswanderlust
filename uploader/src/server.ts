@@ -22,6 +22,7 @@ import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
 import { importWxr } from './wp-import.js';
 import { fixedWindowLimiter, rateLimitPreHandler, type RateLimiter } from './rate-limit.js';
+import { BACKUP_FILE_RE, type DbBackup } from './backup.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -35,6 +36,7 @@ export interface ServerConfig {
   mapDir?: string;   // PMTiles/glyph assets; omit to disable /map/
   builder: SiteBuilder;
   backupDir: string;
+  dbBackup: DbBackup;
   captionImpl?: (jpeg: Buffer, cfg: CaptionConfig) => Promise<Caption>;
   fetchImpl?: typeof fetch;
   loginLimiter?: RateLimiter;
@@ -389,6 +391,25 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   // Replaces the old secret-gated POST /build on the builder container.
   app.post('/rebuild', { preHandler: requireAdmin }, async () => cfg.builder.build());
+
+  app.get('/backups', { preHandler: requireAdmin }, async () => ({
+    state: cfg.dbBackup.state(),
+    files: cfg.dbBackup.list(),
+  }));
+
+  app.post('/backups', { preHandler: requireAdmin }, async () => cfg.dbBackup.runNow());
+
+  // Filename is validated against the strict backup pattern — nothing else in
+  // the directory (state.json!) and no traversal can be fetched.
+  app.get('/backups/:name', { preHandler: requireAdmin }, async (req, reply) => {
+    const name = (req.params as { name: string }).name;
+    if (!BACKUP_FILE_RE.test(name)) return reply.code(400).send({ error: 'invalid backup filename' });
+    const file = join(cfg.dbBackup.dir, name);
+    if (!existsSync(file)) return reply.code(404).send({ error: 'backup not found' });
+    reply.header('content-type', 'application/gzip');
+    reply.header('content-disposition', `attachment; filename="${name}"`);
+    return reply.send(createReadStream(file));
+  });
 
   app.post('/export', { preHandler: requireAuth }, async (_req, reply) => {
     const list = await posts.list();

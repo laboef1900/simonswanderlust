@@ -9,6 +9,7 @@ import { memoryUserStore } from '../src/users.js';
 import { memorySessionStore } from '../src/sessions.js';
 import { memoryPostStore } from '../src/posts.js';
 import type { SiteBuilder } from '../src/build.js';
+import type { DbBackup } from '../src/backup.js';
 
 const IMG = 'img.simonswanderlust.com';
 const MAIN = 'simonswanderlust.com';
@@ -40,14 +41,25 @@ async function release(name: string, files: Record<string, string>) {
   await symlink(releaseDir, join(siteDir, 'current'));
 }
 
+function stubBackup(backupDir: string): DbBackup {
+  let state = {};
+  return {
+    dir: backupDir,
+    runNow: async () => { state = { lastAttemptAt: 'a', lastSuccessAt: 's' }; return { ...state }; },
+    list: () => [{ name: 'db-20260703-120000.json.gz', size: 3 }],
+    state: () => ({ ...state }),
+  };
+}
+
 function build(extra: Partial<ServerConfig> = {}) {
   const hasRelease = () => existsSync(join(siteDir, 'current'));
   const builder: SiteBuilder = { build: async () => ({ ok: true, release: 'r' }), hasRelease };
+  const backupDir = join(dir, 'backup');
   return buildServer({
     storageDir: join(dir, 'images'), baseUrl: `https://${IMG}`, imgHost: IMG,
     siteDir, mapDir: join(dir, 'map'),
     users: memoryUserStore(), sessions: memorySessionStore(), posts: memoryPostStore(),
-    settings: fakeStore(), builder, backupDir: join(dir, 'backup'),
+    settings: fakeStore(), builder, backupDir, dbBackup: stubBackup(backupDir),
     ...extra,
   });
 }

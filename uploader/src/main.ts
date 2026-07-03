@@ -6,6 +6,7 @@ import { pgUserStore } from './users.js';
 import { pgSessionStore } from './sessions.js';
 import { pgPostStore } from './posts.js';
 import { createSiteBuilder } from './build.js';
+import { createDbBackup } from './backup.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -34,6 +35,12 @@ const builder = createSiteBuilder({
   siteAppDir: process.env.SITE_APP_DIR ?? '/app/site',
   releasesRoot: process.env.SITE_DIR ?? '/data/site',
 });
+const backupDir = process.env.BACKUP_DIR ?? '/data/backup';
+const dbBackup = createDbBackup({
+  db: pool,
+  dir: backupDir,
+  retention: () => settings.get().backupRetention,
+});
 
 const app = buildServer({
   storageDir,
@@ -45,7 +52,8 @@ const app = buildServer({
   settings,
   posts,
   builder,
-  backupDir: process.env.BACKUP_DIR ?? '/data/backup',
+  backupDir,
+  dbBackup,
 });
 
 const port = Number(process.env.PORT ?? 3000);
