@@ -1,5 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
+import { createReadStream, existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import Fastify, { type FastifyInstance } from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
@@ -66,12 +68,20 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   const app = Fastify({ logger: false, trustProxy: true });
   const { users, sessions } = cfg;
 
-  // Baseline security headers on every response. CSP is intentionally omitted:
-  // the admin pages use inline scripts, so a strict policy would need nonces.
-  app.addHook('onSend', async (_req, reply) => {
+  // nosniff everywhere; clickjacking/referrer policies only on the admin/API
+  // surface (blog pages keep parity with the old nginx: no admin headers).
+  const ADMIN_PREFIXES = [
+    '/admin', '/login', '/logout', '/auth', '/setup', '/settings', '/users',
+    '/posts', '/upload', '/suggest', '/import', '/export', '/backups', '/rebuild', '/health',
+  ];
+  app.addHook('onSend', async (req, reply) => {
     reply.header('X-Content-Type-Options', 'nosniff');
-    reply.header('X-Frame-Options', 'DENY');
-    reply.header('Referrer-Policy', 'no-referrer');
+    const url = req.raw.url ?? '';
+    const admin = ADMIN_PREFIXES.some((p) => url === p || url.startsWith(`${p}/`) || url.startsWith(`${p}?`));
+    if (admin) {
+      reply.header('X-Frame-Options', 'DENY');
+      reply.header('Referrer-Policy', 'no-referrer');
+    }
   });
 
   // Per-IP throttle for the unauthenticated auth endpoints (brute-force defense).
@@ -95,9 +105,20 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     decorateReply: false,
     maxAge: '365d',
     immutable: true,
+    constraints: { host: cfg.imgHost },
   });
 
-  app.get('/', (_req, reply) => reply.redirect('/admin/'));
+  // The public blog: static output of the last release. `current` is a symlink
+  // flipped atomically by the builder; paths are joined per request, so a flip
+  // takes effect immediately without re-registering.
+  const currentDir = join(cfg.siteDir, 'current');
+  app.register(fastifyStatic, {
+    root: currentDir,
+    prefix: '/',
+    decorateReply: false,
+    redirect: true,          // /foo -> 301 /foo/ (trailingSlash: 'always' contract)
+    index: 'index.html',
+  });
 
   app.post('/upload', { preHandler: requireAuth }, async (req, reply) => {
     let key = '';
@@ -370,6 +391,26 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       return reply.code(400).send({ error: 'no importable posts found in export' });
     }
     return reply.send(summary);
+  });
+
+  // 404/503 for the blog; plain 404 for the img host and non-GET methods.
+  app.setNotFoundHandler(async (req, reply) => {
+    const host = req.headers.host ?? '';
+    if (req.method !== 'GET' && req.method !== 'HEAD') return reply.code(404).send({ error: 'not found' });
+    if (host === cfg.imgHost) return reply.code(404).send('Not found');
+    if (!cfg.builder.hasRelease()) {
+      return reply
+        .code(503)
+        .header('retry-after', '30')
+        .type('text/html')
+        .send('<!doctype html><meta charset="utf-8"><title>Building…</title><h1>Site is building</h1><p>The first build is in progress — try again in a moment.</p>');
+    }
+    try {
+      const html = await readFile(join(currentDir, '404.html'), 'utf8');
+      return reply.code(404).type('text/html').send(html);
+    } catch {
+      return reply.code(404).send('Not found');
+    }
   });
 
   return app;

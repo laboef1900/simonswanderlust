@@ -121,7 +121,7 @@ describe('POST /upload', () => {
     });
     expect(up.statusCode).toBe(200);
     const file = (up.json().files as string[]).find((f) => f.endsWith('.webp'))!;
-    const res = await b.app.inject({ method: 'GET', url: '/' + file });
+    const res = await b.app.inject({ method: 'GET', url: '/' + file, headers: { host: 'img.simonswanderlust.com' } });
     expect(res.statusCode).toBe(200);
     expect(res.headers['cache-control']).toContain('max-age=31536000');
     expect(res.headers['cache-control']).toContain('immutable');
