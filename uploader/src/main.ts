@@ -6,7 +6,7 @@ import { pgUserStore } from './users.js';
 import { pgSessionStore } from './sessions.js';
 import { pgPostStore } from './posts.js';
 import { createSiteBuilder } from './build.js';
-import { createDbBackup } from './backup.js';
+import { createDbBackup, isBackupDue } from './backup.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -24,42 +24,56 @@ const users = pgUserStore(pool);
 const sessions = pgSessionStore(pool);
 const posts = pgPostStore(pool);
 
-// Periodically drop expired session rows (best-effort).
-setInterval(() => { void sessions.sweepExpired().catch(() => {}); }, 3_600_000).unref();
-
-// @ai-note: this is a minimal stopgap so `main.ts` keeps compiling against the
-// new ServerConfig shape (Task 3 of docs/superpowers/plans/2026-07-03-single-app-container.md).
-// Task 10 replaces this block wholesale with the full builder/backup/scheduler wiring.
 const baseUrl = process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com';
+const siteDir = process.env.SITE_DIR ?? '/data/site';
 const builder = createSiteBuilder({
   siteAppDir: process.env.SITE_APP_DIR ?? '/app/site',
-  releasesRoot: process.env.SITE_DIR ?? '/data/site',
+  releasesRoot: siteDir,
 });
 const backupDir = process.env.BACKUP_DIR ?? '/data/backup';
 const dbBackup = createDbBackup({
   db: pool,
-  dir: backupDir,
+  dir: join(backupDir, 'db'),
   retention: () => settings.get().backupRetention,
 });
+
+// Hourly housekeeping: sweep expired sessions and run a due scheduled backup.
+const housekeeping = () => {
+  void sessions.sweepExpired().catch(() => {});
+  if (isBackupDue(dbBackup.state(), settings.get().backupSchedule, Date.now())) {
+    void dbBackup.runNow();
+  }
+};
+setInterval(housekeeping, 3_600_000).unref();
 
 const app = buildServer({
   storageDir,
   baseUrl,
   imgHost: process.env.IMG_HOST ?? new URL(baseUrl).host,
-  siteDir: process.env.SITE_DIR ?? '/data/site',
+  siteDir,
+  mapDir: process.env.MAP_DIR ?? '/map-assets',
   users,
   sessions,
   settings,
   posts,
   builder,
-  backupDir,
   dbBackup,
+  backupDir,
 });
 
 const port = Number(process.env.PORT ?? 3000);
 app
   .listen({ port, host: '0.0.0.0' })
-  .then(() => console.log(`image uploader listening on :${port}`))
+  .then(() => {
+    console.log(`app listening on :${port}`);
+    // First boot on a fresh volume: populate the site in the background
+    // (blog routes 503 until the release lands). Restarts skip this.
+    if (!builder.hasRelease()) {
+      void builder.build().then((r) =>
+        console.log(r.ok ? `initial build released ${r.release}` : `initial build failed: ${r.error}`));
+    }
+    housekeeping();
+  })
   .catch((err) => {
     console.error(err);
     process.exit(1);
