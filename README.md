@@ -70,6 +70,17 @@ docker compose pull && docker compose up -d
 
 (blog-builder's DHI base is root, so `/srv/blog` needs no change.)
 
+### Cutting a release
+
+```bash
+# 1. bump the IMAGE_TAG defaults in docker-compose.yml + uploader/.env.example
+# 2. commit, then tag and push the tag:
+git tag v0.X.Y && git push origin v0.X.Y
+```
+
+The `release` workflow builds both images (multi-arch amd64+arm64, on the DHI node bases),
+publishes them to GHCR, and creates the GitHub Release with generated notes.
+
 Then open `/login` on the uploader to create the first admin account, write a post in the editor,
 and hit **Publish**. The blog rebuilds and nginx serves it.
 
@@ -84,7 +95,7 @@ cd site && npm install && npm run dev    # needs DATABASE_URL pointing at a Post
 
 ## Documentation
 
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** — components, content pipeline, runtime build/deploy flow, data model
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — components, content pipeline, runtime build/deploy flow, data model, packaging & release pipeline
 - **[SECURITY.md](SECURITY.md)** — auth, authorization, rate limiting, SSRF/XSS/traversal defenses
 - **[docs/authoring-workflow.md](docs/authoring-workflow.md)** — how to upload photos and write/publish a post
 - **[docs/map-assets.md](docs/map-assets.md)** — self-hosted PMTiles basemap
@@ -95,5 +106,6 @@ cd site && npm install && npm run dev    # needs DATABASE_URL pointing at a Post
 ## Status
 
 - **Done:** static-site skeleton + expedition-log design, Postgres CMS, in-admin editor,
-  WordPress import, MapLibre travel map, and a security-hardening pass (see SECURITY.md).
+  WordPress import, MapLibre travel map, a security-hardening pass (see SECURITY.md), and
+  hardened (DHI) container images published to GHCR via the release pipeline.
 - **Remaining:** Phase 4 — DNS cutover.

@@ -8,12 +8,16 @@ posture specifically, see [SECURITY.md](SECURITY.md).
 
 ## Components
 
-| Service (compose) | Image / build | Role | Exposure |
+| Service (compose) | Image | Role | Exposure |
 | :-- | :-- | :-- | :-- |
-| `blog` | `nginx:alpine` | Serves the built static site from a shared volume; reverse-proxies `/admin/`, `/upload`, `/suggest` to the uploader; serves the `/map/` PMTiles basemap | Public (via host port → reverse proxy / TLS) |
-| `blog-builder` | `./site` (`build-server.mjs`) | Long-running, secret-gated HTTP server that runs `astro build` **from Postgres** into the shared volume | Internal only (`:4000`) |
-| `images` (uploader) | `./uploader` (Fastify) | Admin CMS: editor, WordPress import, AI alt-text, image optimization (sharp); also serves the optimized images | Public (behind the proxy) |
+| `blog` | `dhi.io/nginx` (hardened, non-root, listens `:8080`) | Serves the built static site from a shared volume; reverse-proxies `/admin/`, `/upload`, `/suggest` to the uploader; serves the `/map/` PMTiles basemap | Public (via host port → reverse proxy / TLS) |
+| `blog-builder` | `ghcr.io/laboef1900/simonswanderlust-blog-builder` (built from `./site`, DHI node base) | Long-running, secret-gated HTTP server (`build-server.mjs`) that runs `astro build` **from Postgres** into the shared volume | Internal only (`:4000`) |
+| `images` (uploader) | `ghcr.io/laboef1900/simonswanderlust-uploader` (built from `./uploader`, DHI node base, non-root) | Admin CMS: editor, WordPress import, AI alt-text, image optimization (sharp); also serves the optimized images | Public (behind the proxy) |
 | `db` | `postgres:17-alpine` | Source of truth for posts, users, and sessions | Internal only (`:5432`) |
+
+The two service images are **released to GHCR** by CI and pulled on the server (pinned via
+`IMAGE_TAG`); each compose service keeps its `build:` so local dev can still
+`docker compose up -d --build` from source. See [Packaging & release pipeline](#packaging--release-pipeline).
 
 Shared state:
 - **`blog-dist`** volume — the built static site. `blog-builder` writes it, `blog` (nginx) reads it.
@@ -91,6 +95,35 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
   `cp`s to the volume — avoiding `EXDEV` across the Docker volume boundary.
 - Concurrent builds are rejected (a single in-flight flag).
 
+## Packaging & release pipeline
+
+Both service images use **multistage Dockerfiles** whose base images are `ARG`-parameterized
+(`NODE_BUILD` / `NODE_RUNTIME`, defaulting to `node:22-slim` for local builds). CI overrides them
+with **Docker Hardened Images** (minimal, low-CVE, non-root) from `dhi.io`:
+
+| Image | Build stage | Runtime stage | Runtime user |
+| :-- | :-- | :-- | :-- |
+| `uploader` | `dhi.io/node:22-dev` (toolchain for `npm ci`) | `dhi.io/node:22` | non-root `1000` — the `/data` bind mount must be `chown`ed once |
+| `blog-builder` | `dhi.io/node:22-dev` | `dhi.io/node:22-dev` — it runs `astro build` at **runtime**, so the runtime keeps the toolchain | root |
+
+The `blog` service pulls `dhi.io/nginx` directly (non-root `65532`, listens on `:8080` — the
+compose port mapping and `site/nginx.conf` account for that). The build and runtime bases must
+share a libc (sharp ships native binaries), which the Dockerfiles warn about.
+
+**Release flow** (`.github/workflows/release.yml`): pushing a `vX.Y.Z` tag triggers a matrix build
+of both images —
+
+1. log in to GHCR (`GITHUB_TOKEN`) and to `dhi.io` (repo variable `DHI_USERNAME` + secret
+   `DHI_TOKEN`) to pull the DHI bases,
+2. `buildx` multi-arch (**amd64 + arm64**) with the DHI build-args, pushed to
+   `ghcr.io/laboef1900/simonswanderlust-{uploader,blog-builder}` tagged `{version}`,
+   `{major}.{minor}`, and `latest`,
+3. create the GitHub Release with generated notes.
+
+On the server: `docker login dhi.io` (for the nginx pull), set `IMAGE_TAG` in `.env`, then
+`docker compose pull && docker compose up -d`. Cutting a release = bump the `IMAGE_TAG` defaults
+(`docker-compose.yml`, `uploader/.env.example`), commit, tag, push the tag.
+
 ## Configuration (environment)
 
 | Var | Used by | Purpose |
@@ -103,6 +136,8 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 | `LMSTUDIO_BASE_URL` / `LMSTUDIO_MODEL` | uploader | Local AI alt-text endpoint (optional) |
 | `RELEASES_DIR` / `BUILD_PORT` | blog-builder | Release root on the volume / listen port |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | db | Database bootstrap |
+| `IMAGE_TAG` / `NGINX_TAG` | compose | Released GHCR image version / DHI nginx tag to run |
+| `BLOG_PORT` / `MAP_ASSETS_DIR` | compose | Host port for the blog / host dir with the PMTiles basemap |
 
 ## Trust boundaries
 
@@ -112,5 +147,8 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
   reverse proxy.
 - **Internal only:** Postgres and `blog-builder` are not exposed to the internet; the only way to
   trigger a build from outside is the secret-gated `POST /build`, reached via the uploader.
+
+As defense-in-depth, the public-facing containers run on hardened, minimal base images (DHI) as
+non-root users — see [Packaging & release pipeline](#packaging--release-pipeline).
 
 See [SECURITY.md](SECURITY.md) for how each boundary is enforced.
