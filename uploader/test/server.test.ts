@@ -22,6 +22,7 @@ beforeEach(async () => {
 const SETTINGS: Settings = {
   lmBaseUrl: 'http://lm:1234/v1', lmModel: 'qwen/qwen3-vl-4b',
   captionTimeoutMs: 60000, captionMaxEdge: 768, captionPrompt: 'P',
+  backupSchedule: 'off', backupRetention: 14,
 };
 function fakeStore(init: Settings = SETTINGS): SettingsStore {
   let cur = { ...init };
