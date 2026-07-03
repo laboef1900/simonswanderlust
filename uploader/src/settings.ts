@@ -2,12 +2,16 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DEFAULT_PROMPT } from './caption.js';
 
+export type BackupSchedule = 'off' | 'daily' | 'weekly';
+
 export interface Settings {
   lmBaseUrl: string;
   lmModel: string;
   captionTimeoutMs: number;
   captionMaxEdge: number;
   captionPrompt: string;
+  backupSchedule: BackupSchedule;
+  backupRetention: number;
 }
 
 export class SettingsError extends Error {}
@@ -24,6 +28,8 @@ export function defaultsFromEnv(env: NodeJS.ProcessEnv): Settings {
     captionTimeoutMs: Number(env.CAPTION_TIMEOUT_MS ?? 60000),
     captionMaxEdge: Number(env.CAPTION_MAX_EDGE ?? 768),
     captionPrompt: DEFAULT_PROMPT,
+    backupSchedule: 'off',
+    backupRetention: 14,
   };
 }
 
@@ -45,6 +51,12 @@ export function validate(s: Settings): Settings {
     throw new SettingsError('Max edge must be a whole number between 256 and 4096 pixels.');
   }
   if (!s.captionPrompt.trim()) throw new SettingsError('Prompt is required.');
+  if (!['off', 'daily', 'weekly'].includes(s.backupSchedule)) {
+    throw new SettingsError('Backup schedule must be off, daily, or weekly.');
+  }
+  if (!Number.isInteger(s.backupRetention) || s.backupRetention < 1 || s.backupRetention > 100) {
+    throw new SettingsError('Backup retention must be a whole number between 1 and 100.');
+  }
   return s;
 }
 

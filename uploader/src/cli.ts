@@ -13,10 +13,33 @@ export async function uploadFile(
   return storeVariants(key, alt, result, opts);
 }
 
+async function restoreMain(file: string | undefined): Promise<void> {
+  if (!file) {
+    console.error('usage: tsx src/cli.ts restore <db-YYYYMMDD-HHmmss.json.gz>');
+    process.exit(1);
+  }
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    console.error('DATABASE_URL is required for restore.');
+    process.exit(1);
+  }
+  const { createPool } = await import('./db.js');
+  const { restoreDatabase } = await import('./backup.js');
+  const pool = createPool(databaseUrl);
+  try {
+    const counts = await restoreDatabase(pool, file);
+    console.log(`restored ${counts.users} users and ${counts.posts} posts (all sessions invalidated).`);
+    console.log('now rebuild the site: /admin/settings.html → "Rebuild site now" (or POST /rebuild).');
+  } finally {
+    await pool.end();
+  }
+}
+
 async function main(): Promise<void> {
+  if (process.argv[2] === 'restore') return restoreMain(process.argv[3]);
   const [, , file, key, alt = ''] = process.argv;
   if (!file || !key) {
-    console.error('usage: npm run upload -- <imageFile> <key> [alt]');
+    console.error('usage: npm run upload -- <imageFile> <key> [alt]   |   tsx src/cli.ts restore <file>');
     process.exit(1);
   }
   const opts: StorageOptions = {

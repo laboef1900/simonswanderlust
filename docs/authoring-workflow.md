@@ -99,12 +99,11 @@ needed. Content is stored in **Postgres**; MDX files are generated automatically
 
 ### Publish
 
-Click **Publish** — this marks both locale rows as published and triggers the `blog-builder`
-rebuild automatically. Wait for the confirmation toast, then verify the post is live at
-`/<slug>/` and `/en/<slug>/`.
+Click **Publish** — this marks both locale rows as published and runs the rebuild in-process,
+awaiting it before the request returns. Wait for the confirmation toast, then verify the post is
+live at `/<slug>/` and `/en/<slug>/`.
 
-> The `blog-builder` rebuild is the same process as the manual `curl` call in Stage 3 — the
-> Publish button just fires it for you.
+> See Stage 3 for what the rebuild does and how to trigger it manually (e.g. after a restore).
 
 ### Edit an existing post
 
@@ -131,36 +130,31 @@ URL, language-appropriate alt):
 
 ## Stage 3 — How the rebuild works
 
-The **Publish** button in the editor triggers a rebuild automatically — you don't need to run
-`curl` manually under normal authoring conditions. This section explains what happens under the
-hood and how to trigger a rebuild manually if needed.
+The **Publish** button in the editor triggers a rebuild automatically and waits for it to finish
+before confirming — you don't need to run anything manually under normal authoring conditions.
+This section explains what happens under the hood and how to trigger a rebuild manually if needed.
 
-The blog is a **static site** served by an nginx container. Content lives in **Postgres** — not
-in the Docker image. The site is built at runtime by a long-running **`blog-builder`** service
-(`site/build-server.mjs`) that runs `astro build` on demand and writes the output into a shared
-`blog-dist` volume that the `blog` nginx container serves.
+The blog is a **static site**, but there's no separate build server or web server anymore: the
+same `app` container that runs the admin/CMS also builds and serves the blog. Content lives in
+**Postgres** — not in the Docker image. `uploader/src/build.ts` spawns `astro build` **in-process**
+(via plain `node`, no shell) on demand, and writes the output into `/data/site/releases/<stamp>`,
+then atomically flips the `/data/site/current` symlink that the app serves directly.
 
-**`docker compose up -d --build blog` does not rebuild the content.** Rebuilding the blog
-image only updates the Astro/template code, not the post data.
+**`docker compose up -d --build` does not rebuild the content.** Rebuilding the `app` image only
+updates the Astro/template code, not the post data.
 
-To trigger a rebuild manually (e.g. from the server, or after a template code change):
-
-```bash
-curl -X POST http://localhost:3001/build \
-  -H "Authorization: Bearer $BUILD_SECRET"
-```
-
-The service logs progress to stdout (`docker compose logs -f blog-builder`) and atomically swaps
-in the new build when complete.
+To trigger a rebuild manually (e.g. after a database restore, or a template code change), sign in
+as an admin and use the **Rebuild site now** button on the settings page (`/admin/settings.html`),
+which calls the admin-only `POST /rebuild` route.
 
 Notes:
 
-- **Images don't need a rebuild.** They're served by the uploader independently — uploading or
+- **Images don't need a rebuild.** They're served by the app independently — uploading or
   re-uploading a photo is live immediately. Only content (text) changes need a rebuild.
 - **Re-uploading the same key overwrites** the variants (immutable cache means you may need a
   hard refresh / cache bust to see a replaced image).
-- **Required environment variables** for the blog stack: `DATABASE_URL` (Postgres connection
-  string) and `BUILD_SECRET` (secret for the build trigger endpoint). See `uploader/.env.example`.
+- **Required environment variable** for the stack: `DATABASE_URL` (Postgres connection string).
+  See `uploader/.env.example`.
 
 ---
 

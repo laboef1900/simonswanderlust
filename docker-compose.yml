@@ -1,48 +1,13 @@
-# Full self-hosted stack: the static blog (nginx) + the image uploader service + Postgres.
-# Copy .env.example to .env (set POSTGRES_PASSWORD, BUILD_SECRET). On the server:
-#   docker compose pull && docker compose up -d     # run the released GHCR images
-# For local development, add --build to build the images from source instead:
+# Self-hosted stack, WordPress-style: one app container + Postgres.
+# Copy uploader/.env.example to .env (set POSTGRES_PASSWORD). On the server:
+#   docker compose pull && docker compose up -d     # run the released GHCR image
+# For local development, build from source instead:
 #   docker compose up -d --build
 # Pin the published image version with IMAGE_TAG in .env (default below).
 services:
-  blog:
-    # Docker Hardened Image: minimal, non-root nginx (listens on :8080).
-    image: dhi.io/nginx:${NGINX_TAG:-1.29}
-    ports:
-      - "${BLOG_PORT:-8090}:8080"
-    volumes:
-      - ./site/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - blog-dist:/srv/blog:ro
-      - ${MAP_ASSETS_DIR:-./map-assets}:/usr/share/nginx/map:ro
-    depends_on:
-      blog-builder:
-        condition: service_healthy
-    restart: unless-stopped
-
-  blog-builder:
-    # Released image (pulled on the server). `build` is kept so local dev can
-    # still `docker compose up -d --build` and tag the result as this image.
-    image: ghcr.io/laboef1900/simonswanderlust-blog-builder:${IMAGE_TAG:-0.3.0}
-    build: ./site
-    environment:
-      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-images}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-images}}
-      BUILD_SECRET: ${BUILD_SECRET:?set BUILD_SECRET in .env}
-    volumes:
-      - blog-dist:/srv/blog
-    depends_on:
-      db:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('node:fs').statSync('/srv/blog/current')\""]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-      start_period: 90s
-    restart: unless-stopped
-
-  images:
-    image: ghcr.io/laboef1900/simonswanderlust-uploader:${IMAGE_TAG:-0.3.0}
-    build: ./uploader
+  app:
+    image: ghcr.io/laboef1900/simonswanderlust-app:${IMAGE_TAG:-0.4.0}
+    build: .
     ports:
       - "3000:3000"
     environment:
@@ -50,15 +15,22 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-images}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-images}}
       LMSTUDIO_BASE_URL: ${LMSTUDIO_BASE_URL:-http://localhost:1234/v1}
       LMSTUDIO_MODEL: ${LMSTUDIO_MODEL:-qwen/qwen3-vl-4b}
-      BUILD_SECRET: ${BUILD_SECRET:?set BUILD_SECRET in .env}
-      BUILDER_URL: ${BUILDER_URL:-http://blog-builder:4000}
+      IMG_HOST: ${IMG_HOST:-img.simonswanderlust.com}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./uploader/data:/data
+      - ${MAP_ASSETS_DIR:-./map-assets}:/map-assets:ro
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      # exec form: the hardened runtime has no shell
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
     restart: unless-stopped
 
   db:
@@ -78,4 +50,3 @@ services:
 
 volumes:
   pgdata:
-  blog-dist:

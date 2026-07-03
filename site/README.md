@@ -5,9 +5,10 @@ Architecture overview in [`../ARCHITECTURE.md`](../ARCHITECTURE.md); design spec
 live in `../docs/superpowers/`.
 
 Content is **loaded from Postgres at build time** (`src/lib/postgres-loader.ts`), not from git —
-the MDX files under `src/content/trips/` are an authoring reference / export-only backup. A
-long-running `blog-builder` (`build-server.mjs`) runs `astro build` from the database and atomically
-publishes the result; nginx serves it. See `../ARCHITECTURE.md` for the full pipeline.
+the MDX files under `src/content/trips/` are an authoring reference / export-only backup. The
+`app` container (`uploader/src/build.ts`) spawns `astro build` **in-process** from the database and
+atomically publishes the result to `/data/site/current`, which it also serves directly — no
+separate build server or web server. See `../ARCHITECTURE.md` for the full pipeline.
 
 ## Commands
 

@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSettingsStore, defaultsFromEnv, SettingsError, type Settings } from '../src/settings.js';
+import { createSettingsStore, defaultsFromEnv, validate, SettingsError, type Settings, type BackupSchedule } from '../src/settings.js';
 
 const DEFAULTS: Settings = {
   lmBaseUrl: 'http://localhost:1234/v1',
@@ -10,6 +10,8 @@ const DEFAULTS: Settings = {
   captionTimeoutMs: 60000,
   captionMaxEdge: 768,
   captionPrompt: 'PROMPT',
+  backupSchedule: 'off',
+  backupRetention: 14,
 };
 
 let dir: string;
@@ -65,5 +67,33 @@ describe('createSettingsStore', () => {
     expect(() => store.update({ captionMaxEdge: 99999 })).toThrow(SettingsError);
     expect(() => store.update({ captionPrompt: '   ' })).toThrow(SettingsError);
     expect(store.get()).toEqual(DEFAULTS); // unchanged
+  });
+});
+
+describe('backup settings', () => {
+  const base: Settings = {
+    lmBaseUrl: 'http://lm:1234/v1', lmModel: 'm', captionTimeoutMs: 60000,
+    captionMaxEdge: 768, captionPrompt: 'P', backupSchedule: 'off', backupRetention: 14,
+  };
+
+  it('defaults to off / 14', () => {
+    const d = defaultsFromEnv({});
+    expect(d.backupSchedule).toBe('off');
+    expect(d.backupRetention).toBe(14);
+  });
+
+  it('accepts daily and weekly', () => {
+    expect(validate({ ...base, backupSchedule: 'daily' }).backupSchedule).toBe('daily');
+    expect(validate({ ...base, backupSchedule: 'weekly' }).backupSchedule).toBe('weekly');
+  });
+
+  it('rejects an unknown schedule', () => {
+    expect(() => validate({ ...base, backupSchedule: 'hourly' as BackupSchedule })).toThrow(SettingsError);
+  });
+
+  it('rejects retention out of range or non-integer', () => {
+    expect(() => validate({ ...base, backupRetention: 0 })).toThrow(SettingsError);
+    expect(() => validate({ ...base, backupRetention: 101 })).toThrow(SettingsError);
+    expect(() => validate({ ...base, backupRetention: 1.5 })).toThrow(SettingsError);
   });
 });

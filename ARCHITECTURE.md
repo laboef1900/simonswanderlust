@@ -2,77 +2,95 @@
 
 This repo is a monorepo for [simonswanderlust.com](https://simonswanderlust.com): a **static**
 Astro blog whose content is authored through a **self-hosted CMS** and built from **Postgres** at
-runtime. Everything runs in Docker on Simon's own server. This document describes the components,
-how content flows from keyboard to published page, and the trust boundaries. For the security
-posture specifically, see [SECURITY.md](SECURITY.md).
+runtime. Everything runs in Docker on Simon's own server, as **one application container + one
+database container** (WordPress-style). This document describes the components, how content flows
+from keyboard to published page, and the trust boundaries. For the security posture specifically,
+see [SECURITY.md](SECURITY.md).
 
 ## Components
 
 | Service (compose) | Image | Role | Exposure |
 | :-- | :-- | :-- | :-- |
-| `blog` | `dhi.io/nginx` (hardened, non-root, listens `:8080`) | Serves the built static site from a shared volume; reverse-proxies `/admin/`, `/upload`, `/suggest` to the uploader; serves the `/map/` PMTiles basemap | Public (via host port → reverse proxy / TLS) |
-| `blog-builder` | `ghcr.io/laboef1900/simonswanderlust-blog-builder` (built from `./site`, DHI node base) | Long-running, secret-gated HTTP server (`build-server.mjs`) that runs `astro build` **from Postgres** into the shared volume | Internal only (`:4000`) |
-| `images` (uploader) | `ghcr.io/laboef1900/simonswanderlust-uploader` (built from `./uploader`, DHI node base, non-root) | Admin CMS: editor, WordPress import, AI alt-text, image optimization (sharp); also serves the optimized images | Public (behind the proxy) |
+| `app` | `ghcr.io/laboef1900/simonswanderlust-app` (built from the repo-root `Dockerfile`, DHI node base) | Single Fastify 5 process: admin CMS (editor, WordPress import, AI alt-text), image service (sharp, host-routed on the img subdomain), public blog static serving, in-process `astro build` on Publish/boot/manual rebuild, `/map/` PMTiles basemap, and DB backups | Public (via host port → reverse proxy / TLS) |
 | `db` | `postgres:17-alpine` | Source of truth for posts, users, and sessions | Internal only (`:5432`) |
 
-The two service images are **released to GHCR** by CI and pulled on the server (pinned via
-`IMAGE_TAG`); each compose service keeps its `build:` so local dev can still
-`docker compose up -d --build` from source. See [Packaging & release pipeline](#packaging--release-pipeline).
+The `app` image is **released to GHCR** by CI and pulled on the server (pinned via `IMAGE_TAG`);
+the compose service keeps its `build:` so local dev can still `docker compose up -d --build` from
+source. See [Packaging & release pipeline](#packaging--release-pipeline).
 
-Shared state:
-- **`blog-dist`** volume — the built static site. `blog-builder` writes it, `blog` (nginx) reads it.
-- **`/data`** volume (uploader) — optimized image variants, MDX backups, and `settings.json`.
-- **`pgdata`** volume — Postgres data.
+Shared state, all under the **`/data`** volume (bind-mounted from `./uploader/data`):
+- `images/` — optimized image variants (`STORAGE_DIR`).
+- `site/releases/<stamp>` + `site/current` (symlink) — built static output (`SITE_DIR`).
+- `backup/` — MDX export backups; `backup/db/` — gzipped Postgres dumps.
+- `settings.json` — admin-configurable settings (LM Studio, backup schedule/retention).
+
+Plus the **`pgdata`** volume — Postgres data.
 
 ```
                          ┌──────────────────────── browser ────────────────────────┐
-                         │  reader                                  author / admin   │
+                         │  reader (blog + images)                 author / admin   │
                          └──────┬───────────────────────────────────────┬───────────┘
-                                │ GET simonswanderlust.com               │ /admin/  /upload  /suggest
+                                │ GET simonswanderlust.com/*             │ /admin/  /upload  /suggest
+                                │ GET img.simonswanderlust.com/*         │ /backups  /rebuild
                                 ▼                                        ▼
-                         ┌──────────────┐   proxy /admin /upload /suggest┌──────────────┐
-                         │  nginx (blog)│ ─────────────────────────────► │  uploader    │
-                         │  root:        │                               │  Fastify 5   │
-                         │  /srv/blog/   │                               │  + sharp     │
-                         │   current     │                               └──────┬───────┘
-                         └──────▲───────┘                                        │ pg + fs
-                  blog-dist     │ static files                                   ▼
-                   volume       │                                         ┌──────────────┐
-                         ┌──────┴───────┐  POST /build (x-build-secret)   │  Postgres    │
-                         │ blog-builder │ ◄───── triggered on Publish ────│ posts/users/ │
-                         │ astro build  │ ─────── reads published ───────►│  sessions    │
-                         │ from Postgres│                                 └──────────────┘
-                         └──────────────┘
+                         ┌───────────────────────────────────────────────────────────┐
+                         │  app — Fastify 5, single process, host-routed             │
+                         │   img host → /data/images (variants, 1y cache)            │
+                         │   main host → /data/site/current (blog) · /map-assets     │
+                         │   any host → /admin/*, /upload, /suggest, /backups, ...   │
+                         └───────────┬───────────────────────────┬───────────────────┘
+                                      │ pg                        │ spawn(node astro.mjs build)
+                                      ▼                            ▼
+                               ┌──────────────┐          /data/site/releases/<stamp>
+                               │  Postgres    │          → current (atomic symlink flip)
+                               │ posts/users/ │
+                               │  sessions    │
+                               └──────────────┘
 ```
 
 ## Content pipeline (keyboard → published page)
 
 1. **Author** writes a post (DE + EN) in the in-admin editor (`/admin/editor.html`, EasyMDE). Body
-   is Markdown; hero and body photos are uploaded inline and optimized by the uploader.
+   is Markdown; hero and body photos are uploaded inline and optimized by the app's image pipeline.
 2. **Store** — drafts and published posts live in the Postgres `posts` table (one row per locale).
    Postgres is the source of truth; git holds no content.
-3. **Publish** — the editor calls `POST /posts/:tk/publish` (admin-only). The uploader validates the
-   post, flips its status to `published`, exports an MDX backup to `/data/backup` (best-effort), and
-   triggers a rebuild via `triggerBuild` → `blog-builder`.
-4. **Build** — `blog-builder` (`site/build-server.mjs`) runs `astro build`. Astro's Content Layer
-   loader (`site/src/lib/postgres-loader.ts`) `SELECT`s the published rows and turns each into a
-   content entry. Post bodies are rendered Markdown → HTML, **sanitized**, and body images become
-   responsive `<picture>` (`site/src/lib/body-images.ts`).
-5. **Release** — the build is written to a fresh `releases/<timestamp>` dir on the `blog-dist`
-   volume, then the `current` symlink is **atomically** swapped to it (old releases pruned, keeping
-   the last 3). nginx serves `current`.
+3. **Publish** — the editor calls `POST /posts/:tk/publish` (admin-only). The app validates the
+   post, flips its status to `published`, exports an MDX backup to `/data/backup` (best-effort),
+   and **awaits the in-process build** (`buildSite()`) before responding — no HTTP hop, no shared
+   secret.
+4. **Build** — `createSiteBuilder` (`uploader/src/build.ts`, ported from the retired
+   `build-server.mjs`) spawns `astro build` **via plain node**
+   (`node node_modules/astro/bin/astro.mjs build`, no npx/npm/shell) with `cwd=/app/site` and
+   `ASTRO_TELEMETRY_DISABLED=1`. Astro's Content Layer loader (`site/src/lib/postgres-loader.ts`)
+   `SELECT`s the published rows and turns each into a content entry. Post bodies are rendered
+   Markdown → HTML, **sanitized**, and body images become responsive `<picture>`
+   (`site/src/lib/body-images.ts`).
+5. **Release** — the build lands in a fresh `releases/<timestamp>` dir under `/data/site` (built
+   into a CWD-local tmp dir first to dodge an `EXDEV` rename across the volume boundary, then
+   `cp`'d), then the `current` symlink is **atomically** swapped to it (old releases pruned, keeping
+   the last 3). The app serves `current` directly via `@fastify/static` — no separate web server.
 
 The Astro entry `id`s (`de/<slug>` / `en/<slug>`) and the Zod schema are unchanged from the original
 MDX era, so the SEO slug contract (`site/src/lib/paths.ts`, `trips.ts`) holds: **DE at root, EN under
 `/en/`** — slugs are never renamed.
 
+**Build-on-boot:** on startup, if `/data/site/current` doesn't exist yet (fresh volume), the app
+kicks off an initial build in the background without blocking Fastify from listening; blog routes
+serve a 503 "site is building" page until it lands. Restarts against an existing `/data` volume
+skip this and serve immediately — no rebuild on every boot.
+
 ## Image pipeline
 
-The uploader optimizes each photo into AVIF + WebP at fixed widths (640/1280/1920 plus the source
+The app optimizes each photo into AVIF + WebP at fixed widths (640/1280/1920 plus the source
 width, never upscaled), preserving EXIF/GPS. Files are content-addressed as `{key}-{width}.{format}`
 under `STORAGE_DIR` and served with a one-year immutable cache. `heroImage` is a remote URL object
 `{src,width,height,alt}`; body images are referenced by URL and rendered as `<picture>` at build
 time. This contract is mirrored on the blog side in `site/src/lib/images.ts`.
+
+Host-based routing keeps the two domains on one process: the image-variant static handler is
+registered with a Fastify **host constraint** for the hostname of `PUBLIC_BASE_URL` (overridable
+via `IMG_HOST`), so on the img host the constrained `/` wildcard wins and image URLs behave exactly
+as before the merge. All other routes (admin, blog, map) are unconstrained.
 
 Optional **AI alt text**: the batch uploader can call a local LM Studio (qwen-VL) to suggest
 DE + EN alt text and a slug for body photos. The server never needs to reach the model; it is
@@ -86,69 +104,109 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 - **`sessions`** — `id` (SHA-256 of the random token), `user_id` (FK, cascade), `expires_at`. Expired rows are swept hourly.
 - **`posts`** — one row per (`translation_key`, `locale`); `slug`, `title`, `date`, `country`, `country_code`, `region`, `excerpt`, `hero_image` (jsonb), `coordinates` (jsonb), optional `stops`/`route`/`key_facts`, `body_markdown`, `images` (jsonb), `status` (`draft`/`published`). Unique on (`locale`, `slug`).
 
-## Build & deploy flow (`build-server.mjs`)
+## Database backups
 
-- Boots with an initial build, then serves two routes:
-  - `GET /health` — 200 once `current` exists.
-  - `POST /build` — gated by a constant-time `x-build-secret` check; builds and atomically releases.
-- Builds into a CWD-local tmp dir first (so Astro's prerender `rename()` stays on-device), then
-  `cp`s to the volume — avoiding `EXDEV` across the Docker volume boundary.
-- Concurrent builds are rejected (a single in-flight flag).
+`uploader/src/backup.ts` provides app-native logical dumps (no `pg_dump`, no sidecar container):
+
+- **Dump format** — one file per run, `/data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`, containing
+  `{ "version": 1, "createdAt": <ISO>, "tables": { "users": [...], "posts": [...] } }` with full
+  column fidelity. `sessions` are **never** dumped — they're disposable, and token hashes don't
+  belong in a backup file. `version` lets restore reject incompatible dumps.
+- **Schedule** — admin-configurable in settings: `backupSchedule` (`off` / `daily` / `weekly`,
+  default `off`) and `backupRetention` (1–100 files, default 14). An hourly in-process tick (same
+  pattern as the session sweep) runs a backup when due, tracked in
+  `/data/backup/db/state.json` (`lastAttemptAt`/`lastSuccessAt`/`lastError`); missed windows catch
+  up on next boot. After a successful run, files beyond the retention count are pruned. Failures
+  are recorded and logged, never crash the app.
+- **Admin UI** (settings page) — schedule select, retention input, **Back up now** button, last-run
+  status, and a list of existing backups with download links.
+- **Routes** (all admin-only): `GET /backups` (state + list), `POST /backups` (run now),
+  `GET /backups/:name` (download; filename validated against `^db-\d{8}-\d{6}\.json\.gz$` — no
+  traversal).
+- **Restore is CLI-only** (destructive, so no web button): `tsx src/cli.ts restore <file>` inside
+  the container. Validates the dump `version`, then in **one transaction** deletes and re-inserts
+  `users` and `posts`. Deleting users **cascades to `sessions`**, so every login is invalidated —
+  the CLI prints a reminder to trigger a rebuild afterwards (`POST /rebuild`).
 
 ## Packaging & release pipeline
 
-Both service images use **multistage Dockerfiles** whose base images are `ARG`-parameterized
-(`NODE_BUILD` / `NODE_RUNTIME`, defaulting to `node:22-slim` for local builds). CI overrides them
-with **Docker Hardened Images** (minimal, low-CVE, non-root) from `dhi.io`:
+One image, built from a **multistage Dockerfile at the repo root** (context = repo root, so it can
+copy both `uploader/` and `site/`) whose base images are `ARG`-parameterized (`NODE_BUILD` /
+`NODE_RUNTIME`, defaulting to `node:22-slim` for local builds). CI overrides them with **Docker
+Hardened Images** (minimal, low-CVE, non-root) from `dhi.io`:
 
-| Image | Build stage | Runtime stage | Runtime user |
-| :-- | :-- | :-- | :-- |
-| `uploader` | `dhi.io/node:22-dev` (toolchain for `npm ci`) | `dhi.io/node:22` | non-root `1000` — the `/data` bind mount must be `chown`ed once |
-| `blog-builder` | `dhi.io/node:22-dev` | `dhi.io/node:22-dev` — it runs `astro build` at **runtime**, so the runtime keeps the toolchain | root |
+| Stage | Base | Purpose |
+| :-- | :-- | :-- |
+| Build (`uploader-build`, `site-build`) | `dhi.io/node:22-dev` | `npm ci` for both trees (uploader: `--omit=dev`; site: full install — Astro's build tooling lives in devDependencies) |
+| Runtime | `dhi.io/node:22` (minimal, no shell/npm) | Runs everything — Astro is spawned **via plain node**, not `npx`/`npm`, so the runtime no longer needs the `-dev` toolchain image it used to (that's the one thing that made merging the builder into the CMS safe) |
 
-The `blog` service pulls `dhi.io/nginx` directly (non-root `65532`, listens on `:8080` — the
-compose port mapping and `site/nginx.conf` account for that). The build and runtime bases must
-share a libc (sharp ships native binaries), which the Dockerfiles warn about.
+Both trees (`/app/uploader`, `/app/site`) are copied into the runtime stage `--chown=1000:1000` —
+the site tree needs to stay writable for Astro's `.build-tmp/` and `.astro/` dirs at runtime. The
+runtime user is non-root **uid 1000** (the DHI default). The build and runtime bases must share a
+libc (sharp ships native binaries, and now Astro/Tailwind's native deps too), which the Dockerfile
+warns about.
 
-**Release flow** (`.github/workflows/release.yml`): pushing a `vX.Y.Z` tag triggers a matrix build
-of both images —
+**Release flow** (`.github/workflows/release.yml`): pushing a `vX.Y.Z` tag —
 
-1. log in to GHCR (`GITHUB_TOKEN`) and to `dhi.io` (repo variable `DHI_USERNAME` + secret
+1. logs in to GHCR (`GITHUB_TOKEN`) and to `dhi.io` (repo variable `DHI_USERNAME` + secret
    `DHI_TOKEN`) to pull the DHI bases,
 2. `buildx` multi-arch (**amd64 + arm64**) with the DHI build-args, pushed to
-   `ghcr.io/laboef1900/simonswanderlust-{uploader,blog-builder}` tagged `{version}`,
-   `{major}.{minor}`, and `latest`,
-3. create the GitHub Release with generated notes.
+   `ghcr.io/laboef1900/simonswanderlust-app` tagged `{version}`, `{major}.{minor}`, and `latest`,
+3. creates the GitHub Release with generated notes.
 
-On the server: `docker login dhi.io` (for the nginx pull), set `IMAGE_TAG` in `.env`, then
-`docker compose pull && docker compose up -d`. Cutting a release = bump the `IMAGE_TAG` defaults
-(`docker-compose.yml`, `uploader/.env.example`), commit, tag, push the tag.
+On the server: pull the GHCR image directly (no `dhi.io` login needed there — that's CI-only), set
+`IMAGE_TAG` in `.env`, then `docker compose pull && docker compose up -d`. Cutting a release = bump
+the `IMAGE_TAG` defaults (`docker-compose.yml`, `uploader/.env.example`), commit, tag, push the tag.
 
 ## Configuration (environment)
 
 | Var | Used by | Purpose |
 | :-- | :-- | :-- |
-| `DATABASE_URL` | uploader, blog-builder | Postgres connection (content + auth) |
-| `BUILD_SECRET` | uploader, blog-builder | Shared secret authorizing a rebuild trigger |
-| `BUILDER_URL` | uploader | Where to POST `/build` (default `http://blog-builder:4000`) |
-| `PUBLIC_BASE_URL` | uploader | Public base for image URLs (e.g. `https://img.simonswanderlust.com`) |
-| `STORAGE_DIR` / `BACKUP_DIR` | uploader | On-disk image variants / MDX backups |
-| `LMSTUDIO_BASE_URL` / `LMSTUDIO_MODEL` | uploader | Local AI alt-text endpoint (optional) |
-| `RELEASES_DIR` / `BUILD_PORT` | blog-builder | Release root on the volume / listen port |
+| `DATABASE_URL` | app | Postgres connection (content + auth) |
+| `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.simonswanderlust.com`) |
+| `IMG_HOST` | app | Hostname routed to the image-variant static handler (defaults to the host of `PUBLIC_BASE_URL`) |
+| `SITE_APP_DIR` | app | Path to the Astro project the builder spawns (`/app/site`) |
+| `SITE_DIR` | app | Release root for the built blog (`/data/site`) — `current` is served from here |
+| `MAP_DIR` | app | PMTiles/glyph assets root for `/map/` (`/map-assets`) |
+| `STORAGE_DIR` | app | On-disk image variants |
+| `BACKUP_DIR` | app | Root for MDX export backups and (in `db/`) database dumps |
+| `LMSTUDIO_BASE_URL` / `LMSTUDIO_MODEL` | app | Local AI alt-text endpoint (optional) |
+| `PORT` | app | Listen port (default `3000`) |
+| `MAP_ASSETS_DIR` | compose | Host dir with the PMTiles basemap, mounted read-only at `/map-assets` |
+| `IMAGE_TAG` | compose | Released GHCR image version to run |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | db | Database bootstrap |
-| `IMAGE_TAG` / `NGINX_TAG` | compose | Released GHCR image version / DHI nginx tag to run |
-| `BLOG_PORT` / `MAP_ASSETS_DIR` | compose | Host port for the blog / host dir with the PMTiles basemap |
 
 ## Trust boundaries
 
 - **Public, unauthenticated:** the static blog (read-only files) and the optimized images.
-- **Public, authenticated:** the uploader admin (`/admin/`) and its API — session-cookie gated,
-  with admin-only operations (publishing, user management). Must sit behind a TLS-terminating
-  reverse proxy.
-- **Internal only:** Postgres and `blog-builder` are not exposed to the internet; the only way to
-  trigger a build from outside is the secret-gated `POST /build`, reached via the uploader.
+- **Public, authenticated:** the admin app (`/admin/`) and its API — session-cookie gated, with
+  admin-only operations (publishing, user management, rebuild, backups).
+- **Internal only:** Postgres is not exposed to the internet (no published port).
 
-As defense-in-depth, the public-facing containers run on hardened, minimal base images (DHI) as
-non-root users — see [Packaging & release pipeline](#packaging--release-pipeline).
+Both public and admin traffic now terminate in the **same process**, which is a deliberate,
+accepted trade-off for the WordPress-style topology (see [Security posture — accepted
+deltas](#security-posture--accepted-deltas)).
+
+As defense-in-depth, the `app` container runs on a hardened, minimal base image (DHI) as a non-root
+user with no shell or package manager — see [Packaging & release pipeline](#packaging--release-pipeline).
+
+### Security posture — accepted deltas
+
+Collapsing the four-container stack (nginx / blog-builder / uploader / db) into one `app` container
+knowingly accepts:
+
+- **The app process can write the served web root.** Inherent to the merge (WordPress-parity
+  risk). The `rehype-sanitize` build chokepoint still runs on all content-derived output, but a
+  fully compromised app process could write files to `/data/site/current` directly.
+- **Public-site availability is coupled to app + db health.** Mitigated: restarts are now seconds,
+  since a build only runs on boot when no release exists yet — nginx's "keep serving stale files
+  even if the backend is down" property is given up knowingly.
+- **All public traffic terminates in the process that parses uploads and WXR imports.** Mitigated
+  by the existing app-level controls: authn, rate limiting, `safeFetch` (SSRF guards), size caps,
+  `assertSafeKey` (path-traversal guards).
+
+**Preserved:** the non-root, minimal (no shell/npm) runtime; `db` has no published port; a
+TLS-terminating reverse proxy is still required in front; all existing app-level controls
+(auth, rate limiting, sanitization, SSRF/traversal guards) are unchanged.
 
 See [SECURITY.md](SECURITY.md) for how each boundary is enforced.

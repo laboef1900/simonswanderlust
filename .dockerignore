@@ -1,0 +1,9 @@
+.git
+**/node_modules
+**/dist
+**/.astro
+**/.build-tmp
+uploader/data
+map-assets
+docs
+*.md

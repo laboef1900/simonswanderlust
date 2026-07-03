@@ -1,9 +1,10 @@
 # simonswanderlust-images
 
 Self-hosted image uploader **and admin CMS** for the Astro blog: uploads a photo and generates
-responsive AVIF/WebP variants (EXIF/GPS preserved), and also hosts the in-admin editor, WordPress
-import, and AI alt-text. How it fits the rest of the stack: [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
-Security model: [`../SECURITY.md`](../SECURITY.md).
+responsive AVIF/WebP variants (EXIF/GPS preserved), hosts the in-admin editor, WordPress import,
+and AI alt-text — and, since the single-app-container merge, **also serves the public blog itself**
+and runs its Astro builds in-process (no separate build server). How it fits the rest of the
+stack: [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Security model: [`../SECURITY.md`](../SECURITY.md).
 
 ## Contract
 
@@ -19,15 +20,16 @@ own width, never upscaled), formats `avif` + `webp`. Must match the blog's
 `docker info`.
 
 ```bash
-# 1. From the repo root (uploader/), create your env file from the template:
-cp .env.example .env
+# 1. From the monorepo root (the docker-compose.yml lives there, not in uploader/),
+#    create your env file from the uploader's template:
+cp uploader/.env.example .env
 
 # 2. Set a strong Postgres password and the matching DATABASE_URL in .env:
 #    POSTGRES_PASSWORD=<long-random-string>
 #    DATABASE_URL=postgres://images:<same-password>@db:5432/images
 #    PUBLIC_BASE_URL=http://localhost:3000
 
-# 3. Build the images and start the containers in the background:
+# 3. Build the image and start the containers in the background:
 docker compose up -d --build
 
 # 4. First run — open /login to create the first admin account:
@@ -112,16 +114,27 @@ running the model on the server instead.)
 ## Deploy to your server
 
 1. Copy the repo to the server.
-2. `cp .env.example .env`, set a strong `POSTGRES_PASSWORD`, the matching
-   `DATABASE_URL`, and `PUBLIC_BASE_URL=https://img.simonswanderlust.com`.
-3. `docker compose up -d --build`.
-4. Point your reverse proxy (nginx/Caddy/Traefik) at the container:
-   `https://img.simonswanderlust.com` → `127.0.0.1:3000`, terminating TLS there.
-5. Open `https://img.simonswanderlust.com/login` to create the first admin account, then upload.
+2. From the monorepo root: `cp uploader/.env.example .env`, set a strong `POSTGRES_PASSWORD`, the
+   matching `DATABASE_URL`, and `PUBLIC_BASE_URL=https://img.simonswanderlust.com`.
+3. `docker compose up -d --build` (or, to run the released GHCR image instead of building:
+   `docker compose pull && docker compose up -d`).
+4. Because the container runs non-root (uid 1000), make its data bind-mount writable once — this
+   now covers image variants *and* the built blog output, since both live under the same `/data`
+   volume: `mkdir -p uploader/data && sudo chown -R 1000:1000 uploader/data` (run from the
+   monorepo root).
+5. Point your reverse proxy (nginx/Caddy/Traefik) at the container, terminating TLS: **both**
+   `https://simonswanderlust.com` **and** `https://img.simonswanderlust.com` → `127.0.0.1:3000`.
+   One Fastify process serves both domains — a host-header check (`IMG_HOST`) picks image-variant
+   serving vs. the blog/admin, so each domain behaves exactly as before the merge. **The proxy
+   must forward the original, verbatim `Host` header for both domains** (nginx:
+   `proxy_set_header Host $host;` — do not rely on the default, which some nginx configs override
+   with `$proxy_host`/the upstream name). If the `Host` header reaching the app isn't exactly
+   `img.simonswanderlust.com`, image URLs silently fall through to the blog/admin routing instead
+   of serving image variants.
+6. Open `https://simonswanderlust.com/login` to create the first admin account, then upload.
 
-When run as part of the full stack (the repo's root `docker-compose.yml`), the site's nginx also
-proxies `/admin/` (and `/upload`, `/suggest`) to this service, so the panel is reachable at
-`https://simonswanderlust.com/admin/` — WordPress-style, on the main domain.
+The admin panel is reachable directly at `https://simonswanderlust.com/admin/` — the same process
+serves it, so there's nothing to proxy to separately anymore.
 
 ### Security notes
 

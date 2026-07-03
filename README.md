@@ -15,16 +15,16 @@ It is a **monorepo** with two deployable parts, wired together by the root `dock
 ## How it fits together
 
 Posts are authored in the in-admin editor (`/admin/`), stored in **Postgres**, and rendered to a
-**static** site by a long-running `blog-builder` service that runs `astro build` from the database.
-nginx serves the built output; the **Publish** button triggers a rebuild. No content lives in git —
-MDX files are export-only backups.
+**static** site by the same app, in-process — no separate build server. Publishing awaits the
+build; the app then serves the built output itself. No content lives in git — MDX files are
+export-only backups.
 
 ```
-reader ──https──► nginx (static blog) ──/admin,/upload,/suggest──► uploader (Fastify + sharp)
-                     ▲                                                   │
-              blog-dist volume                                          ▼
-                     │                                               Postgres ◄── blog-builder
-              blog-builder ──astro build from Postgres───────────────────┘  (reads published posts)
+reader ──https──► app (Fastify + sharp, single process, host-routed)
+                     │  main host: /* → /data/site/current (blog) · /map/ · /admin/ /upload /suggest
+                     │  img host:  /* → /data/images (variants)
+                     ▼
+                  Postgres ◄──────── in-process `astro build` on Publish/boot (writes /data/site)
 ```
 
 See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the full picture and **[SECURITY.md](SECURITY.md)**
@@ -33,42 +33,35 @@ for the security model.
 ## Quick start (full stack, Docker)
 
 ```bash
-cp uploader/.env.example .env        # set POSTGRES_PASSWORD, DATABASE_URL, BUILD_SECRET
-docker compose up -d --build         # blog (nginx) + blog-builder + uploader + Postgres
+cp uploader/.env.example .env        # set POSTGRES_PASSWORD, DATABASE_URL
+docker compose up -d --build         # app (blog + uploader, one image) + Postgres
 ```
 
-On a server you can run the **released images from GHCR** instead of building locally — set
+On a server you can run the **released image from GHCR** instead of building locally — set
 `IMAGE_TAG` in `.env` (defaults to the current release) and:
 
 ```bash
 docker compose pull && docker compose up -d
 ```
 
-The images are `ghcr.io/laboef1900/simonswanderlust-{uploader,blog-builder}` (published on each
-`vX.Y.Z` tag by `.github/workflows/release.yml`). If the packages are private, `docker login
-ghcr.io` first.
+The image is `ghcr.io/laboef1900/simonswanderlust-app` (published on each `vX.Y.Z` tag by
+`.github/workflows/release.yml`). If the package is private, `docker login ghcr.io` first.
 
-### Hardened base images (Docker Hardened Images)
+### Hardened base image (Docker Hardened Images)
 
-The stack runs on **DHI** images (minimal, low-CVE, non-root):
+The `app` image is *built* on **DHI** (minimal, low-CVE, non-root) `dhi.io/node` bases. Because
+that build happens in CI, the release workflow logs in to `dhi.io` using the repo variable
+**`DHI_USERNAME`** (not sensitive) and secret **`DHI_TOKEN`** (a dhi.io access token) — add both
+before tagging a release, or the build can't pull the DHI bases. `dhi.io` login is **CI-only** —
+on the server you just pull the finished image from GHCR.
 
-- **`blog`** pulls `dhi.io/nginx` directly (non-root, listens on `:8080`).
-- **`uploader`** and **`blog-builder`** are *built* on `dhi.io/node` bases. Because that build
-  happens in CI, the release workflow logs in to `dhi.io` using the repo variable
-  **`DHI_USERNAME`** (not sensitive) and secret **`DHI_TOKEN`** (a dhi.io access token) — add both
-  before tagging a release, or the build can't pull the DHI bases.
-
-On the server you must therefore `docker login dhi.io` (so `docker compose pull` can fetch the
-nginx image), and — because the uploader runtime runs **non-root (uid 1000)** — make its data
-bind-mount writable once:
+Because the runtime runs **non-root (uid 1000)**, make its data bind-mount writable once (this now
+also covers the site build output, since both live under the same `/data` volume):
 
 ```bash
-docker login dhi.io
 mkdir -p uploader/data && sudo chown -R 1000:1000 uploader/data
 docker compose pull && docker compose up -d
 ```
-
-(blog-builder's DHI base is root, so `/srv/blog` needs no change.)
 
 ### Cutting a release
 
@@ -78,11 +71,11 @@ docker compose pull && docker compose up -d
 git tag v0.X.Y && git push origin v0.X.Y
 ```
 
-The `release` workflow builds both images (multi-arch amd64+arm64, on the DHI node bases),
-publishes them to GHCR, and creates the GitHub Release with generated notes.
+The `release` workflow builds the image (multi-arch amd64+arm64, on the DHI node bases), publishes
+it to GHCR, and creates the GitHub Release with generated notes.
 
-Then open `/login` on the uploader to create the first admin account, write a post in the editor,
-and hit **Publish**. The blog rebuilds and nginx serves it.
+Then open `/login` to create the first admin account, write a post in the editor, and hit
+**Publish**. The app rebuilds the blog in-process and starts serving it immediately.
 
 For local development of just the static site (no containers):
 
@@ -106,6 +99,7 @@ cd site && npm install && npm run dev    # needs DATABASE_URL pointing at a Post
 ## Status
 
 - **Done:** static-site skeleton + expedition-log design, Postgres CMS, in-admin editor,
-  WordPress import, MapLibre travel map, a security-hardening pass (see SECURITY.md), and
-  hardened (DHI) container images published to GHCR via the release pipeline.
+  WordPress import, MapLibre travel map, a security-hardening pass (see SECURITY.md), and the
+  single-app-container merge (one GHCR image, in-process Astro builds, configurable DB backups —
+  see ARCHITECTURE.md).
 - **Remaining:** Phase 4 — DNS cutover.

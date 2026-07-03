@@ -1,8 +1,9 @@
 import { describe, expect, it, beforeEach } from 'vitest';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import type { BackupState, DbBackup } from '../src/backup.js';
 import sharp from 'sharp';
 import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
@@ -13,6 +14,7 @@ import { memoryUserStore, type UserStore } from '../src/users.js';
 import { memorySessionStore, type SessionStore } from '../src/sessions.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { fixedWindowLimiter } from '../src/rate-limit.js';
+import type { SiteBuilder, BuildOutcome } from '../src/build.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -22,10 +24,33 @@ beforeEach(async () => {
 const SETTINGS: Settings = {
   lmBaseUrl: 'http://lm:1234/v1', lmModel: 'qwen/qwen3-vl-4b',
   captionTimeoutMs: 60000, captionMaxEdge: 768, captionPrompt: 'P',
+  backupSchedule: 'off', backupRetention: 14,
 };
 function fakeStore(init: Settings = SETTINGS): SettingsStore {
   let cur = { ...init };
   return { get: () => ({ ...cur }), update: (p) => { cur = validate({ ...cur, ...p }); return { ...cur }; } };
+}
+
+function stubBuilder(outcome: BuildOutcome = { ok: true, release: 'r1' }) {
+  const calls: number[] = [];
+  return {
+    calls,
+    builder: {
+      build: async () => { calls.push(1); return outcome; },
+      hasRelease: () => true,
+    } satisfies SiteBuilder,
+  };
+}
+
+function stubBackup(dir = '/tmp/none') {
+  let state: BackupState = {};
+  const backup: DbBackup = {
+    dir,
+    runNow: async () => { state = { lastAttemptAt: 'a', lastSuccessAt: 's' }; return { ...state }; },
+    list: () => [{ name: 'db-20260703-120000.json.gz', size: 3 }],
+    state: () => ({ ...state }),
+  };
+  return { backup };
 }
 
 interface Built { app: ReturnType<typeof buildServer>; users: UserStore; sessions: SessionStore; posts: PostStore; }
@@ -37,9 +62,10 @@ function build(extra: Partial<ServerConfig> = {}): Built {
     storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
     users, sessions, settings: fakeStore(),
     posts,
-    builderUrl: 'http://builder:4000', buildSecret: 'bs',
+    imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'),
+    builder: (extra.builder as SiteBuilder) ?? stubBuilder().builder,
     backupDir: dir + '/backup',
-    triggerImpl: extra.triggerImpl ?? (async () => ({ ok: true, release: 'r1' })),
+    dbBackup: (extra.dbBackup as DbBackup) ?? stubBackup().backup,
     ...extra,
   });
   return { app: built, users, sessions, posts };
@@ -108,7 +134,7 @@ describe('POST /upload', () => {
     });
     expect(up.statusCode).toBe(200);
     const file = (up.json().files as string[]).find((f) => f.endsWith('.webp'))!;
-    const res = await b.app.inject({ method: 'GET', url: '/' + file });
+    const res = await b.app.inject({ method: 'GET', url: '/' + file, headers: { host: 'img.simonswanderlust.com' } });
     expect(res.statusCode).toBe(200);
     expect(res.headers['cache-control']).toContain('max-age=31536000');
     expect(res.headers['cache-control']).toContain('immutable');
@@ -118,7 +144,7 @@ describe('POST /upload', () => {
 describe('buildServer config', () => {
   it('boots with a relative storageDir (resolves it to absolute)', async () => {
     const rel = relative(process.cwd(), dir);
-    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), posts: memoryPostStore(), builderUrl: 'http://builder:4000', buildSecret: 'bs', backupDir: dir + '/backup', triggerImpl: async () => ({ ok: true }) });
+    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), posts: memoryPostStore(), imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup });
     await expect(srv.ready()).resolves.toBeDefined();
     await srv.close();
   });
@@ -211,6 +237,69 @@ describe('settings endpoints', () => {
       method: 'POST', url: '/settings',
       headers: { 'content-type': 'application/json' }, cookies: cookie,
       payload: { lmBaseUrl: 'ftp://nope' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBeTruthy();
+  });
+
+  it('POST /settings persists backup schedule + retention', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({
+      method: 'POST', url: '/settings',
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { backupSchedule: 'daily', backupRetention: 5 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ backupSchedule: 'daily', backupRetention: 5 });
+  });
+
+  it('POST /settings 403s a non-admin changing backup settings', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    const res = await b.app.inject({
+      method: 'POST', url: '/settings',
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { backupSchedule: 'daily' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('POST /settings allows a non-admin to change non-backup fields', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    const res = await b.app.inject({
+      method: 'POST', url: '/settings',
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { lmModel: 'x' },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('POST /settings accepts the non-admin page-shaped save (all LLM fields, no backup fields)', async () => {
+    // Mirrors what settings.html sends for a non-admin: the backup card is
+    // hidden, so backupSchedule/backupRetention are omitted from the payload.
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    const res = await b.app.inject({
+      method: 'POST', url: '/settings',
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: {
+        lmBaseUrl: 'http://lm:1234/v1', lmModel: 'qwen/qwen3-vl-4b',
+        captionTimeoutMs: 60000, captionMaxEdge: 768, captionPrompt: 'P',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ lmModel: 'qwen/qwen3-vl-4b', captionMaxEdge: 768 });
+  });
+
+  it('POST /settings 400 on invalid backup retention', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({
+      method: 'POST', url: '/settings',
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { backupRetention: 0 },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBeTruthy();
@@ -450,5 +539,90 @@ describe('WordPress import', () => {
     const res = await b.app.inject({ method: 'POST', url: '/import', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('no importable posts found in export');
+  });
+});
+
+describe('POST /rebuild and GET /health', () => {
+  // Copied from the `posts editor` describe block's post-pair fixture, used
+  // by the existing publish tests.
+  const sample = () => ({
+    translationKey: '', status: 'draft',
+    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de', slug: 'de-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+  });
+
+  it('health is public', async () => {
+    const res = await build().app.inject({ method: 'GET', url: '/health' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+  });
+
+  it('rebuild is admin-only', async () => {
+    const b = build();
+    expect((await b.app.inject({ method: 'POST', url: '/rebuild' })).statusCode).toBe(401);
+    const { cookie } = await authed(b, { isAdmin: false });
+    expect((await b.app.inject({ method: 'POST', url: '/rebuild', cookies: cookie })).statusCode).toBe(403);
+  });
+
+  it('rebuild triggers the builder and returns its outcome', async () => {
+    const s = stubBuilder({ ok: true, release: 'r9' });
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({ method: 'POST', url: '/rebuild', cookies: cookie });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, release: 'r9' });
+    expect(s.calls.length).toBe(1);
+  });
+
+  it('publish reports a failed build without unpublishing', async () => {
+    const s = stubBuilder({ ok: false, error: 'a build is already running' });
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().build).toEqual({ ok: false, error: 'a build is already running' });
+  });
+});
+
+describe('backup routes', () => {
+  it('are admin-only', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false });
+    for (const [method, url] of [['GET', '/backups'], ['POST', '/backups'], ['GET', '/backups/db-20260703-120000.json.gz']] as const) {
+      expect((await b.app.inject({ method, url })).statusCode).toBe(401);
+      expect((await b.app.inject({ method, url, cookies: cookie })).statusCode).toBe(403);
+    }
+  });
+
+  it('lists state + files and runs a backup on demand', async () => {
+    const b = build({ dbBackup: stubBackup().backup });
+    const { cookie } = await authed(b);
+    const run = await b.app.inject({ method: 'POST', url: '/backups', cookies: cookie });
+    expect(run.statusCode).toBe(200);
+    expect(run.json().lastSuccessAt).toBe('s');
+    const list = await b.app.inject({ method: 'GET', url: '/backups', cookies: cookie });
+    expect(list.json().files[0].name).toBe('db-20260703-120000.json.gz');
+  });
+
+  it('downloads only well-formed backup filenames from the backup dir', async () => {
+    const backupDir = join(dir, 'dbbackups');
+    await mkdir(backupDir, { recursive: true });
+    await writeFile(join(backupDir, 'db-20260703-120000.json.gz'), 'gzbytes');
+    const b = build({ dbBackup: { ...stubBackup(backupDir).backup, dir: backupDir } });
+    const { cookie } = await authed(b);
+    const ok = await b.app.inject({ method: 'GET', url: '/backups/db-20260703-120000.json.gz', cookies: cookie });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.headers['content-type']).toBe('application/gzip');
+    expect(ok.headers['content-disposition']).toContain('attachment');
+    for (const evil of ['..%2Fsettings.json', 'state.json', 'db-1.json.gz']) {
+      const res = await b.app.inject({ method: 'GET', url: `/backups/${evil}`, cookies: cookie });
+      expect([400, 404]).toContain(res.statusCode);
+      expect(res.statusCode).not.toBe(200);
+    }
+    const missing = await b.app.inject({ method: 'GET', url: '/backups/db-20990101-000000.json.gz', cookies: cookie });
+    expect(missing.statusCode).toBe(404);
   });
 });

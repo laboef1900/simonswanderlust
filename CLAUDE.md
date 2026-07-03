@@ -14,30 +14,33 @@ runtime DO apply there). The static-site rules below describe `site/` unless a r
 This repo is the **Astro 6 static-site rebuild** of the current WordPress + Elementor site.
 
 **Architecture:** The blog is a single Astro 6 project under `site/`. It is **self-hosted via
-Docker** alongside the uploader; both are wired in the root `docker-compose.yml`. UI is Astro
-components + Tailwind 4.
+Docker** as a **single `app` container** (WordPress-style) alongside Postgres, wired in the root
+`docker-compose.yml` — the uploader (Node 22 + Fastify 5 + sharp) serves the blog itself, in
+addition to being the admin CMS + image service. UI is Astro components + Tailwind 4.
 
-**Content pipeline (Phase A + B):** `trips` content is authored via the **in-admin editor**
-(`/admin/posts.html` + `/admin/editor.html`) and stored in **Postgres** — not edited as MDX in
-git. The Astro Content Layer loader (`site/src/lib/postgres-loader.ts`) reads from Postgres at
-build time; the Zod schema and entry `id`s (`de/<slug>` / `en/<slug>`) are unchanged, so
-`paths.ts`/`trips.ts` work unmodified. Post bodies are Markdown; body images render as
-responsive `<picture>` via `site/src/lib/body-images.ts`. The blog is **not** built at Docker
-image-build time — a long-running **`blog-builder`** service (`site/build-server.mjs`) runs
-`astro build` from Postgres at runtime, writing the static output into a shared **`blog-dist`**
-volume that the `blog` nginx container serves. The in-admin **Publish** button triggers a
-rebuild automatically; MDX backups can be exported to `/data/backup` via **Export all**. Required
-env vars for the blog stack: **`DATABASE_URL`** and **`BUILD_SECRET`** (see
-`uploader/.env.example`). Consequence: `npx astro check` and `npm run build` both require a
-reachable Postgres.
+**Content pipeline (Phase A + B + single-app-container):** `trips` content is authored via the
+**in-admin editor** (`/admin/posts.html` + `/admin/editor.html`) and stored in **Postgres** — not
+edited as MDX in git. The Astro Content Layer loader (`site/src/lib/postgres-loader.ts`) reads
+from Postgres at build time; the Zod schema and entry `id`s (`de/<slug>` / `en/<slug>`) are
+unchanged, so `paths.ts`/`trips.ts` work unmodified. Post bodies are Markdown; body images render
+as responsive `<picture>` via `site/src/lib/body-images.ts`. The blog is **not** built at Docker
+image-build time — the `app` container (`uploader/src/build.ts`) spawns `astro build` **in-process,
+via plain node** (no npx/shell) from Postgres at runtime, writing the static output into
+**`/data/site`** (releases + a `current` symlink), which the same process serves directly. The
+in-admin **Publish** button awaits the rebuild synchronously; MDX backups can be exported to
+`/data/backup` via **Export all**, and the database itself (`users` + `posts`) can be backed up on
+a schedule to `/data/backup/db` (admin settings page; restore is CLI-only — see `ARCHITECTURE.md`).
+Required env var for the app: **`DATABASE_URL`** (see `uploader/.env.example`). Consequence:
+`npx astro check` and `npm run build` both require a reachable Postgres.
 
-A separate **image uploader** (Node 22 + Fastify 5 + sharp, Dockerized) lives under `uploader/`:
-it optimizes uploaded photos into responsive AVIF/WebP variants and returns paste-ready
-`heroImage` / `<RemoteImage>` / `<BodyImage>` snippets (with optional local-AI alt text via LM
-Studio). Access is gated by username/password accounts stored in Postgres, with HttpOnly session
-cookies. Both run on Simon's own server. See `uploader/README.md` and the specs
+The same **`uploader/`** app (Node 22 + Fastify 5 + sharp, Dockerized) also optimizes uploaded
+photos into responsive AVIF/WebP variants and returns paste-ready `heroImage` / `<RemoteImage>` /
+`<BodyImage>` snippets (with optional local-AI alt text via LM Studio). Access is gated by
+username/password accounts stored in Postgres, with HttpOnly session cookies. Everything runs on
+Simon's own server, in one container. See `uploader/README.md`, `ARCHITECTURE.md`, and the specs
 `docs/superpowers/specs/2026-06-18-image-hosting-uploader-design.md` +
-`docs/superpowers/specs/2026-06-22-ai-batch-image-uploader-design.md`.
+`docs/superpowers/specs/2026-06-22-ai-batch-image-uploader-design.md` +
+`docs/superpowers/specs/2026-07-03-single-app-container-design.md`.
 
 **Design language:** Editorial magazine + "refined brand" voice, with an "Expedition Log"
 flavor layer (mono coordinates from frontmatter, N°XX entry numbers, contour textures,
@@ -71,7 +74,7 @@ arrival stamps, dashed route dividers). See `docs/superpowers/specs/2026-06-11-b
 | **Fonts** | Inter Variable (sans), IBM Plex Mono (expedition-log accents) |
 | **Tests** | Vitest |
 | **Type-check** | `@astrojs/check` (`astro check`) |
-| **Deploy target** | Self-hosted Docker: `site/` built + served by nginx, `uploader/` Fastify — both via root `docker-compose.yml` |
+| **Deploy target** | Self-hosted Docker: one `app` image (repo-root `Dockerfile`) runs `uploader/` Fastify, which builds `site/` in-process and serves it — plus `db` (Postgres), via root `docker-compose.yml` |
 
 ### Design Tokens (`site/src/styles/global.css`, Tailwind 4 `@theme`)
 - `--color-canvas: #fbfbfd` (page bg) · `--color-navy: #142a42` (brand/structure)
@@ -107,10 +110,11 @@ npx astro check                     # type-check .astro/.ts (requires DATABASE_U
 ```
 blog/
 ├── CLAUDE.md                       # this file
+├── Dockerfile                      # single multistage image (uploader + site trees, DHI runtime); repo-root context
+├── docker-compose.yml              # app + db (WordPress-style, two services)
 ├── docs/superpowers/              # design spec + phase plans (source of truth for scope)
 ├── *.md                           # blog platform research (WordPress vs Astro, etc.)
-├── site/                          # the Astro project (static blog)
-│   ├── build-server.mjs           #   runtime build server (blog-builder service; secret-gated trigger → astro build)
+├── site/                          # the Astro project (static blog; built in-process by uploader/src/build.ts)
 │   ├── scripts/migrate-stub-posts.mjs  # one-off: import MDX stubs into Postgres
 │   └── src/
 │       ├── content/trips/{de,en}/<slug>.mdx   # MDX source files (authoring reference; content served from Postgres)
@@ -124,11 +128,11 @@ blog/
 │       ├── pages/                              # thin locale routes (de at root, en under /en/)
 │       ├── scripts/travel-map.ts               #   MapLibre GL island; initializes full map and mini-maps
 │       └── layouts/  ·  styles/  ·  assets/
-└── uploader/                      # self-hosted image service (Node/Fastify/sharp, Docker)
-    ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · caption · settings · posts · publish · export · wxr-parse · wp-content · wp-images · wp-import
+└── uploader/                      # self-hosted app: CMS + image service + blog serving (Node/Fastify/sharp)
+    ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · caption · settings · posts · build · backup · export · wxr-parse · wp-content · wp-images · wp-import
     ├── public/                    #   index.html (hero upload) · batch.html (AI batch uploader) · import.html (WordPress import)
     ├── test/                      #   Vitest suites (no live LM Studio needed)
-    └── Dockerfile · docker-compose.yml · README.md
+    └── .env.example · README.md
 ```
 
 - **Logical boundaries over line counts** — keep cohesive logic together; don't fragment files.
@@ -205,6 +209,12 @@ Use comments to leave hints for future sessions:
 - **Done:** Security hardening — auth rate-limiting, admin-only publish, SSRF/timeout/size-cap on
   remote fetches, path-traversal guards, body-HTML sanitization, security headers (branch
   `feature/security-hardening`). See `SECURITY.md`.
+- **Done:** Single-app-container merge + DB backup — collapsed the 4-container stack (nginx /
+  blog-builder / uploader / db) into 2 services (`app` / `db`); the `app` container serves the
+  blog, admin, and images from one process and runs `astro build` in-process; added a
+  scheduled/on-demand, retention-pruned Postgres backup feature (CLI-only restore). See
+  `ARCHITECTURE.md` and `docs/superpowers/specs/2026-07-03-single-app-container-design.md`
+  (branch `feature/single-app-container`).
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details.
 
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.
