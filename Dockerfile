@@ -13,8 +13,8 @@
 # @ai-warning: NODE_BUILD and NODE_RUNTIME must share an OS/libc family —
 # sharp's and Astro's native binaries are installed in build stages and copied
 # into the runtime.
-ARG NODE_BUILD=dhi.io/node:22-dev
-ARG NODE_RUNTIME=dhi.io/node:22
+ARG NODE_BUILD=dhi.io/node:26-dev
+ARG NODE_RUNTIME=dhi.io/node:26
 
 # Self-hosted map basemap + glyph fonts are fetched at build time and baked into
 # the image, so the container serves /map/ with zero server-side provisioning.
