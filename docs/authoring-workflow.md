@@ -51,9 +51,12 @@ use the standalone upload page first:
   **key** like `trips/<slug>/hero`, alt text, pick the photo, **Upload**.
 - Copy the returned `heroImage:` YAML values to paste into the editor's hero fields.
 
-**Body / gallery photos** (the rest) — upload them inline from the editor's body toolbar
-(each upload returns a paste-ready `<BodyImage …>` snippet), or pre-upload via the hero page
-using a `trips/<slug>/<name>` key per photo. Write the German and English alt text by hand.
+**Body / gallery photos** (the rest) — upload them inline from the editor's body toolbar:
+each upload inserts a markdown image (`![alt](URL)`) at the cursor and records the photo's
+dimensions automatically. Alternatively, pre-upload via the standalone upload page using a
+`trips/<slug>/<name>` key per photo and paste the returned `<BodyImage …/>` body snippet into
+the post body — it is converted to a markdown image on save. Write the German and English alt
+text by hand.
 
 > Key naming: use `trips/<slug>/<name>` (lowercase `a–z 0–9 / _ -`). The `<slug>` should match
 > the post slug (below). Upload before publishing, or the URLs 404.
@@ -82,7 +85,7 @@ needed. Content is stored in **Postgres**; MDX files are generated automatically
    | **Excerpt** | 1-2 sentence summary |
    | **Hero image** | Paste the `src` URL, width, height, and alt text from the uploader; or use the inline **Upload** button next to the hero fields |
    | **Coordinates** | `lat`, `lng` decimal |
-   | **Body** | Markdown (EasyMDE editor). Use `<BodyImage src="…" width={…} height={…} alt="…" />` tags to embed photos — upload inline via the body toolbar to get paste-ready snippets. |
+   | **Body** | Markdown (EasyMDE editor). Embed photos via the body toolbar's inline upload — it inserts a markdown image (`![alt](URL)`) and records the dimensions automatically. Pasted `<BodyImage …/>` tags (from an MDX backup or the upload page) also work: they're converted on save. |
 
 4. Switch to the **English** tab and fill in the EN fields (title, excerpt, alt text, body).
    The slug and shared fields (date, countryCode, region, coordinates) carry over automatically.
@@ -108,14 +111,24 @@ The **Export all** button (Posts list) writes MDX backup files for all published
 
 ### Body images
 
-`<BodyImage>` tags in the body render as responsive `<picture>` elements (AVIF + WebP, multiple
-sizes) — the same as in the MDX era. Paste the tag directly; no import is needed. Use the
-**DE body** tab for German alt text and the **EN body** tab for English alt text (same image
-URL, language-appropriate alt):
+Body photos are markdown images (`![alt](URL)`) whose dimensions are recorded in the post's
+images map — at build time they render as responsive `<picture>` elements (AVIF + WebP,
+multiple sizes), the same markup as in the MDX era. The editor's inline body upload does both
+steps for you: it inserts the markdown image at the cursor and records the dimensions.
+
+Pasting a `<BodyImage src="…" width={…} height={…} alt="…" />` tag also works — e.g. from an
+MDX backup under `/data/backup`, or the body snippet shown by the standalone upload page. It is
+normalized to a markdown image on save and its width/height are merged into the images map.
+Use the **DE body** tab for German alt text and the **EN body** tab for English alt text (same
+image URL, language-appropriate alt):
 
 ```
 <BodyImage src="https://img.simonswanderlust.com/trips/rhodes-2021/old-town" width={1600} height={1067} alt="Gepflasterte Gasse in der Altstadt von Rhodos" />
 ```
+
+> Don't hand-write a bare markdown image for a photo whose dimensions were never recorded
+> (i.e. not uploaded via the editor toolbar and not pasted as a `<BodyImage …/>` tag) — it
+> renders as a plain `<img>` without the responsive treatment.
 
 ---
 
@@ -152,8 +165,8 @@ Notes:
 ## Quick checklist
 
 - [ ] Photos uploaded — hero and body images via the editor's inline upload, or pre-uploaded via `/admin/` (hero); snippets/URLs ready.
-- [ ] In the editor: DE tab filled — slug (matches live WordPress slug, never renamed), title, date, country, countryCode, region, excerpt, heroImage fields, body with DE `<BodyImage>` tags.
-- [ ] In the editor: EN tab filled — title, excerpt, EN alt texts, EN body with EN `<BodyImage>` tags.
+- [ ] In the editor: DE tab filled — slug (matches live WordPress slug, never renamed), title, date, country, countryCode, region, excerpt, heroImage fields, body photos inserted via the toolbar (or pasted `<BodyImage …/>` tags — converted on save) with DE alt text.
+- [ ] In the editor: EN tab filled — title, excerpt, EN body with its own photo inserts (EN alt text).
 - [ ] **Save draft** — both locale rows written to Postgres.
 - [ ] **Publish** — rebuild triggered automatically.
 - [ ] Verify the post renders at `/<slug>/` and `/en/<slug>/`, hero + body images load.

@@ -59,11 +59,15 @@ maybe('pgPostStore (integration)', () => {
     const base = {
       translationKey: '', status: 'draft' as const,
       shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b\n\n<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />', images: {} },
       en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     };
     const created = await store.upsertDraft(base);
-    expect((await store.get(created.translationKey))?.de.slug).toBe('de-slug');
+    const fetched = await store.get(created.translationKey);
+    expect(fetched?.de.slug).toBe('de-slug');
+    // pasted <BodyImage> tags are normalized to markdown images in the stored row
+    expect(fetched?.de.bodyMarkdown).toBe('## b\n\n![Gasse](https://img/x/y)');
+    expect(fetched?.de.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
     await store.publish(created.translationKey);
     expect((await store.get(created.translationKey))?.status).toBe('published');
     await expect(store.upsertDraft({ ...created, status: 'published', de: { ...base.de, slug: 'renamed' } })).rejects.toThrow();

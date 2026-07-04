@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { memoryPostStore, PostError, validateDraft, validateForPublish, type PostPair } from '../src/posts.js';
+import { memoryPostStore, normalizeBodyImages, PostError, validateDraft, validateForPublish, type PostPair } from '../src/posts.js';
+import { renderPostToMdx } from '../src/export.js';
 
 function pair(overrides: Partial<PostPair> = {}): PostPair {
   const loc = (locale: 'de' | 'en', slug: string, title: string) => ({
@@ -82,6 +83,70 @@ describe('post validation', () => {
     const noHero = pair({ de: { ...pair().de, heroImage: undefined as never } });
     expect(() => validateForPublish(noHero)).toThrow(PostError);
     expect(() => validateForPublish(noHero)).not.toThrow(TypeError);
+  });
+});
+
+describe('normalizeBodyImages', () => {
+  it('converts a JSX-attr <BodyImage> tag to a markdown image and records its dims', () => {
+    const body = 'Intro\n\n<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />\n\nMore';
+    const out = normalizeBodyImages(body, {});
+    expect(out.bodyMarkdown).toBe('Intro\n\n![Gasse](https://img/x/y)\n\nMore');
+    expect(out.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
+  });
+
+  it('accepts quoted numeric attrs and decodes &quot; in alt (inverse of export escaping)', () => {
+    const body = '<BodyImage src="https://img/a/b" width="1600" height="1067" alt="Die &quot;Gasse&quot;" />';
+    const out = normalizeBodyImages(body, {});
+    expect(out.bodyMarkdown).toBe('![Die "Gasse"](https://img/a/b)');
+    expect(out.images).toEqual({ 'https://img/a/b': { width: 1600, height: 1067 } });
+  });
+
+  it('converts a tag without parsable dims but records no images entry', () => {
+    const out = normalizeBodyImages('<BodyImage src="https://img/no/dims" alt="x" />', {});
+    expect(out.bodyMarkdown).toBe('![x](https://img/no/dims)');
+    expect(out.images).toEqual({});
+  });
+
+  it('leaves a src-less tag untouched', () => {
+    const body = 'a <BodyImage alt="broken" /> b';
+    const out = normalizeBodyImages(body, {});
+    expect(out.bodyMarkdown).toBe(body);
+    expect(out.images).toEqual({});
+  });
+
+  it('is idempotent: plain/already-normalized markdown passes through byte-identical, existing dims preserved', () => {
+    const existing = { 'https://img/x/y': { width: 800, height: 600 } };
+    const body = '## Hi\n\n![Gasse](https://img/x/y)\n';
+    const once = normalizeBodyImages(body, existing);
+    expect(once.bodyMarkdown).toBe(body);
+    expect(once.images).toEqual(existing);
+    const twice = normalizeBodyImages(once.bodyMarkdown, once.images);
+    expect(twice).toEqual(once);
+  });
+
+  it('normalizes on upsertDraft (store chokepoint) and merges into existing images', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.de.images = { 'https://img/pre/existing': { width: 100, height: 50 } };
+    p.de.bodyMarkdown = 'Vorher\n\n<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />';
+    const saved = await s.upsertDraft(p);
+    expect(saved.de.bodyMarkdown).not.toContain('<BodyImage');
+    expect(saved.de.bodyMarkdown).toContain('![Gasse](https://img/x/y)');
+    expect(saved.de.images).toEqual({
+      'https://img/pre/existing': { width: 100, height: 50 },
+      'https://img/x/y': { width: 1600, height: 1067 },
+    });
+    // en body had no tags — untouched
+    expect(saved.en.bodyMarkdown).toBe('## Hi');
+  });
+
+  it('round-trips: MDX export reconstructs the <BodyImage> tag from the normalized pair', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.de.bodyMarkdown = '<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />';
+    const saved = await s.upsertDraft(p);
+    const mdx = renderPostToMdx(saved, 'de');
+    expect(mdx).toContain('<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />');
   });
 });
 
