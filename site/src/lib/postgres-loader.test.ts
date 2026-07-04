@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rowToEntryInput } from '../src/lib/postgres-loader';
+import { rowToEntryInput } from './postgres-loader';
 
 const row = {
   translation_key: 'bucharest-2024', locale: 'de', slug: 'reisebericht-4-tage-bukarest',

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Trip } from '../src/lib/trips';
-import { tripPins, tripGeometry } from '../src/lib/map-data';
+import type { Trip } from './trips';
+import { tripPins, tripGeometry } from './map-data';
 
 // Minimal Trip stub — only the fields the helpers read.
 function trip(id: string, data: Partial<Trip['data']>): Trip {
