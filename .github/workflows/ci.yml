@@ -1,0 +1,87 @@
+# Automated Verification Loop on every PR and push to main (see CLAUDE.md):
+# type-check + tests for both apps. A throwaway Postgres service container
+# backs the integration suites and the site's Content Layer loader.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  uploader:
+    name: uploader · typecheck + tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: uploader
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: uploader/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      # TEST_DATABASE_URL un-skips the pg/pages/backup integration suites.
+      # Sequential files: the integration suites share one database and race
+      # each other's fixtures under Vitest's default file parallelism.
+      - run: npm test -- --fileParallelism=false
+        env:
+          TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/ci
+
+  site:
+    name: site · tests + astro check
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            site/package-lock.json
+            uploader/package-lock.json
+      - run: npm ci
+        working-directory: site
+      # The Content Layer loader queries Postgres during astro check, so
+      # bootstrap the schema first (uses the uploader's db module).
+      - run: npm ci
+        working-directory: uploader
+      - run: npx tsx scripts/ci-ensure-schema.ts
+        working-directory: uploader
+        env:
+          DATABASE_URL: postgres://ci:ci@localhost:5432/ci
+      - run: npm test
+        working-directory: site
+      - run: npx astro check
+        working-directory: site
+        env:
+          DATABASE_URL: postgres://ci:ci@localhost:5432/ci
