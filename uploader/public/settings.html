@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LLM Settings · Simon's Wanderlust</title>
+    <title>Settings · Simon's Wanderlust</title>
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body>
@@ -11,12 +11,10 @@
       <div class="masthead-inner">
         <nav id="mainnav" aria-label="Admin"></nav>
         <p class="eyebrow">Expedition Log · Image Station</p>
-        <h1>LLM settings</h1>
+        <h1>Site &amp; database</h1>
         <p class="lede">
-          Configure the local vision model used for alt-text suggestions. Captioning runs in
-          <em>this browser</em> against the base URL below (your machine's LM Studio), so set it
-          to where LM Studio listens here — usually <code>http://localhost:1234/v1</code>. Saved
-          settings apply immediately; no redeploy.
+          Schedule database backups, run one on demand, and rebuild the public site.
+          Saved settings apply immediately; no redeploy.
         </p>
         <p class="muted" id="whoami"></p>
       </div>
@@ -24,29 +22,6 @@
 
     <main>
       <section class="card">
-        <label for="baseUrl">LM Studio base URL (as this browser reaches it)</label>
-        <input id="baseUrl" type="text" placeholder="http://localhost:1234/v1" />
-
-        <label for="model">Model</label>
-        <select id="model"></select>
-        <input id="modelManual" type="text" placeholder="…or type a model id" />
-
-        <label for="timeout">Caption timeout (ms)</label>
-        <input id="timeout" type="number" min="1000" max="600000" />
-
-        <label for="maxEdge">Max image edge (px)</label>
-        <input id="maxEdge" type="number" min="256" max="4096" />
-
-        <label for="prompt">Caption prompt</label>
-        <textarea id="prompt" rows="8"></textarea>
-
-        <button id="test">Test connection</button>
-        <button id="save">Save</button>
-      </section>
-
-      <section class="card" id="backupCard" hidden>
-        <h2>Site &amp; database</h2>
-
         <label for="backupSchedule">Database backup schedule</label>
         <select id="backupSchedule">
           <option value="off">Off</option>
@@ -57,6 +32,7 @@
         <label for="backupRetention">Backups to keep</label>
         <input id="backupRetention" type="number" min="1" max="100" />
 
+        <button id="save">Save</button>
         <button id="backupNow">Back up now</button>
         <button id="rebuild">Rebuild site now</button>
 
@@ -77,39 +53,12 @@
     </main>
 
     <script src="/admin/auth.js"></script>
-    <script src="/admin/llm.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
 
       function fill(s) {
-        $('baseUrl').value = s.lmBaseUrl || '';
-        $('timeout').value = s.captionTimeoutMs ?? '';
-        $('maxEdge').value = s.captionMaxEdge ?? '';
-        $('prompt').value = s.captionPrompt || '';
         $('backupSchedule').value = s.backupSchedule || 'off';
         $('backupRetention').value = s.backupRetention ?? 14;
-        const sel = $('model');
-        if (![...sel.options].some((o) => o.value === s.lmModel)) {
-          sel.add(new Option(s.lmModel, s.lmModel));
-        }
-        sel.value = s.lmModel;
-      }
-
-      // Repopulate the dropdown from a live model list, preserving the current
-      // selection even if LM Studio isn't serving it (so a saved/manual id survives).
-      function populateModels(models) {
-        const sel = $('model');
-        const keep = sel.value;
-        sel.innerHTML = '';
-        for (const m of models) sel.add(new Option(m, m));
-        if (keep && ![...sel.options].some((o) => o.value === keep)) sel.add(new Option(keep, keep));
-        if (keep) sel.value = keep;
-      }
-
-      async function loadModels() {
-        try {
-          populateModels(await LLM.listModels($('baseUrl').value.trim()));
-        } catch { /* LM Studio not reachable from here — leave the manual field */ }
       }
 
       async function init() {
@@ -118,73 +67,30 @@
           if (res.status === 401) { location.href = '/login'; return; }
           if (!res.ok) { $('out').textContent = 'Could not load settings: ' + res.status; return; }
           fill(await res.json());
-          await loadModels();
-          $('out').textContent = 'Loaded. Edit and Save, or Test connection.';
+          $('out').textContent = 'Loaded.';
         } catch (e) { $('out').textContent = 'Error: ' + e; }
       }
 
-      function chosenModel() { return $('modelManual').value.trim() || $('model').value; }
-
-      $('test').addEventListener('click', async () => {
-        $('out').textContent = 'Testing from this browser…';
-        try {
-          const models = await LLM.listModels($('baseUrl').value.trim());
-          populateModels(models); // refresh the dropdown so whatever LM Studio serves is selectable
-          const model = chosenModel();
-          if (models.includes(model)) {
-            $('out').textContent = 'Reachable from this browser. Model "' + model + '" is available ✓';
-          } else if (models.length) {
-            $('out').textContent =
-              'Reachable, but "' + (model || '(none selected)') + '" is not being served. Available now: ' +
-              models.join(', ') + ' — pick one above (the dropdown was just refreshed).';
-          } else {
-            $('out').textContent =
-              'Reachable, but LM Studio is serving no models. Load your vision model in LM Studio ' +
-              '(and enable "Serve on Local Network"), then Test again.';
-          }
-        } catch (e) {
-          $('out').textContent = 'Not reachable from this browser: ' + e + ' — is LM Studio running here and serving on the network?';
-        }
-      });
-
       $('save').addEventListener('click', async () => {
         $('out').textContent = 'Saving…';
-        const payload = {
-          lmBaseUrl: $('baseUrl').value.trim(),
-          lmModel: chosenModel(),
-          captionTimeoutMs: Number($('timeout').value),
-          captionMaxEdge: Number($('maxEdge').value),
-          captionPrompt: $('prompt').value,
-        };
-        // Backup settings are admin-only server-side (403 otherwise); the card
-        // is only shown to admins, so send those fields only when it's visible.
-        if (!$('backupCard').hidden) {
-          payload.backupSchedule = $('backupSchedule').value;
-          payload.backupRetention = Number($('backupRetention').value);
-        }
         let res;
         try {
           res = await fetch('/settings', {
             method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(payload),
+            body: JSON.stringify({
+              backupSchedule: $('backupSchedule').value,
+              backupRetention: Number($('backupRetention').value),
+            }),
           });
         } catch (e) {
-          $('out').textContent = 'Could not send the save request (' + e + '). ' +
-            'Open this page over http://localhost:3000/admin/settings.html (not a file:// path), and try Chrome if Safari blocks it.';
+          $('out').textContent = 'Could not send the save request (' + e + ').';
           return;
         }
         if (res.status === 401) { location.href = '/login'; return; }
-        const body = await res.text();
-        let r;
-        try { r = JSON.parse(body); }
-        catch {
-          $('out').textContent = 'Server replied with non-JSON (HTTP ' + res.status + ', ' +
-            (res.headers.get('content-type') || 'no content-type') + '): ' + body.slice(0, 200);
-          return;
-        }
+        const r = await res.json().catch(() => ({}));
         if (!res.ok) { $('out').textContent = 'Not saved: ' + (r.error || res.status); return; }
         fill(r);
-        $('out').textContent = 'Saved. New settings apply to the next suggestion.';
+        $('out').textContent = 'Saved.';
       });
 
       function renderBackups(data) {
@@ -222,11 +128,14 @@
         const r = await res.json().catch(() => ({}));
         $('out').textContent = r.ok ? 'Rebuilt: release ' + r.release : 'Rebuild failed: ' + (r.error || res.status);
       });
+
       (async () => {
-        const s = await Auth.ensureAuthed();
+        // The whole page is admin-only (matches the admin-gated /settings API);
+        // non-admins are bounced back to the hero-upload page.
+        const s = await Auth.ensureAuthed({ admin: true });
         if (!s) return;
         Auth.renderHeader(s);
-        if (s.isAdmin) { $('backupCard').hidden = false; await loadBackups(); }
+        await loadBackups();
         await init();
       })();
     </script>

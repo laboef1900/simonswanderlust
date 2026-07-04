@@ -2,11 +2,10 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { createReadStream, existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
-import sharp from 'sharp';
 import { processImage } from './pipeline.js';
 import { storeVariants } from './storage.js';
 import { verifyPassword, type UserStore, UserExistsError } from './users.js';
@@ -15,7 +14,6 @@ import {
   SESSION_TTL_MS, loadUser, requireAuth, requireAdmin,
   setSessionCookie, clearSessionCookie, isSecureRequest, SESSION_COOKIE,
 } from './authn.js';
-import { captionImage, type Caption, type CaptionConfig } from './caption.js';
 import { SettingsError, type SettingsStore } from './settings.js';
 import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair } from './posts.js';
 import { type PageStore, type PagePair, type PageContent, PageError } from './pages.js';
@@ -39,27 +37,10 @@ export interface ServerConfig {
   builder: SiteBuilder;
   backupDir: string;
   dbBackup: DbBackup;
-  captionImpl?: (jpeg: Buffer, cfg: CaptionConfig) => Promise<Caption>;
-  fetchImpl?: typeof fetch;
   loginLimiter?: RateLimiter;
 }
 
-const MODELS_FETCH_TIMEOUT_MS = 15_000;
-
 const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
-
-async function fetchModelIds(baseUrl: string, doFetch: typeof fetch): Promise<string[]> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), MODELS_FETCH_TIMEOUT_MS);
-  try {
-    const res = await doFetch(`${baseUrl.replace(/\/+$/, '')}/models`, { method: 'GET', signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = (await res.json()) as { data?: Array<{ id?: string }> };
-    return (body.data ?? []).map((m) => m.id).filter((id): id is string => Boolean(id));
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 export function buildServer(cfg: ServerConfig): FastifyInstance {
   // @fastify/static requires an absolute root; tolerate a relative STORAGE_DIR
@@ -76,7 +57,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // surface (blog pages keep parity with the old nginx: no admin headers).
   const ADMIN_PREFIXES = [
     '/admin', '/login', '/logout', '/auth', '/setup', '/settings', '/users',
-    '/posts', '/upload', '/suggest', '/import', '/export', '/backups', '/rebuild', '/health', '/pages',
+    '/posts', '/upload', '/import', '/export', '/backups', '/rebuild', '/health', '/pages',
   ];
   app.addHook('onSend', async (req, reply) => {
     reply.header('X-Content-Type-Options', 'nosniff');
@@ -99,6 +80,19 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // Per-IP throttle for the unauthenticated auth endpoints (brute-force defense).
   const loginLimiter = cfg.loginLimiter ?? fixedWindowLimiter({ max: 10, windowMs: 900_000 });
   const limitAuth = rateLimitPreHandler(loginLimiter);
+
+  // Unexpected errors (DB failures, bugs) must not leak internals to clients:
+  // log the detail server-side, return a generic 500. Intentional 4xx framework
+  // errors (body-limit 413, malformed JSON 400, …) keep their message — those
+  // are Fastify's own sanitized responses, not internal state.
+  app.setErrorHandler((err: FastifyError, req, reply) => {
+    const status = err.statusCode ?? 500;
+    if (status >= 500) {
+      console.error(`unhandled error on ${req.method} ${req.url}:`, err);
+      return reply.code(500).send({ error: 'internal server error' });
+    }
+    return reply.code(status).send({ error: err.message });
+  });
 
   app.register(cookie);
   app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024 } });
@@ -169,77 +163,15 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send(stored);
   });
 
-  const captionImpl = cfg.captionImpl ?? captionImage;
-  const doFetch = cfg.fetchImpl ?? fetch;
-
-  app.post('/suggest', { preHandler: requireAuth }, async (req, reply) => {
-    const s = cfg.settings.get();
-    const maxEdge = s.captionMaxEdge;
-    const results: Array<{
-      filename: string; slug: string; altEn: string; altDe: string;
-      width: number; height: number; captionError?: boolean;
-    }> = [];
-
-    for await (const part of req.parts()) {
-      if (part.type !== 'file') continue;
-      const buf = await part.toBuffer();
-      const row = { filename: part.filename, slug: '', altEn: '', altDe: '', width: 0, height: 0 } as {
-        filename: string; slug: string; altEn: string; altDe: string; width: number; height: number; captionError?: boolean;
-      };
-
-      let decodable = part.mimetype.startsWith('image/');
-      if (decodable) {
-        try {
-          const probe = await sharp(buf, { failOn: 'none' }).rotate().toBuffer({ resolveWithObject: true });
-          row.width = probe.info.width;
-          row.height = probe.info.height;
-        } catch {
-          decodable = false;
-        }
-      }
-
-      if (!decodable) {
-        row.captionError = true;
-      } else {
-        try {
-          const small = await sharp(buf, { failOn: 'none' })
-            .rotate()
-            .resize({ width: maxEdge, height: maxEdge, fit: 'inside', withoutEnlargement: true })
-            .jpeg({ quality: 80 })
-            .toBuffer();
-          const c = await captionImpl(small, {
-            baseUrl: s.lmBaseUrl, model: s.lmModel, timeoutMs: s.captionTimeoutMs, prompt: s.captionPrompt,
-          });
-          row.slug = c.slug;
-          row.altEn = c.altEn;
-          row.altDe = c.altDe;
-        } catch {
-          row.captionError = true;
-        }
-      }
-      results.push(row);
-    }
-
-    return reply.send({ results });
-  });
-
-  app.get('/settings', { preHandler: requireAuth }, async (_req, reply) => {
+  // Settings govern backups (what gets written to disk and retained) — same
+  // trust boundary as /rebuild and /backups, so the whole surface is admin-only.
+  app.get('/settings', { preHandler: requireAdmin }, async (_req, reply) => {
     return reply.send(cfg.settings.get());
   });
 
-  app.post('/settings', { preHandler: requireAuth }, async (req, reply) => {
+  app.post('/settings', { preHandler: requireAdmin }, async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
-    // Backup schedule/retention govern what gets written to disk and retained —
-    // restrict them to admins, same trust boundary as /rebuild and /backups.
-    if ((b.backupSchedule !== undefined || b.backupRetention !== undefined) && !req.authUser?.isAdmin) {
-      return reply.code(403).send({ error: 'backup settings are admin-only' });
-    }
     const partial: Record<string, unknown> = {};
-    if (b.lmBaseUrl !== undefined) partial.lmBaseUrl = String(b.lmBaseUrl).trim();
-    if (b.lmModel !== undefined) partial.lmModel = String(b.lmModel).trim();
-    if (b.captionTimeoutMs !== undefined) partial.captionTimeoutMs = Number(b.captionTimeoutMs);
-    if (b.captionMaxEdge !== undefined) partial.captionMaxEdge = Number(b.captionMaxEdge);
-    if (b.captionPrompt !== undefined) partial.captionPrompt = String(b.captionPrompt);
     if (b.backupSchedule !== undefined) partial.backupSchedule = String(b.backupSchedule);
     if (b.backupRetention !== undefined) partial.backupRetention = Number(b.backupRetention);
     try {
@@ -247,30 +179,6 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     } catch (e) {
       if (e instanceof SettingsError) return reply.code(400).send({ error: e.message });
       throw e;
-    }
-  });
-
-  app.get('/settings/models', { preHandler: requireAuth }, async (req, reply) => {
-    const q = (req.query ?? {}) as { baseUrl?: string };
-    const baseUrl = q.baseUrl?.trim() || cfg.settings.get().lmBaseUrl;
-    try {
-      return reply.send({ models: await fetchModelIds(baseUrl, doFetch) });
-    } catch (e) {
-      return reply.send({ models: [], error: (e as Error).message });
-    }
-  });
-
-  app.post('/settings/test', { preHandler: requireAuth }, async (req, reply) => {
-    const b = (req.body ?? {}) as { baseUrl?: string; model?: string };
-    const s = cfg.settings.get();
-    const baseUrl = b.baseUrl?.trim() || s.lmBaseUrl;
-    const model = b.model?.trim() || s.lmModel;
-    try {
-      const ids = await fetchModelIds(baseUrl, doFetch);
-      const modelPresent = ids.includes(model);
-      return reply.send({ ok: modelPresent, reachable: true, modelPresent });
-    } catch (e) {
-      return reply.send({ ok: false, reachable: false, modelPresent: false, error: (e as Error).message });
     }
   });
 

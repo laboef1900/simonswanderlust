@@ -19,11 +19,10 @@ window.Auth = (function () {
   // Single source of truth for the admin main menu (admin-only items gated below).
   const NAV = [
     { label: 'Hero upload',    href: '/admin/' },
-    { label: 'Batch uploader', href: '/admin/batch.html' },
     { label: 'Posts',          href: '/admin/posts.html' },
     { label: 'About page',     href: '/admin/about.html',    admin: true },
     { label: 'Import',         href: '/admin/import.html' },
-    { label: 'LLM settings',   href: '/admin/settings.html', admin: true },
+    { label: 'Settings',       href: '/admin/settings.html', admin: true },
     { label: 'Users',          href: '/admin/users.html',    admin: true },
   ];
 
