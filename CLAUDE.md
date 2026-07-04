@@ -170,16 +170,21 @@ Full security model: `SECURITY.md`. These patterns MUST be preserved when changi
 
 ### 1. API & Configuration (Secure by Default)
 - **Authentication** — All mutating uploader endpoints require a valid session (HttpOnly cookie;
-  username/password accounts in Postgres). Publish, settings/backups, and user management are
-  **admin-only**. Auth endpoints are rate-limited.
+  username/password accounts in Postgres); the only exceptions are `POST /login` and first-run
+  `POST /setup` (guarded by a zero-users check, a setup lock, and the login rate limiter).
+  Publish, rebuild, page edits, backups, and user management are **admin-only**; general
+  settings require any authenticated user (only the backup fields are admin-gated). Auth
+  endpoints are rate-limited.
 - **Infrastructure Isolation** — Only the app's port `3000` is published; Postgres is reachable
   solely on the compose-internal network. LM Studio (local-AI captions) is reached via
   `host.docker.internal`, never over the public internet.
-- **Hardened Remote Fetches** — Outbound fetches (WP import, captions) carry SSRF guards,
-  timeouts, and size caps; file access goes through path-traversal guards. Keep these intact
-  when touching that code.
-- **Configuration Management** — Do NOT grow `.env`. App settings live in Postgres and are
-  managed via the admin Settings page; `.env` is reserved for bootstrap values
+- **Hardened Remote Fetches** — WP-import fetches go through `safeFetch` (SSRF guard, timeout,
+  streamed size cap). LM Studio caption calls carry timeouts only and intentionally allow
+  private/localhost targets (that is where the local model runs). File access goes through
+  path-traversal guards. Keep these intact when touching that code.
+- **Configuration Management** — Do NOT grow `.env`. App settings live in a JSON settings store
+  on the data volume (`uploader/src/settings.ts`, atomic-rename writes) and are managed via the
+  admin Settings page; `.env` is reserved for bootstrap values
   (`DATABASE_URL`/`POSTGRES_PASSWORD`, `PUBLIC_BASE_URL`, LM Studio endpoint — see
   `uploader/.env.example`).
 
