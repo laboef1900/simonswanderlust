@@ -29,8 +29,9 @@ image-build time — the `app` container (`uploader/src/build.ts`) spawns `astro
 via plain node** (no npx/shell) from Postgres at runtime, writing the static output into
 **`/data/site`** (releases + a `current` symlink), which the same process serves directly. The
 in-admin **Publish** button awaits the rebuild synchronously; MDX backups can be exported to
-`/data/backup` via **Export all**, and the database itself (`users` + `posts`) can be backed up on
-a schedule to `/data/backup/db` (admin settings page; restore is CLI-only — see `ARCHITECTURE.md`).
+`/data/backup` via **Export all**, and the database itself (`users` + `posts` + `pages`) can be
+backed up on a schedule to `/data/backup/db` (admin settings page; restore is CLI-only — see
+`ARCHITECTURE.md`).
 Required env var for the app: **`DATABASE_URL`** (see `uploader/.env.example`). Consequence:
 `npx astro check` and `npm run build` both require a reachable Postgres.
 
@@ -80,7 +81,7 @@ arrival stamps, dashed route dividers). See `docs/superpowers/specs/2026-06-11-b
 |-------|-----------|
 | **Framework** | Astro 6 (static output, `trailingSlash: 'always'`) |
 | **Styling** | Tailwind 4 (via `@tailwindcss/vite`), `@tailwindcss/typography` |
-| **Content** | Postgres (loaded at build time by `site/src/lib/postgres-loader.ts`); MDX files remain the authoring source and are migrated into Postgres via `site/scripts/migrate-stub-posts.mjs` |
+| **Content** | Postgres (loaded at build time by `site/src/lib/postgres-loader.ts`); authored in the in-admin editor — MDX files are export-only backups (the original stubs were imported once via `site/scripts/migrate-stub-posts.mjs`) |
 | **i18n** | Astro i18n routing — `defaultLocale: 'de'` (no prefix), `en` under `/en/` |
 | **Fonts** | Inter Variable (sans), IBM Plex Mono (expedition-log accents) |
 | **Tests** | Vitest |
