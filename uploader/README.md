@@ -69,7 +69,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/trips/smoke/hero-
 
 ## Run locally without Docker (Node)
 
-**Prerequisite:** Node >= 22.12, a local Postgres instance.
+**Prerequisite:** Node >= 26, a local Postgres instance.
 
 ```bash
 npm install
