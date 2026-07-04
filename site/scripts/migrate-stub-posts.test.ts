@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseMdxFile, mdxBodyToMarkdown } from '../scripts/migrate-stub-posts.mjs';
+import { parseMdxFile, mdxBodyToMarkdown } from './migrate-stub-posts.mjs';
 import { join } from 'node:path';
 
 const de = join(process.cwd(), 'src/content/trips/de');

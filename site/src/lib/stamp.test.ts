@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { regionShape, stampStyle } from '../src/lib/stamp';
+import { regionShape, stampStyle } from './stamp';
 
 const INKS = ['#1a1a2e', '#1e3a6e', '#c0311e', '#6b3d9e', '#1e5c30'];
 const BORDERS = ['single', 'double', 'dashed'];

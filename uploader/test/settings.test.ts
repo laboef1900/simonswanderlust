@@ -2,29 +2,16 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSettingsStore, defaultsFromEnv, validate, SettingsError, type Settings, type BackupSchedule } from '../src/settings.js';
+import { createSettingsStore, defaultSettings, validate, SettingsError, type Settings, type BackupSchedule } from '../src/settings.js';
 
-const DEFAULTS: Settings = {
-  lmBaseUrl: 'http://localhost:1234/v1',
-  lmModel: 'qwen/qwen3-vl-4b',
-  captionTimeoutMs: 60000,
-  captionMaxEdge: 768,
-  captionPrompt: 'PROMPT',
-  backupSchedule: 'off',
-  backupRetention: 14,
-};
+const DEFAULTS: Settings = { backupSchedule: 'off', backupRetention: 14 };
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'imgset-')); });
 
-describe('defaultsFromEnv', () => {
-  it('reads env with fallbacks', () => {
-    const s = defaultsFromEnv({ LMSTUDIO_MODEL: 'foo' } as NodeJS.ProcessEnv);
-    expect(s.lmModel).toBe('foo');
-    expect(s.lmBaseUrl).toBe('http://localhost:1234/v1');
-    expect(s.captionTimeoutMs).toBe(60000);
-    expect(s.captionMaxEdge).toBe(768);
-    expect(s.captionPrompt.length).toBeGreaterThan(0);
+describe('defaultSettings', () => {
+  it('defaults to off / 14', () => {
+    expect(defaultSettings()).toEqual(DEFAULTS);
   });
 });
 
@@ -36,11 +23,22 @@ describe('createSettingsStore', () => {
 
   it('merges a file over defaults', async () => {
     const path = join(dir, 'settings.json');
-    await writeFile(path, JSON.stringify({ lmModel: 'saved-model', captionMaxEdge: 1024 }));
+    await writeFile(path, JSON.stringify({ backupSchedule: 'daily' }));
     const store = createSettingsStore({ path, defaults: DEFAULTS });
-    expect(store.get().lmModel).toBe('saved-model');
-    expect(store.get().captionMaxEdge).toBe(1024);
-    expect(store.get().lmBaseUrl).toBe(DEFAULTS.lmBaseUrl);
+    expect(store.get().backupSchedule).toBe('daily');
+    expect(store.get().backupRetention).toBe(DEFAULTS.backupRetention);
+  });
+
+  it('drops stale unknown fields from an older settings.json', async () => {
+    // A pre-AI-removal settings.json still carries LM Studio keys; they must
+    // neither surface via get() nor be re-persisted by the next update().
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ lmModel: 'qwen/qwen3-vl-4b', backupSchedule: 'weekly' }));
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(store.get()).toEqual({ backupSchedule: 'weekly', backupRetention: 14 });
+    store.update({ backupRetention: 5 });
+    const onDisk = JSON.parse(await readFile(path, 'utf8'));
+    expect(onDisk).toEqual({ backupSchedule: 'weekly', backupRetention: 5 });
   });
 
   it('falls back to defaults on a corrupt file', async () => {
@@ -53,47 +51,34 @@ describe('createSettingsStore', () => {
   it('update validates, persists, and updates the cache', async () => {
     const path = join(dir, 'settings.json');
     const store = createSettingsStore({ path, defaults: DEFAULTS });
-    const updated = store.update({ lmModel: 'new', captionTimeoutMs: 5000 });
-    expect(updated.lmModel).toBe('new');
-    expect(store.get().captionTimeoutMs).toBe(5000);
+    const updated = store.update({ backupSchedule: 'daily', backupRetention: 7 });
+    expect(updated.backupSchedule).toBe('daily');
+    expect(store.get().backupRetention).toBe(7);
     const onDisk = JSON.parse(await readFile(path, 'utf8'));
-    expect(onDisk.lmModel).toBe('new');
+    expect(onDisk.backupSchedule).toBe('daily');
   });
 
   it('update rejects bad values with SettingsError (nothing persisted)', () => {
     const store = createSettingsStore({ path: join(dir, 'settings.json'), defaults: DEFAULTS });
-    expect(() => store.update({ lmBaseUrl: 'ftp://nope' })).toThrow(SettingsError);
-    expect(() => store.update({ captionTimeoutMs: 10 })).toThrow(SettingsError);
-    expect(() => store.update({ captionMaxEdge: 99999 })).toThrow(SettingsError);
-    expect(() => store.update({ captionPrompt: '   ' })).toThrow(SettingsError);
+    expect(() => store.update({ backupSchedule: 'hourly' as BackupSchedule })).toThrow(SettingsError);
+    expect(() => store.update({ backupRetention: 0 })).toThrow(SettingsError);
     expect(store.get()).toEqual(DEFAULTS); // unchanged
   });
 });
 
-describe('backup settings', () => {
-  const base: Settings = {
-    lmBaseUrl: 'http://lm:1234/v1', lmModel: 'm', captionTimeoutMs: 60000,
-    captionMaxEdge: 768, captionPrompt: 'P', backupSchedule: 'off', backupRetention: 14,
-  };
-
-  it('defaults to off / 14', () => {
-    const d = defaultsFromEnv({});
-    expect(d.backupSchedule).toBe('off');
-    expect(d.backupRetention).toBe(14);
-  });
-
+describe('backup settings validation', () => {
   it('accepts daily and weekly', () => {
-    expect(validate({ ...base, backupSchedule: 'daily' }).backupSchedule).toBe('daily');
-    expect(validate({ ...base, backupSchedule: 'weekly' }).backupSchedule).toBe('weekly');
+    expect(validate({ ...DEFAULTS, backupSchedule: 'daily' }).backupSchedule).toBe('daily');
+    expect(validate({ ...DEFAULTS, backupSchedule: 'weekly' }).backupSchedule).toBe('weekly');
   });
 
   it('rejects an unknown schedule', () => {
-    expect(() => validate({ ...base, backupSchedule: 'hourly' as BackupSchedule })).toThrow(SettingsError);
+    expect(() => validate({ ...DEFAULTS, backupSchedule: 'hourly' as BackupSchedule })).toThrow(SettingsError);
   });
 
   it('rejects retention out of range or non-integer', () => {
-    expect(() => validate({ ...base, backupRetention: 0 })).toThrow(SettingsError);
-    expect(() => validate({ ...base, backupRetention: 101 })).toThrow(SettingsError);
-    expect(() => validate({ ...base, backupRetention: 1.5 })).toThrow(SettingsError);
+    expect(() => validate({ ...DEFAULTS, backupRetention: 0 })).toThrow(SettingsError);
+    expect(() => validate({ ...DEFAULTS, backupRetention: 101 })).toThrow(SettingsError);
+    expect(() => validate({ ...DEFAULTS, backupRetention: 1.5 })).toThrow(SettingsError);
   });
 });

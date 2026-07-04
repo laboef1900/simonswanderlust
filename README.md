@@ -21,7 +21,7 @@ export-only backups.
 
 ```
 reader ──https──► app (Fastify + sharp, single process, host-routed)
-                     │  main host: /* → /data/site/current (blog) · /map/ · /admin/ /upload /suggest
+                     │  main host: /* → /data/site/current (blog) · /map/ · /admin/ /upload
                      │  img host:  /* → /data/images (variants)
                      ▼
                   Postgres ◄──────── in-process `astro build` on Publish/boot (writes /data/site)

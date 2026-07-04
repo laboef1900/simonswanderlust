@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aboutPath, homePath, regionPath, regionsIndexPath, regionSlugs, regions } from './paths';
+import { aboutPath, homePath, mapPath, regionPath, regionsIndexPath, regionSlugs, regions } from './paths';
 
 describe('paths', () => {
   it('home: DE at root, EN prefixed', () => {
@@ -26,5 +26,12 @@ describe('paths', () => {
       expect(regionSlugs[region].de).toBeTruthy();
       expect(regionSlugs[region].en).toBeTruthy();
     }
+  });
+});
+
+describe('mapPath', () => {
+  it('mapPath: DE at /karte/, EN at /en/map/', () => {
+    expect(mapPath('de')).toBe('/karte/');
+    expect(mapPath('en')).toBe('/en/map/');
   });
 });

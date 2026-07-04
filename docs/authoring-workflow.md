@@ -37,11 +37,7 @@ published posts or duplicate existing drafts. Only draft posts from this import 
 
 ## Stage 1 — Upload the photos (do this first)
 
-The uploader must be running (`docker compose up -d` brings it up with the blog). For the AI
-alt-text suggestions, LM Studio must be running with `qwen/qwen3-vl-4b` **on the same machine
-you're authoring from** — captioning happens in your browser, calling LM Studio directly at
-`http://localhost:1234` (set on the LLM settings page). No suggestions? You can always type the
-alt text by hand.
+The uploader must be running (`docker compose up -d` brings it up with the blog).
 
 **Sign in first** — open `/admin/` (`https://simonswanderlust.com/admin/` or locally
 `http://localhost:3000/admin/`). If this is a brand-new deployment, the first visit to `/login`
@@ -55,14 +51,9 @@ use the standalone upload page first:
   **key** like `trips/<slug>/hero`, alt text, pick the photo, **Upload**.
 - Copy the returned `heroImage:` YAML values to paste into the editor's hero fields.
 
-**Body / gallery photos** (the rest) — you can upload inline from the editor, or pre-upload in
-bulk via the batch page:
-
-- `…/admin/batch.html`
-- Enter a shared **prefix** like `trips/<slug>`, pick several photos, **Suggest**.
-- The local model proposes a slug + **German and English** alt text per photo; review/edit.
-- **Upload all**, then copy the `<BodyImage …>` snippets (one DE, one EN per photo) into the
-  editor's body fields.
+**Body / gallery photos** (the rest) — upload them inline from the editor's body toolbar
+(each upload returns a paste-ready `<BodyImage …>` snippet), or pre-upload via the hero page
+using a `trips/<slug>/<name>` key per photo. Write the German and English alt text by hand.
 
 > Key naming: use `trips/<slug>/<name>` (lowercase `a–z 0–9 / _ -`). The `<slug>` should match
 > the post slug (below). Upload before publishing, or the URLs 404.
@@ -91,7 +82,7 @@ needed. Content is stored in **Postgres**; MDX files are generated automatically
    | **Excerpt** | 1-2 sentence summary |
    | **Hero image** | Paste the `src` URL, width, height, and alt text from the uploader; or use the inline **Upload** button next to the hero fields |
    | **Coordinates** | `lat`, `lng` decimal |
-   | **Body** | Markdown (EasyMDE editor). Use `<BodyImage src="…" width={…} height={…} alt="…" />` tags to embed photos — paste snippets from the batch page, or upload inline via the body toolbar. |
+   | **Body** | Markdown (EasyMDE editor). Use `<BodyImage src="…" width={…} height={…} alt="…" />` tags to embed photos — upload inline via the body toolbar to get paste-ready snippets. |
 
 4. Switch to the **English** tab and fill in the EN fields (title, excerpt, alt text, body).
    The slug and shared fields (date, countryCode, region, coordinates) carry over automatically.
@@ -160,7 +151,7 @@ Notes:
 
 ## Quick checklist
 
-- [ ] Photos uploaded — hero and body images via the editor's inline upload, or pre-uploaded via `/admin/` (hero) and `/admin/batch.html` (batch); snippets/URLs ready.
+- [ ] Photos uploaded — hero and body images via the editor's inline upload, or pre-uploaded via `/admin/` (hero); snippets/URLs ready.
 - [ ] In the editor: DE tab filled — slug (matches live WordPress slug, never renamed), title, date, country, countryCode, region, excerpt, heroImage fields, body with DE `<BodyImage>` tags.
 - [ ] In the editor: EN tab filled — title, excerpt, EN alt texts, EN body with EN `<BodyImage>` tags.
 - [ ] **Save draft** — both locale rows written to Postgres.

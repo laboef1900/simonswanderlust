@@ -33,9 +33,18 @@ change about the security posture.
 ## Authorization
 
 - `requireAuth` gates all CMS/editor/upload/import endpoints.
-- `requireAdmin` gates **user management** and, importantly, **publishing**
+- `requireAdmin` gates **user management**, **settings** (`/settings` — backup schedule and
+  retention), **backups**, **rebuild**, **page edits**, and, importantly, **publishing**
   (`POST /posts/:tk/publish`). Non-admin authors may create and edit drafts but **cannot push
   content to the public site or change a published slug** — only admins publish.
+
+## Error handling
+
+Unexpected errors (database failures, bugs) are caught by a global Fastify error handler that
+logs the full error server-side (stdout, captured by Docker) and returns a **generic
+`500 internal server error`** — internal details such as connection strings or stack messages
+never reach the client. Intentional 4xx framework responses (body-size 413, malformed JSON 400)
+keep their sanitized messages. (`uploader/src/server.ts`)
 
 ## Rate limiting
 
@@ -66,8 +75,8 @@ fetches go through `safeFetch` (`uploader/src/safe-fetch.ts`), which:
 - **caps the download size while streaming**, so a huge or never-ending response cannot be buffered
   fully into memory.
 
-The LM Studio settings endpoints intentionally allow private/localhost targets (that is where a
-local model runs) and are admin-operated.
+(The former LM Studio caption feature — the app's only other outbound-fetch surface — was removed
+in July 2026; the WordPress importer is now the sole remote-fetch path.)
 
 ## Output sanitization (stored XSS)
 
@@ -85,7 +94,7 @@ preserved. Verified end-to-end against a published post carrying an XSS payload.
 
 - Every response carries `X-Content-Type-Options: nosniff`. `X-Frame-Options: DENY` and
   `Referrer-Policy: no-referrer` are added only on the admin/API surface (`/admin`, `/login`,
-  `/logout`, `/auth`, `/setup`, `/settings`, `/users`, `/posts`, `/upload`, `/suggest`, `/import`,
+  `/logout`, `/auth`, `/setup`, `/settings`, `/users`, `/posts`, `/upload`, `/import`,
   `/export`, `/backups`, `/rebuild`, `/health`); public blog pages carry only `nosniff`, at parity
   with the old nginx config. (CSP is intentionally omitted because the admin pages use inline
   scripts; a strict policy would need nonces.)

@@ -15,10 +15,7 @@ import type { DbBackup } from '../src/backup.js';
 const IMG = 'img.simonswanderlust.com';
 const MAIN = 'simonswanderlust.com';
 
-const SETTINGS: Settings = {
-  lmBaseUrl: 'http://lm:1234/v1', lmModel: 'm', captionTimeoutMs: 60000,
-  captionMaxEdge: 768, captionPrompt: 'P', backupSchedule: 'off', backupRetention: 14,
-};
+const SETTINGS: Settings = { backupSchedule: 'off', backupRetention: 14 };
 const fakeStore = (): SettingsStore => {
   let cur = { ...SETTINGS };
   return { get: () => ({ ...cur }), update: (p) => { cur = validate({ ...cur, ...p }); return { ...cur }; } };

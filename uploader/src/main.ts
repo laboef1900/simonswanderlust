@@ -1,6 +1,6 @@
 import { dirname, join, resolve } from 'node:path';
 import { buildServer } from './server.js';
-import { createSettingsStore, defaultsFromEnv } from './settings.js';
+import { createSettingsStore, defaultSettings } from './settings.js';
 import { createPool, ensureSchema } from './db.js';
 import { pgUserStore } from './users.js';
 import { pgSessionStore } from './sessions.js';
@@ -17,7 +17,7 @@ if (!databaseUrl) {
 
 const storageDir = process.env.STORAGE_DIR ?? '/data/images';
 const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(storageDir), 'settings.json');
-const settings = createSettingsStore({ path: settingsPath, defaults: defaultsFromEnv(process.env) });
+const settings = createSettingsStore({ path: settingsPath, defaults: defaultSettings() });
 
 const pool = createPool(databaseUrl);
 await ensureSchema(pool);

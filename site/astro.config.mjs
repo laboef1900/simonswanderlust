@@ -6,6 +6,9 @@ import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
   site: 'https://simonswanderlust.com',
+  // Explicit, though it is Astro's default: the SEO slug contract and the
+  // uploader's release/serve pipeline both assume a fully static dist/.
+  output: 'static',
   trailingSlash: 'always',
   i18n: {
     defaultLocale: 'de',

@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,7 +7,6 @@ import type { BackupState, DbBackup } from '../src/backup.js';
 import sharp from 'sharp';
 import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
-import type { Caption } from '../src/caption.js';
 import { validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
 import { memoryUserStore, type UserStore } from '../src/users.js';
@@ -22,11 +21,7 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'imgsrv-'));
 });
 
-const SETTINGS: Settings = {
-  lmBaseUrl: 'http://lm:1234/v1', lmModel: 'qwen/qwen3-vl-4b',
-  captionTimeoutMs: 60000, captionMaxEdge: 768, captionPrompt: 'P',
-  backupSchedule: 'off', backupRetention: 14,
-};
+const SETTINGS: Settings = { backupSchedule: 'off', backupRetention: 14 };
 function fakeStore(init: Settings = SETTINGS): SettingsStore {
   let cur = { ...init };
   return { get: () => ({ ...cur }), update: (p) => { cur = validate({ ...cur, ...p }); return { ...cur }; } };
@@ -152,96 +147,27 @@ describe('buildServer config', () => {
   });
 });
 
-describe('POST /suggest', () => {
-  const okCaption = async (): Promise<Caption> => ({ altEn: 'Old town', altDe: 'Altstadt', slug: 'old-town' });
-
-  it('401 without auth', async () => {
-    const form = new FormData();
-    form.append('file', await jpeg(), { filename: 'a.jpg', contentType: 'image/jpeg' });
-    const res = await build().app.inject({ method: 'POST', url: '/suggest', headers: form.getHeaders(), payload: form });
-    expect(res.statusCode).toBe(401);
-  });
-
-  it('returns suggestions + dimensions', async () => {
-    const b = build({ captionImpl: okCaption });
-    const { cookie } = await authed(b);
-    const form = new FormData();
-    form.append('file', await jpeg(), { filename: 'a.jpg', contentType: 'image/jpeg' });
-    const res = await b.app.inject({
-      method: 'POST', url: '/suggest',
-      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().results[0]).toMatchObject({ filename: 'a.jpg', slug: 'old-town', altEn: 'Old town', altDe: 'Altstadt', width: 1000, height: 800 });
-  });
-
-  it('degrades a row when captioning throws, keeping dimensions', async () => {
-    const b = build({ captionImpl: async () => { throw new Error('down'); } });
-    const { cookie } = await authed(b);
-    const form = new FormData();
-    form.append('file', await jpeg(), { filename: 'a.jpg', contentType: 'image/jpeg' });
-    const res = await b.app.inject({
-      method: 'POST', url: '/suggest',
-      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().results[0]).toMatchObject({ captionError: true, slug: '', width: 1000, height: 800 });
-  });
-
-  it('returns one row per file part even when a file is undecodable', async () => {
-    const b = build({ captionImpl: okCaption });
-    const { cookie } = await authed(b);
-    const form = new FormData();
-    form.append('file', await jpeg(), { filename: 'good.jpg', contentType: 'image/jpeg' });
-    form.append('file', Buffer.from('not a real image'), { filename: 'bad.jpg', contentType: 'image/jpeg' });
-    const res = await b.app.inject({
-      method: 'POST', url: '/suggest',
-      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
-    });
-    const rows = res.json().results;
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({ filename: 'good.jpg', slug: 'old-town' });
-    expect(rows[1]).toMatchObject({ filename: 'bad.jpg', captionError: true, width: 0, height: 0 });
-  });
-});
-
 describe('settings endpoints', () => {
-  const modelsFetch = (ids: string[]) =>
-    (async () => ({ ok: true, json: async () => ({ data: ids.map((id) => ({ id })) }) })) as unknown as typeof fetch;
-
-  it('GET /settings 401 without auth, returns current with auth', async () => {
-    expect((await build().app.inject({ method: 'GET', url: '/settings' })).statusCode).toBe(401);
+  it('GET /settings is admin-only: 401 unauthenticated, 403 for authors', async () => {
     const b = build();
-    const { cookie } = await authed(b);
-    const res = await b.app.inject({ method: 'GET', url: '/settings', cookies: cookie });
+    expect((await b.app.inject({ method: 'GET', url: '/settings' })).statusCode).toBe(401);
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+    expect((await b.app.inject({ method: 'GET', url: '/settings', cookies: author.cookie })).statusCode).toBe(403);
+    const admin = await authed(b, { username: 'admin' });
+    const res = await b.app.inject({ method: 'GET', url: '/settings', cookies: admin.cookie });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ lmModel: 'qwen/qwen3-vl-4b', captionMaxEdge: 768 });
+    expect(res.json()).toEqual({ backupSchedule: 'off', backupRetention: 14 });
   });
 
-  it('POST /settings persists valid changes', async () => {
+  it('POST /settings is admin-only: 403 for authors', async () => {
     const b = build();
-    const { cookie } = await authed(b);
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
     const res = await b.app.inject({
       method: 'POST', url: '/settings',
       headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { lmModel: 'new-model', captionMaxEdge: 1024 },
+      payload: { backupSchedule: 'daily' },
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().lmModel).toBe('new-model');
-    const after = await b.app.inject({ method: 'GET', url: '/settings', cookies: cookie });
-    expect(after.json().captionMaxEdge).toBe(1024);
-  });
-
-  it('POST /settings 400 on invalid', async () => {
-    const b = build();
-    const { cookie } = await authed(b);
-    const res = await b.app.inject({
-      method: 'POST', url: '/settings',
-      headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { lmBaseUrl: 'ftp://nope' },
-    });
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBeTruthy();
+    expect(res.statusCode).toBe(403);
   });
 
   it('POST /settings persists backup schedule + retention', async () => {
@@ -254,45 +180,8 @@ describe('settings endpoints', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ backupSchedule: 'daily', backupRetention: 5 });
-  });
-
-  it('POST /settings 403s a non-admin changing backup settings', async () => {
-    const b = build();
-    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
-    const res = await b.app.inject({
-      method: 'POST', url: '/settings',
-      headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { backupSchedule: 'daily' },
-    });
-    expect(res.statusCode).toBe(403);
-  });
-
-  it('POST /settings allows a non-admin to change non-backup fields', async () => {
-    const b = build();
-    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
-    const res = await b.app.inject({
-      method: 'POST', url: '/settings',
-      headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { lmModel: 'x' },
-    });
-    expect(res.statusCode).toBe(200);
-  });
-
-  it('POST /settings accepts the non-admin page-shaped save (all LLM fields, no backup fields)', async () => {
-    // Mirrors what settings.html sends for a non-admin: the backup card is
-    // hidden, so backupSchedule/backupRetention are omitted from the payload.
-    const b = build();
-    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
-    const res = await b.app.inject({
-      method: 'POST', url: '/settings',
-      headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: {
-        lmBaseUrl: 'http://lm:1234/v1', lmModel: 'qwen/qwen3-vl-4b',
-        captionTimeoutMs: 60000, captionMaxEdge: 768, captionPrompt: 'P',
-      },
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ lmModel: 'qwen/qwen3-vl-4b', captionMaxEdge: 768 });
+    const after = await b.app.inject({ method: 'GET', url: '/settings', cookies: cookie });
+    expect(after.json()).toMatchObject({ backupSchedule: 'daily', backupRetention: 5 });
   });
 
   it('POST /settings 400 on invalid backup retention', async () => {
@@ -306,37 +195,35 @@ describe('settings endpoints', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBeTruthy();
   });
+});
 
-  it('GET /settings/models returns ids from LM Studio', async () => {
-    const b = build({ fetchImpl: modelsFetch(['a', 'b']) });
+describe('error handler', () => {
+  it('sanitizes unexpected errors to a generic 500 and logs them server-side', async () => {
+    const boom = memoryPostStore();
+    boom.list = async () => { throw new Error('pg: connection to db:5432 refused (secret detail)'); };
+    const b = build({ posts: boom });
     const { cookie } = await authed(b);
-    const res = await b.app.inject({
-      method: 'GET', url: '/settings/models', cookies: cookie,
-    });
-    expect(res.json().models).toEqual(['a', 'b']);
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie });
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toEqual({ error: 'internal server error' });
+      expect(res.body).not.toContain('secret detail');
+      expect(spy).toHaveBeenCalledOnce();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
-  it('GET /settings/models degrades to empty + error on failure', async () => {
-    const failing = (async () => { throw new Error('econn'); }) as unknown as typeof fetch;
-    const b = build({ fetchImpl: failing });
+  it('keeps intentional 4xx framework errors (malformed JSON stays a 400)', async () => {
+    const b = build();
     const { cookie } = await authed(b);
     const res = await b.app.inject({
-      method: 'GET', url: '/settings/models', cookies: cookie,
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().models).toEqual([]);
-    expect(res.json().error).toBeTruthy();
-  });
-
-  it('POST /settings/test reports reachable + modelPresent', async () => {
-    const b = build({ fetchImpl: modelsFetch(['qwen/qwen3-vl-4b']) });
-    const { cookie } = await authed(b);
-    const res = await b.app.inject({
-      method: 'POST', url: '/settings/test',
+      method: 'POST', url: '/settings',
       headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { model: 'qwen/qwen3-vl-4b' },
+      payload: '{not json',
     });
-    expect(res.json()).toMatchObject({ ok: true, reachable: true, modelPresent: true });
+    expect(res.statusCode).toBe(400);
   });
 });
 
