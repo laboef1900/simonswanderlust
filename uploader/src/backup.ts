@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type { BackupSchedule } from './settings.js';
 import type { DbPool } from './db.js';
 
-export const DUMP_VERSION = 1;
+export const DUMP_VERSION = 2;
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
 
 export class BackupError extends Error {}
@@ -39,11 +39,12 @@ export async function dumpDatabase(db: Queryable, dir: string, now: Date = new D
        images, status, created_at, updated_at
      FROM posts ORDER BY created_at`,
   )).rows;
+  const pages = (await db.query('SELECT key, locale, title, body_markdown, images FROM pages ORDER BY key, locale')).rows;
   const iso = now.toISOString();
   const stamp = `${iso.slice(0, 10).replace(/-/g, '')}-${iso.slice(11, 19).replace(/:/g, '')}`;
   const name = `db-${stamp}.json.gz`;
   mkdirSync(dir, { recursive: true });
-  const payload = JSON.stringify({ version: DUMP_VERSION, createdAt: iso, tables: { users, posts } });
+  const payload = JSON.stringify({ version: DUMP_VERSION, createdAt: iso, tables: { users, posts, pages } });
   atomicWrite(join(dir, name), gzipSync(payload));
   return name;
 }
@@ -129,16 +130,19 @@ export function createDbBackup(opts: { db: Queryable; dir: string; retention: ()
 interface Dump {
   version: number;
   createdAt: string;
-  tables: { users: Record<string, unknown>[]; posts: Record<string, unknown>[] };
+  tables: { users: Record<string, unknown>[]; posts: Record<string, unknown>[]; pages?: Record<string, unknown>[] };
 }
 
 const asJsonb = (v: unknown): string | null => (v == null ? null : JSON.stringify(v));
 
 /** Restore a dump inside one transaction. Deleting users cascades to sessions
  * (FK ON DELETE CASCADE), so every login is invalidated. */
-export async function restoreDatabase(pool: DbPool, filePath: string): Promise<{ users: number; posts: number }> {
+export async function restoreDatabase(
+  pool: DbPool,
+  filePath: string,
+): Promise<{ users: number; posts: number; pages: number }> {
   const dump = JSON.parse(gunzipSync(readFileSync(filePath)).toString('utf8')) as Dump;
-  if (dump.version !== DUMP_VERSION) throw new BackupError(`unsupported dump version ${dump.version}`);
+  if (dump.version !== 1 && dump.version !== 2) throw new BackupError(`unsupported dump version ${dump.version}`);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -160,8 +164,20 @@ export async function restoreDatabase(pool: DbPool, filePath: string): Promise<{
          asJsonb(p.key_facts), p.body_markdown, asJsonb(p.images), p.status, p.created_at, p.updated_at],
       );
     }
+    // A v1 dump carries no `pages` key at all — leave existing pages untouched
+    // so restoring an old backup can't silently wipe content it never captured.
+    if (dump.tables.pages) {
+      await client.query('DELETE FROM pages');
+      for (const pg of dump.tables.pages) {
+        await client.query(
+          `INSERT INTO pages (key, locale, title, body_markdown, images, updated_at)
+           VALUES ($1,$2,$3,$4,$5::jsonb, now())`,
+          [pg.key, pg.locale, pg.title, pg.body_markdown, asJsonb(pg.images)],
+        );
+      }
+    }
     await client.query('COMMIT');
-    return { users: dump.tables.users.length, posts: dump.tables.posts.length };
+    return { users: dump.tables.users.length, posts: dump.tables.posts.length, pages: dump.tables.pages?.length ?? 0 };
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;

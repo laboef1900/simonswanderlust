@@ -41,20 +41,31 @@ maybe('backup round-trip (Postgres)', () => {
       en: { locale: 'en' as const, slug: 'test-trip', title: 'Test', excerpt: 'x', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hello', images: {} },
     };
     await posts.upsertDraft(base);
+    await pool.query(`INSERT INTO pages (key,locale,title,body_markdown) VALUES ('about','de','T','Body')
+      ON CONFLICT (key,locale) DO UPDATE SET title=EXCLUDED.title, body_markdown=EXCLUDED.body_markdown`);
 
     const file = join(dir, await dumpDatabase(pool, dir));
     await pool.query('DELETE FROM posts');
     await pool.query('DELETE FROM sessions');
     await pool.query('DELETE FROM users');
+    await pool.query('DELETE FROM pages');
+    // Prove the pages are actually gone before restore, so the post-restore
+    // assertion below can only pass if restoreDatabase truly re-inserts them.
+    expect((await pool.query(`SELECT count(*) AS n FROM pages`)).rows[0].n).toBe('0');
 
     const counts = await restoreDatabase(pool, file);
     expect(counts.users).toBe(1);
     expect(counts.posts).toBe(2); // one row per locale (de + en) for the single translation pair
+    // ensureSchema seeds About for both locales; we overwrote about/de to 'T' and
+    // left the seeded about/en, so the dump carried — and restore re-inserts — 2 pages.
+    expect(counts.pages).toBe(2);
     const back = await users.findByUsername('simon');
     expect(back?.isAdmin).toBe(true);
     expect((await pool.query('SELECT count(*) AS n FROM sessions')).rows[0].n).toBe('0');
     const list = await posts.list();
     expect(list.length).toBe(1);
+    const pg = (await pool.query(`SELECT title, body_markdown FROM pages WHERE key='about' AND locale='de'`)).rows[0];
+    expect(pg.title).toBe('T');
 
     // Date fidelity: with TZ=Europe/Berlin, a naive `SELECT *` would parse the
     // `date` column as local midnight and JSON.stringify would shift it a day
@@ -64,12 +75,24 @@ maybe('backup round-trip (Postgres)', () => {
   });
 
   it('rejects an unsupported dump version without touching data', async () => {
-    // hand-craft a version-2 dump
+    // hand-craft a version-3 dump (still unsupported: only v1 and v2 are handled)
     const { gzipSync } = await import('node:zlib');
     const { writeFileSync } = await import('node:fs');
     const bad = join(dir, 'db-20260101-000000.json.gz');
-    writeFileSync(bad, gzipSync(JSON.stringify({ version: 2, tables: { users: [], posts: [] } })));
+    writeFileSync(bad, gzipSync(JSON.stringify({ version: 3, tables: { users: [], posts: [] } })));
     await expect(restoreDatabase(pool, bad)).rejects.toThrow(/unsupported dump version/);
     expect((await pool.query('SELECT count(*) AS n FROM users')).rows[0].n).toBe('1');
+  });
+
+  it('restores a v1 dump (no pages) without wiping existing pages', async () => {
+    const { gzipSync } = await import('node:zlib');
+    const { writeFileSync } = await import('node:fs');
+    await pool.query(`INSERT INTO pages (key,locale,title,body_markdown) VALUES ('about','en','keep','me')
+      ON CONFLICT (key,locale) DO UPDATE SET title='keep', body_markdown='me'`);
+    const v1 = join(dir, 'db-20250101-000000.json.gz');
+    writeFileSync(v1, gzipSync(JSON.stringify({ version: 1, tables: { users: [], posts: [] } })));
+    await restoreDatabase(pool, v1);
+    const kept = (await pool.query(`SELECT title FROM pages WHERE key='about' AND locale='en'`)).rows[0];
+    expect(kept.title).toBe('keep');
   });
 });

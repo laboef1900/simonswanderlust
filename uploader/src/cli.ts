@@ -28,7 +28,7 @@ async function restoreMain(file: string | undefined): Promise<void> {
   const pool = createPool(databaseUrl);
   try {
     const counts = await restoreDatabase(pool, file);
-    console.log(`restored ${counts.users} users and ${counts.posts} posts (all sessions invalidated).`);
+    console.log(`restored ${counts.users} users, ${counts.posts} posts, and ${counts.pages} pages (all sessions invalidated).`);
     console.log('now rebuild the site: /admin/settings.html → "Rebuild site now" (or POST /rebuild).');
   } finally {
     await pool.end();

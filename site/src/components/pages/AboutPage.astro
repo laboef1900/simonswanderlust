@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import { getEntry, render } from 'astro:content';
 import { useTranslations, type Locale } from '../../i18n/ui';
 import { aboutPath } from '../../lib/paths';
 
@@ -9,20 +10,25 @@ interface Props {
 
 const { locale } = Astro.props;
 const t = useTranslations(locale);
-const intro =
-  locale === 'de'
-    ? 'Hier teile ich meine Leidenschaft fürs Reisen — Geschichten und Erinnerungen von den belebten Straßen Europas bis zu den geheimnisvollen Pfaden Südamerikas. Der vollständige Über-mich-Text wird in Phase 2 von der bestehenden Seite migriert.'
-    : 'Here I share my passion for travelling — stories and memories from the bustling streets of Europe to the mysterious trails of South America. The full about text will be migrated from the existing site in Phase 2.';
+
+// About content is authored in /admin/about.html and stored in Postgres (the
+// `pages` collection). Fall back to the i18n title if the entry/heading is
+// missing so the build never breaks on an empty DB.
+const entry = await getEntry('pages', `about/${locale}`);
+const heading = entry?.data.title?.trim() || t('about.title');
+const Content = entry ? (await render(entry)).Content : null;
+const plain = (entry?.body ?? '').replace(/[#>*_`~\-\[\]!()]/g, ' ').replace(/\s+/g, ' ').trim();
+const description = plain ? plain.slice(0, 150) : t('about.title');
 ---
 
 <Base
   title={t('about.title')}
-  description={intro.slice(0, 150)}
+  description={description}
   locale={locale}
   alternates={{ de: aboutPath('de'), en: aboutPath('en') }}
 >
   <section class="mx-auto max-w-3xl px-5 py-14">
-    <h1 class="text-3xl font-extrabold text-navy">{t('about.title')}</h1>
-    <div class="prose prose-lg mt-6"><p>{intro}</p></div>
+    <h1 class="text-3xl font-extrabold text-navy">{heading}</h1>
+    <div class="prose prose-lg mt-6">{Content ? <Content /> : null}</div>
   </section>
 </Base>

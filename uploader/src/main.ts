@@ -5,6 +5,7 @@ import { createPool, ensureSchema } from './db.js';
 import { pgUserStore } from './users.js';
 import { pgSessionStore } from './sessions.js';
 import { pgPostStore } from './posts.js';
+import { pgPageStore } from './pages.js';
 import { createSiteBuilder } from './build.js';
 import { createDbBackup, isBackupDue } from './backup.js';
 
@@ -23,6 +24,7 @@ await ensureSchema(pool);
 const users = pgUserStore(pool);
 const sessions = pgSessionStore(pool);
 const posts = pgPostStore(pool);
+const pages = pgPageStore(pool);
 
 const baseUrl = process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com';
 let imgHost: string;
@@ -65,6 +67,7 @@ const app = buildServer({
   sessions,
   settings,
   posts,
+  pages,
   builder,
   dbBackup,
   backupDir,

@@ -13,6 +13,12 @@ maybe('postgres stores (integration)', () => {
     pool = createPool(url!);
     await ensureSchema(pool);
     await pool.query('DELETE FROM sessions'); await pool.query('DELETE FROM users');
+    // The 'about' page seed is asserted verbatim below. Other integration suites
+    // (pages.integration, backup.integration) intentionally mutate the same
+    // key/locale rows against a shared scratch DB, so re-wipe + re-seed here to
+    // make this suite's assertion independent of sibling test file ordering.
+    await pool.query(`DELETE FROM pages WHERE key = 'about'`);
+    await ensureSchema(pool);
   });
   afterAll(async () => { await pool.end(); });
 
@@ -31,6 +37,16 @@ maybe('postgres stores (integration)', () => {
     expect((await sessions.find(token))?.userId).toBe(u.id);
     const expired = await sessions.create(u.id, -1);
     expect(await sessions.find(expired)).toBeNull();
+  });
+
+  it('creates and seeds the pages table (About)', async () => {
+    const { rows } = await pool.query(
+      `SELECT locale, title, body_markdown FROM pages WHERE key='about' ORDER BY locale`,
+    );
+    expect(rows.map((r) => r.locale)).toEqual(['de', 'en']);
+    const de = rows.find((r) => r.locale === 'de');
+    expect(de.title).toBe('Über mich');
+    expect(de.body_markdown).toContain('Leidenschaft');
   });
 });
 

@@ -5,26 +5,41 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   dumpDatabase, listBackups, pruneBackups, readState, writeState, isBackupDue,
-  createDbBackup, BACKUP_FILE_RE, DUMP_VERSION, type Queryable,
+  createDbBackup, BACKUP_FILE_RE, type Queryable,
 } from '../src/backup.js';
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'backup-')); });
 
-const fakeDb = (users: Record<string, unknown>[] = [], posts: Record<string, unknown>[] = []): Queryable => ({
-  query: async (sql: string) => ({ rows: sql.includes('FROM users') ? users : posts }),
+const fakeDb = (
+  users: Record<string, unknown>[] = [],
+  posts: Record<string, unknown>[] = [],
+  pages: Record<string, unknown>[] = [],
+): Queryable => ({
+  query: async (sql: string) => ({
+    rows: sql.includes('FROM users') ? users : sql.includes('FROM pages') ? pages : posts,
+  }),
 });
 
 describe('dumpDatabase', () => {
   it('writes a versioned gzipped JSON dump named after the timestamp', async () => {
     const now = new Date('2026-07-03T14:30:05Z');
-    const name = await dumpDatabase(fakeDb([{ id: 'u1', username: 'simon' }], [{ id: 'p1', slug: 's' }]), dir, now);
+    const name = await dumpDatabase(
+      fakeDb(
+        [{ id: 'u1', username: 'simon' }],
+        [{ id: 'p1', slug: 's' }],
+        [{ key: 'about', locale: 'de', title: 'X', body_markdown: 'B', images: {} }],
+      ),
+      dir,
+      now,
+    );
     expect(name).toBe('db-20260703-143005.json.gz');
     expect(BACKUP_FILE_RE.test(name)).toBe(true);
     const dump = JSON.parse(gunzipSync(await readFile(join(dir, name))).toString('utf8'));
-    expect(dump.version).toBe(DUMP_VERSION);
+    expect(dump.version).toBe(2);
     expect(dump.tables.users).toEqual([{ id: 'u1', username: 'simon' }]);
     expect(dump.tables.posts).toEqual([{ id: 'p1', slug: 's' }]);
+    expect(dump.tables.pages).toEqual([{ key: 'about', locale: 'de', title: 'X', body_markdown: 'B', images: {} }]);
     expect(dump.tables.sessions).toBeUndefined();
   });
 });

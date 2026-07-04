@@ -8,6 +8,7 @@ import { validate, type Settings, type SettingsStore } from '../src/settings.js'
 import { memoryUserStore } from '../src/users.js';
 import { memorySessionStore } from '../src/sessions.js';
 import { memoryPostStore } from '../src/posts.js';
+import { memoryPageStore } from '../src/pages.js';
 import type { SiteBuilder } from '../src/build.js';
 import type { DbBackup } from '../src/backup.js';
 
@@ -59,6 +60,7 @@ function build(extra: Partial<ServerConfig> = {}) {
     storageDir: join(dir, 'images'), baseUrl: `https://${IMG}`, imgHost: IMG,
     siteDir, mapDir: join(dir, 'map'),
     users: memoryUserStore(), sessions: memorySessionStore(), posts: memoryPostStore(),
+    pages: memoryPageStore(),
     settings: fakeStore(), builder, backupDir, dbBackup: stubBackup(backupDir),
     ...extra,
   });
