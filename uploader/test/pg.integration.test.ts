@@ -32,6 +32,16 @@ maybe('postgres stores (integration)', () => {
     const expired = await sessions.create(u.id, -1);
     expect(await sessions.find(expired)).toBeNull();
   });
+
+  it('creates and seeds the pages table (About)', async () => {
+    const { rows } = await pool.query(
+      `SELECT locale, title, body_markdown FROM pages WHERE key='about' ORDER BY locale`,
+    );
+    expect(rows.map((r) => r.locale)).toEqual(['de', 'en']);
+    const de = rows.find((r) => r.locale === 'de');
+    expect(de.title).toBe('Über mich');
+    expect(de.body_markdown).toContain('Leidenschaft');
+  });
 });
 
 maybe('pgPostStore (integration)', () => {

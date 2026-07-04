@@ -3,6 +3,17 @@ import pg from 'pg';
 const { Pool } = pg;
 export type DbPool = pg.Pool;
 
+const ABOUT_SEED = {
+  de: {
+    title: 'Über mich',
+    body: 'Hier teile ich meine Leidenschaft fürs Reisen — Geschichten und Erinnerungen von den belebten Straßen Europas bis zu den geheimnisvollen Pfaden Südamerikas. Der vollständige Über-mich-Text wird in Phase 2 von der bestehenden Seite migriert.',
+  },
+  en: {
+    title: 'About me',
+    body: 'Here I share my passion for travelling — stories and memories from the bustling streets of Europe to the mysterious trails of South America. The full about text will be migrated from the existing site in Phase 2.',
+  },
+};
+
 export function createPool(connectionString: string): DbPool {
   return new Pool({ connectionString });
 }
@@ -40,4 +51,23 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   `);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS posts_locale_slug_idx ON posts (locale, slug)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS posts_translation_key_idx ON posts (translation_key)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pages (
+      key           text NOT NULL,
+      locale        text NOT NULL CHECK (locale IN ('de','en')),
+      title         text NOT NULL DEFAULT '',
+      body_markdown text NOT NULL DEFAULT '',
+      images        jsonb NOT NULL DEFAULT '{}',
+      updated_at    timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (key, locale)
+    )
+  `);
+  // Seed the About page with the previous hardcoded placeholder so the page
+  // never goes blank; the author then edits it in /admin/about.html.
+  await pool.query(
+    `INSERT INTO pages (key, locale, title, body_markdown) VALUES
+       ('about','de',$1,$2), ('about','en',$3,$4)
+     ON CONFLICT (key, locale) DO NOTHING`,
+    [ABOUT_SEED.de.title, ABOUT_SEED.de.body, ABOUT_SEED.en.title, ABOUT_SEED.en.body],
+  );
 }
