@@ -172,7 +172,7 @@ the `IMAGE_TAG` defaults (`docker-compose.yml`, `uploader/.env.example`), commit
 | `BACKUP_DIR` | app | Root for MDX export backups and (in `db/`) database dumps |
 | `LMSTUDIO_BASE_URL` / `LMSTUDIO_MODEL` | app | Local AI alt-text endpoint (optional) |
 | `PORT` | app | Listen port (default `3000`) |
-| `MAP_ASSETS_DIR` | compose | Host dir with the PMTiles basemap, mounted read-only at `/map-assets` |
+| `PROTOMAPS_BUILD` / `MAP_MAXZOOM` / `PMTILES_VERSION` | Dockerfile (build args) | Pin the map basemap fetched + baked into the image at build (see `docs/map-assets.md`) |
 | `IMAGE_TAG` | compose | Released GHCR image version to run |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | db | Database bootstrap |
 

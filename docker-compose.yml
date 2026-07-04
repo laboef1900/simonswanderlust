@@ -19,7 +19,8 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./uploader/data:/data
-      - ${MAP_ASSETS_DIR:-./map-assets}:/map-assets:ro
+      # The map basemap + fonts are baked into the image (served at /map/).
+      # To override with your own tileset, bind-mount it over /map-assets:ro.
     depends_on:
       db:
         condition: service_healthy

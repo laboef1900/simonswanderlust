@@ -1,12 +1,25 @@
 # Self-Hosted Map Basemap Setup
 
-The travel map (`/karte/` and `/en/map/`) uses a self-hosted vector tileset instead of any third-party tile provider. This guide explains how to obtain, prepare, and deploy the basemap files.
+The travel map (`/karte/` and `/en/map/`) uses a self-hosted vector tileset instead of any third-party tile provider. This guide explains where the basemap comes from and how to change it.
 
 ## Overview
 
-The map renders a **Protomaps planet PMTiles file** (`basemap.pmtiles`) and glyph fonts, both served by the **`app` container (Fastify)** at `/map/` — with `Accept-Ranges: bytes` and `.pmtiles`/`.pbf` MIME types, so PMTiles' random-access range reads work (`uploader/src/server.ts`). The build process is **independent of the basemap files** — if they are not present, the map displays a text/link fallback instead. This enables local development without needing the full production basemap.
+The map renders a **Protomaps planet PMTiles file** (`basemap.pmtiles`) and glyph fonts, both served by the **`app` container (Fastify)** at `/map/` — with `Accept-Ranges: bytes` and `.pmtiles`/`.pbf` MIME types, so PMTiles' random-access range reads work (`uploader/src/server.ts`).
 
-## Getting the Basemap (exact recipe)
+> **The basemap is baked into the app image.** The repo-root `Dockerfile` has a
+> `mapfetch` stage that downloads a whole-world **z0–8** slice (~524 MB) plus the
+> Noto Sans glyph fonts at build time and copies them to `/map-assets`, so the
+> released image is **self-contained** — `docker compose pull && docker compose up -d`
+> serves the map with **zero provisioning**. The source planet build and zoom are
+> pinned via Dockerfile ARGs (`PROTOMAPS_BUILD`, `MAP_MAXZOOM`, `PMTILES_VERSION`).
+> If the assets are ever absent, the map degrades to a text/link fallback (the
+> Astro build never depends on them).
+
+You only need the manual recipe below to **change** the basemap: bump the planet
+build for fresher data, raise the zoom for more detail, or serve a custom tileset
+by bind-mounting over `/map-assets` (uncomment the volume in `docker-compose.yml`).
+
+## Changing the Basemap (manual recipe)
 
 The full Protomaps planet is ~136 GB, so we **extract a low-zoom whole-world slice**
 (`z0–8`, ~520 MB) directly from it over HTTP range requests — no full download, no build
