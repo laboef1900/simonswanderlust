@@ -18,6 +18,7 @@ import {
 import { captionImage, type Caption, type CaptionConfig } from './caption.js';
 import { SettingsError, type SettingsStore } from './settings.js';
 import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair } from './posts.js';
+import { type PageStore, type PagePair, type PageContent, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
 import { importWxr } from './wp-import.js';
@@ -31,6 +32,7 @@ export interface ServerConfig {
   sessions: SessionStore;
   settings: SettingsStore;
   posts: PostStore;
+  pages: PageStore;
   imgHost: string;   // Host header that serves image variants (img subdomain)
   siteDir: string;   // release root; the blog is served from `${siteDir}/current`
   mapDir?: string;   // PMTiles/glyph assets; omit to disable /map/
@@ -74,7 +76,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // surface (blog pages keep parity with the old nginx: no admin headers).
   const ADMIN_PREFIXES = [
     '/admin', '/login', '/logout', '/auth', '/setup', '/settings', '/users',
-    '/posts', '/upload', '/suggest', '/import', '/export', '/backups', '/rebuild', '/health',
+    '/posts', '/upload', '/suggest', '/import', '/export', '/backups', '/rebuild', '/health', '/pages',
   ];
   app.addHook('onSend', async (req, reply) => {
     reply.header('X-Content-Type-Options', 'nosniff');
@@ -398,6 +400,35 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   // Replaces the old secret-gated POST /build on the builder container.
   app.post('/rebuild', { preHandler: requireAdmin }, async () => cfg.builder.build());
+
+  app.get('/pages/:key', { preHandler: requireAuth }, async (req, reply) => {
+    const key = (req.params as { key: string }).key;
+    return reply.send(await cfg.pages.get(key));
+  });
+
+  // Admin-only: writing a page rebuilds the public site (like publishing a post).
+  app.put('/pages/:key', { preHandler: requireAdmin }, async (req, reply) => {
+    const key = (req.params as { key: string }).key;
+    const b = (req.body ?? {}) as Partial<Record<'de' | 'en', Partial<PageContent>>>;
+    const mkLocale = (loc: 'de' | 'en'): PageContent => {
+      const src = b[loc] ?? {};
+      return {
+        locale: loc,
+        title: String(src.title ?? ''),
+        bodyMarkdown: String(src.bodyMarkdown ?? ''),
+        images: (src.images ?? {}) as Record<string, { width: number; height: number }>,
+      };
+    };
+    const pair: PagePair = { key, de: mkLocale('de'), en: mkLocale('en') };
+    try {
+      const saved = await cfg.pages.save(pair);
+      const build = await cfg.builder.build();
+      return reply.send({ saved, build });
+    } catch (e) {
+      if (e instanceof PageError) return reply.code(400).send({ error: e.message });
+      throw e;
+    }
+  });
 
   app.get('/backups', { preHandler: requireAdmin }, async () => ({
     state: cfg.dbBackup.state(),

@@ -13,6 +13,7 @@ import type { Settings, SettingsStore } from '../src/settings.js';
 import { memoryUserStore, type UserStore } from '../src/users.js';
 import { memorySessionStore, type SessionStore } from '../src/sessions.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
+import { memoryPageStore, type PageStore } from '../src/pages.js';
 import { fixedWindowLimiter } from '../src/rate-limit.js';
 import type { SiteBuilder, BuildOutcome } from '../src/build.js';
 
@@ -66,6 +67,7 @@ function build(extra: Partial<ServerConfig> = {}): Built {
     builder: (extra.builder as SiteBuilder) ?? stubBuilder().builder,
     backupDir: dir + '/backup',
     dbBackup: (extra.dbBackup as DbBackup) ?? stubBackup().backup,
+    pages: (extra.pages as PageStore) ?? memoryPageStore(),
     ...extra,
   });
   return { app: built, users, sessions, posts };
@@ -144,7 +146,7 @@ describe('POST /upload', () => {
 describe('buildServer config', () => {
   it('boots with a relative storageDir (resolves it to absolute)', async () => {
     const rel = relative(process.cwd(), dir);
-    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), posts: memoryPostStore(), imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup });
+    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), posts: memoryPostStore(), pages: memoryPageStore(), imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup });
     await expect(srv.ready()).resolves.toBeDefined();
     await srv.close();
   });
@@ -624,5 +626,42 @@ describe('backup routes', () => {
     }
     const missing = await b.app.inject({ method: 'GET', url: '/backups/db-20990101-000000.json.gz', cookies: cookie });
     expect(missing.statusCode).toBe(404);
+  });
+});
+
+describe('pages routes', () => {
+  it('GET /pages/:key requires auth and returns the pair', async () => {
+    const b = build();
+    expect((await b.app.inject({ method: 'GET', url: '/pages/about' })).statusCode).toBe(401);
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({ method: 'GET', url: '/pages/about', cookies: cookie });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().key).toBe('about');
+    expect(res.json().de.locale).toBe('de');
+  });
+
+  it('PUT /pages/:key is admin-only and saves + rebuilds', async () => {
+    const s = stubBuilder({ ok: true, release: 'r7' });
+    const b = build({ builder: s.builder });
+    const body = {
+      de: { locale: 'de', title: 'Über mich', bodyMarkdown: 'Hallo', images: {} },
+      en: { locale: 'en', title: 'About me', bodyMarkdown: 'Hi', images: {} },
+    };
+    expect((await b.app.inject({ method: 'PUT', url: '/pages/about', payload: body })).statusCode).toBe(401);
+    const nonAdmin = await authed(b, { isAdmin: false, username: 'author' });
+    expect((await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: nonAdmin.cookie, payload: body })).statusCode).toBe(403);
+    const admin = await authed(b);
+    const res = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: admin.cookie, payload: body });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().saved.de.title).toBe('Über mich');
+    expect(res.json().build).toEqual({ ok: true, release: 'r7' });
+    expect(s.calls.length).toBe(1);
+  });
+
+  it('PUT /pages/:key rejects an unsafe key with 400', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({ method: 'PUT', url: '/pages/Bad_Key', cookies: cookie, payload: { de: { locale: 'de', title: '', bodyMarkdown: '', images: {} }, en: { locale: 'en', title: '', bodyMarkdown: '', images: {} } } });
+    expect(res.statusCode).toBe(400);
   });
 });
