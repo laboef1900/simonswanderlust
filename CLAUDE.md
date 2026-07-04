@@ -1,12 +1,13 @@
 # CLAUDE.md
 
 Guidance for AI coding assistants (Claude, Gemini, Codex) working in this repository.
-Derived from `../TEMPLATE.md`, tailored to this project. This repo is a **monorepo** with two
-parts: `site/` is an Astro 6 **static site** (the template's auth/RBAC and SRE sections do not
-apply to it — it builds to a static `dist/`; content is loaded from Postgres at build time);
-`uploader/` is a small self-hosted **Node/Fastify + sharp image service** (Docker and a server
-runtime DO apply there). The static-site rules below describe `site/` unless a rule names
-`uploader/` explicitly.
+Derived from `../TEMPLATE.md` and kept in sync with it, tailored to this project. This repo is a
+**monorepo** with two parts: `site/` is an Astro 6 **static site** — it builds to a static
+`dist/` (content is loaded from Postgres at build time), so the template's auth/RBAC, SRE, and
+container rules do not apply to it directly; `uploader/` is a small self-hosted **Node/Fastify +
+sharp app** (CMS + image service + blog serving) where Docker, a server runtime, and the
+Security/Operations sections below DO apply. The static-site rules describe `site/` unless a
+rule names `uploader/` explicitly.
 
 ## Project Overview
 
@@ -45,23 +46,32 @@ Simon's own server, in one container. See `uploader/README.md`, `ARCHITECTURE.md
 **Design language:** Editorial magazine + "refined brand" voice, with an "Expedition Log"
 flavor layer (mono coordinates from frontmatter, N°XX entry numbers, contour textures,
 arrival stamps, dashed route dividers). See `docs/superpowers/specs/2026-06-11-blog-redesign-design.md`.
+(This replaces the template's "Glass & Bento" house style.)
 
 ## Mandatory Rules (The "Golden Rules")
 
 1.  **Tests Required** — Logic in `site/src/lib/` and `site/src/i18n/` is covered by Vitest;
-    add/extend tests for any change there. Run `npm test` and `npx astro check` before claiming done.
+    add/extend tests for any change there. `uploader/` logic is covered by its own Vitest suites
+    in `uploader/test/`. Run `npm test` and `npx astro check` before claiming done.
 2.  **SEO Slug Contract (Critical)** — Live WordPress slugs MUST be preserved exactly:
     DE at root, EN under `/en/`. This is encoded and tested in `site/src/lib/paths.ts` and
     `trips.ts`, and mirrored by MDX filenames. **Never rename a slug or route** without
     explicit authorization — it breaks live URLs and SEO.
-3.  **No Binaries in Git** — Images and other binaries are gitignored. Hero images are hosted on the image server and referenced by URL in `heroImage` (see `docs/superpowers/specs/2026-06-18-image-hosting-uploader-design.md`). Root screenshots/`.jpeg`/`.png` are ignored too.
-4.  **No Secrets** — Never commit `.env`, API keys, or credentials.
-5.  **No Hardcoded UI Strings** — ALL user-facing copy lives in `site/src/i18n/ui.ts` for both
+3.  **Data Safety (Critical)** — Postgres is the content source of truth (`posts`, `pages`,
+    `users`), and `/data` (bind-mounted from `uploader/data`) holds image originals/variants,
+    site releases, and backups. NEVER wipe persistent data without explicit user authorization:
+    no `docker volume rm` (`pgdata`), no `DROP DATABASE`/`TRUNCATE`, no deleting `uploader/data`
+    as a shortcut. Propose targeted `UPDATE`/`DELETE` instead, and back up first.
+4.  **No Binaries in Git** — Images and other binaries are gitignored. Hero images are hosted on the image server and referenced by URL in `heroImage` (see `docs/superpowers/specs/2026-06-18-image-hosting-uploader-design.md`). Root screenshots/`.jpeg`/`.png` are ignored too.
+5.  **No Secrets** — Never commit `.env`, API keys, or credentials.
+6.  **No Hardcoded UI Strings** — ALL user-facing copy lives in `site/src/i18n/ui.ts` for both
     locales (completeness-tested — this guards against the old site's German-in-English-footer bug).
-6.  **Strict Typing** — `tsconfig` extends `astro/tsconfigs/strict`. No `any`, no `@ts-ignore`,
-    no `astro check` suppressions to force a pass. Fix the underlying type issue.
-7.  **Ask Before Assuming** — If a request is ambiguous or conflicts with the design spec/plans
+7.  **Strict Typing** — `tsconfig` extends `astro/tsconfigs/strict`. No `any`, no `@ts-ignore`,
+    no `astro check` suppressions to force a pass. Fix the underlying type issue. Enforce
+    validation at input boundaries (Zod for content; validate uploader request payloads).
+8.  **Ask Before Assuming** — If a request is ambiguous or conflicts with the design spec/plans
     in `docs/superpowers/`, ask first.
+9.  **No AI Issues** — Refuse to work on issues explicitly marked `NO AI`.
 
 ## Tech Stack & Conventions
 
@@ -90,7 +100,7 @@ arrival stamps, dashed route dividers). See `docs/superpowers/specs/2026-06-11-b
 
 ## Build & Development
 
-All commands run from `site/`. No containers needed for the static toolchain itself.
+All static-site commands run from `site/`. No containers needed for the static toolchain itself.
 
 ```bash
 npm install                         # install deps (Node >= 22.12)
@@ -105,6 +115,21 @@ npx astro check                     # type-check .astro/.ts (requires DATABASE_U
 > so a reachable Postgres instance with `DATABASE_URL` set is required. Unit tests (`npm test`)
 > do not hit the database.
 
+### Container Workflow (Container-First, deployed stack)
+
+The deployed stack is **container-first** on **Docker Hardened Images (DHI)**: one `app`
+container (Fastify serves blog + admin + images and builds the site in-process) plus `db`
+(Postgres 17). Compose only RUNS the published GHCR image — it does not build it.
+
+```bash
+docker compose pull && docker compose up -d   # run the released image (pin via IMAGE_TAG in .env)
+docker compose logs -f                        # tail logs (both services log to stdout)
+docker build .                                # rebuild the app image from the repo root (DHI bases)
+```
+
+**Ports:** app `3000` (the only published port) · Astro dev server `4321` · Postgres `5432`
+(compose-internal only — never published to the host).
+
 ## Repository Structure
 
 ```
@@ -112,6 +137,7 @@ blog/
 ├── CLAUDE.md                       # this file
 ├── Dockerfile                      # single multistage image (uploader + site trees, DHI runtime); repo-root context
 ├── docker-compose.yml              # app + db (WordPress-style, two services)
+├── .github/workflows/release.yml   # tag v*.*.* → build & push GHCR image + GitHub Release
 ├── docs/superpowers/              # design spec + phase plans (source of truth for scope)
 ├── *.md                           # blog platform research (WordPress vs Astro, etc.)
 ├── site/                          # the Astro project (static blog; built in-process by uploader/src/build.ts)
@@ -138,9 +164,39 @@ blog/
 - **Logical boundaries over line counts** — keep cohesive logic together; don't fragment files.
 - **One primary component per file** for components.
 
-## AI Assistant Security Guidelines
+## Security & Robustness Patterns
 
+Full security model: `SECURITY.md`. These patterns MUST be preserved when changing `uploader/`.
+
+### 1. API & Configuration (Secure by Default)
+- **Authentication** — All mutating uploader endpoints require a valid session (HttpOnly cookie;
+  username/password accounts in Postgres). Publish, settings/backups, and user management are
+  **admin-only**. Auth endpoints are rate-limited.
+- **Infrastructure Isolation** — Only the app's port `3000` is published; Postgres is reachable
+  solely on the compose-internal network. LM Studio (local-AI captions) is reached via
+  `host.docker.internal`, never over the public internet.
+- **Hardened Remote Fetches** — Outbound fetches (WP import, captions) carry SSRF guards,
+  timeouts, and size caps; file access goes through path-traversal guards. Keep these intact
+  when touching that code.
+- **Configuration Management** — Do NOT grow `.env`. App settings live in Postgres and are
+  managed via the admin Settings page; `.env` is reserved for bootstrap values
+  (`DATABASE_URL`/`POSTGRES_PASSWORD`, `PUBLIC_BASE_URL`, LM Studio endpoint — see
+  `uploader/.env.example`).
+
+### 2. Framework & Output Safety
+- Treat every Fastify route as a public HTTP endpoint: authenticate/authorize *inside* the
+  handler chain and validate input payloads immediately.
+- Post body HTML is sanitized before rendering. Anything injected via `set:html` in `site/`
+  must be escaped/sanitized — XSS applies even to a static site.
+- Never return raw database errors to clients — log the detail server-side and return a
+  sanitized message.
+
+### 3. AI Assistant Security Guidelines
 These apply to YOU, the assistant, while working here:
+- **OWASP Integration (Web & LLM)** — Actively develop with the **OWASP Top 10** and the
+  **OWASP Top 10 for LLM Applications** in mind: defend against SQLi, XSS, and SSRF as well as
+  AI-specific risks (prompt injection via imported/user content, improper output handling —
+  relevant to the LM Studio caption pipeline and the WXR importer).
 - **Secret Protection** — Never log, print, or echo secrets/keys in responses or tool output.
   If editing a file with secrets, preserve them exactly.
 - **Command Execution Safety** — Do NOT run blindly downloaded scripts (`curl ... | bash`) or
@@ -151,8 +207,27 @@ These apply to YOU, the assistant, while working here:
   system-sensitive dirs (`~/.ssh/`, `~/.aws/`, etc.).
 - **No Hacky Workarounds** — Don't disable linters/type-checkers or add `any`/`@ts-ignore` to
   make a build pass. Fix the root cause.
-- **Output Safety** — Escape/sanitize any external content rendered into pages (avoid XSS even
-  in a static context, e.g. via `set:html`).
+
+## Runtime & Operations (`app` container)
+
+Tailored from the template's SRE section — applies to the `uploader/` runtime; `site/` is static
+output and exempt.
+
+- **State in backing services** — Durable data lives in Postgres or under `/data` (releases,
+  images, backups), never only in process memory or the container filesystem.
+- **Logs as event streams** — Log to `stdout`/`stderr` only (Docker captures them); no log files.
+- **Health & resilience** — The app exposes `/health` (used by the compose healthcheck);
+  `restart: unless-stopped` covers crashes. Degrade gracefully when optional backing services
+  are down (e.g. LM Studio unreachable → captions unavailable, uploads still work) — never
+  crash the app over an optional dependency.
+- **Schema changes** — `uploader/src/db.ts` owns the schema via idempotent
+  `CREATE TABLE IF NOT EXISTS` bootstrap; evolve it there (additive, idempotent). No hand-run
+  SQL against the live DB.
+- **CI/CD & immutable artifacts** — `.github/workflows/release.yml` builds the app image ONCE
+  per version tag (`v*.*.*`) and pushes it to GHCR; deploys promote that immutable image by
+  bumping `IMAGE_TAG` in `.env` — never rebuild on the server.
+- **Backups** — Postgres backups run scheduled/on-demand to `/data/backup/db` with retention
+  pruning (admin Settings page); restore is CLI-only — see `ARCHITECTURE.md`.
 
 ## AI Collaboration & Workflow
 
@@ -164,17 +239,29 @@ plan before implementing.
 uploader and write/publish via the in-admin editor (Postgres is the source of truth; MDX files
 are export-only backups).
 
+### Design → Spec → Review (non-trivial features)
+For non-trivial work, follow the superpowers pipeline before coding: brainstorm/design the
+approach, write the spec/plan into `docs/superpowers/`, and critically self-review both
+(play devil's advocate for logical gaps, untested assumptions, and security flaws) before
+implementation begins.
+
+### Contract-First
+Before implementing logic, define or extend the data contracts first — the Zod content schema
+(`site/src/content.config.ts`), table shapes in `uploader/src/db.ts`, and the TS types derived
+from them — then code against those types. This prevents hallucinated property names later.
+
 ### Verify Before Use (Prevent Hallucinations)
 - **Dependencies & APIs** — Never assume a package is installed or that a method exists. Check
-  `site/package.json` and the actual exported API (local types/source) before calling.
-- **Documentation Lookup** — Fetch official/current docs for Astro 6, Tailwind 4, etc. via a
-  docs MCP (priority: Ref → DeepWiki → other) rather than relying on memory.
+  `site/package.json` / `uploader/package.json` and the actual exported API (local types/source)
+  before calling.
+- **Documentation Lookup** — Fetch official/current docs for Astro 6, Tailwind 4, Fastify 5,
+  etc. via a docs MCP (priority: Ref → DeepWiki → other) rather than relying on memory.
 - **Internal Functions** — Read the target file to confirm a helper's name, args, and return
   type before calling it (especially `paths.ts` / `trips.ts`).
 
 ### Automated Verification Loop (after edits)
 1. **Type-check:** `npx astro check`
-2. **Test:** `npm test`
+2. **Test:** `npm test` (in `site/` and/or `uploader/`, whichever changed)
 3. For visual changes, run `npm run dev` and verify the rendered page.
 
 ### Contextual Markers
@@ -188,9 +275,14 @@ Use comments to leave hints for future sessions:
 - **Branching** — `main` is the integration branch. Branch off `main` as
   `feature/<desc>` for non-trivial work; merge back when reviewed and tests pass.
   Avoid committing directly to `main` for substantial changes.
+- **Worktrees** — For feature work that needs isolation from the current workspace (or parallel
+  agents), check the branch out into a separate worktree
+  (`git worktree add ../<desc> -b feature/<desc>`) and remove it after the merge.
 - **Commits** — Conventional style: `type(scope): description` (e.g. `feat(home): add route divider`).
 - **Pushing** — Commits are local by default; the user pushes manually unless they ask otherwise.
-- **No binaries / no secrets** — see Golden Rules 3 and 4.
+- **Releases** — Tag `v*.*.*` on `main`; `.github/workflows/release.yml` builds and publishes
+  the GHCR app image and cuts a GitHub Release. Deploy by bumping `IMAGE_TAG` in the server's `.env`.
+- **No binaries / no secrets** — see Golden Rules 4 and 5.
 
 ## Project Status & Remaining Phases
 
@@ -204,8 +296,8 @@ Use comments to leave hints for future sessions:
   created with slugs preserved and images re-hosted.
 - **Done:** Phase 3 (MapLibre travel map) — map page (`/karte/` + `/en/map/`) plotting all trips as
   pins with popups; homepage `MapTeaser` wired to the map; per-story lazy mini-maps (pin + stops);
-  self-hosted PMTiles basemap (zero third-party requests), served at `/map/` by nginx; progressive
-  enhancement with text/link fallback — merged to `main`.
+  self-hosted PMTiles basemap (zero third-party requests), served at `/map/` by the app;
+  progressive enhancement with text/link fallback — merged to `main`.
 - **Done:** Security hardening — auth rate-limiting, admin-only publish, SSRF/timeout/size-cap on
   remote fetches, path-traversal guards, body-HTML sanitization, security headers (branch
   `feature/security-hardening`). See `SECURITY.md`.
@@ -215,6 +307,7 @@ Use comments to leave hints for future sessions:
   scheduled/on-demand, retention-pruned Postgres backup feature (CLI-only restore). See
   `ARCHITECTURE.md` and `docs/superpowers/specs/2026-07-03-single-app-container-design.md`
   (branch `feature/single-app-container`).
+- **Done:** Editable About page + baked-in travel map basemap (v0.5.0).
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details.
 
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.
