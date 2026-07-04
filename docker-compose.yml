@@ -36,7 +36,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-images}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # postgres:18+ expects the mount at the parent dir (data lands in a
+      # versioned subdirectory), enabling future in-place pg_upgrade --link.
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-images} -d ${POSTGRES_DB:-images}"]
       interval: 5s
