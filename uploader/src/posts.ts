@@ -20,6 +20,8 @@ export interface PostPair {
 export interface PostSummary {
   translationKey: string; titleDe: string; slugDe: string; slugEn: string;
   status: 'draft' | 'published'; updatedAt: Date;
+  /** EN-completeness hint for the write-DE-first workflow (true when the EN body is non-blank). */
+  hasEnBody: boolean;
 }
 export class PostError extends Error {
   code?: string;
@@ -31,6 +33,10 @@ export interface PostStore {
   get(translationKey: string): Promise<PostPair | null>;
   upsertDraft(pair: PostPair): Promise<PostPair>;
   publish(translationKey: string): Promise<void>;
+  /** Flip a pair back to draft (the "emergency brake" — the live site drops it on the next build). */
+  unpublish(translationKey: string): Promise<void>;
+  /** Hard-delete both locale rows, freeing their slugs for reuse. */
+  remove(translationKey: string): Promise<void>;
 }
 
 interface Stored extends PostPair { updatedAt: Date }
@@ -118,7 +124,7 @@ export function memoryPostStore(): PostStore {
     async list() {
       return [...byKey.values()]
         .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
-        .map((p) => ({ translationKey: p.translationKey, titleDe: p.de.title, slugDe: p.de.slug, slugEn: p.en.slug, status: p.status, updatedAt: p.updatedAt }));
+        .map((p) => ({ translationKey: p.translationKey, titleDe: p.de.title, slugDe: p.de.slug, slugEn: p.en.slug, status: p.status, updatedAt: p.updatedAt, hasEnBody: Boolean(p.en.bodyMarkdown && p.en.bodyMarkdown.trim()) }));
     },
     async get(tk) {
       const p = byKey.get(tk);
@@ -143,6 +149,15 @@ export function memoryPostStore(): PostStore {
       if (!p) throw new PostError('post not found');
       p.status = 'published';
       p.updatedAt = new Date();
+    },
+    async unpublish(tk) {
+      const p = byKey.get(tk);
+      if (!p) throw new PostError('post not found');
+      p.status = 'draft';
+      p.updatedAt = new Date();
+    },
+    async remove(tk) {
+      if (!byKey.delete(tk)) throw new PostError('post not found');
     },
   };
 }
@@ -191,6 +206,7 @@ export function pgPostStore(pool: DbPool): PostStore {
         translationKey: tk, titleDe: e.de?.title ?? '', slugDe: e.de?.slug ?? '', slugEn: e.en?.slug ?? '',
         status: (e.de?.status ?? e.en?.status ?? 'draft') as 'draft' | 'published',
         updatedAt: new Date(Math.max(e.de?.updated_at?.getTime() ?? 0, e.en?.updated_at?.getTime() ?? 0)),
+        hasEnBody: Boolean(e.en?.body_markdown?.trim()),
       }));
     },
     async get(tk) {
@@ -217,6 +233,15 @@ export function pgPostStore(pool: DbPool): PostStore {
     },
     async publish(tk) {
       const res = await pool.query(`UPDATE posts SET status='published', updated_at=now() WHERE translation_key=$1`, [tk]);
+      if (res.rowCount === 0) throw new PostError('post not found');
+    },
+    async unpublish(tk) {
+      const res = await pool.query(`UPDATE posts SET status='draft', updated_at=now() WHERE translation_key=$1`, [tk]);
+      if (res.rowCount === 0) throw new PostError('post not found');
+    },
+    async remove(tk) {
+      // One statement deletes both locale rows atomically and frees their slugs.
+      const res = await pool.query(`DELETE FROM posts WHERE translation_key=$1`, [tk]);
       if (res.rowCount === 0) throw new PostError('post not found');
     },
   };

@@ -50,6 +50,42 @@
     <script src="/admin/auth.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
+      let me = null; // session from Auth.ensureAuthed(); buttons are hidden for
+                     // non-admins, but the server enforces admin-only regardless.
+
+      function describeBuild(build) {
+        if (!build) return '';
+        return build.ok ? ' Site rebuilt.' : ' Rebuild failed: ' + build.error;
+      }
+
+      async function unpublishPost(p) {
+        const title = p.titleDe || '(untitled)';
+        if (!confirm('Unpublish "' + title + '" (' + p.slugDe + ' / ' + p.slugEn + ')?\n\nThe post will be removed from the live site on the next build and revert to a draft.')) return;
+        $('out').textContent = 'Unpublishing…';
+        const res = await fetch('/posts/' + encodeURIComponent(p.translationKey) + '/unpublish', { method: 'POST' });
+        if (res.status === 401) { location.href = '/login'; return; }
+        const body = await res.json().catch(() => ({}));
+        $('out').textContent = res.ok
+          ? 'Unpublished "' + title + '".' + describeBuild(body.build)
+          : 'Unpublish failed: ' + (body.error || res.status);
+        if (res.ok) await load();
+      }
+
+      async function deletePost(p) {
+        const title = p.titleDe || '(untitled)';
+        const warning = p.status === 'published'
+          ? '\n\nThis post is PUBLISHED — it will be removed from the live site on the next build.'
+          : '';
+        if (!confirm('Delete "' + title + '" (' + p.slugDe + ' / ' + p.slugEn + ')?' + warning + '\n\nThis cannot be undone.')) return;
+        $('out').textContent = 'Deleting…';
+        const res = await fetch('/posts/' + encodeURIComponent(p.translationKey), { method: 'DELETE' });
+        if (res.status === 401) { location.href = '/login'; return; }
+        const body = await res.json().catch(() => ({}));
+        $('out').textContent = res.ok
+          ? 'Deleted "' + title + '".' + describeBuild(body.build)
+          : 'Delete failed: ' + (body.error || res.status);
+        if (res.ok) await load();
+      }
 
       async function load() {
         const res = await fetch('/posts');
@@ -74,6 +110,13 @@
 
             const tdTitle = document.createElement('td');
             tdTitle.textContent = p.titleDe || '(untitled)';
+            if (p.hasEnBody === false) {
+              const hint = document.createElement('span');
+              hint.textContent = ' · EN missing';
+              hint.style.color = '#6b7280';
+              hint.style.fontSize = '0.75rem';
+              tdTitle.appendChild(hint);
+            }
             tr.appendChild(tdTitle);
 
             const tdStatus = document.createElement('td');
@@ -97,6 +140,24 @@
             editLink.textContent = 'Edit';
             editLink.className = 'action-link';
             tdActions.appendChild(editLink);
+            if (me && me.isAdmin) {
+              if (p.status === 'published') {
+                const unpubBtn = document.createElement('button');
+                unpubBtn.textContent = 'Unpublish';
+                unpubBtn.className = 'btn-remove';
+                unpubBtn.style.marginLeft = '0.75rem';
+                unpubBtn.style.fontSize = '0.7rem';
+                unpubBtn.addEventListener('click', () => unpublishPost(p));
+                tdActions.appendChild(unpubBtn);
+              }
+              const delBtn = document.createElement('button');
+              delBtn.textContent = 'Delete';
+              delBtn.className = 'btn-remove';
+              delBtn.style.marginLeft = '0.75rem';
+              delBtn.style.fontSize = '0.7rem';
+              delBtn.addEventListener('click', () => deletePost(p));
+              tdActions.appendChild(delBtn);
+            }
             tr.appendChild(tdActions);
 
             tbody.appendChild(tr);
@@ -117,9 +178,9 @@
       });
 
       (async () => {
-        const s = await Auth.ensureAuthed();
-        if (!s) return;
-        Auth.renderHeader(s);
+        me = await Auth.ensureAuthed();
+        if (!me) return;
+        Auth.renderHeader(me);
         await load();
       })();
     </script>

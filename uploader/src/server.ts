@@ -304,6 +304,44 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send({ published: true, build });
   });
 
+  // @ai-warning: the emergency brake — flips a published pair back to draft and
+  // rebuilds so the live site drops it. Same trust boundary as publish: admin-only.
+  app.post('/posts/:tk/unpublish', { preHandler: requireAdmin }, async (req, reply) => {
+    const tk = (req.params as { tk: string }).tk;
+    const pair = await posts.get(tk);
+    if (!pair) return reply.code(404).send({ error: 'post not found' });
+    if (pair.status !== 'published') return reply.code(409).send({ error: 'post is not published' });
+    try {
+      await posts.unpublish(tk);
+    } catch (e) {
+      if (e instanceof PostError) return reply.code(404).send({ error: e.message });
+      throw e;
+    }
+    const build = await cfg.builder.build();
+    return reply.send({ unpublished: true, build });
+  });
+
+  // Hard delete (both locale rows), freeing the slugs for reuse. MDX backups in
+  // /data/backup and uploaded images are intentionally left in place (recovery
+  // path). Rebuild only when the post was live — a draft was never on the site.
+  app.delete('/posts/:tk', { preHandler: requireAdmin }, async (req, reply) => {
+    const tk = (req.params as { tk: string }).tk;
+    const pair = await posts.get(tk);
+    if (!pair) return reply.code(404).send({ error: 'post not found' });
+    const wasPublished = pair.status === 'published';
+    try {
+      await posts.remove(tk);
+    } catch (e) {
+      if (e instanceof PostError) return reply.code(404).send({ error: e.message });
+      throw e;
+    }
+    if (wasPublished) {
+      const build = await cfg.builder.build();
+      return reply.send({ deleted: true, build });
+    }
+    return reply.send({ deleted: true });
+  });
+
   app.get('/health', async () => ({ ok: true }));
 
   // Replaces the old secret-gated POST /build on the builder container.

@@ -386,6 +386,77 @@ describe('posts editor', () => {
     const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
     expect(pub.statusCode).toBe(400);
   });
+
+  it('delete and unpublish are admin-only (401 anonymous, 403 author)', async () => {
+    const b = build();
+    expect((await b.app.inject({ method: 'DELETE', url: '/posts/x' })).statusCode).toBe(401);
+    expect((await b.app.inject({ method: 'POST', url: '/posts/x/unpublish' })).statusCode).toBe(401);
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    expect((await b.app.inject({ method: 'DELETE', url: '/posts/x', cookies: cookie })).statusCode).toBe(403);
+    expect((await b.app.inject({ method: 'POST', url: '/posts/x/unpublish', cookies: cookie })).statusCode).toBe(403);
+  });
+
+  it('delete and unpublish 404 on an unknown translation key', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    expect((await b.app.inject({ method: 'DELETE', url: '/posts/nope', cookies: cookie })).statusCode).toBe(404);
+    expect((await b.app.inject({ method: 'POST', url: '/posts/nope/unpublish', cookies: cookie })).statusCode).toBe(404);
+  });
+
+  it('deleting a draft removes it without rebuilding the site', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const del = await b.app.inject({ method: 'DELETE', url: `/posts/${tk}`, cookies: cookie });
+    expect(del.statusCode).toBe(200);
+    expect(del.json()).toEqual({ deleted: true });
+    expect(s.calls.length).toBe(0); // a draft was never on the live site
+    expect((await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json()).toHaveLength(0);
+  });
+
+  it('deleting a published post rebuilds the site and reports the outcome', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(s.calls.length).toBe(1); // publish built once
+    const del = await b.app.inject({ method: 'DELETE', url: `/posts/${tk}`, cookies: cookie });
+    expect(del.statusCode).toBe(200);
+    expect(del.json()).toEqual({ deleted: true, build: { ok: true, release: 'r1' } });
+    expect(s.calls.length).toBe(2);
+    expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).statusCode).toBe(404);
+  });
+
+  it('unpublish 409s on a draft', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    expect(un.statusCode).toBe(409);
+    expect(un.json().error).toBe('post is not published');
+    expect(s.calls.length).toBe(0);
+  });
+
+  it('unpublish flips a published post to draft and rebuilds', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(s.calls.length).toBe(1);
+    const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    expect(un.statusCode).toBe(200);
+    expect(un.json()).toEqual({ unpublished: true, build: { ok: true, release: 'r1' } });
+    expect(s.calls.length).toBe(2);
+    const got = await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie });
+    expect(got.json().status).toBe('draft');
+  });
 });
 
 describe('WordPress import', () => {

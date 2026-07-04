@@ -2,7 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgUserStore, UserExistsError } from '../src/users.js';
 import { pgSessionStore } from '../src/sessions.js';
-import { pgPostStore } from '../src/posts.js';
+import { pgPostStore, PostError } from '../src/posts.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -67,6 +67,36 @@ maybe('pgPostStore (integration)', () => {
     await store.publish(created.translationKey);
     expect((await store.get(created.translationKey))?.status).toBe('published');
     await expect(store.upsertDraft({ ...created, status: 'published', de: { ...base.de, slug: 'renamed' } })).rejects.toThrow();
+    await pool.end();
+  });
+
+  it('unpublishes back to draft; remove deletes both rows and frees the slugs', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    const base = {
+      translationKey: '', status: 'draft' as const,
+      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    };
+    const created = await store.upsertDraft(base);
+    expect((await store.list()).find((p) => p.translationKey === created.translationKey)?.hasEnBody).toBe(true);
+    await store.publish(created.translationKey);
+    await store.unpublish(created.translationKey);
+    expect((await store.get(created.translationKey))?.status).toBe('draft');
+    await store.remove(created.translationKey);
+    const { rows } = await pool.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM posts WHERE translation_key=$1`, [created.translationKey],
+    );
+    expect(rows[0]?.n).toBe(0);
+    // the freed slugs are reusable by a brand-new pair
+    const reused = await store.upsertDraft(base);
+    expect(reused.de.slug).toBe('de-slug');
+    expect(reused.translationKey).not.toBe(created.translationKey);
+    await expect(store.remove('no-such-key')).rejects.toBeInstanceOf(PostError);
+    await expect(store.unpublish('no-such-key')).rejects.toBeInstanceOf(PostError);
     await pool.end();
   });
 });
