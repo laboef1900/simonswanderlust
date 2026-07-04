@@ -36,11 +36,12 @@ Required env var for the app: **`DATABASE_URL`** (see `uploader/.env.example`). 
 
 The same **`uploader/`** app (Node 22 + Fastify 5 + sharp, Dockerized) also optimizes uploaded
 photos into responsive AVIF/WebP variants and returns paste-ready `heroImage` / `<RemoteImage>` /
-`<BodyImage>` snippets (with optional local-AI alt text via LM Studio). Access is gated by
-username/password accounts stored in Postgres, with HttpOnly session cookies. Everything runs on
-Simon's own server, in one container. See `uploader/README.md`, `ARCHITECTURE.md`, and the specs
+`<BodyImage>` snippets. Access is gated by username/password accounts stored in Postgres, with
+HttpOnly session cookies. Everything runs on Simon's own server, in one container. **This project
+does not use LM Studio or any AI features** — the former AI caption/batch-uploader feature was
+removed in July 2026 (the 2026-06-22 spec is historical). See `uploader/README.md`,
+`ARCHITECTURE.md`, and the specs
 `docs/superpowers/specs/2026-06-18-image-hosting-uploader-design.md` +
-`docs/superpowers/specs/2026-06-22-ai-batch-image-uploader-design.md` +
 `docs/superpowers/specs/2026-07-03-single-app-container-design.md`.
 
 **Design language:** Editorial magazine + "refined brand" voice, with an "Expedition Log"
@@ -137,6 +138,7 @@ blog/
 ├── CLAUDE.md                       # this file
 ├── Dockerfile                      # single multistage image (uploader + site trees, DHI runtime); repo-root context
 ├── docker-compose.yml              # app + db (WordPress-style, two services)
+├── .github/workflows/ci.yml        # PR/push: typecheck + tests (both apps) + astro check, vs a Postgres service
 ├── .github/workflows/release.yml   # tag v*.*.* → build & push GHCR image + GitHub Release
 ├── docs/superpowers/              # design spec + phase plans (source of truth for scope)
 ├── *.md                           # blog platform research (WordPress vs Astro, etc.)
@@ -155,9 +157,9 @@ blog/
 │       ├── scripts/travel-map.ts               #   MapLibre GL island; initializes full map and mini-maps
 │       └── layouts/  ·  styles/  ·  assets/
 └── uploader/                      # self-hosted app: CMS + image service + blog serving (Node/Fastify/sharp)
-    ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · caption · settings · posts · build · backup · export · wxr-parse · wp-content · wp-images · wp-import
-    ├── public/                    #   index.html (hero upload) · batch.html (AI batch uploader) · import.html (WordPress import)
-    ├── test/                      #   Vitest suites (no live LM Studio needed)
+    ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · settings · posts · build · backup · export · wxr-parse · wp-content · wp-images · wp-import
+    ├── public/                    #   index.html (hero upload) · import.html (WordPress import) · editor/posts/about/settings/users
+    ├── test/                      #   Vitest suites (integration suites run when TEST_DATABASE_URL is set)
     └── .env.example · README.md
 ```
 
@@ -172,21 +174,17 @@ Full security model: `SECURITY.md`. These patterns MUST be preserved when changi
 - **Authentication** — All mutating uploader endpoints require a valid session (HttpOnly cookie;
   username/password accounts in Postgres); the only exceptions are `POST /login` and first-run
   `POST /setup` (guarded by a zero-users check, a setup lock, and the login rate limiter).
-  Publish, rebuild, page edits, backups, and user management are **admin-only**; general
-  settings require any authenticated user (only the backup fields are admin-gated). Auth
-  endpoints are rate-limited.
+  Publish, rebuild, page edits, settings, backups, and user management are **admin-only**.
+  Auth endpoints are rate-limited.
 - **Infrastructure Isolation** — Only the app's port `3000` is published; Postgres is reachable
-  solely on the compose-internal network. LM Studio (local-AI captions) is reached via
-  `host.docker.internal`, never over the public internet.
+  solely on the compose-internal network.
 - **Hardened Remote Fetches** — WP-import fetches go through `safeFetch` (SSRF guard, timeout,
-  streamed size cap). LM Studio caption calls carry timeouts only and intentionally allow
-  private/localhost targets (that is where the local model runs). File access goes through
-  path-traversal guards. Keep these intact when touching that code.
+  streamed size cap). File access goes through path-traversal guards. Keep these intact when
+  touching that code.
 - **Configuration Management** — Do NOT grow `.env`. App settings live in a JSON settings store
   on the data volume (`uploader/src/settings.ts`, atomic-rename writes) and are managed via the
   admin Settings page; `.env` is reserved for bootstrap values
-  (`DATABASE_URL`/`POSTGRES_PASSWORD`, `PUBLIC_BASE_URL`, LM Studio endpoint — see
-  `uploader/.env.example`).
+  (`DATABASE_URL`/`POSTGRES_PASSWORD`, `PUBLIC_BASE_URL` — see `uploader/.env.example`).
 
 ### 2. Framework & Output Safety
 - Treat every Fastify route as a public HTTP endpoint: authenticate/authorize *inside* the
@@ -198,10 +196,9 @@ Full security model: `SECURITY.md`. These patterns MUST be preserved when changi
 
 ### 3. AI Assistant Security Guidelines
 These apply to YOU, the assistant, while working here:
-- **OWASP Integration (Web & LLM)** — Actively develop with the **OWASP Top 10** and the
-  **OWASP Top 10 for LLM Applications** in mind: defend against SQLi, XSS, and SSRF as well as
-  AI-specific risks (prompt injection via imported/user content, improper output handling —
-  relevant to the LM Studio caption pipeline and the WXR importer).
+- **OWASP Integration** — Actively develop with the **OWASP Top 10** in mind: defend against
+  SQLi, XSS, and SSRF (most relevant here: the WXR importer's remote fetches and the sanitized
+  body-HTML render path). The project deliberately contains no AI/LLM features.
 - **Secret Protection** — Never log, print, or echo secrets/keys in responses or tool output.
   If editing a file with secrets, preserve them exactly.
 - **Command Execution Safety** — Do NOT run blindly downloaded scripts (`curl ... | bash`) or
@@ -222,13 +219,14 @@ output and exempt.
   images, backups), never only in process memory or the container filesystem.
 - **Logs as event streams** — Log to `stdout`/`stderr` only (Docker captures them); no log files.
 - **Health & resilience** — The app exposes `/health` (used by the compose healthcheck);
-  `restart: unless-stopped` covers crashes. Degrade gracefully when optional backing services
-  are down (e.g. LM Studio unreachable → captions unavailable, uploads still work) — never
-  crash the app over an optional dependency.
+  `restart: unless-stopped` covers crashes. Degrade gracefully when an optional dependency is
+  down — never crash the app over one.
 - **Schema changes** — `uploader/src/db.ts` owns the schema via idempotent
   `CREATE TABLE IF NOT EXISTS` bootstrap; evolve it there (additive, idempotent). No hand-run
   SQL against the live DB.
-- **CI/CD & immutable artifacts** — `.github/workflows/release.yml` builds the app image ONCE
+- **CI/CD & immutable artifacts** — `.github/workflows/ci.yml` runs the Automated Verification
+  Loop (typecheck + tests for both apps + `astro check`, against a Postgres service container)
+  on every PR and push to `main`. `.github/workflows/release.yml` builds the app image ONCE
   per version tag (`v*.*.*`) and pushes it to GHCR; deploys promote that immutable image by
   bumping `IMAGE_TAG` in `.env` — never rebuild on the server.
 - **Backups** — Postgres backups run scheduled/on-demand to `/data/backup/db` with retention
@@ -313,6 +311,11 @@ Use comments to leave hints for future sessions:
   `ARCHITECTURE.md` and `docs/superpowers/specs/2026-07-03-single-app-container-design.md`
   (branch `feature/single-app-container`).
 - **Done:** Editable About page + baked-in travel map basemap (v0.5.0).
+- **Done:** AI feature removal + conformance hardening (July 2026) — removed the LM Studio
+  caption/batch-uploader feature entirely (`/suggest`, `caption.ts`, `batch.html`, LM settings);
+  settings endpoints are now admin-only; a global error handler logs unexpected errors
+  server-side and returns sanitized 500s; PR CI added (`.github/workflows/ci.yml`); site tests
+  consolidated next to their modules (branch `feature/remove-ai-and-harden`).
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details.
 
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.

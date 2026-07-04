@@ -22,7 +22,7 @@ Shared state, all under the **`/data`** volume (bind-mounted from `./uploader/da
 - `images/` — optimized image variants (`STORAGE_DIR`).
 - `site/releases/<stamp>` + `site/current` (symlink) — built static output (`SITE_DIR`).
 - `backup/` — MDX export backups; `backup/db/` — gzipped Postgres dumps.
-- `settings.json` — admin-configurable settings (LM Studio, backup schedule/retention).
+- `settings.json` — admin-configurable settings (backup schedule/retention).
 
 Plus the **`pgdata`** volume — Postgres data.
 
@@ -30,14 +30,14 @@ Plus the **`pgdata`** volume — Postgres data.
                          ┌──────────────────────── browser ────────────────────────┐
                          │  reader (blog + images)                 author / admin   │
                          └──────┬───────────────────────────────────────┬───────────┘
-                                │ GET simonswanderlust.com/*             │ /admin/  /upload  /suggest
+                                │ GET simonswanderlust.com/*             │ /admin/  /upload
                                 │ GET img.simonswanderlust.com/*         │ /backups  /rebuild
                                 ▼                                        ▼
                          ┌───────────────────────────────────────────────────────────┐
                          │  app — Fastify 5, single process, host-routed             │
                          │   img host → /data/images (variants, 1y cache)            │
                          │   main host → /data/site/current (blog) · /map-assets     │
-                         │   any host → /admin/*, /upload, /suggest, /backups, ...   │
+                         │   any host → /admin/*, /upload, /backups, /rebuild, ...   │
                          └───────────┬───────────────────────────┬───────────────────┘
                                       │ pg                        │ spawn(node astro.mjs build)
                                       ▼                            ▼
@@ -92,9 +92,6 @@ registered with a Fastify **host constraint** for the hostname of `PUBLIC_BASE_U
 via `IMG_HOST`), so on the img host the constrained `/` wildcard wins and image URLs behave exactly
 as before the merge. All other routes (admin, blog, map) are unconstrained.
 
-Optional **AI alt text**: the batch uploader can call a local LM Studio (qwen-VL) to suggest
-DE + EN alt text and a slug for body photos. The server never needs to reach the model; it is
-configured per-deployment and runs on the author's machine.
 
 ## Data model (Postgres)
 
@@ -170,7 +167,6 @@ the `IMAGE_TAG` defaults (`docker-compose.yml`, `uploader/.env.example`), commit
 | `MAP_DIR` | app | PMTiles/glyph assets root for `/map/` (`/map-assets`) |
 | `STORAGE_DIR` | app | On-disk image variants |
 | `BACKUP_DIR` | app | Root for MDX export backups and (in `db/`) database dumps |
-| `LMSTUDIO_BASE_URL` / `LMSTUDIO_MODEL` | app | Local AI alt-text endpoint (optional) |
 | `PORT` | app | Listen port (default `3000`) |
 | `PROTOMAPS_BUILD` / `MAP_MAXZOOM` / `PMTILES_VERSION` | Dockerfile (build args) | Pin the map basemap fetched + baked into the image at build (see `docs/map-assets.md`) |
 | `IMAGE_TAG` | compose | Released GHCR image version to run |
