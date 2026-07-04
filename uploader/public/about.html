@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>About Page · Simon's Wanderlust</title>
+    <link rel="stylesheet" href="/admin/admin.css" />
+    <link rel="stylesheet" href="/admin/vendor/easymde.min.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="masthead-inner">
+        <nav id="mainnav" aria-label="Admin"></nav>
+        <p class="eyebrow">Expedition Log · Image Station</p>
+        <h1>About page</h1>
+        <p class="muted" id="whoami"></p>
+      </div>
+    </header>
+    <main>
+      <div class="tabs-bar">
+        <button type="button" class="tab-btn active" data-tab="de">Deutsch (DE)</button>
+        <button type="button" class="tab-btn" data-tab="en">English (EN)</button>
+      </div>
+
+      <section id="tab-de" class="card locale-tab">
+        <h2 class="card-heading">Deutsch</h2>
+        <label for="deTitle">Heading</label>
+        <input id="deTitle" type="text" placeholder="Über mich" />
+        <label>Body (Markdown)</label>
+        <textarea id="deBody"></textarea>
+        <div class="body-img-row">
+          <input id="deBodyImgFile" type="file" accept="image/*" />
+          <input id="deBodyImgAlt" type="text" placeholder="Alt text (DE)" />
+          <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert body image</button>
+          <p id="deBodyImgStatus" class="muted"></p>
+        </div>
+      </section>
+
+      <section id="tab-en" class="card locale-tab" style="display:none">
+        <h2 class="card-heading">English</h2>
+        <label for="enTitle">Heading</label>
+        <input id="enTitle" type="text" placeholder="About me" />
+        <label>Body (Markdown)</label>
+        <textarea id="enBody"></textarea>
+        <div class="body-img-row">
+          <input id="enBodyImgFile" type="file" accept="image/*" />
+          <input id="enBodyImgAlt" type="text" placeholder="Alt text (EN)" />
+          <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert body image</button>
+          <p id="enBodyImgStatus" class="muted"></p>
+        </div>
+      </section>
+
+      <div class="editor-actions card">
+        <button id="saveBtn" class="btn-publish">Save &amp; rebuild</button>
+        <p id="actionStatus" class="muted"></p>
+        <p id="actionError" class="err" style="display:none"></p>
+      </div>
+    </main>
+
+    <script src="/admin/auth.js"></script>
+    <script src="/admin/vendor/easymde.min.js"></script>
+    <script>
+      'use strict';
+      const $ = (id) => document.getElementById(id);
+      const KEY = 'about';
+      const deImages = {}, enImages = {};
+
+      const deMDE = new EasyMDE({ element: $('deBody'), spellChecker: false, autosave: { enabled: false },
+        toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'] });
+      const enMDE = new EasyMDE({ element: $('enBody'), spellChecker: false, autosave: { enabled: false },
+        toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'] });
+
+      document.querySelectorAll('.tab-btn').forEach((btn) => btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        const tab = btn.dataset.tab;
+        $('tab-de').style.display = tab === 'de' ? '' : 'none';
+        $('tab-en').style.display = tab === 'en' ? '' : 'none';
+        (tab === 'en' ? enMDE : deMDE).codemirror.refresh();
+      }));
+
+      function showErr(msg) { const el = $('actionError'); el.textContent = msg; el.style.display = msg ? '' : 'none'; }
+      function setStatus(msg) { $('actionStatus').textContent = msg; }
+
+      async function uploadBodyImg(locale) {
+        const fileInput = $(locale + 'BodyImgFile'), altInput = $(locale + 'BodyImgAlt'), statusEl = $(locale + 'BodyImgStatus');
+        const file = fileInput.files[0];
+        if (!file) { statusEl.textContent = 'Pick a file first.'; return; }
+        const imgSlug = file.name.replace(/\.[^.]+$/, '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+        statusEl.textContent = 'Uploading…';
+        const fd = new FormData();
+        fd.append('key', 'pages/about/' + imgSlug);
+        fd.append('alt', altInput.value);
+        fd.append('file', file);
+        const res = await fetch('/upload', { method: 'POST', body: fd });
+        if (res.status === 401) { location.href = '/login'; return; }
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
+        (locale === 'de' ? deImages : enImages)[body.src] = { width: body.width, height: body.height };
+        (locale === 'de' ? deMDE : enMDE).codemirror.replaceSelection('![' + (altInput.value || '') + '](' + body.src + ')');
+        statusEl.textContent = 'Inserted: ' + body.src;
+        fileInput.value = ''; altInput.value = '';
+      }
+      $('deBodyImgUpload').addEventListener('click', () => uploadBodyImg('de'));
+      $('enBodyImgUpload').addEventListener('click', () => uploadBodyImg('en'));
+
+      function localeObj(loc) {
+        return { locale: loc, title: $(loc + 'Title').value.trim(),
+          bodyMarkdown: (loc === 'de' ? deMDE : enMDE).value(), images: { ...(loc === 'de' ? deImages : enImages) } };
+      }
+
+      $('saveBtn').addEventListener('click', async () => {
+        showErr(''); setStatus('Saving & rebuilding…');
+        const payload = { de: localeObj('de'), en: localeObj('en') };
+        const res = await fetch('/pages/' + KEY, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+        if (res.status === 401) { location.href = '/login'; return; }
+        if (res.status === 403) { showErr('Only admins can save the About page.'); setStatus(''); return; }
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) { showErr(body.error || ('Save failed: ' + res.status)); setStatus(''); return; }
+        if (body.build && !body.build.ok) { showErr('Build error: ' + (body.build.error || 'unknown')); setStatus(''); return; }
+        const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
+        setStatus('Saved & rebuilt ✓' + release);
+      });
+
+      function fill(loc, data) {
+        if (!data) return;
+        $(loc + 'Title').value = data.title || '';
+        (loc === 'de' ? deMDE : enMDE).value(data.bodyMarkdown || '');
+        if (data.images) Object.assign(loc === 'de' ? deImages : enImages, data.images);
+      }
+
+      (async () => {
+        const s = await Auth.ensureAuthed();
+        if (!s) return;
+        Auth.renderHeader(s);
+        if (!s.isAdmin) { showErr('You are signed in as an author; only admins can edit the About page.'); $('saveBtn').disabled = true; }
+        const res = await fetch('/pages/' + KEY);
+        if (res.status === 401) { location.href = '/login'; return; }
+        if (res.ok) { const p = await res.json(); fill('de', p.de); fill('en', p.en); enMDE.codemirror.refresh(); setStatus('Loaded.'); }
+        else setStatus('Could not load: ' + res.status);
+      })();
+    </script>
+  </body>
+</html>
