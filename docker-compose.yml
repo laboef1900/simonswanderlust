@@ -7,7 +7,14 @@
 services:
   app:
     image: ghcr.io/laboef1900/simonswanderlust-app:${IMAGE_TAG:-0.4.0}
-    build: .
+    # Build from the hardened DHI node bases (requires `docker login dhi.io`),
+    # matching the CI release. Override in .env with the plain node:22-slim
+    # fallback if you build without a DHI subscription.
+    build:
+      context: .
+      args:
+        NODE_BUILD: ${NODE_BUILD:-dhi.io/node:22-dev}
+        NODE_RUNTIME: ${NODE_RUNTIME:-dhi.io/node:22}
     ports:
       - "3000:3000"
     environment:
