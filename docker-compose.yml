@@ -6,7 +6,7 @@
 # repo root (bases default to DHI — see Dockerfile).
 services:
   app:
-    image: ghcr.io/laboef1900/simonswanderlust-app:${IMAGE_TAG:-0.4.0}
+    image: ghcr.io/laboef1900/simonswanderlust-app:${IMAGE_TAG:-0.5.0}
     ports:
       - "3000:3000"
     environment:
