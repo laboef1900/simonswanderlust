@@ -1,20 +1,12 @@
 # Self-hosted stack, WordPress-style: one app container + Postgres.
-# Copy uploader/.env.example to .env (set POSTGRES_PASSWORD). On the server:
+# Copy uploader/.env.example to .env (set POSTGRES_PASSWORD). Then:
 #   docker compose pull && docker compose up -d     # run the released GHCR image
-# For local development, build from source instead:
-#   docker compose up -d --build
 # Pin the published image version with IMAGE_TAG in .env (default below).
+# Compose only RUNS the published image; to rebuild it, `docker build` from the
+# repo root (bases default to DHI — see Dockerfile).
 services:
   app:
     image: ghcr.io/laboef1900/simonswanderlust-app:${IMAGE_TAG:-0.4.0}
-    # Build from the hardened DHI node bases (requires `docker login dhi.io`),
-    # matching the CI release. Override in .env with the plain node:22-slim
-    # fallback if you build without a DHI subscription.
-    build:
-      context: .
-      args:
-        NODE_BUILD: ${NODE_BUILD:-dhi.io/node:22-dev}
-        NODE_RUNTIME: ${NODE_RUNTIME:-dhi.io/node:22}
     ports:
       - "3000:3000"
     environment:

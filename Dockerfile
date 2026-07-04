@@ -4,14 +4,17 @@
 # Astro toolchain for runtime rebuilds (spawned via plain node — no npx/shell,
 # so the runtime stays the minimal non-root DHI variant).
 #
-# CI overrides the bases with Docker Hardened Images:
-#   --build-arg NODE_BUILD=dhi.io/node:22-dev     (npm for the installs)
-#   --build-arg NODE_RUNTIME=dhi.io/node:22       (minimal, non-root uid 1000)
+# Bases default to Docker Hardened Images (requires `docker login dhi.io`),
+# matching the image CI publishes to GHCR:
+#   NODE_BUILD   dhi.io/node:22-dev   — SDK variant (npm + shell) for the installs
+#   NODE_RUNTIME dhi.io/node:22       — minimal, non-root uid 1000, no shell
+# To build without a DHI subscription, override both with the plain node base:
+#   docker build --build-arg NODE_BUILD=node:22-slim --build-arg NODE_RUNTIME=node:22-slim .
 # @ai-warning: NODE_BUILD and NODE_RUNTIME must share an OS/libc family —
 # sharp's and Astro's native binaries are installed in build stages and copied
 # into the runtime.
-ARG NODE_BUILD=node:22-slim
-ARG NODE_RUNTIME=node:22-slim
+ARG NODE_BUILD=dhi.io/node:22-dev
+ARG NODE_RUNTIME=dhi.io/node:22
 
 # --- uploader deps + vendored admin assets ---
 FROM ${NODE_BUILD} AS uploader-build
