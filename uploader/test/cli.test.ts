@@ -17,8 +17,12 @@ describe('uploadFile', () => {
     const stored = await uploadFile(img, 'trips/test/hero', 'A test', {
       storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
     });
+    // Keys are content-hash versioned (issue #26): hero-<hash8>-<width>.<fmt>.
     const files = await readdir(join(dir, 'trips', 'test'));
-    expect(files.sort()).toEqual(['hero-640.avif', 'hero-640.webp', 'hero-800.avif', 'hero-800.webp']);
-    expect(stored.snippet).toContain("src: 'https://img.simonswanderlust.com/trips/test/hero'");
+    expect(files).toHaveLength(4);
+    for (const f of files) {
+      expect(f).toMatch(/^hero-[0-9a-f]{8}-(640|800)\.(avif|webp)$/);
+    }
+    expect(stored.snippet).toMatch(/src: 'https:\/\/img\.simonswanderlust\.com\/trips\/test\/hero-[0-9a-f]{8}'/);
   });
 });

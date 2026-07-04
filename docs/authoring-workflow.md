@@ -140,10 +140,14 @@ which calls the admin-only `POST /rebuild` route.
 
 Notes:
 
-- **Images don't need a rebuild.** They're served by the app independently — uploading or
-  re-uploading a photo is live immediately. Only content (text) changes need a rebuild.
-- **Re-uploading the same key overwrites** the variants (immutable cache means you may need a
-  hard refresh / cache bust to see a replaced image).
+- **Images don't need a rebuild to be served.** An uploaded file is reachable at its URL
+  immediately — but the site's HTML only points at a *new* image URL after the post is saved
+  with it and republished. Only text/content changes need a rebuild on their own.
+- **Re-uploading a photo returns a NEW URL** (upload keys get a short content-hash suffix), so
+  the previously published URL keeps serving and browser caches can never go stale. To put the
+  replacement on the live site, save the post with the new `src` (the editor's inline upload
+  fills it in automatically) and republish. A standalone upload via `/admin/` alone does not
+  change a published post.
 - **Required environment variable** for the stack: `DATABASE_URL` (Postgres connection string).
   See `uploader/.env.example`.
 

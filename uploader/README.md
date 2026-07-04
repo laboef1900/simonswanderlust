@@ -10,7 +10,11 @@ stack: [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Security model: [`../SECURITY
 
 Filenames: `{key}-{width}.{format}` at widths 640/1280/1920 (plus the source's
 own width, never upscaled), formats `avif` + `webp`. Must match the blog's
-`site/src/lib/images.ts`. Variants are served with a one-year immutable cache.
+`site/src/lib/images.ts`. `/upload` (and the CLI) append a short content-hash
+suffix to the key (`…/hero-<hash8>`), so re-uploading a photo mints a new URL
+and old URLs keep serving — which is what justifies serving variants with a
+one-year immutable cache. (WP-import rehost keys stay deterministic so
+re-imports are idempotent.)
 
 ---
 

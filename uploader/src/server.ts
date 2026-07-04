@@ -7,7 +7,7 @@ import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
 import { processImage } from './pipeline.js';
-import { storeVariants } from './storage.js';
+import { contentHashKey, storeVariants } from './storage.js';
 import { verifyPassword, type UserStore, UserExistsError } from './users.js';
 import type { SessionStore } from './sessions.js';
 import {
@@ -101,10 +101,12 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   const here = dirname(fileURLToPath(import.meta.url));
   app.register(fastifyStatic, { root: join(here, '..', 'public'), prefix: '/admin/' });
-  // Variants are content-addressed by {key}-{width}.{fmt}, so they never change
-  // under a given URL — serve them with a one-year immutable cache. (A custom
-  // setHeaders is overwritten by @fastify/static's own cacheControl, so use the
-  // native maxAge + immutable options instead.)
+  // /upload appends a content hash to every key (contentHashKey), so a given
+  // variant URL's bytes never change: replacing a photo mints a new URL and
+  // previously published URLs keep serving — which is what makes a one-year
+  // immutable cache correct. (A custom setHeaders is overwritten by
+  // @fastify/static's own cacheControl, so use the native maxAge + immutable
+  // options instead.)
   app.register(fastifyStatic, {
     root: storageDir,
     prefix: '/',
@@ -158,8 +160,13 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (!KEY_RE.test(key)) {
       return reply.code(400).send({ error: 'invalid key (use lowercase a-z, 0-9, / _ -)' });
     }
+    // Version the key by content hash (issue #26): a re-upload mints a fresh
+    // URL instead of overwriting variants cached as immutable; old URLs keep
+    // serving because nothing on disk is touched. Clients use the returned
+    // src/snippet, never the key they sent.
+    const versionedKey = contentHashKey(key, buf);
     const result = await processImage(buf);
-    const stored = await storeVariants(key, alt, result, { storageDir, baseUrl: cfg.baseUrl });
+    const stored = await storeVariants(versionedKey, alt, result, { storageDir, baseUrl: cfg.baseUrl });
     return reply.send(stored);
   });
 
