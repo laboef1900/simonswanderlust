@@ -1,6 +1,7 @@
 import { defineCollection } from 'astro:content';
 import { z } from 'astro/zod';
 import { postgresTripsLoader } from './lib/postgres-loader';
+import { postgresPagesLoader } from './lib/pages-loader';
 
 const trips = defineCollection({
   loader: postgresTripsLoader(),
@@ -26,4 +27,9 @@ const trips = defineCollection({
     }),
 });
 
-export const collections = { trips };
+const pages = defineCollection({
+  loader: postgresPagesLoader(),
+  schema: () => z.object({ title: z.string() }),
+});
+
+export const collections = { trips, pages };
