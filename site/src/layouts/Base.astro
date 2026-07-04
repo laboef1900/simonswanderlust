@@ -45,9 +45,9 @@ const site = Astro.site ?? new URL('https://simonswanderlust.com');
       )
     }
   </head>
-  <body class="bg-canvas font-sans text-ink antialiased">
+  <body class="flex min-h-dvh flex-col bg-canvas font-sans text-ink antialiased">
     <Nav locale={locale} alternates={alternates} />
-    <main><slot /></main>
+    <main class="flex-1"><slot /></main>
     <Footer locale={locale} />
   </body>
 </html>
