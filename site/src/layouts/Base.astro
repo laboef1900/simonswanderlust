@@ -13,11 +13,17 @@ interface Props {
   locale: Locale;
   /** Paths of this page in both languages; drives hreflang + language switcher. */
   alternates?: { de: string; en: string };
+  /** Social-sharing image (og:image); `src` must be an absolute URL (trips Zod schema guarantees it). */
+  image?: { src: string; width: number; height: number; alt: string };
+  ogType?: 'website' | 'article';
 }
 
-const { title, description, locale, alternates } = Astro.props;
+const { title, description, locale, alternates, image, ogType = 'website' } = Astro.props;
 const t = useTranslations(locale);
 const site = Astro.site ?? new URL('https://simonswanderlust.com');
+const canonical = new URL(Astro.url.pathname, site);
+const ogLocale: Record<Locale, string> = { de: 'de_DE', en: 'en_US' };
+const otherLocale: Locale = locale === 'de' ? 'en' : 'de';
 ---
 
 <!doctype html>
@@ -34,7 +40,7 @@ const site = Astro.site ?? new URL('https://simonswanderlust.com');
       href={locale === 'en' ? '/en/rss.xml' : '/rss.xml'}
       title={t('site.title')}
     />
-    <link rel="canonical" href={new URL(Astro.url.pathname, site)} />
+    <link rel="canonical" href={canonical} />
     {
       alternates && (
         <>
@@ -44,6 +50,24 @@ const site = Astro.site ?? new URL('https://simonswanderlust.com');
         </>
       )
     }
+    <meta property="og:site_name" content={t('site.title')} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content={ogType} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:locale" content={ogLocale[locale]} />
+    {alternates && <meta property="og:locale:alternate" content={ogLocale[otherLocale]} />}
+    {
+      image && (
+        <>
+          <meta property="og:image" content={image.src} />
+          <meta property="og:image:width" content={String(image.width)} />
+          <meta property="og:image:height" content={String(image.height)} />
+          <meta property="og:image:alt" content={image.alt} />
+        </>
+      )
+    }
+    <meta name="twitter:card" content={image ? 'summary_large_image' : 'summary'} />
   </head>
   <body class="flex min-h-dvh flex-col bg-canvas font-sans text-ink antialiased">
     <Nav locale={locale} alternates={alternates} />
