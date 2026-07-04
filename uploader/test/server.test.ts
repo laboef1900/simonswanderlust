@@ -7,7 +7,7 @@ import type { BackupState, DbBackup } from '../src/backup.js';
 import sharp from 'sharp';
 import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
-import { validate } from '../src/settings.js';
+import { defaultSettings, validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
 import { memoryUserStore, type UserStore } from '../src/users.js';
 import { memorySessionStore, type SessionStore } from '../src/sessions.js';
@@ -21,7 +21,7 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'imgsrv-'));
 });
 
-const SETTINGS: Settings = { backupSchedule: 'off', backupRetention: 14 };
+const SETTINGS: Settings = defaultSettings();
 function fakeStore(init: Settings = SETTINGS): SettingsStore {
   let cur = { ...init };
   return { get: () => ({ ...cur }), update: (p) => { cur = validate({ ...cur, ...p }); return { ...cur }; } };

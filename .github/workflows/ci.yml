@@ -37,10 +37,10 @@ jobs:
           cache-dependency-path: uploader/package-lock.json
       - run: npm ci
       - run: npm run typecheck
-      # TEST_DATABASE_URL un-skips the pg/pages/backup integration suites.
-      # Sequential files: the integration suites share one database and race
-      # each other's fixtures under Vitest's default file parallelism.
-      - run: npm test -- --fileParallelism=false
+      # TEST_DATABASE_URL un-skips the pg/pages/backup integration suites
+      # (serialized against the shared DB by vitest.config.ts's integration
+      # project; unit suites keep full file parallelism).
+      - run: npm test
         env:
           TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/ci
 
@@ -72,8 +72,9 @@ jobs:
       - run: npm ci
         working-directory: site
       # The Content Layer loader queries Postgres during astro check, so
-      # bootstrap the schema first (uses the uploader's db module).
-      - run: npm ci
+      # bootstrap the schema first via the uploader's db module. The script
+      # only needs pg (+ tsx to run TS) — skip the full uploader install.
+      - run: npm install --no-save pg tsx
         working-directory: uploader
       - run: npx tsx scripts/ci-ensure-schema.ts
         working-directory: uploader

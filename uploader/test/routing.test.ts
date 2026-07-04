@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildServer, type ServerConfig } from '../src/server.js';
-import { validate, type Settings, type SettingsStore } from '../src/settings.js';
+import { defaultSettings, validate, type Settings, type SettingsStore } from '../src/settings.js';
 import { memoryUserStore } from '../src/users.js';
 import { memorySessionStore } from '../src/sessions.js';
 import { memoryPostStore } from '../src/posts.js';
@@ -15,7 +15,7 @@ import type { DbBackup } from '../src/backup.js';
 const IMG = 'img.simonswanderlust.com';
 const MAIN = 'simonswanderlust.com';
 
-const SETTINGS: Settings = { backupSchedule: 'off', backupRetention: 14 };
+const SETTINGS: Settings = defaultSettings();
 const fakeStore = (): SettingsStore => {
   let cur = { ...SETTINGS };
   return { get: () => ({ ...cur }), update: (p) => { cur = validate({ ...cur, ...p }); return { ...cur }; } };

@@ -125,6 +125,27 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
   `users` and `posts`. Deleting users **cascades to `sessions`**, so every login is invalidated —
   the CLI prints a reminder to trigger a rebuild afterwards (`POST /rebuild`).
 
+### Upgrading a Postgres major (e.g. 17 → 18)
+
+A Postgres major cannot read the previous major's cluster files, and `postgres:18+` images also
+moved the volume mount from `/var/lib/postgresql/data` to `/var/lib/postgresql` (data lives in a
+versioned subdirectory). **Deployments with a pre-18 `pgdata` volume must migrate via
+dump-and-restore — do NOT just pull the new image**: with the old volume mounted at the new path,
+the entrypoint finds its versioned PGDATA empty and silently `initdb`s a fresh, empty cluster
+(the old data sits unreferenced at the volume root, and the app happily re-seeds — the blog
+comes up blank without an error). Procedure:
+
+```bash
+# 1. still on the OLD version/compose: dump
+docker exec blog-db-1 pg_dump -U images -d images --no-owner > pg-upgrade-dump.sql
+# 2. stop, drop the old-format volume (the dump is your data now)
+docker compose down && docker volume rm blog_pgdata
+# 3. deploy the new compose (new image + mount), start the db, restore
+docker compose up -d db
+docker exec -i blog-db-1 psql -U images -d images < pg-upgrade-dump.sql
+docker compose up -d
+```
+
 ## Packaging & release pipeline
 
 One image, built from a **multistage Dockerfile at the repo root** (context = repo root, so it can
