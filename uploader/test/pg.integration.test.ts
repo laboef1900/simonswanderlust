@@ -56,16 +56,20 @@ maybe('pgPostStore (integration)', () => {
     await ensureSchema(pool);
     await pool.query('DELETE FROM posts');
     const store = pgPostStore(pool);
+    const stops = [{ name: 'Athen', lat: 37.98, lng: 23.73 }, { name: 'Rhodos', lat: 36.43, lng: 28.22 }];
     const base = {
       translationKey: '', status: 'draft' as const,
-      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 }, stops },
       de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
       en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     };
     const created = await store.upsertDraft(base);
     expect((await store.get(created.translationKey))?.de.slug).toBe('de-slug');
+    // stops survive the jsonb round-trip (writeLocale → rowShared)
+    expect((await store.get(created.translationKey))?.shared.stops).toEqual(stops);
     await store.publish(created.translationKey);
     expect((await store.get(created.translationKey))?.status).toBe('published');
+    expect((await store.get(created.translationKey))?.shared.stops).toEqual(stops);
     await expect(store.upsertDraft({ ...created, status: 'published', de: { ...base.de, slug: 'renamed' } })).rejects.toThrow();
     await pool.end();
   });

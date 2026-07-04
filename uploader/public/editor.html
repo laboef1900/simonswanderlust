@@ -66,6 +66,12 @@
         <label for="fmRoute">Route (optional)</label>
         <input id="fmRoute" type="text" placeholder="e.g. Athens → Rhodes" />
 
+        <div id="stopsContainer">
+          <p class="section-label" style="margin-top:1.25rem">Stops (optional · mini-map waypoints)</p>
+          <div id="stopsList"></div>
+          <button type="button" id="addStop" class="btn-secondary">+ Add stop</button>
+        </div>
+
         <div id="keyFactsContainer">
           <p class="section-label" style="margin-top:1.25rem">Key facts (optional)</p>
           <div id="keyFactsList"></div>
@@ -264,6 +270,59 @@
         return Object.keys(obj).length ? obj : undefined;
       }
 
+      // ---- stops (optional rows: mini-map waypoints) ----
+      function addStopRow(name = '', lat = '', lng = '') {
+        const row = document.createElement('div');
+        row.className = 'stop-row';
+
+        const nameInput = document.createElement('input');
+        nameInput.type = 'text';
+        nameInput.placeholder = 'Name';
+        nameInput.className = 'stop-name';
+        nameInput.value = name;
+
+        const latInput = document.createElement('input');
+        latInput.type = 'number';
+        latInput.step = 'any';
+        latInput.placeholder = 'Lat';
+        latInput.className = 'stop-lat';
+        latInput.value = lat;
+
+        const lngInput = document.createElement('input');
+        lngInput.type = 'number';
+        lngInput.step = 'any';
+        lngInput.placeholder = 'Lng';
+        lngInput.className = 'stop-lng';
+        lngInput.value = lng;
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'btn-remove';
+        remove.textContent = '×';
+        remove.addEventListener('click', () => row.remove());
+
+        row.appendChild(nameInput);
+        row.appendChild(latInput);
+        row.appendChild(lngInput);
+        row.appendChild(remove);
+        $('stopsList').appendChild(row);
+      }
+
+      $('addStop').addEventListener('click', () => addStopRow());
+
+      function collectStops() {
+        const rows = $('stopsList').querySelectorAll('.stop-row');
+        if (!rows.length) return undefined;
+        const stops = [];
+        rows.forEach((r) => {
+          const name = r.querySelector('.stop-name').value.trim();
+          const lat = parseFloat(r.querySelector('.stop-lat').value);
+          const lng = parseFloat(r.querySelector('.stop-lng').value);
+          if (name && Number.isFinite(lat) && Number.isFinite(lng)) stops.push({ name, lat, lng });
+        });
+        return stops.length ? stops : undefined;
+      }
+
       // ---- hero upload ----
       async function uploadHero(locale) {
         const slugFieldId = locale === 'de' ? 'slugFieldDe' : 'slugFieldEn';
@@ -346,6 +405,7 @@
           coordinates: ($('fmLat').value && $('fmLng').value)
             ? { lat: parseFloat($('fmLat').value), lng: parseFloat($('fmLng').value) }
             : undefined,
+          stops: collectStops(),
           route: $('fmRoute').value.trim() || undefined,
           keyFacts: collectKeyFacts(),
         };
@@ -464,6 +524,14 @@
         Object.entries(facts).forEach(([l, v]) => addKeyFactRow(l, v));
       }
 
+      function populateStops(stops) {
+        $('stopsList').innerHTML = '';
+        if (!Array.isArray(stops)) return;
+        stops.forEach((s) => {
+          if (s && typeof s === 'object') addStopRow(s.name ?? '', s.lat ?? '', s.lng ?? '');
+        });
+      }
+
       function populateLocale(loc, data) {
         if (!data) return;
         $(loc + 'Title').value = data.title || '';
@@ -508,6 +576,7 @@
           $('fmLng').value = shared.coordinates.lng ?? '';
         }
         if (shared.route) $('fmRoute').value = shared.route;
+        populateStops(shared.stops);
         populateKeyFacts(shared.keyFacts);
 
         populateLocale('de', post.de);
