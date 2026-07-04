@@ -30,13 +30,19 @@ services:
     restart: unless-stopped
 
   db:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-images}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-images}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # postgres:18+ expects the mount at the parent dir (data lands in a
+      # versioned subdirectory), enabling future in-place pg_upgrade --link.
+      # @ai-warning: a pre-18 pgdata volume (created when this mounted
+      # .../data) is NOT readable here — Postgres silently initdb's an EMPTY
+      # cluster next to the old files. Migrate via dump-and-restore first:
+      # see ARCHITECTURE.md "Upgrading a Postgres major".
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-images} -d ${POSTGRES_DB:-images}"]
       interval: 5s

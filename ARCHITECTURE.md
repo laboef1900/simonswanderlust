@@ -12,7 +12,7 @@ see [SECURITY.md](SECURITY.md).
 | Service (compose) | Image | Role | Exposure |
 | :-- | :-- | :-- | :-- |
 | `app` | `ghcr.io/laboef1900/simonswanderlust-app` (built from the repo-root `Dockerfile`, DHI node base) | Single Fastify 5 process: admin CMS (editor, WordPress import, AI alt-text), image service (sharp, host-routed on the img subdomain), public blog static serving, in-process `astro build` on Publish/boot/manual rebuild, `/map/` PMTiles basemap, and DB backups | Public (via host port → reverse proxy / TLS) |
-| `db` | `postgres:17-alpine` | Source of truth for posts, users, and sessions | Internal only (`:5432`) |
+| `db` | `postgres:18-alpine` | Source of truth for posts, users, and sessions | Internal only (`:5432`) |
 
 The `app` image is **released to GHCR** by CI and pulled on the server (pinned via `IMAGE_TAG`);
 the compose service keeps its `build:` so local dev can still `docker compose up -d --build` from
@@ -125,17 +125,38 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
   `users` and `posts`. Deleting users **cascades to `sessions`**, so every login is invalidated —
   the CLI prints a reminder to trigger a rebuild afterwards (`POST /rebuild`).
 
+### Upgrading a Postgres major (e.g. 17 → 18)
+
+A Postgres major cannot read the previous major's cluster files, and `postgres:18+` images also
+moved the volume mount from `/var/lib/postgresql/data` to `/var/lib/postgresql` (data lives in a
+versioned subdirectory). **Deployments with a pre-18 `pgdata` volume must migrate via
+dump-and-restore — do NOT just pull the new image**: with the old volume mounted at the new path,
+the entrypoint finds its versioned PGDATA empty and silently `initdb`s a fresh, empty cluster
+(the old data sits unreferenced at the volume root, and the app happily re-seeds — the blog
+comes up blank without an error). Procedure:
+
+```bash
+# 1. still on the OLD version/compose: dump
+docker exec blog-db-1 pg_dump -U images -d images --no-owner > pg-upgrade-dump.sql
+# 2. stop, drop the old-format volume (the dump is your data now)
+docker compose down && docker volume rm blog_pgdata
+# 3. deploy the new compose (new image + mount), start the db, restore
+docker compose up -d db
+docker exec -i blog-db-1 psql -U images -d images < pg-upgrade-dump.sql
+docker compose up -d
+```
+
 ## Packaging & release pipeline
 
 One image, built from a **multistage Dockerfile at the repo root** (context = repo root, so it can
 copy both `uploader/` and `site/`) whose base images are `ARG`-parameterized (`NODE_BUILD` /
-`NODE_RUNTIME`, defaulting to `node:22-slim` for local builds). CI overrides them with **Docker
-Hardened Images** (minimal, low-CVE, non-root) from `dhi.io`:
+`NODE_RUNTIME`, defaulting to **Docker Hardened Images** (minimal, low-CVE, non-root) from
+`dhi.io` — CI passes the same bases explicitly (requires a dhi.io login):
 
 | Stage | Base | Purpose |
 | :-- | :-- | :-- |
-| Build (`uploader-build`, `site-build`) | `dhi.io/node:22-dev` | `npm ci` for both trees (uploader: `--omit=dev`; site: full install — Astro's build tooling lives in devDependencies) |
-| Runtime | `dhi.io/node:22` (minimal, no shell/npm) | Runs everything — Astro is spawned **via plain node**, not `npx`/`npm`, so the runtime no longer needs the `-dev` toolchain image it used to (that's the one thing that made merging the builder into the CMS safe) |
+| Build (`uploader-build`, `site-build`) | `dhi.io/node:26-dev` | `npm ci` for both trees (uploader: `--omit=dev`; site: full install — Astro's build tooling lives in devDependencies) |
+| Runtime | `dhi.io/node:26` (minimal, no shell/npm) | Runs everything — Astro is spawned **via plain node**, not `npx`/`npm`, so the runtime no longer needs the `-dev` toolchain image it used to (that's the one thing that made merging the builder into the CMS safe) |
 
 Both trees (`/app/uploader`, `/app/site`) are copied into the runtime stage `--chown=1000:1000` —
 the site tree needs to stay writable for Astro's `.build-tmp/` and `.astro/` dirs at runtime. The

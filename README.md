@@ -1,7 +1,7 @@
 # Simon's Wanderlust
 
 [simonswanderlust.com](https://simonswanderlust.com) — a bilingual (DE/EN) personal travel blog.
-This repository is the **Astro 6 static-site rebuild** of the original WordPress + Elementor site,
+This repository is the **Astro 7 static-site rebuild** of the original WordPress + Elementor site,
 plus a small **self-hosted CMS + image service** so posts can be authored, published, and
 re-built entirely on Simon's own server.
 
@@ -9,8 +9,8 @@ It is a **monorepo** with two deployable parts, wired together by the root `dock
 
 | Part | What it is | Stack |
 | :-- | :-- | :-- |
-| [`site/`](site/) | The public blog — a **static** site built from Postgres at runtime | Astro 6, Tailwind 4, MapLibre |
-| [`uploader/`](uploader/) | The **admin CMS + image service** (editor, WordPress import, AI alt-text, image optimization) | Node 22, Fastify 5, sharp, Postgres |
+| [`site/`](site/) | The public blog — a **static** site built from Postgres at runtime | Astro 7, Tailwind 4, MapLibre |
+| [`uploader/`](uploader/) | The **admin CMS + image service** (editor, WordPress import, image optimization) | Node 26, Fastify 5, sharp, Postgres |
 
 ## How it fits together
 

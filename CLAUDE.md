@@ -2,7 +2,7 @@
 
 Guidance for AI coding assistants (Claude, Gemini, Codex) working in this repository.
 Derived from `../TEMPLATE.md` and kept in sync with it, tailored to this project. This repo is a
-**monorepo** with two parts: `site/` is an Astro 6 **static site** — it builds to a static
+**monorepo** with two parts: `site/` is an Astro 7 **static site** — it builds to a static
 `dist/` (content is loaded from Postgres at build time), so the template's auth/RBAC, SRE, and
 container rules do not apply to it directly; `uploader/` is a small self-hosted **Node/Fastify +
 sharp app** (CMS + image service + blog serving) where Docker, a server runtime, and the
@@ -12,11 +12,11 @@ rule names `uploader/` explicitly.
 ## Project Overview
 
 **Simon's Wanderlust** (`simonswanderlust.com`) — a bilingual (DE/EN) personal travel blog.
-This repo is the **Astro 6 static-site rebuild** of the current WordPress + Elementor site.
+This repo is the **Astro 7 static-site rebuild** of the current WordPress + Elementor site.
 
-**Architecture:** The blog is a single Astro 6 project under `site/`. It is **self-hosted via
+**Architecture:** The blog is a single Astro 7 project under `site/`. It is **self-hosted via
 Docker** as a **single `app` container** (WordPress-style) alongside Postgres, wired in the root
-`docker-compose.yml` — the uploader (Node 22 + Fastify 5 + sharp) serves the blog itself, in
+`docker-compose.yml` — the uploader (Node 26 + Fastify 5 + sharp) serves the blog itself, in
 addition to being the admin CMS + image service. UI is Astro components + Tailwind 4.
 
 **Content pipeline (Phase A + B + single-app-container):** `trips` content is authored via the
@@ -35,7 +35,7 @@ backed up on a schedule to `/data/backup/db` (admin settings page; restore is CL
 Required env var for the app: **`DATABASE_URL`** (see `uploader/.env.example`). Consequence:
 `npx astro check` and `npm run build` both require a reachable Postgres.
 
-The same **`uploader/`** app (Node 22 + Fastify 5 + sharp, Dockerized) also optimizes uploaded
+The same **`uploader/`** app (Node 26 + Fastify 5 + sharp, Dockerized) also optimizes uploaded
 photos into responsive AVIF/WebP variants and returns paste-ready `heroImage` / `<RemoteImage>` /
 `<BodyImage>` snippets. Access is gated by username/password accounts stored in Postgres, with
 HttpOnly session cookies. Everything runs on Simon's own server, in one container. **This project
@@ -79,7 +79,7 @@ arrival stamps, dashed route dividers). See `docs/superpowers/specs/2026-06-11-b
 
 | Layer | Technology |
 |-------|-----------|
-| **Framework** | Astro 6 (static output, `trailingSlash: 'always'`) |
+| **Framework** | Astro 7 (static output, `trailingSlash: 'always'`) |
 | **Styling** | Tailwind 4 (via `@tailwindcss/vite`), `@tailwindcss/typography` |
 | **Content** | Postgres (loaded at build time by `site/src/lib/postgres-loader.ts`); authored in the in-admin editor — MDX files are export-only backups (the original stubs were imported once via `site/scripts/migrate-stub-posts.mjs`) |
 | **i18n** | Astro i18n routing — `defaultLocale: 'de'` (no prefix), `en` under `/en/` |
@@ -105,7 +105,7 @@ arrival stamps, dashed route dividers). See `docs/superpowers/specs/2026-06-11-b
 All static-site commands run from `site/`. No containers needed for the static toolchain itself.
 
 ```bash
-npm install                         # install deps (Node >= 22.12)
+npm install                         # install deps (Node >= 26)
 npm run dev                         # dev server at http://localhost:4321
 npm run build                       # build static site to ./dist/ (requires DATABASE_URL)
 npm run preview                     # preview the production build
@@ -121,7 +121,7 @@ npx astro check                     # type-check .astro/.ts (requires DATABASE_U
 
 The deployed stack is **container-first** on **Docker Hardened Images (DHI)**: one `app`
 container (Fastify serves blog + admin + images and builds the site in-process) plus `db`
-(Postgres 17). Compose only RUNS the published GHCR image — it does not build it.
+(Postgres 18). Compose only RUNS the published GHCR image — it does not build it.
 
 ```bash
 docker compose pull && docker compose up -d   # run the released image (pin via IMAGE_TAG in .env)
@@ -258,7 +258,7 @@ from them — then code against those types. This prevents hallucinated property
 - **Dependencies & APIs** — Never assume a package is installed or that a method exists. Check
   `site/package.json` / `uploader/package.json` and the actual exported API (local types/source)
   before calling.
-- **Documentation Lookup** — Fetch official/current docs for Astro 6, Tailwind 4, Fastify 5,
+- **Documentation Lookup** — Fetch official/current docs for Astro 7, Tailwind 4, Fastify 5,
   etc. via a docs MCP (priority: Ref → DeepWiki → other) rather than relying on memory.
 - **Internal Functions** — Read the target file to confirm a helper's name, args, and return
   type before calling it (especially `paths.ts` / `trips.ts`).
@@ -317,6 +317,11 @@ Use comments to leave hints for future sessions:
   settings endpoints are now admin-only; a global error handler logs unexpected errors
   server-side and returns sanitized 500s; PR CI added (`.github/workflows/ci.yml`); site tests
   consolidated next to their modules (branch `feature/remove-ai-and-harden`).
+- **Done:** Stack upgrade (July 2026) — Node 22 → 26 (DHI images, engines, CI), Postgres 17 → 18,
+  Astro 6 → 7 (+ `@astrojs/mdx` 7; `compressHTML: 'true'` kept for v6 whitespace behavior; Sätteri
+  markdown default accepted), Fastify plugins (`multipart` 10, `static` 9.1.3 — security fix),
+  sharp 0.35, TypeScript 6 + Vitest 4 in both apps; CI now also runs the full `astro build`
+  (branch `feature/upgrade-node26-pg18-deps`).
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details.
 
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.

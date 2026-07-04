@@ -6,15 +6,16 @@
 #
 # Bases default to Docker Hardened Images (requires `docker login dhi.io`),
 # matching the image CI publishes to GHCR:
-#   NODE_BUILD   dhi.io/node:22-dev   — SDK variant (npm + shell) for the installs
-#   NODE_RUNTIME dhi.io/node:22       — minimal, non-root uid 1000, no shell
-# To build without a DHI subscription, override both with the plain node base:
-#   docker build --build-arg NODE_BUILD=node:22-slim --build-arg NODE_RUNTIME=node:22-slim .
+#   NODE_BUILD   dhi.io/node:26-dev   — SDK variant (npm + shell) for the installs
+#   NODE_RUNTIME dhi.io/node:26       — minimal, non-root uid 1000, no shell
+# To build without a DHI subscription, override both with the plain node base
+# (both apps declare engines.node >=26, so stay on a node:26 base):
+#   docker build --build-arg NODE_BUILD=node:26-slim --build-arg NODE_RUNTIME=node:26-slim .
 # @ai-warning: NODE_BUILD and NODE_RUNTIME must share an OS/libc family —
 # sharp's and Astro's native binaries are installed in build stages and copied
 # into the runtime.
-ARG NODE_BUILD=dhi.io/node:22-dev
-ARG NODE_RUNTIME=dhi.io/node:22
+ARG NODE_BUILD=dhi.io/node:26-dev
+ARG NODE_RUNTIME=dhi.io/node:26
 
 # Self-hosted map basemap + glyph fonts are fetched at build time and baked into
 # the image, so the container serves /map/ with zero server-side provisioning.

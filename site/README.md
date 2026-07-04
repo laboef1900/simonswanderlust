@@ -1,6 +1,6 @@
 # simonswanderlust.com — site
 
-The Astro 6 rebuild of [simonswanderlust.com](https://simonswanderlust.com) (DE/EN travel blog).
+The Astro 7 rebuild of [simonswanderlust.com](https://simonswanderlust.com) (DE/EN travel blog).
 Architecture overview in [`../ARCHITECTURE.md`](../ARCHITECTURE.md); design spec and phase plans
 live in `../docs/superpowers/`.
 
