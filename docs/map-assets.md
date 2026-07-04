@@ -4,7 +4,7 @@ The travel map (`/karte/` and `/en/map/`) uses a self-hosted vector tileset inst
 
 ## Overview
 
-The map renders a **Protomaps planet PMTiles file** (`basemap.pmtiles`) and glyph fonts, both served by the `blog` nginx container at `/map/`. The build process is **independent of the basemap files** — if they are not present, the map displays a text/link fallback instead. This enables local development without needing the full production basemap.
+The map renders a **Protomaps planet PMTiles file** (`basemap.pmtiles`) and glyph fonts, both served by the **`app` container (Fastify)** at `/map/` — with `Accept-Ranges: bytes` and `.pmtiles`/`.pbf` MIME types, so PMTiles' random-access range reads work (`uploader/src/server.ts`). The build process is **independent of the basemap files** — if they are not present, the map displays a text/link fallback instead. This enables local development without needing the full production basemap.
 
 ## Getting the Basemap (exact recipe)
 
@@ -48,38 +48,27 @@ z9 ≈ 2 GB).
 
 ## Deployment Setup
 
-The map assets are served from a directory specified by the `MAP_ASSETS_DIR` environment variable (default: `/data/map` on the server). The Astro build at deployment time uses the files present in that directory; if files are missing, the build succeeds anyway and the map shows a fallback.
+The host directory holding the assets is named by the `MAP_ASSETS_DIR` env var (default `./map-assets`). `docker-compose.yml` bind-mounts it **read-only** into the `app` container at `/map-assets`, and the app serves it at `/map/` (`MAP_DIR=/map-assets` inside the container). The Astro build is independent of these files — if they are missing, the build still succeeds and the map shows its fallback. Because the mount is a bind mount, dropping the files into the host `MAP_ASSETS_DIR` makes a running container serve them immediately — no image rebuild needed.
 
 ### Production Setup (Server)
 
-1. **Place the basemap file:**
+1. **Place the basemap file** in the host asset dir (whatever `MAP_ASSETS_DIR` points at):
    ```bash
    cp basemap.pmtiles <MAP_ASSETS_DIR>/basemap.pmtiles
    ```
 
-2. **Place glyph fonts:**
+2. **Place glyph fonts** (one subdir per font stack, `.pbf` glyphs inside):
    ```bash
    mkdir -p <MAP_ASSETS_DIR>/fonts
-   cp *.pbf <MAP_ASSETS_DIR>/fonts/
+   cp -R "Noto Sans Regular" "Noto Sans Medium" "Noto Sans Italic" <MAP_ASSETS_DIR>/fonts/
    ```
 
-3. **Set the environment variable** in your `.env` (or Docker environment):
+3. **Set the env var** in your `.env` if you don't use the `./map-assets` default:
    ```
    MAP_ASSETS_DIR=./map-assets
    ```
 
-4. **Serve via nginx** — The `blog` container's nginx config mounts `MAP_ASSETS_DIR` and serves it at `/map/`:
-   ```nginx
-   # Self-hosted map assets (basemap .pmtiles + glyph .pbf fonts).
-   # HTTP range requests are required for PMTiles random-access reads.
-   location /map/ {
-       alias /usr/share/nginx/map/;
-       add_header Accept-Ranges bytes;
-       types { application/octet-stream pmtiles; application/x-protobuf pbf; }
-       try_files $uri =404;
-   }
-   ```
-   The site will request the basemap at URLs like `GET /map/basemap.pmtiles` (with HTTP range requests for tiled access).
+4. **That's it — no web-server config.** The `app` container serves `GET /map/basemap.pmtiles` and `GET /map/fonts/<stack>/<range>.pbf` directly (with range support), so a `docker compose up -d` (or just the files appearing on the host, since the mount is live) is all it takes.
 
 ### Local Development (without full basemap)
 
@@ -119,7 +108,7 @@ For development on a local machine without the full production basemap:
 
 ## Troubleshooting
 
-- **Map shows text fallback:** The `basemap.pmtiles` file is not being served at `/map/basemap.pmtiles`, or the HTTP `Range` header requests are blocked. Check nginx logs and ensure the file exists at `<MAP_ASSETS_DIR>/basemap.pmtiles`.
+- **Map shows text fallback / blank map:** `/map/basemap.pmtiles` is 404ing (the file isn't in `<MAP_ASSETS_DIR>`) or range requests are blocked. Quick check against a running stack: `curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3000/map/basemap.pmtiles` should be `200`, and `curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-99' http://localhost:3000/map/basemap.pmtiles` should be `206`. If both 404, the asset dir is empty — provision it per "Getting the Basemap" above.
 - **Fonts not loading:** Glyph font files (`.pbf`) are not in `<MAP_ASSETS_DIR>/fonts/` or the style URL is incorrect. Verify the font directory and check the browser's network tab for font requests.
 - **Local dev without tiles:** This is expected behavior. Drop a small regional PMTiles file into `site/public/map/` to test styled rendering locally.
 
