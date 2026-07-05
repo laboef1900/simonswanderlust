@@ -83,6 +83,32 @@ describe('renderPreviewHtml', () => {
     expect(html).not.toContain('<script>y</script>');
   });
 
+  it('neutralizes non-integer heroImage.width/height (jsonb is untyped on draft saves)', async () => {
+    // validateDraft does not type-check heroImage, so a draft can carry a
+    // hostile string where a number belongs; it must never reach the markup.
+    const p = pair();
+    p.de.heroImage = {
+      src: 'https://img.example.com/trips/bukarest/hero',
+      width: '9" onerror="alert(document.cookie)' as unknown as number,
+      height: 1,
+      alt: 'Altstadt',
+    };
+    const html = await renderPreviewHtml(p, 'de');
+    expect(html).not.toContain('onerror');
+    // The whole hero block is dropped rather than emitting bogus dimensions.
+    expect(html).not.toContain('class="hero"');
+  });
+
+  it('drops the hero for non-positive or fractional dimensions', async () => {
+    const cases: Array<[number, number]> = [[0, 900], [1600, -1], [1600.5, 900], [NaN, 900]];
+    for (const [width, height] of cases) {
+      const p = pair();
+      p.de.heroImage = { src: 'https://img.example.com/trips/bukarest/hero', width, height, alt: 'x' };
+      const html = await renderPreviewHtml(p, 'de');
+      expect(html).not.toContain('class="hero"');
+    }
+  });
+
   it('renders the hero <picture> when heroImage.src is set', async () => {
     const html = await renderPreviewHtml(pair(), 'de');
     expect(html).toContain('class="hero"');

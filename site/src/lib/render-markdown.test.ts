@@ -26,7 +26,9 @@ describe('renderMarkdown', () => {
     expect(html).toContain('“quote”'); // smart quotes
   });
 
-  it('reuses the cached renderer across calls', async () => {
+  it('is idempotent: repeated calls with the same input yield identical output', async () => {
+    // (Renderer caching itself is an internal detail — a spy would require
+    // mocking satteri and losing the real-render coverage above.)
     const first = await renderMarkdown('# One');
     const second = await renderMarkdown('# One');
     expect(second).toBe(first);

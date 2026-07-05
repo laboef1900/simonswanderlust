@@ -26,11 +26,21 @@ function escapeHtml(s: string): string {
 
 /** Hero <picture> mirroring RemoteImage.astro; empty for the draft '' placeholder. */
 function heroHtml(hero: HeroImage | undefined): string {
-  if (!hero || !hero.src || hero.width <= 0 || hero.height <= 0) return '';
+  if (!hero || !hero.src) return '';
+  // @ai-warning: heroImage is typed {width,height: number} but comes from the
+  // posts.hero_image jsonb column, and draft saves only run validateDraft
+  // (title + slug) — so width/height may be ANY JSON value here, including a
+  // hostile string. Coerce to positive integers (mirrors validateForPublish)
+  // before they reach the markup; the strings around them are escapeHtml'd,
+  // but width/height are emitted as bare attribute values.
+  const width = Number.isInteger(hero.width) && hero.width > 0 ? hero.width : 0;
+  const height = Number.isInteger(hero.height) && hero.height > 0 ? hero.height : 0;
+  if (width === 0 || height === 0) return '';
+  const safeHero: HeroImage = { ...hero, width, height };
   return `<div class="hero"><picture>
-    <source type="image/avif" srcset="${escapeHtml(srcset(hero, 'avif'))}" sizes="100vw">
-    <source type="image/webp" srcset="${escapeHtml(srcset(hero, 'webp'))}" sizes="100vw">
-    <img src="${escapeHtml(fallbackSrc(hero))}" alt="${escapeHtml(hero.alt)}" width="${hero.width}" height="${hero.height}">
+    <source type="image/avif" srcset="${escapeHtml(srcset(safeHero, 'avif'))}" sizes="100vw">
+    <source type="image/webp" srcset="${escapeHtml(srcset(safeHero, 'webp'))}" sizes="100vw">
+    <img src="${escapeHtml(fallbackSrc(safeHero))}" alt="${escapeHtml(hero.alt)}" width="${width}" height="${height}">
   </picture></div>`;
 }
 
