@@ -98,6 +98,23 @@ export function validateForPublish(pair: PostPair): void {
   if (!Number.isFinite(s.coordinates.lng) || s.coordinates.lng < -180 || s.coordinates.lng > 180) {
     throw new PostError('coordinates.lng must be between -180 and 180');
   }
+  // stops arrive from an unvalidated request body; check the shape here so a bad
+  // waypoint fails publish with a clear message instead of inside the Astro build.
+  if (s.stops !== undefined) {
+    if (!Array.isArray(s.stops)) throw new PostError('stops must be an array');
+    s.stops.forEach((stop, i) => {
+      if (!stop || typeof stop !== 'object') throw new PostError(`stops[${i}] must be an object`);
+      if (typeof stop.name !== 'string' || !stop.name.trim()) {
+        throw new PostError(`stops[${i}].name must be a non-empty string`);
+      }
+      if (typeof stop.lat !== 'number' || !Number.isFinite(stop.lat) || stop.lat < -90 || stop.lat > 90) {
+        throw new PostError(`stops[${i}].lat must be between -90 and 90`);
+      }
+      if (typeof stop.lng !== 'number' || !Number.isFinite(stop.lng) || stop.lng < -180 || stop.lng > 180) {
+        throw new PostError(`stops[${i}].lng must be between -180 and 180`);
+      }
+    });
+  }
   if (!s.country.trim()) throw new PostError('country required');
   if (!s.date.trim()) throw new PostError('date required');
   validateLocale(pair.de);
@@ -264,7 +281,7 @@ export function pgPostStore(pool: DbPool): PostStore {
          body_markdown=EXCLUDED.body_markdown, images=EXCLUDED.images, updated_at=now()`,
       [randomUUID(), tk, p.locale, p.slug, p.title, shared.date, shared.country, shared.countryCode, shared.region,
        p.excerpt, JSON.stringify(p.heroImage), JSON.stringify(shared.coordinates),
-       shared.stops ? JSON.stringify(shared.stops) : null, shared.route ?? null, shared.keyFacts ? JSON.stringify(shared.keyFacts) : null,
+       shared.stops?.length ? JSON.stringify(shared.stops) : null, shared.route ?? null, shared.keyFacts ? JSON.stringify(shared.keyFacts) : null,
        p.bodyMarkdown, JSON.stringify(p.images), status],
     );
   }

@@ -56,9 +56,10 @@ maybe('pgPostStore (integration)', () => {
     await ensureSchema(pool);
     await pool.query('DELETE FROM posts');
     const store = pgPostStore(pool);
+    const stops = [{ name: 'Athen', lat: 37.98, lng: 23.73 }, { name: 'Rhodos', lat: 36.43, lng: 28.22 }];
     const base = {
       translationKey: '', status: 'draft' as const,
-      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 }, stops },
       de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b\n\n<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />', images: {} },
       en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     };
@@ -68,9 +69,15 @@ maybe('pgPostStore (integration)', () => {
     // pasted <BodyImage> tags are normalized to markdown images in the stored row
     expect(fetched?.de.bodyMarkdown).toBe('## b\n\n![Gasse](https://img/x/y)');
     expect(fetched?.de.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
+    // stops survive the jsonb round-trip (writeLocale → rowShared)
+    expect(fetched?.shared.stops).toEqual(stops);
     await store.publish(created.translationKey);
     expect((await store.get(created.translationKey))?.status).toBe('published');
+    expect((await store.get(created.translationKey))?.shared.stops).toEqual(stops);
     await expect(store.upsertDraft({ ...created, status: 'published', de: { ...base.de, slug: 'renamed' } })).rejects.toThrow();
+    // writeLocale normalizes an empty stops array to NULL, so it reads back as absent (not [])
+    await store.upsertDraft({ ...created, shared: { ...created.shared, stops: [] } });
+    expect((await store.get(created.translationKey))?.shared.stops).toBeUndefined();
     await pool.end();
   });
 

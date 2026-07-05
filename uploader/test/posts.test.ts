@@ -90,6 +90,23 @@ describe('memoryPostStore', () => {
     await expect(s.upsertDraft(pair({ de: { ...pair().de, slug: 'bukarest' }, en: { ...pair().en, slug: 'other' } })))
       .rejects.toBeInstanceOf(PostError);
   });
+
+  it('round-trips stops through upsertDraft and get', async () => {
+    const s = memoryPostStore();
+    const stops = [{ name: 'Athen', lat: 37.98, lng: 23.73 }, { name: 'Rhodos', lat: 36.43, lng: 28.22 }];
+    const created = await s.upsertDraft(pair({ shared: { ...pair().shared, stops } }));
+    expect((await s.get(created.translationKey))?.shared.stops).toEqual(stops);
+  });
+
+  it('a subsequent upsertDraft without stops removes them (full-replace contract)', async () => {
+    // @ai-warning The store replaces shared wholesale — a client that loads a post
+    // but omits stops on save wipes them (issue #25). The editor must round-trip stops.
+    const s = memoryPostStore();
+    const stops = [{ name: 'Athen', lat: 37.98, lng: 23.73 }];
+    const created = await s.upsertDraft(pair({ shared: { ...pair().shared, stops } }));
+    await s.upsertDraft({ ...created, shared: { ...pair().shared } });
+    expect((await s.get(created.translationKey))?.shared.stops).toBeUndefined();
+  });
 });
 
 describe('post validation', () => {
@@ -114,6 +131,29 @@ describe('post validation', () => {
     // boundary values are valid
     expect(() => validateForPublish(pair({ shared: { ...pair().shared, coordinates: { lat: -90, lng: 180 } } }))).not.toThrow();
   });
+  it('publish accepts valid stops and posts without stops', () => {
+    const stops = [{ name: 'Athen', lat: 37.98, lng: 23.73 }, { name: 'Rhodos', lat: 36.43, lng: 28.22 }];
+    expect(() => validateForPublish(pair({ shared: { ...pair().shared, stops } }))).not.toThrow();
+    // boundary coordinates are valid
+    expect(() => validateForPublish(pair({ shared: { ...pair().shared, stops: [{ name: 'Pole', lat: -90, lng: 180 }] } }))).not.toThrow();
+    // no stops at all is fine (backward compat)
+    expect(() => validateForPublish(pair())).not.toThrow();
+  });
+
+  it('publish rejects malformed stops with an index-bearing message', () => {
+    const withStops = (stops: unknown) =>
+      pair({ shared: { ...pair().shared, stops: stops as never } });
+    expect(() => validateForPublish(withStops('nope'))).toThrow(/stops must be an array/);
+    expect(() => validateForPublish(withStops([null]))).toThrow(/stops\[0\] must be an object/);
+    expect(() => validateForPublish(withStops([{ name: '', lat: 0, lng: 0 }]))).toThrow(/stops\[0\]\.name/);
+    expect(() => validateForPublish(withStops([{ name: 'A', lat: 0, lng: 0 }, { name: 'B', lat: 91, lng: 0 }]))).toThrow(/stops\[1\]\.lat/);
+    expect(() => validateForPublish(withStops([{ name: 'A', lat: -91, lng: 0 }]))).toThrow(/stops\[0\]\.lat/);
+    expect(() => validateForPublish(withStops([{ name: 'A', lat: 0, lng: 181 }]))).toThrow(/stops\[0\]\.lng/);
+    expect(() => validateForPublish(withStops([{ name: 'A', lat: 0, lng: -181 }]))).toThrow(/stops\[0\]\.lng/);
+    expect(() => validateForPublish(withStops([{ name: 'A', lat: NaN, lng: 0 }]))).toThrow(PostError);
+    expect(() => validateForPublish(withStops([{ name: 'A', lat: '37.98', lng: 0 }]))).toThrow(/stops\[0\]\.lat/);
+  });
+
   it('publish throws PostError (not TypeError) when heroImage is missing', () => {
     const noHero = pair({ de: { ...pair().de, heroImage: undefined as never } });
     expect(() => validateForPublish(noHero)).toThrow(PostError);

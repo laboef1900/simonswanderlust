@@ -327,6 +327,18 @@ small { color: rgba(22, 33, 46, 0.6); font-family: var(--mono); font-size: 0.72r
 .keyfact-label { flex: 1; }
 .keyfact-value { flex: 2; }
 
+/* ---- stops ---- */
+.stop-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  align-items: center;
+}
+.stop-row input { margin: 0; }
+.stop-name { flex: 2; }
+.stop-lat { flex: 1; }
+.stop-lng { flex: 1; }
+
 .btn-remove {
   margin-top: 0;
   padding: 0.4rem 0.65rem;
