@@ -39,6 +39,7 @@ export interface ServerConfig {
   builder: SiteBuilder;
   backupDir: string;
   dbBackup: DbBackup;
+  dbCheck: () => Promise<void>; // resolves iff the DB answers — probed by GET /health
   loginLimiter?: RateLimiter;
 }
 
@@ -438,7 +439,18 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send({ deleted: true });
   });
 
-  app.get('/health', async () => ({ ok: true }));
+  // Liveness + DB probe: the compose healthcheck polls this every 10s, so no
+  // per-poll logging. Blog serving stays DB-independent (static files from the
+  // current release), so a down Postgres flips the container unhealthy without
+  // taking the blog offline.
+  app.get('/health', async (_req, reply) => {
+    try {
+      await cfg.dbCheck();
+      return { ok: true, db: true };
+    } catch {
+      return reply.code(503).send({ ok: false, db: false });
+    }
+  });
 
   // Replaces the old secret-gated POST /build on the builder container.
   app.post('/rebuild', { preHandler: requireAdmin }, async () => cfg.builder.build());
