@@ -3,11 +3,13 @@ import {
   mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { create as createTar } from 'tar';
 import type { BackupSchedule } from './settings.js';
 import type { DbPool } from './db.js';
 
 export const DUMP_VERSION = 2;
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
+export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 
 export class BackupError extends Error {}
 
@@ -15,7 +17,13 @@ export interface Queryable {
   query(sql: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
 }
 
-export interface BackupState { lastAttemptAt?: string; lastSuccessAt?: string; lastError?: string }
+export interface BackupState {
+  lastAttemptAt?: string;
+  lastSuccessAt?: string;
+  lastError?: string;
+  /** mtime cutoff for the next incremental images archive (walk-start time of the last one). */
+  lastImagesArchiveAt?: string;
+}
 export interface BackupFileInfo { name: string; size: number }
 
 function atomicWrite(path: string, data: Buffer | string): void {
@@ -24,8 +32,14 @@ function atomicWrite(path: string, data: Buffer | string): void {
   renameSync(tmp, path);
 }
 
-/** Dump users + posts (never sessions — disposable, and token hashes don't
- * belong in backups) as one gzipped, versioned JSON file. Returns the filename. */
+/** `YYYYMMDD-HHmmss` (UTC) — shared by dump and images-archive filenames. */
+function fileStamp(now: Date): string {
+  const iso = now.toISOString();
+  return `${iso.slice(0, 10).replace(/-/g, '')}-${iso.slice(11, 19).replace(/:/g, '')}`;
+}
+
+/** Dump users + posts + pages (never sessions — disposable, and token hashes
+ * don't belong in backups) as one gzipped, versioned JSON file. Returns the filename. */
 export async function dumpDatabase(db: Queryable, dir: string, now: Date = new Date()): Promise<string> {
   const users = (await db.query('SELECT * FROM users ORDER BY created_at')).rows;
   // @ai-warning: node-postgres parses `date` (a DATE column) as a LOCAL-midnight
@@ -40,23 +54,64 @@ export async function dumpDatabase(db: Queryable, dir: string, now: Date = new D
      FROM posts ORDER BY created_at`,
   )).rows;
   const pages = (await db.query('SELECT key, locale, title, body_markdown, images FROM pages ORDER BY key, locale')).rows;
-  const iso = now.toISOString();
-  const stamp = `${iso.slice(0, 10).replace(/-/g, '')}-${iso.slice(11, 19).replace(/:/g, '')}`;
-  const name = `db-${stamp}.json.gz`;
+  const name = `db-${fileStamp(now)}.json.gz`;
   mkdirSync(dir, { recursive: true });
-  const payload = JSON.stringify({ version: DUMP_VERSION, createdAt: iso, tables: { users, posts, pages } });
+  const payload = JSON.stringify({ version: DUMP_VERSION, createdAt: now.toISOString(), tables: { users, posts, pages } });
   atomicWrite(join(dir, name), gzipSync(payload));
   return name;
 }
 
-export function listBackups(dir: string): BackupFileInfo[] {
+/**
+ * Incremental images archive: tars every file under `storageDir` whose mtime is
+ * >= `sinceMs` into `images-<stamp>.tar` in `dir` (next to the db dumps).
+ * Returns the filename, or null — writing nothing — when no file qualifies.
+ * Consecutive archives form a chain; restore by untarring them oldest-first
+ * into an empty images dir (duplicate entries across tars are benign in that
+ * order). Archives are deliberately never pruned: each holds a unique slice.
+ */
+export async function archiveImages(
+  storageDir: string,
+  dir: string,
+  sinceMs: number,
+  now: Date = new Date(),
+): Promise<string | null> {
+  let names: string[];
+  try {
+    names = readdirSync(storageDir, { recursive: true, encoding: 'utf8' });
+  } catch {
+    return null; // no images dir yet — nothing to archive
+  }
+  const fresh = names.filter((rel) => {
+    const st = statSync(join(storageDir, rel), { throwIfNoEntry: false });
+    return st !== undefined && st.isFile() && st.mtimeMs >= sinceMs;
+  });
+  if (fresh.length === 0) return null;
+  const name = `images-${fileStamp(now)}.tar`;
+  mkdirSync(dir, { recursive: true });
+  // Same atomic pattern as the dumps: the .tmp name never matches either
+  // filename regex, so a crashed run can't leave a listable/served artifact.
+  const tmp = join(dir, `${name}.${process.pid}.tmp`);
+  await createTar({ file: tmp, cwd: storageDir, portable: true }, fresh);
+  renameSync(tmp, join(dir, name));
+  return name;
+}
+
+function listByPattern(dir: string, re: RegExp): BackupFileInfo[] {
   let names: string[];
   try { names = readdirSync(dir); } catch { return []; }
   return names
-    .filter((n) => BACKUP_FILE_RE.test(n))
+    .filter((n) => re.test(n))
     .sort()
     .reverse()
     .map((name) => ({ name, size: statSync(join(dir, name)).size }));
+}
+
+export function listBackups(dir: string): BackupFileInfo[] {
+  return listByPattern(dir, BACKUP_FILE_RE);
+}
+
+export function listImageArchives(dir: string): BackupFileInfo[] {
+  return listByPattern(dir, IMAGES_ARCHIVE_RE);
 }
 
 export function pruneBackups(dir: string, keep: number): string[] {
@@ -91,14 +146,18 @@ export interface DbBackup {
   dir: string;
   runNow(): Promise<BackupState>;
   list(): BackupFileInfo[];
+  listImageArchives(): BackupFileInfo[];
   state(): BackupState;
 }
 
-export function createDbBackup(opts: { db: Queryable; dir: string; retention: () => number }): DbBackup {
+export function createDbBackup(
+  opts: { db: Queryable; dir: string; retention: () => number; storageDir?: string },
+): DbBackup {
   let running = false;
   return {
     dir: opts.dir,
     list: () => listBackups(opts.dir),
+    listImageArchives: () => listImageArchives(opts.dir),
     state: () => readState(opts.dir),
     async runNow() {
       if (running) return readState(opts.dir);
@@ -109,6 +168,20 @@ export function createDbBackup(opts: { db: Queryable; dir: string; retention: ()
         await dumpDatabase(opts.db, opts.dir);
         state.lastSuccessAt = new Date().toISOString();
         delete state.lastError;
+        // Best-effort incremental images archive after a successful dump. The
+        // cutoff for the NEXT run is this run's walk-start time (>= compare),
+        // so files written mid-archive land again in the next tar — duplicates
+        // are benign on an ordered restore, gaps would not be.
+        if (opts.storageDir) {
+          try {
+            const walkStart = new Date();
+            const since = state.lastImagesArchiveAt ? Date.parse(state.lastImagesArchiveAt) : 0;
+            await archiveImages(opts.storageDir, opts.dir, since, walkStart);
+            state.lastImagesArchiveAt = walkStart.toISOString();
+          } catch (e) {
+            state.lastError = `images archive failed: ${(e as Error).message}`;
+          }
+        }
         try {
           pruneBackups(opts.dir, opts.retention());
         } catch (e) {

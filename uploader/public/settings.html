@@ -40,6 +40,14 @@
         <pre id="backupStatus">—</pre>
         <p class="section-label">Backup files</p>
         <ul id="backupFiles"></ul>
+        <p class="section-label">Image archives</p>
+        <ul id="imageArchives"></ul>
+        <p class="muted">
+          Note: DB dumps and image archives are written to <code>/data/backup/db</code> —
+          the same server disk as the live data. They are not offsite copies; keep a
+          host-level backup (e.g. restic/rsync cron) of <code>/data</code>
+          (host: <code>./uploader/data</code>).
+        </p>
       </section>
 
       <div class="route" aria-hidden="true">
@@ -98,9 +106,13 @@
         $('backupStatus').textContent = st.lastError
           ? 'FAILED at ' + st.lastAttemptAt + ': ' + st.lastError
           : st.lastSuccessAt ? 'OK at ' + st.lastSuccessAt : 'No backup yet.';
-        const ul = $('backupFiles');
+        renderFileList($('backupFiles'), data.files || []);
+        renderFileList($('imageArchives'), data.imageArchives || []);
+      }
+
+      function renderFileList(ul, files) {
         ul.innerHTML = '';
-        for (const f of data.files || []) {
+        for (const f of files) {
           const li = document.createElement('li');
           const a = document.createElement('a');
           a.href = '/backups/' + encodeURIComponent(f.name);

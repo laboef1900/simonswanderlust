@@ -18,7 +18,7 @@ describe('uploadFile', () => {
       storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
     });
     const files = await readdir(join(dir, 'trips', 'test'));
-    expect(files.sort()).toEqual(['hero-640.avif', 'hero-640.webp', 'hero-800.avif', 'hero-800.webp']);
+    expect(files.sort()).toEqual(['hero-640.avif', 'hero-640.webp', 'hero-800.avif', 'hero-800.webp', 'hero-orig.jpg']);
     expect(stored.snippet).toContain("src: 'https://img.simonswanderlust.com/trips/test/hero'");
   });
 });

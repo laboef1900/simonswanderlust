@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from 'vitest';
-import { mkdtemp, readdir } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { storeVariants } from '../src/storage.js';
@@ -14,6 +14,7 @@ const result: ProcessResult = {
     { width: 2000, format: 'avif', data: Buffer.from('c') },
     { width: 2000, format: 'webp', data: Buffer.from('d') },
   ],
+  original: { data: Buffer.from('original-bytes'), ext: 'jpg' },
 };
 
 let dir: string;
@@ -22,8 +23,8 @@ beforeEach(async () => {
 });
 
 describe('storeVariants', () => {
-  it('writes one file per variant under the key path', async () => {
-    await storeVariants('trips/bucharest-2024/hero', 'Old town', result, {
+  it('writes one file per variant plus the original under the key path', async () => {
+    const stored = await storeVariants('trips/bucharest-2024/hero', 'Old town', result, {
       storageDir: dir,
       baseUrl: 'https://img.simonswanderlust.com',
     });
@@ -33,7 +34,19 @@ describe('storeVariants', () => {
       'hero-2000.webp',
       'hero-640.avif',
       'hero-640.webp',
+      'hero-orig.jpg',
     ]);
+    expect(stored.files).toContain('trips/bucharest-2024/hero-orig.jpg');
+    const orig = await readFile(join(dir, 'trips', 'bucharest-2024', 'hero-orig.jpg'));
+    expect(orig.equals(result.original.data)).toBe(true);
+  });
+
+  it('rejects an unsafe original extension and writes nothing for it', async () => {
+    const evil: ProcessResult = { ...result, original: { data: Buffer.from('x'), ext: '../jpg' } };
+    await expect(
+      storeVariants('trips/x/hero', 'a', evil, { storageDir: dir, baseUrl: 'https://img.example' }),
+    ).rejects.toThrow(/extension/i);
+    expect(await readdir(dir)).toEqual([]);
   });
 
   it('rejects keys that try to escape the storage dir (path traversal)', async () => {

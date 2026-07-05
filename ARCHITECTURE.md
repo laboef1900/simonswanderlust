@@ -19,9 +19,11 @@ the compose service keeps its `build:` so local dev can still `docker compose up
 source. See [Packaging & release pipeline](#packaging--release-pipeline).
 
 Shared state, all under the **`/data`** volume (bind-mounted from `./uploader/data`):
-- `images/` — optimized image variants (`STORAGE_DIR`).
+- `images/` — optimized image variants plus the untouched upload originals
+  (`{key}-orig.<ext>`) (`STORAGE_DIR`).
 - `site/releases/<stamp>` + `site/current` (symlink) — built static output (`SITE_DIR`).
-- `backup/` — MDX export backups; `backup/db/` — gzipped Postgres dumps.
+- `backup/` — MDX export backups; `backup/db/` — gzipped Postgres dumps and incremental
+  image archives.
 - `settings.json` — admin-configurable settings (backup schedule/retention).
 
 Plus the **`pgdata`** volume — Postgres data.
@@ -101,29 +103,65 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 - **`sessions`** — `id` (SHA-256 of the random token), `user_id` (FK, cascade), `expires_at`. Expired rows are swept hourly.
 - **`posts`** — one row per (`translation_key`, `locale`); `slug`, `title`, `date`, `country`, `country_code`, `region`, `excerpt`, `hero_image` (jsonb), `coordinates` (jsonb), optional `stops`/`route`/`key_facts`, `body_markdown`, `images` (jsonb), `status` (`draft`/`published`). Unique on (`locale`, `slug`).
 
-## Database backups
+## Backups & disaster recovery
+
+Full recovery needs **two things**: the Postgres content (`users`/`posts`/`pages`) and the
+**`/data` volume** (image originals + variants, site releases, MDX exports — and the in-app
+backup files themselves). Everything the app writes, including its own DB dumps and image
+archives under `/data/backup/db/`, lives on the **same server disk** as the live data (`/data`
+is bind-mounted from `./uploader/data`; `pgdata`, the live database, is a named volume on the
+same host). The in-app backups therefore protect against application-level mistakes (bad edit,
+botched restore, accidental delete), **not** against disk failure or host loss.
+
+> **Offsite backup is required for real DR:** run a host-level backup (e.g. a restic / borg /
+> rsync cron job) of `./uploader/data`. That one directory contains the DB dumps, the image
+> archives, and the image originals, so copying it offsite is the complete disaster-recovery
+> story. The manual download buttons on the settings page are an escape hatch, not a strategy.
+
+### Database dumps
 
 `uploader/src/backup.ts` provides app-native logical dumps (no `pg_dump`, no sidecar container):
 
 - **Dump format** — one file per run, `/data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`, containing
-  `{ "version": 1, "createdAt": <ISO>, "tables": { "users": [...], "posts": [...] } }` with full
-  column fidelity. `sessions` are **never** dumped — they're disposable, and token hashes don't
-  belong in a backup file. `version` lets restore reject incompatible dumps.
+  `{ "version": 2, "createdAt": <ISO>, "tables": { "users": [...], "posts": [...], "pages": [...] } }`
+  with full column fidelity. `sessions` are **never** dumped — they're disposable, and token
+  hashes don't belong in a backup file. `version` lets restore reject incompatible dumps.
 - **Schedule** — admin-configurable in settings: `backupSchedule` (`off` / `daily` / `weekly`,
   default `off`) and `backupRetention` (1–100 files, default 14). An hourly in-process tick (same
   pattern as the session sweep) runs a backup when due, tracked in
-  `/data/backup/db/state.json` (`lastAttemptAt`/`lastSuccessAt`/`lastError`); missed windows catch
-  up on next boot. After a successful run, files beyond the retention count are pruned. Failures
-  are recorded and logged, never crash the app.
+  `/data/backup/db/state.json` (`lastAttemptAt`/`lastSuccessAt`/`lastError`/`lastImagesArchiveAt`);
+  missed windows catch up on next boot. After a successful run, dump files beyond the retention
+  count are pruned. Failures are recorded and logged, never crash the app.
 - **Admin UI** (settings page) — schedule select, retention input, **Back up now** button, last-run
-  status, and a list of existing backups with download links.
-- **Routes** (all admin-only): `GET /backups` (state + list), `POST /backups` (run now),
-  `GET /backups/:name` (download; filename validated against `^db-\d{8}-\d{6}\.json\.gz$` — no
-  traversal).
-- **Restore is CLI-only** (destructive, so no web button): `tsx src/cli.ts restore <file>` inside
-  the container. Validates the dump `version`, then in **one transaction** deletes and re-inserts
-  `users` and `posts`. Deleting users **cascades to `sessions`**, so every login is invalidated —
-  the CLI prints a reminder to trigger a rebuild afterwards (`POST /rebuild`).
+  status, and lists of existing dumps and image archives with download links.
+- **Routes** (all admin-only): `GET /backups` (state + dump list + image-archive list),
+  `POST /backups` (run now), `GET /backups/:name` (download; filename validated against
+  `^db-\d{8}-\d{6}\.json\.gz$` or `^images-\d{8}-\d{6}\.tar$` — no traversal).
+- **Restore is CLI-only** (destructive, so no web button):
+  `docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/<file>`.
+  The DHI runtime image has no shell, so `exec` must invoke `node` directly (a bare
+  `tsx src/cli.ts ...` cannot run there); outside Docker use `npx tsx src/cli.ts restore <file>`.
+  Restore validates
+  the dump `version`, then in **one transaction** deletes and re-inserts `users`, `posts`, and —
+  for v2 dumps — `pages` (v1 dumps leave existing pages untouched). Deleting users **cascades to
+  `sessions`**, so every login is invalidated — the CLI prints a reminder to trigger a rebuild
+  afterwards (`POST /rebuild`).
+
+### Image originals & incremental archives
+
+- **Originals** — every image write path (`/upload`, the CLI uploader, and WordPress re-hosting)
+  persists the untouched upload as `{key}-orig.<ext>` next to the AVIF/WebP variants, so
+  `/data/images` is a complete media archive: a DB restore alone can't bring photos back, and
+  without originals the lossy variants would be the only server-side copy of every photo.
+  Originals also enable future re-encodes (new widths/formats/quality). Cost: roughly double the
+  per-upload disk use.
+- **Image archives** — after each successful scheduled/on-demand dump, files under `/data/images`
+  modified since the previous archive are tarred into
+  `/data/backup/db/images-<YYYYMMDD-HHmmss>.tar` (mtime-incremental; when nothing changed, no
+  file is written). Archives are **never pruned** — each holds a unique slice of the library —
+  so the chain eventually stores one extra copy of every image; the offsite host-level backup
+  above remains the real DR protection. To rebuild the images dir from archives, untar them
+  **oldest-first** into an empty `images/` (later duplicates simply overwrite earlier ones).
 
 ### Upgrading a Postgres major (e.g. 17 → 18)
 

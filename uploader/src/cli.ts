@@ -15,7 +15,12 @@ export async function uploadFile(
 
 async function restoreMain(file: string | undefined): Promise<void> {
   if (!file) {
-    console.error('usage: tsx src/cli.ts restore <db-YYYYMMDD-HHmmss.json.gz>');
+    // @ai-warning: the DHI runtime image has no shell, so `docker compose exec`
+    // must invoke node directly — `tsx src/cli.ts ...` cannot run there.
+    console.error(
+      'usage: docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
+      '       (bare dev: npx tsx src/cli.ts restore <file>)',
+    );
     process.exit(1);
   }
   const databaseUrl = process.env.DATABASE_URL;
@@ -39,7 +44,7 @@ async function main(): Promise<void> {
   if (process.argv[2] === 'restore') return restoreMain(process.argv[3]);
   const [, , file, key, alt = ''] = process.argv;
   if (!file || !key) {
-    console.error('usage: npm run upload -- <imageFile> <key> [alt]   |   tsx src/cli.ts restore <file>');
+    console.error('usage: npm run upload -- <imageFile> <key> [alt]   |   docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/<file>');
     process.exit(1);
   }
   const opts: StorageOptions = {

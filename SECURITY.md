@@ -137,16 +137,25 @@ deliberate trade-off, not an oversight:
   proxy is still required in front; every app-level control on this page (auth, rate limiting,
   sanitization, SSRF/traversal guards) is unchanged.
 
-### Database backups
+### Backups
 
 - Backup dumps (`/data/backup/db/db-*.json.gz`) contain the `users` table **including scrypt
   password hashes** — treat backup files as sensitive, same as the database itself. `sessions` are
   **never** dumped (disposable, and token hashes don't belong in a backup).
+- Image archives (`/data/backup/db/images-*.tar`) contain no password hashes — only the already
+  publicly served image files — but their download route stays behind the same admin gate and
+  strict filename validation as the dumps.
 - The download route (`GET /backups/:name`) is **admin-only** and validates the filename against a
-  strict pattern (`^db-\d{8}-\d{6}\.json\.gz$`) before touching the filesystem — no path traversal.
-- Restore is **CLI-only** (`tsx src/cli.ts restore <file>`, run inside the container), never a web
-  route, because it's destructive: it deletes and re-inserts `users` and `posts` in one
-  transaction. Deleting `users` cascades to `sessions`, so a restore invalidates every login.
+  strict pattern (`^db-\d{8}-\d{6}\.json\.gz$` or `^images-\d{8}-\d{6}\.tar$`) before touching the
+  filesystem — no path traversal.
+- Restore is **CLI-only**
+  (`docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/<file>` — the
+  shell-less runtime image requires invoking `node` directly), never a web route, because it's
+  destructive: it deletes and re-inserts `users`, `posts`, and `pages` in one transaction.
+  Deleting `users` cascades to `sessions`, so a restore invalidates every login.
+- In-app backups live on the **same disk** as the live data; disaster recovery requires an
+  offsite host-level backup of `./uploader/data` — see
+  [ARCHITECTURE.md](ARCHITECTURE.md#backups--disaster-recovery).
 
 ## Known limitations
 

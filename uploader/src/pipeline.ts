@@ -7,11 +7,24 @@ export interface Variant {
   data: Buffer;
 }
 
+export interface OriginalImage {
+  /** The untouched input bytes, byte-for-byte. */
+  data: Buffer;
+  /** File extension derived from the detected input format (e.g. 'jpg', 'png'). */
+  ext: string;
+}
+
 export interface ProcessResult {
   width: number;
   height: number;
   variants: Variant[];
+  original: OriginalImage;
 }
+
+// sharp format names that differ from the conventional file extension.
+// @ai-note: sharp reports AVIF as 'heif' (AVIF is the AV1 flavor of HEIF, and
+// the prebuilt binaries decode only that flavor), so 'avif' is the honest ext.
+const EXT_BY_FORMAT: Record<string, string> = { jpeg: 'jpg', heif: 'avif' };
 
 export interface ProcessOptions {
   avifQuality?: number;
@@ -34,6 +47,14 @@ export async function processImage(
     .toBuffer({ resolveWithObject: true });
   const width = probe.info.width;
   const height = probe.info.height;
+  // With no output format forced, sharp keeps the input format for the probe,
+  // so info.format identifies what was uploaded. The original bytes are passed
+  // through untouched so /data/images doubles as a lossless media archive
+  // (enables future re-encodes at new widths/formats/quality).
+  const original: OriginalImage = {
+    data: input,
+    ext: EXT_BY_FORMAT[probe.info.format] ?? probe.info.format,
+  };
 
   const variants: Variant[] = [];
   for (const w of variantWidths(width)) {
@@ -50,5 +71,5 @@ export async function processImage(
     }
   }
 
-  return { width, height, variants };
+  return { width, height, variants, original };
 }

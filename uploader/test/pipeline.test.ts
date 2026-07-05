@@ -42,4 +42,18 @@ describe('processImage', () => {
     const meta = await sharp(v.data).metadata();
     expect(meta.exif).toBeDefined();
   });
+
+  it('returns the untouched original bytes with the detected extension', async () => {
+    const jpg = await fixture(800, 600);
+    const fromJpg = await processImage(jpg);
+    expect(fromJpg.original.data.equals(jpg)).toBe(true);
+    expect(fromJpg.original.ext).toBe('jpg');
+
+    const png = await sharp({
+      create: { width: 400, height: 300, channels: 3, background: { r: 1, g: 2, b: 3 } },
+    }).png().toBuffer();
+    const fromPng = await processImage(png);
+    expect(fromPng.original.data.equals(png)).toBe(true);
+    expect(fromPng.original.ext).toBe('png');
+  });
 });

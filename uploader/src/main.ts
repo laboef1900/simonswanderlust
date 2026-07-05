@@ -46,6 +46,7 @@ const dbBackup = createDbBackup({
   db: pool,
   dir: join(backupDir, 'db'),
   retention: () => settings.get().backupRetention,
+  storageDir, // scheduled/on-demand runs also write the incremental images tar
 });
 
 // Hourly housekeeping: sweep expired sessions and run a due scheduled backup.
