@@ -16,6 +16,7 @@ import {
 } from './authn.js';
 import { SettingsError, type SettingsStore } from './settings.js';
 import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair } from './posts.js';
+import { renderPreviewHtml } from './preview.js';
 import { type PageStore, type PagePair, type PageContent, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
@@ -272,6 +273,23 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const pair = await posts.get((req.params as { tk: string }).tk);
     if (!pair) return reply.code(404).send({ error: 'post not found' });
     return reply.send(pair);
+  });
+
+  // Server-side preview of a draft (or published) post, rendered through the
+  // same markdown pipeline the site build uses (see src/preview.ts). Drafts
+  // are author territory, so requireAuth — publishing stays admin-only.
+  app.get('/posts/:tk/preview', { preHandler: requireAuth }, async (req, reply) => {
+    const q = (req.query ?? {}) as { locale?: unknown };
+    const locale = q.locale === undefined ? 'de' : String(q.locale);
+    if (locale !== 'de' && locale !== 'en') {
+      return reply.code(400).send({ error: "locale must be 'de' or 'en'" });
+    }
+    const pair = await posts.get((req.params as { tk: string }).tk);
+    if (!pair) return reply.code(404).send({ error: 'post not found' });
+    return reply
+      .type('text/html; charset=utf-8')
+      .header('cache-control', 'no-store')
+      .send(await renderPreviewHtml(pair, locale));
   });
 
   const upsert = async (req: { body: unknown }, reply: import('fastify').FastifyReply, tk: string) => {

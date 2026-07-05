@@ -552,3 +552,67 @@ describe('pages routes', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+describe('GET /posts/:tk/preview', () => {
+  const draft = () => ({
+    translationKey: '', status: 'draft',
+    shared: { date: '2024-10-03', country: 'Rumänien', countryCode: 'RO', region: 'europe', coordinates: { lat: 44.4, lng: 26.1 } },
+    de: { locale: 'de', slug: 'bukarest', title: 'Entwurf Bukarest', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## Anreise', images: {} },
+    en: { locale: 'en', slug: 'bucharest', title: 'Bucharest draft', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## Arrival', images: {} },
+  });
+
+  it('401 without auth', async () => {
+    const res = await build().app.inject({ method: 'GET', url: '/posts/whatever/preview' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('renders a DRAFT as text/html for an authed non-admin author', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draft() });
+    const tk = created.json().translationKey;
+    const res = await b.app.inject({ method: 'GET', url: `/posts/${tk}/preview?locale=de`, cookies: cookie });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/html');
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.body).toContain('Entwurf Bukarest');
+    expect(res.body).toContain('<h2 id="anreise">Anreise</h2>');
+  });
+
+  it('defaults to the DE locale and honors locale=en', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draft() });
+    const tk = created.json().translationKey;
+    const de = await b.app.inject({ method: 'GET', url: `/posts/${tk}/preview`, cookies: cookie });
+    expect(de.body).toContain('Entwurf Bukarest');
+    const en = await b.app.inject({ method: 'GET', url: `/posts/${tk}/preview?locale=en`, cookies: cookie });
+    expect(en.body).toContain('Bucharest draft');
+  });
+
+  it('404 for an unknown translation key', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({ method: 'GET', url: '/posts/nope/preview', cookies: cookie });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('400 for an unsupported locale', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draft() });
+    const tk = created.json().translationKey;
+    const res = await b.app.inject({ method: 'GET', url: `/posts/${tk}/preview?locale=fr`, cookies: cookie });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('keeps the admin security headers (/posts prefix)', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draft() });
+    const tk = created.json().translationKey;
+    const res = await b.app.inject({ method: 'GET', url: `/posts/${tk}/preview?locale=de`, cookies: cookie });
+    expect(res.headers['x-frame-options']).toBe('DENY');
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
+});

@@ -1,4 +1,6 @@
-import type { Locale } from '../i18n/ui';
+// Explicit .js extension so this module also resolves under NodeNext
+// (the uploader's draft preview imports it cross-tree — see uploader/src/preview.ts).
+import type { Locale } from '../i18n/ui.js';
 
 const intlLocale: Record<Locale, string> = { de: 'de-DE', en: 'en-US' };
 
