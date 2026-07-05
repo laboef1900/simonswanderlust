@@ -107,6 +107,53 @@ describe('memoryPostStore', () => {
     await s.upsertDraft({ ...created, shared: { ...pair().shared } });
     expect((await s.get(created.translationKey))?.shared.stops).toBeUndefined();
   });
+
+  it('unpublish flips a published pair back to draft', async () => {
+    const s = memoryPostStore();
+    const c = await s.upsertDraft(pair());
+    await s.publish(c.translationKey);
+    await s.unpublish(c.translationKey);
+    expect((await s.get(c.translationKey))?.status).toBe('draft');
+  });
+
+  it('unpublish unlocks the slugs again (publish → unpublish → rename allowed)', async () => {
+    const s = memoryPostStore();
+    const c = await s.upsertDraft(pair());
+    await s.publish(c.translationKey);
+    await s.unpublish(c.translationKey);
+    const renamed = await s.upsertDraft({ ...c, de: { ...c.de, slug: 'renamed' } });
+    expect(renamed.de.slug).toBe('renamed');
+  });
+
+  it('remove deletes the pair and frees its slugs for reuse', async () => {
+    const s = memoryPostStore();
+    const c = await s.upsertDraft(pair());
+    await s.remove(c.translationKey);
+    expect(await s.get(c.translationKey)).toBeNull();
+    expect(await s.list()).toHaveLength(0);
+    // the slug-squatting fix: a fresh draft may take the freed slugs
+    const reused = await s.upsertDraft(pair());
+    expect(reused.de.slug).toBe('bukarest');
+    expect(reused.translationKey).not.toBe(c.translationKey);
+  });
+
+  it('remove and unpublish reject an unknown key with PostError', async () => {
+    const s = memoryPostStore();
+    await expect(s.remove('nope')).rejects.toBeInstanceOf(PostError);
+    await expect(s.unpublish('nope')).rejects.toBeInstanceOf(PostError);
+  });
+
+  it('list reports hasEnBody (blank EN body → false)', async () => {
+    const s = memoryPostStore();
+    const withEn = await s.upsertDraft(pair());
+    const withoutEn = await s.upsertDraft(pair({
+      de: { ...pair().de, slug: 'other-de' },
+      en: { ...pair().en, slug: 'other-en', bodyMarkdown: '   ' },
+    }));
+    const list = await s.list();
+    expect(list.find((p) => p.translationKey === withEn.translationKey)?.hasEnBody).toBe(true);
+    expect(list.find((p) => p.translationKey === withoutEn.translationKey)?.hasEnBody).toBe(false);
+  });
 });
 
 describe('post validation', () => {

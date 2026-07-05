@@ -50,8 +50,58 @@
     <script src="/admin/auth.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
+      let me = null; // session from Auth.ensureAuthed(); buttons are hidden for
+                     // non-admins, but the server enforces admin-only regardless.
 
-      async function load() {
+      function describeBuild(build) {
+        if (!build) return '';
+        return build.ok ? ' Site rebuilt.' : ' Rebuild failed: ' + build.error;
+      }
+
+      // Draft slugs may still be empty — only render "(de / en)" when set.
+      function slugSuffix(p) {
+        const slugs = [p.slugDe, p.slugEn].filter(Boolean).join(' / ');
+        return slugs ? ' (' + slugs + ')' : '';
+      }
+
+      async function unpublishPost(p, btn) {
+        const title = p.titleDe || '(untitled)';
+        if (!confirm('Unpublish "' + title + '"' + slugSuffix(p) + '?\n\nThe post will be removed from the live site on the next build and revert to a draft.')) return;
+        btn.disabled = true; // no double-fire while the request is in flight
+        $('out').textContent = 'Unpublishing…';
+        const res = await fetch('/posts/' + encodeURIComponent(p.translationKey) + '/unpublish', { method: 'POST' });
+        if (res.status === 401) { location.href = '/login'; return; }
+        const body = await res.json().catch(() => ({}));
+        const msg = res.ok
+          ? 'Unpublished "' + title + '".' + describeBuild(body.build)
+          : 'Unpublish failed: ' + (body.error || res.status);
+        $('out').textContent = msg;
+        // Pass the outcome so load() does not clobber it with "N post(s) loaded."
+        // — a failed rebuild (body.build.ok === false) must stay visible to the admin.
+        if (res.ok) await load(msg); else btn.disabled = false;
+      }
+
+      async function deletePost(p, btn) {
+        const title = p.titleDe || '(untitled)';
+        const warning = p.status === 'published'
+          ? '\n\nThis post is PUBLISHED — it will be removed from the live site on the next build.'
+          : '';
+        if (!confirm('Delete "' + title + '"' + slugSuffix(p) + '?' + warning + '\n\nThis cannot be undone.')) return;
+        btn.disabled = true; // no double-fire while the request is in flight
+        $('out').textContent = 'Deleting…';
+        const res = await fetch('/posts/' + encodeURIComponent(p.translationKey), { method: 'DELETE' });
+        if (res.status === 401) { location.href = '/login'; return; }
+        const body = await res.json().catch(() => ({}));
+        const msg = res.ok
+          ? 'Deleted "' + title + '".' + describeBuild(body.build)
+          : 'Delete failed: ' + (body.error || res.status);
+        $('out').textContent = msg;
+        // Pass the outcome so load() does not clobber it with "N post(s) loaded."
+        // — a failed rebuild (body.build.ok === false) must stay visible to the admin.
+        if (res.ok) await load(msg); else btn.disabled = false;
+      }
+
+      async function load(statusMsg) {
         const res = await fetch('/posts');
         if (res.status === 401) { location.href = '/login'; return; }
         if (!res.ok) { $('out').textContent = 'Could not load posts: ' + res.status; return; }
@@ -74,6 +124,13 @@
 
             const tdTitle = document.createElement('td');
             tdTitle.textContent = p.titleDe || '(untitled)';
+            if (p.hasEnBody === false) {
+              const hint = document.createElement('span');
+              hint.textContent = ' · EN missing';
+              hint.style.color = '#6b7280';
+              hint.style.fontSize = '0.75rem';
+              tdTitle.appendChild(hint);
+            }
             tr.appendChild(tdTitle);
 
             const tdStatus = document.createElement('td');
@@ -106,13 +163,33 @@
             editLink.textContent = 'Edit';
             editLink.className = 'action-link';
             tdActions.appendChild(editLink);
+            if (me && me.isAdmin) {
+              if (p.status === 'published') {
+                const unpubBtn = document.createElement('button');
+                unpubBtn.textContent = 'Unpublish';
+                unpubBtn.className = 'btn-remove';
+                unpubBtn.style.marginLeft = '0.75rem';
+                unpubBtn.style.fontSize = '0.7rem';
+                unpubBtn.addEventListener('click', () => unpublishPost(p, unpubBtn));
+                tdActions.appendChild(unpubBtn);
+              }
+              const delBtn = document.createElement('button');
+              delBtn.textContent = 'Delete';
+              delBtn.className = 'btn-remove';
+              delBtn.style.marginLeft = '0.75rem';
+              delBtn.style.fontSize = '0.7rem';
+              delBtn.addEventListener('click', () => deletePost(p, delBtn));
+              tdActions.appendChild(delBtn);
+            }
             tr.appendChild(tdActions);
 
             tbody.appendChild(tr);
           }
         }
         $('postsTable').style.display = 'table';
-        $('out').textContent = posts.length + ' post(s) loaded.';
+        // Callers that already set a status (e.g. an unpublish/delete outcome, which
+        // may report a rebuild failure) pass it through so it survives the reload.
+        $('out').textContent = statusMsg != null ? statusMsg : posts.length + ' post(s) loaded.';
       }
 
       $('exportAll').addEventListener('click', async () => {
@@ -126,9 +203,9 @@
       });
 
       (async () => {
-        const s = await Auth.ensureAuthed();
-        if (!s) return;
-        Auth.renderHeader(s);
+        me = await Auth.ensureAuthed();
+        if (!me) return;
+        Auth.renderHeader(me);
         await load();
       })();
     </script>
