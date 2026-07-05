@@ -13,7 +13,8 @@ own width, never upscaled), formats `avif` + `webp`. Must match the blog's
 `site/src/lib/images.ts`. Variants are served with a one-year immutable cache.
 The untouched upload is additionally persisted as `{key}-orig.<ext>` next to the
 variants, so the images dir is a complete media archive (and future re-encodes
-stay possible).
+stay possible). Originals exist only for uploads made from this version onward;
+earlier uploads exist as variants only.
 
 ---
 

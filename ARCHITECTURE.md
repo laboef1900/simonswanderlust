@@ -154,7 +154,8 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   `/data/images` is a complete media archive: a DB restore alone can't bring photos back, and
   without originals the lossy variants would be the only server-side copy of every photo.
   Originals also enable future re-encodes (new widths/formats/quality). Cost: roughly double the
-  per-upload disk use.
+  per-upload disk use. Note: originals exist only for uploads made from this version onward —
+  images uploaded earlier had their originals discarded at upload time and exist as variants only.
 - **Image archives** — after each successful scheduled/on-demand dump, files under `/data/images`
   modified since the previous archive are tarred into
   `/data/backup/db/images-<YYYYMMDD-HHmmss>.tar` (mtime-incremental; when nothing changed, no

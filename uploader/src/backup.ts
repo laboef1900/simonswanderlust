@@ -1,6 +1,6 @@
 import { gzipSync, gunzipSync } from 'node:zlib';
 import {
-  mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
+  existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { create as createTar } from 'tar';
@@ -78,16 +78,31 @@ export async function archiveImages(
   let names: string[];
   try {
     names = readdirSync(storageDir, { recursive: true, encoding: 'utf8' });
-  } catch {
-    return null; // no images dir yet — nothing to archive
+  } catch (e) {
+    // Only a genuinely absent images dir means "nothing to archive". Every
+    // other failure (EACCES/EIO/...) MUST propagate so the caller records it
+    // and does NOT advance the mtime cutoff — a swallowed transient error
+    // would otherwise permanently exclude all pre-existing files from the chain.
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+    throw e;
   }
   const fresh = names.filter((rel) => {
     const st = statSync(join(storageDir, rel), { throwIfNoEntry: false });
     return st !== undefined && st.isFile() && st.mtimeMs >= sinceMs;
   });
   if (fresh.length === 0) return null;
-  const name = `images-${fileStamp(now)}.tar`;
   mkdirSync(dir, { recursive: true });
+  // Stamps have second granularity; an existing archive must NEVER be
+  // overwritten (each tar holds a unique slice of the chain — clobbering one
+  // loses its files for good, because they never re-qualify against a later
+  // cutoff). Bump the stamp until the name is free.
+  let stampAt = now;
+  let name = `images-${fileStamp(stampAt)}.tar`;
+  while (existsSync(join(dir, name))) {
+    stampAt = new Date(stampAt.getTime() + 1000);
+    name = `images-${fileStamp(stampAt)}.tar`;
+  }
   // Same atomic pattern as the dumps: the .tmp name never matches either
   // filename regex, so a crashed run can't leave a listable/served artifact.
   const tmp = join(dir, `${name}.${process.pid}.tmp`);
@@ -179,13 +194,17 @@ export function createDbBackup(
             await archiveImages(opts.storageDir, opts.dir, since, walkStart);
             state.lastImagesArchiveAt = walkStart.toISOString();
           } catch (e) {
+            // Also log it: state.lastError is a single slot, and a later prune
+            // failure in the same run would otherwise displace this message.
+            console.error('images archive failed:', e);
             state.lastError = `images archive failed: ${(e as Error).message}`;
           }
         }
         try {
           pruneBackups(opts.dir, opts.retention());
         } catch (e) {
-          state.lastError = `prune failed: ${(e as Error).message}`;
+          const msg = `prune failed: ${(e as Error).message}`;
+          state.lastError = state.lastError ? `${state.lastError}; ${msg}` : msg;
         }
       } catch (e) {
         state.lastError = (e as Error).message;

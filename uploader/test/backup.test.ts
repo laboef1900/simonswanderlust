@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from 'vitest';
-import { mkdir, mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises';
 import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -126,6 +126,34 @@ describe('archiveImages', () => {
     expect(await archiveImages(join(storage, 'nope'), dir, 0)).toBeNull();
     expect(await readdir(dir)).toEqual([]);
   });
+
+  // chmod 000 doesn't block root, so this EACCES fixture only works unprivileged.
+  it.skipIf(process.getuid?.() === 0)(
+    'propagates a non-ENOENT walk failure instead of treating it as empty',
+    async () => {
+      await chmod(storage, 0o000);
+      try {
+        await expect(archiveImages(storage, dir, 0)).rejects.toThrow();
+      } finally {
+        await chmod(storage, 0o755);
+      }
+      expect(await readdir(dir)).toEqual([]);
+    },
+  );
+
+  it('never overwrites an existing archive: same-second runs get bumped stamps', async () => {
+    const now = new Date('2026-07-04T10:20:30Z');
+    const first = await archiveImages(storage, dir, 0, now);
+    expect(first).toBe('images-20260704-102030.tar');
+    await writeFile(join(storage, 'trips', 'x', 'new-orig.jpg'), 'n');
+    const second = await archiveImages(storage, dir, 0, now);
+    expect(second).toBe('images-20260704-102031.tar');
+    // the first tar survives untouched — neither slice of the chain is lost
+    expect(await tarEntries(join(dir, first!))).toEqual([
+      'trips/x/hero-640.avif', 'trips/x/hero-orig.jpg',
+    ]);
+    expect(await tarEntries(join(dir, second!))).toContain('trips/x/new-orig.jpg');
+  });
 });
 
 describe('isBackupDue', () => {
@@ -201,7 +229,7 @@ describe('createDbBackup.runNow', () => {
   });
 
   it('tolerates a bogus storageDir without failing the dump', async () => {
-    // a FILE as storageDir: the walk fails -> treated as nothing to archive
+    // a FILE as storageDir: the walk fails with ENOTDIR -> nothing to archive
     const notADir = join(dir, 'file-not-dir');
     await writeFile(notADir, 'x');
     const b = createDbBackup({ db: fakeDb(), dir, retention: () => 5, storageDir: notADir });
@@ -211,4 +239,26 @@ describe('createDbBackup.runNow', () => {
     expect(b.list().length).toBe(1);
     expect(b.listImageArchives().length).toBe(0);
   });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'keeps the archive cutoff unchanged when the images walk fails',
+    async () => {
+      const storage = await mkdtemp(join(tmpdir(), 'imgarch-'));
+      await writeFile(join(storage, 'hero-orig.jpg'), 'o');
+      const cutoff = '2026-01-01T00:00:00.000Z';
+      writeState(dir, { lastImagesArchiveAt: cutoff });
+      await chmod(storage, 0o000); // EACCES on the walk — a transient failure, not "empty"
+      try {
+        const b = createDbBackup({ db: fakeDb(), dir, retention: () => 5, storageDir: storage });
+        const s = await b.runNow();
+        expect(s.lastSuccessAt).toBeTruthy(); // the dump itself still succeeded
+        expect(s.lastError).toContain('images archive failed');
+        // the cutoff MUST NOT advance — the next successful run re-covers the gap
+        expect(s.lastImagesArchiveAt).toBe(cutoff);
+        expect(b.listImageArchives().length).toBe(0);
+      } finally {
+        await chmod(storage, 0o755);
+      }
+    },
+  );
 });

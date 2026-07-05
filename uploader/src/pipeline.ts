@@ -51,6 +51,11 @@ export async function processImage(
   // so info.format identifies what was uploaded. The original bytes are passed
   // through untouched so /data/images doubles as a lossless media archive
   // (enables future re-encodes at new widths/formats/quality).
+  // @ai-warning: vector input is the deliberate exception — sharp rasterizes
+  // SVG and the probe reports 'png', so untouched SVG bytes land as
+  // `-orig.png` (mislabeled but preserved, and served as image/png). Do NOT
+  // "fix" this via sharp(input).metadata().format: a publicly served
+  // `-orig.svg` would be a stored-XSS vector on the image host.
   const original: OriginalImage = {
     data: input,
     ext: EXT_BY_FORMAT[probe.info.format] ?? probe.info.format,
