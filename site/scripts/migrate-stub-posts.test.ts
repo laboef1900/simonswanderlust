@@ -1,21 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { parseMdxFile, mdxBodyToMarkdown } from './migrate-stub-posts.mjs';
-import { join } from 'node:path';
+import { mdxBodyToMarkdown } from './migrate-stub-posts.mjs';
 
-const de = join(process.cwd(), 'src/content/trips/de');
-
-describe('parseMdxFile', () => {
-  it('parses a stub post into row fields with locale/slug from the path', () => {
-    const r = parseMdxFile(join(de, 'reisebericht-4-tage-bukarest.mdx'), 'de');
-    expect(r.locale).toBe('de');
-    expect(r.slug).toBe('reisebericht-4-tage-bukarest');
-    expect(r.data.translationKey).toBe('bucharest-2024');
-    expect(r.data.heroImage.src).toContain('/trips/bucharest-2024/hero');
-    expect(r.bodyMarkdown).toContain('## Ankommen');
-    expect(r.images).toEqual({});
-  });
-});
-
+// @ai-note: parseMdxFile is no longer tested here — it lazy-loads gray-matter, which was
+// removed from site/ dependencies after the one-off migration completed (issue #33).
+// This suite doubles as a regression test that importing the module works WITHOUT gray-matter.
 describe('mdxBodyToMarkdown', () => {
   it('rewrites a <BodyImage> tag to a markdown image and records its dimensions', () => {
     const body = 'Intro\n\n<BodyImage src="https://img/x/y" width={1600} height={1067} alt="A caption" />\n\nMore';
