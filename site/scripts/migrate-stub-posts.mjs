@@ -41,8 +41,16 @@ export function parseMdxFile(path, locale) {
   let matter;
   try {
     matter = createRequire(import.meta.url)('gray-matter');
-  } catch {
-    throw new Error('gray-matter is not installed — run `npm i -D gray-matter@4` in site/ to re-run this migration script');
+  } catch (err) {
+    // Only translate "gray-matter itself is not installed"; surface anything else
+    // (broken install, missing nested dep, incompatible build) as the real error.
+    if (err?.code === 'MODULE_NOT_FOUND' && String(err.message).includes("'gray-matter'")) {
+      throw new Error(
+        'gray-matter is not installed — run `npm i -D gray-matter@4` in site/ to re-run this migration script',
+        { cause: err },
+      );
+    }
+    throw err;
   }
   const raw = readFileSync(path, 'utf8');
   const { data, content } = matter(raw);
