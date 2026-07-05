@@ -9,6 +9,7 @@ import { pgPageStore } from './pages.js';
 import { createSiteBuilder } from './build.js';
 import { createDbBackup, isBackupDue } from './backup.js';
 import { createShutdown } from './shutdown.js';
+import { makeDbCheck } from './health.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -72,7 +73,7 @@ const app = buildServer({
   builder,
   dbBackup,
   backupDir,
-  dbCheck: async () => { await pool.query('SELECT 1'); },
+  dbCheck: makeDbCheck(() => pool.query('SELECT 1')),
 });
 
 // Clean shutdown on docker stop / compose recreate: close the HTTP server,
