@@ -40,7 +40,15 @@ maybe('backup round-trip (Postgres)', () => {
       de: { locale: 'de' as const, slug: 'test-reise', title: 'Test', excerpt: 'x', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hallo', images: {} },
       en: { locale: 'en' as const, slug: 'test-trip', title: 'Test', excerpt: 'x', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hello', images: {} },
     };
-    await posts.upsertDraft(base);
+    const createdPair = await posts.upsertDraft(base);
+    // Publish, then save a draft edit: the dump must carry BOTH the working
+    // copy and the published snapshot (issue #20), or a restore would lose the
+    // published/working separation. (Built from `base`, not the round-tripped
+    // pair: with TZ=Europe/Berlin, rowShared's Date→string conversion shifts
+    // the calendar date west, and re-saving it would poison the date column —
+    // a pre-existing quirk this test deliberately keeps out of its scope.)
+    await posts.publish(createdPair.translationKey);
+    await posts.upsertDraft({ ...base, translationKey: createdPair.translationKey, de: { ...base.de, bodyMarkdown: 'Hallo v2' } });
     await pool.query(`INSERT INTO pages (key,locale,title,body_markdown) VALUES ('about','de','T','Body')
       ON CONFLICT (key,locale) DO UPDATE SET title=EXCLUDED.title, body_markdown=EXCLUDED.body_markdown`);
 
@@ -72,6 +80,16 @@ maybe('backup round-trip (Postgres)', () => {
     // west in UTC, so the restored row would carry the wrong calendar date.
     const dateText = (await pool.query("SELECT to_char(date,'YYYY-MM-DD') AS d FROM posts LIMIT 1")).rows[0].d;
     expect(dateText).toBe(base.shared.date);
+
+    // Published-snapshot fidelity: the restored row keeps the draft edit as the
+    // working copy AND the pre-edit content as the live snapshot.
+    const de = (await pool.query(
+      `SELECT body_markdown AS work, published_snapshot->>'body_markdown' AS live, published_at AS p
+         FROM posts WHERE locale='de'`,
+    )).rows[0] as { work: string; live: string; p: Date };
+    expect(de.work).toBe('Hallo v2');
+    expect(de.live).toBe('Hallo');
+    expect(de.p).toBeInstanceOf(Date);
   });
 
   it('rejects an unsupported dump version without touching data', async () => {
@@ -94,5 +112,48 @@ maybe('backup round-trip (Postgres)', () => {
     await restoreDatabase(pool, v1);
     const kept = (await pool.query(`SELECT title FROM pages WHERE key='about' AND locale='en'`)).rows[0];
     expect(kept.title).toBe('keep');
+  });
+
+  it('backfills published_snapshot when restoring a pre-snapshot dump, in the same transaction', async () => {
+    // A dump taken BEFORE issue #20 (v2, but no published_snapshot/published_at
+    // keys): its published rows must become loader-visible right after the
+    // restore — the documented flow is restore → POST /rebuild with no app
+    // restart, so restoreDatabase itself must run the backfill, not ensureSchema.
+    const { gzipSync } = await import('node:zlib');
+    const { writeFileSync } = await import('node:fs');
+    const { randomUUID } = await import('node:crypto');
+    const oldPost = (locale: 'de' | 'en', slug: string, status: 'draft' | 'published', body: string) => ({
+      id: randomUUID(), translation_key: 'legacy-pair', locale, slug, title: 'Legacy', date: '2025-06-01',
+      country: 'Peru', country_code: 'PE', region: 'south-america', excerpt: 'x',
+      hero_image: { src: 'https://img.example/h', width: 100, height: 50, alt: 'a' },
+      coordinates: { lat: -12, lng: -77 }, stops: null, route: null, key_facts: null,
+      body_markdown: body, images: {}, status,
+      created_at: '2025-06-01T10:00:00.000Z', updated_at: '2025-06-02T10:00:00.000Z',
+    });
+    const posts = [
+      oldPost('de', 'legacy-reise', 'published', 'Live DE'),
+      oldPost('en', 'legacy-trip', 'published', 'Live EN'),
+      { ...oldPost('de', 'entwurf', 'draft', 'Draft body'), translation_key: 'legacy-draft' },
+    ];
+    const pre = join(dir, 'db-20260601-000000.json.gz');
+    writeFileSync(pre, gzipSync(JSON.stringify({ version: 2, tables: { users: [], posts } })));
+
+    await restoreDatabase(pool, pre);
+    // Published rows are immediately visible to the site loader's query…
+    const visible = await pool.query(
+      `SELECT slug, published_snapshot->>'body_markdown' AS live, published_at
+         FROM posts WHERE status='published' AND published_snapshot IS NOT NULL ORDER BY slug`,
+    );
+    expect(visible.rows.map((r) => [r.slug, r.live])).toEqual([
+      ['legacy-reise', 'Live DE'],
+      ['legacy-trip', 'Live EN'],
+    ]);
+    for (const r of visible.rows) expect(r.published_at).toBeInstanceOf(Date);
+    // …while the draft row stays snapshot-less.
+    const draft = (await pool.query(
+      `SELECT published_snapshot, published_at FROM posts WHERE slug='entwurf'`,
+    )).rows[0];
+    expect(draft.published_snapshot).toBeNull();
+    expect(draft.published_at).toBeNull();
   });
 });

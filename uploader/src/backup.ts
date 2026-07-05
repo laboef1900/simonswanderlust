@@ -4,7 +4,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import type { BackupSchedule } from './settings.js';
-import type { DbPool } from './db.js';
+import { POST_SNAPSHOT_SQL, type DbPool } from './db.js';
 
 export const DUMP_VERSION = 2;
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
@@ -36,7 +36,7 @@ export async function dumpDatabase(db: Queryable, dir: string, now: Date = new D
   const posts = (await db.query(
     `SELECT id, translation_key, locale, slug, title, to_char(date, 'YYYY-MM-DD') AS date, country,
        country_code, region, excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown,
-       images, status, created_at, updated_at
+       images, status, created_at, updated_at, published_snapshot, published_at
      FROM posts ORDER BY created_at`,
   )).rows;
   const pages = (await db.query('SELECT key, locale, title, body_markdown, images FROM pages ORDER BY key, locale')).rows;
@@ -155,15 +155,33 @@ export async function restoreDatabase(
       );
     }
     for (const p of dump.tables.posts) {
+      // published_snapshot/published_at are absent from older dumps → inserted
+      // as NULL here, then backfilled below in this same transaction.
       await client.query(
         `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
-           excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15::jsonb,$16,$17::jsonb,$18,$19,$20)`,
+           excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status, created_at, updated_at,
+           published_snapshot, published_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15::jsonb,$16,$17::jsonb,$18,$19,$20,$21::jsonb,$22)`,
         [p.id, p.translation_key, p.locale, p.slug, p.title, p.date, p.country, p.country_code, p.region,
          p.excerpt, asJsonb(p.hero_image), asJsonb(p.coordinates), asJsonb(p.stops), p.route,
-         asJsonb(p.key_facts), p.body_markdown, asJsonb(p.images), p.status, p.created_at, p.updated_at],
+         asJsonb(p.key_facts), p.body_markdown, asJsonb(p.images), p.status, p.created_at, p.updated_at,
+         asJsonb(p.published_snapshot), p.published_at ?? null],
       );
     }
+    // @ai-warning: pre-snapshot dumps (v1, and v2 files written before issue
+    // #20) carry no published_snapshot, so their published rows would land
+    // NULL — invisible to the site loader (`published_snapshot IS NOT NULL`)
+    // until ensureSchema runs at the NEXT app start, which the documented
+    // restore flow (CLI restore → POST /rebuild, no restart) never triggers.
+    // Backfill in the same transaction, exactly like the ensureSchema
+    // migration: promote the restored working copy of already-published rows
+    // into the snapshot. The NULL guard keeps new-format dumps intact — their
+    // restored snapshots (and any unpublished draft edits) survive unchanged.
+    await client.query(
+      `UPDATE posts SET published_snapshot = ${POST_SNAPSHOT_SQL},
+                        published_at = COALESCE(published_at, updated_at)
+        WHERE status = 'published' AND published_snapshot IS NULL`,
+    );
     // A v1 dump carries no `pages` key at all — leave existing pages untouched
     // so restoring an old backup can't silently wipe content it never captured.
     if (dump.tables.pages) {

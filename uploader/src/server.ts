@@ -15,7 +15,7 @@ import {
   setSessionCookie, clearSessionCookie, isSecureRequest, SESSION_COOKIE,
 } from './authn.js';
 import { SettingsError, type SettingsStore } from './settings.js';
-import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair } from './posts.js';
+import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair } from './posts.js';
 import { type PageStore, type PagePair, type PageContent, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
@@ -359,7 +359,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   app.post('/export', { preHandler: requireAuth }, async (_req, reply) => {
     const list = await posts.list();
-    const pairs = (await Promise.all(list.map((s) => posts.get(s.translationKey)))).filter((p): p is PostPair => p !== null);
+    const pairs = (await Promise.all(list.map((s) => posts.get(s.translationKey)))).filter((p): p is StoredPostPair => p !== null);
     const files = await exportAll(pairs, cfg.backupDir);
     return reply.send({ ok: true, count: files.length });
   });

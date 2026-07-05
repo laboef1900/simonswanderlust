@@ -82,6 +82,15 @@
             badge.className = 'status-badge status-' + safeStatus;
             badge.textContent = p.status;
             tdStatus.appendChild(badge);
+            if (p.status === 'published' && p.hasUnpublishedChanges) {
+              // Draft edits saved after the last Publish — the live site keeps
+              // serving the published snapshot until the next Publish.
+              const edited = document.createElement('span');
+              edited.className = 'status-badge status-edited';
+              edited.textContent = 'edited';
+              edited.title = 'Has unpublished changes — the live post is unchanged until you Publish.';
+              tdStatus.appendChild(edited);
+            }
             tr.appendChild(tdStatus);
 
             const tdUpdated = document.createElement('td');

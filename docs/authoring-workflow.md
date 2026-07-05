@@ -93,21 +93,28 @@ needed. Content is stored in **Postgres**; MDX files are generated automatically
 
 ### Publish
 
-Click **Publish** — this marks both locale rows as published and runs the rebuild in-process,
-awaiting it before the request returns. Wait for the confirmation toast, then verify the post is
-live at `/<slug>/` and `/en/<slug>/`.
+Click **Publish** — this marks both locale rows as published, takes a **published snapshot** of
+the current content (the exact version the live site will serve), and runs the rebuild
+in-process, awaiting it before the request returns. Wait for the confirmation toast, then verify
+the post is live at `/<slug>/` and `/en/<slug>/`.
 
 > See Stage 3 for what the rebuild does and how to trigger it manually (e.g. after a restore).
 
 ### Edit an existing post
 
-Open **Posts**, find the post, click **Edit**. Changes take effect after the next **Publish**.
-Saving without publishing updates the draft but leaves the live site unchanged.
+Open **Posts**, find the post, click **Edit**. Saving a draft of a published post **never**
+changes the live site — rebuilds of any kind (publishing another post, saving the About page,
+**Rebuild site now**) keep serving the published snapshot, not your in-progress edits. The Posts
+list marks such posts with an **edited** badge and the editor status line shows
+*has unpublished changes*. Your edits go live only when you hit **Publish** again, which
+refreshes the snapshot.
 
 ### Export / backup
 
-The **Export all** button (Posts list) writes MDX backup files for all published posts to
-`/data/backup` on the server. These are reference copies — Postgres is the source of truth.
+The **Export all** button (Posts list) writes MDX backup files for all posts to
+`/data/backup` on the server. Exports contain the **working copies** (what you see in the
+editor) — including draft edits not yet published. These are reference copies — Postgres is the
+source of truth.
 
 ### Body images
 
@@ -153,6 +160,9 @@ which calls the admin-only `POST /rebuild` route.
 
 Notes:
 
+- **Rebuilds render published snapshots only.** The site is built from each post's published
+  snapshot (taken at Publish time) — saved-but-unpublished edits never appear on the live site,
+  no matter what triggers the rebuild.
 - **Images don't need a rebuild.** They're served by the app independently — uploading or
   re-uploading a photo is live immediately. Only content (text) changes need a rebuild.
 - **Re-uploading the same key overwrites** the variants (immutable cache means you may need a
@@ -164,9 +174,9 @@ Notes:
 
 ## Quick checklist
 
-- [ ] Photos uploaded — hero and body images via the editor's inline upload, or pre-uploaded via `/admin/`; snippets/URLs ready.
+- [ ] Photos uploaded — hero and body images via the editor's inline upload, or pre-uploaded via `/admin/` (hero); snippets/URLs ready.
 - [ ] In the editor: DE tab filled — slug (matches live WordPress slug, never renamed), title, date, country, countryCode, region, excerpt, heroImage fields, body photos inserted via the toolbar (or pasted `<BodyImage …/>` tags — converted on save) with DE alt text.
 - [ ] In the editor: EN tab filled — title, excerpt, EN hero alt text, EN body with its own photo inserts (EN alt text).
-- [ ] **Save draft** — both locale rows written to Postgres.
-- [ ] **Publish** — rebuild triggered automatically.
+- [ ] **Save draft** — both locale rows written to Postgres; the live site is never affected by a save.
+- [ ] **Publish** — snapshots the content as the live version and triggers the rebuild automatically.
 - [ ] Verify the post renders at `/<slug>/` and `/en/<slug>/`, hero + body images load.

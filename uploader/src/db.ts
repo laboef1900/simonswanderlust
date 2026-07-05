@@ -18,6 +18,23 @@ export function createPool(connectionString: string): DbPool {
   return new Pool({ connectionString });
 }
 
+/**
+ * SQL fragment building the published-snapshot jsonb from a posts row's own
+ * working columns. Shared by the ensureSchema backfill and pgPostStore.publish,
+ * and reusable for future revision rows (issue #28) so every snapshot has the
+ * exact same shape.
+ * @ai-note `date` is serialized as 'YYYY-MM-DD' text so the site loader can
+ * `new Date(...)` it after the jsonb round-trip (a bare date column would
+ * otherwise be locale/timezone-sensitive — see the dump comment in backup.ts).
+ */
+export const POST_SNAPSHOT_SQL = `jsonb_build_object(
+  'translation_key', translation_key, 'locale', locale, 'slug', slug, 'title', title,
+  'date', to_char(date, 'YYYY-MM-DD'), 'country', country, 'country_code', country_code,
+  'region', region, 'excerpt', excerpt, 'hero_image', hero_image, 'coordinates', coordinates,
+  'stops', stops, 'route', route, 'key_facts', key_facts,
+  'body_markdown', body_markdown, 'images', images
+)`;
+
 export async function ensureSchema(pool: DbPool): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -51,6 +68,21 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   `);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS posts_locale_slug_idx ON posts (locale, slug)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS posts_translation_key_idx ON posts (translation_key)`);
+  // @ai-note published_snapshot separates the LIVE content from the working
+  // copy: publish() copies the row's working columns into it, and the site
+  // loader (site/src/lib/postgres-loader.ts) builds ONLY from snapshots — so a
+  // draft save over a published post can never leak onto the public site via
+  // an unrelated rebuild (issue #20). Additive, idempotent migration.
+  await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS published_snapshot jsonb`);
+  await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS published_at timestamptz`);
+  // One-time backfill for rows published before the column existed. The
+  // `published_snapshot IS NULL` guard makes re-runs no-ops, so a working copy
+  // edited after the first backfill is never promoted into the snapshot.
+  await pool.query(`
+    UPDATE posts SET published_snapshot = ${POST_SNAPSHOT_SQL},
+                     published_at = COALESCE(published_at, updated_at)
+     WHERE status = 'published' AND published_snapshot IS NULL
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pages (
       key           text NOT NULL,

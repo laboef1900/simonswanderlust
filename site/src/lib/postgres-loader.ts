@@ -11,6 +11,20 @@ interface PostRow {
   key_facts: Record<string, string> | null; body_markdown: string; images: Record<string, ImageDims>;
 }
 
+/**
+ * pg parses a `date` column to a LOCAL-midnight JS Date; the published-snapshot
+ * jsonb carries 'YYYY-MM-DD' text instead (see POST_SNAPSHOT_SQL in
+ * uploader/src/db.ts). Parse that text to the same local midnight — a bare
+ * `new Date('YYYY-MM-DD')` would be UTC midnight, which `dateLabel`
+ * (format.ts, toLocaleDateString without an explicit timeZone) renders as the
+ * previous day/month on build machines west of UTC.
+ */
+function parseRowDate(date: Date | string): Date {
+  if (date instanceof Date) return date;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(date);
+}
+
 /** Pure mapping: a DB row → the { id, data, body } a loader will parse/store. */
 export function rowToEntryInput(row: PostRow) {
   return {
@@ -19,7 +33,7 @@ export function rowToEntryInput(row: PostRow) {
     images: row.images ?? {},
     data: {
       title: row.title,
-      date: row.date instanceof Date ? row.date : new Date(row.date),
+      date: parseRowDate(row.date),
       country: row.country,
       countryCode: row.country_code,
       region: row.region,
@@ -43,12 +57,17 @@ export function postgresTripsLoader(): Loader {
       const pool = new pg.Pool({ connectionString: url });
       try {
         store.clear();
-        const { rows } = await pool.query<PostRow>(
-          `SELECT translation_key, locale, slug, title, date, country, country_code, region, excerpt,
-                  hero_image, coordinates, stops, route, key_facts, body_markdown, images
-             FROM posts WHERE status = 'published'`,
+        // @ai-warning: build ONLY from the published snapshot (written by the
+        // uploader's publish action — see uploader/src/db.ts POST_SNAPSHOT_SQL),
+        // never from the working columns: a draft save over a published post
+        // must not go live on an unrelated rebuild (issue #20). The snapshot's
+        // keys mirror PostRow; `date` arrives as a 'YYYY-MM-DD' string, which
+        // rowToEntryInput already handles.
+        const { rows } = await pool.query<{ published_snapshot: PostRow }>(
+          `SELECT published_snapshot
+             FROM posts WHERE status = 'published' AND published_snapshot IS NOT NULL`,
         );
-        for (const row of rows) {
+        for (const { published_snapshot: row } of rows) {
           const input = rowToEntryInput(row);
           const data = await parseData({ id: input.id, data: input.data });
           const rendered = await renderMarkdown(input.body);

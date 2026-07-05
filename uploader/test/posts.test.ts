@@ -41,6 +41,41 @@ describe('memoryPostStore', () => {
     expect((await s.get(c.translationKey))?.status).toBe('published');
   });
 
+  it('a new draft and a fresh publish report no unpublished changes', async () => {
+    const s = memoryPostStore();
+    const c = await s.upsertDraft(pair());
+    expect(c.hasUnpublishedChanges).toBe(false);
+    expect((await s.list())[0]?.hasUnpublishedChanges).toBe(false);
+    await s.publish(c.translationKey);
+    expect((await s.get(c.translationKey))?.hasUnpublishedChanges).toBe(false);
+    expect((await s.list())[0]?.hasUnpublishedChanges).toBe(false);
+  });
+
+  it('a draft save over a published post keeps it published but flags unpublished changes', async () => {
+    const s = memoryPostStore();
+    const c = await s.upsertDraft(pair());
+    await s.publish(c.translationKey);
+    const saved = await s.upsertDraft({ ...c, de: { ...c.de, bodyMarkdown: '## edited' } });
+    expect(saved.status).toBe('published');
+    expect(saved.hasUnpublishedChanges).toBe(true);
+    const got = await s.get(c.translationKey);
+    expect(got?.de.bodyMarkdown).toBe('## edited'); // editor sees the working copy
+    expect(got?.hasUnpublishedChanges).toBe(true);
+    expect((await s.list())[0]?.hasUnpublishedChanges).toBe(true);
+  });
+
+  it('re-publish picks up the newest working copy and clears the flag', async () => {
+    const s = memoryPostStore();
+    const c = await s.upsertDraft(pair());
+    await s.publish(c.translationKey);
+    await s.upsertDraft({ ...c, de: { ...c.de, bodyMarkdown: '## edited' } });
+    await s.publish(c.translationKey);
+    const got = await s.get(c.translationKey);
+    expect(got?.de.bodyMarkdown).toBe('## edited');
+    expect(got?.hasUnpublishedChanges).toBe(false);
+    expect((await s.list())[0]?.hasUnpublishedChanges).toBe(false);
+  });
+
   it('rejects changing a slug once published', async () => {
     const s = memoryPostStore();
     const c = await s.upsertDraft(pair());
