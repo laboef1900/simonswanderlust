@@ -59,6 +59,7 @@ function build(extra: Partial<ServerConfig> = {}) {
     users: memoryUserStore(), sessions: memorySessionStore(), posts: memoryPostStore(),
     pages: memoryPageStore(),
     settings: fakeStore(), builder, backupDir, dbBackup: stubBackup(backupDir),
+    dbCheck: async () => {},
     ...extra,
   });
 }

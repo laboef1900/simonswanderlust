@@ -63,6 +63,7 @@ function build(extra: Partial<ServerConfig> = {}): Built {
     backupDir: dir + '/backup',
     dbBackup: (extra.dbBackup as DbBackup) ?? stubBackup().backup,
     pages: (extra.pages as PageStore) ?? memoryPageStore(),
+    dbCheck: async () => {},
     ...extra,
   });
   return { app: built, users, sessions, posts };
@@ -141,7 +142,7 @@ describe('POST /upload', () => {
 describe('buildServer config', () => {
   it('boots with a relative storageDir (resolves it to absolute)', async () => {
     const rel = relative(process.cwd(), dir);
-    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), posts: memoryPostStore(), pages: memoryPageStore(), imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup });
+    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), posts: memoryPostStore(), pages: memoryPageStore(), imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup, dbCheck: async () => {} });
     await expect(srv.ready()).resolves.toBeDefined();
     await srv.close();
   });
@@ -441,10 +442,17 @@ describe('POST /rebuild and GET /health', () => {
     en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
 
-  it('health is public', async () => {
+  it('health is public and reports the DB as up', async () => {
     const res = await build().app.inject({ method: 'GET', url: '/health' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true });
+    expect(res.json()).toEqual({ ok: true, db: true });
+  });
+
+  it('health returns 503 without error detail when the DB probe fails', async () => {
+    const b = build({ dbCheck: async () => { throw new Error('connection refused: internal detail'); } });
+    const res = await b.app.inject({ method: 'GET', url: '/health' });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ ok: false, db: false });
   });
 
   it('rebuild is admin-only', async () => {

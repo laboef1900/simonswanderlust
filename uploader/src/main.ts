@@ -8,6 +8,7 @@ import { pgPostStore } from './posts.js';
 import { pgPageStore } from './pages.js';
 import { createSiteBuilder } from './build.js';
 import { createDbBackup, isBackupDue } from './backup.js';
+import { createShutdown } from './shutdown.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -71,7 +72,20 @@ const app = buildServer({
   builder,
   dbBackup,
   backupDir,
+  dbCheck: async () => { await pool.query('SELECT 1'); },
 });
+
+// Clean shutdown on docker stop / compose recreate: close the HTTP server,
+// end the pg pool, exit 0 (any failure exits 1 — docker kills us anyway).
+const onSignal = createShutdown({
+  close: () => app.close(),
+  end: () => pool.end(),
+  exit: (code) => process.exit(code),
+  log: (msg) => console.log(msg),
+  error: (msg, err) => console.error(msg, err),
+});
+process.on('SIGTERM', () => onSignal('SIGTERM'));
+process.on('SIGINT', () => onSignal('SIGINT'));
 
 const port = Number(process.env.PORT ?? 3000);
 app

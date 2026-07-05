@@ -7,6 +7,9 @@
 services:
   app:
     image: ghcr.io/laboef1900/simonswanderlust-app:${IMAGE_TAG:-0.5.0}
+    # tini as PID 1: forwards SIGTERM to node (clean shutdown handler in
+    # uploader/src/main.ts) and reaps the spawned `astro build` child process.
+    init: true
     ports:
       - "3000:3000"
     environment:
