@@ -465,14 +465,14 @@ describe('POST /rebuild and GET /health', () => {
   });
 
   it('publish reports a failed build without unpublishing', async () => {
-    const s = stubBuilder({ ok: false, error: 'a build is already running' });
+    const s = stubBuilder({ ok: false, error: 'astro build exited 1' });
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
     const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
     expect(res.statusCode).toBe(200);
-    expect(res.json().build).toEqual({ ok: false, error: 'a build is already running' });
+    expect(res.json().build).toEqual({ ok: false, error: 'astro build exited 1' });
   });
 });
 
