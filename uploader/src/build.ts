@@ -33,7 +33,9 @@ function runAstroBuild(siteAppDir: string, outDir: string): Promise<void> {
 }
 
 // Monotonic stamp suffix: a queued run can start within the same millisecond
-// the previous one finished, so Date.now() alone could collide.
+// the previous one finished, so Date.now() alone could collide. Zero-padded so
+// the lexicographic sort used by release pruning orders same-millisecond
+// stamps correctly (e.g. `-0010` after `-0009`).
 let stampSeq = 0;
 
 /** Build into a fresh release dir, then atomically flip the `current` symlink.
@@ -45,7 +47,7 @@ let stampSeq = 0;
 async function buildAndDeploy(opts: Required<Omit<SiteBuilderOptions, 'runBuild'>> & { runBuild: (outDir: string) => Promise<void> }): Promise<string> {
   const releases = join(opts.releasesRoot, 'releases');
   await mkdir(releases, { recursive: true });
-  const stamp = `${Date.now()}-${process.pid}-${stampSeq++}`;
+  const stamp = `${Date.now()}-${process.pid}-${String(stampSeq++).padStart(4, '0')}`;
   const buildTmp = join(opts.siteAppDir, '.build-tmp', stamp);
   const dest = join(releases, stamp);
   try {
