@@ -22,4 +22,12 @@ maybe('pgPageStore (Postgres)', () => {
     expect(p.de.images['https://img/x']).toEqual({ width: 800, height: 600 });
     expect(p.en.bodyMarkdown).toBe('EN body');
   });
+
+  it('keys() lists saved page keys', async () => {
+    // Assert against 'about' (seeded by ensureSchema and saved above) rather than
+    // inserting a new key: other integration suites (backup) share this database
+    // and assert exact `pages` row counts.
+    const store = pgPageStore(pool);
+    expect(await store.keys()).toContain('about');
+  });
 });

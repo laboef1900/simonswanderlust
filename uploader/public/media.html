@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Media · Simon's Wanderlust</title>
+    <link rel="stylesheet" href="/admin/admin.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="masthead-inner">
+        <nav id="mainnav" aria-label="Admin"></nav>
+        <p class="eyebrow">Expedition Log · Image Station</p>
+        <h1>Media</h1>
+        <p class="lede">Every uploaded image and its responsive variants — copy a URL or heroImage snippet for reuse, or delete images no post or page references anymore.</p>
+        <p class="muted" id="whoami"></p>
+      </div>
+    </header>
+
+    <main>
+      <section class="card">
+        <p id="loadMsg" class="muted">Loading…</p>
+        <table id="mediaTable" class="posts-table" style="display:none">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Key</th>
+              <th>Size</th>
+              <th>Used in</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="mediaList"></tbody>
+        </table>
+      </section>
+
+      <div class="route" aria-hidden="true">
+        <span class="dot"></span><span class="seg"></span>
+        <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>
+        <span class="seg"></span><span class="ring"></span>
+      </div>
+
+      <p class="section-label">Status</p>
+      <pre id="out">—</pre>
+    </main>
+
+    <script src="/admin/auth.js"></script>
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      // Mirrors the heroImage YAML block returned by /upload (storage.ts);
+      // alt is left blank for the author to fill in.
+      function snippetFor(m) {
+        return [
+          'heroImage:',
+          "  src: '" + m.src + "'",
+          '  width: ' + m.width,
+          '  height: ' + m.height,
+          "  alt: ''",
+        ].join('\n');
+      }
+
+      async function copyText(text, label) {
+        try {
+          await navigator.clipboard.writeText(text);
+          $('out').textContent = label + ' copied to clipboard.';
+        } catch {
+          // Clipboard unavailable (e.g. plain-http remote) — show it for manual copy.
+          $('out').textContent = text;
+        }
+      }
+
+      function actionButton(label, onClick) {
+        const btn = document.createElement('button');
+        btn.textContent = label;
+        btn.addEventListener('click', onClick);
+        return btn;
+      }
+
+      async function load() {
+        const res = await fetch('/images');
+        if (res.status === 401) { location.href = '/login'; return; }
+        if (res.status === 403) { location.href = '/admin/'; return; }
+        if (!res.ok) { $('out').textContent = 'Could not load media: ' + res.status; return; }
+        const items = await res.json();
+        $('loadMsg').style.display = 'none';
+        const tbody = $('mediaList');
+        tbody.innerHTML = '';
+        if (!items.length) {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 5;
+          td.textContent = 'No images yet. Upload one via Hero upload or the post editor.';
+          td.style.textAlign = 'center';
+          td.style.color = '#6b7280';
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+        } else {
+          for (const m of items) {
+            const tr = document.createElement('tr');
+
+            const tdThumb = document.createElement('td');
+            if (m.thumbUrl) {
+              const img = document.createElement('img');
+              img.src = m.thumbUrl;
+              img.alt = '';
+              img.loading = 'lazy';
+              img.className = 'media-thumb';
+              tdThumb.appendChild(img);
+            }
+            tr.appendChild(tdThumb);
+
+            const tdKey = document.createElement('td');
+            const code = document.createElement('code');
+            code.className = 'media-key';
+            code.textContent = m.key;
+            tdKey.appendChild(code);
+            tr.appendChild(tdKey);
+
+            const tdDims = document.createElement('td');
+            tdDims.className = 'media-dims';
+            tdDims.textContent = m.width && m.height ? m.width + ' × ' + m.height : '—';
+            tr.appendChild(tdDims);
+
+            const tdUsed = document.createElement('td');
+            const usedLabel = m.usedIn.map((u) => (u.title || u.key) + ' (' + u.kind + ')').join(', ');
+            tdUsed.textContent = usedLabel || '—';
+            tr.appendChild(tdUsed);
+
+            const tdActions = document.createElement('td');
+            const actions = document.createElement('div');
+            actions.className = 'media-actions';
+
+            const btnUrl = actionButton('Copy URL', () => copyText(m.src, 'URL'));
+            btnUrl.className = 'btn-secondary';
+            actions.appendChild(btnUrl);
+
+            const btnSnippet = actionButton('Copy snippet', () => copyText(snippetFor(m), 'heroImage snippet'));
+            btnSnippet.className = 'btn-secondary';
+            if (!m.width || !m.height) {
+              btnSnippet.disabled = true;
+              btnSnippet.title = 'Dimensions unknown — cannot build a heroImage snippet.';
+            }
+            actions.appendChild(btnSnippet);
+
+            const btnDelete = actionButton('Delete', async () => {
+              const ok = confirm('Delete "' + m.key + '" and all ' + m.files.length + ' variant file(s)? Already-built pages keep referencing it until the next rebuild.');
+              if (!ok) return;
+              const res2 = await fetch('/images/' + m.key, { method: 'DELETE' });
+              if (res2.status === 401) { location.href = '/login'; return; }
+              const body = await res2.json().catch(() => ({}));
+              if (res2.ok) {
+                $('out').textContent = 'Deleted ' + m.key + ' (' + body.deleted + ' files).';
+                load();
+              } else {
+                $('out').textContent = 'Delete failed: ' + (body.error || res2.status);
+              }
+            });
+            if (m.usedIn.length) {
+              btnDelete.disabled = true;
+              btnDelete.title = 'In use by: ' + usedLabel;
+            }
+            actions.appendChild(btnDelete);
+
+            tdActions.appendChild(actions);
+            tr.appendChild(tdActions);
+
+            tbody.appendChild(tr);
+          }
+        }
+        $('mediaTable').style.display = 'table';
+        $('out').textContent = items.length + ' image(s) loaded.';
+      }
+
+      (async () => {
+        const s = await Auth.ensureAuthed({ admin: true });
+        if (!s) return;
+        Auth.renderHeader(s);
+        await load();
+      })();
+    </script>
+  </body>
+</html>

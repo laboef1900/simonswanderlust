@@ -20,6 +20,7 @@ window.Auth = (function () {
   const NAV = [
     { label: 'Hero upload',    href: '/admin/' },
     { label: 'Posts',          href: '/admin/posts.html' },
+    { label: 'Media',          href: '/admin/media.html',    admin: true },
     { label: 'About page',     href: '/admin/about.html',    admin: true },
     { label: 'Import',         href: '/admin/import.html' },
     { label: 'Settings',       href: '/admin/settings.html', admin: true },

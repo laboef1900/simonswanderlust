@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import type { BackupState, DbBackup } from '../src/backup.js';
@@ -135,6 +135,114 @@ describe('POST /upload', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers['cache-control']).toContain('max-age=31536000');
     expect(res.headers['cache-control']).toContain('immutable');
+  });
+});
+
+describe('media library', () => {
+  async function upload(b: Built, cookie: Record<string, string>, key: string): Promise<{ src: string; files: string[] }> {
+    const form = new FormData();
+    form.append('key', key);
+    form.append('alt', 'a');
+    form.append('file', await jpeg(), { filename: 't.jpg', contentType: 'image/jpeg' });
+    const res = await b.app.inject({ method: 'POST', url: '/upload', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
+    expect(res.statusCode).toBe(200);
+    return res.json();
+  }
+
+  const draftUsing = (src: string) => ({
+    translationKey: '', status: 'draft',
+    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de', slug: 'media-de', title: 'Mediennutzer', excerpt: 'e', heroImage: { src, width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en', slug: 'media-en', title: 'Media user', excerpt: 'e', heroImage: { src: 'https://i/other', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+  });
+
+  it('GET /images is admin-only: 401 unauthenticated, 403 for authors', async () => {
+    const b = build();
+    expect((await b.app.inject({ method: 'GET', url: '/images' })).statusCode).toBe(401);
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+    expect((await b.app.inject({ method: 'GET', url: '/images', cookies: author.cookie })).statusCode).toBe(403);
+  });
+
+  it('GET /images lists uploaded keys with src, dims, thumbnail and empty usedIn', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    await upload(b, cookie, 'trips/bucharest-2024/hero');
+    const res = await b.app.inject({ method: 'GET', url: '/images', cookies: cookie });
+    expect(res.statusCode).toBe(200);
+    const items = res.json();
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      key: 'trips/bucharest-2024/hero',
+      src: 'https://img.simonswanderlust.com/trips/bucharest-2024/hero',
+      width: 1000, height: 800,
+      thumbUrl: 'https://img.simonswanderlust.com/trips/bucharest-2024/hero-640.webp',
+      usedIn: [],
+    });
+    expect(items[0].files).toHaveLength(4); // 640 + 1000, avif + webp
+  });
+
+  it('GET /images reports usedIn when a post references the image', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const { src } = await upload(b, cookie, 'trips/used/hero');
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
+    expect(created.statusCode).toBe(200);
+    const res = await b.app.inject({ method: 'GET', url: '/images', cookies: cookie });
+    expect(res.json()[0].usedIn).toEqual([
+      { kind: 'post', key: created.json().translationKey, title: 'Mediennutzer' },
+    ]);
+  });
+
+  it('DELETE /images/* is admin-only: 401 unauthenticated, 403 for authors', async () => {
+    const b = build();
+    expect((await b.app.inject({ method: 'DELETE', url: '/images/trips/x/hero' })).statusCode).toBe(401);
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+    expect((await b.app.inject({ method: 'DELETE', url: '/images/trips/x/hero', cookies: author.cookie })).statusCode).toBe(403);
+  });
+
+  it('DELETE /images/* rejects unsafe keys (traversal) with 400', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    // %2F-encoded traversal reaches the handler as '../evil' — assertSafeKey rejects it.
+    for (const url of ['/images/..%2Fevil', '/images/Evil', '/images/a//b']) {
+      const res = await b.app.inject({ method: 'DELETE', url, cookies: cookie });
+      expect(res.statusCode).toBe(400);
+    }
+    // A raw ../ segment is normalized away by the router before matching: never our handler.
+    const raw = await b.app.inject({ method: 'DELETE', url: '/images/../evil', cookies: cookie });
+    expect(raw.statusCode).toBe(404);
+  });
+
+  it('DELETE /images/* 404s for an unknown key', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({ method: 'DELETE', url: '/images/trips/ghost/hero', cookies: cookie });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('DELETE /images/* refuses (409) while a post references the image, keeping the files', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const { src, files } = await upload(b, cookie, 'trips/keep/hero');
+    await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
+    const res = await b.app.inject({ method: 'DELETE', url: '/images/trips/keep/hero', cookies: cookie });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().usedIn).toHaveLength(1);
+    for (const f of files) expect(existsSync(join(dir, f))).toBe(true);
+  });
+
+  it('DELETE /images/* unlinks all variants of exactly that key', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const gone = await upload(b, cookie, 'trips/x/hero');
+    const kept = await upload(b, cookie, 'trips/x/hero-b');
+    const res = await b.app.inject({ method: 'DELETE', url: '/images/trips/x/hero', cookies: cookie });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, deleted: 4 });
+    for (const f of gone.files) expect(existsSync(join(dir, f))).toBe(false);
+    for (const f of kept.files) expect(existsSync(join(dir, f))).toBe(true);
+    const after = await b.app.inject({ method: 'GET', url: '/images', cookies: cookie });
+    expect(after.json().map((m: { key: string }) => m.key)).toEqual(['trips/x/hero-b']);
   });
 });
 

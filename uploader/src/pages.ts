@@ -24,6 +24,8 @@ export function validatePagePair(pair: PagePair): void {
 export interface PageStore {
   get(key: string): Promise<PagePair>;
   save(pair: PagePair): Promise<PagePair>;
+  /** All page keys that have ever been saved (either locale), sorted. */
+  keys(): Promise<string[]>;
 }
 
 export function memoryPageStore(): PageStore {
@@ -42,6 +44,11 @@ export function memoryPageStore(): PageStore {
         byKeyLocale.set(`${pair.key}:${locale}`, structuredClone({ ...pair[locale], locale }));
       }
       return this.get(pair.key);
+    },
+    async keys() {
+      // Stored keys are `${key}:${locale}` and page keys cannot contain ':'.
+      const all = [...byKeyLocale.keys()].map((k) => k.split(':', 1)[0] ?? k);
+      return [...new Set(all)].sort();
     },
   };
 }
@@ -74,6 +81,10 @@ export function pgPageStore(pool: DbPool): PageStore {
         );
       }
       return this.get(pair.key);
+    },
+    async keys() {
+      const { rows } = await pool.query<{ key: string }>(`SELECT DISTINCT key FROM pages ORDER BY key`);
+      return rows.map((r) => r.key);
     },
   };
 }

@@ -36,4 +36,12 @@ describe('memoryPageStore', () => {
     expect(p.de.title).toBe('Über mich');
     expect(p.en.bodyMarkdown).toBe('Hi');
   });
+  it('keys() lists saved page keys once each, sorted', async () => {
+    const s = memoryPageStore();
+    expect(await s.keys()).toEqual([]);
+    await s.save(pair('imprint'));
+    await s.save(pair('about'));
+    await s.save(pair('about'));
+    expect(await s.keys()).toEqual(['about', 'imprint']);
+  });
 });
