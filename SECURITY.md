@@ -144,9 +144,10 @@ deliberate trade-off, not an oversight:
   **never** dumped (disposable, and token hashes don't belong in a backup).
 - The download route (`GET /backups/:name`) is **admin-only** and validates the filename against a
   strict pattern (`^db-\d{8}-\d{6}\.json\.gz$`) before touching the filesystem — no path traversal.
-- Restore is **CLI-only** (`tsx src/cli.ts restore <file>`, run inside the container), never a web
-  route, because it's destructive: it deletes and re-inserts `users` and `posts` in one
-  transaction. Deleting `users` cascades to `sessions`, so a restore invalidates every login.
+- Restore is **CLI-only** (`docker compose exec app node --import tsx src/cli.ts restore <file>` —
+  the hardened runtime has no shell, so use the exec form), never a web route, because it's
+  destructive: it deletes and re-inserts `users`, `posts`, and `pages` in one transaction.
+  Deleting `users` cascades to `sessions`, so a restore invalidates every login.
 
 ## Known limitations
 
