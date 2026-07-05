@@ -1,8 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgUserStore, UserExistsError } from '../src/users.js';
 import { pgSessionStore } from '../src/sessions.js';
-import { pgPostStore } from '../src/posts.js';
+import { pgPostStore, PostError, REVISION_CAP } from '../src/posts.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -143,5 +144,87 @@ maybe('pgPostStore (integration)', () => {
     expect(second.s.body_markdown).toBe('## legacy');
     expect(second.p.getTime()).toBe(first.p.getTime());
     await pool.end();
+  });
+});
+
+maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
+  let pool: DbPool;
+  const base = (slug: string, title = 'T') => ({
+    translationKey: '', status: 'draft' as const,
+    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de' as const, slug: `${slug}-de`, title, excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en' as const, slug: `${slug}-en`, title, excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+  });
+  beforeAll(async () => {
+    pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM post_revisions');
+    await pool.query('DELETE FROM posts');
+  });
+  afterAll(async () => { await pool.end(); });
+
+  it('snapshots the pre-save pair on overwrite; echoing get().updatedAt never false-conflicts', async () => {
+    const store = pgPostStore(pool);
+    const created = await store.upsertDraft(base('rev'));
+    const tk = created.translationKey;
+    expect(created.updatedAt).toBeInstanceOf(Date);
+    expect(await store.listRevisions(tk)).toHaveLength(0);
+
+    // Round-trip guard for the timestamptz µs-vs-ms precision trap: the exact
+    // Date handed out by get() must be accepted as fresh.
+    const fresh = await store.get(tk);
+    const saved = await store.upsertDraft({ ...created, de: { ...created.de, title: 'T2' } }, fresh!.updatedAt);
+    expect(saved.de.title).toBe('T2');
+
+    const revs = await store.listRevisions(tk);
+    expect(revs).toHaveLength(1);
+    expect(revs[0]).toMatchObject({ titleDe: 'T', status: 'draft' });
+    expect(revs[0]!.savedAt).toBeInstanceOf(Date);
+    const rev = await store.getRevision(tk, revs[0]!.id);
+    expect(rev?.snapshot.de.title).toBe('T');
+    expect(rev?.snapshot.de.bodyMarkdown).toBe('## b');
+    // The snapshot stores the pre-save working copy VERBATIM — including the
+    // date exactly as get() serialized it (asserting a literal here would be
+    // timezone-dependent: node-postgres parses `date` columns at local midnight).
+    expect(rev?.snapshot.shared).toEqual(fresh!.shared);
+    // ... and the row is physically in post_revisions.
+    const { rows } = await pool.query(`SELECT snapshot FROM post_revisions WHERE translation_key=$1`, [tk]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].snapshot.de.title).toBe('T');
+  });
+
+  it('rejects a stale baseUpdatedAt with code "conflict" and leaves the row untouched', async () => {
+    const store = pgPostStore(pool);
+    const created = await store.upsertDraft(base('conf'));
+    const tk = created.translationKey;
+    const stale = new Date(Date.now() - 3_600_000);
+    const attempt = store.upsertDraft({ ...created, de: { ...created.de, title: 'clobber' } }, stale);
+    await expect(attempt).rejects.toBeInstanceOf(PostError);
+    await expect(store.upsertDraft({ ...created, de: { ...created.de, title: 'clobber' } }, stale))
+      .rejects.toMatchObject({ code: 'conflict' });
+    expect((await store.get(tk))?.de.title).toBe('T');
+    expect(await store.listRevisions(tk)).toHaveLength(0); // rejected saves snapshot nothing
+  });
+
+  it('getRevision returns null for malformed (no 22P02) and unknown ids', async () => {
+    const store = pgPostStore(pool);
+    const created = await store.upsertDraft(base('ids'));
+    await expect(store.getRevision(created.translationKey, 'not-a-uuid')).resolves.toBeNull();
+    await expect(store.getRevision(created.translationKey, randomUUID())).resolves.toBeNull();
+  });
+
+  it('prunes the history to the newest REVISION_CAP snapshots', async () => {
+    const store = pgPostStore(pool);
+    let cur = await store.upsertDraft(base('cap', 'v1'));
+    const tk = cur.translationKey;
+    for (let i = 2; i <= REVISION_CAP + 6; i++) {
+      cur = await store.upsertDraft({ ...cur, de: { ...cur.de, title: `v${i}` } });
+    }
+    const revs = await store.listRevisions(tk);
+    expect(revs).toHaveLength(REVISION_CAP);
+    expect(revs[0]!.titleDe).toBe(`v${REVISION_CAP + 5}`);
+    expect(revs.some((r) => r.titleDe === 'v5')).toBe(false); // oldest pruned
+    const count = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key=$1`, [tk]);
+    expect(count.rows[0].n).toBe(REVISION_CAP);
   });
 });

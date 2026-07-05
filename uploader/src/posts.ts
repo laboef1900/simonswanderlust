@@ -21,9 +21,19 @@ export interface PostPair {
  * A stored pair as returned by get()/upsertDraft(): the WORKING copy (what the
  * editor edits) plus `hasUnpublishedChanges` — true when a published post has
  * draft edits saved after its last Publish (the live site keeps serving the
- * published snapshot until the next Publish; see issue #20).
+ * published snapshot until the next Publish; see issue #20) — and `updatedAt`,
+ * which the editor echoes back on save for optimistic concurrency (issue #28).
  */
-export interface StoredPostPair extends PostPair { hasUnpublishedChanges: boolean }
+export interface StoredPostPair extends PostPair { hasUnpublishedChanges: boolean; updatedAt: Date }
+/** Whole-pair snapshot of the working copy just BEFORE a save overwrote it (issue #28). */
+export type RevisionSnapshot = Pick<PostPair, 'status' | 'shared' | 'de' | 'en'>;
+export interface RevisionSummary {
+  id: string; savedAt: Date; titleDe: string; status: 'draft' | 'published';
+}
+export interface PostRevision extends RevisionSummary { snapshot: RevisionSnapshot }
+
+/** How many revisions upsertDraft keeps per translation_key (oldest pruned first). */
+export const REVISION_CAP = 20;
 export interface PostSummary {
   translationKey: string; titleDe: string; slugDe: string; slugEn: string;
   status: 'draft' | 'published'; updatedAt: Date; hasUnpublishedChanges: boolean;
@@ -36,8 +46,33 @@ export class PostError extends Error {
 export interface PostStore {
   list(): Promise<PostSummary[]>;
   get(translationKey: string): Promise<StoredPostPair | null>;
-  upsertDraft(pair: PostPair): Promise<StoredPostPair>;
+  /**
+   * Create or overwrite the working copy. When `baseUpdatedAt` is given (the
+   * `updatedAt` the editor loaded), the save is rejected with PostError code
+   * 'conflict' if the stored pair was modified since — optimistic concurrency.
+   * Omitting it skips the check (new posts, WP importer). Every overwrite of
+   * an existing pair first snapshots the pre-save state into the revisions.
+   */
+  upsertDraft(pair: PostPair, baseUpdatedAt?: Date): Promise<StoredPostPair>;
   publish(translationKey: string): Promise<void>;
+  /** Revision summaries for a post, newest first (at most REVISION_CAP). */
+  listRevisions(translationKey: string): Promise<RevisionSummary[]>;
+  /** One full revision snapshot, or null for an unknown (or malformed) id. */
+  getRevision(translationKey: string, id: string): Promise<PostRevision | null>;
+}
+
+/**
+ * Optimistic-concurrency check: throw 'conflict' when the stored pair changed
+ * after the state the caller loaded.
+ * @ai-warning Compare in JS on Dates only — never SQL-side. Postgres stores
+ * timestamptz at µs precision but node-postgres parses it to a ms-precision JS
+ * Date, so both sides here went through the SAME truncation; a SQL comparison
+ * against the echoed value would false-conflict on every innocent save.
+ */
+function assertNotStale(storedUpdatedAt: Date, baseUpdatedAt: Date | undefined): void {
+  if (baseUpdatedAt && storedUpdatedAt.getTime() > baseUpdatedAt.getTime()) {
+    throw new PostError('post was modified since you opened it', 'conflict');
+  }
 }
 
 interface Stored extends PostPair {
@@ -128,6 +163,9 @@ function draftWithDefaults(pair: PostPair): PostPair {
 
 export function memoryPostStore(): PostStore {
   const byKey = new Map<string, Stored>();
+  // Revisions per translation_key, oldest first (append order) — mirrors the
+  // pg store's post_revisions table so server tests exercise the same semantics.
+  const revisionsByKey = new Map<string, PostRevision[]>();
   const slugTaken = (locale: Locale, slug: string, exceptKey: string) =>
     [...byKey.values()].some((p) => p.translationKey !== exceptKey && p[locale].slug === slug);
 
@@ -139,17 +177,28 @@ export function memoryPostStore(): PostStore {
     },
     async get(tk) {
       const p = byKey.get(tk);
-      return p ? structuredClone({ translationKey: p.translationKey, status: p.status, shared: p.shared, de: p.de, en: p.en, hasUnpublishedChanges: p.hasUnpublishedChanges }) : null;
+      return p ? structuredClone({ translationKey: p.translationKey, status: p.status, shared: p.shared, de: p.de, en: p.en, hasUnpublishedChanges: p.hasUnpublishedChanges, updatedAt: p.updatedAt }) : null;
     },
-    async upsertDraft(pair) {
+    async upsertDraft(pair, baseUpdatedAt) {
       pair = draftWithDefaults(pair);
       const key = pair.translationKey || randomUUID();
       const existing = byKey.get(key);
+      if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
       for (const locale of ['de', 'en'] as Locale[]) {
         if (slugTaken(locale, pair[locale].slug, key)) throw new PostError(`slug "${pair[locale].slug}" already in use for ${locale}`, 'duplicate_slug');
         if (existing && existing.status === 'published' && existing[locale].slug !== pair[locale].slug) {
           throw new PostError('cannot change the slug of a published post', 'slug_locked');
         }
+      }
+      if (existing) {
+        // Snapshot the pre-save working copy so the overwrite is recoverable.
+        const revs = revisionsByKey.get(key) ?? [];
+        revs.push({
+          id: randomUUID(), savedAt: new Date(), titleDe: existing.de.title, status: existing.status,
+          snapshot: structuredClone({ status: existing.status, shared: existing.shared, de: existing.de, en: existing.en }),
+        });
+        if (revs.length > REVISION_CAP) revs.splice(0, revs.length - REVISION_CAP);
+        revisionsByKey.set(key, revs);
       }
       const status = existing?.status ?? 'draft';
       const stored: Stored = {
@@ -159,7 +208,7 @@ export function memoryPostStore(): PostStore {
         hasUnpublishedChanges: status === 'published',
       };
       byKey.set(key, stored);
-      return { translationKey: key, status: stored.status, shared: stored.shared, de: stored.de, en: stored.en, hasUnpublishedChanges: stored.hasUnpublishedChanges };
+      return { translationKey: key, status: stored.status, shared: stored.shared, de: stored.de, en: stored.en, hasUnpublishedChanges: stored.hasUnpublishedChanges, updatedAt: stored.updatedAt };
     },
     async publish(tk) {
       const p = byKey.get(tk);
@@ -169,6 +218,15 @@ export function memoryPostStore(): PostStore {
       p.publishedAt = new Date();
       p.updatedAt = p.publishedAt;
       p.hasUnpublishedChanges = false;
+    },
+    async listRevisions(tk) {
+      return (revisionsByKey.get(tk) ?? [])
+        .map(({ id, savedAt, titleDe, status }) => ({ id, savedAt, titleDe, status }))
+        .reverse(); // newest first
+    },
+    async getRevision(tk, id) {
+      const rev = (revisionsByKey.get(tk) ?? []).find((r) => r.id === id);
+      return rev ? structuredClone(rev) : null;
     },
   };
 }
@@ -183,6 +241,8 @@ interface PostRow {
   body_markdown: string; images: Record<string, ImageDims>; status: 'draft' | 'published'; updated_at: Date;
   published_at: Date | null;
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** True when a published row's working copy was saved after its last publish. */
 function rowHasUnpublishedChanges(r: PostRow | undefined): boolean {
@@ -233,16 +293,35 @@ export function pgPostStore(pool: DbPool): PostStore {
       return {
         translationKey: tk, status: de.status, shared: rowShared(de), de: rowLocale(de), en: rowLocale(en),
         hasUnpublishedChanges: rowHasUnpublishedChanges(de) || rowHasUnpublishedChanges(en),
+        // Max of both rows: writeLocale runs two statements with independent
+        // now() values, so de/en updated_at can differ by a tick.
+        updatedAt: new Date(Math.max(de.updated_at.getTime(), en.updated_at.getTime())),
       };
     },
-    async upsertDraft(pair) {
+    async upsertDraft(pair, baseUpdatedAt) {
       pair = draftWithDefaults(pair);
       const tk = pair.translationKey || randomUUID();
       const existing = await this.get(tk);
+      if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
       for (const locale of ['de', 'en'] as Locale[]) {
         const { rows } = await pool.query<{ translation_key: string }>(`SELECT translation_key FROM posts WHERE locale=$1 AND slug=$2`, [locale, pair[locale].slug]);
         if (rows[0] && rows[0].translation_key !== tk) throw new PostError(`slug "${pair[locale].slug}" already in use for ${locale}`, 'duplicate_slug');
         if (existing && existing.status === 'published' && existing[locale].slug !== pair[locale].slug) throw new PostError('cannot change the slug of a published post', 'slug_locked');
+      }
+      if (existing) {
+        // Snapshot the pre-save working copy so the overwrite is recoverable,
+        // then prune to the newest REVISION_CAP per post.
+        await pool.query(
+          `INSERT INTO post_revisions (id, translation_key, snapshot) VALUES ($1, $2, $3)`,
+          [randomUUID(), tk, JSON.stringify({ status: existing.status, shared: existing.shared, de: existing.de, en: existing.en })],
+        );
+        await pool.query(
+          `DELETE FROM post_revisions
+            WHERE translation_key = $1 AND id NOT IN (
+              SELECT id FROM post_revisions WHERE translation_key = $1
+               ORDER BY saved_at DESC, id DESC LIMIT $2)`,
+          [tk, REVISION_CAP],
+        );
       }
       const status = existing?.status ?? 'draft';
       await writeLocale(tk, status, pair.shared, { ...pair.de, locale: 'de' });
@@ -263,6 +342,30 @@ export function pgPostStore(pool: DbPool): PostStore {
         [tk],
       );
       if (res.rowCount === 0) throw new PostError('post not found');
+    },
+    async listRevisions(tk) {
+      // Pull only the summary fields out of the jsonb — bodies can be large.
+      const { rows } = await pool.query<{ id: string; saved_at: Date; title_de: string | null; status: string }>(
+        `SELECT id, saved_at, snapshot->'de'->>'title' AS title_de, snapshot->>'status' AS status
+           FROM post_revisions WHERE translation_key = $1 ORDER BY saved_at DESC, id DESC`,
+        [tk],
+      );
+      return rows.map((r) => ({
+        id: r.id, savedAt: r.saved_at, titleDe: r.title_de ?? '',
+        status: r.status === 'published' ? 'published' as const : 'draft' as const,
+      }));
+    },
+    async getRevision(tk, id) {
+      // Reject non-UUID ids before querying: a malformed uuid parameter raises
+      // Postgres 22P02 (a logged 500) instead of the 404 the route wants.
+      if (!UUID_RE.test(id)) return null;
+      const { rows } = await pool.query<{ id: string; saved_at: Date; snapshot: RevisionSnapshot }>(
+        `SELECT id, saved_at, snapshot FROM post_revisions WHERE translation_key = $1 AND id = $2`,
+        [tk, id],
+      );
+      const r = rows[0];
+      if (!r) return null;
+      return { id: r.id, savedAt: r.saved_at, titleDe: r.snapshot.de.title, status: r.snapshot.status, snapshot: r.snapshot };
     },
   };
 }

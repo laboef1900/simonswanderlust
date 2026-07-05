@@ -413,6 +413,121 @@ describe('posts editor', () => {
     got = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
     expect(got).toMatchObject({ status: 'published', hasUnpublishedChanges: false });
   });
+
+  it('GET /posts/:tk includes updatedAt, and a PUT echoing it saves fine', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    expect(created.json().updatedAt).toBeTruthy();
+    const tk = created.json().translationKey;
+    const got = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
+    expect(typeof got.updatedAt).toBe('string');
+    const put = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { ...sample(), de: { ...sample().de, title: 'T2' }, updatedAt: got.updatedAt },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(put.json().de.title).toBe('T2');
+  });
+
+  it('PUT with a stale updatedAt → 409 code "conflict"; nothing is overwritten', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const put = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { ...sample(), de: { ...sample().de, bodyMarkdown: '## clobber' }, updatedAt: '2000-01-01T00:00:00.000Z' },
+    });
+    expect(put.statusCode).toBe(409);
+    expect(put.json()).toMatchObject({ code: 'conflict' });
+    expect(put.json().error).toMatch(/modified/);
+    const got = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
+    expect(got.de.bodyMarkdown).toBe('## b');
+  });
+
+  it('PUT with an unparsable updatedAt → 400; without one the check is skipped', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const bad = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { ...sample(), updatedAt: 'not-a-date' },
+    });
+    expect(bad.statusCode).toBe(400);
+    const none = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: sample(),
+    });
+    expect(none.statusCode).toBe(200);
+  });
+
+  it('duplicate-slug 409 carries its own code, distinguishable from a conflict', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const dup = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    expect(dup.statusCode).toBe(409);
+    expect(dup.json().code).toBe('duplicate_slug');
+  });
+
+  it('publish response includes the fresh updatedAt so the editor can re-sync', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(pub.statusCode).toBe(200);
+    expect(pub.json().updatedAt).toBeTruthy();
+    // Echoing the post-publish value must not false-conflict.
+    const put = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { ...sample(), status: 'published', updatedAt: pub.json().updatedAt },
+    });
+    expect(put.statusCode).toBe(200);
+  });
+});
+
+describe('post revisions endpoints', () => {
+  const sample = () => ({
+    translationKey: '', status: 'draft',
+    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de', slug: 'de-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+  });
+
+  it('401 anonymous', async () => {
+    const b = build();
+    expect((await b.app.inject({ method: 'GET', url: '/posts/x/revisions' })).statusCode).toBe(401);
+    expect((await b.app.inject({ method: 'GET', url: '/posts/x/revisions/y' })).statusCode).toBe(401);
+  });
+
+  it('404 for an unknown post', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    expect((await b.app.inject({ method: 'GET', url: '/posts/nope/revisions', cookies: cookie })).statusCode).toBe(404);
+  });
+
+  it('lists the revision created by a second save and serves its full snapshot', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    let list = (await b.app.inject({ method: 'GET', url: `/posts/${tk}/revisions`, cookies: cookie })).json();
+    expect(list).toEqual([]);
+    await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { ...sample(), de: { ...sample().de, title: 'T2', bodyMarkdown: '## new' } },
+    });
+    list = (await b.app.inject({ method: 'GET', url: `/posts/${tk}/revisions`, cookies: cookie })).json();
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ titleDe: 'T', status: 'draft' });
+    expect(typeof list[0].savedAt).toBe('string');
+    expect(list[0].snapshot).toBeUndefined(); // summaries stay light
+
+    const rev = await b.app.inject({ method: 'GET', url: `/posts/${tk}/revisions/${list[0].id}`, cookies: cookie });
+    expect(rev.statusCode).toBe(200);
+    expect(rev.json().snapshot.de.title).toBe('T');
+    expect(rev.json().snapshot.de.bodyMarkdown).toBe('## b');
+    expect(rev.json().snapshot.en.slug).toBe('en-s');
+
+    const missing = await b.app.inject({ method: 'GET', url: `/posts/${tk}/revisions/00000000-0000-4000-8000-000000000000`, cookies: cookie });
+    expect(missing.statusCode).toBe(404);
+  });
 });
 
 describe('WordPress import', () => {

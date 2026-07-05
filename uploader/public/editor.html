@@ -151,6 +151,14 @@
         <p id="actionError" class="err" style="display:none"></p>
       </div>
 
+      <!-- Revisions (issue #28): snapshots of what each save overwrote -->
+      <section class="card" id="revisionsCard" style="display:none">
+        <h2 class="card-heading">Revisions</h2>
+        <p class="muted">Each save keeps a snapshot of what it overwrote (newest first, last 20 kept). Restoring only fills the editor — review, then Save draft to keep it.</p>
+        <ul id="revisionsList" class="revisions-list"></ul>
+        <p id="revisionsEmpty" class="muted" style="display:none">No revisions yet — one appears each time a save overwrites this post.</p>
+      </section>
+
       <div class="route" aria-hidden="true">
         <span class="dot"></span><span class="seg"></span>
         <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>
@@ -167,6 +175,9 @@
       // ---- state ----
       let currentTk = null;       // translationKey, null = new post
       let isPublished = false;    // slug is locked once published
+      // updatedAt of the pair as loaded/last saved in THIS tab. Echoed back on
+      // every save so the server can 409 when another tab/user saved meanwhile.
+      let loadedUpdatedAt = null;
       const deImages = {};        // src → {width, height}
       const enImages = {};
 
@@ -381,6 +392,8 @@
         return {
           translationKey: currentTk || undefined,
           status: isPublished ? 'published' : 'draft',
+          // Concurrency echo — JSON.stringify drops it when undefined (new post).
+          updatedAt: loadedUpdatedAt || undefined,
           shared,
           de,
           en,
@@ -413,8 +426,19 @@
         if (res.status === 401) { location.href = '/login'; return false; }
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
-          showErr((body.error || ('Save failed: ' + res.status)));
           setStatus('');
+          if (res.status === 409 && body.code === 'conflict') {
+            showErr(body.error || 'This post was modified since you opened it — nothing was saved.');
+            const reload = confirm(
+              'This post was changed elsewhere (another tab or user) since you opened it, '
+              + 'so saving would overwrite those changes. Nothing was saved.\n\n'
+              + 'OK — reload the latest version into the editor (your edits in this tab are lost).\n'
+              + 'Cancel — keep your edits on screen so you can copy them out first.'
+            );
+            if (reload) await loadPost(currentTk);
+            return false;
+          }
+          showErr((body.error || ('Save failed: ' + res.status)));
           return false;
         }
         // On first save, capture the new translationKey and update the URL
@@ -425,6 +449,10 @@
           history.replaceState(null, '', url2.toString());
           $('pageTitle').textContent = 'Edit post';
         }
+        // Re-sync the concurrency echo with what this save just wrote, and
+        // refresh the revisions list (this save snapshotted the previous state).
+        if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
+        loadRevisions().catch(() => {});
         // A draft save never touches the live site — published posts keep
         // serving their published snapshot until the next Publish.
         setStatus(isPublished ? 'Saved draft. The live post is unchanged until you Publish.' : 'Saved draft.');
@@ -455,6 +483,9 @@
         const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
         setStatus('Published ✓' + release);
         isPublished = true;
+        // Publish bumps the stored updated_at — re-sync the concurrency echo
+        // or the very next Save in this tab would falsely report a conflict.
+        if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
         $('slugFieldDe').disabled = true;
         $('slugFieldEn').disabled = true;
       });
@@ -472,17 +503,42 @@
         $(loc + 'Excerpt').value = data.excerpt || '';
         const mde = loc === 'de' ? deMDE : enMDE;
         mde.value(data.bodyMarkdown || '');
-        if (data.heroImage) {
-          $(loc + 'HeroSrc').value = data.heroImage.src || '';
-          $(loc + 'HeroWidth').value = data.heroImage.width || '';
-          $(loc + 'HeroHeight').value = data.heroImage.height || '';
-          $(loc + 'HeroAlt').value = data.heroImage.alt || '';
-          $(loc + 'HeroStatus').textContent = data.heroImage.src ? 'Hero: ' + data.heroImage.src : '';
-        }
+        // Overwrite the hero fields even when empty — a revision restore must
+        // replace what's on screen, never merge with it.
+        const hero = data.heroImage || {};
+        $(loc + 'HeroSrc').value = hero.src || '';
+        $(loc + 'HeroWidth').value = hero.width || '';
+        $(loc + 'HeroHeight').value = hero.height || '';
+        $(loc + 'HeroAlt').value = hero.alt || '';
+        $(loc + 'HeroStatus').textContent = hero.src ? 'Hero: ' + hero.src : '';
         if (data.images && typeof data.images === 'object') {
           const map = loc === 'de' ? deImages : enImages;
           Object.assign(map, data.images);
         }
+      }
+
+      // Fill the whole form from a {shared, de, en} pair — used on load and by
+      // "Restore into editor". Every field is overwritten (with '' when absent)
+      // so restoring an older snapshot never merges with what was on screen.
+      function populatePair(post) {
+        const shared = post.shared || {};
+        $('fmDate').value = shared.date || '';
+        $('fmCountry').value = shared.country || '';
+        $('fmCountryCode').value = shared.countryCode || '';
+        $('fmRegion').value = shared.region || '';
+        $('fmLat').value = shared.coordinates ? (shared.coordinates.lat ?? '') : '';
+        $('fmLng').value = shared.coordinates ? (shared.coordinates.lng ?? '') : '';
+        $('fmRoute').value = shared.route || '';
+        populateKeyFacts(shared.keyFacts);
+
+        populateLocale('de', post.de);
+        populateLocale('en', post.en);
+        // EN tab is hidden on load; refresh its CodeMirror so it renders at full width when shown
+        enMDE.codemirror.refresh();
+
+        // Populate each locale's slug from the pair (never re-derive over a stored value)
+        if (post.de) $('slugFieldDe').value = post.de.slug || '';
+        if (post.en) $('slugFieldEn').value = post.en.slug || '';
       }
 
       async function loadPost(tk) {
@@ -497,34 +553,18 @@
         const post = await res.json();
         currentTk = post.translationKey || tk;
         isPublished = post.status === 'published';
+        loadedUpdatedAt = post.updatedAt || null;
 
         $('pageTitle').textContent = 'Edit post';
 
-        const shared = post.shared || {};
-        if (shared.date) $('fmDate').value = shared.date;
-        if (shared.country) $('fmCountry').value = shared.country;
-        if (shared.countryCode) $('fmCountryCode').value = shared.countryCode;
-        if (shared.region) $('fmRegion').value = shared.region;
-        if (shared.coordinates) {
-          $('fmLat').value = shared.coordinates.lat ?? '';
-          $('fmLng').value = shared.coordinates.lng ?? '';
-        }
-        if (shared.route) $('fmRoute').value = shared.route;
-        populateKeyFacts(shared.keyFacts);
-
-        populateLocale('de', post.de);
-        populateLocale('en', post.en);
-        // EN tab is hidden on load; refresh its CodeMirror so it renders at full width when shown
-        enMDE.codemirror.refresh();
-
-        // Populate each locale's slug from the loaded post (never re-derive over a stored value)
-        if (post.de && post.de.slug) $('slugFieldDe').value = post.de.slug;
-        if (post.en && post.en.slug) $('slugFieldEn').value = post.en.slug;
+        populatePair(post);
 
         if (isPublished) {
           $('slugFieldDe').disabled = true;
           $('slugFieldEn').disabled = true;
         }
+
+        loadRevisions().catch(() => {});
 
         let state = '';
         if (isPublished) {
@@ -533,6 +573,47 @@
             : ' (published — slug locked)';
         }
         setStatus('Loaded post ' + currentTk + state + '.');
+      }
+
+      // ---- revisions (issue #28) ----
+      async function loadRevisions() {
+        if (!currentTk) return;
+        const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/revisions');
+        if (!res.ok) return; // non-fatal: the card just stays as-is
+        const revs = await res.json();
+        $('revisionsCard').style.display = '';
+        $('revisionsEmpty').style.display = revs.length ? 'none' : '';
+        const ul = $('revisionsList');
+        ul.innerHTML = '';
+        revs.forEach((rev) => {
+          const li = document.createElement('li');
+          li.className = 'revision-row';
+          const label = document.createElement('span');
+          label.textContent = new Date(rev.savedAt).toLocaleString() + ' — '
+            + (rev.titleDe || '(untitled)') + ' · ' + rev.status;
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn-secondary';
+          btn.textContent = 'Restore into editor';
+          btn.addEventListener('click', () => { restoreRevision(rev.id); });
+          li.appendChild(label);
+          li.appendChild(btn);
+          ul.appendChild(li);
+        });
+      }
+
+      // Fills the form from a snapshot; persisting still goes through the
+      // normal Save (slug-lock + validation apply, and the overwritten state
+      // gets its own revision) — there is no direct server-side restore.
+      async function restoreRevision(id) {
+        showErr('');
+        const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/revisions/' + encodeURIComponent(id));
+        if (res.status === 401) { location.href = '/login'; return; }
+        if (!res.ok) { showErr('Could not load revision: ' + res.status); return; }
+        const rev = await res.json();
+        populatePair(rev.snapshot);
+        setStatus('Restored the revision from ' + new Date(rev.savedAt).toLocaleString()
+          + ' into the editor — review it, then Save draft to keep it.');
       }
 
       // ---- init ----

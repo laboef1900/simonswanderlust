@@ -275,17 +275,47 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   const upsert = async (req: { body: unknown }, reply: import('fastify').FastifyReply, tk: string) => {
-    const pair = { ...(req.body as PostPair), translationKey: tk };
+    // `updatedAt` is the optimistic-concurrency echo (the value the editor
+    // loaded), not part of the pair itself — strip it before storing. It is
+    // optional: callers without it (new posts, WP importer) skip the check.
+    const { updatedAt, ...body } = (req.body ?? {}) as PostPair & { updatedAt?: unknown };
+    const pair: PostPair = { ...body, translationKey: tk };
+    let baseUpdatedAt: Date | undefined;
+    if (updatedAt !== undefined && updatedAt !== null) {
+      baseUpdatedAt = new Date(String(updatedAt));
+      if (Number.isNaN(baseUpdatedAt.getTime())) return reply.code(400).send({ error: 'invalid updatedAt' });
+    }
     try {
       validateDraft(pair);
-      return reply.send(await posts.upsertDraft(pair));
+      return reply.send(await posts.upsertDraft(pair, baseUpdatedAt));
     } catch (e) {
-      if (e instanceof PostError) return reply.code(e.code === 'duplicate_slug' || e.code === 'slug_locked' ? 409 : 400).send({ error: e.message });
+      if (e instanceof PostError) {
+        // `code` lets the editor tell a stale-tab 409 ('conflict' → offer a
+        // reload) apart from duplicate_slug/slug_locked 409s.
+        const status = e.code === 'duplicate_slug' || e.code === 'slug_locked' || e.code === 'conflict' ? 409 : 400;
+        return reply.code(status).send({ error: e.message, ...(e.code ? { code: e.code } : {}) });
+      }
       throw e;
     }
   };
   app.post('/posts', { preHandler: requireAuth }, (req, reply) => upsert(req, reply, ''));
   app.put('/posts/:tk', { preHandler: requireAuth }, (req, reply) => upsert(req, reply, (req.params as { tk: string }).tk));
+
+  // Revision history — read-only for any authed user (same trust boundary as
+  // GET /posts/:tk); restoring goes through the normal PUT save, so slug-lock
+  // and validation still apply and the clobbered state is itself snapshotted.
+  app.get('/posts/:tk/revisions', { preHandler: requireAuth }, async (req, reply) => {
+    const tk = (req.params as { tk: string }).tk;
+    if (!(await posts.get(tk))) return reply.code(404).send({ error: 'post not found' });
+    return reply.send(await posts.listRevisions(tk));
+  });
+
+  app.get('/posts/:tk/revisions/:id', { preHandler: requireAuth }, async (req, reply) => {
+    const { tk, id } = req.params as { tk: string; id: string };
+    const rev = await posts.getRevision(tk, id);
+    if (!rev) return reply.code(404).send({ error: 'revision not found' });
+    return reply.send(rev);
+  });
 
   // @ai-warning: publishing pushes content to the PUBLIC static site, so it is
   // admin-only. Authors may create/edit drafts (requireAuth) but not publish.
@@ -301,7 +331,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const published = await posts.get(tk);
     const build = await cfg.builder.build();
     if (published) await exportPost(published, cfg.backupDir).catch(() => { /* best-effort backup */ });
-    return reply.send({ published: true, build });
+    // updatedAt: publish bumps the stored timestamp, so the editor must re-sync
+    // its concurrency echo or its very next Save would falsely 409.
+    return reply.send({ published: true, build, updatedAt: published?.updatedAt });
   });
 
   app.get('/health', async () => ({ ok: true }));
