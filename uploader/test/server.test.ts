@@ -413,6 +413,66 @@ describe('settings endpoints', () => {
   });
 });
 
+describe('GET /ai-config', () => {
+  it('401 without auth', async () => {
+    const res = await build().app.inject({ method: 'GET', url: '/ai-config' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns the LM config for a non-admin author (no backup fields)', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false });
+    const res = await b.app.inject({ method: 'GET', url: '/ai-config', cookies: cookie });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toMatchObject({
+      lmBaseUrl: 'http://localhost:1234/v1',
+      lmModel: 'qwen/qwen3-vl-4b',
+      captionTimeoutMs: 60000,
+      captionMaxEdge: 768,
+    });
+    expect(body.captionPrompt).toBeTruthy();
+    expect(body).not.toHaveProperty('backupSchedule');
+    expect(body).not.toHaveProperty('backupRetention');
+  });
+});
+
+describe('POST /settings (LM fields)', () => {
+  it('admin can update LM fields', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: true });
+    const res = await b.app.inject({
+      method: 'POST', url: '/settings',
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { lmModel: 'my/vlm', captionMaxEdge: 1024 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ lmModel: 'my/vlm', captionMaxEdge: 1024 });
+  });
+
+  it('400 on an invalid lmBaseUrl', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: true });
+    const res = await b.app.inject({
+      method: 'POST', url: '/settings',
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { lmBaseUrl: 'not a url' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('403 for a non-admin', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false });
+    const res = await b.app.inject({
+      method: 'POST', url: '/settings',
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { lmModel: 'x' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+});
+
 describe('error handler', () => {
   it('sanitizes unexpected errors to a generic 500 and logs them server-side', async () => {
     const boom = memoryPostStore();
