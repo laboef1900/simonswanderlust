@@ -77,6 +77,32 @@ window.DraftGuard = (function () {
       }
     }
 
+    // Decline restoring a stash WITHOUT destroying it: disarm dirty tracking so
+    // the beforeunload prompt goes silent, but keep the stash in localStorage so
+    // a misclicked "Cancel" on the restore prompt can't lose unsaved work. Record
+    // the dismissal (by the stash's savedAt) in sessionStorage so the SAME stash
+    // isn't re-offered on every reload this session; a fresh session (new tab)
+    // offers it again, and a newer stash (different savedAt) is offered normally.
+    function dismissRestore(stash) {
+      dirty = false;
+      cancelTimer();
+      try {
+        const at = stash && typeof stash.savedAt === 'string' ? stash.savedAt : '';
+        if (at) sessionStorage.setItem(key + ':dismissed', at);
+      } catch (e) { /* best-effort: sessionStorage may be unavailable */ }
+    }
+
+    // True when this exact stash (same savedAt) was already dismissed this
+    // session, so the caller can skip re-prompting to restore it.
+    function wasDismissed(stash) {
+      try {
+        return !!stash && typeof stash.savedAt === 'string'
+          && sessionStorage.getItem(key + ':dismissed') === stash.savedAt;
+      } catch (e) {
+        return false;
+      }
+    }
+
     // Re-keys the stash once a new post gains its real translationKey.
     function setKey(newKey) {
       try {
@@ -104,7 +130,7 @@ window.DraftGuard = (function () {
       e.returnValue = ''; // legacy Chrome needs returnValue set to show the dialog
     });
 
-    return { markDirty, markClean, snapshot, stashNow, tryRestore, setKey, redirectToLogin };
+    return { markDirty, markClean, snapshot, stashNow, tryRestore, dismissRestore, wasDismissed, setKey, redirectToLogin };
   }
 
   return { safeNextPath, createDraftGuard };

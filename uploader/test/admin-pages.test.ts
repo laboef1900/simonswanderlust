@@ -18,6 +18,8 @@ interface Guard {
   snapshot(): number;
   stashNow(): void;
   tryRestore(): Stash | null;
+  dismissRestore(stash: Stash | null): void;
+  wasDismissed(stash: Stash | null): boolean;
   setKey(newKey: string): void;
   redirectToLogin(): void;
 }
@@ -49,6 +51,20 @@ function makeSandbox(opts: { throwStorage?: boolean } = {}) {
         removeItem: (k: string): void => { store.delete(k); },
       };
 
+  // sessionStorage-backed dismissal marker (per-tab; separate from localStorage).
+  const session = new Map<string, string>();
+  const sessionStorageStub = opts.throwStorage
+    ? {
+        getItem: (): string | null => { throw new Error('quota exceeded'); },
+        setItem: (): void => { throw new Error('quota exceeded'); },
+        removeItem: (): void => { throw new Error('quota exceeded'); },
+      }
+    : {
+        getItem: (k: string): string | null => session.get(k) ?? null,
+        setItem: (k: string, v: string): void => { session.set(k, String(v)); },
+        removeItem: (k: string): void => { session.delete(k); },
+      };
+
   const location = { pathname: '/admin/editor.html', search: '?tk=abc', href: '' };
   const windowStub: {
     addEventListener: (type: string, fn: (e: StubEvent) => void) => void;
@@ -60,6 +76,7 @@ function makeSandbox(opts: { throwStorage?: boolean } = {}) {
   vm.runInNewContext(guardSrc, {
     window: windowStub,
     localStorage: localStorageStub,
+    sessionStorage: sessionStorageStub,
     location,
     setTimeout: (fn: () => void): number => { const id = nextId++; timers.set(id, fn); return id; },
     clearTimeout: (id: number): void => { timers.delete(id); },
@@ -71,6 +88,7 @@ function makeSandbox(opts: { throwStorage?: boolean } = {}) {
   return {
     api,
     store,
+    session,
     location,
     pendingTimers: () => timers.size,
     flushTimers: () => {
@@ -191,6 +209,42 @@ describe('DraftGuard.createDraftGuard', () => {
     expect(sb.pendingTimers()).toBe(0);
     sb.flushTimers();
     expect(sb.store.has(KEY)).toBe(false);
+  });
+
+  it('dismissRestore keeps the stash but disarms the warning (a misclicked Cancel loses nothing)', () => {
+    const sb = makeSandbox();
+    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ h: 8 }) });
+    guard.stashNow();
+    guard.markDirty();
+    const stash = guard.tryRestore();
+    guard.dismissRestore(stash);
+    expect(sb.store.has(KEY)).toBe(true);                       // stash preserved (recoverable)
+    expect(sb.fireBeforeUnload().defaultPrevented).toBe(false); // dirty disarmed
+    expect(sb.pendingTimers()).toBe(0);                         // debounced stash cancelled
+    // Restoring the still-present stash on a later load round-trips the payload.
+    expect(guard.tryRestore()?.payload).toEqual({ h: 8 });
+  });
+
+  it('wasDismissed suppresses a re-prompt for the same stash but not a newer one', () => {
+    const sb = makeSandbox();
+    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ i: 9 }) });
+    guard.stashNow();
+    const first = guard.tryRestore();
+    expect(guard.wasDismissed(first)).toBe(false);
+    guard.dismissRestore(first);
+    expect(guard.wasDismissed(first)).toBe(true);               // same stash: don't re-offer
+    // A newer stash (different savedAt) must still be offered.
+    const newer = { savedAt: 'a-later-timestamp', payload: { i: 9 } };
+    expect(guard.wasDismissed(newer)).toBe(false);
+    expect(guard.wasDismissed(null)).toBe(false);
+  });
+
+  it('dismissRestore degrades safely when sessionStorage throws', () => {
+    const sb = makeSandbox({ throwStorage: true });
+    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ j: 10 }) });
+    const stash = { savedAt: 'now', payload: { j: 10 } };
+    expect(() => guard.dismissRestore(stash)).not.toThrow();
+    expect(guard.wasDismissed(stash)).toBe(false); // can't record → treated as not dismissed
   });
 
   it('markClean with a current snapshot token cleans normally after a save', () => {
@@ -315,6 +369,17 @@ describe('admin page wiring', () => {
     expect(editor).toContain('const hero = data.heroImage || {}');
     expect(editor).not.toMatch(/if \(shared\.(date|country|countryCode|region|route|coordinates)\)/);
     expect(editor).not.toMatch(/if \(data\.heroImage\)/);
+  });
+
+  it('declining the restore prompt keeps the stash (non-destructive) instead of wiping it', () => {
+    // A misclicked Cancel must not destroy unsaved work: both editors gate the
+    // prompt on wasDismissed() and, when a stash exists but is not restored,
+    // call dismissRestore() (keeps the stash) rather than the stash-deleting
+    // tokenless markClean(). markClean() stays only for the no-stash branch.
+    for (const page of [editor, about]) {
+      expect(page).toContain('guard.wasDismissed(stash)');
+      expect(page).toContain('guard.dismissRestore(stash)');
+    }
   });
 
   it('save handlers pass a pre-fetch snapshot token to markClean (mid-save edits survive)', () => {

@@ -173,11 +173,17 @@
         // Offer to restore locally stashed changes; filling above fired CodeMirror
         // change events, so settle the guard's dirty state here either way.
         const stash = guard.tryRestore();
-        if (stash && confirm('Found unsaved About-page changes from ' + new Date(stash.savedAt).toLocaleString() + '. Restore them?')) {
+        if (stash && !guard.wasDismissed(stash)
+            && confirm('Found unsaved About-page changes from ' + new Date(stash.savedAt).toLocaleString() + '. Restore them?')) {
           fill('de', stash.payload.de); fill('en', stash.payload.en);
           enMDE.codemirror.refresh();
           guard.markDirty();
           setStatus('Restored unsaved changes — remember to Save.');
+        } else if (stash) {
+          // Declined (or already dismissed this session): keep the stash so a
+          // misclicked Cancel can't destroy unsaved work — just disarm dirty and
+          // remember the dismissal so it isn't re-offered on every reload.
+          guard.dismissRestore(stash);
         } else {
           guard.markClean();
         }

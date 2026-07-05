@@ -611,11 +611,17 @@
         // 401 mid-edit). Populating above fired CodeMirror change events, so settle
         // the guard's dirty state here either way.
         const stash = guard.tryRestore();
-        if (stash && confirm('Found an unsaved local draft from ' + new Date(stash.savedAt).toLocaleString() + '. Restore it into the editor?')) {
+        if (stash && !guard.wasDismissed(stash)
+            && confirm('Found an unsaved local draft from ' + new Date(stash.savedAt).toLocaleString() + '. Restore it into the editor?')) {
           currentTk = stash.payload.translationKey || currentTk;
           populateForm(stash.payload);
           guard.markDirty();
           setStatus('Restored unsaved draft — remember to Save draft.');
+        } else if (stash) {
+          // Declined (or already dismissed this session): keep the stash so a
+          // misclicked Cancel can't destroy unsaved work — just disarm dirty and
+          // remember the dismissal so it isn't re-offered on every reload.
+          guard.dismissRestore(stash);
         } else {
           guard.markClean();
         }
