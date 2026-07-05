@@ -102,4 +102,20 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
      ON CONFLICT (key, locale) DO NOTHING`,
     [ABOUT_SEED.de.title, ABOUT_SEED.de.body, ABOUT_SEED.en.title, ABOUT_SEED.en.body],
   );
+
+  // --- column migrations -----------------------------------------------------
+  // @ai-note Schema evolution convention (issue #32): `CREATE TABLE IF NOT
+  // EXISTS` silently no-ops on a database that already has the table, so a
+  // column added only to a CREATE TABLE above never reaches existing
+  // deployments — every query naming it then fails at runtime. Every new
+  // column MUST therefore land in BOTH places:
+  //   1. the table's CREATE TABLE statement above (fresh installs), and
+  //   2. a matching statement appended in this section (existing databases),
+  //      e.g. (illustrative only — not a real column):
+  //        await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS example_col text`);
+  // Rules: statements must stay idempotent — ensureSchema runs on every boot
+  // (uploader/src/main.ts) — and NOT NULL columns MUST carry a DEFAULT, or
+  // the ALTER fails on populated tables. Never edit or reorder past
+  // migrations; only append. No migration framework / schema_version table
+  // by design — see ARCHITECTURE.md "Data model (Postgres)".
 }

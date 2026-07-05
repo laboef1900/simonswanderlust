@@ -48,6 +48,34 @@ maybe('postgres stores (integration)', () => {
     expect(de.title).toBe('Über mich');
     expect(de.body_markdown).toContain('Leidenschaft');
   });
+
+  // ensureSchema runs on EVERY boot (main.ts), so it must be re-runnable
+  // against a database that already has the full schema plus live data — the
+  // contract the column-migrations section in db.ts relies on.
+  it('ensureSchema is re-runnable against a populated database', async () => {
+    const users = pgUserStore(pool);
+    const u = await users.create({ username: `rerun-${Date.now()}`, password: 'pw', isAdmin: false });
+    await pool.query(`UPDATE pages SET title='Edited by author' WHERE key='about' AND locale='de'`);
+    // Populate posts too: future appended ALTERs (e.g. a NOT NULL column
+    // missing its DEFAULT) only fail on tables that HAVE rows, and posts is
+    // the table column migrations will target first.
+    const stamp = Date.now();
+    const post = await pgPostStore(pool).upsertDraft({
+      translationKey: '', status: 'draft',
+      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de', slug: `rerun-de-${stamp}`, title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en', slug: `rerun-en-${stamp}`, title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    });
+
+    await expect(ensureSchema(pool)).resolves.toBeUndefined();
+
+    // Existing rows survive the re-run...
+    expect((await users.findByUsername(u.username))?.id).toBe(u.id);
+    expect((await pgPostStore(pool).get(post.translationKey))?.de.slug).toBe(`rerun-de-${stamp}`);
+    // ...and the About seed (ON CONFLICT DO NOTHING) does not clobber edits.
+    const { rows } = await pool.query(`SELECT title FROM pages WHERE key='about' AND locale='de'`);
+    expect(rows[0].title).toBe('Edited by author');
+  });
 });
 
 maybe('pgPostStore (integration)', () => {
