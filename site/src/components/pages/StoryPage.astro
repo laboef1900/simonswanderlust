@@ -10,6 +10,7 @@ import StoryMiniMap from '../StoryMiniMap.astro';
 import { useTranslations } from '../../i18n/ui';
 import { coordsLabel, dateLabel, entryLabel } from '../../lib/format';
 import { byLocale, entryNumberOf, localeOf, pathOf, translationOf, type Trip } from '../../lib/trips';
+import { PROD_SITE, blogPostingJsonLd, serializeJsonLd } from '../../lib/seo';
 
 interface Props {
   trip: Trip;
@@ -34,9 +35,31 @@ const alternates = other
     : { de: pathOf(other), en: pathOf(trip) }
   : undefined;
 const label = `${entryLabel(number)} — ${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
+
+// Same production fallback as Base.astro's canonical URL.
+const site = Astro.site ?? PROD_SITE;
+const jsonLd = serializeJsonLd(
+  blogPostingJsonLd({
+    title: trip.data.title,
+    date: trip.data.date,
+    excerpt: trip.data.excerpt,
+    locale,
+    image: trip.data.heroImage,
+    url: new URL(pathOf(trip), site).href,
+  }),
+);
 ---
 
-<Base title={trip.data.title} description={trip.data.excerpt} locale={locale} alternates={alternates}>
+<Base
+  title={trip.data.title}
+  description={trip.data.excerpt}
+  locale={locale}
+  alternates={alternates}
+  image={trip.data.heroImage}
+  ogType="article"
+>
+  {/* serializeJsonLd escapes '<' — safe for set:html even with CMS-authored titles. */}
+  <script type="application/ld+json" set:html={jsonLd} is:inline />
   <section class="relative h-[55vh] min-h-[360px]">
     <RemoteImage
       image={trip.data.heroImage}
