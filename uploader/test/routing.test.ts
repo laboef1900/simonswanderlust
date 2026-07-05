@@ -130,7 +130,7 @@ describe('legacy WordPress redirects', () => {
   it('301s the /feed/ family to /rss.xml on the main host', async () => {
     await release('r1', { 'index.html': 'home', '404.html': 'nf' });
     const app = build();
-    for (const url of ['/feed/', '/feed', '/comments/feed/', '/feed/atom/']) {
+    for (const url of ['/feed/', '/feed', '/comments/feed/', '/feed/atom/', '/feed/rss2/']) {
       const res = await app.inject({ method: 'GET', url, headers: { host: MAIN } });
       expect(res.statusCode).toBe(301);
       expect(res.headers.location).toBe('/rss.xml');
@@ -189,6 +189,15 @@ describe('legacy WordPress redirects', () => {
     const res = await build().inject({ method: 'GET', url: '/feed/', headers: { host: MAIN } });
     expect(res.statusCode).toBe(301);
     expect(res.headers.location).toBe('/rss.xml');
+  });
+
+  it('never shadows a real static file: a released feed/index.html wins over the 301', async () => {
+    // The redirect lives in setNotFoundHandler, which only runs after
+    // @fastify/static misses — this pins that precedence.
+    await release('r1', { 'index.html': 'home', '404.html': 'nf', 'feed/index.html': 'static feed' });
+    const res = await build().inject({ method: 'GET', url: '/feed/', headers: { host: MAIN } });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('static feed');
   });
 });
 

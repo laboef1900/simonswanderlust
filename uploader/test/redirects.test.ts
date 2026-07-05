@@ -9,9 +9,18 @@ describe('legacyRedirect', () => {
     expect(legacyRedirect('/comments/feed/')).toBe('/rss.xml');
   });
 
+  it('maps the built-in WP feed aliases (rss2, rss, rdf) to /rss.xml', () => {
+    expect(legacyRedirect('/feed/rss2/')).toBe('/rss.xml');
+    expect(legacyRedirect('/feed/rss/')).toBe('/rss.xml');
+    expect(legacyRedirect('/feed/rdf/')).toBe('/rss.xml');
+  });
+
   it('maps the Polylang EN feed family to /en/rss.xml', () => {
     expect(legacyRedirect('/en/feed/')).toBe('/en/rss.xml');
     expect(legacyRedirect('/en/feed/atom/')).toBe('/en/rss.xml');
+    expect(legacyRedirect('/en/feed/rss2/')).toBe('/en/rss.xml');
+    expect(legacyRedirect('/en/feed/rss/')).toBe('/en/rss.xml');
+    expect(legacyRedirect('/en/feed/rdf/')).toBe('/en/rss.xml');
     expect(legacyRedirect('/en/comments/feed/')).toBe('/en/rss.xml');
   });
 

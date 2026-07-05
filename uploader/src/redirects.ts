@@ -15,8 +15,15 @@
 //   have to pick a concrete width/format variant on the img host, and no
 //   mapping table was persisted at import time.
 // - /?p=<id> shortlinks resolve to `/` and serve the homepage — acceptable.
+//   The same applies to the `/?feed=rss2` query-form feed URL: it also
+//   resolves to `/` and stays unmapped (query-based routing is out of scope).
 // - Tag/date archives are not mappable from repo data; extend the map below
 //   once the real WXR inventory is available.
+// - The `/category/` (DE) and `/en/category/` (EN) archive bases are
+//   best-effort: the real WP install may have used a localized or custom
+//   category base, which is unverifiable from the repo (no real WXR export
+//   checked in). Wrong entries are harmless (those URLs 404 today anyway);
+//   confirm the actual base from the WXR inventory before Phase 4.
 
 /**
  * Ordered legacy-URL map. Keys are normalized paths (no query string, no
@@ -24,13 +31,20 @@
  * aggressively, so targets must be contract-frozen).
  */
 export const LEGACY_REDIRECTS: ReadonlyArray<readonly [string, string]> = [
-  // WordPress feed family → Astro-generated RSS feeds.
+  // WordPress feed family → Astro-generated RSS feeds. /feed/rss2, /feed/rss
+  // and /feed/rdf are WP's built-in aliases of the default feed.
   ['/feed', '/rss.xml'],
   ['/feed/atom', '/rss.xml'],
+  ['/feed/rss2', '/rss.xml'],
+  ['/feed/rss', '/rss.xml'],
+  ['/feed/rdf', '/rss.xml'],
   ['/comments/feed', '/rss.xml'],
   // Polylang per-language feed URLs for the EN tree.
   ['/en/feed', '/en/rss.xml'],
   ['/en/feed/atom', '/en/rss.xml'],
+  ['/en/feed/rss2', '/en/rss.xml'],
+  ['/en/feed/rss', '/en/rss.xml'],
+  ['/en/feed/rdf', '/en/rss.xml'],
   ['/en/comments/feed', '/en/rss.xml'],
   // WP auto category archives → region pages (slugs from paths.ts regionSlugs).
   ['/category/europa', '/reiseziele/europa/'],
