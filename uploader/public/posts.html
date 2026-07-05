@@ -72,10 +72,13 @@
         const res = await fetch('/posts/' + encodeURIComponent(p.translationKey) + '/unpublish', { method: 'POST' });
         if (res.status === 401) { location.href = '/login'; return; }
         const body = await res.json().catch(() => ({}));
-        $('out').textContent = res.ok
+        const msg = res.ok
           ? 'Unpublished "' + title + '".' + describeBuild(body.build)
           : 'Unpublish failed: ' + (body.error || res.status);
-        if (res.ok) await load(); else btn.disabled = false;
+        $('out').textContent = msg;
+        // Pass the outcome so load() does not clobber it with "N post(s) loaded."
+        // — a failed rebuild (body.build.ok === false) must stay visible to the admin.
+        if (res.ok) await load(msg); else btn.disabled = false;
       }
 
       async function deletePost(p, btn) {
@@ -89,13 +92,16 @@
         const res = await fetch('/posts/' + encodeURIComponent(p.translationKey), { method: 'DELETE' });
         if (res.status === 401) { location.href = '/login'; return; }
         const body = await res.json().catch(() => ({}));
-        $('out').textContent = res.ok
+        const msg = res.ok
           ? 'Deleted "' + title + '".' + describeBuild(body.build)
           : 'Delete failed: ' + (body.error || res.status);
-        if (res.ok) await load(); else btn.disabled = false;
+        $('out').textContent = msg;
+        // Pass the outcome so load() does not clobber it with "N post(s) loaded."
+        // — a failed rebuild (body.build.ok === false) must stay visible to the admin.
+        if (res.ok) await load(msg); else btn.disabled = false;
       }
 
-      async function load() {
+      async function load(statusMsg) {
         const res = await fetch('/posts');
         if (res.status === 401) { location.href = '/login'; return; }
         if (!res.ok) { $('out').textContent = 'Could not load posts: ' + res.status; return; }
@@ -172,7 +178,9 @@
           }
         }
         $('postsTable').style.display = 'table';
-        $('out').textContent = posts.length + ' post(s) loaded.';
+        // Callers that already set a status (e.g. an unpublish/delete outcome, which
+        // may report a rebuild failure) pass it through so it survives the reload.
+        $('out').textContent = statusMsg != null ? statusMsg : posts.length + ' post(s) loaded.';
       }
 
       $('exportAll').addEventListener('click', async () => {
