@@ -58,6 +58,7 @@
     </main>
 
     <script src="/admin/auth.js"></script>
+    <script src="/admin/draft-guard.js"></script>
     <script src="/admin/vendor/easymde.min.js"></script>
     <script>
       'use strict';
@@ -65,10 +66,23 @@
       const KEY = 'about';
       const deImages = {}, enImages = {};
 
+      // EasyMDE's built-in autosave stays disabled — DraftGuard below stashes the
+      // full form (both locales) instead.
       const deMDE = new EasyMDE({ element: $('deBody'), spellChecker: false, autosave: { enabled: false },
         toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'] });
       const enMDE = new EasyMDE({ element: $('enBody'), spellChecker: false, autosave: { enabled: false },
         toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'] });
+
+      // ---- draft guard: dirty tracking, beforeunload warning, local autosave ----
+      const guard = DraftGuard.createDraftGuard({
+        storageKey: 'swl:draft:about',
+        collect: () => ({ de: localeObj('de'), en: localeObj('en') }),
+      });
+      const mainEl = document.querySelector('main');
+      mainEl.addEventListener('input', () => guard.markDirty());
+      mainEl.addEventListener('change', () => guard.markDirty());
+      deMDE.codemirror.on('change', () => guard.markDirty());
+      enMDE.codemirror.on('change', () => guard.markDirty());
 
       document.querySelectorAll('.tab-btn').forEach((btn) => btn.addEventListener('click', () => {
         document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
@@ -92,14 +106,19 @@
         fd.append('key', 'pages/about/' + imgSlug);
         fd.append('alt', altInput.value);
         fd.append('file', file);
-        const res = await fetch('/upload', { method: 'POST', body: fd });
-        if (res.status === 401) { location.href = '/login'; return; }
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
-        (locale === 'de' ? deImages : enImages)[body.src] = { width: body.width, height: body.height };
-        (locale === 'de' ? deMDE : enMDE).codemirror.replaceSelection('![' + (altInput.value || '') + '](' + body.src + ')');
-        statusEl.textContent = 'Inserted: ' + body.src;
-        fileInput.value = ''; altInput.value = '';
+        try {
+          const res = await fetch('/upload', { method: 'POST', body: fd });
+          if (res.status === 401) { guard.redirectToLogin(); return; }
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
+          (locale === 'de' ? deImages : enImages)[body.src] = { width: body.width, height: body.height };
+          // replaceSelection fires a CodeMirror change → marks the guard dirty
+          (locale === 'de' ? deMDE : enMDE).codemirror.replaceSelection('![' + (altInput.value || '') + '](' + body.src + ')');
+          statusEl.textContent = 'Inserted: ' + body.src;
+          fileInput.value = ''; altInput.value = '';
+        } catch (e) {
+          statusEl.textContent = 'Upload failed: ' + e;
+        }
       }
       $('deBodyImgUpload').addEventListener('click', () => uploadBodyImg('de'));
       $('enBodyImgUpload').addEventListener('click', () => uploadBodyImg('en'));
@@ -112,14 +131,20 @@
       $('saveBtn').addEventListener('click', async () => {
         showErr(''); setStatus('Saving & rebuilding…');
         const payload = { de: localeObj('de'), en: localeObj('en') };
-        const res = await fetch('/pages/' + KEY, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
-        if (res.status === 401) { location.href = '/login'; return; }
-        if (res.status === 403) { showErr('Only admins can save the About page.'); setStatus(''); return; }
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) { showErr(body.error || ('Save failed: ' + res.status)); setStatus(''); return; }
-        if (body.build && !body.build.ok) { showErr('Build error: ' + (body.build.error || 'unknown')); setStatus(''); return; }
-        const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
-        setStatus('Saved & rebuilt ✓' + release);
+        try {
+          const res = await fetch('/pages/' + KEY, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+          if (res.status === 401) { guard.redirectToLogin(); return; }
+          if (res.status === 403) { showErr('Only admins can save the About page.'); setStatus(''); return; }
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) { showErr(body.error || ('Save failed: ' + res.status)); setStatus(''); return; }
+          if (body.build && !body.build.ok) { showErr('Build error: ' + (body.build.error || 'unknown')); setStatus(''); return; }
+          const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
+          guard.markClean(); // saved server-side — drop the stash, disarm the warning
+          setStatus('Saved & rebuilt ✓' + release);
+        } catch (e) {
+          showErr('Save failed: ' + e);
+          setStatus('');
+        }
       });
 
       function fill(loc, data) {
@@ -134,10 +159,25 @@
         if (!s) return;
         Auth.renderHeader(s);
         if (!s.isAdmin) { showErr('You are signed in as an author; only admins can edit the About page.'); $('saveBtn').disabled = true; }
-        const res = await fetch('/pages/' + KEY);
-        if (res.status === 401) { location.href = '/login'; return; }
-        if (res.ok) { const p = await res.json(); fill('de', p.de); fill('en', p.en); enMDE.codemirror.refresh(); setStatus('Loaded.'); }
-        else setStatus('Could not load: ' + res.status);
+        try {
+          const res = await fetch('/pages/' + KEY);
+          if (res.status === 401) { guard.redirectToLogin(); return; }
+          if (res.ok) { const p = await res.json(); fill('de', p.de); fill('en', p.en); enMDE.codemirror.refresh(); setStatus('Loaded.'); }
+          else setStatus('Could not load: ' + res.status);
+        } catch (e) {
+          setStatus('Could not load: ' + e);
+        }
+        // Offer to restore locally stashed changes; filling above fired CodeMirror
+        // change events, so settle the guard's dirty state here either way.
+        const stash = guard.tryRestore();
+        if (stash && confirm('Found unsaved About-page changes from ' + new Date(stash.savedAt).toLocaleString() + '. Restore them?')) {
+          fill('de', stash.payload.de); fill('en', stash.payload.en);
+          enMDE.codemirror.refresh();
+          guard.markDirty();
+          setStatus('Restored unsaved changes — remember to Save.');
+        } else {
+          guard.markClean();
+        }
       })();
     </script>
   </body>

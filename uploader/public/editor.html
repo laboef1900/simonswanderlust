@@ -159,6 +159,7 @@
     </main>
 
     <script src="/admin/auth.js"></script>
+    <script src="/admin/draft-guard.js"></script>
     <script src="/admin/vendor/easymde.min.js"></script>
     <script>
       'use strict';
@@ -184,6 +185,9 @@
       }
 
       // ---- EasyMDE instances ----
+      // @ai-warning EasyMDE's built-in autosave stays disabled on purpose: it is
+      // body-only and per-textarea. DraftGuard below stashes the FULL form
+      // (all frontmatter fields, both locales) instead.
       const deMDE = new EasyMDE({
         element: $('deBody'),
         spellChecker: false,
@@ -196,6 +200,19 @@
         autosave: { enabled: false },
         toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'],
       });
+
+      // ---- draft guard: dirty tracking, beforeunload warning, local autosave ----
+      const guard = DraftGuard.createDraftGuard({
+        storageKey: 'swl:draft:' + (new URLSearchParams(location.search).get('tk') || 'new'),
+        collect: () => buildPayload(),
+      });
+      // Delegated listeners cover every static field plus dynamic key-fact rows;
+      // the EasyMDE bodies live in CodeMirror and need their own change hooks.
+      const mainEl = document.querySelector('main');
+      mainEl.addEventListener('input', () => guard.markDirty());
+      mainEl.addEventListener('change', () => guard.markDirty());
+      deMDE.codemirror.on('change', () => guard.markDirty());
+      enMDE.codemirror.on('change', () => guard.markDirty());
 
       // ---- tabs ----
       document.querySelectorAll('.tab-btn').forEach((btn) => {
@@ -281,15 +298,21 @@
         fd.append('alt', altInput.value);
         fd.append('file', file);
 
-        const res = await fetch('/upload', { method: 'POST', body: fd });
-        if (res.status === 401) { location.href = '/login'; return; }
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
+        try {
+          const res = await fetch('/upload', { method: 'POST', body: fd });
+          if (res.status === 401) { guard.redirectToLogin(); return; }
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
 
-        $(locale + 'HeroSrc').value = body.src;
-        $(locale + 'HeroWidth').value = body.width;
-        $(locale + 'HeroHeight').value = body.height;
-        statusEl.textContent = 'Hero uploaded: ' + body.src;
+          $(locale + 'HeroSrc').value = body.src;
+          $(locale + 'HeroWidth').value = body.width;
+          $(locale + 'HeroHeight').value = body.height;
+          // Hidden inputs are set programmatically — no input event fires.
+          guard.markDirty();
+          statusEl.textContent = 'Hero uploaded: ' + body.src;
+        } catch (e) {
+          statusEl.textContent = 'Upload failed: ' + e;
+        }
       }
 
       $('deHeroUpload').addEventListener('click', () => uploadHero('de'));
@@ -314,23 +337,28 @@
         fd.append('alt', altInput.value);
         fd.append('file', file);
 
-        const res = await fetch('/upload', { method: 'POST', body: fd });
-        if (res.status === 401) { location.href = '/login'; return; }
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
+        try {
+          const res = await fetch('/upload', { method: 'POST', body: fd });
+          if (res.status === 401) { guard.redirectToLogin(); return; }
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
 
-        // Record dims into the locale-specific images map
-        const imagesMap = locale === 'de' ? deImages : enImages;
-        imagesMap[body.src] = { width: body.width, height: body.height };
+          // Record dims into the locale-specific images map
+          const imagesMap = locale === 'de' ? deImages : enImages;
+          imagesMap[body.src] = { width: body.width, height: body.height };
 
-        // Insert markdown at cursor in the matching EasyMDE instance
-        const mde = locale === 'de' ? deMDE : enMDE;
-        const md = '![' + (altInput.value || '') + '](' + body.src + ')';
-        mde.codemirror.replaceSelection(md);
+          // Insert markdown at cursor in the matching EasyMDE instance
+          // (replaceSelection fires a CodeMirror change → marks the guard dirty)
+          const mde = locale === 'de' ? deMDE : enMDE;
+          const md = '![' + (altInput.value || '') + '](' + body.src + ')';
+          mde.codemirror.replaceSelection(md);
 
-        statusEl.textContent = 'Inserted: ' + body.src;
-        fileInput.value = '';
-        altInput.value = '';
+          statusEl.textContent = 'Inserted: ' + body.src;
+          fileInput.value = '';
+          altInput.value = '';
+        } catch (e) {
+          statusEl.textContent = 'Upload failed: ' + e;
+        }
       }
 
       $('deBodyImgUpload').addEventListener('click', () => uploadBodyImg('de'));
@@ -405,26 +433,35 @@
         const payload = buildPayload();
         const url = currentTk ? '/posts/' + encodeURIComponent(currentTk) : '/posts';
         const method = currentTk ? 'PUT' : 'POST';
-        const res = await fetch(url, {
-          method,
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (res.status === 401) { location.href = '/login'; return false; }
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          showErr((body.error || ('Save failed: ' + res.status)));
+        let body;
+        try {
+          const res = await fetch(url, {
+            method,
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (res.status === 401) { guard.redirectToLogin(); return false; }
+          body = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            showErr((body.error || ('Save failed: ' + res.status)));
+            setStatus('');
+            return false;
+          }
+        } catch (e) {
+          showErr('Save failed: ' + e);
           setStatus('');
           return false;
         }
         // On first save, capture the new translationKey and update the URL
         if (!currentTk && body.translationKey) {
           currentTk = body.translationKey;
+          guard.setKey('swl:draft:' + currentTk); // re-key any stash to the real tk
           const url2 = new URL(location.href);
           url2.searchParams.set('tk', currentTk);
           history.replaceState(null, '', url2.toString());
           $('pageTitle').textContent = 'Edit post';
         }
+        guard.markClean(); // saved server-side — drop the stash, disarm the warning
         setStatus('Saved draft.');
         return true;
       }
@@ -437,24 +474,29 @@
         const saved = await doSaveDraft();
         if (!saved) return;
         setStatus('Building…');
-        const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/publish', { method: 'POST' });
-        if (res.status === 401) { location.href = '/login'; return; }
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          showErr(body.error || ('Publish failed: ' + res.status));
+        try {
+          const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/publish', { method: 'POST' });
+          if (res.status === 401) { guard.redirectToLogin(); return; }
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            showErr(body.error || ('Publish failed: ' + res.status));
+            setStatus('');
+            return;
+          }
+          if (body.build && !body.build.ok) {
+            showErr('Build error: ' + (body.build.error || 'unknown'));
+            setStatus('');
+            return;
+          }
+          const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
+          setStatus('Published ✓' + release);
+          isPublished = true;
+          $('slugFieldDe').disabled = true;
+          $('slugFieldEn').disabled = true;
+        } catch (e) {
+          showErr('Publish failed: ' + e);
           setStatus('');
-          return;
         }
-        if (body.build && !body.build.ok) {
-          showErr('Build error: ' + (body.build.error || 'unknown'));
-          setStatus('');
-          return;
-        }
-        const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
-        setStatus('Published ✓' + release);
-        isPublished = true;
-        $('slugFieldDe').disabled = true;
-        $('slugFieldEn').disabled = true;
       });
 
       // ---- load existing post ----
@@ -483,20 +525,10 @@
         }
       }
 
-      async function loadPost(tk) {
-        setStatus('Loading…');
-        const res = await fetch('/posts/' + encodeURIComponent(tk));
-        if (res.status === 401) { location.href = '/login'; return; }
-        if (!res.ok) {
-          showErr('Could not load post: ' + res.status);
-          setStatus('');
-          return;
-        }
-        const post = await res.json();
-        currentTk = post.translationKey || tk;
+      // Fills the whole form from a PostPair-shaped object — a server post or a
+      // local DraftGuard stash (buildPayload() emits the same shape loadPost consumes).
+      function populateForm(post) {
         isPublished = post.status === 'published';
-
-        $('pageTitle').textContent = 'Edit post';
 
         const shared = post.shared || {};
         if (shared.date) $('fmDate').value = shared.date;
@@ -515,7 +547,7 @@
         // EN tab is hidden on load; refresh its CodeMirror so it renders at full width when shown
         enMDE.codemirror.refresh();
 
-        // Populate each locale's slug from the loaded post (never re-derive over a stored value)
+        // Populate each locale's slug from the loaded data (never re-derive over a stored value)
         if (post.de && post.de.slug) $('slugFieldDe').value = post.de.slug;
         if (post.en && post.en.slug) $('slugFieldEn').value = post.en.slug;
 
@@ -523,8 +555,34 @@
           $('slugFieldDe').disabled = true;
           $('slugFieldEn').disabled = true;
         }
+      }
+
+      // Returns false only when it redirected to /login (callers must stop);
+      // true otherwise — even on a failed load, so a local stash can still be offered.
+      async function loadPost(tk) {
+        setStatus('Loading…');
+        let post;
+        try {
+          const res = await fetch('/posts/' + encodeURIComponent(tk));
+          if (res.status === 401) { guard.redirectToLogin(); return false; }
+          if (!res.ok) {
+            showErr('Could not load post: ' + res.status);
+            setStatus('');
+            return true;
+          }
+          post = await res.json();
+        } catch (e) {
+          showErr('Could not load post: ' + e);
+          setStatus('');
+          return true;
+        }
+        currentTk = post.translationKey || tk;
+
+        $('pageTitle').textContent = 'Edit post';
+        populateForm(post);
 
         setStatus('Loaded post ' + currentTk + (isPublished ? ' (published — slug locked)' : '') + '.');
+        return true;
       }
 
       // ---- init ----
@@ -536,9 +594,23 @@
         const params = new URLSearchParams(location.search);
         const tk = params.get('tk');
         if (tk) {
-          await loadPost(tk);
+          const proceed = await loadPost(tk);
+          if (!proceed) return; // redirecting to /login
         } else {
           setStatus('New post. Fill in the fields and Save draft.');
+        }
+
+        // Offer to restore a locally stashed draft (tab close, network loss, or a
+        // 401 mid-edit). Populating above fired CodeMirror change events, so settle
+        // the guard's dirty state here either way.
+        const stash = guard.tryRestore();
+        if (stash && confirm('Found an unsaved local draft from ' + new Date(stash.savedAt).toLocaleString() + '. Restore it into the editor?')) {
+          currentTk = stash.payload.translationKey || currentTk;
+          populateForm(stash.payload);
+          guard.markDirty();
+          setStatus('Restored unsaved draft — remember to Save draft.');
+        } else {
+          guard.markClean();
         }
       })();
     </script>

@@ -1,0 +1,290 @@
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+
+// draft-guard.js is a plain browser IIFE (window.DraftGuard). Run it inside a
+// vm sandbox with stubbed window/localStorage/location/timers so its behavior
+// (dirty tracking, debounced stash, 401 redirect, open-redirect guard) is
+// testable without a browser.
+const guardSrc = readFileSync('public/draft-guard.js', 'utf8');
+
+interface Stash {
+  savedAt: string;
+  payload: Record<string, unknown>;
+}
+interface Guard {
+  markDirty(): void;
+  markClean(): void;
+  stashNow(): void;
+  tryRestore(): Stash | null;
+  setKey(newKey: string): void;
+  redirectToLogin(): void;
+}
+interface DraftGuardApi {
+  safeNextPath(raw: string | null): string;
+  createDraftGuard(opts: { storageKey: string; collect: () => unknown; debounceMs?: number }): Guard;
+}
+interface StubEvent {
+  defaultPrevented: boolean;
+  returnValue: string | undefined;
+  preventDefault: () => void;
+}
+
+function makeSandbox(opts: { throwStorage?: boolean } = {}) {
+  const beforeUnload: Array<(e: StubEvent) => void> = [];
+  const store = new Map<string, string>();
+  const timers = new Map<number, () => void>();
+  let nextId = 1;
+
+  const localStorageStub = opts.throwStorage
+    ? {
+        getItem: (): string | null => { throw new Error('quota exceeded'); },
+        setItem: (): void => { throw new Error('quota exceeded'); },
+        removeItem: (): void => { throw new Error('quota exceeded'); },
+      }
+    : {
+        getItem: (k: string): string | null => store.get(k) ?? null,
+        setItem: (k: string, v: string): void => { store.set(k, String(v)); },
+        removeItem: (k: string): void => { store.delete(k); },
+      };
+
+  const location = { pathname: '/admin/editor.html', search: '?tk=abc', href: '' };
+  const windowStub: {
+    addEventListener: (type: string, fn: (e: StubEvent) => void) => void;
+    DraftGuard?: DraftGuardApi;
+  } = {
+    addEventListener: (type, fn) => { if (type === 'beforeunload') beforeUnload.push(fn); },
+  };
+
+  vm.runInNewContext(guardSrc, {
+    window: windowStub,
+    localStorage: localStorageStub,
+    location,
+    setTimeout: (fn: () => void): number => { const id = nextId++; timers.set(id, fn); return id; },
+    clearTimeout: (id: number): void => { timers.delete(id); },
+  });
+
+  const api = windowStub.DraftGuard;
+  if (!api) throw new Error('draft-guard.js did not assign window.DraftGuard');
+
+  return {
+    api,
+    store,
+    location,
+    pendingTimers: () => timers.size,
+    flushTimers: () => {
+      const fns = [...timers.values()];
+      timers.clear();
+      fns.forEach((fn) => fn());
+    },
+    fireBeforeUnload: (): StubEvent => {
+      const e: StubEvent = {
+        defaultPrevented: false,
+        returnValue: undefined,
+        preventDefault() { this.defaultPrevented = true; },
+      };
+      beforeUnload.forEach((fn) => fn(e));
+      return e;
+    },
+  };
+}
+
+describe('DraftGuard.safeNextPath', () => {
+  it('accepts same-origin admin paths', () => {
+    const { api } = makeSandbox();
+    expect(api.safeNextPath('/admin/editor.html?tk=abc')).toBe('/admin/editor.html?tk=abc');
+    expect(api.safeNextPath('/admin/about.html')).toBe('/admin/about.html');
+    expect(api.safeNextPath('/admin/')).toBe('/admin/');
+  });
+
+  it('falls back to /admin/ for anything else (open-redirect guard)', () => {
+    const { api } = makeSandbox();
+    expect(api.safeNextPath(null)).toBe('/admin/');
+    expect(api.safeNextPath('')).toBe('/admin/');
+    expect(api.safeNextPath('https://evil.com/admin/')).toBe('/admin/');
+    expect(api.safeNextPath('//evil.com/x')).toBe('/admin/');
+    expect(api.safeNextPath('/\\evil.com')).toBe('/admin/');
+    expect(api.safeNextPath('/admin/\\evil.com')).toBe('/admin/');
+    expect(api.safeNextPath('/admin//..//x')).toBe('/admin/');
+    expect(api.safeNextPath('javascript:alert(1)')).toBe('/admin/');
+    expect(api.safeNextPath('/etc/passwd')).toBe('/admin/');
+  });
+});
+
+describe('DraftGuard.createDraftGuard', () => {
+  const KEY = 'swl:draft:test';
+
+  it('warns on beforeunload only while dirty, and takes a last-chance stash', () => {
+    const sb = makeSandbox();
+    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ a: 1 }) });
+
+    expect(sb.fireBeforeUnload().defaultPrevented).toBe(false);
+
+    guard.markDirty();
+    const e = sb.fireBeforeUnload();
+    expect(e.defaultPrevented).toBe(true);
+    expect(e.returnValue).toBe('');
+    expect(sb.store.has(KEY)).toBe(true); // stashed even if the user leaves anyway
+
+    guard.markClean();
+    expect(sb.fireBeforeUnload().defaultPrevented).toBe(false);
+  });
+
+  it('markDirty schedules one debounced stash of the collected payload', () => {
+    const sb = makeSandbox();
+    let collectCalls = 0;
+    const guard = sb.api.createDraftGuard({
+      storageKey: KEY,
+      collect: () => { collectCalls += 1; return { title: 'Rhodos', de: { slug: 'rhodos' } }; },
+    });
+
+    guard.markDirty();
+    guard.markDirty();
+    guard.markDirty();
+    expect(sb.pendingTimers()).toBe(1); // debounced: earlier timers cancelled
+    expect(sb.store.has(KEY)).toBe(false);
+
+    sb.flushTimers();
+    expect(collectCalls).toBe(1);
+    const stash = JSON.parse(sb.store.get(KEY) ?? '') as Stash;
+    expect(typeof stash.savedAt).toBe('string');
+    expect(stash.payload).toEqual({ title: 'Rhodos', de: { slug: 'rhodos' } });
+  });
+
+  it('stashNow writes synchronously and tryRestore round-trips it', () => {
+    const sb = makeSandbox();
+    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ b: 2 }) });
+    guard.stashNow();
+    const restored = guard.tryRestore();
+    expect(restored).not.toBeNull();
+    expect(restored?.payload).toEqual({ b: 2 });
+  });
+
+  it('tryRestore returns null for absent, corrupt, or misshapen stashes', () => {
+    const sb = makeSandbox();
+    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({}) });
+    expect(guard.tryRestore()).toBeNull();
+
+    sb.store.set(KEY, '{not json');
+    expect(guard.tryRestore()).toBeNull();
+
+    sb.store.set(KEY, '42');
+    expect(guard.tryRestore()).toBeNull();
+
+    sb.store.set(KEY, JSON.stringify({ savedAt: 'now' })); // no payload
+    expect(guard.tryRestore()).toBeNull();
+
+    sb.store.set(KEY, JSON.stringify({ payload: { a: 1 } })); // no savedAt
+    expect(guard.tryRestore()).toBeNull();
+  });
+
+  it('markClean removes the stash and cancels a pending debounced stash', () => {
+    const sb = makeSandbox();
+    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ c: 3 }) });
+    guard.stashNow();
+    guard.markDirty();
+    guard.markClean();
+    expect(sb.store.has(KEY)).toBe(false);
+    expect(sb.pendingTimers()).toBe(0);
+    sb.flushTimers();
+    expect(sb.store.has(KEY)).toBe(false);
+  });
+
+  it('setKey moves an existing stash to the new key', () => {
+    const sb = makeSandbox();
+    const guard = sb.api.createDraftGuard({ storageKey: 'swl:draft:new', collect: () => ({ d: 4 }) });
+    guard.stashNow();
+    guard.setKey('swl:draft:tk-123');
+    expect(sb.store.has('swl:draft:new')).toBe(false);
+    const moved = JSON.parse(sb.store.get('swl:draft:tk-123') ?? '') as Stash;
+    expect(moved.payload).toEqual({ d: 4 });
+    guard.markClean(); // now operates on the new key
+    expect(sb.store.has('swl:draft:tk-123')).toBe(false);
+  });
+
+  it('redirectToLogin stashes dirty work, disarms the prompt, and carries ?next=', () => {
+    const sb = makeSandbox();
+    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ e: 5 }) });
+    guard.markDirty();
+    guard.redirectToLogin();
+    expect(sb.store.has(KEY)).toBe(true);
+    expect(sb.location.href).toBe('/login?next=%2Fadmin%2Feditor.html%3Ftk%3Dabc');
+    // the intentional navigation must not trigger the leave-page dialog
+    expect(sb.fireBeforeUnload().defaultPrevented).toBe(false);
+  });
+
+  it('redirectToLogin does not stash a pristine form (nothing worth restoring)', () => {
+    const sb = makeSandbox();
+    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ f: 6 }) });
+    guard.redirectToLogin();
+    expect(sb.store.has(KEY)).toBe(false);
+    expect(sb.location.href).toBe('/login?next=%2Fadmin%2Feditor.html%3Ftk%3Dabc');
+  });
+
+  it('degrades to warning-only when localStorage throws (quota / private mode)', () => {
+    const sb = makeSandbox({ throwStorage: true });
+    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ g: 7 }) });
+    expect(() => { guard.markDirty(); sb.flushTimers(); }).not.toThrow();
+    expect(() => guard.stashNow()).not.toThrow();
+    expect(guard.tryRestore()).toBeNull();
+    expect(() => guard.setKey('swl:draft:other')).not.toThrow();
+    // still dirty → the beforeunload warning must keep working
+    expect(sb.fireBeforeUnload().defaultPrevented).toBe(true);
+    expect(() => guard.markClean()).not.toThrow();
+    expect(sb.fireBeforeUnload().defaultPrevented).toBe(false);
+  });
+});
+
+// Static regression assertions on the admin pages (same readFileSync precedent
+// as the server.test.ts fixtures): the wiring below is what keeps issue #22's
+// guarantees — every page loads the guard, every 401 carries a return URL, and
+// every fetch path surfaces a visible error.
+describe('admin page wiring', () => {
+  const editor = readFileSync('public/editor.html', 'utf8');
+  const about = readFileSync('public/about.html', 'utf8');
+  const login = readFileSync('public/login.html', 'utf8');
+  const auth = readFileSync('public/auth.js', 'utf8');
+
+  it('editor, about, and login load the shared draft-guard script', () => {
+    for (const page of [editor, about, login]) {
+      expect(page).toContain('<script src="/admin/draft-guard.js"></script>');
+    }
+  });
+
+  it('editor and about create a guard and route every 401 through it', () => {
+    for (const page of [editor, about]) {
+      expect(page).toContain('DraftGuard.createDraftGuard(');
+      expect(page).toContain('guard.redirectToLogin()');
+      // no bare login redirect may survive — it would drop the ?next= return URL
+      expect(page).not.toMatch(/location\.href = '\/login/);
+    }
+  });
+
+  it('every fetch path surfaces a visible error on network failure', () => {
+    expect(editor).toContain("'Upload failed: ' + e");
+    expect(editor).toContain("'Save failed: ' + e");
+    expect(editor).toContain("'Publish failed: ' + e");
+    expect(editor).toContain("'Could not load post: ' + e");
+    expect(about).toContain("'Upload failed: ' + e");
+    expect(about).toContain("'Save failed: ' + e");
+    expect(about).toContain("'Could not load: ' + e");
+    expect(login).toContain("'Error: ' + e");
+  });
+
+  it('login honors a validated ?next= return URL', () => {
+    expect(login).toContain('DraftGuard.safeNextPath(');
+    expect(login).toContain('location.href = nextPath');
+    expect(login).not.toMatch(/location\.href = '\/admin\/'/);
+  });
+
+  it('ensureAuthed sends the current page as the return URL', () => {
+    expect(auth).toContain("'/login?next=' + encodeURIComponent(location.pathname + location.search)");
+  });
+
+  it('EasyMDE built-in autosave stays disabled (DraftGuard owns persistence)', () => {
+    // @ai-warning do not re-enable EasyMDE autosave: it is body-only and would
+    // fight the full-form DraftGuard stash (duplicate writes, partial restores).
+    expect(editor.match(/autosave: \{ enabled: false \}/g)).toHaveLength(2);
+    expect(about.match(/autosave: \{ enabled: false \}/g)).toHaveLength(2);
+  });
+});
