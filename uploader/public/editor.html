@@ -146,6 +146,7 @@
       <!-- Actions -->
       <div class="editor-actions card">
         <button id="saveDraft">Save draft</button>
+        <button id="previewBtn" type="button" class="btn-secondary">Open preview</button>
         <button id="publishBtn" class="btn-publish">Publish</button>
         <p id="actionStatus" class="muted"></p>
         <p id="actionError" class="err" style="display:none"></p>
@@ -215,11 +216,13 @@
       enMDE.codemirror.on('change', () => guard.markDirty());
 
       // ---- tabs ----
+      let activeTab = 'de'; // which locale "Open preview" shows
       document.querySelectorAll('.tab-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
           document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
           btn.classList.add('active');
           const tab = btn.dataset.tab;
+          activeTab = tab;
           $('tab-de').style.display = tab === 'de' ? '' : 'none';
           $('tab-en').style.display = tab === 'en' ? '' : 'none';
           // CodeMirror can't measure width when the panel is hidden; refresh on reveal
@@ -469,6 +472,15 @@
         return true;
       }
       $('saveDraft').addEventListener('click', () => { doSaveDraft(); });
+
+      // ---- open preview ----
+      $('previewBtn').addEventListener('click', async () => {
+        // Save the on-screen form FIRST (same pattern as Publish) so the
+        // server-rendered preview shows exactly what's on screen.
+        const saved = await doSaveDraft();
+        if (!saved) return;
+        window.open('/posts/' + encodeURIComponent(currentTk) + '/preview?locale=' + activeTab, '_blank');
+      });
 
       // ---- publish ----
       $('publishBtn').addEventListener('click', async () => {

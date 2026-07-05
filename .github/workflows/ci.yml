@@ -34,8 +34,15 @@ jobs:
         with:
           node-version: 26
           cache: npm
-          cache-dependency-path: uploader/package-lock.json
+          cache-dependency-path: |
+            uploader/package-lock.json
+            site/package-lock.json
       - run: npm ci
+      # The draft-preview route (src/preview.ts) reuses site/src/lib markdown
+      # modules, whose deps (@astrojs/markdown-satteri, unified, rehype-*) live
+      # in site/node_modules — install them so typecheck + tests can compile.
+      - run: npm ci
+        working-directory: site
       - run: npm run typecheck
       # TEST_DATABASE_URL un-skips the pg/pages/backup integration suites
       # (serialized against the shared DB by vitest.config.ts's integration
