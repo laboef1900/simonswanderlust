@@ -92,6 +92,15 @@ registered with a Fastify **host constraint** for the hostname of `PUBLIC_BASE_U
 via `IMG_HOST`), so on the img host the constrained `/` wildcard wins and image URLs behave exactly
 as before the merge. All other routes (admin, blog, map) are unconstrained.
 
+Legacy WordPress URLs are 301-redirected by the not-found handler (blog host only, before the
+404/503 fallbacks): the `/feed/` family (`/feed/`, `/feed/atom/`, `/comments/feed/` and the
+`/en/…` Polylang equivalents) goes to `/rss.xml` resp. `/en/rss.xml`, and the six
+`/category/<region>/` archives map to their `/reiseziele/…` / `/en/destinations/…` pages. The
+data-driven map lives in `uploader/src/redirects.ts` and is extensible once the real WXR
+inventory is available. `/wp-content/uploads/*` image URLs are intentionally **not** redirected
+(accepted loss — the old URLs carry no post slug, so they cannot be mapped onto the
+`trips/<slug>/…` key scheme, and no mapping table was persisted at import time).
+
 
 ## Data model (Postgres)
 
