@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { listMedia, deleteMedia, imageUsage, VARIANT_FILE_RE } from '../src/media.js';
-import type { PostPair } from '../src/posts.js';
+import type { PostUsageRow } from '../src/posts.js';
 import type { PagePair } from '../src/pages.js';
 
 let dir: string;
@@ -99,25 +99,17 @@ describe('listMedia', () => {
 
 const SRC = 'https://img.example/trips/x/hero';
 
+// Both locale rows of one post, as PostStore.usageRows() would report them.
 function post(over: {
   tk?: string; title?: string; heroSrc?: string; body?: string; images?: Record<string, { width: number; height: number }>;
-}): PostPair {
-  const locale = (loc: 'de' | 'en') => ({
-    locale: loc,
-    slug: `${over.tk ?? 'p1'}-${loc}`,
+}): PostUsageRow[] {
+  return (['de', 'en'] as const).map(() => ({
+    translationKey: over.tk ?? 'p1',
     title: over.title ?? 'Titel',
-    excerpt: 'e',
     heroImage: { src: over.heroSrc ?? 'https://img.example/other/hero', width: 9, height: 9, alt: 'a' },
     bodyMarkdown: over.body ?? '## body',
     images: over.images ?? {},
-  });
-  return {
-    translationKey: over.tk ?? 'p1',
-    status: 'draft',
-    shared: { date: '2024-01-01', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-    de: locale('de'),
-    en: locale('en'),
-  };
+  }));
 }
 
 function page(over: { key?: string; title?: string; body?: string; images?: Record<string, { width: number; height: number }> }): PagePair {
@@ -132,24 +124,33 @@ function page(over: { key?: string; title?: string; body?: string; images?: Reco
 
 describe('imageUsage', () => {
   it('finds heroImage.src usage by exact match', () => {
-    const refs = imageUsage(SRC, [post({ tk: 'p1', title: 'Trip', heroSrc: SRC })], []);
+    const refs = imageUsage(SRC, post({ tk: 'p1', title: 'Trip', heroSrc: SRC }), []);
     expect(refs).toEqual([{ kind: 'post', key: 'p1', title: 'Trip' }]);
   });
 
-  it('finds usage via the images map keys', () => {
-    const refs = imageUsage(SRC, [post({ images: { [SRC]: { width: 1, height: 1 } } })], []);
+  it('counts a direct variant URL pasted as heroImage.src (copy-image-address)', () => {
+    const refs = imageUsage(SRC, post({ heroSrc: `${SRC}-1280.webp` }), []);
     expect(refs).toHaveLength(1);
+    // Prefix keys still don't match: hero vs hero2 / hero-2.
+    expect(imageUsage(SRC, post({ heroSrc: `${SRC}2` }), [])).toHaveLength(0);
+    expect(imageUsage(SRC, post({ heroSrc: `${SRC}-2` }), [])).toHaveLength(0);
+  });
+
+  it('finds usage via the images map keys, including direct variant URLs', () => {
+    expect(imageUsage(SRC, post({ images: { [SRC]: { width: 1, height: 1 } } }), [])).toHaveLength(1);
+    expect(imageUsage(SRC, post({ images: { [`${SRC}-640.webp`]: { width: 1, height: 1 } } }), [])).toHaveLength(1);
+    expect(imageUsage(SRC, post({ images: { [`${SRC}-2`]: { width: 1, height: 1 } } }), [])).toHaveLength(0);
   });
 
   it('finds usage inside body markdown, but not prefix keys', () => {
-    expect(imageUsage(SRC, [post({ body: `![a](${SRC})` })], [])).toHaveLength(1);
+    expect(imageUsage(SRC, post({ body: `![a](${SRC})` }), [])).toHaveLength(1);
     // hero2 and hero-2 are different keys — no false positive.
-    expect(imageUsage(SRC, [post({ body: `![a](${SRC}2)` })], [])).toHaveLength(0);
-    expect(imageUsage(SRC, [post({ body: `![a](${SRC}-2)` })], [])).toHaveLength(0);
+    expect(imageUsage(SRC, post({ body: `![a](${SRC}2)` }), [])).toHaveLength(0);
+    expect(imageUsage(SRC, post({ body: `![a](${SRC}-2)` }), [])).toHaveLength(0);
   });
 
   it('counts a hand-written direct variant URL as usage', () => {
-    expect(imageUsage(SRC, [post({ body: `<img src="${SRC}-640.webp">` })], [])).toHaveLength(1);
+    expect(imageUsage(SRC, post({ body: `<img src="${SRC}-640.webp">` }), [])).toHaveLength(1);
   });
 
   it('finds page usage too', () => {
@@ -158,12 +159,18 @@ describe('imageUsage', () => {
   });
 
   it('reports each post once even when both locales use the image', () => {
-    const p = post({ tk: 'p9', heroSrc: SRC, body: `see ${SRC}` });
-    expect(imageUsage(SRC, [p], [])).toHaveLength(1);
+    expect(imageUsage(SRC, post({ tk: 'p9', heroSrc: SRC, body: `see ${SRC}` }), [])).toHaveLength(1);
+  });
+
+  it('sees usage in a stranded single-locale row', () => {
+    // A crash between upsertDraft's two locale INSERTs leaves one row; the
+    // row-based corpus must still report it (get() would return null).
+    const deOnly = post({ tk: 'half', title: 'Halb', heroSrc: SRC }).slice(0, 1);
+    expect(imageUsage(SRC, deOnly, [])).toEqual([{ kind: 'post', key: 'half', title: 'Halb' }]);
   });
 
   it('returns [] when nothing references the src', () => {
-    expect(imageUsage(SRC, [post({})], [page({})])).toEqual([]);
+    expect(imageUsage(SRC, post({}), [page({})])).toEqual([]);
   });
 });
 

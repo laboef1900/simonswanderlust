@@ -231,6 +231,25 @@ describe('media library', () => {
     for (const f of files) expect(existsSync(join(dir, f))).toBe(true);
   });
 
+  it('DELETE /images/* still 409s for a stranded single-locale row (get() → null)', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const { src } = await upload(b, cookie, 'trips/stranded/hero');
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
+    expect(created.statusCode).toBe(200);
+    // Simulate the pg half-pair: a crash between upsertDraft's two locale
+    // INSERTs leaves a key that usageRows() sees but get() cannot pair.
+    const deRow = (await b.posts.usageRows()).filter((r) => r.heroImage.src === src);
+    expect(deRow).toHaveLength(1);
+    b.posts.get = async () => null;
+    b.posts.usageRows = async () => deRow;
+    const res = await b.app.inject({ method: 'DELETE', url: '/images/trips/stranded/hero', cookies: cookie });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().usedIn).toEqual([
+      { kind: 'post', key: created.json().translationKey, title: 'Mediennutzer' },
+    ]);
+  });
+
   it('DELETE /images/* unlinks all variants of exactly that key', async () => {
     const b = build();
     const { cookie } = await authed(b);

@@ -2,7 +2,7 @@ import { readdir, unlink } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import sharp from 'sharp';
 import { assertSafeKey } from './storage.js';
-import type { PostPair } from './posts.js';
+import type { PostUsageRow } from './posts.js';
 import type { PagePair } from './pages.js';
 
 // The variant filename contract: `${key}-${width}.${format}` (see storage.ts /
@@ -107,17 +107,32 @@ interface UsageLocale {
 }
 
 function localeUses(src: string, l: UsageLocale): boolean {
-  if (l.heroImage && l.heroImage.src === src) return true;
-  if (l.images && Object.hasOwn(l.images, src)) return true;
+  // Symmetric matching everywhere a URL can live: heroImage.src, images-map
+  // keys, and the body. Each may carry a hand-pasted direct variant URL
+  // (e.g. `${src}-1280.webp` from the browser's "Copy image address"), so all
+  // three go through the variant-tolerant, boundary-safe matcher.
+  if (l.heroImage && textReferences(src, l.heroImage.src)) return true;
+  if (l.images && Object.keys(l.images).some((k) => textReferences(src, k))) return true;
   return textReferences(src, l.bodyMarkdown);
 }
 
-/** Which posts/pages reference the image `src` (hero, images map, or body markdown). */
-export function imageUsage(src: string, posts: PostPair[], pages: PagePair[]): UsageRef[] {
+/**
+ * Which posts/pages reference the image `src` (hero, images map, or body
+ * markdown). Posts arrive as flat per-locale rows (PostStore.usageRows) so a
+ * stranded single-locale row — invisible to PostStore.get() — still guards
+ * its images against deletion.
+ */
+export function imageUsage(src: string, posts: PostUsageRow[], pages: PagePair[]): UsageRef[] {
   const refs: UsageRef[] = [];
-  for (const p of posts) {
-    if (localeUses(src, p.de) || localeUses(src, p.en)) {
-      refs.push({ kind: 'post', key: p.translationKey, title: p.de.title || p.en.title || p.translationKey });
+  const byKey = new Map<string, PostUsageRow[]>();
+  for (const r of posts) {
+    const rows = byKey.get(r.translationKey) ?? [];
+    rows.push(r);
+    byKey.set(r.translationKey, rows);
+  }
+  for (const [key, rows] of byKey) {
+    if (rows.some((r) => localeUses(src, r))) {
+      refs.push({ kind: 'post', key, title: rows.map((r) => r.title).find((t) => t) || key });
     }
   }
   for (const pg of pages) {

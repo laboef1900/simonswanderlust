@@ -16,7 +16,7 @@ import {
   setSessionCookie, clearSessionCookie, isSecureRequest, SESSION_COOKIE,
 } from './authn.js';
 import { SettingsError, type SettingsStore } from './settings.js';
-import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair } from './posts.js';
+import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type PostUsageRow } from './posts.js';
 import { type PageStore, type PagePair, type PageContent, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
@@ -169,15 +169,15 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   // Everything (posts + pages) that could reference an image URL. Usage is
   // computed store-agnostically in TS so the memory and pg stores behave alike.
-  // @ai-note: N+1 posts.get() per request is fine at this blog's scale (dozens
-  // of posts); do not cache across requests (state lives in backing services).
-  const usageCorpus = async (): Promise<{ posts: PostPair[]; pages: PagePair[] }> => {
-    const summaries = await cfg.posts.list();
-    const postPairs = (await Promise.all(summaries.map((s) => cfg.posts.get(s.translationKey))))
-      .filter((p): p is PostPair => p !== null);
-    const pageKeys = await cfg.pages.keys();
+  // @ai-note: posts come from usageRows() — flat per-locale rows — NOT from
+  // list()+get(): pgPostStore.get() returns null for a stranded single-locale
+  // row (crash between upsertDraft's two locale INSERTs), and that row's image
+  // references must still block deletion. Do not cache across requests (state
+  // lives in backing services).
+  const usageCorpus = async (): Promise<{ posts: PostUsageRow[]; pages: PagePair[] }> => {
+    const [postRows, pageKeys] = await Promise.all([cfg.posts.usageRows(), cfg.pages.keys()]);
     const pagePairs = await Promise.all(pageKeys.map((k) => cfg.pages.get(k)));
-    return { posts: postPairs, pages: pagePairs };
+    return { posts: postRows, pages: pagePairs };
   };
 
   // Browse everything under storageDir. Admin-only: it exposes the full

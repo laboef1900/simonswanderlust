@@ -51,22 +51,45 @@ maybe('postgres stores (integration)', () => {
 });
 
 maybe('pgPostStore (integration)', () => {
+  const base = {
+    translationKey: '', status: 'draft' as const,
+    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+  };
+
   it('round-trips a pair, publishes, and enforces slug immutability', async () => {
     const pool = createPool(url!);
     await ensureSchema(pool);
     await pool.query('DELETE FROM posts');
     const store = pgPostStore(pool);
-    const base = {
-      translationKey: '', status: 'draft' as const,
-      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-      en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-    };
     const created = await store.upsertDraft(base);
     expect((await store.get(created.translationKey))?.de.slug).toBe('de-slug');
     await store.publish(created.translationKey);
     expect((await store.get(created.translationKey))?.status).toBe('published');
     await expect(store.upsertDraft({ ...created, status: 'published', de: { ...base.de, slug: 'renamed' } })).rejects.toThrow();
+    await pool.end();
+  });
+
+  it('usageRows sees a stranded single-locale row that get() cannot pair', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    const created = await store.upsertDraft(base);
+    // Simulate a crash between upsertDraft's two non-transactional locale
+    // INSERTs: only the de row survives.
+    await pool.query(`DELETE FROM posts WHERE translation_key = $1 AND locale = 'en'`, [created.translationKey]);
+    expect(await store.get(created.translationKey)).toBeNull();
+    const rows = await store.usageRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      translationKey: created.translationKey,
+      title: 'T',
+      heroImage: { src: 'https://i/h' },
+      bodyMarkdown: '## b',
+      images: {},
+    });
     await pool.end();
   });
 });

@@ -54,6 +54,20 @@ describe('memoryPostStore', () => {
     await expect(s.upsertDraft(pair({ de: { ...pair().de, slug: 'bukarest' }, en: { ...pair().en, slug: 'other' } })))
       .rejects.toBeInstanceOf(PostError);
   });
+
+  it('usageRows returns one row per stored locale with the referencing fields', async () => {
+    const s = memoryPostStore();
+    const created = await s.upsertDraft(pair());
+    const rows = await s.usageRows();
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.translationKey)).toEqual([created.translationKey, created.translationKey]);
+    expect(rows[0]).toMatchObject({
+      title: 'Bukarest',
+      heroImage: { src: 'https://img/h' },
+      bodyMarkdown: '## Hi',
+      images: {},
+    });
+  });
 });
 
 describe('post validation', () => {

@@ -146,14 +146,20 @@
             const btnDelete = actionButton('Delete', async () => {
               const ok = confirm('Delete "' + m.key + '" and all ' + m.files.length + ' variant file(s)? Already-built pages keep referencing it until the next rebuild.');
               if (!ok) return;
-              const res2 = await fetch('/images/' + m.key, { method: 'DELETE' });
-              if (res2.status === 401) { location.href = '/login'; return; }
-              const body = await res2.json().catch(() => ({}));
-              if (res2.ok) {
-                $('out').textContent = 'Deleted ' + m.key + ' (' + body.deleted + ' files).';
-                load();
-              } else {
-                $('out').textContent = 'Delete failed: ' + (body.error || res2.status);
+              try {
+                const res2 = await fetch('/images/' + m.key, { method: 'DELETE' });
+                if (res2.status === 401) { location.href = '/login'; return; }
+                const body = await res2.json().catch(() => ({}));
+                if (res2.ok) {
+                  // Refresh first — load() writes its own status line, so the
+                  // deletion confirmation must be set after it to survive.
+                  await load();
+                  $('out').textContent = 'Deleted ' + m.key + ' (' + body.deleted + ' files).';
+                } else {
+                  $('out').textContent = 'Delete failed: ' + (body.error || res2.status);
+                }
+              } catch (e) {
+                $('out').textContent = 'Delete failed: ' + (e instanceof Error ? e.message : e);
               }
             });
             if (m.usedIn.length) {
@@ -176,7 +182,12 @@
         const s = await Auth.ensureAuthed({ admin: true });
         if (!s) return;
         Auth.renderHeader(s);
-        await load();
+        try {
+          await load();
+        } catch (e) {
+          $('loadMsg').textContent = 'Could not load media — is the server reachable?';
+          $('out').textContent = 'Could not load media: ' + (e instanceof Error ? e.message : e);
+        }
       })();
     </script>
   </body>
