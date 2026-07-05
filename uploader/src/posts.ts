@@ -90,17 +90,71 @@ export function validateForPublish(pair: PostPair): void {
 const PLACEHOLDER_HERO: HeroImage = { src: '', width: 0, height: 0, alt: '' };
 
 /**
+ * Save-time normalization: convert pasted `<BodyImage src="…" width={…} height={…} alt="…" />`
+ * tags (the MDX-export format — see export.ts bodyToMdx, its exact inverse) into markdown
+ * images `![alt](src)`, merging their width/height into the locale's images map. Without
+ * this the render pipeline silently strips the unknown `bodyimage` element (rehype-sanitize),
+ * so MDX-backup bodies and old paste-ready snippets would publish with the photos missing.
+ * Plain-markdown bodies pass through byte-identical, so re-saving is idempotent.
+ * Accepted shape: a self-closing tag with `name="value"` or `name={value}` attrs
+ * (export.ts is the only producer of the format). Quoted/braced attr values may span `>`,
+ * `/>`, and newlines — multiline tags are accepted — and tags inside markdown code fences
+ * are NOT exempt. Alt entities (`&quot; &lt; &gt; &amp;`) are decoded, the inverse of
+ * export.ts escaping. Malformed tags (missing `src`, unclosed quote/brace, non-self-closing
+ * `<BodyImage></BodyImage>`) are left untouched — never truncated.
+ * @ai-context site/scripts/migrate-stub-posts.mjs mdxBodyToMarkdown — the original untyped
+ * regex; this version is additionally quote/brace-aware so alt text containing '>' (legacy
+ * exports escaped only '"') converts instead of surviving to be sanitizer-stripped.
+ */
+export function normalizeBodyImages(
+  bodyMarkdown: string,
+  images: Record<string, ImageDims>,
+): { bodyMarkdown: string; images: Record<string, ImageDims> } {
+  const merged: Record<string, ImageDims> = { ...images };
+  // Attrs are consumed in disjoint chunks — "quoted", {braced}, or any char that opens
+  // neither and isn't '>' — so a '>' or '/>' inside a quoted value can't terminate the tag.
+  const tagRe = /<BodyImage\s+((?:"[^"]*"|\{[^}]*\}|[^>"{])*?)\/>/g;
+  const normalized = bodyMarkdown.replace(tagRe, (match, attrs: string) => {
+    const get = (name: string): string | undefined => {
+      const quoted = attrs.match(new RegExp(`${name}="([^"]*)"`));
+      if (quoted?.[1] !== undefined) return quoted[1];
+      const braced = attrs.match(new RegExp(`${name}=\\{([^}]*)\\}`));
+      return braced?.[1] !== undefined ? braced[1].trim() : undefined;
+    };
+    const src = get('src');
+    if (!src) return match;
+    const alt = (get('alt') ?? '') // inverse of export.ts escaping; &amp; last
+      .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    const width = Number(get('width'));
+    const height = Number(get('height'));
+    if (Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0) {
+      merged[src] = { width, height };
+    }
+    return `![${alt}](${src})`;
+  });
+  return { bodyMarkdown: normalized, images: merged };
+}
+
+/**
  * Fill the NOT-NULL columns the editor can omit on a partial draft save
  * (`coordinates`, `heroImage`) so a draft can never write NULL (Postgres 23502).
  * The placeholders match the WordPress-import defaults and still fail
  * `validateForPublish` until the author completes them.
+ * Also normalizes pasted `<BodyImage …/>` tags — this is the single chokepoint
+ * shared by memoryPostStore and pgPostStore (and the WP importer via upsertDraft).
  */
 function draftWithDefaults(pair: PostPair): PostPair {
-  const fillLocale = (l: PostLocale): PostLocale => ({
-    ...l,
-    heroImage: l.heroImage ?? PLACEHOLDER_HERO,
-    images: l.images ?? {},
-  });
+  const fillLocale = (l: PostLocale): PostLocale => {
+    const filled: PostLocale = {
+      ...l,
+      heroImage: l.heroImage ?? PLACEHOLDER_HERO,
+      images: l.images ?? {},
+    };
+    // Partial draft payloads can omit bodyMarkdown at runtime despite the TS type.
+    if (typeof filled.bodyMarkdown !== 'string') return filled;
+    const n = normalizeBodyImages(filled.bodyMarkdown, filled.images);
+    return { ...filled, bodyMarkdown: n.bodyMarkdown, images: n.images };
+  };
   return {
     ...pair,
     shared: { ...pair.shared, coordinates: pair.shared.coordinates ?? { lat: 0, lng: 0 } },

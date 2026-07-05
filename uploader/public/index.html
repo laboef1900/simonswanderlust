@@ -11,10 +11,11 @@
       <div class="masthead-inner">
         <nav id="mainnav" aria-label="Admin"></nav>
         <p class="eyebrow">Expedition Log · Image Station</p>
-        <h1>Hero image</h1>
+        <h1>Photo upload</h1>
         <p class="lede">
-          Upload one cover photo for a post. It's optimized into responsive AVIF/WebP and
-          returns a <code>heroImage</code> snippet to paste into the post's frontmatter.
+          Upload a photo for a post. It's optimized into responsive AVIF/WebP and returns a
+          <code>heroImage</code> snippet for the editor's hero fields — plus, for non-hero
+          keys, a body snippet to paste into the post body (converted to a markdown image on save).
         </p>
         <p class="muted" id="whoami"></p>
       </div>
@@ -43,17 +44,24 @@
 
       <p class="section-label">heroImage snippet</p>
       <pre id="out">—</pre>
+
+      <p class="section-label">Body snippet (non-hero keys — paste into the post body)</p>
+      <pre id="outBody">—</pre>
     </main>
 
     <script src="/admin/auth.js"></script>
     <script>
       document.getElementById('go').addEventListener('click', async () => {
         const out = document.getElementById('out');
+        const outBody = document.getElementById('outBody');
         const file = document.getElementById('file').files[0];
+        outBody.textContent = '—';
         if (!file) { out.textContent = 'Pick a file first.'; return; }
+        const key = document.getElementById('key').value;
+        const alt = document.getElementById('alt').value;
         const fd = new FormData();
-        fd.append('key', document.getElementById('key').value);
-        fd.append('alt', document.getElementById('alt').value);
+        fd.append('key', key);
+        fd.append('alt', alt);
         fd.append('file', file);
         out.textContent = 'Uploading…';
         try {
@@ -63,7 +71,18 @@
           });
           if (res.status === 401) { location.href = '/login'; return; }
           const body = await res.json();
-          out.textContent = res.ok ? body.snippet : 'Error: ' + (body.error || res.status);
+          if (!res.ok) { out.textContent = 'Error: ' + (body.error || res.status); return; }
+          out.textContent = body.snippet;
+          // Body-image paste format: the editor normalizes this tag to a markdown
+          // image on save, merging width/height into the post's images map.
+          // Alt escaping (&, ", <, > — & first) mirrors export.ts bodyToMdx so
+          // posts.ts normalizeBodyImages decodes the exact inverse.
+          if (!/(^|\/)hero$/.test(key.trim())) {
+            const escAlt = alt.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+              .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            outBody.textContent = '<BodyImage src="' + body.src + '" width={' + body.width +
+              '} height={' + body.height + '} alt="' + escAlt + '" />';
+          }
         } catch (e) {
           out.textContent = 'Error: ' + e;
         }

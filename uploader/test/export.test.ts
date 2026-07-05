@@ -46,4 +46,16 @@ describe('renderPostToMdx', () => {
     expect(mdx).toContain('alt="He said &quot;hi&quot;"');
     expect(mdx).not.toContain('alt="He said "hi""');
   });
+
+  it('escapes &, < and > in body image alt text (so paste-back normalization can invert it)', () => {
+    const pairWithAngles: PostPair = {
+      translationKey: 'k1', status: 'published',
+      shared: { date: '2024-10-03', country: 'Test', countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } },
+      de: { locale: 'de', slug: 'test', title: 'Test', excerpt: 'E', heroImage: { src: 'https://img/h', width: 768, height: 512, alt: 'Alt' }, bodyMarkdown: '![Blick <nach> Westen & zurück](https://img/x/y)', images: { 'https://img/x/y': { width: 1600, height: 1067 } } },
+      en: { locale: 'en', slug: 'test', title: 'Test', excerpt: 'E', heroImage: { src: 'https://img/h', width: 768, height: 512, alt: 'Alt' }, bodyMarkdown: 'Intro', images: {} },
+    };
+    const mdx = renderPostToMdx(pairWithAngles, 'de');
+    expect(mdx).toContain('alt="Blick &lt;nach&gt; Westen &amp; zurück"');
+    expect(mdx).not.toContain('alt="Blick <nach>');
+  });
 });

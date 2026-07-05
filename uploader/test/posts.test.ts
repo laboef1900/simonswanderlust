@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { memoryPostStore, PostError, validateDraft, validateForPublish, type PostPair } from '../src/posts.js';
+import { memoryPostStore, normalizeBodyImages, PostError, validateDraft, validateForPublish, type PostPair } from '../src/posts.js';
+import { renderPostToMdx } from '../src/export.js';
 
 function pair(overrides: Partial<PostPair> = {}): PostPair {
   const loc = (locale: 'de' | 'en', slug: string, title: string) => ({
@@ -82,6 +83,124 @@ describe('post validation', () => {
     const noHero = pair({ de: { ...pair().de, heroImage: undefined as never } });
     expect(() => validateForPublish(noHero)).toThrow(PostError);
     expect(() => validateForPublish(noHero)).not.toThrow(TypeError);
+  });
+});
+
+describe('normalizeBodyImages', () => {
+  it('converts a JSX-attr <BodyImage> tag to a markdown image and records its dims', () => {
+    const body = 'Intro\n\n<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />\n\nMore';
+    const out = normalizeBodyImages(body, {});
+    expect(out.bodyMarkdown).toBe('Intro\n\n![Gasse](https://img/x/y)\n\nMore');
+    expect(out.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
+  });
+
+  it('accepts quoted numeric attrs and decodes &quot; in alt (inverse of export escaping)', () => {
+    const body = '<BodyImage src="https://img/a/b" width="1600" height="1067" alt="Die &quot;Gasse&quot;" />';
+    const out = normalizeBodyImages(body, {});
+    expect(out.bodyMarkdown).toBe('![Die "Gasse"](https://img/a/b)');
+    expect(out.images).toEqual({ 'https://img/a/b': { width: 1600, height: 1067 } });
+  });
+
+  it('converts a tag without parsable dims but records no images entry', () => {
+    const out = normalizeBodyImages('<BodyImage src="https://img/no/dims" alt="x" />', {});
+    expect(out.bodyMarkdown).toBe('![x](https://img/no/dims)');
+    expect(out.images).toEqual({});
+  });
+
+  it('leaves a src-less tag untouched', () => {
+    const body = 'a <BodyImage alt="broken" /> b';
+    const out = normalizeBodyImages(body, {});
+    expect(out.bodyMarkdown).toBe(body);
+    expect(out.images).toEqual({});
+  });
+
+  it('is idempotent: plain/already-normalized markdown passes through byte-identical, existing dims preserved', () => {
+    const existing = { 'https://img/x/y': { width: 800, height: 600 } };
+    const body = '## Hi\n\n![Gasse](https://img/x/y)\n';
+    const once = normalizeBodyImages(body, existing);
+    expect(once.bodyMarkdown).toBe(body);
+    expect(once.images).toEqual(existing);
+    const twice = normalizeBodyImages(once.bodyMarkdown, once.images);
+    expect(twice).toEqual(once);
+  });
+
+  it('normalizes on upsertDraft (store chokepoint) and merges into existing images', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.de.images = { 'https://img/pre/existing': { width: 100, height: 50 } };
+    p.de.bodyMarkdown = 'Vorher\n\n<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />';
+    const saved = await s.upsertDraft(p);
+    expect(saved.de.bodyMarkdown).not.toContain('<BodyImage');
+    expect(saved.de.bodyMarkdown).toContain('![Gasse](https://img/x/y)');
+    expect(saved.de.images).toEqual({
+      'https://img/pre/existing': { width: 100, height: 50 },
+      'https://img/x/y': { width: 1600, height: 1067 },
+    });
+    // en body had no tags — untouched
+    expect(saved.en.bodyMarkdown).toBe('## Hi');
+  });
+
+  it('round-trips: MDX export reconstructs the <BodyImage> tag from the normalized pair', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.de.bodyMarkdown = '<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />';
+    const saved = await s.upsertDraft(p);
+    const mdx = renderPostToMdx(saved, 'de');
+    expect(mdx).toContain('<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />');
+  });
+
+  it('converts a tag whose quoted alt contains ">" (legacy exports escaped only quotes)', () => {
+    const body = '<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Blick > Westen" />';
+    const out = normalizeBodyImages(body, {});
+    expect(out.bodyMarkdown).toBe('![Blick > Westen](https://img/x/y)');
+    expect(out.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
+  });
+
+  it('does not truncate the tag on "/>" inside a quoted alt', () => {
+    const body = 'a <BodyImage src="https://img/x/y" width={16} height={10} alt="x/>y" /> b';
+    const out = normalizeBodyImages(body, {});
+    expect(out.bodyMarkdown).toBe('a ![x/>y](https://img/x/y) b');
+    expect(out.images).toEqual({ 'https://img/x/y': { width: 16, height: 10 } });
+  });
+
+  it('decodes &lt; &gt; &amp; in alt and round-trips through the MDX export escaping', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    const alt = 'Blick <über> das "Tor" & zurück';
+    p.de.bodyMarkdown = `![${alt}](https://img/x/y)`;
+    p.de.images = { 'https://img/x/y': { width: 1600, height: 1067 } };
+    const saved = await s.upsertDraft(p);
+    const mdx = renderPostToMdx(saved, 'de');
+    expect(mdx).toContain('alt="Blick &lt;über&gt; das &quot;Tor&quot; &amp; zurück"');
+    const tag = mdx.match(/<BodyImage[^\n]*\/>/)?.[0] ?? '';
+    const back = normalizeBodyImages(tag, {});
+    expect(back.bodyMarkdown).toBe(`![${alt}](https://img/x/y)`);
+    expect(back.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
+  });
+
+  it('accepts a multiline tag and the braced src={…} attribute form', () => {
+    const multi = normalizeBodyImages('<BodyImage\n  src="https://img/m/l"\n  width={10}\n  height={20}\n  alt="ml"\n/>', {});
+    expect(multi.bodyMarkdown).toBe('![ml](https://img/m/l)');
+    expect(multi.images).toEqual({ 'https://img/m/l': { width: 10, height: 20 } });
+    const braced = normalizeBodyImages('<BodyImage src={https://img/b/r} width={10} height={20} alt="b" />', {});
+    expect(braced.bodyMarkdown).toBe('![b](https://img/b/r)');
+    expect(braced.images).toEqual({ 'https://img/b/r': { width: 10, height: 20 } });
+  });
+
+  it('leaves malformed tags untouched rather than truncating (pinned rejected shapes)', () => {
+    const nonSelfClosing = 'a <BodyImage src="https://img/x/y"></BodyImage> b';
+    expect(normalizeBodyImages(nonSelfClosing, {}).bodyMarkdown).toBe(nonSelfClosing);
+    const unclosedQuote = 'a <BodyImage src="https://img/x/y" alt="oops /> b';
+    expect(normalizeBodyImages(unclosedQuote, {}).bodyMarkdown).toBe(unclosedQuote);
+  });
+
+  it('normalizes the EN locale through the store chokepoint too', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.en.bodyMarkdown = 'Before\n\n<BodyImage src="https://img/e/n" width={10} height={20} alt="en alt" />';
+    const saved = await s.upsertDraft(p);
+    expect(saved.en.bodyMarkdown).toBe('Before\n\n![en alt](https://img/e/n)');
+    expect(saved.en.images).toEqual({ 'https://img/e/n': { width: 10, height: 20 } });
   });
 });
 
