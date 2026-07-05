@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { storeVariants, isOriginalFile } from '../src/storage.js';
+import { assertSafeKey, contentHashKey, storeVariants, isOriginalFile } from '../src/storage.js';
 import type { ProcessResult } from '../src/pipeline.js';
 
 const result: ProcessResult = {
@@ -90,5 +90,31 @@ describe('isOriginalFile', () => {
     // A key ending in "-orig" still only excludes its actual original file.
     expect(isOriginalFile('trips/foo-orig-1280.webp')).toBe(false);
     expect(isOriginalFile('trips/foo-orig-orig.jpg')).toBe(true);
+  });
+});
+
+describe('contentHashKey', () => {
+  it('is deterministic: same key + same bytes give the same result', () => {
+    const buf = Buffer.from('same-bytes');
+    expect(contentHashKey('trips/x/hero', buf)).toBe(contentHashKey('trips/x/hero', buf));
+  });
+
+  it('different bytes give different suffixes (re-upload mints a new key)', () => {
+    expect(contentHashKey('trips/x/hero', Buffer.from('photo one'))).not.toBe(
+      contentHashKey('trips/x/hero', Buffer.from('photo two')),
+    );
+  });
+
+  it('appends 8 lowercase hex chars and stays a safe key', () => {
+    const versioned = contentHashKey('trips/x/hero', Buffer.from('img'));
+    expect(versioned).toMatch(/^trips\/x\/hero-[0-9a-f]{8}$/);
+    expect(() => assertSafeKey(versioned)).not.toThrow();
+  });
+
+  it('does not launder traversal-shaped keys — storeVariants still rejects them', async () => {
+    const versioned = contentHashKey('../evil', Buffer.from('img'));
+    await expect(
+      storeVariants(versioned, 'a', result, { storageDir: dir, baseUrl: 'https://img.example' }),
+    ).rejects.toThrow(/key/i);
   });
 });

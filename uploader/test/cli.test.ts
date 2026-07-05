@@ -17,8 +17,40 @@ describe('uploadFile', () => {
     const stored = await uploadFile(img, 'trips/test/hero', 'A test', {
       storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
     });
+    // Keys are content-hash versioned (issue #26): hero-<hash8>-<width>.<fmt>.
+    // Extract the hash once and pin the exact file set so every variant must
+    // carry the SAME suffix and no width/format pairing can go missing.
     const files = await readdir(join(dir, 'trips', 'test'));
-    expect(files.sort()).toEqual(['hero-640.avif', 'hero-640.webp', 'hero-800.avif', 'hero-800.webp', 'hero-orig.jpg']);
-    expect(stored.snippet).toContain("src: 'https://img.simonswanderlust.com/trips/test/hero'");
+    const hash = files[0]?.match(/^hero-([0-9a-f]{8})-/)?.[1];
+    expect(hash).toBeDefined();
+    // Every variant carries the same hash suffix, plus the untouched original
+    // (`-orig.<ext>`, issue #21) written next to them.
+    expect(files.sort()).toEqual([
+      `hero-${hash}-640.avif`,
+      `hero-${hash}-640.webp`,
+      `hero-${hash}-800.avif`,
+      `hero-${hash}-800.webp`,
+      `hero-${hash}-orig.jpg`,
+    ]);
+    expect(stored.snippet).toContain(`src: 'https://img.simonswanderlust.com/trips/test/hero-${hash}'`);
+  });
+
+  it('a different image under the same key mints a new hash; the first files stay on disk', async () => {
+    const imgA = await sharp({ create: { width: 800, height: 600, channels: 3, background: '#222' } })
+      .jpeg().toBuffer();
+    const imgB = await sharp({ create: { width: 800, height: 600, channels: 3, background: '#eee' } })
+      .jpeg().toBuffer();
+    const opts = { storageDir: dir, baseUrl: 'https://img.simonswanderlust.com' };
+    const a = await uploadFile(imgA, 'trips/test/hero', 'A', opts);
+    const b = await uploadFile(imgB, 'trips/test/hero', 'B', opts);
+    expect(b.src).not.toBe(a.src);
+    // idempotent: identical bytes reuse the same URL
+    const a2 = await uploadFile(imgA, 'trips/test/hero', 'A', opts);
+    expect(a2.src).toBe(a.src);
+    // both uploads' file sets coexist — nothing was overwritten or deleted
+    // (each upload writes 4 variants + 1 untouched original = 5 files)
+    const files = await readdir(join(dir, 'trips', 'test'));
+    expect(files).toHaveLength(10);
+    expect(files.filter((f) => a.files.some((rel) => rel.endsWith(f)))).toHaveLength(5);
   });
 });

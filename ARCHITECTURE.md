@@ -84,8 +84,11 @@ skip this and serve immediately — no rebuild on every boot.
 ## Image pipeline
 
 The app optimizes each photo into AVIF + WebP at fixed widths (640/1280/1920 plus the source
-width, never upscaled), preserving EXIF/GPS. Files are content-addressed as `{key}-{width}.{format}`
-under `STORAGE_DIR` and served with a one-year immutable cache. `heroImage` is a remote URL object
+width, never upscaled), preserving EXIF/GPS. `/upload` appends a short content hash to the
+client's key, so files land as `{key}-{hash8}-{width}.{format}` under `STORAGE_DIR`: replacing a
+photo mints a new URL while previously published URLs keep serving untouched — which is what
+makes the one-year immutable cache correct. (The WP-import rehost path keeps deterministic
+`{key}-{width}.{format}` keys so re-imports stay idempotent.) `heroImage` is a remote URL object
 `{src,width,height,alt}`; body images are referenced by URL and rendered as `<picture>` at build
 time. This contract is mirrored on the blog side in `site/src/lib/images.ts`.
 

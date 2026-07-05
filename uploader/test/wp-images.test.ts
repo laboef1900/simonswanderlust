@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from 'vitest';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
@@ -16,6 +16,16 @@ describe('rehostImage', () => {
     expect(r.src).toBe('https://img.example/trips/t/body');
     expect(r.width).toBe(800);
     expect(r.height).toBe(600);
+    // @ai-warning: rehost keys are deliberately NOT content-hash versioned
+    // (unlike /upload — issue #26): deterministic {key}-{width}.{format} names
+    // keep WXR re-imports idempotent. Do not route this through contentHashKey.
+    const files = await readdir(join(dir, 'trips', 't'));
+    expect(files.sort()).toEqual([
+      'body-640.avif',
+      'body-640.webp',
+      'body-800.avif',
+      'body-800.webp',
+    ]);
   });
   it('throws on a non-200 download', async () => {
     const fetchImpl = (async () => new Response('missing', { status: 404 })) as unknown as typeof fetch;

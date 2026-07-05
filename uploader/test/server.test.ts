@@ -115,8 +115,61 @@ describe('POST /upload', () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.src).toBe('https://img.simonswanderlust.com/trips/bucharest-2024/hero');
+    // The key is content-hash versioned server-side (issue #26).
+    expect(body.src).toMatch(/^https:\/\/img\.simonswanderlust\.com\/trips\/bucharest-2024\/hero-[0-9a-f]{8}$/);
     expect(body.snippet).toContain("alt: 'Old town'");
+  });
+
+  it('re-uploading a different image under the same key mints a new URL; the old URL keeps serving unchanged', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const upload = async (img: Buffer) => {
+      const form = new FormData();
+      form.append('key', 'trips/t/hero');
+      form.append('alt', 'a');
+      form.append('file', img, { filename: 't.jpg', contentType: 'image/jpeg' });
+      return b.app.inject({
+        method: 'POST', url: '/upload',
+        headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
+      });
+    };
+    const first = await upload(await jpeg());
+    expect(first.statusCode).toBe(200);
+    const oldFile = (first.json().files as string[]).find((f) => f.endsWith('.webp'))!;
+    const get = () => b.app.inject({ method: 'GET', url: '/' + oldFile, headers: { host: 'img.simonswanderlust.com' } });
+    const before = await get();
+    expect(before.statusCode).toBe(200);
+
+    const other = await sharp({ create: { width: 900, height: 700, channels: 3, background: '#a00' } }).jpeg().toBuffer();
+    const second = await upload(other);
+    expect(second.statusCode).toBe(200);
+    expect(second.json().src).not.toBe(first.json().src);
+
+    // Published posts reference the first URL — it must keep serving the same bytes.
+    const after = await get();
+    expect(after.statusCode).toBe(200);
+    expect(after.rawPayload.equals(before.rawPayload)).toBe(true);
+  });
+
+  it('re-uploading identical bytes reuses the same URL (idempotent)', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const img = await jpeg();
+    const upload = async () => {
+      const form = new FormData();
+      form.append('key', 'trips/same/hero');
+      form.append('alt', 'a');
+      form.append('file', img, { filename: 't.jpg', contentType: 'image/jpeg' });
+      return b.app.inject({
+        method: 'POST', url: '/upload',
+        headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
+      });
+    };
+    const first = await upload();
+    const second = await upload();
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(second.json().src).toBe(first.json().src);
   });
 
   it('serves stored variants with a long immutable cache header', async () => {

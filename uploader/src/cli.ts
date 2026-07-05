@@ -1,8 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { processImage } from './pipeline.js';
-import { storeVariants, type StorageOptions, type StoredImage } from './storage.js';
+import { contentHashKey, storeVariants, type StorageOptions, type StoredImage } from './storage.js';
 
-/** Reusable: process an in-memory image and store its variants. */
+/** Reusable: process an in-memory image and store its variants.
+ * Keys are content-hash versioned like POST /upload, so a re-upload mints a
+ * new URL instead of overwriting immutable-cached variants (issue #26). */
 export async function uploadFile(
   input: Buffer,
   key: string,
@@ -10,7 +12,7 @@ export async function uploadFile(
   opts: StorageOptions,
 ): Promise<StoredImage> {
   const result = await processImage(input);
-  return storeVariants(key, alt, result, opts);
+  return storeVariants(contentHashKey(key, input), alt, result, opts);
 }
 
 async function restoreMain(file: string | undefined): Promise<void> {
