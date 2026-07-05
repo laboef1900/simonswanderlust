@@ -7,7 +7,7 @@ import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
 import { processImage } from './pipeline.js';
-import { storeVariants } from './storage.js';
+import { storeVariants, isOriginalFile } from './storage.js';
 import { verifyPassword, type UserStore, UserExistsError } from './users.js';
 import type { SessionStore } from './sessions.js';
 import {
@@ -112,6 +112,12 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     maxAge: '365d',
     immutable: true,
     constraints: { host: cfg.imgHost },
+    // Untouched full-resolution originals (`<key>-orig.<ext>`) live in
+    // storageDir so the incremental backup tar captures them, but they are a
+    // private DR archive — never a web asset. Keep them off the public image
+    // host (404) so a visitor can't guess `.../hero-orig.jpg` next to the
+    // published `.../hero-640.avif`.
+    allowedPath: (pathName) => !isOriginalFile(pathName),
   });
 
   // The public blog: static output of the last release. `current` is a symlink

@@ -156,6 +156,10 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   Originals also enable future re-encodes (new widths/formats/quality). Cost: roughly double the
   per-upload disk use. Note: originals exist only for uploads made from this version onward —
   images uploaded earlier had their originals discarded at upload time and exist as variants only.
+  Originals are a **private DR asset**: they live in `STORAGE_DIR` so the incremental archive
+  captures them, but the app's image-host static mount excludes `-orig.*` (404), so a
+  full-resolution original is never publicly downloadable — only the derived variants the site
+  links to are served.
 - **Image archives** — after each successful scheduled/on-demand dump, files under `/data/images`
   modified since the previous archive are tarred into
   `/data/backup/db/images-<YYYYMMDD-HHmmss>.tar` (mtime-incremental; when nothing changed, no

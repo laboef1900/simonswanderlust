@@ -137,6 +137,29 @@ describe('POST /upload', () => {
     expect(res.headers['cache-control']).toContain('max-age=31536000');
     expect(res.headers['cache-control']).toContain('immutable');
   });
+
+  it('serves variants but not the untouched original on the public image host', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const form = new FormData();
+    form.append('key', 'trips/private/hero');
+    form.append('alt', 'p');
+    form.append('file', await jpeg(), { filename: 't.jpg', contentType: 'image/jpeg' });
+    const up = await b.app.inject({
+      method: 'POST', url: '/upload',
+      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
+    });
+    expect(up.statusCode).toBe(200);
+    const files = up.json().files as string[];
+    const variant = files.find((f) => f.endsWith('.webp'))!;
+    const original = files.find((f) => /-orig\.[a-z0-9]+$/.test(f))!;
+    expect(original).toBeTruthy(); // the original is still written to disk (for the backup tar)
+    const img = { host: 'img.simonswanderlust.com' };
+    // The lossy variant is public...
+    expect((await b.app.inject({ method: 'GET', url: '/' + variant, headers: img })).statusCode).toBe(200);
+    // ...but the full-resolution original is not downloadable.
+    expect((await b.app.inject({ method: 'GET', url: '/' + original, headers: img })).statusCode).toBe(404);
+  });
 });
 
 describe('buildServer config', () => {

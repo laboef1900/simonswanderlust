@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { storeVariants } from '../src/storage.js';
+import { storeVariants, isOriginalFile } from '../src/storage.js';
 import type { ProcessResult } from '../src/pipeline.js';
 
 const result: ProcessResult = {
@@ -75,5 +75,20 @@ describe('storeVariants', () => {
         "  alt: 'O''Brien''s view'",
       ].join('\n'),
     );
+  });
+});
+
+describe('isOriginalFile', () => {
+  it('matches original filenames but not variants or the base key', () => {
+    expect(isOriginalFile('trips/x/hero-orig.jpg')).toBe(true);
+    expect(isOriginalFile('/trips/x/hero-orig.png')).toBe(true);
+    expect(isOriginalFile('a-orig.webp')).toBe(true);
+    // Variants are `-<width>.<fmt>` and the base key has no `-orig.<ext>` suffix.
+    expect(isOriginalFile('trips/x/hero-640.avif')).toBe(false);
+    expect(isOriginalFile('trips/x/hero-2000.webp')).toBe(false);
+    expect(isOriginalFile('trips/x/hero')).toBe(false);
+    // A key ending in "-orig" still only excludes its actual original file.
+    expect(isOriginalFile('trips/foo-orig-1280.webp')).toBe(false);
+    expect(isOriginalFile('trips/foo-orig-orig.jpg')).toBe(true);
   });
 });
