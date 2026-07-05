@@ -101,6 +101,13 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 - **`sessions`** — `id` (SHA-256 of the random token), `user_id` (FK, cascade), `expires_at`. Expired rows are swept hourly.
 - **`posts`** — one row per (`translation_key`, `locale`); `slug`, `title`, `date`, `country`, `country_code`, `region`, `excerpt`, `hero_image` (jsonb), `coordinates` (jsonb), optional `stops`/`route`/`key_facts`, `body_markdown`, `images` (jsonb), `status` (`draft`/`published`). Unique on (`locale`, `slug`).
 
+Schema evolution is additive and idempotent — no migration framework, no `schema_version` table.
+`ensureSchema` runs on every boot before the server starts serving, so a new column is added in
+**both** places: the table's `CREATE TABLE` definition (fresh installs) and a matching
+`ALTER TABLE … ADD COLUMN IF NOT EXISTS` appended to the marked column-migrations section at the
+end of `ensureSchema` (existing deployments pick it up at the next boot). `NOT NULL` columns must
+carry a `DEFAULT`, or the `ALTER` fails on populated tables.
+
 ## Database backups
 
 `uploader/src/backup.ts` provides app-native logical dumps (no `pg_dump`, no sidecar container):

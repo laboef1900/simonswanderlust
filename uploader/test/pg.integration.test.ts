@@ -48,6 +48,23 @@ maybe('postgres stores (integration)', () => {
     expect(de.title).toBe('Über mich');
     expect(de.body_markdown).toContain('Leidenschaft');
   });
+
+  // ensureSchema runs on EVERY boot (main.ts), so it must be re-runnable
+  // against a database that already has the full schema plus live data — the
+  // contract the column-migrations section in db.ts relies on.
+  it('ensureSchema is re-runnable against a populated database', async () => {
+    const users = pgUserStore(pool);
+    const u = await users.create({ username: `rerun-${Date.now()}`, password: 'pw', isAdmin: false });
+    await pool.query(`UPDATE pages SET title='Edited by author' WHERE key='about' AND locale='de'`);
+
+    await expect(ensureSchema(pool)).resolves.toBeUndefined();
+
+    // Existing rows survive the re-run...
+    expect((await users.findByUsername(u.username))?.id).toBe(u.id);
+    // ...and the About seed (ON CONFLICT DO NOTHING) does not clobber edits.
+    const { rows } = await pool.query(`SELECT title FROM pages WHERE key='about' AND locale='de'`);
+    expect(rows[0].title).toBe('Edited by author');
+  });
 });
 
 maybe('pgPostStore (integration)', () => {
