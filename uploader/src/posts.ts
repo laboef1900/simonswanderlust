@@ -30,6 +30,11 @@ export interface PostSummary {
   /** EN-completeness hint for the write-DE-first workflow (true when the EN body is non-blank). */
   hasEnBody: boolean;
 }
+/** One stored locale row's image-referencing fields — the corpus for media usage scans. */
+export interface PostUsageRow {
+  translationKey: string; title: string;
+  heroImage: HeroImage; bodyMarkdown: string; images: Record<string, ImageDims>;
+}
 export class PostError extends Error {
   code?: string;
   constructor(message: string, code?: string) { super(message); this.code = code; }
@@ -44,6 +49,14 @@ export interface PostStore {
   unpublish(translationKey: string): Promise<void>;
   /** Hard-delete both locale rows, freeing their slugs for reuse. */
   remove(translationKey: string): Promise<void>;
+  /**
+   * Every stored locale row, regardless of locale pairing. Image-usage scans
+   * must use this instead of list()+get(): pgPostStore.get() returns null for
+   * a key with only one locale row (upsertDraft writes de and en as two
+   * non-transactional INSERTs, so a crash in between strands one), and such a
+   * row's image references must still count as usage.
+   */
+  usageRows(): Promise<PostUsageRow[]>;
 }
 
 interface Stored extends PostPair {
@@ -218,6 +231,12 @@ export function memoryPostStore(): PostStore {
       const p = byKey.get(tk);
       return p ? structuredClone({ translationKey: p.translationKey, status: p.status, shared: p.shared, de: p.de, en: p.en, hasUnpublishedChanges: p.hasUnpublishedChanges }) : null;
     },
+    async usageRows() {
+      return [...byKey.values()].flatMap((p) => (['de', 'en'] as const).map((loc) => structuredClone({
+        translationKey: p.translationKey, title: p[loc].title,
+        heroImage: p[loc].heroImage, bodyMarkdown: p[loc].bodyMarkdown, images: p[loc].images,
+      })));
+    },
     async upsertDraft(pair) {
       pair = draftWithDefaults(pair);
       const key = pair.translationKey || randomUUID();
@@ -321,6 +340,15 @@ export function pgPostStore(pool: DbPool): PostStore {
         translationKey: tk, status: de.status, shared: rowShared(de), de: rowLocale(de), en: rowLocale(en),
         hasUnpublishedChanges: rowHasUnpublishedChanges(de) || rowHasUnpublishedChanges(en),
       };
+    },
+    async usageRows() {
+      const { rows } = await pool.query<Pick<PostRow, 'translation_key' | 'title' | 'hero_image' | 'body_markdown' | 'images'>>(
+        `SELECT translation_key, title, hero_image, body_markdown, images FROM posts ORDER BY translation_key, locale`,
+      );
+      return rows.map((r) => ({
+        translationKey: r.translation_key, title: r.title,
+        heroImage: r.hero_image, bodyMarkdown: r.body_markdown, images: r.images ?? {},
+      }));
     },
     async upsertDraft(pair) {
       pair = draftWithDefaults(pair);

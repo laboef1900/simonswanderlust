@@ -7,7 +7,8 @@ import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
 import { processImage } from './pipeline.js';
-import { contentHashKey, storeVariants, isOriginalFile } from './storage.js';
+import { contentHashKey, storeVariants, isOriginalFile, assertSafeKey } from './storage.js';
+import { listMedia, deleteMedia, imageUsage } from './media.js';
 import { verifyPassword, type UserStore, UserExistsError } from './users.js';
 import type { SessionStore } from './sessions.js';
 import {
@@ -15,7 +16,7 @@ import {
   setSessionCookie, clearSessionCookie, isSecureRequest, SESSION_COOKIE,
 } from './authn.js';
 import { SettingsError, type SettingsStore } from './settings.js';
-import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair } from './posts.js';
+import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow } from './posts.js';
 import { renderPreviewHtml } from './preview.js';
 import { type PageStore, type PagePair, type PageContent, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
@@ -58,7 +59,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // surface (blog pages keep parity with the old nginx: no admin headers).
   const ADMIN_PREFIXES = [
     '/admin', '/login', '/logout', '/auth', '/setup', '/settings', '/users',
-    '/posts', '/upload', '/import', '/export', '/backups', '/rebuild', '/health', '/pages',
+    '/posts', '/upload', '/import', '/export', '/backups', '/rebuild', '/health', '/pages', '/images',
   ];
   app.addHook('onSend', async (req, reply) => {
     reply.header('X-Content-Type-Options', 'nosniff');
@@ -179,6 +180,61 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const result = await processImage(buf);
     const stored = await storeVariants(versionedKey, alt, result, { storageDir, baseUrl: cfg.baseUrl });
     return reply.send(stored);
+  });
+
+  // ---- media library ----
+  const imageBase = cfg.baseUrl.replace(/\/+$/, '');
+
+  // Everything (posts + pages) that could reference an image URL. Usage is
+  // computed store-agnostically in TS so the memory and pg stores behave alike.
+  // @ai-note: posts come from usageRows() — flat per-locale rows — NOT from
+  // list()+get(): pgPostStore.get() returns null for a stranded single-locale
+  // row (crash between upsertDraft's two locale INSERTs), and that row's image
+  // references must still block deletion. Do not cache across requests (state
+  // lives in backing services).
+  const usageCorpus = async (): Promise<{ posts: PostUsageRow[]; pages: PagePair[] }> => {
+    const [postRows, pageKeys] = await Promise.all([cfg.posts.usageRows(), cfg.pages.keys()]);
+    const pagePairs = await Promise.all(pageKeys.map((k) => cfg.pages.get(k)));
+    return { posts: postRows, pages: pagePairs };
+  };
+
+  // Browse everything under storageDir. Admin-only: it exposes the full
+  // inventory of uploaded files, same trust boundary as /settings.
+  app.get('/images', { preHandler: requireAdmin }, async (_req, reply) => {
+    const [items, corpus] = await Promise.all([listMedia(storageDir), usageCorpus()]);
+    return reply.send(items.map((m) => {
+      const src = `${imageBase}/${m.key}`;
+      return {
+        key: m.key,
+        src,
+        width: m.width,
+        height: m.height,
+        thumbUrl: m.thumbFile ? `${imageBase}/${m.thumbFile}` : null,
+        files: m.files,
+        usedIn: imageUsage(src, corpus.posts, corpus.pages),
+      };
+    }));
+  });
+
+  // Wildcard because keys contain slashes (trips/x/hero). Admin-only inside the
+  // handler chain; refuses to delete anything still referenced by content.
+  // @ai-note: usage only sees Postgres content — the last built release may
+  // still reference a deleted image until the next rebuild.
+  app.delete('/images/*', { preHandler: requireAdmin }, async (req, reply) => {
+    const key = (req.params as { '*': string })['*'];
+    try {
+      assertSafeKey(key);
+    } catch (e) {
+      return reply.code(400).send({ error: (e as Error).message });
+    }
+    const corpus = await usageCorpus();
+    const usedIn = imageUsage(`${imageBase}/${key}`, corpus.posts, corpus.pages);
+    if (usedIn.length > 0) {
+      return reply.code(409).send({ error: 'image is referenced by existing content — remove those references first', usedIn });
+    }
+    const deleted = await deleteMedia(storageDir, key);
+    if (deleted === 0) return reply.code(404).send({ error: 'image not found' });
+    return reply.send({ ok: true, deleted });
   });
 
   // Settings govern backups (what gets written to disk and retained) — same

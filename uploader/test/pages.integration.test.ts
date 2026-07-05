@@ -22,4 +22,25 @@ maybe('pgPageStore (Postgres)', () => {
     expect(p.de.images['https://img/x']).toEqual({ width: 800, height: 600 });
     expect(p.en.bodyMarkdown).toBe('EN body');
   });
+
+  it('keys() lists every saved key exactly once', async () => {
+    const store = pgPageStore(pool);
+    // Save a second key to prove keys() is neither hardcoded nor duplicated
+    // per locale row, then clean it up: backup.integration asserts exact
+    // `pages` row counts against this shared database (integration files run
+    // sequentially — fileParallelism: false in vitest.config.ts — so the
+    // finally-cleanup is ordered before that suite reads the table).
+    try {
+      await store.save({
+        key: 'imprint',
+        de: { locale: 'de', title: 'Impressum', bodyMarkdown: 'x', images: {} },
+        en: { locale: 'en', title: 'Imprint', bodyMarkdown: 'x', images: {} },
+      });
+      const keys = await store.keys();
+      expect(keys).toContain('about');
+      expect(keys.filter((k) => k === 'imprint')).toEqual(['imprint']);
+    } finally {
+      await pool.query(`DELETE FROM pages WHERE key = 'imprint'`);
+    }
+  });
 });

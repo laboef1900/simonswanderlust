@@ -25,6 +25,7 @@ describe('rehostImage', () => {
       'body-640.webp',
       'body-800.avif',
       'body-800.webp',
+      'body-orig.jpg', // the untouched original is persisted next to the variants (issue #21)
     ]);
   });
   it('throws on a non-200 download', async () => {
