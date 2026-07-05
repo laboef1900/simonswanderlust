@@ -33,6 +33,7 @@ services:
     restart: unless-stopped
 
   db:
+    # major-pinned on purpose — bump only via ARCHITECTURE.md "Upgrading a Postgres major"
     image: postgres:18-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-images}

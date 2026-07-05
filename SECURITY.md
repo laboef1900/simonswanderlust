@@ -162,8 +162,9 @@ deliberate trade-off, not an oversight:
 - Restore is **CLI-only**
   (`docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/<file>` — the
   shell-less runtime image requires invoking `node` directly), never a web route, because it's
-  destructive: it deletes and re-inserts `users`, `posts`, and `pages` in one transaction.
-  Deleting `users` cascades to `sessions`, so a restore invalidates every login.
+  destructive: it deletes and re-inserts `users`, `posts`, and `pages` in one transaction
+  (`pages` only when present in the dump — v1 dumps predate them and leave existing pages
+  untouched). Deleting `users` cascades to `sessions`, so a restore invalidates every login.
 - In-app backups live on the **same disk** as the live data; disaster recovery requires an
   offsite host-level backup of `./uploader/data` — see
   [ARCHITECTURE.md](ARCHITECTURE.md#backups--disaster-recovery).

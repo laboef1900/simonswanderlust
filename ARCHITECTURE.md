@@ -144,7 +144,8 @@ botched restore, accidental delete), **not** against disk failure or host loss.
 - **Dump format** — one file per run, `/data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`, containing
   `{ "version": 2, "createdAt": <ISO>, "tables": { "users": [...], "posts": [...], "pages": [...] } }`
   with full column fidelity. `sessions` are **never** dumped — they're disposable, and token
-  hashes don't belong in a backup file. `version` lets restore reject incompatible dumps.
+  hashes don't belong in a backup file. `version` lets restore reject incompatible dumps
+  (v1 dumps, which predate `pages`, are still accepted).
 - **Schedule** — admin-configurable in settings: `backupSchedule` (`off` / `daily` / `weekly`,
   default `off`) and `backupRetention` (1–100 files, default 14). An hourly in-process tick (same
   pattern as the session sweep) runs a backup when due, tracked in
@@ -204,7 +205,8 @@ versioned subdirectory). **Deployments with a pre-18 `pgdata` volume must migrat
 dump-and-restore — do NOT just pull the new image**: with the old volume mounted at the new path,
 the entrypoint finds its versioned PGDATA empty and silently `initdb`s a fresh, empty cluster
 (the old data sits unreferenced at the volume root, and the app happily re-seeds — the blog
-comes up blank without an error). Procedure:
+comes up blank without an error). The same dump → drop volume → bump tag → restore sequence
+applies to every future major (18 → 19, …). Procedure:
 
 ```bash
 # 1. still on the OLD version/compose: dump
@@ -216,6 +218,22 @@ docker compose up -d db
 docker exec -i blog-db-1 psql -U images -d images < pg-upgrade-dump.sql
 docker compose up -d
 ```
+
+**App-native alternative** (JSON backup instead of `pg_dump`/`psql`): while **still on the OLD
+version**, take a fresh dump first (admin Settings → **Back up now**, or `POST /backups` —
+`backupSchedule` defaults to `off`, so don't assume one exists) and confirm the file is present
+under `/data/backup/db` **before** running `docker compose down` / `docker volume rm`. After
+`docker compose up -d` on the new major, the app's boot-time `ensureSchema` recreates all tables
+on the fresh cluster, so that `/data/backup/db/db-*.json.gz` dump (see
+[Database backups](#database-backups)) can be restored with the shell-less exec-form CLI:
+`docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`.
+Note the database has **zero users** until the restore completes, which re-opens first-run
+`POST /setup` to anyone who can reach port 3000 — run the restore immediately after the app is
+healthy, or keep the port unreachable (reverse proxy off / firewall) during the window.
+The restore covers `users`, `posts`, and `pages` only — sessions are disposable and app settings
+live on disk under `/data`, but every login is invalidated, so log in again and trigger a rebuild
+(`/admin/settings.html` → **Rebuild site now**, or `POST /rebuild`). Prefer the `pg_dump`/`psql`
+path above as primary — it captures the whole database with full fidelity.
 
 ## Packaging & release pipeline
 
