@@ -327,6 +327,23 @@
         return stops.length ? stops : undefined;
       }
 
+      // A stop row is "partial" when the author entered something but not all
+      // three of name + finite lat + finite lng — collectStops() drops such rows,
+      // so we surface a count on save rather than silently losing a half-entered
+      // waypoint (the exact silent-loss class issue #25 exists to prevent).
+      function partialStopCount() {
+        let n = 0;
+        $('stopsList').querySelectorAll('.stop-row').forEach((r) => {
+          const name = r.querySelector('.stop-name').value.trim();
+          const latRaw = r.querySelector('.stop-lat').value.trim();
+          const lngRaw = r.querySelector('.stop-lng').value.trim();
+          const anyFilled = name !== '' || latRaw !== '' || lngRaw !== '';
+          const complete = name !== '' && Number.isFinite(parseFloat(latRaw)) && Number.isFinite(parseFloat(lngRaw));
+          if (anyFilled && !complete) n += 1;
+        });
+        return n;
+      }
+
       // ---- hero upload ----
       async function uploadHero(locale) {
         const slugFieldId = locale === 'de' ? 'slugFieldDe' : 'slugFieldEn';
@@ -489,7 +506,10 @@
           history.replaceState(null, '', url2.toString());
           $('pageTitle').textContent = 'Edit post';
         }
-        setStatus('Saved draft.');
+        const skipped = partialStopCount();
+        setStatus(skipped
+          ? 'Saved draft — but ' + skipped + ' incomplete stop row(s) were skipped (each needs a name, latitude and longitude).'
+          : 'Saved draft.');
         return true;
       }
       $('saveDraft').addEventListener('click', () => { doSaveDraft(); });
