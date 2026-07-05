@@ -457,6 +457,25 @@ describe('posts editor', () => {
     const got = await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie });
     expect(got.json().status).toBe('draft');
   });
+
+  it('a failed rebuild is surfaced but the store change still lands (unpublish + delete)', async () => {
+    const s = stubBuilder({ ok: false, error: 'a build is already running' });
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    expect(un.statusCode).toBe(200);
+    expect(un.json()).toEqual({ unpublished: true, build: { ok: false, error: 'a build is already running' } });
+    expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('draft');
+    // re-publish, then delete while the builder keeps failing: DB delete lands, outcome surfaced
+    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const del = await b.app.inject({ method: 'DELETE', url: `/posts/${tk}`, cookies: cookie });
+    expect(del.statusCode).toBe(200);
+    expect(del.json()).toEqual({ deleted: true, build: { ok: false, error: 'a build is already running' } });
+    expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).statusCode).toBe(404);
+  });
 });
 
 describe('WordPress import', () => {

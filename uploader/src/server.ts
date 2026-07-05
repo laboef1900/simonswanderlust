@@ -323,7 +323,12 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   // Hard delete (both locale rows), freeing the slugs for reuse. MDX backups in
   // /data/backup and uploaded images are intentionally left in place (recovery
-  // path). Rebuild only when the post was live — a draft was never on the site.
+  // path). Rebuild only when the post is currently published.
+  // @ai-warning: "draft" does not guarantee the post is absent from the live
+  // site — if a prior unpublish's rebuild failed (e.g. "a build is already
+  // running"), the deployed release may still contain it until the next
+  // successful build. The unpublish response surfaces that failure to the
+  // admin; build queueing (issue #36) is the proper fix.
   app.delete('/posts/:tk', { preHandler: requireAdmin }, async (req, reply) => {
     const tk = (req.params as { tk: string }).tk;
     const pair = await posts.get(tk);

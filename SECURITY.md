@@ -34,9 +34,11 @@ change about the security posture.
 
 - `requireAuth` gates all CMS/editor/upload/import endpoints.
 - `requireAdmin` gates **user management**, **settings** (`/settings` — backup schedule and
-  retention), **backups**, **rebuild**, **page edits**, and, importantly, **publishing**
-  (`POST /posts/:tk/publish`). Non-admin authors may create and edit drafts but **cannot push
-  content to the public site or change a published slug** — only admins publish.
+  retention), **backups**, **rebuild**, **page edits**, and, importantly, everything that
+  changes what the public site serves: **publishing** (`POST /posts/:tk/publish`),
+  **unpublishing** (`POST /posts/:tk/unpublish`), and **post deletion** (`DELETE /posts/:tk`).
+  Non-admin authors may create and edit drafts but **cannot push content to the public site,
+  take it down, or change a published slug** — only admins publish.
 
 ## Error handling
 

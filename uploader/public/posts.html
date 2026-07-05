@@ -58,9 +58,16 @@
         return build.ok ? ' Site rebuilt.' : ' Rebuild failed: ' + build.error;
       }
 
-      async function unpublishPost(p) {
+      // Draft slugs may still be empty — only render "(de / en)" when set.
+      function slugSuffix(p) {
+        const slugs = [p.slugDe, p.slugEn].filter(Boolean).join(' / ');
+        return slugs ? ' (' + slugs + ')' : '';
+      }
+
+      async function unpublishPost(p, btn) {
         const title = p.titleDe || '(untitled)';
-        if (!confirm('Unpublish "' + title + '" (' + p.slugDe + ' / ' + p.slugEn + ')?\n\nThe post will be removed from the live site on the next build and revert to a draft.')) return;
+        if (!confirm('Unpublish "' + title + '"' + slugSuffix(p) + '?\n\nThe post will be removed from the live site on the next build and revert to a draft.')) return;
+        btn.disabled = true; // no double-fire while the request is in flight
         $('out').textContent = 'Unpublishing…';
         const res = await fetch('/posts/' + encodeURIComponent(p.translationKey) + '/unpublish', { method: 'POST' });
         if (res.status === 401) { location.href = '/login'; return; }
@@ -68,15 +75,16 @@
         $('out').textContent = res.ok
           ? 'Unpublished "' + title + '".' + describeBuild(body.build)
           : 'Unpublish failed: ' + (body.error || res.status);
-        if (res.ok) await load();
+        if (res.ok) await load(); else btn.disabled = false;
       }
 
-      async function deletePost(p) {
+      async function deletePost(p, btn) {
         const title = p.titleDe || '(untitled)';
         const warning = p.status === 'published'
           ? '\n\nThis post is PUBLISHED — it will be removed from the live site on the next build.'
           : '';
-        if (!confirm('Delete "' + title + '" (' + p.slugDe + ' / ' + p.slugEn + ')?' + warning + '\n\nThis cannot be undone.')) return;
+        if (!confirm('Delete "' + title + '"' + slugSuffix(p) + '?' + warning + '\n\nThis cannot be undone.')) return;
+        btn.disabled = true; // no double-fire while the request is in flight
         $('out').textContent = 'Deleting…';
         const res = await fetch('/posts/' + encodeURIComponent(p.translationKey), { method: 'DELETE' });
         if (res.status === 401) { location.href = '/login'; return; }
@@ -84,7 +92,7 @@
         $('out').textContent = res.ok
           ? 'Deleted "' + title + '".' + describeBuild(body.build)
           : 'Delete failed: ' + (body.error || res.status);
-        if (res.ok) await load();
+        if (res.ok) await load(); else btn.disabled = false;
       }
 
       async function load() {
@@ -147,7 +155,7 @@
                 unpubBtn.className = 'btn-remove';
                 unpubBtn.style.marginLeft = '0.75rem';
                 unpubBtn.style.fontSize = '0.7rem';
-                unpubBtn.addEventListener('click', () => unpublishPost(p));
+                unpubBtn.addEventListener('click', () => unpublishPost(p, unpubBtn));
                 tdActions.appendChild(unpubBtn);
               }
               const delBtn = document.createElement('button');
@@ -155,7 +163,7 @@
               delBtn.className = 'btn-remove';
               delBtn.style.marginLeft = '0.75rem';
               delBtn.style.fontSize = '0.7rem';
-              delBtn.addEventListener('click', () => deletePost(p));
+              delBtn.addEventListener('click', () => deletePost(p, delBtn));
               tdActions.appendChild(delBtn);
             }
             tr.appendChild(tdActions);
