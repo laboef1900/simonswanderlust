@@ -339,6 +339,32 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send({ ok: true });
   });
 
+  // Self-service password change (any authenticated user, own account only).
+  // Rate-limited like the other password-verifying endpoints: a hijacked
+  // session must not be able to brute-force the current password.
+  app.post('/users/me/password', { preHandler: [limitAuth, requireAuth] }, async (req, reply) => {
+    const b = (req.body ?? {}) as { currentPassword?: unknown; newPassword?: unknown };
+    const currentPassword = String(b.currentPassword ?? '');
+    const newPassword = String(b.newPassword ?? '');
+    if (!currentPassword || !newPassword) {
+      return reply.code(400).send({ error: 'current and new password are required' });
+    }
+    const user = req.authUser ? await users.findById(req.authUser.id) : null;
+    if (!user) return reply.code(401).send({ error: 'unauthorized' });
+    // @ai-note: a wrong current password is a 400, NOT a 401 — the admin-page
+    // fetch handlers redirect to /login on 401, which would boot the user mid-form.
+    if (!verifyPassword(currentPassword, user.passwordHash)) {
+      return reply.code(400).send({ error: 'current password is incorrect' });
+    }
+    await users.setPassword(user.id, newPassword);
+    await sessions.destroyAllForUser(user.id);
+    // destroyAllForUser also killed the caller's own session — mint a fresh one
+    // (mirrors /login) so changing the password doesn't log its author out.
+    const token = await sessions.create(user.id, SESSION_TTL_MS);
+    setSessionCookie(reply, token, isSecureRequest(req));
+    return reply.send({ ok: true });
+  });
+
   const { posts } = cfg;
 
   app.get('/posts', { preHandler: requireAuth }, async () => posts.list());

@@ -156,6 +156,15 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   for v2 dumps — `pages` (v1 dumps leave existing pages untouched). Deleting users **cascades to
   `sessions`**, so every login is invalidated — the CLI prints a reminder to trigger a rebuild
   afterwards (`POST /rebuild`).
+- **Admin password recovery** — a forgotten password is reset from the host via the CLI (the
+  runtime image has no shell, so use the exec form):
+  `docker compose exec app node --import tsx src/cli.ts set-password <username>` — prompts for
+  the new password when omitted (input is echoed; passing it as an argument would expose it in
+  the container's process list) and invalidates that user's sessions. Routine rotation while
+  logged in: the "Change my password" card on `/admin/users.html`. Last-resort lockout fallback:
+  `docker compose exec db psql -U images -d images -c 'DELETE FROM users;'` re-opens `/setup`
+  (zero-users check) on the next visit to `/login`. That deletes **only** accounts and their
+  cascaded sessions — `posts`, `pages`, and images carry no user FK and are untouched.
 
 ### Image originals & incremental archives
 

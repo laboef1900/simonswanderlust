@@ -52,6 +52,8 @@ export interface UserStore {
   findById(id: string): Promise<User | null>;
   list(): Promise<User[]>;
   create(u: NewUser): Promise<User>;
+  /** Replaces the stored hash. Throws a plain Error for an unknown id. */
+  setPassword(id: string, password: string): Promise<void>;
   remove(id: string): Promise<void>;
 }
 
@@ -75,6 +77,11 @@ export function memoryUserStore(): UserStore {
       const user: User = { id: randomUUID(), username, passwordHash: hashPassword(password), isAdmin, createdAt: new Date() };
       byId.set(user.id, user);
       return user;
+    },
+    async setPassword(id, password) {
+      const user = byId.get(id);
+      if (!user) throw new Error('user not found');
+      user.passwordHash = hashPassword(password);
     },
     async remove(id) { byId.delete(id); },
   };
@@ -125,6 +132,10 @@ export function pgUserStore(pool: DbPool): UserStore {
         if ((e as { code?: string }).code === '23505') throw new UserExistsError('username already exists');
         throw e;
       }
+    },
+    async setPassword(id, password) {
+      const { rowCount } = await pool.query('UPDATE users SET password_hash = $2 WHERE id = $1', [id, hashPassword(password)]);
+      if (!rowCount) throw new Error('user not found');
     },
     async remove(id) {
       await pool.query('DELETE FROM users WHERE id = $1', [id]);

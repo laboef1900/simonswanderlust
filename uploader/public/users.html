@@ -31,6 +31,16 @@
         <h2>Existing users</h2>
         <ul id="list"></ul>
       </section>
+      <section class="card">
+        <h2>Change my password</h2>
+        <label for="curpw">Current password</label>
+        <input id="curpw" type="password" autocomplete="current-password" />
+        <label for="newpw">New password</label>
+        <input id="newpw" type="password" autocomplete="new-password" />
+        <button id="changepw">Change password</button>
+        <p class="section-label">Status</p>
+        <pre id="pwout">—</pre>
+      </section>
     </main>
     <script src="/admin/auth.js"></script>
     <script>
@@ -69,6 +79,15 @@
         if (res.status === 401) { location.href = '/login'; return; }
         if (res.ok) { $('out').textContent = 'Added ' + username + '.'; $('username').value = ''; $('password').value = ''; $('isAdmin').checked = false; load(); }
         else { const r = await res.json().catch(() => ({})); $('out').textContent = r.error || ('Failed: ' + res.status); }
+      });
+      $('changepw').addEventListener('click', async () => {
+        const currentPassword = $('curpw').value;
+        const newPassword = $('newpw').value;
+        if (!currentPassword || !newPassword) { $('pwout').textContent = 'Enter your current and new password.'; return; }
+        const res = await fetch('/users/me/password', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ currentPassword, newPassword }) });
+        if (res.status === 401) { location.href = '/login'; return; }
+        if (res.ok) { $('pwout').textContent = 'Password changed. Your other sessions were logged out.'; $('curpw').value = ''; $('newpw').value = ''; }
+        else { const r = await res.json().catch(() => ({})); $('pwout').textContent = r.error || ('Failed: ' + res.status); }
       });
       (async () => {
         me = await Auth.ensureAuthed({ admin: true });

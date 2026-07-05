@@ -15,6 +15,8 @@ export interface SessionStore {
   create(userId: string, ttlMs: number): Promise<string>;
   find(rawToken: string): Promise<Session | null>;
   destroy(rawToken: string): Promise<void>;
+  /** Invalidates every session of one user (e.g. after a password change). */
+  destroyAllForUser(userId: string): Promise<void>;
   sweepExpired(): Promise<void>;
 }
 
@@ -37,6 +39,9 @@ export function memorySessionStore(): SessionStore {
     },
     async destroy(rawToken) {
       if (rawToken) byHash.delete(hashToken(rawToken));
+    },
+    async destroyAllForUser(userId) {
+      for (const [k, v] of byHash) if (v.userId === userId) byHash.delete(k);
     },
     async sweepExpired() {
       const now = Date.now();
@@ -70,6 +75,9 @@ export function pgSessionStore(pool: DbPool): SessionStore {
     },
     async destroy(rawToken) {
       if (rawToken) await pool.query('DELETE FROM sessions WHERE id = $1', [hashToken(rawToken)]);
+    },
+    async destroyAllForUser(userId) {
+      await pool.query('DELETE FROM sessions WHERE user_id = $1', [userId]);
     },
     async sweepExpired() {
       await pool.query('DELETE FROM sessions WHERE expires_at <= now()');
