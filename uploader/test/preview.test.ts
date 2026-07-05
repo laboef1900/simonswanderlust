@@ -99,6 +99,24 @@ describe('renderPreviewHtml', () => {
     expect(html).not.toContain('class="hero"');
   });
 
+  it('tolerates non-string jsonb alt / key-fact values without throwing (draft saves are untyped)', async () => {
+    // validateDraft type-checks only title + slug, so hero.alt and keyFacts
+    // values can be any JSON on a draft. escapeHtml must coerce them rather
+    // than throw a TypeError on .replaceAll and 500 the preview.
+    const p = pair();
+    p.de.heroImage = {
+      src: 'https://img.example.com/trips/bukarest/hero',
+      width: 1600,
+      height: 900,
+      alt: undefined as unknown as string, // missing 'alt' key in the jsonb
+    };
+    p.shared.keyFacts = { Höhe: 42 as unknown as string }; // a number, not a string
+    const html = await renderPreviewHtml(p, 'de');
+    expect(html).toContain('class="hero"'); // hero still renders (dims are valid)
+    expect(html).toContain('alt=""'); // undefined alt coerced to empty string
+    expect(html).toContain('<dd>42</dd>'); // numeric key-fact stringified, not crashed
+  });
+
   it('drops the hero for non-positive or fractional dimensions', async () => {
     const cases: Array<[number, number]> = [[0, 900], [1600, -1], [1600.5, 900], [NaN, 900]];
     for (const [width, height] of cases) {

@@ -15,8 +15,15 @@ import { srcset, fallbackSrc } from '../../site/src/lib/images.js';
 import { coordsLabel, dateLabel } from '../../site/src/lib/format.js';
 import type { HeroImage, Locale, PostPair } from './posts.js';
 
+// @ai-warning: several fields escaped here (hero.alt, keyFacts labels/values,
+// coordinate/date strings) are typed as string but come from untyped jsonb
+// columns, and draft saves only run validateDraft (title + slug) — so a draft
+// may carry a non-string value where a string belongs. `.replaceAll` only
+// exists on strings, so coerce first (mirrors the width/height guard in
+// heroHtml); otherwise a non-string alt/keyFact would throw a TypeError and
+// 500 the whole preview.
 function escapeHtml(s: string): string {
-  return s
+  return String(s ?? '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
