@@ -11,10 +11,10 @@
       <div class="masthead-inner">
         <nav id="mainnav" aria-label="Admin"></nav>
         <p class="eyebrow">Expedition Log · Image Station</p>
-        <h1>Site &amp; database</h1>
+        <h1>Settings</h1>
         <p class="lede">
-          Schedule database backups, run one on demand, and rebuild the public site.
-          Saved settings apply immediately; no redeploy.
+          Configure the local vision model for alt-text suggestions, schedule database
+          backups, and rebuild the public site. Saved settings apply immediately; no redeploy.
         </p>
         <p class="muted" id="whoami"></p>
       </div>
@@ -22,6 +22,35 @@
 
     <main>
       <section class="card">
+        <h2 class="card-heading">AI alt-text (local LM Studio)</h2>
+        <p class="muted">
+          Suggestions run in <em>this browser</em> against the base URL below (your machine's
+          LM Studio) — the server never contacts the model. Set it to where LM Studio listens
+          here, usually <code>http://localhost:1234/v1</code>.
+        </p>
+
+        <label for="baseUrl">LM Studio base URL (as this browser reaches it)</label>
+        <input id="baseUrl" type="text" placeholder="http://localhost:1234/v1" />
+
+        <label for="model">Model</label>
+        <select id="model"></select>
+        <input id="modelManual" type="text" placeholder="…or type a model id" />
+
+        <label for="timeout">Caption timeout (ms)</label>
+        <input id="timeout" type="number" min="1000" max="600000" />
+
+        <label for="maxEdge">Max image edge (px)</label>
+        <input id="maxEdge" type="number" min="256" max="4096" />
+
+        <label for="prompt">Caption prompt</label>
+        <textarea id="prompt" rows="8"></textarea>
+
+        <button id="test">Test connection</button>
+      </section>
+
+      <section class="card">
+        <h2 class="card-heading">Site &amp; database</h2>
+
         <label for="backupSchedule">Database backup schedule</label>
         <select id="backupSchedule">
           <option value="off">Off</option>
@@ -32,7 +61,6 @@
         <label for="backupRetention">Backups to keep</label>
         <input id="backupRetention" type="number" min="1" max="100" />
 
-        <button id="save">Save</button>
         <button id="backupNow">Back up now</button>
         <button id="rebuild">Rebuild site now</button>
 
@@ -50,6 +78,8 @@
         </p>
       </section>
 
+      <button id="save">Save settings</button>
+
       <div class="route" aria-hidden="true">
         <span class="dot"></span><span class="seg"></span>
         <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>
@@ -61,13 +91,42 @@
     </main>
 
     <script src="/admin/auth.js"></script>
+    <script src="/admin/llm.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
 
       function fill(s) {
+        $('baseUrl').value = s.lmBaseUrl || '';
+        $('timeout').value = s.captionTimeoutMs ?? '';
+        $('maxEdge').value = s.captionMaxEdge ?? '';
+        $('prompt').value = s.captionPrompt || '';
         $('backupSchedule').value = s.backupSchedule || 'off';
         $('backupRetention').value = s.backupRetention ?? 14;
+        const sel = $('model');
+        if (s.lmModel && ![...sel.options].some((o) => o.value === s.lmModel)) {
+          sel.add(new Option(s.lmModel, s.lmModel));
+        }
+        if (s.lmModel) sel.value = s.lmModel;
       }
+
+      // Repopulate the dropdown from a live model list, preserving the current
+      // selection even if LM Studio isn't serving it (so a saved/manual id survives).
+      function populateModels(models) {
+        const sel = $('model');
+        const keep = sel.value;
+        sel.innerHTML = '';
+        for (const m of models) sel.add(new Option(m, m));
+        if (keep && ![...sel.options].some((o) => o.value === keep)) sel.add(new Option(keep, keep));
+        if (keep) sel.value = keep;
+      }
+
+      async function loadModels() {
+        try {
+          populateModels(await LLM.listModels($('baseUrl').value.trim()));
+        } catch { /* LM Studio not reachable from here — leave the manual field */ }
+      }
+
+      function chosenModel() { return $('modelManual').value.trim() || $('model').value; }
 
       async function init() {
         try {
@@ -75,9 +134,30 @@
           if (res.status === 401) { location.href = '/login'; return; }
           if (!res.ok) { $('out').textContent = 'Could not load settings: ' + res.status; return; }
           fill(await res.json());
+          await loadModels();
           $('out').textContent = 'Loaded.';
         } catch (e) { $('out').textContent = 'Error: ' + e; }
       }
+
+      $('test').addEventListener('click', async () => {
+        $('out').textContent = 'Testing from this browser…';
+        try {
+          const models = await LLM.listModels($('baseUrl').value.trim());
+          populateModels(models);
+          const model = chosenModel();
+          if (models.includes(model)) {
+            $('out').textContent = 'Reachable from this browser. Model "' + model + '" is available ✓';
+          } else if (models.length) {
+            $('out').textContent = 'Reachable, but "' + (model || '(none selected)') +
+              '" is not being served. Available now: ' + models.join(', ');
+          } else {
+            $('out').textContent = 'Reachable, but no models are loaded in LM Studio.';
+          }
+        } catch (e) {
+          $('out').textContent = 'Not reachable from this browser (' + e.message +
+            '). Is LM Studio running and serving on ' + $('baseUrl').value.trim() + '?';
+        }
+      });
 
       $('save').addEventListener('click', async () => {
         $('out').textContent = 'Saving…';
@@ -86,6 +166,11 @@
           res = await fetch('/settings', {
             method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
+              lmBaseUrl: $('baseUrl').value.trim(),
+              lmModel: chosenModel(),
+              captionTimeoutMs: Number($('timeout').value),
+              captionMaxEdge: Number($('maxEdge').value),
+              captionPrompt: $('prompt').value,
               backupSchedule: $('backupSchedule').value,
               backupRetention: Number($('backupRetention').value),
             }),
