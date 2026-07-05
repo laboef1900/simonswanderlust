@@ -6,6 +6,7 @@ import sharp from 'sharp';
 import { uploadFile, resetPassword } from '../src/cli.js';
 import { memoryUserStore, verifyPassword } from '../src/users.js';
 import { memorySessionStore } from '../src/sessions.js';
+import { runCli, envWithoutDatabaseUrl } from './run-cli.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -42,4 +43,31 @@ describe('resetPassword', () => {
     await expect(resetPassword(memoryUserStore(), memorySessionStore(), 'ghost', 'pw'))
       .rejects.toThrow('user not found');
   });
+});
+
+// Wiring tests for setPasswordMain: spawn the CLI exactly as production invokes
+// it. None of these paths reach the database — the guards (and the EOF-on-prompt
+// fallback) all fire before a pool is created, so a bogus DATABASE_URL is fine.
+describe('set-password CLI wiring (spawned process)', () => {
+  it('prints usage and exits 1 when the username is missing', async () => {
+    const r = await runCli(['set-password'], envWithoutDatabaseUrl());
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('usage: tsx src/cli.ts set-password <username> [newPassword]');
+  }, 30_000);
+
+  it('exits 1 when DATABASE_URL is missing', async () => {
+    const r = await runCli(['set-password', 'simon'], envWithoutDatabaseUrl());
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('DATABASE_URL is required for set-password');
+  }, 30_000);
+
+  it('EOF on the password prompt exits 1 cleanly instead of hanging', async () => {
+    // runCli closes stdin immediately, so rl.question() sees EOF without a line —
+    // this pins the Promise.race('close') fallback and the empty-password guard.
+    const r = await runCli(['set-password', 'simon'],
+      { ...process.env, DATABASE_URL: 'postgres://nobody:nope@127.0.0.1:1/nope' });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toContain('New password');
+    expect(r.stderr).toContain('the new password must not be empty');
+  }, 30_000);
 });

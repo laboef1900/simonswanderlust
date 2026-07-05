@@ -112,7 +112,9 @@ Full details in [`../SECURITY.md`](../SECURITY.md); the essentials:
 - **Always run behind the TLS-terminating reverse proxy.** The app trusts `X-Forwarded-*`
   (so per-IP login throttling and the cookie `secure` flag work); your proxy MUST set
   `X-Forwarded-Proto`. Do not expose port 3000 directly to the internet.
-- **Auth endpoints are rate-limited** per client IP (`/login`, `/setup`) to slow brute-force.
+- **Password-verifying endpoints are rate-limited** per client IP (`/login`, `/setup`, and the
+  authenticated `POST /users/me/password`) to slow brute-force; they share one bucket, so failed
+  current-password guesses count against login attempts from that IP.
 - **Publishing is admin-only.** Non-admin accounts can create and edit drafts but cannot publish
   to the public site or change a published slug; only admins can publish.
 - **WordPress import is SSRF-guarded.** Remote image fetches reject internal/loopback addresses,
@@ -127,6 +129,19 @@ STORAGE_DIR=./data/images PUBLIC_BASE_URL=https://img.simonswanderlust.com \
 
 Prints the paste-ready `heroImage:` snippet and writes all variants under
 `STORAGE_DIR`.
+
+## CLI password reset (recovery)
+
+Forgot a password? Reset it from the host — the runtime image has no shell, so use the exec form:
+
+```bash
+docker compose exec app node --import tsx src/cli.ts set-password <username>
+```
+
+Prompts for the new password when it is omitted (input is echoed) and invalidates that user's
+sessions. Routine rotation while logged in uses the "Change my password" card on
+`/admin/users.html`. Full recovery notes (including the last-resort `DELETE FROM users;` →
+`/setup` fallback) are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
 
 ## Develop
 

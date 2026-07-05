@@ -50,6 +50,23 @@ maybe('postgres stores (integration)', () => {
     await expect(users.setPassword(randomUUID(), 'x')).rejects.toThrow('user not found');
   });
 
+  it('set-password CLI end-to-end: argv path updates the hash; unknown user exits 1 with a clean one-liner', async () => {
+    const { runCli } = await import('./run-cli.js');
+    const users = pgUserStore(pool);
+    const name = `cli${Date.now()}`;
+    await users.create({ username: name, password: 'old-pw', isAdmin: false });
+    const ok = await runCli(['set-password', name, 'cli-new-pw'], { ...process.env, DATABASE_URL: url! });
+    expect(ok.code).toBe(0);
+    expect(ok.stdout).toContain(`password updated for ${name}`);
+    const after = await users.findByUsername(name);
+    expect(verifyPassword('cli-new-pw', after!.passwordHash)).toBe(true);
+    expect(verifyPassword('old-pw', after!.passwordHash)).toBe(false);
+    const ghost = `ghost-${Date.now()}`;
+    const bad = await runCli(['set-password', ghost, 'x'], { ...process.env, DATABASE_URL: url! });
+    expect(bad.code).toBe(1);
+    expect(bad.stderr.trim()).toBe(`user not found: ${ghost}`); // clean message, no stack trace
+  }, 30_000);
+
   it('destroyAllForUser removes only that user\'s sessions', async () => {
     const users = pgUserStore(pool);
     const sessions = pgSessionStore(pool);

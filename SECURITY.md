@@ -29,6 +29,13 @@ change about the security posture.
   expired rows are swept hourly. (`uploader/src/sessions.ts`, `authn.ts`)
 - **First-admin setup** (`/setup`) is only available while no users exist, and is **serialized**
   with a per-process lock so two concurrent requests cannot both create an admin (TOCTOU closed).
+- **Password changes** — `POST /users/me/password` lets an authenticated user rotate their own
+  password after re-proving the **current** one (rate-limited, so a hijacked session cannot
+  brute-force it — see *Rate limiting*). On success **all of that user's sessions are destroyed**
+  and the caller receives a freshly minted cookie, so any stolen session dies immediately.
+  Forgotten passwords are reset out-of-band from the host via the CLI
+  (`docker compose exec app node --import tsx src/cli.ts set-password <username>`), which also
+  invalidates all of that user's sessions — recovery procedure in `ARCHITECTURE.md`.
 
 ## Authorization
 
@@ -48,8 +55,10 @@ keep their sanitized messages. (`uploader/src/server.ts`)
 
 ## Rate limiting
 
-A per-client-IP fixed-window limiter throttles the unauthenticated auth endpoints (`/login`,
-`/setup`) to slow brute-force attempts. It is in-memory and dependency-free
+A per-client-IP fixed-window limiter throttles the password-verifying endpoints — the
+unauthenticated `/login` and `/setup`, plus the authenticated `POST /users/me/password` — to slow
+brute-force attempts. All three share the same per-IP bucket, so failed current-password guesses
+also count against login attempts from that IP. It is in-memory and dependency-free
 (`uploader/src/rate-limit.ts`); with a single container that is sufficient. (If ever scaled to
 multiple replicas, limits would be counted per replica.)
 

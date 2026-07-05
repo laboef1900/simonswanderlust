@@ -396,6 +396,15 @@ describe('POST /users/me/password (change password)', () => {
     expect((await change(b, cookie, { currentPassword: 'wrong', newPassword: 'x' })).statusCode).toBe(400);
     expect((await change(b, cookie, { currentPassword: 'wrong', newPassword: 'x' })).statusCode).toBe(429);
   });
+
+  it('limitAuth runs before requireAuth: unauthenticated requests consume the limiter too', async () => {
+    // First unauthenticated hit passes the limiter (consuming its one slot) and
+    // fails auth with 401; the second is cut off by the limiter with 429. This
+    // pins the preHandler order the brute-force defense relies on.
+    const b = build({ loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
+    expect((await change(b, undefined, { currentPassword: 'x', newPassword: 'y' })).statusCode).toBe(401);
+    expect((await change(b, undefined, { currentPassword: 'x', newPassword: 'y' })).statusCode).toBe(429);
+  });
 });
 
 describe('posts editor', () => {

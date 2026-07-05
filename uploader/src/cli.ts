@@ -84,6 +84,16 @@ async function setPasswordMain(username: string | undefined, passwordArg: string
   try {
     await resetPassword(pgUserStore(pool), pgSessionStore(pool), username, password);
     console.log(`password updated for ${username}; all sessions for that user were invalidated.`);
+  } catch (e) {
+    // A typo'd username is the expected failure in a lockout — print a clean
+    // one-liner instead of a stack trace. process.exitCode (not exit()) lets
+    // the finally block still close the pool before the process ends.
+    if (e instanceof Error && e.message.startsWith('user not found')) {
+      console.error(e.message);
+      process.exitCode = 1;
+      return;
+    }
+    throw e;
   } finally {
     await pool.end();
   }
