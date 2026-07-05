@@ -302,6 +302,12 @@ export function pgPostStore(pool: DbPool): PostStore {
       pair = draftWithDefaults(pair);
       const tk = pair.translationKey || randomUUID();
       const existing = await this.get(tk);
+      // @ai-note The read → check → snapshot → write sequence below is NOT
+      // transactional: two saves racing within the same ms window can both
+      // pass this check (single-process deployment; the losing state is still
+      // recoverable via its revision). A hard guarantee would need
+      // SELECT ... FOR UPDATE in one transaction — keep the timestamp compare
+      // in JS if that ever happens (see assertNotStale's @ai-warning).
       if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
       for (const locale of ['de', 'en'] as Locale[]) {
         const { rows } = await pool.query<{ translation_key: string }>(`SELECT translation_key FROM posts WHERE locale=$1 AND slug=$2`, [locale, pair[locale].slug]);

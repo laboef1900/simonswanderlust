@@ -116,6 +116,8 @@ describe('memoryPostStore optimistic concurrency', () => {
     await expect(attempt()).rejects.toBeInstanceOf(PostError);
     await expect(attempt()).rejects.toMatchObject({ code: 'conflict' });
     expect((await s.get(created.translationKey))?.de.title).toBe('Bukarest');
+    // The check runs BEFORE the snapshot: a rejected save must record no revision.
+    expect(await s.listRevisions(created.translationKey)).toHaveLength(0);
   });
 
   it('detects the two-tab scenario: B saves first, then stale A is rejected', async () => {

@@ -511,8 +511,11 @@
         $(loc + 'HeroHeight').value = hero.height || '';
         $(loc + 'HeroAlt').value = hero.alt || '';
         $(loc + 'HeroStatus').textContent = hero.src ? 'Hero: ' + hero.src : '';
+        // Reset the dimension map before filling it — merging would persist
+        // stale entries from the pre-restore state on the next Save.
+        const map = loc === 'de' ? deImages : enImages;
+        for (const k of Object.keys(map)) delete map[k];
         if (data.images && typeof data.images === 'object') {
-          const map = loc === 'de' ? deImages : enImages;
           Object.assign(map, data.images);
         }
       }
@@ -611,9 +614,22 @@
         if (res.status === 401) { location.href = '/login'; return; }
         if (!res.ok) { showErr('Could not load revision: ' + res.status); return; }
         const rev = await res.json();
+        // On a published post the slug fields are disabled (slug locked for
+        // SEO), but buildPayload still reads their .value — restoring a
+        // snapshot from before a slug change would make every Save 409
+        // (slug_locked) with no way to correct the disabled field. Keep the
+        // current live slugs; only the content is restored.
+        const keptSlugDe = isPublished ? $('slugFieldDe').value : null;
+        const keptSlugEn = isPublished ? $('slugFieldEn').value : null;
         populatePair(rev.snapshot);
+        if (isPublished) {
+          $('slugFieldDe').value = keptSlugDe;
+          $('slugFieldEn').value = keptSlugEn;
+        }
         setStatus('Restored the revision from ' + new Date(rev.savedAt).toLocaleString()
-          + ' into the editor — review it, then Save draft to keep it.');
+          + ' into the editor'
+          + (isPublished ? ' (current slugs kept — the slug is locked after publish)' : '')
+          + ' — review it, then Save draft to keep it.');
       }
 
       // ---- init ----
