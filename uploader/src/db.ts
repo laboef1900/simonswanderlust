@@ -79,8 +79,8 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   // column MUST therefore land in BOTH places:
   //   1. the table's CREATE TABLE statement above (fresh installs), and
   //   2. a matching statement appended in this section (existing databases),
-  //      e.g.:
-  //        await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS publish_at timestamptz`);
+  //      e.g. (illustrative only — not a real column):
+  //        await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS example_col text`);
   // Rules: statements must stay idempotent — ensureSchema runs on every boot
   // (uploader/src/main.ts) — and NOT NULL columns MUST carry a DEFAULT, or
   // the ALTER fails on populated tables. Never edit or reorder past
