@@ -4,7 +4,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import type { BackupSchedule } from './settings.js';
-import type { DbPool } from './db.js';
+import { POST_SNAPSHOT_SQL, type DbPool } from './db.js';
 
 export const DUMP_VERSION = 2;
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
@@ -155,8 +155,8 @@ export async function restoreDatabase(
       );
     }
     for (const p of dump.tables.posts) {
-      // published_snapshot/published_at are absent from older dumps → restored
-      // as NULL; the next ensureSchema run backfills them from the working copy.
+      // published_snapshot/published_at are absent from older dumps → inserted
+      // as NULL here, then backfilled below in this same transaction.
       await client.query(
         `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
            excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status, created_at, updated_at,
@@ -168,6 +168,20 @@ export async function restoreDatabase(
          asJsonb(p.published_snapshot), p.published_at ?? null],
       );
     }
+    // @ai-warning: pre-snapshot dumps (v1, and v2 files written before issue
+    // #20) carry no published_snapshot, so their published rows would land
+    // NULL — invisible to the site loader (`published_snapshot IS NOT NULL`)
+    // until ensureSchema runs at the NEXT app start, which the documented
+    // restore flow (CLI restore → POST /rebuild, no restart) never triggers.
+    // Backfill in the same transaction, exactly like the ensureSchema
+    // migration: promote the restored working copy of already-published rows
+    // into the snapshot. The NULL guard keeps new-format dumps intact — their
+    // restored snapshots (and any unpublished draft edits) survive unchanged.
+    await client.query(
+      `UPDATE posts SET published_snapshot = ${POST_SNAPSHOT_SQL},
+                        published_at = COALESCE(published_at, updated_at)
+        WHERE status = 'published' AND published_snapshot IS NULL`,
+    );
     // A v1 dump carries no `pages` key at all — leave existing pages untouched
     // so restoring an old backup can't silently wipe content it never captured.
     if (dump.tables.pages) {

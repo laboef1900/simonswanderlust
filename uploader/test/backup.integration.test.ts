@@ -113,4 +113,47 @@ maybe('backup round-trip (Postgres)', () => {
     const kept = (await pool.query(`SELECT title FROM pages WHERE key='about' AND locale='en'`)).rows[0];
     expect(kept.title).toBe('keep');
   });
+
+  it('backfills published_snapshot when restoring a pre-snapshot dump, in the same transaction', async () => {
+    // A dump taken BEFORE issue #20 (v2, but no published_snapshot/published_at
+    // keys): its published rows must become loader-visible right after the
+    // restore — the documented flow is restore → POST /rebuild with no app
+    // restart, so restoreDatabase itself must run the backfill, not ensureSchema.
+    const { gzipSync } = await import('node:zlib');
+    const { writeFileSync } = await import('node:fs');
+    const { randomUUID } = await import('node:crypto');
+    const oldPost = (locale: 'de' | 'en', slug: string, status: 'draft' | 'published', body: string) => ({
+      id: randomUUID(), translation_key: 'legacy-pair', locale, slug, title: 'Legacy', date: '2025-06-01',
+      country: 'Peru', country_code: 'PE', region: 'south-america', excerpt: 'x',
+      hero_image: { src: 'https://img.example/h', width: 100, height: 50, alt: 'a' },
+      coordinates: { lat: -12, lng: -77 }, stops: null, route: null, key_facts: null,
+      body_markdown: body, images: {}, status,
+      created_at: '2025-06-01T10:00:00.000Z', updated_at: '2025-06-02T10:00:00.000Z',
+    });
+    const posts = [
+      oldPost('de', 'legacy-reise', 'published', 'Live DE'),
+      oldPost('en', 'legacy-trip', 'published', 'Live EN'),
+      { ...oldPost('de', 'entwurf', 'draft', 'Draft body'), translation_key: 'legacy-draft' },
+    ];
+    const pre = join(dir, 'db-20260601-000000.json.gz');
+    writeFileSync(pre, gzipSync(JSON.stringify({ version: 2, tables: { users: [], posts } })));
+
+    await restoreDatabase(pool, pre);
+    // Published rows are immediately visible to the site loader's query…
+    const visible = await pool.query(
+      `SELECT slug, published_snapshot->>'body_markdown' AS live, published_at
+         FROM posts WHERE status='published' AND published_snapshot IS NOT NULL ORDER BY slug`,
+    );
+    expect(visible.rows.map((r) => [r.slug, r.live])).toEqual([
+      ['legacy-reise', 'Live DE'],
+      ['legacy-trip', 'Live EN'],
+    ]);
+    for (const r of visible.rows) expect(r.published_at).toBeInstanceOf(Date);
+    // …while the draft row stays snapshot-less.
+    const draft = (await pool.query(
+      `SELECT published_snapshot, published_at FROM posts WHERE slug='entwurf'`,
+    )).rows[0];
+    expect(draft.published_snapshot).toBeNull();
+    expect(draft.published_at).toBeNull();
+  });
 });

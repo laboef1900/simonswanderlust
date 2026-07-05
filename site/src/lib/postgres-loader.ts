@@ -11,6 +11,20 @@ interface PostRow {
   key_facts: Record<string, string> | null; body_markdown: string; images: Record<string, ImageDims>;
 }
 
+/**
+ * pg parses a `date` column to a LOCAL-midnight JS Date; the published-snapshot
+ * jsonb carries 'YYYY-MM-DD' text instead (see POST_SNAPSHOT_SQL in
+ * uploader/src/db.ts). Parse that text to the same local midnight — a bare
+ * `new Date('YYYY-MM-DD')` would be UTC midnight, which `dateLabel`
+ * (format.ts, toLocaleDateString without an explicit timeZone) renders as the
+ * previous day/month on build machines west of UTC.
+ */
+function parseRowDate(date: Date | string): Date {
+  if (date instanceof Date) return date;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(date);
+}
+
 /** Pure mapping: a DB row → the { id, data, body } a loader will parse/store. */
 export function rowToEntryInput(row: PostRow) {
   return {
@@ -19,7 +33,7 @@ export function rowToEntryInput(row: PostRow) {
     images: row.images ?? {},
     data: {
       title: row.title,
-      date: row.date instanceof Date ? row.date : new Date(row.date),
+      date: parseRowDate(row.date),
       country: row.country,
       countryCode: row.country_code,
       region: row.region,
