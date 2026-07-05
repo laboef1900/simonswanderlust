@@ -17,6 +17,7 @@ window.AltSuggest = (function () {
   function wire(opts) {
     const { button, fileInput, altInput, statusEl, lang, hintEl } = opts;
     if (!button) return;
+    if (!fileInput || !altInput) return;
     const say = (msg) => { if (statusEl) statusEl.textContent = msg; };
     button.addEventListener('click', async () => {
       const file = fileInput.files && fileInput.files[0];

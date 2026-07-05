@@ -11,7 +11,12 @@ export const DEFAULT_PROMPT = [
   '- altDe: the same scene described natively in German (write it directly, do not translate word-for-word).',
 ].join('\n');
 
-export class CaptionError extends Error {}
+export class CaptionError extends Error {
+  constructor(message?: string) {
+    super(message);
+    this.name = 'CaptionError';
+  }
+}
 
 export interface Caption {
   altEn: string;
@@ -21,7 +26,7 @@ export interface Caption {
 /** Extract the first {…} JSON object from a model reply and require non-empty
  *  altEn + altDe. Tolerates prose/code-fence wrapping around the object. */
 export function parseCaption(content: string): Caption {
-  const match = content.match(/\{[\s\S]*\}/);
+  const match = content.match(/\{[\s\S]*?\}/);
   if (!match) throw new CaptionError('no JSON object in caption response');
   let obj: { altEn?: unknown; altDe?: unknown };
   try {

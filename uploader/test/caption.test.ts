@@ -29,6 +29,11 @@ describe('parseCaption', () => {
     expect(() => parseCaption('{"altEn":"X","altDe":""}')).toThrow(CaptionError);
     expect(() => parseCaption('{"altEn":"X"}')).toThrow(CaptionError);
   });
+
+  it('extracts the first object when the model appends trailing chatter', () => {
+    expect(parseCaption('{"altEn":"A","altDe":"B"} — let me know, e.g. {shorter}'))
+      .toEqual({ altEn: 'A', altDe: 'B' });
+  });
 });
 
 describe('DEFAULT_PROMPT', () => {

@@ -365,14 +365,7 @@ describe('settings endpoints', () => {
     const admin = await authed(b, { username: 'admin' });
     const res = await b.app.inject({ method: 'GET', url: '/settings', cookies: admin.cookie });
     expect(res.statusCode).toBe(200);
-    const settings = res.json();
-    expect(settings.backupSchedule).toBe('off');
-    expect(settings.backupRetention).toBe(14);
-    expect(settings.lmBaseUrl).toBe('http://localhost:1234/v1');
-    expect(settings.lmModel).toBe('qwen/qwen3-vl-4b');
-    expect(settings.captionTimeoutMs).toBe(60000);
-    expect(settings.captionMaxEdge).toBe(768);
-    expect(settings.captionPrompt.length).toBeGreaterThan(0);
+    expect(res.json()).toEqual(defaultSettings());
   });
 
   it('POST /settings is admin-only: 403 for authors', async () => {

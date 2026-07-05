@@ -9,7 +9,7 @@ window.LLM = (function () {
   const base = (u) => String(u).replace(/\/+$/, '');
 
   function parseCaption(content) {
-    const m = String(content).match(/\{[\s\S]*\}/);
+    const m = String(content).match(/\{[\s\S]*?\}/);
     if (!m) throw new Error('no JSON object in model response');
     const o = JSON.parse(m[0]);
     const altEn = String(o.altEn ?? '').trim();
