@@ -449,10 +449,21 @@ describe('POST /rebuild and GET /health', () => {
   });
 
   it('health returns 503 without error detail when the DB probe fails', async () => {
-    const b = build({ dbCheck: async () => { throw new Error('connection refused: internal detail'); } });
-    const res = await b.app.inject({ method: 'GET', url: '/health' });
-    expect(res.statusCode).toBe(503);
-    expect(res.json()).toEqual({ ok: false, db: false });
+    // Also pin the no-per-poll-logging property: the compose healthcheck fires
+    // every 10s, so a failing probe must not spam docker logs.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const b = build({ dbCheck: async () => { throw new Error('connection refused: internal detail'); } });
+      const res = await b.app.inject({ method: 'GET', url: '/health' });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ ok: false, db: false });
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 
   it('rebuild is admin-only', async () => {
