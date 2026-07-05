@@ -14,7 +14,8 @@ interface Stash {
 }
 interface Guard {
   markDirty(): void;
-  markClean(): void;
+  markClean(token?: number): void;
+  snapshot(): number;
   stashNow(): void;
   tryRestore(): Stash | null;
   setKey(newKey: string): void;
@@ -178,7 +179,9 @@ describe('DraftGuard.createDraftGuard', () => {
     expect(guard.tryRestore()).toBeNull();
   });
 
-  it('markClean removes the stash and cancels a pending debounced stash', () => {
+  it('tokenless markClean removes the stash and cancels a pending debounced stash', () => {
+    // Tokenless = unconditional: used by the restore-declined path, NOT by the
+    // save handlers (those must pass a snapshot() token — see the race tests).
     const sb = makeSandbox();
     const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ c: 3 }) });
     guard.stashNow();
@@ -188,6 +191,33 @@ describe('DraftGuard.createDraftGuard', () => {
     expect(sb.pendingTimers()).toBe(0);
     sb.flushTimers();
     expect(sb.store.has(KEY)).toBe(false);
+  });
+
+  it('markClean with a current snapshot token cleans normally after a save', () => {
+    const sb = makeSandbox();
+    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ c: 3 }) });
+    guard.markDirty();
+    const snap = guard.snapshot(); // taken just before the save fetch
+    guard.markClean(snap);         // response landed, nothing typed meanwhile
+    expect(sb.fireBeforeUnload().defaultPrevented).toBe(false);
+    expect(sb.pendingTimers()).toBe(0);
+    expect(sb.store.has(KEY)).toBe(false);
+  });
+
+  it('markClean with a stale token keeps mid-save edits dirty and stashed', () => {
+    // Race from the review: payload snapshotted at t0, user keeps typing while
+    // the request is in flight (the About save runs a full astro rebuild), the
+    // response lands and must NOT wipe the newer on-screen edits' protection.
+    const sb = makeSandbox();
+    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ c: 3 }) });
+    guard.markDirty();
+    const snap = guard.snapshot(); // save fetch starts here
+    guard.markDirty();             // user typed while the save was in flight
+    guard.markClean(snap);         // save response lands
+    expect(sb.fireBeforeUnload().defaultPrevented).toBe(true); // warning still armed
+    expect(sb.pendingTimers()).toBe(1);                        // debounced stash still pending
+    sb.flushTimers();
+    expect(sb.store.has(KEY)).toBe(true);                      // newer edits get stashed
   });
 
   it('setKey moves an existing stash to the new key', () => {
@@ -269,6 +299,31 @@ describe('admin page wiring', () => {
     expect(about).toContain("'Save failed: ' + e");
     expect(about).toContain("'Could not load: ' + e");
     expect(login).toContain("'Error: ' + e");
+  });
+
+  it('populateForm applies restore payloads deterministically (no field resurrection)', () => {
+    // buildPayload() omits cleared/empty fields from the stash, so populateForm
+    // must write every shared/hero field unconditionally with a fallback — an
+    // `if (shared.route)`-style guard resurrects server values the user deleted
+    // when a stash is restored over an already-loaded post.
+    expect(editor).toContain("$('fmDate').value = shared.date || ''");
+    expect(editor).toContain("$('fmCountry').value = shared.country || ''");
+    expect(editor).toContain("$('fmCountryCode').value = shared.countryCode || ''");
+    expect(editor).toContain("$('fmRegion').value = shared.region || ''");
+    expect(editor).toContain("$('fmRoute').value = shared.route || ''");
+    expect(editor).toContain('const coords = shared.coordinates || {}');
+    expect(editor).toContain('const hero = data.heroImage || {}');
+    expect(editor).not.toMatch(/if \(shared\.(date|country|countryCode|region|route|coordinates)\)/);
+    expect(editor).not.toMatch(/if \(data\.heroImage\)/);
+  });
+
+  it('save handlers pass a pre-fetch snapshot token to markClean (mid-save edits survive)', () => {
+    for (const page of [editor, about]) {
+      expect(page).toContain('const snap = guard.snapshot()');
+      expect(page).toContain('guard.markClean(snap)');
+      // the unconditional form must not be used on the save path
+      expect(page.match(/guard\.markClean\(\)/g) ?? []).toHaveLength(1); // restore-declined only
+    }
   });
 
   it('login honors a validated ?next= return URL', () => {

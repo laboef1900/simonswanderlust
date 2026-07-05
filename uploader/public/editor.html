@@ -430,6 +430,7 @@
       async function doSaveDraft() {
         showErr('');
         setStatus('Saving…');
+        const snap = guard.snapshot(); // edits typed after this point must survive markClean
         const payload = buildPayload();
         const url = currentTk ? '/posts/' + encodeURIComponent(currentTk) : '/posts';
         const method = currentTk ? 'PUT' : 'POST';
@@ -461,7 +462,7 @@
           history.replaceState(null, '', url2.toString());
           $('pageTitle').textContent = 'Edit post';
         }
-        guard.markClean(); // saved server-side — drop the stash, disarm the warning
+        guard.markClean(snap); // saved server-side — no-op if edits landed mid-save
         setStatus('Saved draft.');
         return true;
       }
@@ -512,13 +513,15 @@
         $(loc + 'Excerpt').value = data.excerpt || '';
         const mde = loc === 'de' ? deMDE : enMDE;
         mde.value(data.bodyMarkdown || '');
-        if (data.heroImage) {
-          $(loc + 'HeroSrc').value = data.heroImage.src || '';
-          $(loc + 'HeroWidth').value = data.heroImage.width || '';
-          $(loc + 'HeroHeight').value = data.heroImage.height || '';
-          $(loc + 'HeroAlt').value = data.heroImage.alt || '';
-          $(loc + 'HeroStatus').textContent = data.heroImage.src ? 'Hero: ' + data.heroImage.src : '';
-        }
+        // Written unconditionally: buildPayload() omits heroImage when unset, so
+        // a restore payload without it must CLEAR the hero fields rather than
+        // leave a previously loaded value on screen (no field resurrection).
+        const hero = data.heroImage || {};
+        $(loc + 'HeroSrc').value = hero.src || '';
+        $(loc + 'HeroWidth').value = hero.width || '';
+        $(loc + 'HeroHeight').value = hero.height || '';
+        $(loc + 'HeroAlt').value = hero.alt || '';
+        $(loc + 'HeroStatus').textContent = hero.src ? 'Hero: ' + hero.src : '';
         if (data.images && typeof data.images === 'object') {
           const map = loc === 'de' ? deImages : enImages;
           Object.assign(map, data.images);
@@ -530,16 +533,20 @@
       function populateForm(post) {
         isPublished = post.status === 'published';
 
+        // Every shared field is written unconditionally (with '' fallbacks):
+        // buildPayload() deletes cleared/empty keys from the stash, so applying
+        // a restore over an already-loaded post must not resurrect values the
+        // user had deliberately deleted (e.g. a cleared Route surviving a 401
+        // round-trip because the stash simply omits the key).
         const shared = post.shared || {};
-        if (shared.date) $('fmDate').value = shared.date;
-        if (shared.country) $('fmCountry').value = shared.country;
-        if (shared.countryCode) $('fmCountryCode').value = shared.countryCode;
-        if (shared.region) $('fmRegion').value = shared.region;
-        if (shared.coordinates) {
-          $('fmLat').value = shared.coordinates.lat ?? '';
-          $('fmLng').value = shared.coordinates.lng ?? '';
-        }
-        if (shared.route) $('fmRoute').value = shared.route;
+        $('fmDate').value = shared.date || '';
+        $('fmCountry').value = shared.country || '';
+        $('fmCountryCode').value = shared.countryCode || '';
+        $('fmRegion').value = shared.region || '';
+        const coords = shared.coordinates || {};
+        $('fmLat').value = coords.lat ?? '';
+        $('fmLng').value = coords.lng ?? '';
+        $('fmRoute').value = shared.route || '';
         populateKeyFacts(shared.keyFacts);
 
         populateLocale('de', post.de);

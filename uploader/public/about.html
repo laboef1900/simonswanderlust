@@ -130,6 +130,9 @@
 
       $('saveBtn').addEventListener('click', async () => {
         showErr(''); setStatus('Saving & rebuilding…');
+        // The synchronous astro rebuild makes this request slow (tens of
+        // seconds); snapshot first so text typed mid-save survives markClean.
+        const snap = guard.snapshot();
         const payload = { de: localeObj('de'), en: localeObj('en') };
         try {
           const res = await fetch('/pages/' + KEY, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
@@ -139,7 +142,7 @@
           if (!res.ok) { showErr(body.error || ('Save failed: ' + res.status)); setStatus(''); return; }
           if (body.build && !body.build.ok) { showErr('Build error: ' + (body.build.error || 'unknown')); setStatus(''); return; }
           const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
-          guard.markClean(); // saved server-side — drop the stash, disarm the warning
+          guard.markClean(snap); // saved server-side — no-op if edits landed mid-save
           setStatus('Saved & rebuilt ✓' + release);
         } catch (e) {
           showErr('Save failed: ' + e);

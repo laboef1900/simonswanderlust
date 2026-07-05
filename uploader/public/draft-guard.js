@@ -25,6 +25,7 @@ window.DraftGuard = (function () {
     const debounceMs = opts.debounceMs || 5000;
     let dirty = false;
     let timer = null;
+    let generation = 0; // bumped on every edit; lets markClean detect mid-save edits
 
     // All localStorage access is best-effort: quota errors / private mode
     // degrade to warning-only behavior (the beforeunload prompt still works).
@@ -40,12 +41,21 @@ window.DraftGuard = (function () {
 
     function markDirty() {
       dirty = true;
+      generation += 1;
       cancelTimer();
       timer = setTimeout(() => { timer = null; stashNow(); }, debounceMs);
     }
 
-    // Saved to the server (or restore declined): drop the stash, disarm the warning.
-    function markClean() {
+    // Capture immediately before building a save payload; pass the token to
+    // markClean so edits typed while the request was in flight stay protected.
+    function snapshot() { return generation; }
+
+    // Saved to the server (or restore declined): drop the stash, disarm the
+    // warning. With a token from snapshot(), this is a no-op when edits landed
+    // after the snapshot — the save persisted an older payload, so the newer
+    // on-screen text must stay dirty (warning armed, debounced stash pending).
+    function markClean(token) {
+      if (token !== undefined && token !== generation) return;
       dirty = false;
       cancelTimer();
       try { localStorage.removeItem(key); } catch (e) { /* best-effort */ }
@@ -94,7 +104,7 @@ window.DraftGuard = (function () {
       e.returnValue = ''; // legacy Chrome needs returnValue set to show the dialog
     });
 
-    return { markDirty, markClean, stashNow, tryRestore, setKey, redirectToLogin };
+    return { markDirty, markClean, snapshot, stashNow, tryRestore, setKey, redirectToLogin };
   }
 
   return { safeNextPath, createDraftGuard };
