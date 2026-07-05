@@ -386,6 +386,33 @@ describe('posts editor', () => {
     const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
     expect(pub.statusCode).toBe(400);
   });
+
+  it('draft edits over a published post surface hasUnpublishedChanges until re-publish', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    let got = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
+    expect(got).toMatchObject({ status: 'published', hasUnpublishedChanges: false });
+
+    const edited = { ...sample(), de: { ...sample().de, bodyMarkdown: '## edited' } };
+    const put = await b.app.inject({ method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie, payload: edited });
+    expect(put.statusCode).toBe(200);
+    expect(put.json()).toMatchObject({ status: 'published', hasUnpublishedChanges: true });
+
+    // The editor still gets the edited WORKING copy; the list carries the flag
+    // for the posts page's "edited" badge.
+    got = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
+    expect(got.de.bodyMarkdown).toBe('## edited');
+    expect(got.hasUnpublishedChanges).toBe(true);
+    const list = (await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json();
+    expect(list[0]).toMatchObject({ status: 'published', hasUnpublishedChanges: true });
+
+    const repub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(repub.statusCode).toBe(200);
+    got = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
+    expect(got).toMatchObject({ status: 'published', hasUnpublishedChanges: false });
+  });
 });
 
 describe('WordPress import', () => {

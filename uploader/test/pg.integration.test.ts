@@ -69,4 +69,79 @@ maybe('pgPostStore (integration)', () => {
     await expect(store.upsertDraft({ ...created, status: 'published', de: { ...base.de, slug: 'renamed' } })).rejects.toThrow();
     await pool.end();
   });
+
+  it('publish snapshots the working copy; later draft saves leave the snapshot untouched', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    const base = {
+      translationKey: '', status: 'draft' as const,
+      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de' as const, slug: 'snap-de', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## live', images: {} },
+      en: { locale: 'en' as const, slug: 'snap-en', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## live', images: {} },
+    };
+    const created = await store.upsertDraft(base);
+    const tk = created.translationKey;
+    expect(created.hasUnpublishedChanges).toBe(false); // drafts have nothing published to diverge from
+
+    await store.publish(tk);
+    const snapshotDe = async () => (await pool.query(
+      `SELECT published_snapshot AS s, published_at AS p FROM posts WHERE translation_key=$1 AND locale='de'`, [tk],
+    )).rows[0];
+    let row = await snapshotDe();
+    expect(row.p).toBeInstanceOf(Date);
+    expect(row.s.body_markdown).toBe('## live');
+    expect(row.s.date).toBe('2024-10-03'); // jsonb round-trip keeps the calendar date as text
+    expect(row.s.slug).toBe('snap-de');
+    expect(row.s.hero_image).toEqual(base.de.heroImage);
+    expect((await store.get(tk))?.hasUnpublishedChanges).toBe(false);
+
+    // Draft save over the published post: working copy changes, snapshot must not.
+    await store.upsertDraft({ ...created, de: { ...base.de, bodyMarkdown: '## edited' } });
+    const got = await store.get(tk);
+    expect(got?.status).toBe('published');
+    expect(got?.de.bodyMarkdown).toBe('## edited');
+    expect(got?.hasUnpublishedChanges).toBe(true);
+    expect((await store.list()).find((s) => s.translationKey === tk)?.hasUnpublishedChanges).toBe(true);
+    row = await snapshotDe();
+    expect(row.s.body_markdown).toBe('## live');
+
+    // Re-publish promotes the newest working copy and clears the flag.
+    await store.publish(tk);
+    row = await snapshotDe();
+    expect(row.s.body_markdown).toBe('## edited');
+    expect((await store.get(tk))?.hasUnpublishedChanges).toBe(false);
+    await pool.end();
+  });
+
+  it('ensureSchema backfills published_snapshot for pre-migration published rows, idempotently', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    // Simulate a row published before the published_snapshot column existed.
+    await pool.query(
+      `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
+         excerpt, hero_image, coordinates, body_markdown, status)
+       VALUES (gen_random_uuid(), 'legacy-tk', 'de', 'legacy-de', 'T', '2024-10-03', 'X', 'RO', 'europe',
+         'e', '{"src":"https://i/h","width":10,"height":10,"alt":"a"}', '{"lat":1,"lng":2}', '## legacy', 'published')`,
+    );
+    await ensureSchema(pool);
+    const first = (await pool.query(
+      `SELECT published_snapshot AS s, published_at AS p, updated_at AS u FROM posts WHERE slug='legacy-de'`,
+    )).rows[0];
+    expect(first.s.body_markdown).toBe('## legacy');
+    expect(first.s.date).toBe('2024-10-03');
+    expect(first.p.getTime()).toBe(first.u.getTime()); // backfilled published_at := updated_at
+
+    // A later working-copy edit + another ensureSchema run must NOT re-backfill.
+    await pool.query(`UPDATE posts SET body_markdown='## edited after backfill' WHERE slug='legacy-de'`);
+    await ensureSchema(pool);
+    const second = (await pool.query(
+      `SELECT published_snapshot AS s, published_at AS p FROM posts WHERE slug='legacy-de'`,
+    )).rows[0];
+    expect(second.s.body_markdown).toBe('## legacy');
+    expect(second.p.getTime()).toBe(first.p.getTime());
+    await pool.end();
+  });
 });

@@ -425,7 +425,9 @@
           history.replaceState(null, '', url2.toString());
           $('pageTitle').textContent = 'Edit post';
         }
-        setStatus('Saved draft.');
+        // A draft save never touches the live site — published posts keep
+        // serving their published snapshot until the next Publish.
+        setStatus(isPublished ? 'Saved draft. The live post is unchanged until you Publish.' : 'Saved draft.');
         return true;
       }
       $('saveDraft').addEventListener('click', () => { doSaveDraft(); });
@@ -524,7 +526,13 @@
           $('slugFieldEn').disabled = true;
         }
 
-        setStatus('Loaded post ' + currentTk + (isPublished ? ' (published — slug locked)' : '') + '.');
+        let state = '';
+        if (isPublished) {
+          state = post.hasUnpublishedChanges
+            ? ' (published — slug locked · has unpublished changes)'
+            : ' (published — slug locked)';
+        }
+        setStatus('Loaded post ' + currentTk + state + '.');
       }
 
       // ---- init ----

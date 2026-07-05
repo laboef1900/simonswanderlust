@@ -43,12 +43,17 @@ export function postgresTripsLoader(): Loader {
       const pool = new pg.Pool({ connectionString: url });
       try {
         store.clear();
-        const { rows } = await pool.query<PostRow>(
-          `SELECT translation_key, locale, slug, title, date, country, country_code, region, excerpt,
-                  hero_image, coordinates, stops, route, key_facts, body_markdown, images
-             FROM posts WHERE status = 'published'`,
+        // @ai-warning: build ONLY from the published snapshot (written by the
+        // uploader's publish action — see uploader/src/db.ts POST_SNAPSHOT_SQL),
+        // never from the working columns: a draft save over a published post
+        // must not go live on an unrelated rebuild (issue #20). The snapshot's
+        // keys mirror PostRow; `date` arrives as a 'YYYY-MM-DD' string, which
+        // rowToEntryInput already handles.
+        const { rows } = await pool.query<{ published_snapshot: PostRow }>(
+          `SELECT published_snapshot
+             FROM posts WHERE status = 'published' AND published_snapshot IS NOT NULL`,
         );
-        for (const row of rows) {
+        for (const { published_snapshot: row } of rows) {
           const input = rowToEntryInput(row);
           const data = await parseData({ id: input.id, data: input.data });
           const rendered = await renderMarkdown(input.body);

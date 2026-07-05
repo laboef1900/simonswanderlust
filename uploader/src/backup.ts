@@ -36,7 +36,7 @@ export async function dumpDatabase(db: Queryable, dir: string, now: Date = new D
   const posts = (await db.query(
     `SELECT id, translation_key, locale, slug, title, to_char(date, 'YYYY-MM-DD') AS date, country,
        country_code, region, excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown,
-       images, status, created_at, updated_at
+       images, status, created_at, updated_at, published_snapshot, published_at
      FROM posts ORDER BY created_at`,
   )).rows;
   const pages = (await db.query('SELECT key, locale, title, body_markdown, images FROM pages ORDER BY key, locale')).rows;
@@ -155,13 +155,17 @@ export async function restoreDatabase(
       );
     }
     for (const p of dump.tables.posts) {
+      // published_snapshot/published_at are absent from older dumps → restored
+      // as NULL; the next ensureSchema run backfills them from the working copy.
       await client.query(
         `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
-           excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15::jsonb,$16,$17::jsonb,$18,$19,$20)`,
+           excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status, created_at, updated_at,
+           published_snapshot, published_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15::jsonb,$16,$17::jsonb,$18,$19,$20,$21::jsonb,$22)`,
         [p.id, p.translation_key, p.locale, p.slug, p.title, p.date, p.country, p.country_code, p.region,
          p.excerpt, asJsonb(p.hero_image), asJsonb(p.coordinates), asJsonb(p.stops), p.route,
-         asJsonb(p.key_facts), p.body_markdown, asJsonb(p.images), p.status, p.created_at, p.updated_at],
+         asJsonb(p.key_facts), p.body_markdown, asJsonb(p.images), p.status, p.created_at, p.updated_at,
+         asJsonb(p.published_snapshot), p.published_at ?? null],
       );
     }
     // A v1 dump carries no `pages` key at all — leave existing pages untouched

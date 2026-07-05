@@ -17,9 +17,16 @@ export interface PostPair {
   translationKey: string; status: 'draft' | 'published';
   shared: PostShared; de: PostLocale; en: PostLocale;
 }
+/**
+ * A stored pair as returned by get()/upsertDraft(): the WORKING copy (what the
+ * editor edits) plus `hasUnpublishedChanges` — true when a published post has
+ * draft edits saved after its last Publish (the live site keeps serving the
+ * published snapshot until the next Publish; see issue #20).
+ */
+export interface StoredPostPair extends PostPair { hasUnpublishedChanges: boolean }
 export interface PostSummary {
   translationKey: string; titleDe: string; slugDe: string; slugEn: string;
-  status: 'draft' | 'published'; updatedAt: Date;
+  status: 'draft' | 'published'; updatedAt: Date; hasUnpublishedChanges: boolean;
 }
 export class PostError extends Error {
   code?: string;
@@ -28,12 +35,22 @@ export class PostError extends Error {
 
 export interface PostStore {
   list(): Promise<PostSummary[]>;
-  get(translationKey: string): Promise<PostPair | null>;
-  upsertDraft(pair: PostPair): Promise<PostPair>;
+  get(translationKey: string): Promise<StoredPostPair | null>;
+  upsertDraft(pair: PostPair): Promise<StoredPostPair>;
   publish(translationKey: string): Promise<void>;
 }
 
-interface Stored extends PostPair { updatedAt: Date }
+interface Stored extends PostPair {
+  updatedAt: Date;
+  publishedAt?: Date;
+  // Deep-cloned copy of { shared, de, en } as of the last publish() — mirrors
+  // the pg store's published_snapshot column so both stores share semantics.
+  publishedSnapshot?: Pick<PostPair, 'shared' | 'de' | 'en'>;
+  // Explicit flag (instead of comparing updatedAt > publishedAt like the pg
+  // store) because Date's millisecond resolution makes a publish-then-save
+  // within the same tick indistinguishable in-process.
+  hasUnpublishedChanges: boolean;
+}
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 const REGIONS = ['europe', 'north-america', 'south-america'];
@@ -118,11 +135,11 @@ export function memoryPostStore(): PostStore {
     async list() {
       return [...byKey.values()]
         .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
-        .map((p) => ({ translationKey: p.translationKey, titleDe: p.de.title, slugDe: p.de.slug, slugEn: p.en.slug, status: p.status, updatedAt: p.updatedAt }));
+        .map((p) => ({ translationKey: p.translationKey, titleDe: p.de.title, slugDe: p.de.slug, slugEn: p.en.slug, status: p.status, updatedAt: p.updatedAt, hasUnpublishedChanges: p.hasUnpublishedChanges }));
     },
     async get(tk) {
       const p = byKey.get(tk);
-      return p ? structuredClone({ translationKey: p.translationKey, status: p.status, shared: p.shared, de: p.de, en: p.en }) : null;
+      return p ? structuredClone({ translationKey: p.translationKey, status: p.status, shared: p.shared, de: p.de, en: p.en, hasUnpublishedChanges: p.hasUnpublishedChanges }) : null;
     },
     async upsertDraft(pair) {
       pair = draftWithDefaults(pair);
@@ -134,20 +151,29 @@ export function memoryPostStore(): PostStore {
           throw new PostError('cannot change the slug of a published post', 'slug_locked');
         }
       }
-      const stored: Stored = { ...structuredClone(pair), translationKey: key, status: existing?.status ?? 'draft', updatedAt: new Date() };
+      const status = existing?.status ?? 'draft';
+      const stored: Stored = {
+        ...structuredClone(pair), translationKey: key, status, updatedAt: new Date(),
+        // Preserve the published snapshot — a draft save must never touch what is live.
+        publishedAt: existing?.publishedAt, publishedSnapshot: existing?.publishedSnapshot,
+        hasUnpublishedChanges: status === 'published',
+      };
       byKey.set(key, stored);
-      return { translationKey: key, status: stored.status, shared: stored.shared, de: stored.de, en: stored.en };
+      return { translationKey: key, status: stored.status, shared: stored.shared, de: stored.de, en: stored.en, hasUnpublishedChanges: stored.hasUnpublishedChanges };
     },
     async publish(tk) {
       const p = byKey.get(tk);
       if (!p) throw new PostError('post not found');
       p.status = 'published';
-      p.updatedAt = new Date();
+      p.publishedSnapshot = structuredClone({ shared: p.shared, de: p.de, en: p.en });
+      p.publishedAt = new Date();
+      p.updatedAt = p.publishedAt;
+      p.hasUnpublishedChanges = false;
     },
   };
 }
 
-import type { DbPool } from './db.js';
+import { POST_SNAPSHOT_SQL, type DbPool } from './db.js';
 
 interface PostRow {
   translation_key: string; locale: Locale; slug: string; title: string; date: Date | string;
@@ -155,6 +181,12 @@ interface PostRow {
   hero_image: HeroImage; coordinates: { lat: number; lng: number };
   stops: PostShared['stops'] | null; route: string | null; key_facts: Record<string, string> | null;
   body_markdown: string; images: Record<string, ImageDims>; status: 'draft' | 'published'; updated_at: Date;
+  published_at: Date | null;
+}
+
+/** True when a published row's working copy was saved after its last publish. */
+function rowHasUnpublishedChanges(r: PostRow | undefined): boolean {
+  return !!r && r.status === 'published' && r.published_at !== null && r.updated_at.getTime() > r.published_at.getTime();
 }
 
 function rowLocale(r: PostRow): PostLocale {
@@ -191,13 +223,17 @@ export function pgPostStore(pool: DbPool): PostStore {
         translationKey: tk, titleDe: e.de?.title ?? '', slugDe: e.de?.slug ?? '', slugEn: e.en?.slug ?? '',
         status: (e.de?.status ?? e.en?.status ?? 'draft') as 'draft' | 'published',
         updatedAt: new Date(Math.max(e.de?.updated_at?.getTime() ?? 0, e.en?.updated_at?.getTime() ?? 0)),
+        hasUnpublishedChanges: rowHasUnpublishedChanges(e.de) || rowHasUnpublishedChanges(e.en),
       }));
     },
     async get(tk) {
       const { rows } = await pool.query<PostRow>(`SELECT * FROM posts WHERE translation_key = $1`, [tk]);
       const de = rows.find((r) => r.locale === 'de'); const en = rows.find((r) => r.locale === 'en');
       if (!de || !en) return null;
-      return { translationKey: tk, status: de.status, shared: rowShared(de), de: rowLocale(de), en: rowLocale(en) };
+      return {
+        translationKey: tk, status: de.status, shared: rowShared(de), de: rowLocale(de), en: rowLocale(en),
+        hasUnpublishedChanges: rowHasUnpublishedChanges(de) || rowHasUnpublishedChanges(en),
+      };
     },
     async upsertDraft(pair) {
       pair = draftWithDefaults(pair);
@@ -216,7 +252,16 @@ export function pgPostStore(pool: DbPool): PostStore {
       return saved;
     },
     async publish(tk) {
-      const res = await pool.query(`UPDATE posts SET status='published', updated_at=now() WHERE translation_key=$1`, [tk]);
+      // Copy the working columns into published_snapshot in the same UPDATE —
+      // the snapshot (not the working row) is what the site loader builds from,
+      // so later draft saves cannot leak live (issue #20). published_at and
+      // updated_at are stamped with the same now(), making
+      // `updated_at > published_at` (= hasUnpublishedChanges) false until the
+      // next draft save bumps updated_at.
+      const res = await pool.query(
+        `UPDATE posts SET status='published', published_snapshot=${POST_SNAPSHOT_SQL}, published_at=now(), updated_at=now() WHERE translation_key=$1`,
+        [tk],
+      );
       if (res.rowCount === 0) throw new PostError('post not found');
     },
   };

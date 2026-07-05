@@ -40,7 +40,15 @@ maybe('backup round-trip (Postgres)', () => {
       de: { locale: 'de' as const, slug: 'test-reise', title: 'Test', excerpt: 'x', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hallo', images: {} },
       en: { locale: 'en' as const, slug: 'test-trip', title: 'Test', excerpt: 'x', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hello', images: {} },
     };
-    await posts.upsertDraft(base);
+    const createdPair = await posts.upsertDraft(base);
+    // Publish, then save a draft edit: the dump must carry BOTH the working
+    // copy and the published snapshot (issue #20), or a restore would lose the
+    // published/working separation. (Built from `base`, not the round-tripped
+    // pair: with TZ=Europe/Berlin, rowShared's Date→string conversion shifts
+    // the calendar date west, and re-saving it would poison the date column —
+    // a pre-existing quirk this test deliberately keeps out of its scope.)
+    await posts.publish(createdPair.translationKey);
+    await posts.upsertDraft({ ...base, translationKey: createdPair.translationKey, de: { ...base.de, bodyMarkdown: 'Hallo v2' } });
     await pool.query(`INSERT INTO pages (key,locale,title,body_markdown) VALUES ('about','de','T','Body')
       ON CONFLICT (key,locale) DO UPDATE SET title=EXCLUDED.title, body_markdown=EXCLUDED.body_markdown`);
 
@@ -72,6 +80,16 @@ maybe('backup round-trip (Postgres)', () => {
     // west in UTC, so the restored row would carry the wrong calendar date.
     const dateText = (await pool.query("SELECT to_char(date,'YYYY-MM-DD') AS d FROM posts LIMIT 1")).rows[0].d;
     expect(dateText).toBe(base.shared.date);
+
+    // Published-snapshot fidelity: the restored row keeps the draft edit as the
+    // working copy AND the pre-edit content as the live snapshot.
+    const de = (await pool.query(
+      `SELECT body_markdown AS work, published_snapshot->>'body_markdown' AS live, published_at AS p
+         FROM posts WHERE locale='de'`,
+    )).rows[0] as { work: string; live: string; p: Date };
+    expect(de.work).toBe('Hallo v2');
+    expect(de.live).toBe('Hallo');
+    expect(de.p).toBeInstanceOf(Date);
   });
 
   it('rejects an unsupported dump version without touching data', async () => {
