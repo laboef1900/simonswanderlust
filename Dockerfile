@@ -44,7 +44,7 @@ COPY site/ .
 # --- map assets: fetch the Protomaps basemap slice + glyph fonts ONCE, on the
 # native build platform (tiles are arch-independent data). Kept off the node
 # base so it needs no npm/toolchain and its 524 MB layer caches independently. ---
-FROM --platform=$BUILDPLATFORM alpine:3.20 AS mapfetch
+FROM --platform=$BUILDPLATFORM alpine:3.22 AS mapfetch
 ARG PMTILES_VERSION
 ARG PROTOMAPS_BUILD
 ARG MAP_MAXZOOM
@@ -76,7 +76,7 @@ ENV NODE_ENV=production \
     SITE_DIR=/data/site \
     MAP_DIR=/map-assets \
     PORT=3000
-# uid 1000 = the DHI default user / `node` in node:22-slim. The site tree must
+# uid 1000 = the DHI default user / `node` in node:26-slim. The site tree must
 # be writable: astro writes .build-tmp/ and .astro/ during runtime builds.
 COPY --from=uploader-build --chown=1000:1000 /app/uploader /app/uploader
 COPY --from=site-build --chown=1000:1000 /app/site /app/site
