@@ -24,6 +24,7 @@ import type { SiteBuilder } from './build.js';
 import { importWxr } from './wp-import.js';
 import { fixedWindowLimiter, rateLimitPreHandler, type RateLimiter } from './rate-limit.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
+import { legacyRedirect } from './redirects.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -561,6 +562,12 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const host = req.headers.host ?? '';
     if (req.method !== 'GET' && req.method !== 'HEAD') return reply.code(404).send({ error: 'not found' });
     if (host === cfg.imgHost) return reply.code(404).send('Not found');
+    // Legacy WordPress URLs (feeds, category archives) 301 to their new homes
+    // before any 404/503 — see redirects.ts (issue #35). Static files always
+    // win: this handler only runs after @fastify/static misses. Explicit
+    // code+header instead of reply.redirect() (its signature changed in v5).
+    const target = legacyRedirect(req.raw.url ?? '');
+    if (target) return reply.code(301).header('location', target).send();
     if (!cfg.builder.hasRelease()) {
       return reply
         .code(503)
