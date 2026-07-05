@@ -1,8 +1,13 @@
+// @ai-note: Completed Phase A one-off — imported the MDX stubs into Postgres on the
+// initial migration; kept as the documented re-run path for MDX backups. Its frontmatter
+// parser, gray-matter, is no longer a site dependency: run `npm i -D gray-matter@4` in
+// site/ before re-running this script (it is lazy-loaded inside parseMdxFile so importing
+// this module — e.g. from the test — works without it).
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import matter from 'gray-matter';
+import { createRequire } from 'node:module';
 import pg from 'pg';
 
 const CONTENT = join(dirname(fileURLToPath(import.meta.url)), '..', 'src/content/trips');
@@ -32,6 +37,21 @@ export function mdxBodyToMarkdown(body) {
 
 /** Parse one MDX file into row fields. `locale` is supplied by the caller (folder). */
 export function parseMdxFile(path, locale) {
+  // gray-matter is CJS and no longer installed by default — see the header comment.
+  let matter;
+  try {
+    matter = createRequire(import.meta.url)('gray-matter');
+  } catch (err) {
+    // Only translate "gray-matter itself is not installed"; surface anything else
+    // (broken install, missing nested dep, incompatible build) as the real error.
+    if (err?.code === 'MODULE_NOT_FOUND' && String(err.message).includes("'gray-matter'")) {
+      throw new Error(
+        'gray-matter is not installed — run `npm i -D gray-matter@4` in site/ to re-run this migration script',
+        { cause: err },
+      );
+    }
+    throw err;
+  }
   const raw = readFileSync(path, 'utf8');
   const { data, content } = matter(raw);
   const slug = path.split('/').pop().replace(/\.mdx$/, '');
