@@ -344,6 +344,60 @@ describe('user management', () => {
   });
 });
 
+describe('POST /users/me/password (change password)', () => {
+  const change = (b: Built, cookie: Record<string, string> | undefined, payload: Record<string, unknown>) =>
+    b.app.inject({ method: 'POST', url: '/users/me/password', headers: { 'content-type': 'application/json' }, ...(cookie ? { cookies: cookie } : {}), payload });
+
+  it('401 unauthenticated', async () => {
+    const res = await change(build(), undefined, { currentPassword: 'pw', newPassword: 'new-pw' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('400 when a field is missing or empty', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    expect((await change(b, cookie, { newPassword: 'new-pw' })).statusCode).toBe(400);
+    expect((await change(b, cookie, { currentPassword: 'pw', newPassword: '' })).statusCode).toBe(400);
+  });
+
+  it('400 (not 401 — admin JS redirects on 401) on a wrong current password', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await change(b, cookie, { currentPassword: 'wrong', newPassword: 'new-pw' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('current password is incorrect');
+  });
+
+  it('changes the password, invalidates other sessions, keeps the caller logged in', async () => {
+    const b = build();
+    const { user, cookie } = await authed(b); // password 'pw'
+    const otherToken = await b.sessions.create(user.id, 60_000);
+    const res = await change(b, cookie, { currentPassword: 'pw', newPassword: 'brand-new' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    // Old password no longer logs in; the new one does.
+    const login = (password: string) =>
+      b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: user.username, password } });
+    expect((await login('pw')).statusCode).toBe(401);
+    expect((await login('brand-new')).statusCode).toBe(200);
+    // The pre-existing other session and the caller's old session are dead…
+    expect((await b.app.inject({ method: 'GET', url: '/settings', cookies: { sid: otherToken } })).statusCode).toBe(401);
+    expect((await b.app.inject({ method: 'GET', url: '/settings', cookies: cookie })).statusCode).toBe(401);
+    // …but the fresh sid cookie set by the response still authenticates.
+    const fresh = res.cookies.find((c) => c.name === 'sid');
+    expect(fresh).toBeDefined();
+    expect((await b.app.inject({ method: 'GET', url: '/settings', cookies: { sid: fresh!.value } })).statusCode).toBe(200);
+  });
+
+  it('is rate-limited like the other password-verifying endpoints (429)', async () => {
+    const b = build({ loginLimiter: fixedWindowLimiter({ max: 2, windowMs: 60_000 }) });
+    const { cookie } = await authed(b);
+    expect((await change(b, cookie, { currentPassword: 'wrong', newPassword: 'x' })).statusCode).toBe(400);
+    expect((await change(b, cookie, { currentPassword: 'wrong', newPassword: 'x' })).statusCode).toBe(400);
+    expect((await change(b, cookie, { currentPassword: 'wrong', newPassword: 'x' })).statusCode).toBe(429);
+  });
+});
+
 describe('posts editor', () => {
   const sample = () => ({
     translationKey: '', status: 'draft',

@@ -40,4 +40,16 @@ describe('memoryUserStore', () => {
     await s.remove(u.id);
     expect(await s.count()).toBe(0);
   });
+  it('setPassword replaces the stored hash (old rejected, new verifies)', async () => {
+    const s = memoryUserStore();
+    const u = await s.create({ username: 'a', password: 'old-pw', isAdmin: false });
+    await s.setPassword(u.id, 'new-pw');
+    const after = await s.findById(u.id);
+    expect(verifyPassword('old-pw', after!.passwordHash)).toBe(false);
+    expect(verifyPassword('new-pw', after!.passwordHash)).toBe(true);
+  });
+  it('setPassword throws for an unknown id', async () => {
+    const s = memoryUserStore();
+    await expect(s.setPassword('nope', 'pw')).rejects.toThrow('user not found');
+  });
 });

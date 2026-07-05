@@ -25,6 +25,16 @@ describe('memorySessionStore', () => {
     await s.destroy(token);
     expect(await s.find(token)).toBeNull();
   });
+  it('destroyAllForUser removes all sessions of that user, no others', async () => {
+    const s = memorySessionStore();
+    const t1 = await s.create('user-1', 60_000);
+    const t2 = await s.create('user-1', 60_000);
+    const other = await s.create('user-2', 60_000);
+    await s.destroyAllForUser('user-1');
+    expect(await s.find(t1)).toBeNull();
+    expect(await s.find(t2)).toBeNull();
+    expect((await s.find(other))?.userId).toBe('user-2');
+  });
   it('hashToken is deterministic and not the raw token', () => {
     expect(hashToken('abc')).toBe(hashToken('abc'));
     expect(hashToken('abc')).not.toBe('abc');

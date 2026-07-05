@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
-import { pgUserStore, UserExistsError } from '../src/users.js';
+import { pgUserStore, verifyPassword, UserExistsError } from '../src/users.js';
 import { pgSessionStore } from '../src/sessions.js';
 import { pgPostStore } from '../src/posts.js';
 
@@ -37,6 +38,30 @@ maybe('postgres stores (integration)', () => {
     expect((await sessions.find(token))?.userId).toBe(u.id);
     const expired = await sessions.create(u.id, -1);
     expect(await sessions.find(expired)).toBeNull();
+  });
+
+  it('setPassword round-trips (new verifies, old does not) and throws for an unknown id', async () => {
+    const users = pgUserStore(pool);
+    const u = await users.create({ username: `pw${Date.now()}`, password: 'old-pw', isAdmin: false });
+    await users.setPassword(u.id, 'new-pw');
+    const after = await users.findByUsername(u.username);
+    expect(verifyPassword('new-pw', after!.passwordHash)).toBe(true);
+    expect(verifyPassword('old-pw', after!.passwordHash)).toBe(false);
+    await expect(users.setPassword(randomUUID(), 'x')).rejects.toThrow('user not found');
+  });
+
+  it('destroyAllForUser removes only that user\'s sessions', async () => {
+    const users = pgUserStore(pool);
+    const sessions = pgSessionStore(pool);
+    const u1 = await users.create({ username: `da1-${Date.now()}`, password: 'pw', isAdmin: false });
+    const u2 = await users.create({ username: `da2-${Date.now()}`, password: 'pw', isAdmin: false });
+    const t1a = await sessions.create(u1.id, 60_000);
+    const t1b = await sessions.create(u1.id, 60_000);
+    const t2 = await sessions.create(u2.id, 60_000);
+    await sessions.destroyAllForUser(u1.id);
+    expect(await sessions.find(t1a)).toBeNull();
+    expect(await sessions.find(t1b)).toBeNull();
+    expect((await sessions.find(t2))?.userId).toBe(u2.id);
   });
 
   it('creates and seeds the pages table (About)', async () => {
