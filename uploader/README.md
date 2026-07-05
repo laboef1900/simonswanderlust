@@ -1,8 +1,8 @@
 # simonswanderlust-images
 
 Self-hosted image uploader **and admin CMS** for the Astro blog: uploads a photo and generates
-responsive AVIF/WebP variants (EXIF/GPS preserved), hosts the in-admin editor, WordPress import,
-and AI alt-text — and, since the single-app-container merge, **also serves the public blog itself**
+responsive AVIF/WebP variants (EXIF/GPS preserved), and hosts the in-admin editor and WordPress
+import — and, since the single-app-container merge, **also serves the public blog itself**
 and runs its Astro builds in-process (no separate build server). How it fits the rest of the
 stack: [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Security model: [`../SECURITY.md`](../SECURITY.md).
 
