@@ -1,5 +1,6 @@
 // Shared admin-auth helpers. Pages call ensureAuthed() on load; on 401 anywhere,
-// redirect to /login. The session cookie is sent automatically (same-origin).
+// redirect to /login (carrying a ?next= return URL back to the current page).
+// The session cookie is sent automatically (same-origin).
 window.Auth = (function () {
   async function status() {
     const r = await fetch('/auth/status');
@@ -8,7 +9,10 @@ window.Auth = (function () {
   async function ensureAuthed(opts) {
     const want = opts || {};
     const s = await status();
-    if (!s.authenticated) { location.href = '/login'; return null; }
+    if (!s.authenticated) {
+      location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
+      return null;
+    }
     if (want.admin && !s.isAdmin) { location.href = '/admin/'; return null; }
     return s;
   }

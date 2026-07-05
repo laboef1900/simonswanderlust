@@ -26,12 +26,16 @@
       </section>
     </main>
     <script src="/admin/auth.js"></script>
+    <script src="/admin/draft-guard.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       let needsSetup = false;
+      // Post-login return target (?next=…), validated to same-origin /admin/ paths
+      // so an expired session lands back on the exact page (e.g. the editor).
+      const nextPath = DraftGuard.safeNextPath(new URLSearchParams(location.search).get('next'));
       async function init() {
         const s = await Auth.status();
-        if (s.authenticated) { location.href = '/admin/'; return; }
+        if (s.authenticated) { location.href = nextPath; return; }
         needsSetup = !!s.needsSetup;
         if (needsSetup) {
           $('title').textContent = 'Create the first admin';
@@ -45,13 +49,17 @@
         const password = $('password').value;
         if (!username || !password) { $('out').textContent = 'Enter a username and password.'; return; }
         $('out').textContent = needsSetup ? 'Creating…' : 'Signing in…';
-        const res = await fetch(needsSetup ? '/setup' : '/login', {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ username, password }),
-        });
-        if (res.ok) { location.href = '/admin/'; return; }
-        const r = await res.json().catch(() => ({}));
-        $('out').textContent = r.error || ('Failed: ' + res.status);
+        try {
+          const res = await fetch(needsSetup ? '/setup' : '/login', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+          });
+          if (res.ok) { location.href = nextPath; return; }
+          const r = await res.json().catch(() => ({}));
+          $('out').textContent = r.error || ('Failed: ' + res.status);
+        } catch (e) {
+          $('out').textContent = 'Error: ' + e;
+        }
       });
       init();
     </script>
