@@ -148,6 +148,60 @@ describe('normalizeBodyImages', () => {
     const mdx = renderPostToMdx(saved, 'de');
     expect(mdx).toContain('<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />');
   });
+
+  it('converts a tag whose quoted alt contains ">" (legacy exports escaped only quotes)', () => {
+    const body = '<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Blick > Westen" />';
+    const out = normalizeBodyImages(body, {});
+    expect(out.bodyMarkdown).toBe('![Blick > Westen](https://img/x/y)');
+    expect(out.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
+  });
+
+  it('does not truncate the tag on "/>" inside a quoted alt', () => {
+    const body = 'a <BodyImage src="https://img/x/y" width={16} height={10} alt="x/>y" /> b';
+    const out = normalizeBodyImages(body, {});
+    expect(out.bodyMarkdown).toBe('a ![x/>y](https://img/x/y) b');
+    expect(out.images).toEqual({ 'https://img/x/y': { width: 16, height: 10 } });
+  });
+
+  it('decodes &lt; &gt; &amp; in alt and round-trips through the MDX export escaping', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    const alt = 'Blick <über> das "Tor" & zurück';
+    p.de.bodyMarkdown = `![${alt}](https://img/x/y)`;
+    p.de.images = { 'https://img/x/y': { width: 1600, height: 1067 } };
+    const saved = await s.upsertDraft(p);
+    const mdx = renderPostToMdx(saved, 'de');
+    expect(mdx).toContain('alt="Blick &lt;über&gt; das &quot;Tor&quot; &amp; zurück"');
+    const tag = mdx.match(/<BodyImage[^\n]*\/>/)?.[0] ?? '';
+    const back = normalizeBodyImages(tag, {});
+    expect(back.bodyMarkdown).toBe(`![${alt}](https://img/x/y)`);
+    expect(back.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
+  });
+
+  it('accepts a multiline tag and the braced src={…} attribute form', () => {
+    const multi = normalizeBodyImages('<BodyImage\n  src="https://img/m/l"\n  width={10}\n  height={20}\n  alt="ml"\n/>', {});
+    expect(multi.bodyMarkdown).toBe('![ml](https://img/m/l)');
+    expect(multi.images).toEqual({ 'https://img/m/l': { width: 10, height: 20 } });
+    const braced = normalizeBodyImages('<BodyImage src={https://img/b/r} width={10} height={20} alt="b" />', {});
+    expect(braced.bodyMarkdown).toBe('![b](https://img/b/r)');
+    expect(braced.images).toEqual({ 'https://img/b/r': { width: 10, height: 20 } });
+  });
+
+  it('leaves malformed tags untouched rather than truncating (pinned rejected shapes)', () => {
+    const nonSelfClosing = 'a <BodyImage src="https://img/x/y"></BodyImage> b';
+    expect(normalizeBodyImages(nonSelfClosing, {}).bodyMarkdown).toBe(nonSelfClosing);
+    const unclosedQuote = 'a <BodyImage src="https://img/x/y" alt="oops /> b';
+    expect(normalizeBodyImages(unclosedQuote, {}).bodyMarkdown).toBe(unclosedQuote);
+  });
+
+  it('normalizes the EN locale through the store chokepoint too', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.en.bodyMarkdown = 'Before\n\n<BodyImage src="https://img/e/n" width={10} height={20} alt="en alt" />';
+    const saved = await s.upsertDraft(p);
+    expect(saved.en.bodyMarkdown).toBe('Before\n\n![en alt](https://img/e/n)');
+    expect(saved.en.images).toEqual({ 'https://img/e/n': { width: 10, height: 20 } });
+  });
 });
 
 describe('upsertDraft fills NOT-NULL defaults on a partial draft', () => {

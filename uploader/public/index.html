@@ -75,9 +75,13 @@
           out.textContent = body.snippet;
           // Body-image paste format: the editor normalizes this tag to a markdown
           // image on save, merging width/height into the post's images map.
+          // Alt escaping (&, ", <, > — & first) mirrors export.ts bodyToMdx so
+          // posts.ts normalizeBodyImages decodes the exact inverse.
           if (!/(^|\/)hero$/.test(key.trim())) {
+            const escAlt = alt.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+              .replace(/</g, '&lt;').replace(/>/g, '&gt;');
             outBody.textContent = '<BodyImage src="' + body.src + '" width={' + body.width +
-              '} height={' + body.height + '} alt="' + alt.replace(/"/g, '&quot;') + '" />';
+              '} height={' + body.height + '} alt="' + escAlt + '" />';
           }
         } catch (e) {
           out.textContent = 'Error: ' + e;

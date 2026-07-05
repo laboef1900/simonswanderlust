@@ -96,16 +96,25 @@ const PLACEHOLDER_HERO: HeroImage = { src: '', width: 0, height: 0, alt: '' };
  * this the render pipeline silently strips the unknown `bodyimage` element (rehype-sanitize),
  * so MDX-backup bodies and old paste-ready snippets would publish with the photos missing.
  * Plain-markdown bodies pass through byte-identical, so re-saving is idempotent.
- * Accepted shape: single-line self-closing tag with `name="value"` or `name={value}` attrs
- * (export.ts is the only producer of the format). A tag without a `src` is left untouched.
- * @ai-context site/scripts/migrate-stub-posts.mjs mdxBodyToMarkdown — same proven regex.
+ * Accepted shape: a self-closing tag with `name="value"` or `name={value}` attrs
+ * (export.ts is the only producer of the format). Quoted/braced attr values may span `>`,
+ * `/>`, and newlines — multiline tags are accepted — and tags inside markdown code fences
+ * are NOT exempt. Alt entities (`&quot; &lt; &gt; &amp;`) are decoded, the inverse of
+ * export.ts escaping. Malformed tags (missing `src`, unclosed quote/brace, non-self-closing
+ * `<BodyImage></BodyImage>`) are left untouched — never truncated.
+ * @ai-context site/scripts/migrate-stub-posts.mjs mdxBodyToMarkdown — the original untyped
+ * regex; this version is additionally quote/brace-aware so alt text containing '>' (legacy
+ * exports escaped only '"') converts instead of surviving to be sanitizer-stripped.
  */
 export function normalizeBodyImages(
   bodyMarkdown: string,
   images: Record<string, ImageDims>,
 ): { bodyMarkdown: string; images: Record<string, ImageDims> } {
   const merged: Record<string, ImageDims> = { ...images };
-  const normalized = bodyMarkdown.replace(/<BodyImage\s+([^>]*?)\/>/g, (match, attrs: string) => {
+  // Attrs are consumed in disjoint chunks — "quoted", {braced}, or any char that opens
+  // neither and isn't '>' — so a '>' or '/>' inside a quoted value can't terminate the tag.
+  const tagRe = /<BodyImage\s+((?:"[^"]*"|\{[^}]*\}|[^>"{])*?)\/>/g;
+  const normalized = bodyMarkdown.replace(tagRe, (match, attrs: string) => {
     const get = (name: string): string | undefined => {
       const quoted = attrs.match(new RegExp(`${name}="([^"]*)"`));
       if (quoted?.[1] !== undefined) return quoted[1];
@@ -114,7 +123,8 @@ export function normalizeBodyImages(
     };
     const src = get('src');
     if (!src) return match;
-    const alt = (get('alt') ?? '').replace(/&quot;/g, '"'); // inverse of export.ts escaping
+    const alt = (get('alt') ?? '') // inverse of export.ts escaping; &amp; last
+      .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
     const width = Number(get('width'));
     const height = Number(get('height'));
     if (Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0) {

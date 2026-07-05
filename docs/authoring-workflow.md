@@ -164,9 +164,9 @@ Notes:
 
 ## Quick checklist
 
-- [ ] Photos uploaded — hero and body images via the editor's inline upload, or pre-uploaded via `/admin/` (hero); snippets/URLs ready.
+- [ ] Photos uploaded — hero and body images via the editor's inline upload, or pre-uploaded via `/admin/`; snippets/URLs ready.
 - [ ] In the editor: DE tab filled — slug (matches live WordPress slug, never renamed), title, date, country, countryCode, region, excerpt, heroImage fields, body photos inserted via the toolbar (or pasted `<BodyImage …/>` tags — converted on save) with DE alt text.
-- [ ] In the editor: EN tab filled — title, excerpt, EN body with its own photo inserts (EN alt text).
+- [ ] In the editor: EN tab filled — title, excerpt, EN hero alt text, EN body with its own photo inserts (EN alt text).
 - [ ] **Save draft** — both locale rows written to Postgres.
 - [ ] **Publish** — rebuild triggered automatically.
 - [ ] Verify the post renders at `/<slug>/` and `/en/<slug>/`, hero + body images load.

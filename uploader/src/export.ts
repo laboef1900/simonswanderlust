@@ -11,7 +11,10 @@ function bodyToMdx(p: PostLocale): string {
   return p.bodyMarkdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt: string, src: string) => {
     const dims = p.images[src];
     if (!dims) return `![${alt}](${src})`;
-    const escapedAlt = alt.replace(/"/g, '&quot;');
+    // Escape &, ", <, > (& first) so posts.ts normalizeBodyImages can decode the exact
+    // inverse — a raw '>' in alt would otherwise defeat its tag regex on paste-back.
+    const escapedAlt = alt
+      .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     return `<BodyImage src="${src}" width={${dims.width}} height={${dims.height}} alt="${escapedAlt}" />`;
   });
 }
