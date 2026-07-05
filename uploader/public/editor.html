@@ -284,6 +284,8 @@
         const latInput = document.createElement('input');
         latInput.type = 'number';
         latInput.step = 'any';
+        latInput.min = '-90';
+        latInput.max = '90';
         latInput.placeholder = 'Lat';
         latInput.className = 'stop-lat';
         latInput.value = lat;
@@ -291,6 +293,8 @@
         const lngInput = document.createElement('input');
         lngInput.type = 'number';
         lngInput.step = 'any';
+        lngInput.min = '-180';
+        lngInput.max = '180';
         lngInput.placeholder = 'Lng';
         lngInput.className = 'stop-lng';
         lngInput.value = lng;

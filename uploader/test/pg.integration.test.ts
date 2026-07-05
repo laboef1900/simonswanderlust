@@ -71,6 +71,9 @@ maybe('pgPostStore (integration)', () => {
     expect((await store.get(created.translationKey))?.status).toBe('published');
     expect((await store.get(created.translationKey))?.shared.stops).toEqual(stops);
     await expect(store.upsertDraft({ ...created, status: 'published', de: { ...base.de, slug: 'renamed' } })).rejects.toThrow();
+    // writeLocale normalizes an empty stops array to NULL, so it reads back as absent (not [])
+    await store.upsertDraft({ ...created, shared: { ...created.shared, stops: [] } });
+    expect((await store.get(created.translationKey))?.shared.stops).toBeUndefined();
     await pool.end();
   });
 });
