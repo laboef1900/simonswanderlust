@@ -151,13 +151,19 @@ docker exec -i blog-db-1 psql -U images -d images < pg-upgrade-dump.sql
 docker compose up -d
 ```
 
-**App-native alternative** (JSON backup instead of `pg_dump`/`psql`): after `docker compose up -d`
-on the new major, the app's boot-time `ensureSchema` recreates all tables on the fresh cluster, so
-a recent `/data/backup/db/db-*.json.gz` dump (see [Database backups](#database-backups)) can be
-restored with the shell-less exec-form CLI:
+**App-native alternative** (JSON backup instead of `pg_dump`/`psql`): while **still on the OLD
+version**, take a fresh dump first (admin Settings → **Back up now**, or `POST /backups` —
+`backupSchedule` defaults to `off`, so don't assume one exists) and confirm the file is present
+under `/data/backup/db` **before** running `docker compose down` / `docker volume rm`. After
+`docker compose up -d` on the new major, the app's boot-time `ensureSchema` recreates all tables
+on the fresh cluster, so that `/data/backup/db/db-*.json.gz` dump (see
+[Database backups](#database-backups)) can be restored with the shell-less exec-form CLI:
 `docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`.
-This restores `users`, `posts`, and `pages` only — sessions are disposable and app settings live
-on disk under `/data`, but every login is invalidated, so log in again and trigger a rebuild
+Note the database has **zero users** until the restore completes, which re-opens first-run
+`POST /setup` to anyone who can reach port 3000 — run the restore immediately after the app is
+healthy, or keep the port unreachable (reverse proxy off / firewall) during the window.
+The restore covers `users`, `posts`, and `pages` only — sessions are disposable and app settings
+live on disk under `/data`, but every login is invalidated, so log in again and trigger a rebuild
 (`/admin/settings.html` → **Rebuild site now**, or `POST /rebuild`). Prefer the `pg_dump`/`psql`
 path above as primary — it captures the whole database with full fidelity.
 

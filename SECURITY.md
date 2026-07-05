@@ -146,8 +146,9 @@ deliberate trade-off, not an oversight:
   strict pattern (`^db-\d{8}-\d{6}\.json\.gz$`) before touching the filesystem — no path traversal.
 - Restore is **CLI-only** (`docker compose exec app node --import tsx src/cli.ts restore <file>` —
   the hardened runtime has no shell, so use the exec form), never a web route, because it's
-  destructive: it deletes and re-inserts `users`, `posts`, and `pages` in one transaction.
-  Deleting `users` cascades to `sessions`, so a restore invalidates every login.
+  destructive: it deletes and re-inserts `users`, `posts`, and `pages` in one transaction
+  (`pages` only when present in the dump — v1 dumps predate them and leave existing pages
+  untouched). Deleting `users` cascades to `sessions`, so a restore invalidates every login.
 
 ## Known limitations
 
