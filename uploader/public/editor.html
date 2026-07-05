@@ -158,6 +158,14 @@
         <p id="actionError" class="err" style="display:none"></p>
       </div>
 
+      <!-- Revisions (issue #28): snapshots of what each save overwrote -->
+      <section class="card" id="revisionsCard" style="display:none">
+        <h2 class="card-heading">Revisions</h2>
+        <p class="muted">Each save keeps a snapshot of what it overwrote (newest first, last 20 kept). Restoring only fills the editor — review, then Save draft to keep it.</p>
+        <ul id="revisionsList" class="revisions-list"></ul>
+        <p id="revisionsEmpty" class="muted" style="display:none">No revisions yet — one appears each time a save overwrites this post.</p>
+      </section>
+
       <div class="route" aria-hidden="true">
         <span class="dot"></span><span class="seg"></span>
         <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>
@@ -175,6 +183,9 @@
       // ---- state ----
       let currentTk = null;       // translationKey, null = new post
       let isPublished = false;    // slug is locked once published
+      // updatedAt of the pair as loaded/last saved in THIS tab. Echoed back on
+      // every save so the server can 409 when another tab/user saved meanwhile.
+      let loadedUpdatedAt = null;
       const deImages = {};        // src → {width, height}
       const enImages = {};
 
@@ -493,6 +504,8 @@
         return {
           translationKey: currentTk || undefined,
           status: isPublished ? 'published' : 'draft',
+          // Concurrency echo — JSON.stringify drops it when undefined (new post).
+          updatedAt: loadedUpdatedAt || undefined,
           shared,
           de,
           en,
@@ -528,8 +541,19 @@
           if (res.status === 401) { guard.redirectToLogin(); return false; }
           body = await res.json().catch(() => ({}));
           if (!res.ok) {
-            showErr((body.error || ('Save failed: ' + res.status)));
             setStatus('');
+            if (res.status === 409 && body.code === 'conflict') {
+              showErr(body.error || 'This post was modified since you opened it — nothing was saved.');
+              const reload = confirm(
+                'This post was changed elsewhere (another tab or user) since you opened it, '
+                + 'so saving would overwrite those changes. Nothing was saved.\n\n'
+                + 'OK — reload the latest version into the editor (your edits in this tab are lost).\n'
+                + 'Cancel — keep your edits on screen so you can copy them out first.'
+              );
+              if (reload) await loadPost(currentTk);
+              return false;
+            }
+            showErr((body.error || ('Save failed: ' + res.status)));
             return false;
           }
         } catch (e) {
@@ -547,6 +571,10 @@
           $('pageTitle').textContent = 'Edit post';
         }
         guard.markClean(snap); // saved server-side — no-op if edits landed mid-save
+        // Re-sync the concurrency echo with what this save just wrote, and
+        // refresh the revisions list (this save snapshotted the previous state).
+        if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
+        loadRevisions().catch(() => {});
         const skipped = partialStopCount();
         // A draft save never touches the live site — published posts keep
         // serving their published snapshot until the next Publish.
@@ -591,6 +619,9 @@
           const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
           setStatus('Published ✓' + release);
           isPublished = true;
+          // Publish bumps the stored updated_at — re-sync the concurrency echo
+          // or the very next Save in this tab would falsely report a conflict.
+          if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
           $('slugFieldDe').disabled = true;
           $('slugFieldEn').disabled = true;
         } catch (e) {
@@ -629,17 +660,20 @@
         $(loc + 'HeroHeight').value = hero.height || '';
         $(loc + 'HeroAlt').value = hero.alt || '';
         $(loc + 'HeroStatus').textContent = hero.src ? 'Hero: ' + hero.src : '';
+        // Reset the dimension map before filling it — merging would persist
+        // stale entries from the pre-restore state on the next Save.
+        const map = loc === 'de' ? deImages : enImages;
+        for (const k of Object.keys(map)) delete map[k];
         if (data.images && typeof data.images === 'object') {
-          const map = loc === 'de' ? deImages : enImages;
           Object.assign(map, data.images);
         }
       }
 
-      // Fills the whole form from a PostPair-shaped object — a server post or a
-      // local DraftGuard stash (buildPayload() emits the same shape loadPost consumes).
+      // Fills the whole form from a PostPair-shaped object (or a {shared,de,en}
+      // revision snapshot) — a server post, a local DraftGuard stash, or a
+      // restored revision. Every field is overwritten (with '' when absent) so it
+      // never merges with what was already on screen.
       function populateForm(post) {
-        isPublished = post.status === 'published';
-
         // Every shared field is written unconditionally (with '' fallbacks):
         // buildPayload() deletes cleared/empty keys from the stash, so applying
         // a restore over an already-loaded post must not resurrect values the
@@ -692,9 +726,13 @@
           return true;
         }
         currentTk = post.translationKey || tk;
+        isPublished = post.status === 'published';
+        loadedUpdatedAt = post.updatedAt || null;
 
         $('pageTitle').textContent = 'Edit post';
         populateForm(post);
+
+        loadRevisions().catch(() => {});
 
         let state = '';
         if (isPublished) {
@@ -704,6 +742,60 @@
         }
         setStatus('Loaded post ' + currentTk + state + '.');
         return true;
+      }
+
+      // ---- revisions (issue #28) ----
+      async function loadRevisions() {
+        if (!currentTk) return;
+        const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/revisions');
+        if (!res.ok) return; // non-fatal: the card just stays as-is
+        const revs = await res.json();
+        $('revisionsCard').style.display = '';
+        $('revisionsEmpty').style.display = revs.length ? 'none' : '';
+        const ul = $('revisionsList');
+        ul.innerHTML = '';
+        revs.forEach((rev) => {
+          const li = document.createElement('li');
+          li.className = 'revision-row';
+          const label = document.createElement('span');
+          label.textContent = new Date(rev.savedAt).toLocaleString() + ' — '
+            + (rev.titleDe || '(untitled)') + ' · ' + rev.status;
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn-secondary';
+          btn.textContent = 'Restore into editor';
+          btn.addEventListener('click', () => { restoreRevision(rev.id); });
+          li.appendChild(label);
+          li.appendChild(btn);
+          ul.appendChild(li);
+        });
+      }
+
+      // Fills the form from a snapshot; persisting still goes through the
+      // normal Save (slug-lock + validation apply, and the overwritten state
+      // gets its own revision) — there is no direct server-side restore.
+      async function restoreRevision(id) {
+        showErr('');
+        const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/revisions/' + encodeURIComponent(id));
+        if (res.status === 401) { guard.redirectToLogin(); return; }
+        if (!res.ok) { showErr('Could not load revision: ' + res.status); return; }
+        const rev = await res.json();
+        // On a published post the slug fields are disabled (slug locked for
+        // SEO), but buildPayload still reads their .value — restoring a
+        // snapshot from before a slug change would make every Save 409
+        // (slug_locked) with no way to correct the disabled field. Keep the
+        // current live slugs; only the content is restored.
+        const keptSlugDe = isPublished ? $('slugFieldDe').value : null;
+        const keptSlugEn = isPublished ? $('slugFieldEn').value : null;
+        populateForm(rev.snapshot);
+        if (isPublished) {
+          $('slugFieldDe').value = keptSlugDe;
+          $('slugFieldEn').value = keptSlugEn;
+        }
+        setStatus('Restored the revision from ' + new Date(rev.savedAt).toLocaleString()
+          + ' into the editor'
+          + (isPublished ? ' (current slugs kept — the slug is locked after publish)' : '')
+          + ' — review it, then Save draft to keep it.');
       }
 
       // ---- init ----

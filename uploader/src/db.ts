@@ -20,9 +20,9 @@ export function createPool(connectionString: string): DbPool {
 
 /**
  * SQL fragment building the published-snapshot jsonb from a posts row's own
- * working columns. Shared by the ensureSchema backfill and pgPostStore.publish,
- * and reusable for future revision rows (issue #28) so every snapshot has the
- * exact same shape.
+ * working columns. Shared by the ensureSchema backfill and pgPostStore.publish.
+ * (Post revisions — issue #28 — snapshot the whole pair in the editor's
+ * camelCase PUT-payload shape instead, so a restore round-trips unchanged.)
  * @ai-note `date` is serialized as 'YYYY-MM-DD' text so the site loader can
  * `new Date(...)` it after the jsonb round-trip (a bare date column would
  * otherwise be locale/timezone-sensitive — see the dump comment in backup.ts).
@@ -83,6 +83,23 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
                      published_at = COALESCE(published_at, updated_at)
      WHERE status = 'published' AND published_snapshot IS NULL
   `);
+  // @ai-note post_revisions holds whole-pair snapshots of the WORKING copy,
+  // taken just before a save overwrites it (issue #28) — the recovery net for
+  // bad pastes and stale-tab overwrites. Snapshots use the editor's PUT-payload
+  // shape ({status, shared, de, en}, camelCase) so a restore round-trips
+  // through the editor unchanged. Capped at REVISION_CAP (posts.ts) per
+  // translation_key by upsertDraft; deliberately excluded from the scheduled
+  // DB dumps (backup.ts keeps its fixed table list — revisions are a
+  // convenience net, not content of record). Additive, idempotent migration.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS post_revisions (
+      id              uuid PRIMARY KEY,
+      translation_key text NOT NULL,
+      snapshot        jsonb NOT NULL,
+      saved_at        timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS post_revisions_tk_saved_idx ON post_revisions (translation_key, saved_at DESC)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pages (
       key           text NOT NULL,
