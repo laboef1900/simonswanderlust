@@ -38,9 +38,12 @@ Required env var for the app: **`DATABASE_URL`** (see `uploader/.env.example`). 
 The same **`uploader/`** app (Node 26 + Fastify 5 + sharp, Dockerized) also optimizes uploaded
 photos into responsive AVIF/WebP variants and returns paste-ready `heroImage` / `<RemoteImage>` /
 `<BodyImage>` snippets. Access is gated by username/password accounts stored in Postgres, with
-HttpOnly session cookies. Everything runs on Simon's own server, in one container. **This project
-does not use LM Studio or any AI features** — the former AI caption/batch-uploader feature was
-removed in July 2026 (the 2026-06-22 spec is historical). See `uploader/README.md`,
+HttpOnly session cookies. Everything runs on Simon's own server, in one container. The blog has
+**one** small AI feature: **editor-integrated alt-text suggestions** via a local LM Studio vision
+model, called **directly from the browser** (the server never contacts the model; no new server
+SSRF surface). See docs/superpowers/specs/2026-07-05-ai-alt-text-editor-integration-design.md.
+(An earlier standalone batch-uploader variant was removed in July 2026 and restored in this
+slimmer, editor-integrated form; the 2026-06-22 spec is historical.) See `uploader/README.md`,
 `ARCHITECTURE.md`, and the specs
 `docs/superpowers/specs/2026-06-18-image-hosting-uploader-design.md` +
 `docs/superpowers/specs/2026-07-03-single-app-container-design.md`.
@@ -199,7 +202,9 @@ Full security model: `SECURITY.md`. These patterns MUST be preserved when changi
 These apply to YOU, the assistant, while working here:
 - **OWASP Integration** — Actively develop with the **OWASP Top 10** in mind: defend against
   SQLi, XSS, and SSRF (most relevant here: the WXR importer's remote fetches and the sanitized
-  body-HTML render path). The project deliberately contains no AI/LLM features.
+  body-HTML render path). The one AI feature (browser-direct alt-text via local LM Studio) adds
+  no server→LLM call and no new outbound-fetch surface; keep it that way (do not proxy the model
+  through the server or through safeFetch).
 - **Secret Protection** — Never log, print, or echo secrets/keys in responses or tool output.
   If editing a file with secrets, preserve them exactly.
 - **Command Execution Safety** — Do NOT run blindly downloaded scripts (`curl ... | bash`) or
@@ -317,6 +322,12 @@ Use comments to leave hints for future sessions:
   settings endpoints are now admin-only; a global error handler logs unexpected errors
   server-side and returns sanitized 500s; PR CI added (`.github/workflows/ci.yml`); site tests
   consolidated next to their modules (branch `feature/remove-ai-and-harden`).
+- **Done:** AI alt-text restored (2026-07-05) — editor-integrated "Suggest alt text" buttons
+  (DE/EN hero + body) + photo uploader, browser-direct to local LM Studio; LM config in the
+  JSON settings store; read-only GET /ai-config for non-admin authors. Slimmer replacement for
+  the removed batch uploader (no server /suggest, no slug). See
+  docs/superpowers/specs/2026-07-05-ai-alt-text-editor-integration-design.md (branch
+  feature/ai-alt-text).
 - **Done:** Stack upgrade (July 2026) — Node 22 → 26 (DHI images, engines, CI), Postgres 17 → 18,
   Astro 6 → 7 (+ `@astrojs/mdx` 7; `compressHTML: 'true'` kept for v6 whitespace behavior; Sätteri
   markdown default accepted), Fastify plugins (`multipart` 10, `static` 9.1.3 — security fix),

@@ -131,6 +131,15 @@ Full details in [`../SECURITY.md`](../SECURITY.md); the essentials:
 - **WordPress import is SSRF-guarded.** Remote image fetches reject internal/loopback addresses,
   time out, and cap the download size; imported slugs are validated before anything is written.
 
+## AI alt-text (local LM Studio)
+
+The post editor and photo uploader offer a "Suggest alt text" button per alt field. The browser
+downscales the picked photo and calls the author's local LM Studio (`<lmBaseUrl>/chat/completions`)
+directly — the app server never contacts the model. LM config (`lmBaseUrl`, `lmModel`,
+`captionTimeoutMs`, `captionMaxEdge`, `captionPrompt`) lives in the JSON settings store, edited on
+the admin-only Settings page; authors read it read-only via `GET /ai-config`. No
+`docker-compose`/`.env` LM variables are needed.
+
 ## CLI upload (Phase 2 migration)
 
 ```bash
