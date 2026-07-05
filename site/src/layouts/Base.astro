@@ -6,6 +6,7 @@ import '../styles/global.css';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
+import { PROD_SITE, type SeoImage } from '../lib/seo';
 
 interface Props {
   title: string;
@@ -14,13 +15,13 @@ interface Props {
   /** Paths of this page in both languages; drives hreflang + language switcher. */
   alternates?: { de: string; en: string };
   /** Social-sharing image (og:image); `src` must be an absolute URL (trips Zod schema guarantees it). */
-  image?: { src: string; width: number; height: number; alt: string };
+  image?: SeoImage;
   ogType?: 'website' | 'article';
 }
 
 const { title, description, locale, alternates, image, ogType = 'website' } = Astro.props;
 const t = useTranslations(locale);
-const site = Astro.site ?? new URL('https://simonswanderlust.com');
+const site = Astro.site ?? PROD_SITE;
 const canonical = new URL(Astro.url.pathname, site);
 const ogLocale: Record<Locale, string> = { de: 'de_DE', en: 'en_US' };
 const otherLocale: Locale = locale === 'de' ? 'en' : 'de';

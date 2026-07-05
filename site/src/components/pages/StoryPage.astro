@@ -10,7 +10,7 @@ import StoryMiniMap from '../StoryMiniMap.astro';
 import { useTranslations } from '../../i18n/ui';
 import { coordsLabel, dateLabel, entryLabel } from '../../lib/format';
 import { byLocale, entryNumberOf, localeOf, pathOf, translationOf, type Trip } from '../../lib/trips';
-import { blogPostingJsonLd, serializeJsonLd } from '../../lib/seo';
+import { PROD_SITE, blogPostingJsonLd, serializeJsonLd } from '../../lib/seo';
 
 interface Props {
   trip: Trip;
@@ -37,11 +37,11 @@ const alternates = other
 const label = `${entryLabel(number)} — ${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
 
 // Same production fallback as Base.astro's canonical URL.
-const site = Astro.site ?? new URL('https://simonswanderlust.com');
+const site = Astro.site ?? PROD_SITE;
 const jsonLd = serializeJsonLd(
   blogPostingJsonLd({
     title: trip.data.title,
-    dateIso: trip.data.date.toISOString(),
+    date: trip.data.date,
     excerpt: trip.data.excerpt,
     locale,
     image: trip.data.heroImage,

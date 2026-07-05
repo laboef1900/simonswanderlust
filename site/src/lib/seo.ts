@@ -4,6 +4,28 @@ import type { Locale } from '../i18n/ui';
 // not a ui.ts key (same author for both locales; keeps i18n churn out of SEO).
 const AUTHOR_NAME = 'Simon';
 
+/**
+ * Production origin — fallback base URL when `Astro.site` is unset.
+ * Single source of truth; mirrors `site` in astro.config.mjs.
+ */
+export const PROD_SITE = new URL('https://simonswanderlust.com');
+
+/**
+ * Formats a Date as a date-only ISO 8601 string (YYYY-MM-DD) from its LOCAL
+ * calendar components.
+ *
+ * @ai-warning `posts.date` is a Postgres `date` column that node-pg parses as
+ * local-midnight on the build host, so `toISOString()` shifts it to the
+ * previous UTC day on any UTC+x builder. schema.org accepts a plain date for
+ * `datePublished`; emitting local Y-M-D keeps the output timezone-proof.
+ */
+export function isoDate(date: Date): string {
+  const y = String(date.getFullYear()).padStart(4, '0');
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 export interface SeoImage {
   src: string;
   width: number;
@@ -13,8 +35,8 @@ export interface SeoImage {
 
 export interface BlogPostingInput {
   title: string;
-  /** Publication date as an ISO 8601 string (e.g. `date.toISOString()`). */
-  dateIso: string;
+  /** Publication date; serialized date-only via `isoDate()` (see its warning). */
+  date: Date;
   excerpt: string;
   locale: Locale;
   /** Hero image; `src` is an absolute URL per the trips Zod schema. */
@@ -41,7 +63,7 @@ export function blogPostingJsonLd(input: BlogPostingInput): BlogPostingJsonLd {
     '@context': 'https://schema.org',
     '@type': 'BlogPosting',
     headline: input.title,
-    datePublished: input.dateIso,
+    datePublished: isoDate(input.date),
     description: input.excerpt,
     inLanguage: input.locale,
     image: {
