@@ -101,10 +101,14 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   const here = dirname(fileURLToPath(import.meta.url));
   app.register(fastifyStatic, { root: join(here, '..', 'public'), prefix: '/admin/' });
-  // /upload appends a content hash to every key (contentHashKey), so a given
-  // variant URL's bytes never change: replacing a photo mints a new URL and
-  // previously published URLs keep serving — which is what makes a one-year
-  // immutable cache correct. (A custom setHeaders is overwritten by
+  // /upload and the CLI append a content hash to every key (contentHashKey),
+  // so a given variant URL's bytes never change: replacing a photo mints a new
+  // URL and previously published URLs keep serving — which is what makes a
+  // one-year immutable cache correct. Exception: WP-import rehost keys
+  // (wp-images.ts) stay deterministic so re-imports are idempotent, so
+  // re-importing a remote image that changed since the first import is the one
+  // residual path that can rewrite bytes under an immutable-cached URL —
+  // accepted trade-off. (A custom setHeaders is overwritten by
   // @fastify/static's own cacheControl, so use the native maxAge + immutable
   // options instead.)
   app.register(fastifyStatic, {
