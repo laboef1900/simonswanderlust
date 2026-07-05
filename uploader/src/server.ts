@@ -7,7 +7,7 @@ import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
 import { processImage } from './pipeline.js';
-import { storeVariants } from './storage.js';
+import { storeVariants, isOriginalFile } from './storage.js';
 import { verifyPassword, type UserStore, UserExistsError } from './users.js';
 import type { SessionStore } from './sessions.js';
 import {
@@ -21,7 +21,7 @@ import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
 import { importWxr } from './wp-import.js';
 import { fixedWindowLimiter, rateLimitPreHandler, type RateLimiter } from './rate-limit.js';
-import { BACKUP_FILE_RE, type DbBackup } from './backup.js';
+import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -112,6 +112,12 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     maxAge: '365d',
     immutable: true,
     constraints: { host: cfg.imgHost },
+    // Untouched full-resolution originals (`<key>-orig.<ext>`) live in
+    // storageDir so the incremental backup tar captures them, but they are a
+    // private DR archive — never a web asset. Keep them off the public image
+    // host (404) so a visitor can't guess `.../hero-orig.jpg` next to the
+    // published `.../hero-640.avif`.
+    allowedPath: (pathName) => !isOriginalFile(pathName),
   });
 
   // The public blog: static output of the last release. `current` is a symlink
@@ -341,18 +347,23 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   app.get('/backups', { preHandler: requireAdmin }, async () => ({
     state: cfg.dbBackup.state(),
     files: cfg.dbBackup.list(),
+    imageArchives: cfg.dbBackup.listImageArchives(),
   }));
 
   app.post('/backups', { preHandler: requireAdmin }, async () => cfg.dbBackup.runNow());
 
-  // Filename is validated against the strict backup pattern — nothing else in
-  // the directory (state.json!) and no traversal can be fetched.
+  // Filename is validated against the strict backup patterns (db dump OR images
+  // archive) — nothing else in the directory (state.json!) and no traversal can
+  // be fetched.
   app.get('/backups/:name', { preHandler: requireAdmin }, async (req, reply) => {
     const name = (req.params as { name: string }).name;
-    if (!BACKUP_FILE_RE.test(name)) return reply.code(400).send({ error: 'invalid backup filename' });
+    const isDump = BACKUP_FILE_RE.test(name);
+    if (!isDump && !IMAGES_ARCHIVE_RE.test(name)) {
+      return reply.code(400).send({ error: 'invalid backup filename' });
+    }
     const file = join(cfg.dbBackup.dir, name);
     if (!existsSync(file)) return reply.code(404).send({ error: 'backup not found' });
-    reply.header('content-type', 'application/gzip');
+    reply.header('content-type', isDump ? 'application/gzip' : 'application/x-tar');
     reply.header('content-disposition', `attachment; filename="${name}"`);
     return reply.send(createReadStream(file));
   });

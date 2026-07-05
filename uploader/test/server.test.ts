@@ -44,6 +44,7 @@ function stubBackup(dir = '/tmp/none') {
     dir,
     runNow: async () => { state = { lastAttemptAt: 'a', lastSuccessAt: 's' }; return { ...state }; },
     list: () => [{ name: 'db-20260703-120000.json.gz', size: 3 }],
+    listImageArchives: () => [{ name: 'images-20260703-120000.tar', size: 7 }],
     state: () => ({ ...state }),
   };
   return { backup };
@@ -135,6 +136,29 @@ describe('POST /upload', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers['cache-control']).toContain('max-age=31536000');
     expect(res.headers['cache-control']).toContain('immutable');
+  });
+
+  it('serves variants but not the untouched original on the public image host', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const form = new FormData();
+    form.append('key', 'trips/private/hero');
+    form.append('alt', 'p');
+    form.append('file', await jpeg(), { filename: 't.jpg', contentType: 'image/jpeg' });
+    const up = await b.app.inject({
+      method: 'POST', url: '/upload',
+      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
+    });
+    expect(up.statusCode).toBe(200);
+    const files = up.json().files as string[];
+    const variant = files.find((f) => f.endsWith('.webp'))!;
+    const original = files.find((f) => /-orig\.[a-z0-9]+$/.test(f))!;
+    expect(original).toBeTruthy(); // the original is still written to disk (for the backup tar)
+    const img = { host: 'img.simonswanderlust.com' };
+    // The lossy variant is public...
+    expect((await b.app.inject({ method: 'GET', url: '/' + variant, headers: img })).statusCode).toBe(200);
+    // ...but the full-resolution original is not downloadable.
+    expect((await b.app.inject({ method: 'GET', url: '/' + original, headers: img })).statusCode).toBe(404);
   });
 });
 
@@ -507,13 +531,13 @@ describe('backup routes', () => {
   it('are admin-only', async () => {
     const b = build();
     const { cookie } = await authed(b, { isAdmin: false });
-    for (const [method, url] of [['GET', '/backups'], ['POST', '/backups'], ['GET', '/backups/db-20260703-120000.json.gz']] as const) {
+    for (const [method, url] of [['GET', '/backups'], ['POST', '/backups'], ['GET', '/backups/db-20260703-120000.json.gz'], ['GET', '/backups/images-20260703-120000.tar']] as const) {
       expect((await b.app.inject({ method, url })).statusCode).toBe(401);
       expect((await b.app.inject({ method, url, cookies: cookie })).statusCode).toBe(403);
     }
   });
 
-  it('lists state + files and runs a backup on demand', async () => {
+  it('lists state + files + image archives and runs a backup on demand', async () => {
     const b = build({ dbBackup: stubBackup().backup });
     const { cookie } = await authed(b);
     const run = await b.app.inject({ method: 'POST', url: '/backups', cookies: cookie });
@@ -521,19 +545,25 @@ describe('backup routes', () => {
     expect(run.json().lastSuccessAt).toBe('s');
     const list = await b.app.inject({ method: 'GET', url: '/backups', cookies: cookie });
     expect(list.json().files[0].name).toBe('db-20260703-120000.json.gz');
+    expect(list.json().imageArchives[0].name).toBe('images-20260703-120000.tar');
   });
 
   it('downloads only well-formed backup filenames from the backup dir', async () => {
     const backupDir = join(dir, 'dbbackups');
     await mkdir(backupDir, { recursive: true });
     await writeFile(join(backupDir, 'db-20260703-120000.json.gz'), 'gzbytes');
+    await writeFile(join(backupDir, 'images-20260703-120000.tar'), 'tarbytes');
     const b = build({ dbBackup: { ...stubBackup(backupDir).backup, dir: backupDir } });
     const { cookie } = await authed(b);
     const ok = await b.app.inject({ method: 'GET', url: '/backups/db-20260703-120000.json.gz', cookies: cookie });
     expect(ok.statusCode).toBe(200);
     expect(ok.headers['content-type']).toBe('application/gzip');
     expect(ok.headers['content-disposition']).toContain('attachment');
-    for (const evil of ['..%2Fsettings.json', 'state.json', 'db-1.json.gz']) {
+    const tarOk = await b.app.inject({ method: 'GET', url: '/backups/images-20260703-120000.tar', cookies: cookie });
+    expect(tarOk.statusCode).toBe(200);
+    expect(tarOk.headers['content-type']).toBe('application/x-tar');
+    expect(tarOk.headers['content-disposition']).toContain('attachment');
+    for (const evil of ['..%2Fsettings.json', 'state.json', 'db-1.json.gz', 'images-1.tar', 'images-20260703-120000.tar.gz']) {
       const res = await b.app.inject({ method: 'GET', url: `/backups/${evil}`, cookies: cookie });
       expect([400, 404]).toContain(res.statusCode);
       expect(res.statusCode).not.toBe(200);

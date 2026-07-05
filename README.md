@@ -86,6 +86,15 @@ cd site && npm install && npm run dev    # needs DATABASE_URL pointing at a Post
 > `npm run build` and `npx astro check` both invoke the Postgres content loader, so they require a
 > reachable Postgres with `DATABASE_URL` set. Unit tests (`npm test`) do not hit the database.
 
+## Backups
+
+The app writes its own backups (gzipped DB dumps + incremental image archives, admin settings
+page) to `/data/backup/db` — but that is the **same server disk** as the live data, so it is not
+a disaster-recovery story by itself. Keep a **host-level offsite backup** (restic/rsync/borg
+cron) of `./uploader/data`; that one directory carries the dumps, the image archives, and the
+untouched image originals. Details and the restore procedure:
+[ARCHITECTURE.md](ARCHITECTURE.md#backups--disaster-recovery).
+
 ## Documentation
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — components, content pipeline, runtime build/deploy flow, data model, packaging & release pipeline

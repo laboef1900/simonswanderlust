@@ -11,6 +11,10 @@ stack: [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Security model: [`../SECURITY
 Filenames: `{key}-{width}.{format}` at widths 640/1280/1920 (plus the source's
 own width, never upscaled), formats `avif` + `webp`. Must match the blog's
 `site/src/lib/images.ts`. Variants are served with a one-year immutable cache.
+The untouched upload is additionally persisted as `{key}-orig.<ext>` next to the
+variants, so the images dir is a complete media archive (and future re-encodes
+stay possible). Originals exist only for uploads made from this version onward;
+earlier uploads exist as variants only.
 
 ---
 
@@ -43,8 +47,12 @@ closed once any user exists. Sign in at `/login`, then pick a key
 **Upload** — the page prints the `heroImage:` snippet to paste into the post's
 frontmatter.
 
-Uploaded variants are written to `./data/images/` on the host (a Docker volume),
-so they survive container restarts. `./data/` is git-ignored.
+Uploaded variants — plus the untouched original as `{key}-orig.<ext>` — are
+written to `./data/images/` on the host (a Docker volume), so they survive
+container restarts. `./data/` is git-ignored. Note that `./data/` (images,
+site releases, and the in-app backups) lives on the same disk as everything
+else: for disaster recovery, keep a host-level offsite backup of it — see
+[`../ARCHITECTURE.md`](../ARCHITECTURE.md#backups--disaster-recovery).
 
 **Manage the container:**
 
@@ -125,8 +133,8 @@ STORAGE_DIR=./data/images PUBLIC_BASE_URL=https://img.simonswanderlust.com \
   npm run upload -- ./photo.jpg trips/bucharest-2024/hero "Old town at dusk"
 ```
 
-Prints the paste-ready `heroImage:` snippet and writes all variants under
-`STORAGE_DIR`.
+Prints the paste-ready `heroImage:` snippet and writes all variants (plus the
+untouched `-orig` original) under `STORAGE_DIR`.
 
 ## Develop
 

@@ -42,4 +42,31 @@ describe('processImage', () => {
     const meta = await sharp(v.data).metadata();
     expect(meta.exif).toBeDefined();
   });
+
+  it('returns the untouched original bytes with the detected extension', async () => {
+    const jpg = await fixture(800, 600);
+    const fromJpg = await processImage(jpg);
+    expect(fromJpg.original.data.equals(jpg)).toBe(true);
+    expect(fromJpg.original.ext).toBe('jpg');
+
+    const png = await sharp({
+      create: { width: 400, height: 300, channels: 3, background: { r: 1, g: 2, b: 3 } },
+    }).png().toBuffer();
+    const fromPng = await processImage(png);
+    expect(fromPng.original.data.equals(png)).toBe(true);
+    expect(fromPng.original.ext).toBe('png');
+  });
+
+  it('labels SVG originals as png (rasterized probe), never svg', async () => {
+    // Pins the deliberate relabeling: sharp rasterizes SVG, so the probe
+    // reports 'png' and the untouched SVG bytes are stored as `-orig.png`.
+    // Guard: switching the derivation to metadata().format could yield a
+    // publicly served `-orig.svg`, a stored-XSS vector on the image host.
+    const svg = Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#f00"/></svg>',
+    );
+    const result = await processImage(svg);
+    expect(result.original.data.equals(svg)).toBe(true);
+    expect(result.original.ext).toBe('png');
+  });
 });
