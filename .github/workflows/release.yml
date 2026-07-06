@@ -53,8 +53,8 @@ jobs:
         with:
           context: .
           build-args: |
-            NODE_BUILD=dhi.io/node:22-dev
-            NODE_RUNTIME=dhi.io/node:22
+            NODE_BUILD=dhi.io/node:26-dev
+            NODE_RUNTIME=dhi.io/node:26
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
