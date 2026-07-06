@@ -23,19 +23,49 @@ export interface Caption {
   altDe: string;
 }
 
-/** Extract the first {…} JSON object from a model reply and require non-empty
- *  altEn + altDe. Tolerates prose/code-fence wrapping around the object. */
-export function parseCaption(content: string): Caption {
-  const match = content.match(/\{[\s\S]*?\}/);
-  if (!match) throw new CaptionError('no JSON object in caption response');
-  let obj: { altEn?: unknown; altDe?: unknown };
-  try {
-    obj = JSON.parse(match[0]) as { altEn?: unknown; altDe?: unknown };
-  } catch {
-    throw new CaptionError('invalid JSON in caption response');
+/** Index of the `}` that balances the `{` at `start`, or -1 if unbalanced.
+ *  String-aware: braces inside string literals don't affect depth, so a `}`
+ *  in a value (e.g. "a sign reading {closed}") won't end the object early. */
+function matchBrace(s: string, start: number): number {
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let j = start; j < s.length; j++) {
+    const ch = s[j];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+    } else if (ch === '"') inStr = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) return j;
   }
-  const altEn = String(obj.altEn ?? '').trim();
-  const altDe = String(obj.altDe ?? '').trim();
-  if (!altEn || !altDe) throw new CaptionError('caption response missing required fields');
-  return { altEn, altDe };
+  return -1;
+}
+
+/** Extract the first JSON object that carries a non-empty altEn + altDe from a
+ *  model reply. Scans each `{`, matching braces string-aware, so it tolerates
+ *  prose/code-fence wrapping, a stray `{…}` before the real object, and literal
+ *  braces inside string values — cases a plain regex match mishandles. */
+export function parseCaption(content: string): Caption {
+  const s = String(content);
+  let sawJson = false;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== '{') continue;
+    const end = matchBrace(s, i);
+    if (end < 0) break; // no balanced object from here on
+    let obj: { altEn?: unknown; altDe?: unknown };
+    try {
+      obj = JSON.parse(s.slice(i, end + 1)) as { altEn?: unknown; altDe?: unknown };
+    } catch {
+      continue; // not valid JSON from this `{`; try the next one
+    }
+    sawJson = true;
+    const altEn = String(obj.altEn ?? '').trim();
+    const altDe = String(obj.altDe ?? '').trim();
+    if (altEn && altDe) return { altEn, altDe };
+  }
+  throw new CaptionError(
+    sawJson ? 'caption response missing required fields' : 'no JSON object in caption response',
+  );
 }

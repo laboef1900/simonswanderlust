@@ -56,6 +56,15 @@ describe('createSettingsStore', () => {
     expect(store.get()).toEqual(DEFAULTS);
   });
 
+  it('falls back to defaults when an on-disk value is out of range', async () => {
+    // A hand-edited/partially-written settings.json must not serve invalid values
+    // (e.g. a negative timeout reaching the browser abort timer) — validate on load.
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ captionTimeoutMs: -100, lmModel: 'my/vlm' }));
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(store.get()).toEqual(DEFAULTS); // whole file rejected, not partially trusted
+  });
+
   it('update validates, persists, and updates the cache', async () => {
     const path = join(dir, 'settings.json');
     const store = createSettingsStore({ path, defaults: DEFAULTS });

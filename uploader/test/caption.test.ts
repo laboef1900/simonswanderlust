@@ -34,6 +34,26 @@ describe('parseCaption', () => {
     expect(parseCaption('{"altEn":"A","altDe":"B"} — let me know, e.g. {shorter}'))
       .toEqual({ altEn: 'A', altDe: 'B' });
   });
+
+  it('skips a stray brace group in prose BEFORE the real object', () => {
+    expect(parseCaption('Sure {here}: {"altEn":"A harbor","altDe":"Ein Hafen"}'))
+      .toEqual({ altEn: 'A harbor', altDe: 'Ein Hafen' });
+  });
+
+  it('keeps a literal brace inside a string value', () => {
+    expect(parseCaption('{"altEn":"a sign reading {open}","altDe":"ein Schild"}'))
+      .toEqual({ altEn: 'a sign reading {open}', altDe: 'ein Schild' });
+  });
+
+  it('handles a nested object among the fields', () => {
+    expect(parseCaption('{"altEn":"A","meta":{"x":1},"altDe":"B"}'))
+      .toEqual({ altEn: 'A', altDe: 'B' });
+  });
+
+  it('skips a valid non-caption object and uses the real one', () => {
+    expect(parseCaption('{"status":"ok"} {"altEn":"A","altDe":"B"}'))
+      .toEqual({ altEn: 'A', altDe: 'B' });
+  });
 });
 
 describe('DEFAULT_PROMPT', () => {

@@ -7,15 +7,21 @@
  * the manual alt field always stays usable.
  */
 window.AltSuggest = (function () {
-  async function loadConfig() {
+  // on401: called instead of a raw redirect when the session has expired, so a
+  // host page with a DraftGuard (editor.html) can stash the draft, clear its
+  // dirty flag (no surprise beforeunload prompt), and carry a ?next= back here.
+  async function loadConfig(on401) {
     const res = await fetch('/ai-config');
-    if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+    if (res.status === 401) {
+      if (on401) on401(); else location.href = '/login';
+      throw new Error('unauthorized');
+    }
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }
 
   function wire(opts) {
-    const { button, fileInput, altInput, statusEl, lang, hintEl } = opts;
+    const { button, fileInput, altInput, statusEl, lang, hintEl, on401 } = opts;
     if (!button) return;
     if (!fileInput || !altInput) return;
     const say = (msg) => { if (statusEl) statusEl.textContent = msg; };
@@ -24,7 +30,7 @@ window.AltSuggest = (function () {
       if (!file) { say('Pick a photo first.'); return; }
       let cfg;
       try {
-        cfg = await loadConfig();
+        cfg = await loadConfig(on401);
       } catch (e) {
         say('Could not load AI settings: ' + e.message);
         return;

@@ -66,15 +66,21 @@ export function createSettingsStore({ path, defaults }: { path: string; defaults
     // Pick known keys only, so truly unknown fields in an older settings.json are
     // dropped instead of re-persisted forever.
     const fromFile = JSON.parse(readFileSync(path, 'utf8')) as Partial<Settings>;
-    if (fromFile.lmBaseUrl !== undefined) current.lmBaseUrl = fromFile.lmBaseUrl;
-    if (fromFile.lmModel !== undefined) current.lmModel = fromFile.lmModel;
-    if (fromFile.captionTimeoutMs !== undefined) current.captionTimeoutMs = fromFile.captionTimeoutMs;
-    if (fromFile.captionMaxEdge !== undefined) current.captionMaxEdge = fromFile.captionMaxEdge;
-    if (fromFile.captionPrompt !== undefined) current.captionPrompt = fromFile.captionPrompt;
-    if (fromFile.backupSchedule !== undefined) current.backupSchedule = fromFile.backupSchedule;
-    if (fromFile.backupRetention !== undefined) current.backupRetention = fromFile.backupRetention;
+    const merged: Settings = { ...defaults };
+    if (fromFile.lmBaseUrl !== undefined) merged.lmBaseUrl = fromFile.lmBaseUrl;
+    if (fromFile.lmModel !== undefined) merged.lmModel = fromFile.lmModel;
+    if (fromFile.captionTimeoutMs !== undefined) merged.captionTimeoutMs = fromFile.captionTimeoutMs;
+    if (fromFile.captionMaxEdge !== undefined) merged.captionMaxEdge = fromFile.captionMaxEdge;
+    if (fromFile.captionPrompt !== undefined) merged.captionPrompt = fromFile.captionPrompt;
+    if (fromFile.backupSchedule !== undefined) merged.backupSchedule = fromFile.backupSchedule;
+    if (fromFile.backupRetention !== undefined) merged.backupRetention = fromFile.backupRetention;
+    // Validate on load too, not just on update(): a hand-edited or partially
+    // written settings.json must not serve out-of-range values (e.g. a negative
+    // captionTimeoutMs reaching the browser's abort timer). Reject → safe defaults.
+    current = validate(merged);
   } catch {
-    // No file yet, or unreadable/corrupt — keep defaults.
+    // No file yet, unreadable/corrupt, or failed validation — keep defaults.
+    current = { ...defaults };
   }
 
   return {

@@ -16,6 +16,9 @@ describe('llm.js parseCaption (shipped browser parser)', () => {
     '{"altEn":"A beach","altDe":"Ein Strand"}',
     'Here you go:\n```json\n{"altEn":"X","altDe":"Y"}\n```',
     '{"altEn":"A","altDe":"B"} — trailing note {x}',
+    'Sure {here}: {"altEn":"A harbor","altDe":"Ein Hafen"}',      // stray brace before
+    '{"altEn":"a sign reading {open}","altDe":"ein Schild"}',      // brace inside a value
+    '{"status":"ok"} {"altEn":"A","altDe":"B"}',                   // non-caption object first
   ];
   it('parses the same valid cases as the server caption.ts contract', () => {
     for (const c of cases) {

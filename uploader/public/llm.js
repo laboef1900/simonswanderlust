@@ -8,14 +8,46 @@
 window.LLM = (function () {
   const base = (u) => String(u).replace(/\/+$/, '');
 
+  // Index of the `}` balancing the `{` at `start`, or -1. String-aware so a `}`
+  // inside a value doesn't end the object early. Mirrors src/caption.ts.
+  function matchBrace(s, start) {
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let j = start; j < s.length; j++) {
+      const ch = s[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+      } else if (ch === '"') inStr = true;
+      else if (ch === '{') depth++;
+      else if (ch === '}' && --depth === 0) return j;
+    }
+    return -1;
+  }
+
+  // Extract the first JSON object carrying non-empty altEn + altDe. Mirrors
+  // src/caption.ts::parseCaption (kept in sync; enforced by test/llm-mirror.test.ts).
   function parseCaption(content) {
-    const m = String(content).match(/\{[\s\S]*?\}/);
-    if (!m) throw new Error('no JSON object in model response');
-    const o = JSON.parse(m[0]);
-    const altEn = String(o.altEn ?? '').trim();
-    const altDe = String(o.altDe ?? '').trim();
-    if (!altEn || !altDe) throw new Error('model response missing fields');
-    return { altEn, altDe };
+    const s = String(content);
+    let sawJson = false;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] !== '{') continue;
+      const end = matchBrace(s, i);
+      if (end < 0) break;
+      let o;
+      try {
+        o = JSON.parse(s.slice(i, end + 1));
+      } catch (_) {
+        continue;
+      }
+      sawJson = true;
+      const altEn = String(o.altEn ?? '').trim();
+      const altDe = String(o.altDe ?? '').trim();
+      if (altEn && altDe) return { altEn, altDe };
+    }
+    throw new Error(sawJson ? 'model response missing fields' : 'no JSON object in model response');
   }
 
   async function listModels(baseUrl) {
