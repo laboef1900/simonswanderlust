@@ -62,6 +62,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   const ADMIN_PREFIXES = [
     '/admin', '/login', '/logout', '/auth', '/setup', '/settings', '/users',
     '/posts', '/upload', '/import', '/export', '/backups', '/rebuild', '/health', '/pages', '/images',
+    '/ai-config',
   ];
   app.addHook('onSend', async (req, reply) => {
     reply.header('X-Content-Type-Options', 'nosniff');
@@ -248,6 +249,11 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   app.post('/settings', { preHandler: requireAdmin }, async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     const partial: Record<string, unknown> = {};
+    if (b.lmBaseUrl !== undefined) partial.lmBaseUrl = String(b.lmBaseUrl).trim();
+    if (b.lmModel !== undefined) partial.lmModel = String(b.lmModel).trim();
+    if (b.captionTimeoutMs !== undefined) partial.captionTimeoutMs = Number(b.captionTimeoutMs);
+    if (b.captionMaxEdge !== undefined) partial.captionMaxEdge = Number(b.captionMaxEdge);
+    if (b.captionPrompt !== undefined) partial.captionPrompt = String(b.captionPrompt);
     if (b.backupSchedule !== undefined) partial.backupSchedule = String(b.backupSchedule);
     if (b.backupRetention !== undefined) partial.backupRetention = Number(b.backupRetention);
     try {
@@ -256,6 +262,20 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       if (e instanceof SettingsError) return reply.code(400).send({ error: e.message });
       throw e;
     }
+  });
+
+  // Read-only LM config for the browser-direct alt-text suggester. Any signed-in
+  // author may READ it (to run a suggestion); CHANGING it stays admin-only via
+  // POST /settings. Deliberately excludes backup settings.
+  app.get('/ai-config', { preHandler: requireAuth }, async (_req, reply) => {
+    const s = cfg.settings.get();
+    return reply.send({
+      lmBaseUrl: s.lmBaseUrl,
+      lmModel: s.lmModel,
+      captionPrompt: s.captionPrompt,
+      captionTimeoutMs: s.captionTimeoutMs,
+      captionMaxEdge: s.captionMaxEdge,
+    });
   });
 
   app.get('/login', (_req, reply) => reply.sendFile('login.html'));

@@ -106,6 +106,14 @@ inventory is available. `/wp-content/uploads/*` image URLs are intentionally **n
 (accepted loss — the old URLs carry no post slug, so they cannot be mapped onto the
 `trips/<slug>/…` key scheme, and no mapping table was persisted at import time).
 
+## AI alt-text (local LM Studio)
+
+The post editor and photo uploader offer a "Suggest alt text" button per alt field. The browser
+downscales the picked photo and calls the author's local LM Studio (`<lmBaseUrl>/chat/completions`)
+directly — the app server never contacts the model. LM config (`lmBaseUrl`, `lmModel`,
+`captionTimeoutMs`, `captionMaxEdge`, `captionPrompt`) lives in the JSON settings store, edited on
+the admin-only Settings page; authors read it read-only via `GET /ai-config`. No
+`docker-compose`/`.env` LM variables are needed.
 
 ## Data model (Postgres)
 
