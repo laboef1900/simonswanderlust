@@ -10,6 +10,11 @@ interface Props {
 
 const { locale, alternates } = Astro.props;
 const t = useTranslations(locale);
+const pathname = Astro.url.pathname;
+
+const isHome = pathname === homePath(locale) || pathname === homePath(locale) + '/';
+const isMap = pathname.startsWith(mapPath(locale));
+const isAbout = pathname.startsWith(aboutPath(locale));
 ---
 
 <header class="border-b border-navy/10 bg-canvas">
@@ -17,10 +22,28 @@ const t = useTranslations(locale);
     <a href={homePath(locale)} class="text-sm font-extrabold tracking-wide text-navy uppercase">
       {t('site.title')}
     </a>
-    <nav aria-label={t('nav.ariaLabel')} class="flex items-center gap-5 text-sm">
-      <a href={homePath(locale) + '#stories'} class="hover:text-brand-red">{t('nav.stories')}</a>
-      <a href={mapPath(locale)} class="hover:text-brand-red">{t('nav.map')}</a>
-      <a href={aboutPath(locale)} class="hover:text-brand-red">{t('nav.about')}</a>
+    <nav aria-label={t('nav.ariaLabel')} class="flex items-center gap-5 text-sm font-medium">
+      <a
+        href={homePath(locale) + '#stories'}
+        aria-current={isHome ? 'page' : undefined}
+        class={isHome ? 'font-semibold text-brand-red' : 'text-ink/80 transition-colors hover:text-brand-red'}
+      >
+        {t('nav.stories')}
+      </a>
+      <a
+        href={mapPath(locale)}
+        aria-current={isMap ? 'page' : undefined}
+        class={isMap ? 'font-semibold text-brand-red' : 'text-ink/80 transition-colors hover:text-brand-red'}
+      >
+        {t('nav.map')}
+      </a>
+      <a
+        href={aboutPath(locale)}
+        aria-current={isAbout ? 'page' : undefined}
+        class={isAbout ? 'font-semibold text-brand-red' : 'text-ink/80 transition-colors hover:text-brand-red'}
+      >
+        {t('nav.about')}
+      </a>
       <LangSwitcher locale={locale} alternates={alternates} />
     </nav>
   </div>

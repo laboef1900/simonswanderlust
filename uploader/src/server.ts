@@ -613,7 +613,21 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   app.setNotFoundHandler(async (req, reply) => {
     const host = req.headers.host ?? '';
     if (req.method !== 'GET' && req.method !== 'HEAD') return reply.code(404).send({ error: 'not found' });
-    if (host === cfg.imgHost) return reply.code(404).send('Not found');
+    if (host === cfg.imgHost) {
+      const urlPath = (req.raw.url ?? '').split('?', 1)[0] ?? '';
+      const relPath = (urlPath.endsWith('/') ? join(urlPath, 'index.html') : urlPath).replace(/^\//, '');
+      const fullPath = join(currentDir, relPath);
+      if (relPath && existsSync(fullPath)) {
+        const body = await readFile(fullPath);
+        const mime = relPath.endsWith('.html') ? 'text/html; charset=utf-8'
+          : relPath.endsWith('.css') ? 'text/css; charset=utf-8'
+          : relPath.endsWith('.js') ? 'text/javascript; charset=utf-8'
+          : relPath.endsWith('.svg') ? 'image/svg+xml'
+          : 'application/octet-stream';
+        return reply.type(mime).send(body);
+      }
+      return reply.code(404).send('Not found');
+    }
     // Legacy WordPress URLs (feeds, category archives) 301 to their new homes
     // before any 404/503 — see redirects.ts (issue #35). Static files always
     // win: this handler only runs after @fastify/static misses. Explicit

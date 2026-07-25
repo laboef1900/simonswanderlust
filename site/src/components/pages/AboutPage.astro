@@ -27,8 +27,55 @@ const description = plain ? plain.slice(0, 150) : t('about.title');
   locale={locale}
   alternates={{ de: aboutPath('de'), en: aboutPath('en') }}
 >
-  <section class="mx-auto max-w-3xl px-5 py-14">
-    <h1 class="text-3xl font-extrabold text-navy">{heading}</h1>
-    <div class="prose prose-lg mt-6">{Content ? <Content /> : null}</div>
+  <section class="mx-auto max-w-6xl px-5 py-14">
+    <div class="grid gap-12 lg:grid-cols-[1fr_2.2fr] lg:items-start">
+      <!-- Author Profile Card -->
+      <div class="rounded-md border border-navy/10 bg-canvas p-6 shadow-sm">
+        <div class="flex items-center gap-4">
+          <div class="flex h-14 w-14 items-center justify-center rounded-full bg-navy text-white shadow-md">
+            <svg class="h-7 w-7 text-brand-red-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <circle cx="12" cy="12" r="10" />
+              <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" />
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-xl font-extrabold text-navy">Simon</h2>
+            <p class="font-mono text-xs font-semibold tracking-widest text-brand-red uppercase">
+              {locale === 'en' ? 'Traveler & Storyteller' : 'Reisender & Autor'}
+            </p>
+          </div>
+        </div>
+
+        <div class="mt-6 border-t border-navy/10 pt-4 space-y-3 font-mono text-xs text-ink/80">
+          <div class="flex justify-between">
+            <span class="text-navy/60 uppercase tracking-wider">{t('stats.trips')}</span>
+            <span class="font-bold text-navy">20</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-navy/60 uppercase tracking-wider">{t('stats.countries')}</span>
+            <span class="font-bold text-navy">10</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-navy/60 uppercase tracking-wider">{t('stats.continents')}</span>
+            <span class="font-bold text-navy">3</span>
+          </div>
+        </div>
+
+        <div class="mt-6 rounded border border-navy/10 bg-navy/5 p-4 text-xs text-ink/75">
+          <p class="font-mono font-semibold uppercase tracking-wider text-navy">
+            {locale === 'en' ? 'Equipment' : 'Ausrüstung'}
+          </p>
+          <p class="mt-1">Leica Q2 · analoge Canon AE-1 · Notizbuch</p>
+        </div>
+      </div>
+
+      <!-- Main Content Block -->
+      <div>
+        <h1 class="text-3xl font-extrabold text-navy md:text-4xl">{heading}</h1>
+        <article class="prose prose-lg mt-6 max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-a:font-semibold prose-a:text-brand-red prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:italic prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red">
+          {Content ? <Content /> : null}
+        </article>
+      </div>
+    </div>
   </section>
 </Base>

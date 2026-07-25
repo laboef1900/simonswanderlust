@@ -24,13 +24,21 @@ const alternates = region
 ---
 
 <Base title={title} description={`${title} – ${t('site.tagline')}`} locale={locale} alternates={alternates}>
-  <section class="mx-auto max-w-6xl px-5 py-14">
-    <div class="flex flex-wrap items-baseline justify-between gap-4">
-      <h1 class="text-3xl font-extrabold text-navy">{title}</h1>
-      <RegionFilter locale={locale} active={region} allHref={regionsIndexPath(locale)} />
+  <section class="border-b border-navy/10 bg-canvas py-10">
+    <div class="mx-auto max-w-6xl px-5">
+      <div class="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p class="font-mono text-xs font-semibold tracking-[0.2em] text-brand-red uppercase">
+            {trips.length} {t('stats.trips')}
+          </p>
+          <h1 class="mt-1 text-3xl font-extrabold text-navy md:text-4xl">{title}</h1>
+        </div>
+        <RegionFilter locale={locale} active={region} allHref={regionsIndexPath(locale)} />
+      </div>
     </div>
-    <div class="mt-6">
-      <StoryGrid trips={trips} numberingPool={all} />
-    </div>
+  </section>
+
+  <section class="mx-auto max-w-6xl px-5 py-12">
+    <StoryGrid trips={trips} numberingPool={all} />
   </section>
 </Base>

@@ -1,9 +1,12 @@
 /*
- * Admin UI styling — mirrors the blog's editorial / "expedition-log" identity
- * (see blog site/src/styles/global.css). Inter + IBM Plex Mono are self-hosted
- * (served from /admin/fonts/, copied from node_modules at build — no CDN), with
- * system fallbacks if a file is missing.
+ * Admin UI — matches the blog's expedition-log visual identity.
+ *
+ * Design tokens mirror site/src/styles/global.css:
+ *   canvas (#fbfbfd), navy (#142a42), ink (#16212e),
+ *   brand-red (#d23b30), brand-red-light (#ff5a4e).
+ * Inter + IBM Plex Mono self-hosted from /admin/fonts/.
  */
+
 @font-face {
   font-family: 'Inter';
   font-style: normal;
@@ -32,7 +35,8 @@
   --ink: #16212e;
   --red: #d23b30;
   --red-light: #ff5a4e;
-  --line: rgba(20, 42, 66, 0.15);
+  --line: rgba(20, 42, 66, 0.10);
+  --line-strong: rgba(20, 42, 66, 0.18);
   --sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
 }
@@ -47,82 +51,108 @@ body {
   line-height: 1.55;
 }
 
-/* ---- masthead (navy band) ---- */
-.masthead { background: var(--navy); color: #fff; padding: 1.6rem 1.25rem; }
-.masthead-inner { max-width: 880px; margin: 0 auto; }
+/* ---- masthead (navy band — identical to blog header/footer) ---- */
+.masthead {
+  background: var(--navy);
+  color: #fff;
+  padding: 0;
+}
+.masthead-inner {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 1.25rem;
+}
 .eyebrow {
   margin: 0;
   font-family: var(--mono);
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   font-weight: 600;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--red-light);
 }
 .masthead h1 {
-  margin: 0.35rem 0 0;
-  font-size: clamp(1.5rem, 4vw, 2rem);
+  margin: 0.3rem 0 0;
+  font-size: clamp(1.4rem, 3.5vw, 1.75rem);
   font-weight: 800;
   letter-spacing: -0.01em;
+  color: #fff;
 }
 .masthead .lede {
-  margin: 0.45rem 0 0;
+  margin: 0.4rem 0 0;
   max-width: 56ch;
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 0.9rem;
+  line-height: 1.5;
 }
-/* Tab bar: pills make it read as navigation, with the current page in brand-red. */
+
+/* Navigation — clean text links matching the blog nav, active = brand-red */
 .masthead nav {
-  margin-top: 1.1rem;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
-  padding-top: 1rem;
+  align-items: center;
+  gap: 0.15rem;
+  margin-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 0.85rem;
 }
 .masthead nav a {
-  font-family: var(--mono);
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.82);
+  font-family: var(--sans);
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
   text-decoration: none;
-  padding: 0.4rem 0.85rem;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  border-radius: 9999px;
+  padding: 0.4rem 0.75rem;
+  border-radius: 0.35rem;
+  transition: color 0.15s, background 0.15s;
 }
 .masthead nav a:hover {
   color: #fff;
-  border-color: var(--red-light);
+  background: rgba(255, 255, 255, 0.06);
 }
 .masthead nav a[aria-current='page'] {
-  background: var(--red);
-  border-color: var(--red);
-  color: #fff;
-  cursor: default;
+  color: var(--red-light);
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.06);
 }
 
 /* ---- layout ---- */
-main { max-width: 880px; margin: 0 auto; padding: 1.75rem 1.25rem 3rem; }
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 3rem;
+}
 
+/* Card — white on canvas, subtle border like blog StoryCard */
 .card {
   background: #fff;
   border: 1px solid var(--line);
-  border-radius: 0.65rem;
+  border-radius: 0.5rem;
   padding: 1.25rem 1.35rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 1px 3px rgba(20, 42, 66, 0.06);
 }
 
-.help { margin: 0 0 1.25rem; color: rgba(22, 33, 46, 0.7); font-size: 0.92rem; }
+.help {
+  margin: 0 0 1.25rem;
+  color: rgba(22, 33, 46, 0.6);
+  font-size: 0.92rem;
+}
 
-code { font-family: var(--mono); font-size: 0.88em; }
+code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  background: rgba(20, 42, 66, 0.05);
+  padding: 0.15em 0.3em;
+  border-radius: 0.25rem;
+}
 
 /* ---- form controls ---- */
 label {
   display: block;
   margin: 1rem 0 0.35rem;
   font-family: var(--mono);
-  font-size: 0.68rem;
+  font-size: 0.65rem;
   font-weight: 600;
   letter-spacing: 0.15em;
   text-transform: uppercase;
@@ -130,29 +160,33 @@ label {
 }
 .card > label:first-of-type { margin-top: 0; }
 
-input, textarea {
+input, textarea, select {
   width: 100%;
-  padding: 0.6rem 0.7rem;
-  border: 1px solid var(--line);
-  border-radius: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.4rem;
   background: #fff;
   color: var(--ink);
   font-family: var(--sans);
-  font-size: 0.95rem;
+  font-size: 0.92rem;
 }
 textarea { resize: vertical; }
-input:focus, textarea:focus { outline: 2px solid var(--red); outline-offset: 1px; border-color: var(--red); }
+input:focus, textarea:focus, select:focus {
+  outline: 2px solid var(--red);
+  outline-offset: 1px;
+  border-color: var(--red);
+}
 
-input[type='file'] { padding: 0.45rem; cursor: pointer; }
+input[type='file'] { padding: 0.4rem; cursor: pointer; }
 input[type='file']::file-selector-button {
   margin-right: 0.8rem;
-  padding: 0.45rem 0.8rem;
+  padding: 0.4rem 0.75rem;
   border: 0;
-  border-radius: 0.4rem;
+  border-radius: 0.35rem;
   background: var(--navy);
   color: #fff;
   font-family: var(--mono);
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -160,58 +194,97 @@ input[type='file']::file-selector-button {
 }
 input[type='file']::file-selector-button:hover { background: var(--red); }
 
+/* ---- buttons ---- */
 button {
   margin-top: 1.25rem;
-  padding: 0.7rem 1.3rem;
+  padding: 0.65rem 1.2rem;
   border: 0;
-  border-radius: 0.5rem;
+  border-radius: 0.4rem;
   background: var(--red);
   color: #fff;
   font-family: var(--sans);
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
 }
 button:hover { background: var(--red-light); }
+button:active { transform: scale(0.98); }
 button:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
 
-/* ---- signature: dashed route divider (matches the blog's RouteDivider) ---- */
-.route { display: flex; align-items: center; gap: 0.5rem; margin: 2rem 0 1.25rem; }
-.route .dot { height: 6px; width: 6px; border-radius: 9999px; background: var(--red); }
-.route .ring { height: 6px; width: 6px; border-radius: 9999px; border: 2px solid var(--red); background: var(--canvas); }
-.route .seg { flex: 1; border-top: 2px dashed var(--line); }
-.route svg { color: rgba(22, 33, 46, 0.4); }
+/* ---- route divider (dashed line — matches blog RouteDivider) ---- */
+.route {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 1.75rem 0 1rem;
+}
+.route .dot {
+  height: 5px;
+  width: 5px;
+  border-radius: 9999px;
+  background: var(--red);
+}
+.route .ring {
+  height: 5px;
+  width: 5px;
+  border-radius: 9999px;
+  border: 1.5px solid var(--red);
+  background: var(--canvas);
+}
+.route .seg {
+  flex: 1;
+  border-top: 2px dashed var(--line);
+}
+.route svg { color: rgba(22, 33, 46, 0.35); }
 
 .section-label {
-  margin: 0 0 0.6rem;
+  margin: 0 0 0.5rem;
   font-family: var(--mono);
-  font-size: 0.68rem;
+  font-size: 0.65rem;
   font-weight: 600;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--red);
 }
 
-/* ---- output (expedition-log readout) ---- */
+/* ---- output (terminal readout) ---- */
 pre {
   margin: 0;
-  padding: 1rem 1.1rem;
-  border-radius: 0.5rem;
+  padding: 0.9rem 1rem;
+  border-radius: 0.4rem;
   background: var(--navy);
   color: #e7eef6;
   font-family: var(--mono);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.err { color: var(--red); font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.03em; }
-small { color: rgba(22, 33, 46, 0.6); font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.04em; }
+.err {
+  color: var(--red);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+}
+small {
+  color: rgba(22, 33, 46, 0.55);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
 
-.muted { color: #6b7280; font-size: 0.9rem; margin-top: 0.5rem; }
+.muted { color: rgba(22, 33, 46, 0.5); font-size: 0.88rem; margin-top: 0.4rem; }
+
 #list { list-style: none; padding: 0; }
-#list li { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0; border-bottom: 1px dashed #d1d5db; }
+#list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px dashed var(--line);
+}
 #list li button { margin-left: auto; }
 
 /* ---- posts list ---- */
@@ -225,51 +298,65 @@ small { color: rgba(22, 33, 46, 0.6); font-family: var(--mono); font-size: 0.72r
 
 .btn-new {
   display: inline-block;
-  padding: 0.65rem 1.2rem;
+  padding: 0.6rem 1.1rem;
   background: var(--red);
   color: #fff;
   font-family: var(--sans);
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   text-decoration: none;
-  border-radius: 0.5rem;
+  border-radius: 0.4rem;
+  transition: background 0.15s;
 }
 .btn-new:hover { background: var(--red-light); }
 
-.posts-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.posts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
 .posts-table th {
   text-align: left;
   padding: 0.4rem 0.6rem;
   font-family: var(--mono);
-  font-size: 0.65rem;
-  letter-spacing: 0.12em;
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--navy);
-  border-bottom: 2px solid var(--line);
+  color: rgba(22, 33, 46, 0.5);
+  border-bottom: 2px solid var(--line-strong);
 }
-.posts-table td { padding: 0.55rem 0.6rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.posts-table td {
+  padding: 0.55rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
 .posts-table tr:last-child td { border-bottom: 0; }
-.posts-date { color: #6b7280; font-family: var(--mono); font-size: 0.78rem; }
+.posts-date {
+  color: rgba(22, 33, 46, 0.5);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
 
+/* Status badges */
 .status-badge {
   display: inline-block;
   padding: 0.2rem 0.55rem;
   border-radius: 9999px;
   font-family: var(--mono);
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 .status-draft { background: #f3f4f6; color: #6b7280; }
 .status-published { background: #d1fae5; color: #065f46; }
-/* published post with draft edits not yet live (issue #20) */
+/* published post with draft edits not yet live */
 .status-edited { background: #fef3c7; color: #92400e; }
 .status-badge + .status-badge { margin-left: 0.35rem; }
 
 .action-link {
   font-family: var(--mono);
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.06em;
   color: var(--red);
@@ -283,21 +370,30 @@ small { color: rgba(22, 33, 46, 0.6); font-family: var(--mono); font-size: 0.72r
   width: 72px;
   height: 54px;
   object-fit: cover;
-  border-radius: 0.35rem;
+  border-radius: 0.3rem;
   background: #f3f4f6;
 }
-.media-key { font-family: var(--mono); font-size: 0.78rem; overflow-wrap: anywhere; }
-.media-dims { color: #6b7280; font-family: var(--mono); font-size: 0.78rem; white-space: nowrap; }
+.media-key {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.media-dims {
+  color: rgba(22, 33, 46, 0.5);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
 .media-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.media-actions button { margin-top: 0; padding: 0.35rem 0.65rem; font-size: 0.72rem; }
-.media-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+.media-actions button { margin-top: 0; padding: 0.35rem 0.6rem; font-size: 0.7rem; }
+.media-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
 .media-actions button:disabled:hover { background: var(--red); }
 .media-actions .btn-secondary:disabled:hover { background: var(--navy); }
 
 /* ---- editor ---- */
 .card-heading {
-  margin: 0 0 1rem;
-  font-size: 1rem;
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
   font-weight: 700;
   color: var(--navy);
 }
@@ -306,19 +402,19 @@ small { color: rgba(22, 33, 46, 0.6); font-family: var(--mono); font-size: 0.72r
   display: flex;
   align-items: center;
   gap: 0;
-  border: 1px solid var(--line);
-  border-radius: 0.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.4rem;
   overflow: hidden;
   background: #fff;
 }
 .slug-base {
-  padding: 0.6rem 0.7rem;
+  padding: 0.55rem 0.7rem;
   background: #f3f4f6;
-  color: #6b7280;
+  color: rgba(22, 33, 46, 0.45);
   font-family: var(--mono);
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   white-space: nowrap;
-  border-right: 1px solid var(--line);
+  border-right: 1px solid var(--line-strong);
 }
 .slug-preview input {
   border: 0;
@@ -358,21 +454,21 @@ small { color: rgba(22, 33, 46, 0.6); font-family: var(--mono); font-size: 0.72r
 
 .btn-remove {
   margin-top: 0;
-  padding: 0.4rem 0.65rem;
+  padding: 0.35rem 0.6rem;
   font-size: 1rem;
   line-height: 1;
   background: transparent;
   color: var(--red);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
 }
 .btn-remove:hover { background: #fee2e2; color: var(--red); }
 
 .btn-secondary {
   margin-top: 0.6rem;
-  padding: 0.55rem 1rem;
+  padding: 0.5rem 0.9rem;
   background: var(--navy);
   color: #fff;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
 }
 .btn-secondary:hover { background: #1e3f5e; }
 
@@ -380,27 +476,28 @@ small { color: rgba(22, 33, 46, 0.6); font-family: var(--mono); font-size: 0.72r
 .tabs-bar {
   display: flex;
   gap: 0;
-  margin: 1.5rem 0 0;
-  border-bottom: 2px solid var(--line);
+  margin: 1.25rem 0 0;
+  border-bottom: 2px solid var(--line-strong);
 }
 .tab-btn {
   margin-top: 0;
-  padding: 0.65rem 1.4rem;
+  padding: 0.6rem 1.3rem;
   background: transparent;
   color: var(--ink);
-  border-radius: 0.5rem 0.5rem 0 0;
-  border: 1px solid var(--line);
+  border-radius: 0.4rem 0.4rem 0 0;
+  border: 1px solid var(--line-strong);
   border-bottom: 0;
   font-weight: 600;
-  font-size: 0.88rem;
+  font-size: 0.85rem;
   cursor: pointer;
   position: relative;
   bottom: -2px;
+  transition: color 0.15s, background 0.15s;
 }
 .tab-btn:hover { background: #f3f4f6; }
 .tab-btn.active {
   background: #fff;
-  border-color: var(--line);
+  border-color: var(--line-strong);
   border-bottom-color: #fff;
   color: var(--red);
 }
@@ -448,11 +545,44 @@ small { color: rgba(22, 33, 46, 0.6); font-family: var(--mono); font-size: 0.72r
 .revision-row:last-child { border-bottom: 0; }
 .revision-row button { margin-top: 0; white-space: nowrap; }
 
-/* EasyMDE overrides — constrain to match card width */
+/* EasyMDE overrides */
 .EasyMDEContainer { width: 100%; }
-.CodeMirror { border-radius: 0.5rem; border-color: var(--line); }
+.CodeMirror { border-radius: 0.4rem; border-color: var(--line-strong); }
 
-@media (max-width: 560px) {
+/* ---- login page ---- */
+body.login-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+body.login-page main {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 2rem;
+}
+body.login-page .card {
+  width: 100%;
+  max-width: 380px;
+}
+
+/* ---- links ---- */
+a { color: var(--red); }
+a:hover { color: var(--red-light); }
+
+/* Logged-in-as bar */
+#whoami { font-size: 0.82rem; color: rgba(255, 255, 255, 0.6); }
+#whoami a { color: var(--red-light); text-decoration: none; }
+#whoami a:hover { text-decoration: underline; }
+
+/* ---- responsive ---- */
+@media (max-width: 600px) {
   .form-row-2 { grid-template-columns: 1fr; }
   .posts-toolbar { flex-direction: column; align-items: flex-start; }
+  .masthead nav { flex-wrap: wrap; }
+  .masthead nav a {
+    padding: 0.35rem 0.55rem;
+    font-size: 0.72rem;
+  }
 }

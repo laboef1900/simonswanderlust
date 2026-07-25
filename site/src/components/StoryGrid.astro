@@ -11,10 +11,21 @@ interface Props {
 const { trips, numberingPool = trips } = Astro.props;
 ---
 
-<div class="grid auto-rows-[240px] gap-4 md:grid-cols-3">
-  {
-    trips.map((trip, i) => (
-      <StoryCard trip={trip} featured={i === 0} number={entryNumberOf(trip, numberingPool)} />
-    ))
-  }
-</div>
+{
+  trips.length > 0 ? (
+    <div class="grid auto-rows-[240px] gap-4 md:grid-cols-3 [content-visibility:auto] [contain-intrinsic-size:600px]">
+      {trips.map((trip, i) => (
+        <StoryCard trip={trip} featured={i === 0} number={entryNumberOf(trip, numberingPool)} />
+      ))}
+    </div>
+  ) : (
+    <div class="my-12 rounded-md border border-navy/10 bg-canvas p-8 text-center">
+      <p class="font-mono text-xs font-semibold uppercase tracking-wider text-navy/60">
+        Keine Beiträge gefunden
+      </p>
+      <p class="mt-1 text-sm text-ink/70">
+        In dieser Region stehen aktuell noch keine Reiseberichte bereit.
+      </p>
+    </div>
+  )
+}

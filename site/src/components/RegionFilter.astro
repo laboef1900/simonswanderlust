@@ -12,9 +12,9 @@ interface Props {
 const { locale, active, allHref = homePath(locale) + '#stories' } = Astro.props;
 const t = useTranslations(locale);
 
-const chip = 'rounded-full border px-3 py-1 text-sm';
-const on = 'border-navy bg-navy text-white';
-const off = 'border-navy/20 text-ink/70 hover:border-brand-red hover:text-brand-red';
+const chip = 'inline-flex items-center justify-center min-h-[36px] rounded-full border px-3.5 py-1 text-sm font-medium transition-all motion-safe:hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2';
+const on = 'border-navy bg-navy text-white shadow-sm';
+const off = 'border-navy/20 bg-canvas text-ink/70 hover:border-brand-red hover:text-brand-red';
 ---
 
 <nav aria-label={t('regions.filterLabel')} class="flex flex-wrap gap-2">
