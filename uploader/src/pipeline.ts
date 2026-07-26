@@ -1,5 +1,6 @@
 import sharp from 'sharp';
 import { variantWidths, FORMATS, type ImageFormat } from './variants.js';
+import { allowedExif } from './exif.js';
 
 export interface Variant {
   width: number;
@@ -32,8 +33,13 @@ export interface ProcessOptions {
 }
 
 /**
- * Auto-orients via EXIF, preserves all metadata (incl. GPS), and encodes
- * AVIF + WebP at each contract width without upscaling.
+ * Auto-orients via EXIF, re-injects ONLY the allow-listed camera metadata,
+ * and encodes AVIF + WebP at each contract width without upscaling.
+ *
+ * @ai-warning: public variants carry an EXIF ALLOW-LIST (see exif.ts), never
+ * `.withMetadata()`. A blanket copy republishes GPS coordinates, XMP and IPTC
+ * to anyone who downloads a photo. Widening this is a privacy change, not a
+ * refactor.
  */
 export async function processImage(
   input: Buffer,
@@ -61,13 +67,20 @@ export async function processImage(
     ext: EXT_BY_FORMAT[probe.info.format] ?? probe.info.format,
   };
 
+  // Parsed once: the source EXIF is the same for every variant.
+  const keepExif = allowedExif((await sharp(input, { failOn: 'none' }).metadata()).exif);
+
   const variants: Variant[] = [];
   for (const w of variantWidths(width)) {
     for (const format of FORMATS) {
-      const base = sharp(input, { failOn: 'none' })
-        .rotate()
-        .withMetadata() // keep EXIF (GPS), capture time, ICC
+      let base = sharp(input, { failOn: 'none' })
+        .rotate()             // applies EXIF orientation to the PIXELS
+        .keepIccProfile()     // colour accuracy; an ICC profile carries no location
         .resize({ width: w, withoutEnlargement: true });
+      // withExif() REPLACES the EXIF block wholesale, which is exactly the
+      // point: anything not in the allow-list cannot survive. Skipped entirely
+      // when the source had nothing worth keeping, leaving the variant clean.
+      if (keepExif) base = base.withExif(keepExif);
       const data =
         format === 'avif'
           ? await base.avif({ quality: avifQuality }).toBuffer()

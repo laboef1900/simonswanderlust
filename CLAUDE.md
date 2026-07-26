@@ -333,6 +333,16 @@ Use comments to leave hints for future sessions:
   markdown default accepted), Fastify plugins (`multipart` 10, `static` 9.1.3 — security fix),
   sharp 0.35, TypeScript 6 + Vitest 4 in both apps; CI now also runs the full `astro build`
   (branch `feature/upgrade-node26-pg18-deps`).
+- **Done:** Phase 0 of the media-library work (2026-07-26) — published image variants now carry
+  an EXIF allow-list instead of full metadata (no GPS/XMP/IPTC), `POST /upload` rejects
+  multi-file requests with 413 instead of silently dropping files, an explicit `requestTimeout`
+  is set, and a new `audit-exif` CLI subcommand reports the stored corpus's actual EXIF/GPS
+  exposure (found 102 variants with EXIF, zero with GPS, against the **local development
+  corpus** — the server has not yet been audited). A `strip-gps` remediation subcommand was
+  deliberately **not** built in this phase — that audit came back clean, so it is deferred
+  until a server-side `audit-exif` run finds otherwise. See
+  `docs/superpowers/specs/2026-07-26-media-library-and-galleries-design.md` (branch
+  `feature/phase-0-exif-privacy`).
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details.
 
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.

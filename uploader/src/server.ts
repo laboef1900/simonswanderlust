@@ -80,7 +80,14 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // cookie `secure` flag reflect the real client). This is correct ONLY behind a
   // trusted reverse proxy that sets X-Forwarded-Proto; if the container is ever
   // exposed directly, clients could spoof those headers.
-  const app = Fastify({ logger: false, trustProxy: true });
+  // @ai-note: http.Server#requestTimeout bounds how long the server waits to
+  // fully RECEIVE a request (headers + body) — it does not bound how long a
+  // handler then takes to process it (e.g. encoding an upload). Fastify sets
+  // this to 0 (disabled) by default, itself overriding Node's own 300s
+  // default, so without an explicit value a stalled request would never time
+  // out at this layer. 120s is generous for even a large multipart upload
+  // over a slow connection while still bounding one that stalls outright.
+  const app = Fastify({ logger: false, trustProxy: true, requestTimeout: 120_000 });
   const { users, sessions } = cfg;
 
   // nosniff everywhere; clickjacking/referrer policies only on the admin/API
@@ -126,7 +133,16 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   app.register(cookie);
-  app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024 } });
+  // @ai-warning: `files: 1` is a data-integrity guard, not a convenience limit.
+  // POST /upload reads one file into a single `buf`, so a multi-file request
+  // used to buffer every file and silently keep only the last. Bulk upload is
+  // N single-file requests by design.
+  // `parts` also matters: @fastify/multipart's parser never consumes the body,
+  // so Fastify's 1 MiB bodyLimit does NOT apply to multipart — without a cap,
+  // one authenticated request could stream ~25 GB.
+  app.register(multipart, {
+    limits: { fileSize: 25 * 1024 * 1024, files: 1, parts: 8 },
+  });
   app.decorateRequest('authUser', null);
   app.addHook('onRequest', async (req) => { req.authUser = await loadUser(req, users, sessions); });
 
