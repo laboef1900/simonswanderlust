@@ -703,8 +703,21 @@ fires. The `images`-map gate is not a control (`images` is unvalidated author-su
 ```ts
 let u: URL; try { u = new URL(raw); } catch { continue; }
 if (u.protocol !== 'https:' && u.protocol !== 'http:') continue;
-if (!raw.startsWith(imageBaseUrl)) continue;   // the only thing a gallery may reference
+// @ai-warning: compare ORIGINS for equality — never prefix-match the base URL.
+// `raw.startsWith(imageBaseUrl)` passes both of these against
+// https://img.simonswanderlust.com :
+//   https://img.simonswanderlust.com.evil.com/x  → origin is …com.evil.com
+//   https://img.simonswanderlust.com@evil.com/x  → origin is https://evil.com
+if (u.origin !== new URL(imageBaseUrl).origin) continue;   // the only origin a gallery may reference
 ```
+
+`imageBaseUrl` reaches `transformBodyImages` as an **explicit parameter** —
+`transformBodyImages(html, images, imageOrigin)`, updating all three call sites
+(`postgres-loader.ts`, `pages-loader.ts`, `preview.ts`). The function is pure and env-free and must
+stay that way: it runs both under `astro build` and under the uploader's `tsx` runtime via
+`preview.ts`, and `import.meta.env` does not exist in the latter. Falling back to
+`PROD_IMAGE_ORIGIN` was rejected — dev and CI galleries would fail the allow-list, since their
+origin never matches production. See issue #65.
 
 The escalation this closes is real: `GET /posts/:tk/preview` is `requireAuth` (any author), runs
 the identical transform, and is served **same-origin with `/admin/*` with no CSP**. A non-admin
@@ -1059,8 +1072,11 @@ work.
 - **Bulk upload remains slow by choice.** ~19 s of encoding per 24 MP frame. Measured for 100
   photos: ~35 min at concurrency 1, **~20 min at concurrency 2** on a 10-core M5, extrapolating to
   roughly **50–65 min on a 2–4 core VPS**, which is where this runs. The async queue makes that
-  background work nobody waits on. A tested switch for capping the top variant width is left
-  documented in `variants.ts` so the decision can be revisited without redesign.
+  background work nobody waits on. Capping the top variant width would be the lever if this ever
+  needs revisiting, but **no such switch exists** — `variants.ts` has a fixed
+  `WIDTHS = [640, 1280, 1920]`. Adding one is deliberately out of scope here: it would have to
+  account for already-stored 1920px variants and for `srcset`/`fallbackSrc` in
+  `site/src/lib/images.ts`, which mirror the width list on the site side.
 - **Disk growth:** ~17.5 MB per photo (6.9 MB variants + 10.7 MB original) ≈ 1.75 GB per 100
   photos, plus roughly the same again in `/data/backup` because originals are captured by the
   incremental image archive. A 100-photo trip costs ~4 GB all-in. The one-off `strip-gps` pass adds
