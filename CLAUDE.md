@@ -349,6 +349,29 @@ Use comments to leave hints for future sessions:
   until a server-side `audit-exif` run finds otherwise. See
   `docs/superpowers/specs/2026-07-26-media-library-and-galleries-design.md` (branch
   `feature/phase-0-exif-privacy`).
+- **Done:** Backend rework, epic #69 (2026-07-27) — four approved issues, landed in sequence:
+  - **#65 galleries** — a fenced ```gallery block rendered as a photo grid, with per-line
+    `| WxH | alt="…" | caption="…"` metadata lifted into the `images` map on save and re-attached
+    by the MDX exporter. Gallery URLs are allow-listed by **origin equality** (never a prefix
+    match) because the markup is injected *after* `rehype-sanitize`; the `images` map is now
+    validated at the `posts.ts`/`pages.ts` store chokepoint rather than in `validateDraft`, since
+    the WXR importer bypasses the latter.
+  - **#63 posts list** — hero thumbnails, client-side search/filter/sort (extracted to
+    `public/posts-filter.js` so it is testable), and `POST /posts/bulk` with one rebuild per
+    batch and per-post failure reporting. Also fixed a live bug: `pgPostStore` formatted the
+    `date` column with `toISOString()`, walking a post's trip date back a day per re-save on any
+    host east of UTC.
+  - **#64 + #73 media library** — `media`/`media_folders` tables, virtual folders, bulk
+    drag-and-drop upload with an **async encode queue** (concurrency 2), a shared build/encode
+    mutex (`work-lock.ts`) where a build preempts the encode backlog, a publish gate that refuses
+    while a referenced photo is not `ready`, disk↔database reconciliation, backup dump **v3**,
+    `GET /media` at session level **with GPS/uploader redaction for non-admins**, a `/data`
+    free-space precondition (507) and `mem_limit`/`memswap_limit` on the app container.
+  - **#70 duplicate post** — "New from this one": structure copies, identity resets, slugs asked
+    for up front. Zero server change.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details.
+  Not started, deliberately: #66 (gallery polish — justified layout + lightbox), #75 (gallery
+  picker), #67 (AI authoring), #68 (production EXIF audit), #72 (Traefik timeouts). See
+  `docs/superpowers/plans/IMPLEMENTATION-PROMPT.md` for why each is excluded.
 
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.
