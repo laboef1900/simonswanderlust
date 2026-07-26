@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import { createReadStream, existsSync } from 'node:fs';
+import { createReadStream, existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import multipart from '@fastify/multipart';
@@ -614,17 +614,33 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const host = req.headers.host ?? '';
     if (req.method !== 'GET' && req.method !== 'HEAD') return reply.code(404).send({ error: 'not found' });
     if (host === cfg.imgHost) {
-      const urlPath = (req.raw.url ?? '').split('?', 1)[0] ?? '';
+      // @ai-note: the image host doubles as a blog host so that LOCAL DEV works.
+      // With IMG_HOST=localhost:3000 (see uploader/.env.example) the image mount's
+      // host constraint matches every request on the only host that exists, so it
+      // shadows the blog mount and blog URLs would otherwise all 404. In
+      // production the two hosts differ and this arm is near-dead code.
+      // @ai-warning: this rationale is inferred from the code + .env.example —
+      // it is not stated in any spec. Confirm before relying on it.
+      //
+      // Delegated to @fastify/static's reply.sendFile (decorated by the /admin/
+      // mount, which does not set decorateReply:false) instead of a hand-rolled
+      // readFile: that buys the full mime database, ETag/Last-Modified, range
+      // requests and @fastify/send's own root-containment check. No options are
+      // passed, so the bytes are served with exactly the same headers as the
+      // blog mount above serves them on the main host — in particular NOT the
+      // image mount's immutable 365d, which would be wrong here: release HTML
+      // changes under a stable URL on every publish.
+      const rawUrl = req.raw.url ?? '';
+      const qIndex = rawUrl.indexOf('?');
+      const urlPath = qIndex === -1 ? rawUrl : rawUrl.slice(0, qIndex);
       const relPath = (urlPath.endsWith('/') ? join(urlPath, 'index.html') : urlPath).replace(/^\//, '');
-      const fullPath = join(currentDir, relPath);
-      if (relPath && existsSync(fullPath)) {
-        const body = await readFile(fullPath);
-        const mime = relPath.endsWith('.html') ? 'text/html; charset=utf-8'
-          : relPath.endsWith('.css') ? 'text/css; charset=utf-8'
-          : relPath.endsWith('.js') ? 'text/javascript; charset=utf-8'
-          : relPath.endsWith('.svg') ? 'image/svg+xml'
-          : 'application/octet-stream';
-        return reply.type(mime).send(body);
+      const stat = relPath ? statSync(join(currentDir, relPath), { throwIfNoEntry: false }) : undefined;
+      if (stat?.isFile()) return reply.sendFile(relPath, currentDir);
+      // A directory without its trailing slash: mirror the blog mount's
+      // `redirect: true` (301) rather than reading the directory and blowing up.
+      if (stat?.isDirectory()) {
+        const query = qIndex === -1 ? '' : rawUrl.slice(qIndex);
+        return reply.code(301).header('location', `${urlPath}/${query}`).send();
       }
       return reply.code(404).send('Not found');
     }

@@ -117,6 +117,58 @@ describe('host routing', () => {
     expect((await app.inject({ method: 'GET', url: '/', headers: { host: MAIN } })).body).toBe('v2');
   });
 
+  it('serves the released blog on the img host too (local-dev shadowing fallback)', async () => {
+    await release('r1', { 'index.html': '<h1>blog</h1>', '404.html': 'nf' });
+    const res = await build().inject({ method: 'GET', url: '/', headers: { host: IMG } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/html');
+    expect(res.body).toContain('blog');
+  });
+
+  it('does not 500 on a directory path on the img host (301s like the main host)', async () => {
+    await release('r1', { 'index.html': 'home', '404.html': 'nf', 'rumaenien/index.html': 'trip' });
+    const app = build();
+    const res = await app.inject({ method: 'GET', url: '/rumaenien', headers: { host: IMG } });
+    expect(res.statusCode).toBe(301);
+    expect(res.headers.location).toBe('/rumaenien/');
+    const ok = await app.inject({ method: 'GET', url: '/rumaenien/', headers: { host: IMG } });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.body).toBe('trip');
+  });
+
+  it('labels release files by extension on the img host (robots.txt, rss.xml)', async () => {
+    await release('r1', {
+      'index.html': 'home', '404.html': 'nf',
+      'robots.txt': 'User-agent: *', 'rss.xml': '<rss/>',
+    });
+    const app = build();
+    // RFC 9309: a robots.txt not served as text/plain is treated as absent.
+    const txt = await app.inject({ method: 'GET', url: '/robots.txt', headers: { host: IMG } });
+    expect(txt.statusCode).toBe(200);
+    expect(txt.headers['content-type']).toContain('text/plain');
+    const xml = await app.inject({ method: 'GET', url: '/rss.xml', headers: { host: IMG } });
+    expect(xml.statusCode).toBe(200);
+    expect(xml.headers['content-type']).toMatch(/xml/);
+  });
+
+  it('sets the same cache headers on the img host as the main host serves', async () => {
+    await release('r1', { 'index.html': 'home', '404.html': 'nf', '_astro/app.css': 'body{}' });
+    const app = build();
+    const main = await app.inject({ method: 'GET', url: '/_astro/app.css', headers: { host: MAIN } });
+    const img = await app.inject({ method: 'GET', url: '/_astro/app.css', headers: { host: IMG } });
+    expect(img.statusCode).toBe(200);
+    expect(img.headers['content-type']).toContain('text/css');
+    expect(main.headers['cache-control']).toBeDefined();
+    expect(img.headers['cache-control']).toBe(main.headers['cache-control']);
+    expect(img.headers.etag).toBeDefined();
+  });
+
+  it('404s a genuinely missing path on the img host', async () => {
+    await release('r1', { 'index.html': 'home', '404.html': 'nf' });
+    const res = await build().inject({ method: 'GET', url: '/nope/', headers: { host: IMG } });
+    expect(res.statusCode).toBe(404);
+  });
+
   it('scopes admin headers: /health gets X-Frame-Options, blog pages do not', async () => {
     await release('r1', { 'index.html': 'home', '404.html': 'nf' });
     const app = build();

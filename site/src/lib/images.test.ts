@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { variantWidths, srcset, fallbackSrc, type RemoteHeroImage } from './images';
+import {
+  fallbackSrc,
+  imageOrigin,
+  PROD_IMAGE_ORIGIN,
+  srcset,
+  variantWidths,
+  type RemoteHeroImage,
+} from './images';
 
 const big: RemoteHeroImage = {
   src: 'https://img.simonswanderlust.com/trips/rhodes-2021/hero',
@@ -57,5 +64,23 @@ describe('fallbackSrc', () => {
     expect(
       fallbackSrc({ src: 'https://img.simonswanderlust.com/trips/x/hero', width: 1280, height: 800, alt: '' }),
     ).toBe('https://img.simonswanderlust.com/trips/x/hero-1280.webp');
+  });
+});
+
+describe('imageOrigin', () => {
+  it('reduces a configured base URL to its origin (no path, no trailing slash)', () => {
+    expect(imageOrigin('https://img.simonswanderlust.com/')).toBe('https://img.simonswanderlust.com');
+    expect(imageOrigin('http://localhost:3000/images')).toBe('http://localhost:3000');
+  });
+
+  it('falls back to the production origin when the build has no PUBLIC_BASE_URL', () => {
+    expect(imageOrigin(undefined)).toBe(PROD_IMAGE_ORIGIN);
+    expect(imageOrigin('')).toBe(PROD_IMAGE_ORIGIN);
+    expect(imageOrigin('   ')).toBe(PROD_IMAGE_ORIGIN);
+  });
+
+  it('falls back on a non-string or unparsable value instead of emitting a broken hint', () => {
+    expect(imageOrigin(42)).toBe(PROD_IMAGE_ORIGIN);
+    expect(imageOrigin('img.simonswanderlust.com')).toBe(PROD_IMAGE_ORIGIN);
   });
 });
