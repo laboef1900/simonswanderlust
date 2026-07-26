@@ -45,6 +45,20 @@ export interface PostSummary {
   status: 'draft' | 'published'; updatedAt: Date; hasUnpublishedChanges: boolean;
   /** EN-completeness hint for the write-DE-first workflow (true when the EN body is non-blank). */
   hasEnBody: boolean;
+  /**
+   * Hero base URL and its INTRINSIC width, for the list thumbnail. Both are
+   * needed: `src` carries no width/format suffix and `variantWidths()` never
+   * upscales, so a hero narrower than 640px has no `-640.webp` — only
+   * `-<intrinsicWidth>.webp`. The client picks `min(640, heroWidth)`.
+   * @ai-warning `heroSrc` is `''` for a draft that has no hero yet — there are
+   * TWO independent sources of that placeholder (`PLACEHOLDER_HERO` here and a
+   * separate one in `wp-import.ts`), so the UI must render a placeholder cell
+   * rather than emitting `<img src="-640.webp">`. `heroWidth` comes from
+   * untyped jsonb and nothing verifies it, so treat it as a hint.
+   */
+  heroSrc: string; heroWidth: number;
+  /** Shared trip metadata, for the list's filters and sort. */
+  date: string; country: string; region: string;
 }
 /** One stored locale row's image-referencing fields — the corpus for media usage scans. */
 export interface PostUsageRow {
@@ -285,7 +299,18 @@ export function memoryPostStore(): PostStore {
     async list() {
       return [...byKey.values()]
         .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
-        .map((p) => ({ translationKey: p.translationKey, titleDe: p.de.title, slugDe: p.de.slug, slugEn: p.en.slug, status: p.status, updatedAt: p.updatedAt, hasUnpublishedChanges: p.hasUnpublishedChanges, hasEnBody: Boolean(p.en.bodyMarkdown && p.en.bodyMarkdown.trim()) }));
+        .map((p) => {
+          // DE hero with an EN fallback: the list is DE-led (titleDe), but a
+          // pair may have only the EN hero filled in.
+          const hero = p.de.heroImage?.src ? p.de.heroImage : p.en.heroImage;
+          return {
+            translationKey: p.translationKey, titleDe: p.de.title, slugDe: p.de.slug, slugEn: p.en.slug,
+            status: p.status, updatedAt: p.updatedAt, hasUnpublishedChanges: p.hasUnpublishedChanges,
+            hasEnBody: Boolean(p.en.bodyMarkdown && p.en.bodyMarkdown.trim()),
+            heroSrc: hero?.src ?? '', heroWidth: hero?.width ?? 0,
+            date: p.shared.date ?? '', country: p.shared.country ?? '', region: p.shared.region ?? '',
+          };
+        });
     },
     async get(tk) {
       const p = byKey.get(tk);
@@ -369,18 +394,57 @@ interface PostRow {
   published_at: Date | null;
 }
 
+/**
+ * The columns `list()` actually needs. Deliberately NOT `SELECT *`: that also
+ * pulls `body_markdown`, `images` and `published_snapshot` (a full jsonb copy
+ * of the whole post) for every row, purely to build a summary — the real cost
+ * behind the "when should filtering move server-side?" question the admin list
+ * documents. `has_en_body` is therefore computed in SQL, since dropping the
+ * bodies means it can no longer be derived in TS.
+ */
+interface PostListRow {
+  translation_key: string; locale: Locale; slug: string; title: string;
+  status: 'draft' | 'published'; updated_at: Date; published_at: Date | null;
+  hero_image: HeroImage | null; date: Date | string; country: string; region: string;
+  has_body: boolean;
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** True when a published row's working copy was saved after its last publish. */
-function rowHasUnpublishedChanges(r: PostRow | undefined): boolean {
+function rowHasUnpublishedChanges(
+  r: Pick<PostRow, 'status' | 'published_at' | 'updated_at'> | undefined,
+): boolean {
   return !!r && r.status === 'published' && r.published_at !== null && r.updated_at.getTime() > r.published_at.getTime();
+}
+
+/**
+ * `date` arrives as a pg Date (or as text from a published snapshot) —
+ * normalize to YYYY-MM-DD.
+ *
+ * @ai-warning Format from the LOCAL date components, never via
+ * `toISOString()`. node-postgres parses a `date` column to **local** midnight,
+ * so on any deployment east of UTC (the production host is Europe/Zurich)
+ * `toISOString()` reports the *previous* day — `2024-10-03` came back as
+ * `2024-10-02`, and because the editor saves what it loaded, every re-save
+ * walked the trip date back another day. The published site was never affected
+ * (POST_SNAPSHOT_SQL formats the date with `to_char` in SQL), which is why this
+ * survived unnoticed. `site/src/lib/postgres-loader.ts` documents the same
+ * local-midnight behaviour from the parsing side.
+ */
+function dateText(date: Date | string | null | undefined): string {
+  if (date instanceof Date) {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  }
+  return date ? String(date).slice(0, 10) : '';
 }
 
 function rowLocale(r: PostRow): PostLocale {
   return { locale: r.locale, slug: r.slug, title: r.title, excerpt: r.excerpt, heroImage: r.hero_image, bodyMarkdown: r.body_markdown, images: r.images ?? {} };
 }
 function rowShared(r: PostRow): PostShared {
-  const d = r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10);
+  const d = dateText(r.date);
   return { date: d, country: r.country, countryCode: r.country_code, region: r.region, coordinates: r.coordinates, ...(r.stops ? { stops: r.stops } : {}), ...(r.route ? { route: r.route } : {}), ...(r.key_facts ? { keyFacts: r.key_facts } : {}) };
 }
 
@@ -403,16 +467,28 @@ export function pgPostStore(pool: DbPool): PostStore {
   }
   return {
     async list() {
-      const { rows } = await pool.query<PostRow>(`SELECT * FROM posts ORDER BY updated_at DESC`);
-      const byKey = new Map<string, { de?: PostRow; en?: PostRow }>();
+      const { rows } = await pool.query<PostListRow>(
+        `SELECT translation_key, locale, slug, title, status, updated_at, published_at,
+                hero_image, date, country, region, btrim(body_markdown) <> '' AS has_body
+           FROM posts ORDER BY updated_at DESC`,
+      );
+      const byKey = new Map<string, { de?: PostListRow; en?: PostListRow }>();
       for (const r of rows) { const e = byKey.get(r.translation_key) ?? {}; e[r.locale] = r; byKey.set(r.translation_key, e); }
-      return [...byKey.entries()].map(([tk, e]) => ({
-        translationKey: tk, titleDe: e.de?.title ?? '', slugDe: e.de?.slug ?? '', slugEn: e.en?.slug ?? '',
-        status: (e.de?.status ?? e.en?.status ?? 'draft') as 'draft' | 'published',
-        updatedAt: new Date(Math.max(e.de?.updated_at?.getTime() ?? 0, e.en?.updated_at?.getTime() ?? 0)),
-        hasUnpublishedChanges: rowHasUnpublishedChanges(e.de) || rowHasUnpublishedChanges(e.en),
-        hasEnBody: Boolean(e.en?.body_markdown?.trim()),
-      }));
+      return [...byKey.entries()].map(([tk, e]) => {
+        // DE hero with an EN fallback (the list is DE-led, but a pair can have
+        // only the EN row's hero filled in — or only one locale row at all).
+        const hero = e.de?.hero_image?.src ? e.de.hero_image : e.en?.hero_image;
+        const shared = e.de ?? e.en;
+        return {
+          translationKey: tk, titleDe: e.de?.title ?? '', slugDe: e.de?.slug ?? '', slugEn: e.en?.slug ?? '',
+          status: (e.de?.status ?? e.en?.status ?? 'draft') as 'draft' | 'published',
+          updatedAt: new Date(Math.max(e.de?.updated_at?.getTime() ?? 0, e.en?.updated_at?.getTime() ?? 0)),
+          hasUnpublishedChanges: rowHasUnpublishedChanges(e.de) || rowHasUnpublishedChanges(e.en),
+          hasEnBody: Boolean(e.en?.has_body),
+          heroSrc: hero?.src ?? '', heroWidth: hero?.width ?? 0,
+          date: dateText(shared?.date), country: shared?.country ?? '', region: shared?.region ?? '',
+        };
+      });
     },
     async get(tk) {
       const { rows } = await pool.query<PostRow>(`SELECT * FROM posts WHERE translation_key = $1`, [tk]);

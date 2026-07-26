@@ -43,7 +43,10 @@ change about the security posture.
 - `requireAdmin` gates **user management**, **settings** (`/settings` — backup schedule and
   retention), **backups**, **rebuild**, **page edits**, and, importantly, everything that
   changes what the public site serves: **publishing** (`POST /posts/:tk/publish`),
-  **unpublishing** (`POST /posts/:tk/unpublish`), and **post deletion** (`DELETE /posts/:tk`).
+  **unpublishing** (`POST /posts/:tk/unpublish`), **post deletion** (`DELETE /posts/:tk`),
+  and their batch form **`POST /posts/bulk`** (`{action, keys[]}` — the `action` is checked
+  against a fixed allow-list and `keys` is capped at 100 per request, since an unbounded array
+  is an authenticated N-round-trip amplifier against the process that also serves the blog).
   Non-admin authors may create and edit drafts but **cannot push content to the public site,
   take it down, or change a published slug** — only admins publish.
 
