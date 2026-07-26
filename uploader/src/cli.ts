@@ -111,8 +111,8 @@ async function auditExifMain(): Promise<void> {
   const storageDir = process.env.STORAGE_DIR ?? './data/images';
   const r = await auditExif(storageDir);
   console.log(`scanned ${r.variants} variant file(s) across ${r.keys} key(s) in ${storageDir}`);
-  console.log(`  carrying EXIF : ${r.withExif}`);
-  console.log(`  carrying GPS  : ${r.withGps}`);
+  console.log(`  carrying EXIF      : ${r.withExif}`);
+  console.log(`  carrying GPS       : ${r.withGps}  (checked EXIF and XMP)`);
   if (r.skippedDirs.length) {
     console.log(
       `\n${r.skippedDirs.length} director${r.skippedDirs.length === 1 ? 'y' : 'ies'} could not be read ` +
@@ -123,9 +123,9 @@ async function auditExifMain(): Promise<void> {
   if (r.withGps === 0) {
     console.log(
       r.skippedDirs.length
-        ? '\nNo GPS found in the readable part of the corpus, but the scan was partial (see above) — ' +
-          'fix the permissions and re-run before concluding no rewrite is needed.'
-        : '\nNo stored variant carries GPS. No rewrite is needed.',
+        ? '\nNo GPS found (EXIF or XMP) in the readable part of the corpus, but the scan was partial ' +
+          '(see above) — fix the permissions and re-run before concluding no rewrite is needed.'
+        : '\nNo stored variant carries GPS, in EXIF or XMP. No rewrite is needed.',
     );
     return;
   }

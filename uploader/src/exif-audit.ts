@@ -29,6 +29,24 @@ const EMPTY: ExifAudit = {
 };
 
 /**
+ * True when a raw XMP packet contains a GPS field, in any of the forms
+ * real-world exporters emit: RDF-prefixed (`exif:GPSLatitude`), bare
+ * (`GPSLatitude`), as either an attribute or a nested element. All of those
+ * forms contain the tag name as a substring, so a case-insensitive substring
+ * search catches them without needing to parse the packet as XML.
+ *
+ * @ai-context: sharp exposes XMP as raw bytes (`metadata().xmp`), same as
+ * EXIF — see exif.ts's @ai-context note. Capture One and other export tools
+ * write location into XMP even when the allow-listed EXIF block carries none
+ * (docs/superpowers/specs/2026-07-26-media-library-and-galleries-design.md, D1).
+ */
+function xmpHasGps(xmp: Buffer | undefined): boolean {
+  if (!xmp || xmp.length === 0) return false;
+  const text = xmp.toString('utf8').toLowerCase();
+  return text.includes('gpslatitude') || text.includes('gpslongitude');
+}
+
+/**
  * Read-only scan of the stored corpus: how much published metadata actually
  * carries location. Never writes, never throws on a bad file or directory.
  *
@@ -85,9 +103,9 @@ export async function auditExif(storageDir: string): Promise<ExifAudit> {
       try {
         const meta = await sharp(full).metadata();
         const tags = readExif(meta.exif);
-        if (!tags) continue;
-        withExif++;
-        if (tags.GPSInfo?.GPSLatitude) {
+        if (tags) withExif++;
+        const hasExifGps = !!(tags?.GPSInfo && Object.keys(tags.GPSInfo).length > 0);
+        if (hasExifGps || xmpHasGps(meta.xmp)) {
           withGps++;
           gpsKeys.add(key);
         }

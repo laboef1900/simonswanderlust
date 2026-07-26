@@ -30,6 +30,38 @@ async function withoutGps(): Promise<Buffer> {
     .toBuffer();
 }
 
+// GPSInfo present, but without GPSLatitude — e.g. altitude/direction-only
+// tags, which a real camera can write independently of a lat/long fix.
+async function withGpsInfoButNoLatitude(): Promise<Buffer> {
+  return sharp({ create: { width: 40, height: 20, channels: 3, background: { r: 1, g: 2, b: 3 } } })
+    .withExif({
+      IFD0: { Make: 'Leica Camera AG' },
+      IFD3: {
+        GPSAltitudeRef: '0', GPSAltitude: '100/1',
+        GPSImgDirectionRef: 'T', GPSImgDirection: '180/1',
+      },
+    })
+    .webp()
+    .toBuffer();
+}
+
+// No EXIF GPS at all, but an XMP packet carrying location — the shape
+// Capture One and similar export tools write (RDF attribute form).
+async function withXmpGpsOnly(): Promise<Buffer> {
+  const xmp =
+    '<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>' +
+    '<x:xmpmeta xmlns:x="adobe:ns:meta/">' +
+    '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">' +
+    '<rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" ' +
+    'exif:GPSLatitude="63,4.552N" exif:GPSLongitude="10,23.324E"/>' +
+    '</rdf:RDF></x:xmpmeta>' +
+    '<?xpacket end="w"?>';
+  return sharp({ create: { width: 40, height: 20, channels: 3, background: { r: 1, g: 2, b: 3 } } })
+    .withXmp(xmp)
+    .webp()
+    .toBuffer();
+}
+
 describe('auditExif', () => {
   it('counts variants, EXIF and GPS, and flags keys with no original', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'audit-'));
@@ -49,6 +81,24 @@ describe('auditExif', () => {
     expect(r.keys).toBe(3);
     expect(r.gpsKeys.sort()).toEqual(['trips/a/leaky', 'trips/a/orphan']);
     expect(r.gpsKeysWithoutOriginal).toEqual(['trips/a/orphan']);
+  });
+
+  it('detects GPS carried only in an XMP packet (no EXIF GPS)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'audit-xmp-'));
+    await writeFile(join(dir, 'c1-640.webp'), await withXmpGpsOnly());
+    const r = await auditExif(dir);
+    expect(r.variants).toBe(1);
+    expect(r.withGps).toBe(1);
+    expect(r.gpsKeys).toEqual(['c1']);
+  });
+
+  it('detects a GPSInfo block that has no GPSLatitude tag', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'audit-gpsinfo-'));
+    await writeFile(join(dir, 'alt-640.webp'), await withGpsInfoButNoLatitude());
+    const r = await auditExif(dir);
+    expect(r.variants).toBe(1);
+    expect(r.withGps).toBe(1);
+    expect(r.gpsKeys).toEqual(['alt']);
   });
 
   it('returns zeros for an empty or missing storage dir', async () => {

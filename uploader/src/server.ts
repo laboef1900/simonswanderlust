@@ -54,10 +54,13 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // cookie `secure` flag reflect the real client). This is correct ONLY behind a
   // trusted reverse proxy that sets X-Forwarded-Proto; if the container is ever
   // exposed directly, clients could spoof those headers.
-  // @ai-note: 120s comfortably exceeds the ~19s encode of a 24MP frame plus
-  // transfer, while still bounding a stalled connection. Without it Fastify
-  // never times out (default 0) and the reverse proxy decides instead — which
-  // means a 504 with nothing in the app's logs.
+  // @ai-note: http.Server#requestTimeout bounds how long the server waits to
+  // fully RECEIVE a request (headers + body) — it does not bound how long a
+  // handler then takes to process it (e.g. encoding an upload). Fastify sets
+  // this to 0 (disabled) by default, itself overriding Node's own 300s
+  // default, so without an explicit value a stalled request would never time
+  // out at this layer. 120s is generous for even a large multipart upload
+  // over a slow connection while still bounding one that stalls outright.
   const app = Fastify({ logger: false, trustProxy: true, requestTimeout: 120_000 });
   const { users, sessions } = cfg;
 

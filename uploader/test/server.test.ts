@@ -394,10 +394,12 @@ describe('buildServer config', () => {
     await srv.close();
   });
 
-  it('sets an explicit request timeout so the proxy does not own the failure', () => {
-    // @ai-context: encoding a 24MP frame takes ~19s; behind nginx's default
-    // 60s proxy_read_timeout a slow upload 504s with no server-side trace.
-    // An explicit timeout means the server logs and owns the failure instead.
+  it('sets an explicit request timeout instead of relying on Fastify\'s disabled default', () => {
+    // @ai-context: requestTimeout bounds how long the server waits to fully
+    // RECEIVE a request (headers + body), not how long a handler then spends
+    // processing it. Fastify defaults it to 0 (disabled), overriding Node's
+    // own 300s default, so without this a stalled request would never time
+    // out at this layer — an explicit value closes that gap.
     // @ai-note: asserts on the underlying node http.Server, not
     // `app.initialConfig` — fastify's own .d.ts omits `requestTimeout` from
     // `initialConfig`'s type (a gap in the upstream types, not ours), while
