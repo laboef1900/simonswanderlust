@@ -6,6 +6,7 @@ import '../styles/global.css';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
+import { imageOrigin } from '../lib/images';
 import { PROD_SITE, type SeoImage } from '../lib/seo';
 
 interface Props {
@@ -25,6 +26,14 @@ const site = Astro.site ?? PROD_SITE;
 const canonical = new URL(Astro.url.pathname, site);
 const ogLocale: Record<Locale, string> = { de: 'de_DE', en: 'en_US' };
 const otherLocale: Locale = locale === 'de' ? 'en' : 'de';
+
+// @ai-warning Preconnect to the IMAGE host, never to `site.origin`: the document's
+// own origin is already connected before <head> is parsed, so that hint is a
+// no-op, while the LCP hero comes from the uploader's image domain. And no
+// `crossorigin` here — plain `<img>` requests are not CORS requests, so they
+// cannot reuse an anonymous-CORS connection; fonts ship locally via @fontsource,
+// so nothing on the page needs one.
+const imgOrigin = imageOrigin(import.meta.env.PUBLIC_BASE_URL);
 ---
 
 <!doctype html>
@@ -42,8 +51,8 @@ const otherLocale: Locale = locale === 'de' ? 'en' : 'de';
       title={t('site.title')}
     />
     <link rel="canonical" href={canonical} />
-    <link rel="preconnect" href={site.origin} crossorigin />
-    <link rel="dns-prefetch" href={site.origin} />
+    <link rel="preconnect" href={imgOrigin} />
+    <link rel="dns-prefetch" href={imgOrigin} />
     {
       alternates && (
         <>
@@ -77,7 +86,7 @@ const otherLocale: Locale = locale === 'de' ? 'en' : 'de';
       href="#main-content"
       class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded focus:bg-brand-red focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-white focus:outline-none"
     >
-      {locale === 'en' ? 'Skip to main content' : 'Zum Hauptinhalt springen'}
+      {t('nav.skipToContent')}
     </a>
     <Nav locale={locale} alternates={alternates} />
     <main id="main-content" class="flex-1"><slot /></main>

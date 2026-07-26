@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import { createReadStream, existsSync } from 'node:fs';
+import { createReadStream, existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import multipart from '@fastify/multipart';
@@ -45,6 +45,32 @@ export interface ServerConfig {
 }
 
 const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
+
+/** IPv4 loopback block (127.0.0.0/8) — matched after WHATWG normalization, which
+ *  canonicalizes shorthands (`127.1` → `127.0.0.1`) and rejects out-of-range octets. */
+const LOOPBACK_IPV4_RE = /^127(?:\.\d{1,3}){3}$/;
+
+/**
+ * True iff a host *authority* — `localhost:3000`, `127.0.0.1:3000`, `[::1]:3000`,
+ * `img.simonswanderlust.com` — names the loopback interface. Parsed with the WHATWG
+ * URL parser rather than string matching, so an optional port and bracketed IPv6 are
+ * handled correctly; an unparseable authority counts as non-local.
+ *
+ * Only the exact loopback names qualify. `evil.localhost` does not, even though some
+ * resolvers map every `*.localhost` name to 127.0.0.1: this predicate exists solely to
+ * detect the one-hostname local-dev setup that makes the image mount shadow the blog
+ * mount (see setNotFoundHandler), and giving images their own hostname is precisely the
+ * setup that has no such collision.
+ */
+function isLoopbackAuthority(authority: string): boolean {
+  let hostname: string;
+  try {
+    ({ hostname } = new URL(`http://${authority}`));
+  } catch {
+    return false;
+  }
+  return hostname === 'localhost' || hostname === '[::1]' || LOOPBACK_IPV4_RE.test(hostname);
+}
 
 export function buildServer(cfg: ServerConfig): FastifyInstance {
   // @fastify/static requires an absolute root; tolerate a relative STORAGE_DIR
@@ -625,22 +651,45 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send(summary);
   });
 
+  // @ai-note: the image host doubles as a blog host so that LOCAL DEV works, and
+  // ONLY for local dev. uploader/.env.example tells you to set IMG_HOST=localhost:3000
+  // for a bare local run; the image mount's host constraint then matches every request
+  // on the only host that exists, shadowing the blog mount. Measured with that config:
+  // without the arm below `/` and `/rumaenien/` 404 (`/admin/` and image variants serve
+  // either way); with it they serve.
+  // @ai-warning: this must never engage in production. With IMG_HOST=img.simonswanderlust.com
+  // an ungated arm publishes a second, fully crawlable copy of the blog on the image
+  // subdomain (duplicate content, split SEO). The gate is computed once here from the
+  // *configured* imgHost and never from the request's Host header, so a spoofed Host
+  // cannot talk a production deployment into the local branch; when it is off, the image
+  // host plain-404s non-image paths exactly as it did before the arm existed (513bf5f).
+  const imgHostServesBlog = isLoopbackAuthority(cfg.imgHost);
+
   // 404/503 for the blog; plain 404 for the img host and non-GET methods.
   app.setNotFoundHandler(async (req, reply) => {
     const host = req.headers.host ?? '';
     if (req.method !== 'GET' && req.method !== 'HEAD') return reply.code(404).send({ error: 'not found' });
     if (host === cfg.imgHost) {
-      const urlPath = (req.raw.url ?? '').split('?', 1)[0] ?? '';
+      if (!imgHostServesBlog) return reply.code(404).send('Not found');
+      // Delegated to @fastify/static's reply.sendFile (decorated by the /admin/
+      // mount, which does not set decorateReply:false) instead of a hand-rolled
+      // readFile: that buys the full mime database, ETag/Last-Modified, range
+      // requests and @fastify/send's own root-containment check. No options are
+      // passed, so the bytes are served with exactly the same headers as the
+      // blog mount above serves them on the main host — in particular NOT the
+      // image mount's immutable 365d, which would be wrong here: release HTML
+      // changes under a stable URL on every publish.
+      const rawUrl = req.raw.url ?? '';
+      const qIndex = rawUrl.indexOf('?');
+      const urlPath = qIndex === -1 ? rawUrl : rawUrl.slice(0, qIndex);
       const relPath = (urlPath.endsWith('/') ? join(urlPath, 'index.html') : urlPath).replace(/^\//, '');
-      const fullPath = join(currentDir, relPath);
-      if (relPath && existsSync(fullPath)) {
-        const body = await readFile(fullPath);
-        const mime = relPath.endsWith('.html') ? 'text/html; charset=utf-8'
-          : relPath.endsWith('.css') ? 'text/css; charset=utf-8'
-          : relPath.endsWith('.js') ? 'text/javascript; charset=utf-8'
-          : relPath.endsWith('.svg') ? 'image/svg+xml'
-          : 'application/octet-stream';
-        return reply.type(mime).send(body);
+      const stat = relPath ? statSync(join(currentDir, relPath), { throwIfNoEntry: false }) : undefined;
+      if (stat?.isFile()) return reply.sendFile(relPath, currentDir);
+      // A directory without its trailing slash: mirror the blog mount's
+      // `redirect: true` (301) rather than reading the directory and blowing up.
+      if (stat?.isDirectory()) {
+        const query = qIndex === -1 ? '' : rawUrl.slice(qIndex);
+        return reply.code(301).header('location', `${urlPath}/${query}`).send();
       }
       return reply.code(404).send('Not found');
     }

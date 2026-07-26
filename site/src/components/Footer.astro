@@ -12,16 +12,24 @@ interface Props {
 const { locale } = Astro.props;
 const t = useTranslations(locale);
 const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
+
+// @ai-note `contain-intrinsic-size` below uses the `auto` keyword form, so the
+// browser reuses the last-rendered height instead of trusting the placeholder
+// forever; the fixed part is the measured stacked (mobile) height (~510px), not
+// the old 300px guess that threw scrollbar length and anchor jumps off.
+// `content-visibility` is safe here (unlike on the story grid — see
+// StoryGrid.astro): the footer's own `px-5 py-14` padding keeps every link's
+// focus ring well inside the paint-containment box.
 ---
 
-<footer class="relative overflow-hidden bg-navy text-white [content-visibility:auto] [contain-intrinsic-size:300px]">
+<footer class="relative overflow-hidden bg-navy text-white [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
   <Contours />
   <div class="relative mx-auto grid max-w-6xl gap-10 px-5 py-14 md:grid-cols-[2.2fr_1fr_1fr]">
     <div>
       <p class="text-lg font-extrabold tracking-wider text-white uppercase">{t('site.title')}</p>
       <p class="mt-1 text-sm text-white/60">{t('site.tagline')}</p>
       <p class="mt-4 font-mono text-[11px] tracking-[0.2em] text-brand-red-light uppercase">
-        N° 01 — TRAVEL JOURNAL &amp; LOGS
+        {t('footer.logline')}
       </p>
     </div>
     <div>

@@ -31,7 +31,7 @@ Self-hosted, single-author travel CMS with a custom bilingual editor, automatic 
 - **Auth:** Cookie-based sessions with admin/non-admin roles; rate-limited login.
 - **Editor:** Bilingual DE/EN tabs, slug preview, hero image picker, body markdown with EasyMDE, key facts and stops editors, revision history, preview, publish/unpublish.
 - **Tech stack:** Fastify server, plain HTML/CSS/JS admin UI (no framework), PostgreSQL, Docker.
-- **Constraint:** Admin UI is vanilla HTML/CSS/JS served as static files from `uploader/public/`; no build step, no bundler, no framework.
+- **Constraint:** Admin UI is vanilla HTML/CSS/JS served as static files from `uploader/public/`; no bundler and no framework. The only build step copies vendored fonts and EasyMDE into `public/` (`Dockerfile` runs `scripts/copy-fonts.mjs` and `scripts/copy-easymde.mjs`), so `public/fonts/` and `public/vendor/` are generated, not checked in.
 
 ## Brand Commitments
 
@@ -51,7 +51,7 @@ Self-hosted, single-author travel CMS with a custom bilingual editor, automatic 
 1. **Author-first workflow** — Every admin interaction serves the solo author's publishing workflow; no multi-tenant complexity.
 2. **Photography leads** — The image pipeline and visual presentation treat photos as the primary content, not decoration.
 3. **Bilingual by design** — DE/EN content lives as a first-class pair, not a translation afterthought.
-4. **Self-hosted independence** — The entire stack runs in a single Docker container with no external dependencies.
+4. **Self-hosted independence** — The stack is two containers, `app` (Fastify, which also builds the Astro site in-process) and `db` (Postgres), with no third-party runtime services.
 
 ## Accessibility & Inclusion
 

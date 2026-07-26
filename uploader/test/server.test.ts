@@ -588,6 +588,21 @@ describe('auth endpoints', () => {
     expect(unknown.statusCode).toBe(401);
   });
 
+  it('GET /login serves a real form so Enter submits (keyboard-only sign-in)', async () => {
+    const res = await build().app.inject({ method: 'GET', url: '/login' });
+    expect(res.statusCode).toBe(200);
+    // A bare input + a click handler on the button leaves Enter dead; the fields
+    // must live in a <form> with a submit button and an intercepted submit event.
+    expect(res.body).toMatch(/<form[^>]*id="login-form"/);
+    expect(res.body).toMatch(/<button[^>]*type="submit"/);
+    expect(res.body).toContain("$('login-form').addEventListener('submit'");
+    expect(res.body).toContain('event.preventDefault()');
+    expect(res.body).not.toContain("$('submit').addEventListener('click'");
+    // …without losing the setup-vs-login mode or the ?next= return URL
+    expect(res.body).toContain("needsSetup ? '/setup' : '/login'");
+    expect(res.body).toContain('DraftGuard.safeNextPath(');
+  });
+
   it('GET /auth/status returns the logged-in user', async () => {
     const b = build();
     const { cookie } = await authed(b, { isAdmin: true, username: 'simon' });

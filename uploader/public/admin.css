@@ -37,6 +37,16 @@
   --red-light: #ff5a4e;
   --line: rgba(20, 42, 66, 0.10);
   --line-strong: rgba(20, 42, 66, 0.18);
+  /* @ai-note: interactive boundaries (inputs, tabs, outlined buttons) must clear
+     WCAG 1.4.11's 3:1 against their backdrop — --line-strong is only 1.4:1.
+     0.55 alpha measures 3.53:1 on #fff, 3.49:1 on --canvas, 3.42:1 on #f3f4f6.
+     Decorative rules keep --line / --line-strong; do not swap them. */
+  --line-control: rgba(20, 42, 66, 0.55);
+  /* @ai-note: single secondary-text ink. PRODUCT.md commits to WCAG 2.1 AA, and
+     none of the copy using this is large text, so it must clear 4.5:1: 0.64 alpha
+     measures 4.94:1 on #fff, 4.88:1 on --canvas, 4.76:1 on #f3f4f6 (--slug-base).
+     Never lower it — the previous 0.5/0.55/0.6 values measured 3.2–4.4:1. */
+  --muted: rgba(22, 33, 46, 0.64);
   --sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
 }
@@ -110,8 +120,12 @@ body {
   color: #fff;
   background: rgba(255, 255, 255, 0.06);
 }
+/* @ai-note: --red-light straight on the navy + 6% white pill is only 3.97:1 —
+   under AA for this 0.78rem label. Tinting the brand red 18% toward white keeps
+   the palette and lifts it to 4.74:1 (5.66:1 on bare navy). If color-mix is
+   unsupported the declaration drops and the link inherits the 6.9:1 white. */
 .masthead nav a[aria-current='page'] {
-  color: var(--red-light);
+  color: color-mix(in srgb, var(--red-light) 82%, #fff);
   font-weight: 600;
   background: rgba(255, 255, 255, 0.06);
 }
@@ -135,7 +149,7 @@ main {
 
 .help {
   margin: 0 0 1.25rem;
-  color: rgba(22, 33, 46, 0.6);
+  color: var(--muted);
   font-size: 0.92rem;
 }
 
@@ -163,7 +177,7 @@ label {
 input, textarea, select {
   width: 100%;
   padding: 0.55rem 0.7rem;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-control);
   border-radius: 0.4rem;
   background: #fff;
   color: var(--ink);
@@ -269,13 +283,13 @@ pre {
   letter-spacing: 0.03em;
 }
 small {
-  color: rgba(22, 33, 46, 0.55);
+  color: var(--muted);
   font-family: var(--mono);
   font-size: 0.72rem;
   letter-spacing: 0.04em;
 }
 
-.muted { color: rgba(22, 33, 46, 0.5); font-size: 0.88rem; margin-top: 0.4rem; }
+.muted { color: var(--muted); font-size: 0.88rem; margin-top: 0.4rem; }
 
 #list { list-style: none; padding: 0; }
 #list li {
@@ -322,7 +336,7 @@ small {
   font-size: 0.6rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: rgba(22, 33, 46, 0.5);
+  color: var(--muted);
   border-bottom: 2px solid var(--line-strong);
 }
 .posts-table td {
@@ -332,7 +346,7 @@ small {
 }
 .posts-table tr:last-child td { border-bottom: 0; }
 .posts-date {
-  color: rgba(22, 33, 46, 0.5);
+  color: var(--muted);
   font-family: var(--mono);
   font-size: 0.75rem;
 }
@@ -348,7 +362,7 @@ small {
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.status-draft { background: #f3f4f6; color: #6b7280; }
+.status-draft { background: #f3f4f6; color: #4b5563; }
 .status-published { background: #d1fae5; color: #065f46; }
 /* published post with draft edits not yet live */
 .status-edited { background: #fef3c7; color: #92400e; }
@@ -379,7 +393,7 @@ small {
   overflow-wrap: anywhere;
 }
 .media-dims {
-  color: rgba(22, 33, 46, 0.5);
+  color: var(--muted);
   font-family: var(--mono);
   font-size: 0.75rem;
   white-space: nowrap;
@@ -402,7 +416,7 @@ small {
   display: flex;
   align-items: center;
   gap: 0;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-control);
   border-radius: 0.4rem;
   overflow: hidden;
   background: #fff;
@@ -410,11 +424,11 @@ small {
 .slug-base {
   padding: 0.55rem 0.7rem;
   background: #f3f4f6;
-  color: rgba(22, 33, 46, 0.45);
+  color: var(--muted);
   font-family: var(--mono);
   font-size: 0.75rem;
   white-space: nowrap;
-  border-right: 1px solid var(--line-strong);
+  border-right: 1px solid var(--line-control);
 }
 .slug-preview input {
   border: 0;
@@ -459,7 +473,7 @@ small {
   line-height: 1;
   background: transparent;
   color: var(--red);
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-control);
 }
 .btn-remove:hover { background: #fee2e2; color: var(--red); }
 
@@ -477,7 +491,7 @@ small {
   display: flex;
   gap: 0;
   margin: 1.25rem 0 0;
-  border-bottom: 2px solid var(--line-strong);
+  border-bottom: 2px solid var(--line-control);
 }
 .tab-btn {
   margin-top: 0;
@@ -485,7 +499,7 @@ small {
   background: transparent;
   color: var(--ink);
   border-radius: 0.4rem 0.4rem 0 0;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-control);
   border-bottom: 0;
   font-weight: 600;
   font-size: 0.85rem;
@@ -497,7 +511,7 @@ small {
 .tab-btn:hover { background: #f3f4f6; }
 .tab-btn.active {
   background: #fff;
-  border-color: var(--line-strong);
+  border-color: var(--line-control);
   border-bottom-color: #fff;
   color: var(--red);
 }
@@ -547,13 +561,14 @@ small {
 
 /* EasyMDE overrides */
 .EasyMDEContainer { width: 100%; }
-.CodeMirror { border-radius: 0.4rem; border-color: var(--line-strong); }
+.CodeMirror { border-radius: 0.4rem; border-color: var(--line-control); }
 
 /* ---- login page ---- */
 body.login-page {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 body.login-page main {
   flex: 1;
