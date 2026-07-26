@@ -132,6 +132,10 @@ docker compose logs -f                        # tail logs (both services log to 
 docker build .                                # rebuild the app image from the repo root (DHI bases)
 ```
 
+Rebuilding or redeploying the image does not regenerate the blog's static output — that lives on
+the `/data` volume and only changes via Publish, **Rebuild site now**, or `POST /rebuild`
+(`docs/authoring-workflow.md`, Stage 3).
+
 **Ports:** app `3000` (the only published port) · Astro dev server `4321` · Postgres `5432`
 (compose-internal only — never published to the host).
 

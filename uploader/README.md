@@ -36,8 +36,10 @@ cp uploader/.env.example .env
 #    DATABASE_URL=postgres://images:<same-password>@db:5432/images
 #    PUBLIC_BASE_URL=http://localhost:3000
 
-# 3. Build the image and start the containers in the background:
-docker compose up -d --build
+# 3. Build the image (compose has no build: key, so `--build` is a no-op) and
+#    start the containers in the background:
+docker build -t ghcr.io/laboef1900/simonswanderlust-app:local .
+IMAGE_TAG=local docker compose up -d
 
 # 4. First run — open /login to create the first admin account:
 open http://localhost:3000/login      # macOS (or just browse to the URL)
@@ -96,8 +98,10 @@ DATABASE_URL=postgres://images:YOUR_PASSWORD@127.0.0.1:5432/images \
 1. Copy the repo to the server.
 2. From the monorepo root: `cp uploader/.env.example .env`, set a strong `POSTGRES_PASSWORD`, the
    matching `DATABASE_URL`, and `PUBLIC_BASE_URL=https://img.simonswanderlust.com`.
-3. `docker compose up -d --build` (or, to run the released GHCR image instead of building:
-   `docker compose pull && docker compose up -d`).
+3. Build and run: `docker build -t ghcr.io/laboef1900/simonswanderlust-app:local .` then
+   `IMAGE_TAG=local docker compose up -d` (compose has no `build:` key, so plain
+   `docker compose up -d --build` is a no-op) — or, to run the released GHCR image instead of
+   building: `docker compose pull && docker compose up -d`.
 4. Because the container runs non-root (uid 1000), make its data bind-mount writable once — this
    now covers image variants *and* the built blog output, since both live under the same `/data`
    volume: `mkdir -p uploader/data && sudo chown -R 1000:1000 uploader/data` (run from the

@@ -14,9 +14,12 @@ see [SECURITY.md](SECURITY.md).
 | `app` | `ghcr.io/laboef1900/simonswanderlust-app` (built from the repo-root `Dockerfile`, DHI node base) | Single Fastify 5 process: admin CMS (editor, WordPress import), image service (sharp, host-routed on the img subdomain), public blog static serving, in-process `astro build` on Publish/boot/manual rebuild, `/map/` PMTiles basemap, and DB backups | Public (via host port → reverse proxy / TLS) |
 | `db` | `postgres:18-alpine` | Source of truth for posts, users, and sessions | Internal only (`:5432`) |
 
-The `app` image is **released to GHCR** by CI and pulled on the server (pinned via `IMAGE_TAG`);
-the compose service keeps its `build:` so local dev can still `docker compose up -d --build` from
-source. See [Packaging & release pipeline](#packaging--release-pipeline).
+The `app` image is **released to GHCR** by CI and pulled on the server (pinned via `IMAGE_TAG`).
+`docker-compose.yml` has no `build:` key, so `docker compose up -d --build` is a no-op — to build
+the image locally, run `docker build .` from the repo root instead. See [Packaging & release
+pipeline](#packaging--release-pipeline). Note: rebuilding the image does not regenerate the
+already-built blog on `/data` — see [docs/authoring-workflow.md](docs/authoring-workflow.md)
+(Stage 3: How the rebuild works).
 
 Shared state, all under the **`/data`** volume (bind-mounted from `./uploader/data`):
 - `images/` — optimized image variants plus the untouched upload originals

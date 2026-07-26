@@ -155,8 +155,11 @@ same `app` container that runs the admin/CMS also builds and serves the blog. Co
 (via plain `node`, no shell) on demand, and writes the output into `/data/site/releases/<stamp>`,
 then atomically flips the `/data/site/current` symlink that the app serves directly.
 
-**`docker compose up -d --build` does not rebuild the content.** Rebuilding the `app` image only
-updates the Astro/template code, not the post data.
+**Rebuilding the `app` image does not update the live blog.** The image carries Astro/template
+code; the already-built HTML on `/data/site` (rendered from Postgres at the last Publish/rebuild)
+is untouched until something triggers a *new* build — an image rebuild alone doesn't. (Also note:
+compose has no `build:` key, so `docker compose up -d --build` doesn't even rebuild the image —
+use `docker build .` from the repo root instead.)
 
 To trigger a rebuild manually (e.g. after a database restore, or a template code change), sign in
 as an admin and use the **Rebuild site now** button on the settings page (`/admin/settings.html`),

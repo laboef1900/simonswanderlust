@@ -34,7 +34,8 @@ for the security model.
 
 ```bash
 cp uploader/.env.example .env        # set POSTGRES_PASSWORD, DATABASE_URL
-docker compose up -d --build         # app (blog + uploader, one image) + Postgres
+docker build -t ghcr.io/laboef1900/simonswanderlust-app:local .   # compose has no build: key
+IMAGE_TAG=local docker compose up -d                               # app (blog + uploader, one image) + Postgres
 ```
 
 On a server you can run the **released image from GHCR** instead of building locally — set
@@ -46,6 +47,9 @@ docker compose pull && docker compose up -d
 
 The image is `ghcr.io/laboef1900/simonswanderlust-app` (published on each `vX.Y.Z` tag by
 `.github/workflows/release.yml`). If the package is private, `docker login ghcr.io` first.
+Either way, redeploying the image doesn't rebuild the blog itself — see
+[docs/authoring-workflow.md](docs/authoring-workflow.md) (Stage 3) for how the static output on
+`/data` gets regenerated.
 
 ### Hardened base image (Docker Hardened Images)
 
