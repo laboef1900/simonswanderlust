@@ -100,7 +100,16 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   app.register(cookie);
-  app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024 } });
+  // @ai-warning: `files: 1` is a data-integrity guard, not a convenience limit.
+  // POST /upload reads one file into a single `buf`, so a multi-file request
+  // used to buffer every file and silently keep only the last. Bulk upload is
+  // N single-file requests by design.
+  // `parts` also matters: @fastify/multipart's parser never consumes the body,
+  // so Fastify's 1 MiB bodyLimit does NOT apply to multipart — without a cap,
+  // one authenticated request could stream ~25 GB.
+  app.register(multipart, {
+    limits: { fileSize: 25 * 1024 * 1024, files: 1, parts: 8 },
+  });
   app.decorateRequest('authUser', null);
   app.addHook('onRequest', async (req) => { req.authUser = await loadUser(req, users, sessions); });
 

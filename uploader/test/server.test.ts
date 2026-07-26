@@ -214,6 +214,45 @@ describe('POST /upload', () => {
     // ...but the full-resolution original is not downloadable.
     expect((await b.app.inject({ method: 'GET', url: '/' + original, headers: img })).statusCode).toBe(404);
   });
+
+  it('rejects a multi-file upload instead of silently keeping only the last', async () => {
+    // @ai-context: the handler reassigns `buf` on every file part, so N files
+    // meant N-1 were fully buffered into memory and then dropped, with the last
+    // one stored under the single `key`. Silent data loss, not an unsupported
+    // feature — and bulk upload makes multi-file requests an obvious attempt.
+    const b = build();
+    const { cookie } = await authed(b);
+    const form = new FormData();
+    form.append('key', 'trips/x/photo');
+    form.append('alt', 'a');
+    form.append('file', await jpeg(), { filename: 'a.jpg', contentType: 'image/jpeg' });
+    form.append('file', await jpeg(), { filename: 'b.jpg', contentType: 'image/jpeg' });
+    const res = await b.app.inject({
+      method: 'POST', url: '/upload',
+      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
+    });
+    // @fastify/multipart raises FST_FILES_LIMIT, typed 413 by createError, from
+    // inside req.parts() — before the handler ever sees the second file. A
+    // handler-level 400 is therefore unreachable by construction.
+    expect(res.statusCode).toBe(413);
+  });
+
+  it('still accepts a single-file upload unchanged', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const form = new FormData();
+    form.append('key', 'trips/x/photo');
+    form.append('alt', 'Old town');
+    form.append('file', await jpeg(), { filename: 't.jpg', contentType: 'image/jpeg' });
+    const res = await b.app.inject({
+      method: 'POST', url: '/upload',
+      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().src).toMatch(
+      /^https:\/\/img\.simonswanderlust\.com\/trips\/x\/photo-[0-9a-f]{8}$/,
+    );
+  });
 });
 
 describe('media library', () => {
