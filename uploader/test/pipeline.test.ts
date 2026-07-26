@@ -1,16 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
+import exifReader from 'exif-reader';
 import { processImage } from '../src/pipeline.js';
 
+/**
+ * A JPEG carrying camera tags AND a real GPS IFD.
+ * @ai-note: libvips maps IFD3 to the GPS IFD, so GPS *can* be injected here.
+ * A previous comment claimed otherwise and settled for asserting only that
+ * "the EXIF container is intact" — which is why the GPS leak went unnoticed.
+ */
 async function fixture(width: number, height: number): Promise<Buffer> {
-  // sharp's typed withExif() exposes only IFD0–IFD3, not a GPS IFD. We can't
-  // inject GPS tags here, but the pipeline preserves metadata via withMetadata(),
-  // which copies the whole EXIF block wholesale — so proving IFD0 survives proves
-  // GPS would survive too. Hence the assertion checks the EXIF container is intact.
   return sharp({
     create: { width, height, channels: 3, background: { r: 120, g: 120, b: 120 } },
   })
-    .withExif({ IFD0: { ImageDescription: 'fixture' } })
+    .withIccProfile('srgb')
+    .withExif({
+      IFD0: { ImageDescription: 'fixture', Make: 'Leica Camera AG', Model: 'LEICA Q2' },
+      IFD2: { DateTimeOriginal: '2026:07:04 18:23:11', ExposureTime: '1/250' },
+      IFD3: {
+        GPSLatitudeRef: 'N', GPSLatitude: '63/1 4/1 3312/100',
+        GPSLongitudeRef: 'E', GPSLongitude: '10/1 23/1 1944/100',
+      },
+    })
     .jpeg()
     .toBuffer();
 }
@@ -36,11 +47,61 @@ describe('processImage', () => {
     expect([...new Set(result.variants.map((v) => v.width))]).toEqual([500]);
   });
 
-  it('preserves EXIF metadata (incl. GPS) in output variants', async () => {
+  it('never emits GPS in any output variant', async () => {
     const result = await processImage(await fixture(2000, 1000));
-    const v = result.variants.find((x) => x.format === 'webp' && x.width === 640)!;
-    const meta = await sharp(v.data).metadata();
-    expect(meta.exif).toBeDefined();
+    // Every variant, both formats, every width — not just a sample.
+    for (const v of result.variants) {
+      const meta = await sharp(v.data).metadata();
+      const tags = meta.exif ? exifReader(meta.exif) : null;
+      expect(tags?.GPSInfo ?? null, `${v.format}@${v.width} leaked GPS`).toBeNull();
+    }
+  });
+
+  it('keeps camera, model and capture time in output variants', async () => {
+    const result = await processImage(await fixture(2000, 1000));
+    for (const fmt of ['avif', 'webp'] as const) {
+      const v = result.variants.find((x) => x.format === fmt && x.width === 640)!;
+      const tags = exifReader((await sharp(v.data).metadata()).exif!);
+      expect(tags.Image?.Make).toBe('Leica Camera AG');
+      expect(tags.Image?.Model).toBe('LEICA Q2');
+      expect(tags.Photo?.DateTimeOriginal?.toISOString()).toBe('2026-07-04T18:23:11.000Z');
+      expect(tags.Photo?.ExposureTime).toBeCloseTo(0.004, 6);
+    }
+  });
+
+  it('drops non-allow-listed EXIF such as ImageDescription', async () => {
+    const result = await processImage(await fixture(800, 600));
+    const v = result.variants.find((x) => x.format === 'webp')!;
+    const tags = exifReader((await sharp(v.data).metadata()).exif!);
+    expect(tags.Image?.ImageDescription).toBeUndefined();
+  });
+
+  it('keeps the ICC profile (colour accuracy) while dropping location', async () => {
+    const result = await processImage(await fixture(800, 600));
+    const v = result.variants.find((x) => x.format === 'webp')!;
+    expect((await sharp(v.data).metadata()).icc).toBeDefined();
+  });
+
+  it('does not re-embed Orientation (already applied by rotate)', async () => {
+    const result = await processImage(await fixture(800, 600));
+    for (const v of result.variants) {
+      const meta = await sharp(v.data).metadata();
+      const tags = meta.exif ? exifReader(meta.exif) : null;
+      // undefined or 1 ("normal") are both fine; anything else double-rotates.
+      const o = tags?.Image?.Orientation;
+      expect(o === undefined || o === 1, `${v.format}@${v.width} orientation=${o}`).toBe(true);
+    }
+  });
+
+  it('still produces valid variants for an image with no EXIF at all', async () => {
+    const plain = await sharp({
+      create: { width: 900, height: 600, channels: 3, background: { r: 5, g: 6, b: 7 } },
+    }).jpeg().toBuffer();
+    const result = await processImage(plain);
+    expect(result.width).toBe(900);
+    expect(result.variants.length).toBeGreaterThan(0);
+    const meta = await sharp(result.variants[0]!.data).metadata();
+    expect(meta.width).toBeGreaterThan(0);
   });
 
   it('returns the untouched original bytes with the detected extension', async () => {
