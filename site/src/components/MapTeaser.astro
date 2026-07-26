@@ -2,7 +2,7 @@
 import { getCollection } from 'astro:content';
 import Contours from './Contours.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
-import { byLocale } from '../lib/trips';
+import { byLocale, statsLine, tripStats } from '../lib/trips';
 import { mapPath } from '../lib/paths';
 
 interface Props {
@@ -12,27 +12,30 @@ interface Props {
 const { locale } = Astro.props;
 const t = useTranslations(locale);
 const trips = byLocale(await getCollection('trips'), locale);
-const countries = new Set(trips.map((trip) => trip.data.countryCode)).size;
-const continents = new Set(trips.map((trip) => trip.data.region)).size;
-const stats = [
-  `${trips.length} ${t('stats.trips')}`,
-  `${countries} ${t('stats.countries')}`,
-  `${continents} ${t('stats.continents')}`,
-].join(' · ');
+const stats = statsLine(tripStats(trips), t);
 ---
 
 <section class="relative overflow-hidden bg-navy text-white">
   <Contours />
   <div class="relative mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-10">
     <div>
-      <h2 class="text-2xl font-extrabold">{t('home.mapTeaser.title')}</h2>
+      <div class="flex items-center gap-2">
+        <span class="relative flex h-2 w-2">
+          <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-red opacity-75 motion-reduce:hidden"></span>
+          <span class="relative inline-flex h-2 w-2 rounded-full bg-brand-red"></span>
+        </span>
+        <h2 class="text-2xl font-extrabold">{t('home.mapTeaser.title')}</h2>
+      </div>
       <p class="mt-1 font-mono text-xs tracking-[0.15em] text-brand-red-light">{stats}</p>
     </div>
     <a
       href={mapPath(locale)}
-      class="rounded border border-white/30 px-4 py-2 text-sm text-white/70 hover:border-white/60 hover:text-white transition-colors"
+      class="group inline-flex items-center gap-2 rounded border border-white/30 px-4 py-2 text-sm text-white/90 transition-all hover:border-brand-red hover:bg-brand-red/10 hover:text-white motion-safe:hover:-translate-y-0.5"
     >
-      {t('home.mapTeaser.cta')}
+      <span>{t('home.mapTeaser.cta')}</span>
+      <svg aria-hidden="true" focusable="false" class="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
     </a>
   </div>
 </section>

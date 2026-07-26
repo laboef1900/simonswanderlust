@@ -1,5 +1,5 @@
 import type { CollectionEntry } from 'astro:content';
-import type { Locale } from '../i18n/ui';
+import type { Locale, UIKey } from '../i18n/ui';
 
 export type Trip = CollectionEntry<'trips'>;
 
@@ -30,6 +30,39 @@ export function translationOf(trip: Trip, all: Trip[]): Trip | undefined {
   return all.find(
     (t) => t.data.translationKey === trip.data.translationKey && localeOf(t) !== localeOf(trip),
   );
+}
+
+export interface TripStats {
+  trips: number;
+  countries: number;
+  continents: number;
+}
+
+/**
+ * Headline counts for a set of trips (pass one locale's set — the DE and EN
+ * sets mirror each other, so counting both would double every number).
+ *
+ * @ai-warning These were once hardcoded ("20 REISEN · 10 LÄNDER · 3 KONTINENTE")
+ * and went stale the moment a post was published. Always derive them here.
+ * @ai-note `region` doubles as the continent axis (the Zod enum is
+ * europe / north-america / south-america), and countries are counted by
+ * `countryCode` so spelling differences between locales cannot inflate them.
+ */
+export function tripStats(trips: Trip[]): TripStats {
+  return {
+    trips: trips.length,
+    countries: new Set(trips.map((t) => t.data.countryCode)).size,
+    continents: new Set(trips.map((t) => t.data.region)).size,
+  };
+}
+
+/** "20 REISEN · 10 LÄNDER · 3 KONTINENTE" — the expedition-log stat line. */
+export function statsLine(stats: TripStats, t: (key: UIKey) => string): string {
+  return [
+    `${stats.trips} ${t('stats.trips')}`,
+    `${stats.countries} ${t('stats.countries')}`,
+    `${stats.continents} ${t('stats.continents')}`,
+  ].join(' · ');
 }
 
 /** 1-based chronological number (oldest = 1) of a trip within its locale's set. */

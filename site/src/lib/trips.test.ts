@@ -1,8 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { byLocale, entryNumberOf, localeOf, pathOf, slugOf, translationOf, type Trip } from './trips';
+import { useTranslations } from '../i18n/ui';
+import {
+  byLocale,
+  entryNumberOf,
+  localeOf,
+  pathOf,
+  slugOf,
+  statsLine,
+  translationOf,
+  tripStats,
+  type Trip,
+} from './trips';
 
 function fake(id: string, date: string, translationKey: string): Trip {
   return { id, data: { date: new Date(date), translationKey } } as unknown as Trip;
+}
+
+function fakeWithPlace(id: string, countryCode: string, region: string): Trip {
+  return {
+    id,
+    data: { date: new Date('2024-01-01'), translationKey: id, countryCode, region },
+  } as unknown as Trip;
 }
 
 const rhodesDe = fake('de/sonne-und-abenteuer-rhodos', '2021-07-25', 'rhodes-2021');
@@ -38,6 +56,37 @@ describe('trips helpers', () => {
   it('finds the translation pair via translationKey', () => {
     expect(translationOf(rhodesDe, all)?.id).toBe('en/sun-and-adventure-on-rhodes');
     expect(translationOf(buchDe, all)).toBeUndefined();
+  });
+});
+
+describe('tripStats', () => {
+  const trips = [
+    fakeWithPlace('de/a', 'GR', 'europe'),
+    fakeWithPlace('de/b', 'GR', 'europe'),
+    fakeWithPlace('de/c', 'RO', 'europe'),
+    fakeWithPlace('de/d', 'EC', 'south-america'),
+  ];
+
+  it('counts trips, distinct countries and distinct continents', () => {
+    expect(tripStats(trips)).toEqual({ trips: 4, countries: 3, continents: 2 });
+  });
+
+  it('is all-zero for an empty set (no hardcoded floor)', () => {
+    expect(tripStats([])).toEqual({ trips: 0, countries: 0, continents: 0 });
+  });
+
+  it('tracks published content instead of a frozen number', () => {
+    const grown = [...trips, fakeWithPlace('de/e', 'US', 'north-america')];
+    expect(tripStats(grown)).toEqual({ trips: 5, countries: 4, continents: 3 });
+  });
+});
+
+describe('statsLine', () => {
+  const stats = { trips: 20, countries: 10, continents: 3 };
+
+  it('joins the localized stat labels with the expedition separator', () => {
+    expect(statsLine(stats, useTranslations('de'))).toBe('20 REISEN · 10 LÄNDER · 3 KONTINENTE');
+    expect(statsLine(stats, useTranslations('en'))).toBe('20 TRIPS · 10 COUNTRIES · 3 CONTINENTS');
   });
 });
 

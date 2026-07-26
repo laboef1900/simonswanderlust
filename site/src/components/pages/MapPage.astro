@@ -2,7 +2,7 @@
 import { getCollection } from 'astro:content';
 import Base from '../../layouts/Base.astro';
 import { useTranslations, type Locale } from '../../i18n/ui';
-import { byLocale, pathOf } from '../../lib/trips';
+import { byLocale, pathOf, statsLine, tripStats } from '../../lib/trips';
 import { tripPins } from '../../lib/map-data';
 import { mapPath } from '../../lib/paths';
 
@@ -15,6 +15,7 @@ const t = useTranslations(locale);
 const all = await getCollection('trips');
 const trips = byLocale(all, locale);
 const geojson = tripPins(all, locale);
+const stats = statsLine(tripStats(trips), t);
 ---
 
 <Base
@@ -24,14 +25,31 @@ const geojson = tripPins(all, locale);
   alternates={{ de: mapPath('de'), en: mapPath('en') }}
 >
   <section class="mx-auto max-w-6xl px-5 py-10">
-    <h1 class="text-3xl font-extrabold text-navy">{t('map.title')}</h1>
-    <p class="mt-1 text-ink/70">{t('map.intro')}</p>
-    <div
-      id="map"
-      class="mt-6 h-[70vh] w-full rounded-lg bg-navy/5"
-      data-geojson={JSON.stringify(geojson)}
-      data-readstory={t('map.readStory')}
-    ></div>
+    <div class="flex flex-wrap items-end justify-between gap-4 border-b border-navy/10 pb-6">
+      <div>
+        <p class="font-mono text-xs font-semibold tracking-[0.2em] text-brand-red uppercase">
+          {stats}
+        </p>
+        <h1 class="mt-1 text-3xl font-extrabold text-navy md:text-4xl">{t('map.title')}</h1>
+        <p class="mt-1 text-ink/70">{t('map.intro')}</p>
+      </div>
+      <div class="hidden sm:flex items-center gap-2 rounded border border-navy/10 bg-canvas px-3 py-1.5 font-mono text-xs text-navy/70 shadow-sm">
+        <span class="relative flex h-2 w-2">
+          <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-red opacity-75 motion-reduce:hidden"></span>
+          <span class="relative inline-flex h-2 w-2 rounded-full bg-brand-red"></span>
+        </span>
+        <span>{trips.length} {t('map.pinCount')}</span>
+      </div>
+    </div>
+
+    <div class="relative mt-6 overflow-hidden rounded-lg border border-navy/10 bg-canvas shadow-sm">
+      <div
+        id="map"
+        class="h-[70vh] w-full bg-navy/5"
+        data-geojson={JSON.stringify(geojson)}
+        data-readstory={t('map.readStory')}
+      ></div>
+    </div>
     <noscript>
       <p class="mt-2 text-sm text-ink/60">{t('map.intro')}</p>
     </noscript>

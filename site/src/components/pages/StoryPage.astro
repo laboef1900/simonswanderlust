@@ -72,7 +72,7 @@ const jsonLd = serializeJsonLd(
     <div class="absolute right-0 bottom-0 left-0">
       <div class="mx-auto max-w-3xl px-5 pb-10 text-white">
         <p class="font-mono text-xs font-semibold tracking-[0.25em] text-brand-red-light uppercase">{label}</p>
-        <h1 class="mt-2 text-3xl font-extrabold md:text-4xl">{trip.data.title}</h1>
+        <h1 class="mt-2 text-3xl font-extrabold md:text-4xl break-words">{trip.data.title}</h1>
         <p class="mt-2 font-mono text-xs tracking-[0.2em] text-white/60">
           {coordsLabel(trip.data.coordinates)}
         </p>
@@ -81,11 +81,11 @@ const jsonLd = serializeJsonLd(
   </section>
 
   <div class="mx-auto max-w-3xl px-5 py-10">
-    <div class="flex items-start justify-between gap-4">
+    <div class="flex flex-wrap items-start justify-between gap-4">
       <p class="text-sm">
         {
           other && (
-            <a href={pathOf(other)} class="font-medium text-brand-red hover:underline">
+            <a href={pathOf(other)} class="font-medium text-brand-red hover:underline focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2">
               {t('story.otherLang')} →
             </a>
           )
@@ -99,7 +99,7 @@ const jsonLd = serializeJsonLd(
         <KeyFacts facts={trip.data.keyFacts} country={trip.data.country} locale={locale} />
       )
     }
-    <article class="prose prose-lg max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-a:text-brand-red">
+    <article class="prose prose-lg max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-headings:break-words prose-p:break-words prose-a:font-semibold prose-a:text-brand-red prose-a:no-underline hover:prose-a:underline prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:bg-navy/[0.02] prose-blockquote:py-3 prose-blockquote:px-5 prose-blockquote:italic prose-blockquote:text-navy prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red">
       <Content />
     </article>
 
@@ -110,26 +110,44 @@ const jsonLd = serializeJsonLd(
     </div>
     <nav
       aria-label={t('story.pagination')}
-      class="mt-10 flex justify-between gap-4 text-sm"
+      class="mt-12 grid gap-4 sm:grid-cols-2"
     >
-      <span>
-        {
-          older && (
-            <a href={pathOf(older)} class="hover:text-brand-red">
-              ← {t('story.prev')}: {older.data.title}
-            </a>
-          )
-        }
-      </span>
-      <span class="text-right">
-        {
-          newer && (
-            <a href={pathOf(newer)} class="hover:text-brand-red">
-              {t('story.next')}: {newer.data.title} →
-            </a>
-          )
-        }
-      </span>
+      {
+        older ? (
+          <a
+            href={pathOf(older)}
+            class="group flex min-w-0 flex-col justify-between rounded-md border border-navy/10 bg-canvas p-4 transition-all duration-300 hover:-translate-y-0.5 hover:border-brand-red/40 hover:shadow-md focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2"
+          >
+            <span class="inline-flex items-center gap-1 font-mono text-[11px] font-semibold tracking-wider text-navy/60 uppercase group-hover:text-brand-red">
+              <svg aria-hidden="true" focusable="false" class="h-3.5 w-3.5 transition-transform duration-300 group-hover:-translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M13 8H3M7 4L3 8l4 4" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              {t('story.prev')}
+            </span>
+            <span class="mt-2 font-bold text-navy line-clamp-1 break-words group-hover:text-brand-red">
+              {older.data.title}
+            </span>
+          </a>
+        ) : <div />
+      }
+      {
+        newer ? (
+          <a
+            href={pathOf(newer)}
+            class="group flex min-w-0 flex-col justify-between rounded-md border border-navy/10 bg-canvas p-4 text-right transition-all duration-300 hover:-translate-y-0.5 hover:border-brand-red/40 hover:shadow-md focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2"
+          >
+            <span class="inline-flex items-center justify-end gap-1 font-mono text-[11px] font-semibold tracking-wider text-navy/60 uppercase group-hover:text-brand-red">
+              {t('story.next')}
+              <svg aria-hidden="true" focusable="false" class="h-3.5 w-3.5 transition-transform duration-300 group-hover:translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </span>
+            <span class="mt-2 font-bold text-navy line-clamp-1 break-words group-hover:text-brand-red">
+              {newer.data.title}
+            </span>
+          </a>
+        ) : <div />
+      }
     </nav>
   </div>
 </Base>

@@ -6,24 +6,28 @@
     <title>Sign in · Simon's Wanderlust</title>
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
-  <body>
+  <body class="login-page">
     <header class="masthead">
-      <div class="masthead-inner">
+      <div class="masthead-inner" style="text-align:center">
         <p class="eyebrow">Expedition Log · Image Station</p>
         <h1 id="title">Sign in</h1>
-        <p class="lede" id="lede">Enter your username and password.</p>
+        <p class="lede" id="lede" style="margin-left:auto;margin-right:auto">Enter your username and password.</p>
       </div>
     </header>
     <main>
-      <section class="card">
+      <!-- @ai-note: a real <form> (not bare inputs plus a click handler) so that
+           Enter in either field submits — keyboard-only sign-in must work. The
+           card itself is the form so `.card > label:first-of-type` still matches.
+           Submission is intercepted below; there is deliberately no action/method. -->
+      <form class="card" id="login-form">
         <label for="username">Username</label>
         <input id="username" type="text" autocomplete="username" />
         <label for="password">Password</label>
         <input id="password" type="password" autocomplete="current-password" />
-        <button id="submit">Sign in</button>
-        <p class="section-label">Status</p>
+        <button id="submit" type="submit">Sign in</button>
+        <p class="section-label" style="margin-top:1.25rem">Status</p>
         <pre id="out">—</pre>
-      </section>
+      </form>
     </main>
     <script src="/admin/auth.js"></script>
     <script src="/admin/draft-guard.js"></script>
@@ -44,7 +48,8 @@
           $('password').setAttribute('autocomplete', 'new-password');
         }
       }
-      $('submit').addEventListener('click', async () => {
+      $('login-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
         const username = $('username').value.trim();
         const password = $('password').value;
         if (!username || !password) { $('out').textContent = 'Enter a username and password.'; return; }

@@ -21,7 +21,7 @@ const label = [number !== undefined ? entryLabel(number) : null, `${dateLabel(tr
 <a
   href={pathOf(trip)}
   class:list={[
-    'group relative block overflow-hidden rounded-lg',
+    'group relative block min-w-0 overflow-hidden rounded-md border border-navy/10 bg-navy shadow-sm transition-all duration-500 hover:border-brand-red/40 hover:shadow-xl motion-safe:hover:-translate-y-1 motion-safe:hover:rotate-[0.5deg] focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2',
     featured ? 'md:col-span-2 md:row-span-2' : '',
   ]}
 >
@@ -29,12 +29,12 @@ const label = [number !== undefined ? entryLabel(number) : null, `${dateLabel(tr
     image={trip.data.heroImage}
     alt=""
     sizes={featured ? '(min-width: 768px) 66vw, 100vw' : '(min-width: 768px) 33vw, 100vw'}
-    class="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+    class="h-full w-full object-cover opacity-90 transition-all duration-500 group-hover:opacity-100 motion-safe:group-hover:scale-[1.04]"
   />
-  <div class="absolute inset-0 bg-gradient-to-t from-navy/80 via-navy/10 to-transparent"></div>
+  <div class="absolute inset-0 bg-gradient-to-t from-navy/90 via-navy/30 to-transparent transition-opacity duration-300 group-hover:from-navy/85"></div>
   <div class="absolute right-0 bottom-0 left-0 p-5 text-white">
-    <p class="font-mono text-[11px] font-semibold tracking-[0.2em] text-brand-red-light uppercase">{label}</p>
-    <h3 class:list={['mt-1 font-extrabold', featured ? 'text-2xl' : 'text-lg']}>
+    <p class="font-mono text-[11px] font-semibold tracking-[0.2em] text-brand-red-light uppercase truncate">{label}</p>
+    <h3 class:list={['mt-1 font-extrabold line-clamp-2 break-words transition-colors duration-300 group-hover:text-white', featured ? 'text-2xl' : 'text-lg']}>
       {trip.data.title}
     </h3>
   </div>

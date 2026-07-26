@@ -2,6 +2,9 @@
 .venv/
 .superpowers/
 .playwright-mcp/
+# Agent design-critique scratch (session-scoped, self-contradicting snapshots) —
+# same class as .superpowers/. Promote anything durable into docs/ by hand.
+.impeccable/
 /*.jpeg
 /*.png
 home-network.txt

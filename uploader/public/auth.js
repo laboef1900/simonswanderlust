@@ -22,7 +22,7 @@ window.Auth = (function () {
   }
   // Single source of truth for the admin main menu (admin-only items gated below).
   const NAV = [
-    { label: 'Photo upload',   href: '/admin/' },
+    { label: 'Upload',         href: '/admin/' },
     { label: 'Posts',          href: '/admin/posts.html' },
     { label: 'Media',          href: '/admin/media.html',    admin: true },
     { label: 'About page',     href: '/admin/about.html',    admin: true },

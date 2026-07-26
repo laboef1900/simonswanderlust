@@ -1,20 +1,40 @@
 ---
 import StoryCard from './StoryCard.astro';
+import { useTranslations, type Locale } from '../i18n/ui';
 import { entryNumberOf, type Trip } from '../lib/trips';
 
 interface Props {
   trips: Trip[];
+  /** Locale of the surrounding page — drives the empty state (the grid itself can be empty). */
+  locale: Locale;
   /** Full locale trip set used for chronological numbering; defaults to `trips`. */
   numberingPool?: Trip[];
 }
 
-const { trips, numberingPool = trips } = Astro.props;
+const { trips, locale, numberingPool = trips } = Astro.props;
+const t = useTranslations(locale);
+
+// @ai-warning Do NOT put `content-visibility: auto` on the card grid. It implies
+// `contain: paint`, which clips descendants to the padding box — this grid has no
+// padding and the cards fill their tracks exactly, so the cards'
+// `focus-visible:outline-offset-2` ring gets sliced off on every edge card
+// (WCAG 2.4.7). The grid is also the main content of the home/region pages, so
+// skipping its layout buys little.
 ---
 
-<div class="grid auto-rows-[240px] gap-4 md:grid-cols-3">
-  {
-    trips.map((trip, i) => (
-      <StoryCard trip={trip} featured={i === 0} number={entryNumberOf(trip, numberingPool)} />
-    ))
-  }
-</div>
+{
+  trips.length > 0 ? (
+    <div class="grid auto-rows-[240px] gap-4 md:grid-cols-3">
+      {trips.map((trip, i) => (
+        <StoryCard trip={trip} featured={i === 0} number={entryNumberOf(trip, numberingPool)} />
+      ))}
+    </div>
+  ) : (
+    <div class="my-12 rounded-md border border-navy/10 bg-canvas p-8 text-center">
+      <p class="font-mono text-xs font-semibold uppercase tracking-wider text-navy/60">
+        {t('stories.emptyTitle')}
+      </p>
+      <p class="mt-1 text-sm text-ink/70">{t('stories.emptyBody')}</p>
+    </div>
+  )
+}

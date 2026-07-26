@@ -35,7 +35,7 @@ const [featured, ...rest] = trips;
     </div>
     <div class="mt-6">
       {/* Single-story locale: grid repeats the hero story — duplicate beats an empty grid during migration. */}
-      <StoryGrid trips={rest.length > 0 ? rest : trips} numberingPool={trips} />
+      <StoryGrid trips={rest.length > 0 ? rest : trips} locale={locale} numberingPool={trips} />
     </div>
   </section>
   <RouteDivider />
@@ -45,9 +45,12 @@ const [featured, ...rest] = trips;
       <p class="mt-3 text-ink/80">{t('home.aboutTeaser.text')}</p>
       <a
         href={aboutPath(locale)}
-        class="mt-4 inline-block text-sm font-medium text-brand-red hover:underline"
+        class="group/about mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-brand-red hover:text-brand-red-light"
       >
-        {t('home.aboutTeaser.cta')} →
+        <span>{t('home.aboutTeaser.cta')}</span>
+        <svg aria-hidden="true" focusable="false" class="h-4 w-4 transition-transform duration-300 group-hover/about:translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
       </a>
     </div>
   </section>
