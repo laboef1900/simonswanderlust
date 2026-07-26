@@ -84,13 +84,34 @@ skip this and serve immediately — no rebuild on every boot.
 ## Image pipeline
 
 The app optimizes each photo into AVIF + WebP at fixed widths (640/1280/1920 plus the source
-width, never upscaled), preserving EXIF/GPS. `/upload` appends a short content hash to the
-client's key, so files land as `{key}-{hash8}-{width}.{format}` under `STORAGE_DIR`: replacing a
-photo mints a new URL while previously published URLs keep serving untouched — which is what
-makes the one-year immutable cache correct. (The WP-import rehost path keeps deterministic
-`{key}-{width}.{format}` keys so re-imports stay idempotent.) `heroImage` is a remote URL object
+width, never upscaled). Metadata is **not** copied wholesale: `pipeline.ts` re-injects only an
+EXIF **allow-list** (camera make/model/lens, capture time, exposure, aperture, ISO, focal length)
+built by `uploader/src/exif.ts`, plus the ICC profile — GPS, XMP, IPTC and `Orientation` never
+reach a public variant. The untouched upload (`{key}-orig.<ext>`) keeps its full original
+metadata but is never served (excluded from the image-host static mount). See
+[SECURITY.md](SECURITY.md#published-image-metadata-allow-list) for why and what's kept. `/upload`
+appends a short content hash to the client's key, so files land as `{key}-{hash8}-{width}.{format}`
+under `STORAGE_DIR`: replacing a photo mints a new URL while previously published URLs keep
+serving untouched — which is what makes the one-year immutable cache correct. (The WP-import
+rehost path keeps deterministic `{key}-{width}.{format}` keys so re-imports stay idempotent.)
+`/upload` accepts **one file per request** (a second file in the same multipart body is rejected
+with 413 rather than silently dropped — see [SECURITY.md](SECURITY.md#input-validation)); bulk
+upload is N single-file requests by design. `heroImage` is a remote URL object
 `{src,width,height,alt}`; body images are referenced by URL and rendered as `<picture>` at build
 time. This contract is mirrored on the blog side in `site/src/lib/images.ts`.
+
+**CLI subcommands** (alongside `restore`/`set-password`, see
+[Database dumps](#database-dumps)):
+
+- `audit-exif` — read-only scan of every variant under `STORAGE_DIR`, reporting how many carry
+  EXIF and how many carry GPS, and (when any do) which storage keys and whether each has a
+  retained `-orig` to re-encode from. Gates whether a remediation pass is needed at all; nothing
+  is written. `docker compose exec app node --import tsx src/cli.ts audit-exif`.
+- `strip-gps` — **not yet built.** It remediates the historical corpus (a lossy re-encode for
+  the keys with no retained original), and is scoped to be added only if a server-side
+  `audit-exif` run finds GPS-carrying variants. A pre-release audit of the production corpus
+  found 102 variant files with EXIF and zero with GPS, so it wasn't built speculatively — the
+  pipeline fix above already stops new GPS exposure regardless.
 
 Host-based routing keeps the two domains on one process: the image-variant static handler is
 registered with a Fastify **host constraint** for the hostname of `PUBLIC_BASE_URL` (overridable

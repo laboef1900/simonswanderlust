@@ -61,6 +61,10 @@ text by hand.
 > Key naming: use `trips/<slug>/<name>` (lowercase `a–z 0–9 / _ -`). The `<slug>` should match
 > the post slug (below). Upload before publishing, or the URLs 404.
 
+> The uploader accepts **one photo per request** (a second file in the same upload is rejected —
+> bulk upload is a Phase 2 feature), and published variants keep only camera make/model, lens,
+> capture date and exposure settings — never location, even if the original photo had it.
+
 ---
 
 ## Stage 2 — Write and publish via the in-admin editor

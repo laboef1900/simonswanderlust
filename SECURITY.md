@@ -73,6 +73,38 @@ multiple replicas, limits would be counted per replica.)
   skipped with a warning and never reaches the database, the storage path, or the MDX export.
 - **Coordinates** are bounded on publish (`lat ∈ [-90,90]`, `lng ∈ [-180,180]`, finite).
 - **SQL** is parameterized throughout (`pg` placeholders) — no string-built queries.
+- **Uploads** — `POST /upload` is capped at one file per request (`files: 1`); a second file in the
+  same multipart body gets the request rejected with **413**, rather than the old silent behavior
+  of buffering every file and keeping only the last. `fileSize` is capped at 25 MB and `parts` at
+  8, and the app sets an explicit `requestTimeout` (120 s) — @fastify/multipart's parser never
+  consumes the body itself, so without these an authenticated caller could stream an effectively
+  unbounded request. (`uploader/src/server.ts`)
+
+### Published image metadata (allow-list)
+
+Public image variants carry an explicit **allow-list** of EXIF tags, built in
+`uploader/src/exif.ts` and applied in `pipeline.ts`: `Make`, `Model`,
+`LensModel`, `DateTimeOriginal`, `ExposureTime`, `FNumber`, `ISOSpeedRatings`,
+`FocalLength`, plus the ICC profile. Everything else — the **GPS IFD**, XMP,
+IPTC and `Orientation` — is dropped by construction, because `withExif()`
+replaces the EXIF block wholesale rather than filtering it.
+
+This replaced a blanket `.withMetadata()` which republished source GPS
+coordinates on every public file. Untouched originals under `/data/images`
+keep their full metadata; they are never served (`isOriginalFile` excludes
+them from the static mount).
+
+**Widening this list is a privacy change, not a refactor.** `audit-exif`
+(`docker compose exec app node --import tsx src/cli.ts audit-exif`) is a
+read-only scan of the stored corpus reporting how many variants carry EXIF
+and how many carry GPS. A read-only audit of the production corpus at
+shipping time found 102 variant files with EXIF and **zero** with GPS — the
+blog's camera has no GPS receiver, so the exposure was latent rather than
+active. Because that audit was clean, a remediation `strip-gps` command was
+not built in this phase; it is scoped to be added only if a future
+`audit-exif` run (in particular against `/data/images` on the server) finds
+otherwise. Until then, the pipeline fix above covers every upload going
+forward, but the historical corpus is unchanged.
 
 ## SSRF protection (WordPress import)
 
