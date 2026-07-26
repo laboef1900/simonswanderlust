@@ -393,6 +393,20 @@ describe('buildServer config', () => {
     await expect(srv.ready()).resolves.toBeDefined();
     await srv.close();
   });
+
+  it('sets an explicit request timeout so the proxy does not own the failure', () => {
+    // @ai-context: encoding a 24MP frame takes ~19s; behind nginx's default
+    // 60s proxy_read_timeout a slow upload 504s with no server-side trace.
+    // An explicit timeout means the server logs and owns the failure instead.
+    // @ai-note: fastify's own .d.ts omits `requestTimeout` from
+    // `initialConfig`'s type even though it's a real, populated field at
+    // runtime (see fastify/lib/server.js, which copies it onto the
+    // underlying node http.Server) — a known gap in the upstream types, not
+    // a hole in ours, so widen locally instead of reaching for `any`.
+    const { app } = build();
+    const config = app.initialConfig as typeof app.initialConfig & { requestTimeout: number };
+    expect(config.requestTimeout).toBe(120_000);
+  });
 });
 
 describe('settings endpoints', () => {

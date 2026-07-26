@@ -54,7 +54,11 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // cookie `secure` flag reflect the real client). This is correct ONLY behind a
   // trusted reverse proxy that sets X-Forwarded-Proto; if the container is ever
   // exposed directly, clients could spoof those headers.
-  const app = Fastify({ logger: false, trustProxy: true });
+  // @ai-note: 120s comfortably exceeds the ~19s encode of a 24MP frame plus
+  // transfer, while still bounding a stalled connection. Without it Fastify
+  // never times out (default 0) and the reverse proxy decides instead — which
+  // means a 504 with nothing in the app's logs.
+  const app = Fastify({ logger: false, trustProxy: true, requestTimeout: 120_000 });
   const { users, sessions } = cfg;
 
   // nosniff everywhere; clickjacking/referrer policies only on the admin/API
