@@ -141,6 +141,43 @@ image URL, language-appropriate alt):
 > (i.e. not uploaded via the editor toolbar and not pasted as a `<BodyImage …/>` tag) — it
 > renders as a plain `<img>` without the responsive treatment.
 
+### Galleries
+
+Several photos in one grid go in a fenced block with the language `gallery`, one image URL per
+line. Order is line order; blank lines and `#`-prefixed lines are ignored.
+
+````
+```gallery
+https://img.simonswanderlust.com/trips/rhodes-2021/a-1a2b3c4d | 3000x2000 | alt="Blick über die Bucht" | caption="Tag 3"
+https://img.simonswanderlust.com/trips/rhodes-2021/b-9f8e7d6c | 2000x3000 | alt="Der Aufstieg"
+```
+````
+
+The `| WIDTHxHEIGHT | alt="…" | caption="…"` metadata is **lifted into the post's images map on
+save**, and the line is rewritten to the bare URL — so you type it once, and re-saving does not
+duplicate it. Only dimensions are required; alt and caption are optional (a photo with no
+caption just gets no `<figcaption>`). Characters that would break the format — `|`, `"`, `<`,
+`>`, `&` and newlines — are escaped automatically on export (`&#124;`, `&quot;`, …) and decoded
+on save, so you can write them literally.
+
+Two things silently drop a photo from the grid, both deliberate:
+
+- **A URL from any other origin than the image host is refused** (compared by exact origin —
+  `https://img.simonswanderlust.com.evil.com/…` does *not* count as the image host). Galleries
+  may only reference photos this blog hosts.
+- **A URL with no dimensions in the images map is skipped.** If that leaves the gallery with
+  nothing to show, the fence is left visible as a code block rather than disappearing, so you
+  can see what went wrong.
+
+> On a local dev build with no `PUBLIC_BASE_URL` set, the allowed origin defaults to the
+> production image host, so `http://localhost:3000/…` gallery URLs are refused and the fence
+> renders as a code block. Set `PUBLIC_BASE_URL` (the repo-root `.env` already does) to preview
+> galleries locally. Draft previews in the admin are unaffected — they use the app's own
+> configured image base.
+
+Galleries work in **page** bodies (the About page) on the same terms. The draft preview renders
+them; per the current phase there is no lightbox, so clicking a photo opens the full-size image.
+
 ---
 
 ## Stage 3 — How the rebuild works

@@ -1,6 +1,7 @@
 import type { Loader } from 'astro/loaders';
 import pg from 'pg';
 import { transformBodyImages, type ImageDims } from './body-images.js';
+import { imageOrigin } from './images.js';
 
 interface PostRow {
   translation_key: string; locale: 'de' | 'en'; slug: string; title: string; date: Date | string;
@@ -54,6 +55,15 @@ export function postgresTripsLoader(): Loader {
     load: async ({ store, parseData, renderMarkdown, logger }) => {
       const url = process.env.DATABASE_URL;
       if (!url) throw new Error('DATABASE_URL is required to build content from Postgres');
+      // The one origin a ```gallery fence may reference. Read here (the build
+      // runs in Node, same as DATABASE_URL above) and passed down explicitly,
+      // so transformBodyImages stays pure and env-free for the uploader's
+      // draft preview.
+      // @ai-note: with PUBLIC_BASE_URL unset this falls back to the production
+      // origin, so a local/CI build renders localhost gallery URLs as the bare
+      // <pre> instead of a grid. That is the fail-safe direction — set
+      // PUBLIC_BASE_URL (repo-root .env already does) to preview galleries.
+      const galleryOrigin = imageOrigin(process.env.PUBLIC_BASE_URL);
       const pool = new pg.Pool({ connectionString: url });
       try {
         store.clear();
@@ -71,7 +81,7 @@ export function postgresTripsLoader(): Loader {
           const input = rowToEntryInput(row);
           const data = await parseData({ id: input.id, data: input.data });
           const rendered = await renderMarkdown(input.body);
-          rendered.html = transformBodyImages(rendered.html, input.images);
+          rendered.html = transformBodyImages(rendered.html, input.images, galleryOrigin);
           store.set({ id: input.id, data, body: input.body, rendered });
         }
         logger.info(`postgres-trips: loaded ${rows.length} published entries`);

@@ -142,6 +142,34 @@ preserved. Verified end-to-end against a published post carrying an XSS payload.
 > We deliberately use a maintained, allow-list sanitizer rather than hand-rolled escaping — the
 > cardinal rule of XSS defense.
 
+### Content injected *after* sanitize (body images and galleries)
+
+`transformBodyImages` sanitizes first and then replaces recognized nodes with its own trusted
+`<picture>` / gallery markup. Those injected nodes therefore inherit **none** of the sanitizer's
+protections, so they carry their own:
+
+- **Gallery URLs are allow-listed by origin equality.** A ` ```gallery ` fence's URLs arrive as
+  *text* content, which `rehype-sanitize` never protocol-checks (unlike an `<img src>`), and they
+  land in an `<a href>`. A `javascript:` line would fire. The check is
+  `new URL(raw).origin === new URL(imageOrigin).origin` — **never a string prefix**:
+  `startsWith('https://img.simonswanderlust.com')` passes both
+  `https://img.simonswanderlust.com.evil.com/x` and `https://img.simonswanderlust.com@evil.com/x`.
+  The origin arrives as an explicit parameter (from `PUBLIC_BASE_URL` at build time, from
+  `cfg.baseUrl` for draft previews), keeping the transform pure and env-free.
+- **The `images` map is validated at the write chokepoint.** `uploader/src/body-content.ts`
+  (`imagesMapError`) rejects an entry whose `alt`/`caption` is not a string or whose
+  `width`/`height` is not a positive integer, from `draftWithDefaults` (posts) and
+  `validatePagePair` (pages). This is enforced in the *store*, not in `validateDraft`: the WXR
+  importer calls `upsertDraft` directly and would otherwise bypass it entirely. The reason it
+  matters is that hastscript treats a node-shaped object in a children array **as a node**, so a
+  caption of `{"type":"raw","value":"<script>…</script>"}` would emit a live script tag — the
+  render boundary additionally coerces with `String()` as a backstop.
+
+Why this is not merely theoretical: `GET /posts/:tk/preview` is `requireAuth` (**any** author, not
+just admins), runs the identical transform, and is served same-origin with `/admin/*` with no CSP.
+A non-admin author storing a payload in a draft that an admin then previews would run script with
+the admin's cookie against `POST /users`, `GET /backups/*` and `POST /posts/:tk/publish`.
+
 ## Transport, headers & proxy
 
 - Every response carries `X-Content-Type-Options: nosniff`. `X-Frame-Options: DENY` and

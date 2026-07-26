@@ -19,6 +19,45 @@ describe('page key validation', () => {
   });
 });
 
+describe('page images-map validation', () => {
+  // PUT /pages/:key casts the request body's `images` straight to a typed
+  // record, so this is the only thing standing between author JSON and the
+  // gallery render boundary — same control posts get in draftWithDefaults.
+  const withImages = (images: unknown): PagePair => {
+    const p = pair();
+    p.de.images = images as PagePair['de']['images'];
+    return p;
+  };
+
+  it('rejects a node-shaped caption', () => {
+    expect(() => validatePagePair(withImages({ 'https://img/x': { width: 8, height: 6, caption: { type: 'raw', value: '<script>' } } })))
+      .toThrow(/de: images.*caption must be a string/);
+  });
+
+  it('rejects non-positive-integer dimensions', () => {
+    expect(() => validatePagePair(withImages({ 'https://img/x': { width: 0, height: 6 } })))
+      .toThrow(/positive integer/);
+  });
+
+  it('accepts a well-formed map', () => {
+    expect(() => validatePagePair(withImages({ 'https://img/x': { width: 8, height: 6, alt: 'a' } }))).not.toThrow();
+  });
+});
+
+describe('page gallery normalization', () => {
+  const a = 'https://img/g/a-1a2b3c4d';
+
+  it('lifts per-line gallery metadata into the images map on save', async () => {
+    const s = memoryPageStore();
+    const p = pair();
+    p.de.bodyMarkdown = `\`\`\`gallery\n${a} | 3000x2000 | alt="Blick" | caption="Tag 1"\n\`\`\``;
+    await s.save(p);
+    const saved = await s.get('about');
+    expect(saved.de.bodyMarkdown).toBe(`\`\`\`gallery\n${a}\n\`\`\``);
+    expect(saved.de.images[a]).toEqual({ width: 3000, height: 2000, alt: 'Blick', caption: 'Tag 1' });
+  });
+});
+
 describe('memoryPageStore', () => {
   it('returns an empty-but-valid pair before any save', async () => {
     const s = memoryPageStore();

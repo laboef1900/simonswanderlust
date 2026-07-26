@@ -1,14 +1,21 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { galleryFencesToMdx } from './body-content.js';
 import type { Locale, PostLocale, PostPair } from './posts.js';
 
 // YAML single-quoted scalar: a literal quote is escaped by doubling it ('' ),
 // never with a backslash. Mirrors storage.ts so exported MDX re-parses cleanly.
 const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
-/** Turn markdown body images back into <BodyImage> tags using the images map. */
+/**
+ * Turn markdown body images back into <BodyImage> tags using the images map,
+ * and re-attach each ```gallery photo's dimensions/alt/caption to its line.
+ * Without the gallery pass a backup would keep the fence text but lose every
+ * gallery photo's metadata, and re-importing it would yield a gallery the
+ * renderer skips entirely. Exact inverse of posts.ts `normalizeBodyImages`.
+ */
 function bodyToMdx(p: PostLocale): string {
-  return p.bodyMarkdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt: string, src: string) => {
+  return galleryFencesToMdx(p.bodyMarkdown, p.images).replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt: string, src: string) => {
     const dims = p.images[src];
     if (!dims) return `![${alt}](${src})`;
     // Escape &, ", <, > (& first) so posts.ts normalizeBodyImages can decode the exact

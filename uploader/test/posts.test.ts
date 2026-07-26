@@ -311,6 +311,66 @@ describe('post validation', () => {
   });
 });
 
+describe('images-map validation at the store chokepoint', () => {
+  // @ai-warning: this MUST be enforced in upsertDraft (draftWithDefaults), not
+  // in validateDraft — the WXR importer calls upsertDraft directly and never
+  // runs validateDraft, so validation placed there alone leaves every imported
+  // post's images map unchecked.
+  it('rejects a node-shaped alt (the hastscript markup-injection vector)', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.de.images = {
+      'https://img/x/y': { width: 8, height: 6, alt: { type: 'raw', value: '<script>alert(1)</script>' } },
+    } as unknown as PostPair['de']['images'];
+    await expect(s.upsertDraft(p)).rejects.toThrow(PostError);
+    await expect(s.upsertDraft(p)).rejects.toThrow(/de: images.*alt must be a string/);
+  });
+
+  it('rejects non-positive-integer dimensions', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.en.images = { 'https://img/x/y': { width: '1;} html{}', height: 6 } } as unknown as PostPair['en']['images'];
+    await expect(s.upsertDraft(p)).rejects.toThrow(/en: images.*positive integer/);
+  });
+
+  it('validateDraft itself stays untouched — the gate is the store', () => {
+    const p = pair();
+    p.de.images = { 'https://img/x/y': { width: 0, height: 0 } };
+    expect(() => validateDraft(p)).not.toThrow();
+  });
+
+  it('accepts alt/caption strings and keeps them', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.de.images = { 'https://img/x/y': { width: 8, height: 6, alt: 'a', caption: 'c' } };
+    const saved = await s.upsertDraft(p);
+    expect(saved.de.images['https://img/x/y']).toEqual({ width: 8, height: 6, alt: 'a', caption: 'c' });
+  });
+});
+
+describe('gallery fences at the store chokepoint', () => {
+  const a = 'https://img/g/a-1a2b3c4d';
+
+  it('lifts per-line metadata into images and bares the fence line', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.de.bodyMarkdown = `Intro\n\n\`\`\`gallery\n${a} | 3000x2000 | alt="Sonnenaufgang" | caption="Tag 3"\n\`\`\``;
+    const saved = await s.upsertDraft(p);
+    expect(saved.de.bodyMarkdown).toBe(`Intro\n\n\`\`\`gallery\n${a}\n\`\`\``);
+    expect(saved.de.images[a]).toEqual({ width: 3000, height: 2000, alt: 'Sonnenaufgang', caption: 'Tag 3' });
+  });
+
+  it('is idempotent across a re-save', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.de.bodyMarkdown = `\`\`\`gallery\n${a} | 800x600 | alt="x"\n\`\`\``;
+    const first = await s.upsertDraft(p);
+    const second = await s.upsertDraft(first);
+    expect(second.de.bodyMarkdown).toBe(first.de.bodyMarkdown);
+    expect(second.de.images).toEqual(first.de.images);
+  });
+});
+
 describe('normalizeBodyImages', () => {
   it('converts a JSX-attr <BodyImage> tag to a markdown image and records its dims', () => {
     const body = 'Intro\n\n<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />\n\nMore';
