@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { auditExif } from '../src/exif-audit.js';
+
+// chmod 0o000 only blocks access for non-root POSIX processes; root and
+// Windows don't enforce it, so the permission test below is skipped there
+// rather than false-failing.
+const CAN_ENFORCE_PERMS = typeof process.getuid === 'function' && process.getuid() !== 0;
 
 async function withGps(): Promise<Buffer> {
   return sharp({ create: { width: 40, height: 20, channels: 3, background: { r: 1, g: 2, b: 3 } } })
@@ -51,7 +56,7 @@ describe('auditExif', () => {
     const r = await auditExif(dir);
     expect(r).toEqual({
       variants: 0, withExif: 0, withGps: 0, keys: 0,
-      gpsKeys: [], gpsKeysWithoutOriginal: [],
+      gpsKeys: [], gpsKeysWithoutOriginal: [], skippedDirs: [],
     });
     expect((await auditExif(join(dir, 'does-not-exist'))).variants).toBe(0);
   });
@@ -64,4 +69,28 @@ describe('auditExif', () => {
     expect(r.variants).toBe(2);
     expect(r.withGps).toBe(1);
   });
+
+  it.skipIf(!CAN_ENFORCE_PERMS)(
+    'records an unreadable subdirectory instead of aborting the scan',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'audit-perm-'));
+      await mkdir(join(dir, 'locked'), { recursive: true });
+      await writeFile(join(dir, 'locked', 'secret-640.webp'), await withGps());
+      await mkdir(join(dir, 'open'), { recursive: true });
+      await writeFile(join(dir, 'open', 'visible-640.webp'), await withoutGps());
+
+      await chmod(join(dir, 'locked'), 0o000);
+      try {
+        const r = await auditExif(dir);
+        // The readable half still gets scanned...
+        expect(r.variants).toBe(1);
+        expect(r.keys).toBe(1);
+        expect(r.withGps).toBe(0);
+        // ...and the unreadable one is reported, not silently dropped.
+        expect(r.skippedDirs).toEqual(['locked']);
+      } finally {
+        await chmod(join(dir, 'locked'), 0o755);
+      }
+    },
+  );
 });
