@@ -99,6 +99,7 @@
 
     <script src="/admin/auth.js"></script>
     <script src="/admin/posts-filter.js"></script>
+    <script src="/admin/posts-duplicate.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       let me = null; // session from Auth.ensureAuthed(); buttons are hidden for
@@ -167,6 +168,46 @@
         // Pass the outcome so load() does not clobber it with "N post(s) loaded."
         // — a failed rebuild (body.build.ok === false) must stay visible to the admin.
         if (res.ok) await load(msg); else btn.disabled = false;
+      }
+
+      // ---- duplicate ("New from this one") -------------------------------
+
+      // Structure copies, identity resets — see posts-duplicate.js. The slugs
+      // are asked for UP FRONT and never derived: they are an SEO contract, and
+      // a silently-derived one is what gets published by accident.
+      async function duplicatePost(p) {
+        const title = p.titleDe || '(untitled)';
+        const suggest = (slug) => (slug ? slug + '-kopie' : '');
+        const slugDe = prompt('New DE slug for the copy of "' + title + '":', suggest(p.slugDe));
+        if (slugDe === null) return;
+        const slugEn = prompt('New EN slug for the copy:', suggest(p.slugEn));
+        if (slugEn === null) return;
+        const slugs = { de: slugDe.trim(), en: slugEn.trim() };
+        const problem = PostsDuplicate.slugError(slugs);
+        if (problem) { $('out').textContent = 'Duplicate cancelled: ' + problem; return; }
+
+        $('out').textContent = 'Duplicating…';
+        const src = await fetch('/posts/' + encodeURIComponent(p.translationKey));
+        if (src.status === 401) { location.href = '/login'; return; }
+        if (!src.ok) { $('out').textContent = 'Could not load the source post: ' + src.status; return; }
+        const payload = PostsDuplicate.duplicatePayload(await src.json(), slugs, new Date());
+
+        const res = await fetch('/posts', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (res.status === 401) { location.href = '/login'; return; }
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          // A taken slug comes back as 409 duplicate_slug — fail loudly rather
+          // than silently picking a different one.
+          $('out').textContent = 'Duplicate failed: ' + (body.error || res.status);
+          return;
+        }
+        // Straight into the editor: the copy needs a new title, date and
+        // coordinates before it can be published.
+        location.href = '/admin/editor.html?tk=' + encodeURIComponent(body.translationKey);
       }
 
       // ---- bulk actions -------------------------------------------------
@@ -348,6 +389,15 @@
           editLink.textContent = 'Edit';
           editLink.className = 'action-link';
           tdActions.appendChild(editLink);
+          // Author-accessible: duplicating only ever creates a new draft, which
+          // POST /posts already allows any signed-in author to do.
+          const dupBtn = document.createElement('button');
+          dupBtn.textContent = 'Duplicate';
+          dupBtn.className = 'btn-remove';
+          dupBtn.style.marginLeft = '0.75rem';
+          dupBtn.style.fontSize = '0.7rem';
+          dupBtn.addEventListener('click', () => duplicatePost(p));
+          tdActions.appendChild(dupBtn);
           if (me && me.isAdmin) {
             if (p.status === 'published') {
               const unpubBtn = document.createElement('button');

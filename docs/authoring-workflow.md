@@ -113,6 +113,28 @@ list marks such posts with an **edited** badge and the editor status line shows
 *has unpublished changes*. Your edits go live only when you hit **Publish** again, which
 refreshes the snapshot.
 
+### Duplicating a post ("New from this one")
+
+Trips in the same region repeat a lot of structure — key facts, stops, route, region, country
+code — so the Posts list has a **Duplicate** action per row.
+
+It asks for the **DE and EN slugs up front**, before anything is created, and refuses if either
+is blank, malformed, or already taken (you get a plain "already in use" error rather than a
+silently different URL). That is deliberate: slugs are an SEO contract, and a derived one is the
+kind of thing that gets published by accident.
+
+**Structure copies, identity resets.**
+
+| Carried over | Reset |
+|---|---|
+| Title, excerpt, body, hero image | Trip date → today |
+| The `images` map (mandatory — without it the body's photos silently stop rendering) | Coordinates → unset |
+| Key facts, stops, route, region, country, country code | Status → always draft |
+
+The copy opens straight in the editor, because it still needs a new title, date and coordinates
+before it can be published. The original is untouched — it keeps its own slugs, and a published
+source stays published.
+
 ### Finding posts, and acting on several at once
 
 The Posts list shows a hero thumbnail per post plus its country and trip date, and has a
