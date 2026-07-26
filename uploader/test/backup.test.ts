@@ -16,9 +16,16 @@ const fakeDb = (
   users: Record<string, unknown>[] = [],
   posts: Record<string, unknown>[] = [],
   pages: Record<string, unknown>[] = [],
+  media: Record<string, unknown>[] = [],
+  mediaFolders: Record<string, unknown>[] = [],
 ): Queryable => ({
+  // Order matters: 'FROM media_folders' also contains 'FROM media'.
   query: async (sql: string) => ({
-    rows: sql.includes('FROM users') ? users : sql.includes('FROM pages') ? pages : posts,
+    rows: sql.includes('FROM users') ? users
+      : sql.includes('FROM pages') ? pages
+      : sql.includes('FROM media_folders') ? mediaFolders
+      : sql.includes('FROM media') ? media
+      : posts,
   }),
 });
 
@@ -30,6 +37,8 @@ describe('dumpDatabase', () => {
         [{ id: 'u1', username: 'simon' }],
         [{ id: 'p1', slug: 's' }],
         [{ key: 'about', locale: 'de', title: 'X', body_markdown: 'B', images: {} }],
+        [{ key: 'library/2025/a', folder: 'Island', tags: ['sunrise'] }],
+        [{ path: 'Island' }],
       ),
       dir,
       now,
@@ -37,10 +46,14 @@ describe('dumpDatabase', () => {
     expect(name).toBe('db-20260703-143005.json.gz');
     expect(BACKUP_FILE_RE.test(name)).toBe(true);
     const dump = JSON.parse(gunzipSync(await readFile(join(dir, name))).toString('utf8'));
-    expect(dump.version).toBe(2);
+    expect(dump.version).toBe(3);
     expect(dump.tables.users).toEqual([{ id: 'u1', username: 'simon' }]);
     expect(dump.tables.posts).toEqual([{ id: 'p1', slug: 's' }]);
     expect(dump.tables.pages).toEqual([{ key: 'about', locale: 'de', title: 'X', body_markdown: 'B', images: {} }]);
+    // Without these a restore would bring the photos back but lose every
+    // folder, caption and tag — the worst kind of partial recovery.
+    expect(dump.tables.media).toEqual([{ key: 'library/2025/a', folder: 'Island', tags: ['sunrise'] }]);
+    expect(dump.tables.media_folders).toEqual([{ path: 'Island' }]);
     expect(dump.tables.sessions).toBeUndefined();
   });
 });

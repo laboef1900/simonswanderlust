@@ -6,9 +6,17 @@ import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
-import { processImage } from './pipeline.js';
-import { contentHashKey, storeVariants, isOriginalFile, assertSafeKey } from './storage.js';
-import { listMedia, deleteMedia, imageUsage } from './media.js';
+import { probeImage } from './pipeline.js';
+import { contentHashKey, storeOriginal, heroSnippet, isOriginalFile, assertSafeKey } from './storage.js';
+import { deleteMedia, imageUsage } from './media-files.js';
+import {
+  libraryKey, redactForNonAdmin, MediaStoreError,
+  type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
+} from './media-store.js';
+import { BacklogFullError, type EncodeQueue } from './encode-queue.js';
+import { parseExif } from './exif.js';
+import { diskSpace, insufficientSpace, formatBytes } from './disk.js';
+import type { SyncReport } from './media-sync.js';
 import { verifyPassword, type UserStore, UserExistsError } from './users.js';
 import type { SessionStore } from './sessions.js';
 import {
@@ -42,6 +50,10 @@ export interface ServerConfig {
   dbBackup: DbBackup;
   dbCheck: () => Promise<void>; // resolves iff the DB answers — probed by GET /health
   loginLimiter?: RateLimiter;
+  media: MediaStore;
+  encodeQueue: EncodeQueue;
+  /** Disk↔database reconciliation, triggered by POST /media/rescan. */
+  mediaSync?: { run: () => Promise<SyncReport> };
 }
 
 const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
@@ -95,7 +107,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   const ADMIN_PREFIXES = [
     '/admin', '/login', '/logout', '/auth', '/setup', '/settings', '/users',
     '/posts', '/upload', '/import', '/export', '/backups', '/rebuild', '/health', '/pages', '/images',
-    '/ai-config',
+    // Without '/media' here the whole media API would lose X-Frame-Options and
+    // Referrer-Policy — it is admin surface, not public.
+    '/media', '/ai-config',
   ];
   app.addHook('onSend', async (req, reply) => {
     reply.header('X-Content-Type-Options', 'nosniff');
@@ -196,39 +210,149 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     });
   }
 
+  // Declared before the upload route, which builds `src` from it.
+  const imageBase = cfg.baseUrl.replace(/\/+$/, '');
+
+  /** Cap on any `keys[]` batch: an unbounded array is an authenticated
+   *  N-round-trip amplifier against the process that also serves the blog. */
+  const MAX_BULK_KEYS = 100;
+
+  /**
+   * Single-file upload. The request returns as soon as the untouched ORIGINAL
+   * is on disk; the AVIF/WebP variants encode in the background queue.
+   *
+   * @ai-warning This used to encode inline, which held the connection for
+   * 40–90 s per frame at concurrency 2 on a VPS — against a reverse proxy
+   * whose default read timeout is 60 s. The response is still complete
+   * immediately because the storage key is a pure function of the content hash
+   * and a metadata-only probe reads orientation-corrected dimensions in
+   * ~0.0002 s (vs ~0.467 s for the re-encode probe it replaced). What callers
+   * lose is that `${src}-640.webp` 404s until the encode lands — the media
+   * library shows a processing badge, and `POST /posts/:tk/publish` refuses to
+   * publish a post referencing a photo that is not `ready`.
+   */
   app.post('/upload', { preHandler: requireAuth }, async (req, reply) => {
     let key = '';
     let alt = '';
+    let title = '';
+    let folder = '';
+    let filename = '';
     let buf: Buffer | undefined;
     let mimetype = '';
     for await (const part of req.parts()) {
       if (part.type === 'file') {
         mimetype = part.mimetype;
+        filename = String(part.filename ?? '');
         buf = await part.toBuffer();
       } else if (part.fieldname === 'key') {
         key = String(part.value).trim();
       } else if (part.fieldname === 'alt') {
         alt = String(part.value).trim();
+      } else if (part.fieldname === 'title') {
+        title = String(part.value).trim();
+      } else if (part.fieldname === 'folder') {
+        folder = String(part.value).trim();
       }
     }
     if (!buf || !mimetype.startsWith('image/')) {
       return reply.code(400).send({ error: 'expected an image file' });
     }
+    // Bulk library uploads have no post slug to derive a key from, and KEY_RE
+    // is lowercase-only — a Leica's `L1002345.JPG` would be a 400. So the
+    // server derives one when the client sends none. Editor uploads keep
+    // sending their `trips/<slug>/…` keys and are unaffected.
+    if (key === '') key = libraryKey(filename, new Date());
     if (!KEY_RE.test(key)) {
       return reply.code(400).send({ error: 'invalid key (use lowercase a-z, 0-9, / _ -)' });
     }
+
+    // #73: refuse before writing rather than failing mid-pipeline. A full
+    // /data takes out uploads, publishing AND backups at once, and a partial
+    // variant set with no complete record is worse than a rejected upload.
+    try {
+      const space = await diskSpace(storageDir);
+      const problem = insufficientSpace(space, buf.length);
+      if (problem) {
+        console.error(`upload refused: ${formatBytes(space.free)} free on ${storageDir}`);
+        return reply.code(507).send({ error: problem });
+      }
+    } catch (e) {
+      // An unreadable statfs must not block uploads — log and continue.
+      console.error('could not read free disk space; accepting the upload anyway:', e);
+    }
+
     // Version the key by content hash (issue #26): a re-upload mints a fresh
     // URL instead of overwriting variants cached as immutable; old URLs keep
     // serving because nothing on disk is touched. Clients use the returned
     // src/snippet, never the key they sent.
     const versionedKey = contentHashKey(key, buf);
-    const result = await processImage(buf);
-    const stored = await storeVariants(versionedKey, alt, result, { storageDir, baseUrl: cfg.baseUrl });
-    return reply.send(stored);
+    const src = `${imageBase}/${versionedKey}`;
+
+    let probe;
+    try {
+      probe = await probeImage(buf);
+    } catch (e) {
+      console.error(`could not probe uploaded image for ${versionedKey}:`, e);
+      return reply.code(400).send({ error: 'could not read that image' });
+    }
+    if (!probe.width || !probe.height) {
+      return reply.code(400).send({ error: 'could not read that image' });
+    }
+
+    // Re-uploading identical bytes is the NORMAL case when a folder is dropped
+    // twice, so all three states of an existing row are handled explicitly.
+    const existing = await cfg.media.get(versionedKey);
+    if (existing && existing.status === 'ready') {
+      // Metadata the caller supplied still applies — it is not silently
+      // discarded — but the STORED values win for the returned snippet.
+      if (alt || title || folder) {
+        await cfg.media.patch(versionedKey, {
+          ...(title ? { title } : {}), ...(folder ? { folder } : {}),
+          ...(alt ? { alt: { de: existing.alt.de || alt, en: existing.alt.en || alt } } : {}),
+        }).catch(() => { /* metadata update is best-effort on a duplicate */ });
+      }
+      return reply.send({
+        src, key: versionedKey, width: existing.width, height: existing.height,
+        status: existing.status, duplicate: true,
+        snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt),
+      });
+    }
+    if (existing && existing.status === 'processing') {
+      // Do NOT re-enqueue: the job is already in the queue.
+      return reply.send({
+        src, key: versionedKey, width: existing.width, height: existing.height,
+        status: 'processing', duplicate: true,
+        snippet: heroSnippet(src, existing.width, existing.height, alt),
+      });
+    }
+
+    const exif = parseExif(probe.exif);
+    try {
+      await storeOriginal(versionedKey, buf, probe.ext, { storageDir });
+    } catch (e) {
+      console.error(`could not store the original for ${versionedKey}:`, e);
+      return reply.code(500).send({ error: 'internal server error' });
+    }
+    await cfg.media.upsert({
+      key: versionedKey, folder, title,
+      alt: { de: alt, en: alt },
+      width: probe.width, height: probe.height, origBytes: buf.length,
+      status: 'processing', exif, uploadedBy: req.authUser?.id ?? null,
+    });
+    try {
+      cfg.encodeQueue.enqueue(versionedKey);
+    } catch (e) {
+      if (e instanceof BacklogFullError) return reply.code(429).send({ error: e.message });
+      throw e;
+    }
+    return reply.send({
+      src, key: versionedKey, width: probe.width, height: probe.height,
+      status: 'processing',
+      snippet: heroSnippet(src, probe.width, probe.height, alt),
+    });
   });
 
   // ---- media library ----
-  const imageBase = cfg.baseUrl.replace(/\/+$/, '');
 
   // Everything (posts + pages) that could reference an image URL. Usage is
   // computed store-agnostically in TS so the memory and pg stores behave alike.
@@ -243,29 +367,180 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return { posts: postRows, pages: pagePairs };
   };
 
-  // Browse everything under storageDir. Admin-only: it exposes the full
-  // inventory of uploaded files, same trust boundary as /settings.
-  app.get('/images', { preHandler: requireAdmin }, async (_req, reply) => {
-    const [items, corpus] = await Promise.all([listMedia(storageDir), usageCorpus()]);
-    return reply.send(items.map((m) => {
-      const src = `${imageBase}/${m.key}`;
-      return {
-        key: m.key,
-        src,
-        width: m.width,
-        height: m.height,
-        thumbUrl: m.thumbFile ? `${imageBase}/${m.thumbFile}` : null,
-        files: m.files,
-        usedIn: imageUsage(src, corpus.posts, corpus.pages),
-      };
-    }));
+  /**
+   * Serialize a media row for the wire, redacting what a non-admin must not see.
+   *
+   * @ai-warning `GET /media` is SESSION-level where the `GET /images` it
+   * replaces was admin-only — the gallery picker needs authors to browse. That
+   * privilege drop is only safe because `exif.lat`/`exif.lng` and `uploadedBy`
+   * are redacted here: handing every author the GPS coordinates of every photo
+   * through a lower gate would undo the Phase 0 privacy fix. Tests assert the
+   * redaction itself, not merely the status code.
+   */
+  const serializeMedia = (item: MediaItem, isAdmin: boolean) => (isAdmin ? item : redactForNonAdmin(item));
+
+  const mediaError = (e: unknown, reply: import('fastify').FastifyReply) => {
+    if (e instanceof MediaStoreError) {
+      const status = e.code === 'not_found' ? 404 : e.code === 'exists' || e.code === 'not_empty' ? 409 : 400;
+      return reply.code(status).send({ error: e.message });
+    }
+    throw e;
+  };
+
+  // Paginated, filtered listing plus usage refs for the visible page only.
+  app.get('/media', { preHandler: requireAuth }, async (req, reply) => {
+    const q = (req.query ?? {}) as Record<string, string | undefined>;
+    const query: MediaQuery = {
+      ...(q.folder !== undefined ? { folder: q.folder } : {}),
+      recursive: q.recursive === '1' || q.recursive === 'true',
+      ...(q.q !== undefined ? { q: q.q } : {}),
+      ...(q.tag ? { tag: q.tag } : {}),
+      ...(q.status ? { status: q.status as MediaStatus } : {}),
+      ...(q.sort ? { sort: q.sort as MediaQuery['sort'] } : {}),
+      ...(q.order ? { order: q.order as MediaQuery['order'] } : {}),
+      ...(q.page ? { page: Number(q.page) } : {}),
+      ...(q.pageSize ? { pageSize: Number(q.pageSize) } : {}),
+    };
+    let result;
+    try {
+      result = await cfg.media.list(query);
+    } catch (e) {
+      return mediaError(e, reply);
+    }
+    const corpus = await usageCorpus();
+    const isAdmin = Boolean(req.authUser?.isAdmin);
+    return reply.send({
+      total: result.total,
+      items: result.items.map((m) => ({
+        ...serializeMedia(m, isAdmin),
+        usedIn: imageUsage(m.src, corpus.posts, corpus.pages),
+      })),
+    });
   });
 
-  // Wildcard because keys contain slashes (trips/x/hero). Admin-only inside the
-  // handler chain; refuses to delete anything still referenced by content.
+  app.get('/media/folders', { preHandler: requireAuth }, async (_req, reply) =>
+    reply.send(await cfg.media.folders()));
+
+  app.post('/media/folders', { preHandler: requireAuth }, async (req, reply) => {
+    const b = (req.body ?? {}) as { path?: unknown };
+    try {
+      await cfg.media.createFolder(String(b.path ?? ''));
+    } catch (e) {
+      return mediaError(e, reply);
+    }
+    return reply.send({ ok: true, folders: await cfg.media.folders() });
+  });
+
+  // Rename and delete are ADMIN-only: both are bulk-irreversible, and media
+  // has no revision history the way posts do.
+  app.patch('/media/folders', { preHandler: requireAdmin }, async (req, reply) => {
+    const b = (req.body ?? {}) as { from?: unknown; to?: unknown };
+    try {
+      const moved = await cfg.media.renameFolder(String(b.from ?? ''), String(b.to ?? ''));
+      return reply.send({ ok: true, moved, folders: await cfg.media.folders() });
+    } catch (e) {
+      return mediaError(e, reply);
+    }
+  });
+
+  app.delete('/media/folders', { preHandler: requireAdmin }, async (req, reply) => {
+    const b = (req.body ?? {}) as { path?: unknown };
+    try {
+      await cfg.media.deleteFolder(String(b.path ?? ''));
+      return reply.send({ ok: true, folders: await cfg.media.folders() });
+    } catch (e) {
+      return mediaError(e, reply);
+    }
+  });
+
+  app.post('/media/move', { preHandler: requireAuth }, async (req, reply) => {
+    const b = (req.body ?? {}) as { keys?: unknown; folder?: unknown };
+    if (!Array.isArray(b.keys)) return reply.code(400).send({ error: 'keys must be an array' });
+    if (b.keys.length > MAX_BULK_KEYS) return reply.code(400).send({ error: `at most ${MAX_BULK_KEYS} photos per request` });
+    try {
+      const moved = await cfg.media.move(b.keys.map(String), String(b.folder ?? ''));
+      return reply.send({ ok: true, moved });
+    } catch (e) {
+      return mediaError(e, reply);
+    }
+  });
+
+  // Re-queue failed encodes. The original is still on disk, so this is just a
+  // status flip plus an enqueue — re-encoding overwrites the same filenames.
+  app.post('/media/retry', { preHandler: requireAuth }, async (req, reply) => {
+    const b = (req.body ?? {}) as { keys?: unknown };
+    const keys = Array.isArray(b.keys) ? b.keys.map(String).slice(0, MAX_BULK_KEYS) : [];
+    let queued = 0;
+    for (const key of keys) {
+      const item = await cfg.media.get(key);
+      if (!item || item.status === 'ready' || item.status === 'processing') continue;
+      await cfg.media.setStatus(key, 'processing');
+      try {
+        cfg.encodeQueue.enqueue(key);
+        queued++;
+      } catch (e) {
+        if (e instanceof BacklogFullError) return reply.code(429).send({ error: e.message, queued });
+        throw e;
+      }
+    }
+    return reply.send({ ok: true, queued });
+  });
+
+  app.post('/media/rescan', { preHandler: requireAdmin }, async (_req, reply) => {
+    if (!cfg.mediaSync) return reply.code(503).send({ error: 'reconciliation is not configured' });
+    return reply.send(await cfg.mediaSync.run());
+  });
+
+  app.get('/media/queue', { preHandler: requireAuth }, async (_req, reply) =>
+    reply.send(cfg.encodeQueue.stats()));
+
+  // Item routes nest under /media/items/* so a wildcard key (keys contain
+  // slashes: trips/x/hero) can never collide with the static /media/folders.
+  app.get('/media/items/*', { preHandler: requireAuth }, async (req, reply) => {
+    const key = (req.params as { '*': string })['*'];
+    const item = await cfg.media.get(key);
+    if (!item) return reply.code(404).send({ error: 'image not found' });
+    const corpus = await usageCorpus();
+    return reply.send({
+      ...serializeMedia(item, Boolean(req.authUser?.isAdmin)),
+      usedIn: imageUsage(item.src, corpus.posts, corpus.pages),
+    });
+  });
+
+  app.patch('/media/items/*', { preHandler: requireAuth }, async (req, reply) => {
+    const key = (req.params as { '*': string })['*'];
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const patch: Parameters<MediaStore['patch']>[1] = {};
+    if (b.folder !== undefined) patch.folder = String(b.folder);
+    if (b.title !== undefined) patch.title = String(b.title);
+    if (b.alt && typeof b.alt === 'object') {
+      const alt = b.alt as Record<string, unknown>;
+      patch.alt = {
+        ...(alt.de !== undefined ? { de: String(alt.de) } : {}),
+        ...(alt.en !== undefined ? { en: String(alt.en) } : {}),
+      };
+    }
+    if (b.caption && typeof b.caption === 'object') {
+      const cap = b.caption as Record<string, unknown>;
+      patch.caption = {
+        ...(cap.de !== undefined ? { de: String(cap.de) } : {}),
+        ...(cap.en !== undefined ? { en: String(cap.en) } : {}),
+      };
+    }
+    if (Array.isArray(b.tags)) patch.tags = b.tags.map(String);
+    try {
+      const saved = await cfg.media.patch(key, patch);
+      return reply.send(serializeMedia(saved, Boolean(req.authUser?.isAdmin)));
+    } catch (e) {
+      return mediaError(e, reply);
+    }
+  });
+
+  // Deletion stays ADMIN-only and still refuses when a post or page references
+  // the photo.
   // @ai-note: usage only sees Postgres content — the last built release may
   // still reference a deleted image until the next rebuild.
-  app.delete('/images/*', { preHandler: requireAdmin }, async (req, reply) => {
+  app.delete('/media/items/*', { preHandler: requireAdmin }, async (req, reply) => {
     const key = (req.params as { '*': string })['*'];
     try {
       assertSafeKey(key);
@@ -278,7 +553,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       return reply.code(409).send({ error: 'image is referenced by existing content — remove those references first', usedIn });
     }
     const deleted = await deleteMedia(storageDir, key);
-    if (deleted === 0) return reply.code(404).send({ error: 'image not found' });
+    const hadRow = (await cfg.media.get(key)) !== null;
+    await cfg.media.remove(key);
+    if (deleted === 0 && !hadRow) return reply.code(404).send({ error: 'image not found' });
     return reply.send({ ok: true, deleted });
   });
 
@@ -430,6 +707,61 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   const { posts } = cfg;
 
+  /**
+   * Turn an image URL from a post back into its storage key, or null when the
+   * URL is not one of ours. Strips the image base and any hand-pasted variant
+   * suffix (`-1280.webp` from the browser's "Copy image address").
+   */
+  function srcToKey(src: string, baseUrl: string): string | null {
+    if (typeof src !== 'string' || src === '') return null;
+    const prefix = `${baseUrl}/`;
+    let u: URL;
+    let base: URL;
+    try { u = new URL(src); base = new URL(baseUrl); } catch { return null; }
+    // Origin equality, never a prefix match — same rule as the gallery
+    // allow-list (see site/src/lib/body-images.ts).
+    if (u.origin !== base.origin || !src.startsWith(prefix)) return null;
+    return src.slice(prefix.length).replace(/-\d+\.(?:avif|webp)$/, '');
+  }
+
+  /**
+   * Every image URL a post references: both heroes and every `images` key
+   * (gallery URLs are already `images` keys — body-images.ts skips any that
+   * are not).
+   */
+  function referencedSrcs(pair: StoredPostPair): string[] {
+    const out = new Set<string>();
+    for (const locale of ['de', 'en'] as const) {
+      const l = pair[locale];
+      if (l?.heroImage?.src) out.add(l.heroImage.src);
+      for (const key of Object.keys(l?.images ?? {})) out.add(key);
+    }
+    return [...out];
+  }
+
+  /**
+   * The publish gate: refuse to publish a post whose photos are still encoding.
+   *
+   * @ai-warning Deliberately NOT in `validateForPublish`, which is a
+   * synchronous, pure `(pair) => void` with no store access and no knowledge of
+   * `cfg.baseUrl`; making it async would ripple through every posts.test.ts
+   * case for no benefit. This is also the ONLY real check on the encode
+   * queue's `status` invariant — without it a post publishes, `astro build`
+   * succeeds, and the live site shows broken <img> elements, because the URL is
+   * already in the body and the original is already on disk.
+   *
+   * URLs with NO media row do not block: WordPress-imported and legacy files
+   * predate the library and exist on disk perfectly well.
+   */
+  async function notReadyPhotos(pair: StoredPostPair): Promise<string[]> {
+    const keys = referencedSrcs(pair)
+      .map((src) => srcToKey(src, imageBase))
+      .filter((k): k is string => k !== null);
+    if (keys.length === 0) return [];
+    const notReady = await cfg.media.notReadyKeys(keys);
+    return [...notReady];
+  }
+
   app.get('/posts', { preHandler: requireAuth }, async () => posts.list());
 
   app.get('/posts/:tk', { preHandler: requireAuth }, async (req, reply) => {
@@ -508,6 +840,13 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       if (e instanceof PostError) return reply.code(400).send({ error: e.message });
       throw e;
     }
+    const notReady = await notReadyPhotos(pair);
+    if (notReady.length > 0) {
+      return reply.code(409).send({
+        error: `${notReady.length} photo(s) are still processing or failed to encode — wait for them to finish, then publish again`,
+        notReady,
+      });
+    }
     await posts.publish(tk);
     const published = await posts.get(tk);
     const build = await cfg.builder.build();
@@ -534,9 +873,6 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   //    leave bulk-published posts without a backup.
   const BULK_ACTIONS = ['publish', 'unpublish', 'delete'] as const;
   type BulkAction = (typeof BULK_ACTIONS)[number];
-  /** Cap: an unbounded array is an authenticated N-round-trip amplifier against
-   *  the process that also serves the blog. */
-  const MAX_BULK_KEYS = 100;
 
   app.post('/posts/bulk', { preHandler: requireAdmin }, async (req, reply) => {
     const b = (req.body ?? {}) as { action?: unknown; keys?: unknown };
@@ -562,6 +898,10 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         if (!pair) throw new PostError('post not found');
         if (action === 'publish') {
           validateForPublish(pair);
+          const notReady = await notReadyPhotos(pair);
+          if (notReady.length > 0) {
+            throw new PostError(`${notReady.length} photo(s) are still processing or failed to encode`);
+          }
           await posts.publish(tk);
           const published = await posts.get(tk);
           if (published) await exportPost(published, cfg.backupDir).catch(() => { /* best-effort backup */ });
@@ -640,11 +980,20 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // current release), so a down Postgres flips the container unhealthy without
   // taking the blog offline.
   app.get('/health', async (_req, reply) => {
+    // @ai-warning: free space is REPORTED, never a health verdict (#73). A low
+    // -space warning that flipped the container unhealthy would trigger a
+    // restart loop, which makes a full disk strictly worse. The probe is
+    // best-effort for the same reason: an unreadable statfs must not 503.
+    let disk: { free: number; total: number; freeLabel: string } | undefined;
+    try {
+      const space = await diskSpace(storageDir);
+      disk = { ...space, freeLabel: formatBytes(space.free) };
+    } catch { /* reported as absent */ }
     try {
       await cfg.dbCheck();
-      return { ok: true, db: true };
+      return { ok: true, db: true, ...(disk ? { disk } : {}) };
     } catch {
-      return reply.code(503).send({ ok: false, db: false });
+      return reply.code(503).send({ ok: false, db: false, ...(disk ? { disk } : {}) });
     }
   });
 

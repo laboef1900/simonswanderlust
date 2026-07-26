@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assertSafeKey, contentHashKey, storeVariants, isOriginalFile } from '../src/storage.js';
+import { assertSafeKey, contentHashKey, storeVariants, storeOriginal, storeVariantFiles, isOriginalFile } from '../src/storage.js';
 import type { ProcessResult } from '../src/pipeline.js';
 
 const result: ProcessResult = {
@@ -116,5 +116,46 @@ describe('contentHashKey', () => {
     await expect(
       storeVariants(versioned, 'a', result, { storageDir: dir, baseUrl: 'https://img.example' }),
     ).rejects.toThrow(/key/i);
+  });
+});
+
+describe('storeOriginal / storeVariantFiles (the async-upload split)', () => {
+  it('storeOriginal writes only the untouched original and returns its rel path', async () => {
+    const rel = await storeOriginal('trips/x/hero', Buffer.from('raw-bytes'), 'jpg', { storageDir: dir });
+    expect(rel).toBe('trips/x/hero-orig.jpg');
+    expect(await readFile(join(dir, rel), 'utf8')).toBe('raw-bytes');
+    // No variants yet — that is the whole point of returning before encoding.
+    expect(await readdir(join(dir, 'trips/x'))).toEqual(['hero-orig.jpg']);
+  });
+
+  // @ai-warning: the traversal guard and the extension check live in
+  // storeOriginal, which is what keeps it the single write chokepoint after
+  // the split. Do not add a write path that bypasses it.
+  it('storeOriginal keeps the traversal and extension guards', async () => {
+    for (const key of ['../evil', 'Evil', 'a//b', 'a/../b']) {
+      await expect(storeOriginal(key, Buffer.from('x'), 'jpg', { storageDir: dir })).rejects.toThrow(/unsafe storage key/);
+    }
+    await expect(storeOriginal('ok/key', Buffer.from('x'), '../sh', { storageDir: dir })).rejects.toThrow(/unsafe original extension/);
+  });
+
+  it('storeVariantFiles writes every variant and reports the total byte size', async () => {
+    const out = await storeVariantFiles('trips/x/hero', result.variants, { storageDir: dir });
+    expect(out.files).toEqual([
+      'trips/x/hero-640.avif', 'trips/x/hero-640.webp',
+      'trips/x/hero-2000.avif', 'trips/x/hero-2000.webp',
+    ]);
+    expect(out.bytes).toBe(4); // 1 byte per stub variant
+  });
+
+  it('storeVariantFiles rejects an unsafe key too', async () => {
+    await expect(storeVariantFiles('../evil', result.variants, { storageDir: dir })).rejects.toThrow(/unsafe storage key/);
+  });
+
+  it('re-running storeVariantFiles overwrites the same filenames (idempotent re-encode)', async () => {
+    // This is what makes a crash mid-encode self-heal on retry rather than
+    // needing cleanup.
+    await storeVariantFiles('trips/x/hero', result.variants, { storageDir: dir });
+    await storeVariantFiles('trips/x/hero', result.variants, { storageDir: dir });
+    expect(await readdir(join(dir, 'trips/x'))).toHaveLength(4);
   });
 });

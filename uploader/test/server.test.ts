@@ -13,6 +13,9 @@ import { memoryUserStore, type UserStore } from '../src/users.js';
 import { memorySessionStore, type SessionStore } from '../src/sessions.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { memoryPageStore, type PageStore } from '../src/pages.js';
+import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
+import { BacklogFullError, createEncodeQueue, type EncodeQueue } from '../src/encode-queue.js';
+import { createWorkLock } from '../src/work-lock.js';
 import { fixedWindowLimiter } from '../src/rate-limit.js';
 import type { SiteBuilder, BuildOutcome } from '../src/build.js';
 
@@ -50,15 +53,40 @@ function stubBackup(dir = '/tmp/none') {
   return { backup };
 }
 
-interface Built { app: ReturnType<typeof buildServer>; users: UserStore; sessions: SessionStore; posts: PostStore; }
+/**
+ * An encode queue that records what was enqueued instead of running sharp —
+ * the real encoder is covered in encode-queue.test.ts, and a 19s-per-frame
+ * pipeline has no place in the route suite.
+ */
+function stubQueue(opts: { full?: boolean } = {}) {
+  const enqueued: string[] = [];
+  const queue: EncodeQueue = {
+    enqueue: (key) => {
+      if (opts.full) throw new BacklogFullError();
+      enqueued.push(key);
+    },
+    recover: async () => 0,
+    drain: async () => {},
+    stats: () => ({ pending: enqueued.length, running: 0 }),
+  };
+  return { enqueued, queue };
+}
+
+interface Built {
+  app: ReturnType<typeof buildServer>; users: UserStore; sessions: SessionStore;
+  posts: PostStore; media: MediaStore; enqueued: string[];
+}
 function build(extra: Partial<ServerConfig> = {}): Built {
   const users = (extra.users as UserStore) ?? memoryUserStore();
   const sessions = (extra.sessions as SessionStore) ?? memorySessionStore();
   const posts = (extra.posts as PostStore) ?? memoryPostStore();
+  const media = (extra.media as MediaStore) ?? memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
+  const q = stubQueue();
+  const encodeQueue = (extra.encodeQueue as EncodeQueue) ?? q.queue;
   const built = buildServer({
     storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
     users, sessions, settings: fakeStore(),
-    posts,
+    posts, media, encodeQueue,
     imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'),
     builder: (extra.builder as SiteBuilder) ?? stubBuilder().builder,
     backupDir: dir + '/backup',
@@ -67,7 +95,7 @@ function build(extra: Partial<ServerConfig> = {}): Built {
     dbCheck: async () => {},
     ...extra,
   });
-  return { app: built, users, sessions, posts };
+  return { app: built, users, sessions, posts, media, enqueued: q.enqueued };
 }
 
 // Seed a user and return a Cookie header value for an authenticated session.
@@ -79,6 +107,38 @@ async function authed(b: Built, opts: { isAdmin?: boolean; username?: string } =
 
 async function jpeg(): Promise<Buffer> {
   return sharp({ create: { width: 1000, height: 800, channels: 3, background: '#444' } }).jpeg().toBuffer();
+}
+
+/**
+ * A server wired to the REAL encode queue, so tests that need actual variant
+ * files on disk (static serving, cache headers, the private original) still
+ * exercise the whole path. Await `settle()` after an upload — encoding is
+ * asynchronous now, which is the entire point of the phase.
+ */
+function buildEncoding(extra: Partial<ServerConfig> = {}) {
+  const media = memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
+  const queue = createEncodeQueue({ store: media, storageDir: dir, lock: createWorkLock(), concurrency: 1 });
+  const b = build({ media, encodeQueue: queue, ...extra });
+  return { ...b, media, settle: () => queue.drain() };
+}
+
+/** Upload one image and return the parsed body. */
+async function upload(
+  b: { app: ReturnType<typeof buildServer> },
+  cookie: { sid: string },
+  fields: { key?: string; alt?: string; folder?: string; title?: string; filename?: string },
+  img?: Buffer,
+) {
+  const form = new FormData();
+  if (fields.key !== undefined) form.append('key', fields.key);
+  if (fields.alt !== undefined) form.append('alt', fields.alt);
+  if (fields.folder !== undefined) form.append('folder', fields.folder);
+  if (fields.title !== undefined) form.append('title', fields.title);
+  form.append('file', img ?? (await jpeg()), { filename: fields.filename ?? 't.jpg', contentType: 'image/jpeg' });
+  return b.app.inject({
+    method: 'POST', url: '/upload',
+    headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
+  });
 }
 
 describe('POST /upload', () => {
@@ -122,29 +182,21 @@ describe('POST /upload', () => {
   });
 
   it('re-uploading a different image under the same key mints a new URL; the old URL keeps serving unchanged', async () => {
-    const b = build();
+    const b = buildEncoding();
     const { cookie } = await authed(b);
-    const upload = async (img: Buffer) => {
-      const form = new FormData();
-      form.append('key', 'trips/t/hero');
-      form.append('alt', 'a');
-      form.append('file', img, { filename: 't.jpg', contentType: 'image/jpeg' });
-      return b.app.inject({
-        method: 'POST', url: '/upload',
-        headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
-      });
-    };
-    const first = await upload(await jpeg());
+    const first = await upload(b, cookie, { key: 'trips/t/hero', alt: 'a' });
     expect(first.statusCode).toBe(200);
-    const oldFile = (first.json().files as string[]).find((f) => f.endsWith('.webp'))!;
+    await b.settle();
+    const oldFile = `${first.json().key}-640.webp`;
     const get = () => b.app.inject({ method: 'GET', url: '/' + oldFile, headers: { host: 'img.simonswanderlust.com' } });
     const before = await get();
     expect(before.statusCode).toBe(200);
 
     const other = await sharp({ create: { width: 900, height: 700, channels: 3, background: '#a00' } }).jpeg().toBuffer();
-    const second = await upload(other);
+    const second = await upload(b, cookie, { key: 'trips/t/hero', alt: 'a' }, other);
     expect(second.statusCode).toBe(200);
     expect(second.json().src).not.toBe(first.json().src);
+    await b.settle();
 
     // Published posts reference the first URL — it must keep serving the same bytes.
     const after = await get();
@@ -152,67 +204,85 @@ describe('POST /upload', () => {
     expect(after.rawPayload.equals(before.rawPayload)).toBe(true);
   });
 
-  it('re-uploading identical bytes reuses the same URL (idempotent)', async () => {
-    const b = build();
+  it('re-uploading identical bytes reuses the same URL and short-circuits (idempotent)', async () => {
+    const b = buildEncoding();
     const { cookie } = await authed(b);
     const img = await jpeg();
-    const upload = async () => {
-      const form = new FormData();
-      form.append('key', 'trips/same/hero');
-      form.append('alt', 'a');
-      form.append('file', img, { filename: 't.jpg', contentType: 'image/jpeg' });
-      return b.app.inject({
-        method: 'POST', url: '/upload',
-        headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
-      });
-    };
-    const first = await upload();
-    const second = await upload();
+    const first = await upload(b, cookie, { key: 'trips/same/hero', alt: 'a' }, img);
     expect(first.statusCode).toBe(200);
+    await b.settle();
+    const second = await upload(b, cookie, { key: 'trips/same/hero', alt: 'a' }, img);
     expect(second.statusCode).toBe(200);
     expect(second.json().src).toBe(first.json().src);
+    // Already encoded: reported as a duplicate rather than re-encoded.
+    expect(second.json()).toMatchObject({ duplicate: true, status: 'ready' });
   });
 
   it('serves stored variants with a long immutable cache header', async () => {
-    const b = build();
+    const b = buildEncoding();
     const { cookie } = await authed(b);
-    const form = new FormData();
-    form.append('key', 'trips/cache/hero');
-    form.append('alt', 'c');
-    form.append('file', await jpeg(), { filename: 't.jpg', contentType: 'image/jpeg' });
-    const up = await b.app.inject({
-      method: 'POST', url: '/upload',
-      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
-    });
+    const up = await upload(b, cookie, { key: 'trips/cache/hero', alt: 'c' });
     expect(up.statusCode).toBe(200);
-    const file = (up.json().files as string[]).find((f) => f.endsWith('.webp'))!;
-    const res = await b.app.inject({ method: 'GET', url: '/' + file, headers: { host: 'img.simonswanderlust.com' } });
+    await b.settle();
+    const res = await b.app.inject({ method: 'GET', url: `/${up.json().key}-640.webp`, headers: { host: 'img.simonswanderlust.com' } });
     expect(res.statusCode).toBe(200);
     expect(res.headers['cache-control']).toContain('max-age=31536000');
     expect(res.headers['cache-control']).toContain('immutable');
   });
 
   it('serves variants but not the untouched original on the public image host', async () => {
-    const b = build();
+    const b = buildEncoding();
     const { cookie } = await authed(b);
-    const form = new FormData();
-    form.append('key', 'trips/private/hero');
-    form.append('alt', 'p');
-    form.append('file', await jpeg(), { filename: 't.jpg', contentType: 'image/jpeg' });
-    const up = await b.app.inject({
-      method: 'POST', url: '/upload',
-      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
-    });
+    const up = await upload(b, cookie, { key: 'trips/private/hero', alt: 'p' });
     expect(up.statusCode).toBe(200);
-    const files = up.json().files as string[];
-    const variant = files.find((f) => f.endsWith('.webp'))!;
-    const original = files.find((f) => /-orig\.[a-z0-9]+$/.test(f))!;
-    expect(original).toBeTruthy(); // the original is still written to disk (for the backup tar)
+    await b.settle();
+    const key = up.json().key as string;
+    // The original is written to disk (for the backup tar) even before encoding.
+    expect(existsSync(join(dir, `${key}-orig.jpg`))).toBe(true);
     const img = { host: 'img.simonswanderlust.com' };
     // The lossy variant is public...
-    expect((await b.app.inject({ method: 'GET', url: '/' + variant, headers: img })).statusCode).toBe(200);
+    expect((await b.app.inject({ method: 'GET', url: `/${key}-640.webp`, headers: img })).statusCode).toBe(200);
     // ...but the full-resolution original is not downloadable.
-    expect((await b.app.inject({ method: 'GET', url: '/' + original, headers: img })).statusCode).toBe(404);
+    expect((await b.app.inject({ method: 'GET', url: `/${key}-orig.jpg`, headers: img })).statusCode).toBe(404);
+  });
+
+  it('returns immediately with status "processing" and enqueues the encode', async () => {
+    // The whole point of the async path: the response is complete (src, real
+    // orientation-corrected dimensions, snippet) before any variant exists.
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await upload(b, cookie, { key: 'trips/async/hero', alt: 'a' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: 'processing', width: 1000, height: 800 });
+    expect(b.enqueued).toEqual([res.json().key]);
+    expect(await b.media.get(res.json().key)).toMatchObject({ status: 'processing' });
+  });
+
+  it('derives a storage key from the filename when the client sends none', async () => {
+    // Bulk library upload has no post slug, and KEY_RE is lowercase-only — a
+    // Leica's L1002345.JPG would otherwise be a 400.
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await upload(b, cookie, { filename: 'L1002345.JPG' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().key).toMatch(/^library\/\d{4}\/l1002345-[0-9a-f]{8}$/);
+  });
+
+  it('429s when the encode backlog is full', async () => {
+    const b = build({ encodeQueue: stubQueue({ full: true }).queue });
+    const { cookie } = await authed(b);
+    const res = await upload(b, cookie, { key: 'trips/full/hero' });
+    expect(res.statusCode).toBe(429);
+  });
+
+  it('records EXIF-free uploads without lat/lng and stores the supplied folder/title', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await upload(b, cookie, { key: 'trips/meta/hero', title: 'Sunrise', folder: 'Island 2024', alt: 'A' });
+    expect(res.statusCode).toBe(200);
+    const item = await b.media.get(res.json().key);
+    expect(item).toMatchObject({ title: 'Sunrise', folder: 'Island 2024', alt: { de: 'A', en: 'A' } });
+    expect(item?.exif).toMatchObject({ lat: null, lng: null });
   });
 
   it('rejects a multi-file upload instead of silently keeping only the last', async () => {
@@ -256,17 +326,14 @@ describe('POST /upload', () => {
 });
 
 describe('media library', () => {
-  async function upload(b: Built, cookie: Record<string, string>, key: string): Promise<{ src: string; files: string[]; storedKey: string }> {
-    const form = new FormData();
-    form.append('key', key);
-    form.append('alt', 'a');
-    form.append('file', await jpeg(), { filename: 't.jpg', contentType: 'image/jpeg' });
-    const res = await b.app.inject({ method: 'POST', url: '/upload', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
+  /** Upload + finish encoding, returning the stored (content-hashed) key. */
+  async function put(
+    b: ReturnType<typeof buildEncoding>, cookie: { sid: string }, key: string, img?: Buffer,
+  ): Promise<{ src: string; storedKey: string }> {
+    const res = await upload(b, cookie, { key, alt: 'a' }, img);
     expect(res.statusCode).toBe(200);
-    const json = res.json();
-    // The stored key is content-hash versioned server-side (issue #26), so derive
-    // the real key from the returned src rather than assuming the requested one.
-    return { ...json, storedKey: new URL(json.src).pathname.slice(1) };
+    await b.settle();
+    return { src: res.json().src, storedKey: res.json().key };
   }
 
   const draftUsing = (src: string) => ({
@@ -276,85 +343,136 @@ describe('media library', () => {
     en: { locale: 'en', slug: 'media-en', title: 'Media user', excerpt: 'e', heroImage: { src: 'https://i/other', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
 
-  it('GET /images is admin-only: 401 unauthenticated, 403 for authors', async () => {
+  it('GET /media requires a session but NOT admin — the gallery picker needs authors', async () => {
     const b = build();
-    expect((await b.app.inject({ method: 'GET', url: '/images' })).statusCode).toBe(401);
+    expect((await b.app.inject({ method: 'GET', url: '/media' })).statusCode).toBe(401);
     const author = await authed(b, { isAdmin: false, username: 'author' });
-    expect((await b.app.inject({ method: 'GET', url: '/images', cookies: author.cookie })).statusCode).toBe(403);
+    expect((await b.app.inject({ method: 'GET', url: '/media', cookies: author.cookie })).statusCode).toBe(200);
   });
 
-  it('GET /images lists uploaded keys with src, dims, thumbnail and empty usedIn', async () => {
-    const b = build();
-    const { cookie } = await authed(b);
-    const { src, storedKey } = await upload(b, cookie, 'trips/bucharest-2024/hero');
-    const res = await b.app.inject({ method: 'GET', url: '/images', cookies: cookie });
-    expect(res.statusCode).toBe(200);
-    const items = res.json();
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({
-      key: storedKey,
-      src,
-      width: 1000, height: 800,
-      thumbUrl: `${src}-640.webp`,
-      usedIn: [],
+  // @ai-warning: this is what makes the privilege drop from admin-only
+  // GET /images to session-level GET /media safe. Assert the REDACTION, not
+  // just the status code — handing every author photo GPS through a lower gate
+  // would undo the Phase 0 privacy fix.
+  it('redacts exif.lat/lng and uploadedBy for non-admins, and keeps them for admins', async () => {
+    const media = memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
+    const b = build({ media });
+    const admin = await authed(b);
+    await media.upsert({
+      key: 'library/2025/geo', status: 'ready', width: 800, height: 600, origBytes: 1,
+      uploadedBy: 'user-1',
+      exif: { takenAt: new Date('2025-01-01T10:00:00Z'), camera: 'Leica Q2', lens: 'Summilux', lat: 63.4, lng: 10.4 },
     });
-    expect(items[0].files).toHaveLength(4); // 640 + 1000, avif + webp (the -orig original is not listed)
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+
+    const asAdmin = (await b.app.inject({ method: 'GET', url: '/media', cookies: admin.cookie })).json();
+    expect(asAdmin.items[0].exif).toMatchObject({ lat: 63.4, lng: 10.4, camera: 'Leica Q2' });
+    expect(asAdmin.items[0].uploadedBy).toBe('user-1');
+
+    const asAuthor = (await b.app.inject({ method: 'GET', url: '/media', cookies: author.cookie })).json();
+    expect(asAuthor.items[0].exif).toMatchObject({ lat: null, lng: null });
+    expect(asAuthor.items[0].uploadedBy).toBeNull();
+    // Non-location metadata is still useful to an author and is NOT redacted.
+    expect(asAuthor.items[0].exif.camera).toBe('Leica Q2');
   });
 
-  it('GET /images reports usedIn when a post references the image', async () => {
-    const b = build();
+  it('GET /media/items/* redacts for non-admins too', async () => {
+    const media = memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
+    const b = build({ media });
+    await media.upsert({
+      key: 'library/2025/geo', status: 'ready', width: 8, height: 6, origBytes: 1, uploadedBy: 'u1',
+      exif: { takenAt: null, camera: null, lens: null, lat: 1.5, lng: 2.5 },
+    });
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+    const res = await b.app.inject({ method: 'GET', url: '/media/items/library/2025/geo', cookies: author.cookie });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().exif).toMatchObject({ lat: null, lng: null });
+    expect(res.json().uploadedBy).toBeNull();
+  });
+
+  it('GET /media lists an uploaded key with a server-derived thumbnail and empty usedIn', async () => {
+    const b = buildEncoding();
     const { cookie } = await authed(b);
-    const { src } = await upload(b, cookie, 'trips/used/hero');
+    const { src, storedKey } = await put(b, cookie, 'trips/bucharest-2024/hero');
+    const res = await b.app.inject({ method: 'GET', url: '/media', cookies: cookie });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().total).toBe(1);
+    expect(res.json().items[0]).toMatchObject({
+      key: storedKey, src, width: 1000, height: 800,
+      thumbSrc: `${src}-640.webp`, status: 'ready', usedIn: [],
+    });
+  });
+
+  it('GET /media reports usedIn when a post references the image', async () => {
+    const b = buildEncoding();
+    const { cookie } = await authed(b);
+    const { src } = await put(b, cookie, 'trips/used/hero');
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
     expect(created.statusCode).toBe(200);
-    const res = await b.app.inject({ method: 'GET', url: '/images', cookies: cookie });
-    expect(res.json()[0].usedIn).toEqual([
+    const res = await b.app.inject({ method: 'GET', url: '/media', cookies: cookie });
+    expect(res.json().items[0].usedIn).toEqual([
       { kind: 'post', key: created.json().translationKey, title: 'Mediennutzer' },
     ]);
   });
 
-  it('DELETE /images/* is admin-only: 401 unauthenticated, 403 for authors', async () => {
-    const b = build();
-    expect((await b.app.inject({ method: 'DELETE', url: '/images/trips/x/hero' })).statusCode).toBe(401);
+  it('PATCH /media/items/* edits metadata and is author-accessible', async () => {
+    const b = buildEncoding();
     const author = await authed(b, { isAdmin: false, username: 'author' });
-    expect((await b.app.inject({ method: 'DELETE', url: '/images/trips/x/hero', cookies: author.cookie })).statusCode).toBe(403);
+    const { storedKey } = await put(b, author.cookie, 'trips/edit/hero');
+    const res = await b.app.inject({
+      method: 'PATCH', url: `/media/items/${storedKey}`, cookies: author.cookie,
+      headers: { 'content-type': 'application/json' },
+      payload: { title: 'Sonnenaufgang', alt: { de: 'DE alt', en: 'EN alt' }, caption: { de: 'Tag 3' }, tags: ['island', 'island', ' '] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      title: 'Sonnenaufgang', alt: { de: 'DE alt', en: 'EN alt' }, caption: { de: 'Tag 3' },
+      tags: ['island'],
+    });
   });
 
-  it('DELETE /images/* rejects unsafe keys (traversal) with 400', async () => {
+  it('DELETE /media/items/* is admin-only: 401 unauthenticated, 403 for authors', async () => {
+    const b = build();
+    expect((await b.app.inject({ method: 'DELETE', url: '/media/items/trips/x/hero' })).statusCode).toBe(401);
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+    expect((await b.app.inject({ method: 'DELETE', url: '/media/items/trips/x/hero', cookies: author.cookie })).statusCode).toBe(403);
+  });
+
+  it('DELETE /media/items/* rejects unsafe keys (traversal) with 400', async () => {
     const b = build();
     const { cookie } = await authed(b);
     // %2F-encoded traversal reaches the handler as '../evil' — assertSafeKey rejects it.
-    for (const url of ['/images/..%2Fevil', '/images/Evil', '/images/a//b']) {
+    for (const url of ['/media/items/..%2Fevil', '/media/items/Evil', '/media/items/a//b']) {
       const res = await b.app.inject({ method: 'DELETE', url, cookies: cookie });
       expect(res.statusCode).toBe(400);
     }
     // A raw ../ segment is normalized away by the router before matching: never our handler.
-    const raw = await b.app.inject({ method: 'DELETE', url: '/images/../evil', cookies: cookie });
+    const raw = await b.app.inject({ method: 'DELETE', url: '/media/items/../evil', cookies: cookie });
     expect(raw.statusCode).toBe(404);
   });
 
-  it('DELETE /images/* 404s for an unknown key', async () => {
+  it('DELETE /media/items/* 404s for an unknown key', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    const res = await b.app.inject({ method: 'DELETE', url: '/images/trips/ghost/hero', cookies: cookie });
+    const res = await b.app.inject({ method: 'DELETE', url: '/media/items/trips/ghost/hero', cookies: cookie });
     expect(res.statusCode).toBe(404);
   });
 
-  it('DELETE /images/* refuses (409) while a post references the image, keeping the files', async () => {
-    const b = build();
+  it('DELETE /media/items/* refuses (409) while a post references the image, keeping the files', async () => {
+    const b = buildEncoding();
     const { cookie } = await authed(b);
-    const { src, files, storedKey } = await upload(b, cookie, 'trips/keep/hero');
+    const { src, storedKey } = await put(b, cookie, 'trips/keep/hero');
     await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
-    const res = await b.app.inject({ method: 'DELETE', url: `/images/${storedKey}`, cookies: cookie });
+    const res = await b.app.inject({ method: 'DELETE', url: `/media/items/${storedKey}`, cookies: cookie });
     expect(res.statusCode).toBe(409);
     expect(res.json().usedIn).toHaveLength(1);
-    for (const f of files) expect(existsSync(join(dir, f))).toBe(true);
+    expect(existsSync(join(dir, `${storedKey}-640.webp`))).toBe(true);
   });
 
-  it('DELETE /images/* still 409s for a stranded single-locale row (get() → null)', async () => {
-    const b = build();
+  it('DELETE /media/items/* still 409s for a stranded single-locale row (get() → null)', async () => {
+    const b = buildEncoding();
     const { cookie } = await authed(b);
-    const { src, storedKey } = await upload(b, cookie, 'trips/stranded/hero');
+    const { src, storedKey } = await put(b, cookie, 'trips/stranded/hero');
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
     expect(created.statusCode).toBe(200);
     // Simulate the pg half-pair: a crash between upsertDraft's two locale
@@ -363,33 +481,94 @@ describe('media library', () => {
     expect(deRow).toHaveLength(1);
     b.posts.get = async () => null;
     b.posts.usageRows = async () => deRow;
-    const res = await b.app.inject({ method: 'DELETE', url: `/images/${storedKey}`, cookies: cookie });
+    const res = await b.app.inject({ method: 'DELETE', url: `/media/items/${storedKey}`, cookies: cookie });
     expect(res.statusCode).toBe(409);
     expect(res.json().usedIn).toEqual([
       { kind: 'post', key: created.json().translationKey, title: 'Mediennutzer' },
     ]);
   });
 
-  it('DELETE /images/* unlinks all variants of exactly that key', async () => {
-    const b = build();
+  it('DELETE /media/items/* unlinks all variants of exactly that key and drops the row', async () => {
+    const b = buildEncoding();
     const { cookie } = await authed(b);
-    const gone = await upload(b, cookie, 'trips/x/hero');
-    const kept = await upload(b, cookie, 'trips/x/hero-b');
-    const res = await b.app.inject({ method: 'DELETE', url: `/images/${gone.storedKey}`, cookies: cookie });
+    const other = await sharp({ create: { width: 900, height: 700, channels: 3, background: '#0a0' } }).jpeg().toBuffer();
+    const gone = await put(b, cookie, 'trips/x/hero');
+    const kept = await put(b, cookie, 'trips/x/hero-b', other);
+    const res = await b.app.inject({ method: 'DELETE', url: `/media/items/${gone.storedKey}`, cookies: cookie });
     expect(res.statusCode).toBe(200);
     // 4 variants + the untouched -orig original are all removed.
     expect(res.json()).toEqual({ ok: true, deleted: 5 });
-    for (const f of gone.files) expect(existsSync(join(dir, f))).toBe(false);
-    for (const f of kept.files) expect(existsSync(join(dir, f))).toBe(true);
-    const after = await b.app.inject({ method: 'GET', url: '/images', cookies: cookie });
-    expect(after.json().map((m: { key: string }) => m.key)).toEqual([kept.storedKey]);
+    expect(existsSync(join(dir, `${gone.storedKey}-640.webp`))).toBe(false);
+    expect(existsSync(join(dir, `${kept.storedKey}-640.webp`))).toBe(true);
+    const after = await b.app.inject({ method: 'GET', url: '/media', cookies: cookie });
+    expect(after.json().items.map((m: { key: string }) => m.key)).toEqual([kept.storedKey]);
+  });
+
+  it('folder create is author-level; rename and delete are admin-only', async () => {
+    const b = build();
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+    const create = await b.app.inject({
+      method: 'POST', url: '/media/folders', cookies: author.cookie,
+      headers: { 'content-type': 'application/json' }, payload: { path: 'Island 2024' },
+    });
+    expect(create.statusCode).toBe(200);
+    expect(create.json().folders).toContain('Island 2024');
+    for (const call of [
+      { method: 'PATCH' as const, payload: { from: 'Island 2024', to: 'Island' } },
+      { method: 'DELETE' as const, payload: { path: 'Island 2024' } },
+    ]) {
+      const res = await b.app.inject({
+        method: call.method, url: '/media/folders', cookies: author.cookie,
+        headers: { 'content-type': 'application/json' }, payload: call.payload,
+      });
+      expect(res.statusCode).toBe(403);
+    }
+  });
+
+  it('rejects an invalid folder path with 400 and a rename onto an existing folder with 409', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const post = async (payload: Record<string, unknown>) => b.app.inject({
+      method: 'POST', url: '/media/folders', cookies: cookie,
+      headers: { 'content-type': 'application/json' }, payload,
+    });
+    expect((await post({ path: 'a/../b' })).statusCode).toBe(400);
+    expect((await post({ path: '%' })).statusCode).toBe(400);
+    expect((await post({ path: 'a/b/c/d/e/f/g' })).statusCode).toBe(400);
+    await post({ path: 'Iceland' });
+    await post({ path: 'Norway' });
+    const clash = await b.app.inject({
+      method: 'PATCH', url: '/media/folders', cookies: cookie,
+      headers: { 'content-type': 'application/json' }, payload: { from: 'Iceland', to: 'Norway' },
+    });
+    expect(clash.statusCode).toBe(409);
+  });
+
+  it('POST /media/rescan is admin-only', async () => {
+    const b = build({ mediaSync: { run: async () => ({ scanned: 1, inserted: 0, altHarvested: 0, markedMissing: 0 }) } });
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+    expect((await b.app.inject({ method: 'POST', url: '/media/rescan', cookies: author.cookie })).statusCode).toBe(403);
+    const admin = await authed(b, { username: 'boss' });
+    const res = await b.app.inject({ method: 'POST', url: '/media/rescan', cookies: admin.cookie });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ scanned: 1 });
+  });
+
+  it('the whole /media surface carries the admin security headers', async () => {
+    // '/media' must be in ADMIN_PREFIXES or the new API silently loses
+    // X-Frame-Options and Referrer-Policy.
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({ method: 'GET', url: '/media', cookies: cookie });
+    expect(res.headers['x-frame-options']).toBe('DENY');
+    expect(res.headers['referrer-policy']).toBe('no-referrer');
   });
 });
 
 describe('buildServer config', () => {
   it('boots with a relative storageDir (resolves it to absolute)', async () => {
     const rel = relative(process.cwd(), dir);
-    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), posts: memoryPostStore(), pages: memoryPageStore(), imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup, dbCheck: async () => {} });
+    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), posts: memoryPostStore(), pages: memoryPageStore(), media: memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' }), encodeQueue: stubQueue().queue, imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup, dbCheck: async () => {} });
     await expect(srv.ready()).resolves.toBeDefined();
     await srv.close();
   });
@@ -866,6 +1045,99 @@ describe('POST /posts/bulk', () => {
   });
 });
 
+describe('publish gate (encode status)', () => {
+  // @ai-warning: this is the ONLY real check on the encode queue's `status`
+  // invariant. Without it a post publishes, `astro build` succeeds, and the
+  // live site shows broken <img> elements — the URL is already in the body and
+  // the original is already on disk, so nothing else notices.
+  const IMG = 'https://img.simonswanderlust.com';
+  const pairUsing = (heroSrc: string, images: Record<string, unknown> = {}) => ({
+    translationKey: '', status: 'draft',
+    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de', slug: 'gate-de', title: 'T', excerpt: 'e', heroImage: { src: heroSrc, width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images },
+    en: { locale: 'en', slug: 'gate-en', title: 'T', excerpt: 'e', heroImage: { src: heroSrc, width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images },
+  });
+
+  const create = async (b: Built, cookie: { sid: string }, payload: Record<string, unknown>) =>
+    (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload })).json().translationKey;
+
+  it('blocks publishing while a referenced photo is still processing', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    await b.media.upsert({ key: 'trips/g/hero', status: 'processing', width: 9, height: 9, origBytes: 1, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+    const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`));
+    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().notReady).toEqual(['trips/g/hero']);
+    // Nothing went live.
+    expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('draft');
+  });
+
+  it('blocks on a failed encode too', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    await b.media.upsert({ key: 'trips/g/hero', status: 'failed', width: 9, height: 9, origBytes: 1, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+    const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`));
+    expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie })).statusCode).toBe(409);
+  });
+
+  it('allows publishing once every referenced photo is ready', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    await b.media.upsert({ key: 'trips/g/hero', status: 'ready', width: 9, height: 9, origBytes: 1, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+    const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`));
+    expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie })).statusCode).toBe(200);
+  });
+
+  it('does NOT block a URL with no media row — WP-imported and legacy files predate the library', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const tk = await create(b, cookie, pairUsing(`${IMG}/wp/legacy/photo`));
+    expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie })).statusCode).toBe(200);
+  });
+
+  it('checks gallery/body images from the images map, not just the hero', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const exif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+    await b.media.upsert({ key: 'trips/g/hero', status: 'ready', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null });
+    await b.media.upsert({ key: 'trips/g/gallery-a', status: 'processing', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null });
+    const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`, {
+      [`${IMG}/trips/g/gallery-a`]: { width: 3000, height: 2000 },
+    }));
+    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().notReady).toEqual(['trips/g/gallery-a']);
+  });
+
+  it('maps a hand-pasted variant URL back to its key, and ignores foreign origins', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const exif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+    await b.media.upsert({ key: 'trips/g/hero', status: 'processing', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null });
+    const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero-1280.webp`, {
+      // A different origin is not ours to gate on.
+      'https://elsewhere.example/photo': { width: 10, height: 10 },
+    }));
+    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().notReady).toEqual(['trips/g/hero']);
+  });
+
+  it('applies to the bulk path as a per-post failure', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    await b.media.upsert({ key: 'trips/g/hero', status: 'processing', width: 9, height: 9, origBytes: 1, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+    const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`));
+    const res = await b.app.inject({
+      method: 'POST', url: '/posts/bulk', headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { action: 'publish', keys: [tk] },
+    });
+    expect(res.json()).toMatchObject({ succeeded: 0, failed: 1 });
+    expect(res.json().results[0].error).toMatch(/still processing/);
+  });
+});
+
 describe('posts editor', () => {
   const sample = () => ({
     translationKey: '', status: 'draft',
@@ -1205,10 +1477,21 @@ describe('POST /rebuild and GET /health', () => {
     en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
 
-  it('health is public and reports the DB as up', async () => {
+  it('health is public and reports the DB as up, plus free disk space', async () => {
     const res = await build().app.inject({ method: 'GET', url: '/health' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, db: true });
+    expect(res.json()).toMatchObject({ ok: true, db: true });
+    // #73: the volume's headroom is visible before it becomes an outage.
+    expect(res.json().disk.free).toBeGreaterThan(0);
+    expect(res.json().disk.freeLabel).toMatch(/^\d+(\.\d)? [kMGT]?B$/);
+  });
+
+  it('low disk space does NOT by itself flip the container unhealthy', async () => {
+    // @ai-warning: a low-space 503 would trigger a restart loop, which makes a
+    // full disk strictly worse. Free space is reported, never a verdict.
+    const res = await build().app.inject({ method: 'GET', url: '/health' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
   });
 
   it('health returns 503 without error detail when the DB probe fails', async () => {
@@ -1220,7 +1503,8 @@ describe('POST /rebuild and GET /health', () => {
       const b = build({ dbCheck: async () => { throw new Error('connection refused: internal detail'); } });
       const res = await b.app.inject({ method: 'GET', url: '/health' });
       expect(res.statusCode).toBe(503);
-      expect(res.json()).toEqual({ ok: false, db: false });
+      expect(res.json()).toMatchObject({ ok: false, db: false });
+      expect(JSON.stringify(res.json())).not.toContain('internal detail');
       expect(logSpy).not.toHaveBeenCalled();
       expect(errorSpy).not.toHaveBeenCalled();
     } finally {

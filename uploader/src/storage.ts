@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { ProcessResult } from './pipeline.js';
+import type { ProcessResult, Variant } from './pipeline.js';
 
 export interface StorageOptions {
   storageDir: string;
@@ -62,45 +62,98 @@ export function contentHashKey(key: string, data: Buffer): string {
   return `${key}-${hash}`;
 }
 
+/**
+ * Persist the untouched upload as `${key}-orig.${ext}`.
+ *
+ * @ai-warning This is the central write chokepoint: `assertSafeKey` and
+ * `SAFE_EXT_RE` live HERE, so every path that puts bytes under storageDir —
+ * the async upload route, the CLI, and the WordPress re-host — passes the
+ * traversal guard. Do not add a write path that bypasses it.
+ *
+ * `-orig` can never collide with a variant name (variant suffixes are numeric
+ * widths). This makes /data/images a complete media archive — a DB restore
+ * alone can't bring photos back, and the lossy variants would otherwise be the
+ * only copy. The original lives in storageDir (so the incremental backup tar
+ * captures it) but is a PRIVATE DR asset: the img-host static mount excludes
+ * `-orig.*` via isOriginalFile(), so it is not downloadable.
+ */
+export async function storeOriginal(
+  key: string,
+  data: Buffer,
+  ext: string,
+  { storageDir }: Pick<StorageOptions, 'storageDir'>,
+): Promise<string> {
+  assertSafeKey(key);
+  if (!SAFE_EXT_RE.test(ext)) throw new Error(`unsafe original extension "${ext}"`);
+  const rel = `${key}-orig.${ext}`;
+  const abs = join(storageDir, rel);
+  await mkdir(dirname(abs), { recursive: true });
+  await writeFile(abs, data);
+  return rel;
+}
+
+/**
+ * Write the generated variants for a key. Returns their relative paths and
+ * total byte size (which the media row records as `variant_bytes`).
+ *
+ * Re-running this for the same key overwrites the same deterministic
+ * filenames, which is what makes a crashed mid-encode self-heal on retry.
+ */
+export async function storeVariantFiles(
+  key: string,
+  variants: Variant[],
+  { storageDir }: Pick<StorageOptions, 'storageDir'>,
+): Promise<{ files: string[]; bytes: number }> {
+  assertSafeKey(key);
+  const files: string[] = [];
+  let bytes = 0;
+  for (const v of variants) {
+    const rel = `${key}-${v.width}.${v.format}`;
+    const abs = join(storageDir, rel);
+    await mkdir(dirname(abs), { recursive: true });
+    await writeFile(abs, v.data);
+    files.push(rel);
+    bytes += v.data.length;
+  }
+  return { files, bytes };
+}
+
+/** The paste-ready `heroImage:` YAML block returned by the upload routes. */
+export function heroSnippet(src: string, width: number, height: number, alt: string): string {
+  return [
+    'heroImage:',
+    `  src: '${src}'`,
+    `  width: ${width}`,
+    `  height: ${height}`,
+    `  alt: '${alt.replace(/'/g, "''")}'`, // YAML single-quote escaping
+  ].join('\n');
+}
+
+/**
+ * Write variants + original in one synchronous call.
+ *
+ * @ai-note Retained as a thin wrapper over storeOriginal + storeVariantFiles
+ * because two of its callers genuinely need the synchronous contract: the CLI
+ * uploader, and the WordPress re-host path (which returns {src,width,height}
+ * straight into the post body). Only the HTTP upload route went async.
+ * storage.test.ts asserts the traversal guards THROUGH this wrapper, which is
+ * what keeps those tests meaningful after the split.
+ */
 export async function storeVariants(
   key: string,
   alt: string,
   result: ProcessResult,
   { storageDir, baseUrl }: StorageOptions,
 ): Promise<StoredImage> {
-  assertSafeKey(key);
-  if (!SAFE_EXT_RE.test(result.original.ext)) {
-    throw new Error(`unsafe original extension "${result.original.ext}"`);
-  }
-  const files: string[] = [];
-  for (const v of result.variants) {
-    const rel = `${key}-${v.width}.${v.format}`;
-    const abs = join(storageDir, rel);
-    await mkdir(dirname(abs), { recursive: true });
-    await writeFile(abs, v.data);
-    files.push(rel);
-  }
-  // Persist the untouched upload alongside the variants: `-orig` can never
-  // collide with a variant name (variant suffixes are numeric widths). This
-  // makes /data/images a complete media archive — a DB restore alone can't
-  // bring photos back, and the lossy variants would otherwise be the only copy.
-  // @ai-warning: the original lives in storageDir (so the incremental backup
-  // tar captures it) but is a PRIVATE DR asset — the server's img-host static
-  // mount excludes `-orig.*` via isOriginalFile(), so it is not downloadable.
-  const origRel = `${key}-orig.${result.original.ext}`;
-  const origAbs = join(storageDir, origRel);
-  await mkdir(dirname(origAbs), { recursive: true });
-  await writeFile(origAbs, result.original.data);
+  // Original first: it carries the extension check, and a failure there must
+  // not leave a half-written variant set behind.
+  const origRel = await storeOriginal(key, result.original.data, result.original.ext, { storageDir });
+  const { files } = await storeVariantFiles(key, result.variants, { storageDir });
   files.push(origRel);
 
   const src = `${baseUrl.replace(/\/+$/, '')}/${key}`;
-  const snippet = [
-    'heroImage:',
-    `  src: '${src}'`,
-    `  width: ${result.width}`,
-    `  height: ${result.height}`,
-    `  alt: '${alt.replace(/'/g, "''")}'`, // YAML single-quote escaping
-  ].join('\n');
-
-  return { src, width: result.width, height: result.height, files, snippet };
+  return {
+    src, width: result.width, height: result.height, files,
+    snippet: heroSnippet(src, result.width, result.height, alt),
+  };
 }

@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { cp, mkdir, rm, rename, symlink, readdir, readlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createWorkLock, type WorkLock } from './work-lock.js';
 
 export interface BuildOutcome { ok: boolean; release?: string; error?: string }
 
@@ -15,6 +16,14 @@ export interface SiteBuilderOptions {
   releasesRoot: string;
   keep?: number;
   runBuild?: (outDir: string) => Promise<void>;
+  /**
+   * Shared with the encode queue so a build and image encoding never run at
+   * the same time — both are memory-hungry and share one container. The build
+   * takes the lock EXCLUSIVELY and preempts the encode backlog; see
+   * `work-lock.ts`. Omit and the builder gets a private lock, which is the
+   * right default for tests and for any deployment with no encode queue.
+   */
+  lock?: WorkLock;
 }
 
 /** Spawn `astro build` via plain node — no npx/npm/shell, so the runtime image
@@ -44,7 +53,7 @@ let stampSeq = 0;
  * outDir sits on another device (a Docker volume) its rename() fails with
  * EXDEV. So: build into a CWD-local tmp first, then `cp` to the release dir.
  */
-async function buildAndDeploy(opts: Required<Omit<SiteBuilderOptions, 'runBuild'>> & { runBuild: (outDir: string) => Promise<void> }): Promise<string> {
+async function buildAndDeploy(opts: Required<Omit<SiteBuilderOptions, 'runBuild' | 'lock'>> & { runBuild: (outDir: string) => Promise<void> }): Promise<string> {
   const releases = join(opts.releasesRoot, 'releases');
   await mkdir(releases, { recursive: true });
   const stamp = `${Date.now()}-${process.pid}-${String(stampSeq++).padStart(4, '0')}`;
@@ -72,6 +81,7 @@ async function buildAndDeploy(opts: Required<Omit<SiteBuilderOptions, 'runBuild'
 export function createSiteBuilder(opts: SiteBuilderOptions): SiteBuilder {
   const keep = opts.keep ?? 3;
   const runBuild = opts.runBuild ?? ((outDir: string) => runAstroBuild(opts.siteAppDir, outDir));
+  const lock = opts.lock ?? createWorkLock();
   // @ai-note One-deep coalescing instead of rejecting concurrent builds. The
   // publish route flips the Postgres row BEFORE calling build(), so rejecting
   // used to surface a false "a build is already running" error for a post that
@@ -86,7 +96,11 @@ export function createSiteBuilder(opts: SiteBuilderOptions): SiteBuilder {
   // in-flight build is safe.
   const runOnce = async (): Promise<BuildOutcome> => {
     try {
-      const release = await buildAndDeploy({ siteAppDir: opts.siteAppDir, releasesRoot: opts.releasesRoot, keep, runBuild });
+      // Exclusive: pauses the encode queue for the duration (see work-lock.ts).
+      // Taken INSIDE runOnce so the coalescing above is unaffected — a queued
+      // build still waits for the in-flight one, then competes for the lock.
+      const release = await lock.runExclusive(() =>
+        buildAndDeploy({ siteAppDir: opts.siteAppDir, releasesRoot: opts.releasesRoot, keep, runBuild }));
       return { ok: true, release };
     } catch (e) {
       return { ok: false, error: (e as Error).message };

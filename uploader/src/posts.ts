@@ -62,7 +62,13 @@ export interface PostSummary {
 }
 /** One stored locale row's image-referencing fields — the corpus for media usage scans. */
 export interface PostUsageRow {
-  translationKey: string; title: string;
+  translationKey: string;
+  /** Which locale's row this is. Carried explicitly so the media library's
+   *  alt-text harvest can file German alt on the DE row and English on the EN
+   *  row — inferring it from row order or title would collide whenever both
+   *  locales share a title. */
+  locale: Locale;
+  title: string;
   heroImage: HeroImage; bodyMarkdown: string; images: Record<string, ImageDims>;
 }
 export class PostError extends Error {
@@ -318,7 +324,7 @@ export function memoryPostStore(): PostStore {
     },
     async usageRows() {
       return [...byKey.values()].flatMap((p) => (['de', 'en'] as const).map((loc) => structuredClone({
-        translationKey: p.translationKey, title: p[loc].title,
+        translationKey: p.translationKey, locale: loc, title: p[loc].title,
         heroImage: p[loc].heroImage, bodyMarkdown: p[loc].bodyMarkdown, images: p[loc].images,
       })));
     },
@@ -503,11 +509,11 @@ export function pgPostStore(pool: DbPool): PostStore {
       };
     },
     async usageRows() {
-      const { rows } = await pool.query<Pick<PostRow, 'translation_key' | 'title' | 'hero_image' | 'body_markdown' | 'images'>>(
-        `SELECT translation_key, title, hero_image, body_markdown, images FROM posts ORDER BY translation_key, locale`,
+      const { rows } = await pool.query<Pick<PostRow, 'translation_key' | 'locale' | 'title' | 'hero_image' | 'body_markdown' | 'images'>>(
+        `SELECT translation_key, locale, title, hero_image, body_markdown, images FROM posts ORDER BY translation_key, locale`,
       );
       return rows.map((r) => ({
-        translationKey: r.translation_key, title: r.title,
+        translationKey: r.translation_key, locale: r.locale, title: r.title,
         heroImage: r.hero_image, bodyMarkdown: r.body_markdown, images: r.images ?? {},
       }));
     },

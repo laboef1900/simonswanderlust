@@ -9,6 +9,7 @@ import { pgUserStore } from '../src/users.js';
 import { pgPostStore } from '../src/posts.js';
 import { pgSessionStore } from '../src/sessions.js';
 import { dumpDatabase, restoreDatabase } from '../src/backup.js';
+import { pgMediaStore } from '../src/media-store.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -93,11 +94,13 @@ maybe('backup round-trip (Postgres)', () => {
   });
 
   it('rejects an unsupported dump version without touching data', async () => {
-    // hand-craft a version-3 dump (still unsupported: only v1 and v2 are handled)
+    // @ai-warning: the guard is an ALLOW-LIST (1, 2, 3), not a minimum — so
+    // this probes the next UNRELEASED version. Bump it whenever DUMP_VERSION
+    // is bumped, or this stops testing anything.
     const { gzipSync } = await import('node:zlib');
     const { writeFileSync } = await import('node:fs');
     const bad = join(dir, 'db-20260101-000000.json.gz');
-    writeFileSync(bad, gzipSync(JSON.stringify({ version: 3, tables: { users: [], posts: [] } })));
+    writeFileSync(bad, gzipSync(JSON.stringify({ version: 4, tables: { users: [], posts: [] } })));
     await expect(restoreDatabase(pool, bad)).rejects.toThrow(/unsupported dump version/);
     expect((await pool.query('SELECT count(*) AS n FROM users')).rows[0].n).toBe('1');
   });
@@ -155,5 +158,64 @@ maybe('backup round-trip (Postgres)', () => {
     )).rows[0];
     expect(draft.published_snapshot).toBeNull();
     expect(draft.published_at).toBeNull();
+  });
+
+  it('a v3 dump round-trips the media library, including tags and folders', async () => {
+    // @ai-warning: without this, a restore brings the photos back (they are on
+    // disk) but loses every folder, caption and tag — the worst kind of
+    // partial recovery. `tags` is text[], which CANNOT round-trip through the
+    // JSON.stringify path every other non-scalar column uses.
+    const users = pgUserStore(pool);
+    const media = pgMediaStore(pool, { baseUrl: 'https://img.example' });
+    await pool.query('DELETE FROM media');
+    await pool.query('DELETE FROM media_folders');
+    await pool.query('DELETE FROM users');
+    const u = await users.create({ username: `mediauser-${Date.now()}`, password: 'pw', isAdmin: true });
+    await media.upsert({
+      key: 'library/2025/a', folder: 'Island/Sued', title: 'Sonnenaufgang',
+      alt: { de: 'DE alt', en: 'EN alt' }, caption: { de: 'Tag 3', en: 'Day 3' },
+      tags: ['dawn', 'sea'], status: 'ready',
+      width: 3000, height: 2000, origBytes: 10_700_000,
+      exif: { takenAt: new Date('2026-07-04T18:23:11Z'), camera: 'LEICA Q2', lens: 'Summilux', lat: 63.0759, lng: 10.3887 },
+      uploadedBy: u.id,
+    });
+    await media.setVariantBytes('library/2025/a', 6_900_000);
+
+    const name = await dumpDatabase(pool, dir);
+    const dump = JSON.parse(
+      (await import('node:zlib')).gunzipSync((await import('node:fs')).readFileSync(join(dir, name))).toString('utf8'),
+    );
+    expect(dump.version).toBe(3);
+
+    await pool.query('DELETE FROM media');
+    await pool.query('DELETE FROM media_folders');
+    const counts = await restoreDatabase(pool, join(dir, name));
+    expect(counts.media).toBe(1);
+
+    const back = await media.get('library/2025/a');
+    expect(back).toMatchObject({
+      folder: 'Island/Sued', title: 'Sonnenaufgang',
+      alt: { de: 'DE alt', en: 'EN alt' }, caption: { de: 'Tag 3', en: 'Day 3' },
+      tags: ['dawn', 'sea'], width: 3000, height: 2000,
+      origBytes: 10_700_000, variantBytes: 6_900_000, status: 'ready',
+    });
+    expect(back?.exif.camera).toBe('LEICA Q2');
+    expect(back?.exif.lat).toBeCloseTo(63.0759, 4);
+    // Restore ordering: media is deleted BEFORE users, so uploaded_by is not
+    // nulled by the users cascade before the rows come back.
+    expect(back?.uploadedBy).toBe(u.id);
+    expect(await media.folders()).toEqual(expect.arrayContaining(['Island', 'Island/Sued']));
+  });
+
+  it('a v2 dump (no media tables) still restores and leaves media rows to be rescanned', async () => {
+    const { gzipSync } = await import('node:zlib');
+    const { writeFileSync } = await import('node:fs');
+    const v2 = join(dir, 'db-20260102-000000.json.gz');
+    writeFileSync(v2, gzipSync(JSON.stringify({
+      version: 2, createdAt: new Date().toISOString(),
+      tables: { users: [], posts: [], pages: [] },
+    })));
+    const counts = await restoreDatabase(pool, v2);
+    expect(counts.media).toBe(0);
   });
 });

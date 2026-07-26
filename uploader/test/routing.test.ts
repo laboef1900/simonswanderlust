@@ -11,6 +11,14 @@ import { memoryPostStore } from '../src/posts.js';
 import { memoryPageStore } from '../src/pages.js';
 import type { SiteBuilder } from '../src/build.js';
 import type { DbBackup } from '../src/backup.js';
+import { memoryMediaStore } from '../src/media-store.js';
+import type { EncodeQueue } from '../src/encode-queue.js';
+
+/** This suite only exercises host routing, so the queue never needs to run. */
+const noopQueue = (): EncodeQueue => ({
+  enqueue: () => {}, recover: async () => 0, drain: async () => {},
+  stats: () => ({ pending: 0, running: 0 }),
+});
 
 const IMG = 'img.simonswanderlust.com';
 const MAIN = 'simonswanderlust.com';
@@ -62,6 +70,10 @@ function build(extra: Partial<ServerConfig> = {}) {
     siteDir, mapDir: join(dir, 'map'),
     users: memoryUserStore(), sessions: memorySessionStore(), posts: memoryPostStore(),
     pages: memoryPageStore(),
+
+    media: memoryMediaStore({ baseUrl: `https://${IMG}` }),
+
+    encodeQueue: noopQueue(),
     settings: fakeStore(), builder, backupDir, dbBackup: stubBackup(backupDir),
     dbCheck: async () => {},
     ...extra,

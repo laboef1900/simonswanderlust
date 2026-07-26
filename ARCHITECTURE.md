@@ -105,7 +105,35 @@ serving untouched — which is what makes the one-year immutable cache correct. 
 rehost path keeps deterministic `{key}-{width}.{format}` keys so re-imports stay idempotent.)
 `/upload` accepts **one file per request** (a second file in the same multipart body is rejected
 with 413 rather than silently dropped — see [SECURITY.md](SECURITY.md#input-validation)); bulk
-upload is N single-file requests by design. `heroImage` is a remote URL object
+upload is N single-file requests by design.
+
+**Uploads are asynchronous.** The request returns as soon as the untouched original is on disk;
+the AVIF/WebP variants encode in a background queue (`uploader/src/encode-queue.ts`). The
+response is still complete — the storage key is a pure function of the content hash, and a
+metadata-only probe reads orientation-corrected dimensions in ~0.0002 s versus ~0.467 s for the
+re-encode probe it replaced. This exists because encoding a 24 MP frame costs ~19 s and ~1.94 GB
+peak RSS: at concurrency 2 the old synchronous path held the connection for 40–90 s, against a
+reverse proxy whose default read timeout is 60 s. The trade-off is that `{src}-640.webp` 404s
+until the encode lands, so **`POST /posts/:tk/publish` refuses (409) while any photo the post
+references is not `ready`** — that gate is the only thing standing between a lost encode job and
+a published page full of broken images. A key with no `media` row never blocks (WordPress-imported
+and legacy files predate the library).
+
+The queue runs at concurrency **2** (the measured throughput plateau) and shares a lock with the
+site builder (`uploader/src/work-lock.ts`) so a build and image encoding are **mutually
+exclusive** — both peak around 2 GB in one container. A waiting build *preempts* the encode
+backlog at the next job boundary rather than queueing behind it, because Publish awaits the
+rebuild synchronously in the editor. That mutual exclusion is why `docker-compose.yml`'s
+`mem_limit` is sized as `max(build, encode) + baseline` rather than their sum.
+`createShutdown` drains the queue between closing the HTTP server and ending the pg pool, so
+in-flight jobs can still write their final status.
+
+**Disk headroom (#73):** roughly **17.5 MB per photo** (6.9 MB of variants + the 10.7 MB retained
+original) ≈ **1.75 GB per 100 photos**, plus roughly the same again under `/data/backup` because
+originals are captured by the incremental image archive — so a 100-photo trip costs about
+**4 GB all-in**. `POST /upload` therefore refuses with **507** when `/data` lacks room for the
+photo's full cost plus a reserve that keeps a build and a backup able to run, and `GET /health`
+reports free space (as information, never as a health verdict — see SECURITY.md). `heroImage` is a remote URL object
 `{src,width,height,alt}`; body images are referenced by URL and rendered as `<picture>` at build
 time. This contract is mirrored on the blog side in `site/src/lib/images.ts`.
 
@@ -153,6 +181,21 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 - **`users`** — `id`, `username` (unique, case-insensitive), `password_hash` (scrypt), `is_admin`, `created_at`.
 - **`sessions`** — `id` (SHA-256 of the random token), `user_id` (FK, cascade), `expires_at`. Expired rows are swept hourly.
 - **`posts`** — one row per (`translation_key`, `locale`); `slug`, `title`, `date`, `country`, `country_code`, `region`, `excerpt`, `hero_image` (jsonb), `coordinates` (jsonb), optional `stops`/`route`/`key_facts`, `body_markdown`, `images` (jsonb), `status` (`draft`/`published`). Unique on (`locale`, `slug`).
+- **`media`** — one row per storage key: `folder` (virtual, decoupled from the key), `title`,
+  bilingual `alt_*`/`caption_*`, `tags` (`text[]`), dimensions, byte sizes, `status`
+  (`processing`/`ready`/`failed`/`missing`), EXIF (`taken_at`, `camera`, `lens`, `lat`, `lng`)
+  and `uploaded_by` (FK, `ON DELETE SET NULL`).
+- **`media_folders`** — `path` primary key; the single source of truth for the folder tree
+  (every write that sets a `folder` upserts the row and its ancestors).
+
+> **The filesystem stays the source of truth for a file's existence.** A `media` row is metadata
+> *about* a file under `STORAGE_DIR`, never the other way round — which is what preserves the
+> property this document relies on elsewhere: photos survive a database loss.
+> `uploader/src/media-sync.ts` reconciles the two on boot and on demand
+> (`POST /media/rescan`): it backfills rows for keys already on disk, harvests existing alt text
+> by **exact URL match only**, and marks a row whose files vanished as `missing` rather than
+> deleting it. Its walk matches originals as well as variants, so a crashed upload — which has
+> written only `{key}-orig.<ext>` — is discovered and re-queued.
 
 Schema evolution is additive and idempotent — no migration framework, no `schema_version` table.
 `ensureSchema` runs on every boot before the server starts serving, so a new column is added in
@@ -181,10 +224,17 @@ botched restore, accidental delete), **not** against disk failure or host loss.
 `uploader/src/backup.ts` provides app-native logical dumps (no `pg_dump`, no sidecar container):
 
 - **Dump format** — one file per run, `/data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`, containing
-  `{ "version": 2, "createdAt": <ISO>, "tables": { "users": [...], "posts": [...], "pages": [...] } }`
+  `{ "version": 3, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […] } }`
   with full column fidelity. `sessions` are **never** dumped — they're disposable, and token
-  hashes don't belong in a backup file. `version` lets restore reject incompatible dumps
-  (v1 dumps, which predate `pages`, are still accepted).
+  hashes don't belong in a backup file. `version` lets restore reject incompatible dumps; the
+  guard is an **allow-list** (1, 2 and 3), so every bump must widen it or newly written dumps
+  become unrestorable. v1 predates `pages`, v2 predates the media tables; both still restore and
+  leave the tables they never captured alone (for media, `POST /media/rescan` rebuilds the rows
+  from the files on disk).
+  Two ordering details the naive version gets wrong: `media` and `media_folders` are deleted
+  **before** `users` (`media.uploaded_by` is `ON DELETE SET NULL`, so the other order silently
+  nulls every attribution), and `tags` is `text[]`, which cannot round-trip through the
+  `JSON.stringify` path every other non-scalar column uses — it needs a `$n::text[]` bind.
 - **Schedule** — admin-configurable in settings: `backupSchedule` (`off` / `daily` / `weekly`,
   default `off`) and `backupRetention` (1–100 files, default 14). An hourly in-process tick (same
   pattern as the session sweep) runs a backup when due, tracked in

@@ -10,6 +10,10 @@ import { createSiteBuilder } from './build.js';
 import { createDbBackup, isBackupDue } from './backup.js';
 import { createShutdown } from './shutdown.js';
 import { makeDbCheck } from './health.js';
+import { createWorkLock } from './work-lock.js';
+import { pgMediaStore } from './media-store.js';
+import { createEncodeQueue } from './encode-queue.js';
+import { createMediaSync } from './media-sync.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -39,9 +43,27 @@ try {
 // Resolve once so a relative SITE_DIR (dev) can't produce broken relative
 // symlink targets in the builder or an invalid @fastify/static root.
 const siteDir = resolve(process.env.SITE_DIR ?? '/data/site');
+// @ai-warning: ONE lock instance, shared by the builder and the encode queue.
+// `astro build` and sharp both peak around 2 GB in a container with no
+// mem_limit headroom to spare, so they must never run at the same time; the
+// build takes it exclusively and preempts the encode backlog (work-lock.ts).
+// Constructing a second lock here would silently remove that protection.
+const workLock = createWorkLock();
 const builder = createSiteBuilder({
   siteAppDir: process.env.SITE_APP_DIR ?? '/app/site',
   releasesRoot: siteDir,
+  lock: workLock,
+});
+const media = pgMediaStore(pool, { baseUrl });
+const encodeQueue = createEncodeQueue({ store: media, storageDir, lock: workLock });
+const mediaSync = createMediaSync({
+  store: media,
+  storageDir,
+  baseUrl,
+  corpus: async () => {
+    const [postRows, pageKeys] = await Promise.all([posts.usageRows(), pages.keys()]);
+    return { posts: postRows, pages: await Promise.all(pageKeys.map((k) => pages.get(k))) };
+  },
 });
 const backupDir = process.env.BACKUP_DIR ?? '/data/backup';
 const dbBackup = createDbBackup({
@@ -71,6 +93,9 @@ const app = buildServer({
   settings,
   posts,
   pages,
+  media,
+  encodeQueue,
+  mediaSync,
   builder,
   dbBackup,
   backupDir,
@@ -81,6 +106,10 @@ const app = buildServer({
 // end the pg pool, exit 0 (any failure exits 1 — docker kills us anyway).
 const onSignal = createShutdown({
   close: () => app.close(),
+  // Between close and end: in-flight encodes still need the pg pool for their
+  // final setStatus write, or every `docker stop` logs a rejection and leaves
+  // rows stuck in `processing`.
+  drain: () => encodeQueue.drain(),
   end: () => pool.end(),
   exit: (code) => process.exit(code),
   log: (msg) => console.log(msg),
@@ -101,6 +130,10 @@ app
         console.log(r.ok ? `initial build released ${r.release}` : `initial build failed: ${r.error}`));
     }
     housekeeping();
+    // Reconcile disk ↔ database and resume anything a crash left half-encoded.
+    // Both run AFTER listen() and never block boot; a failure is logged, not fatal.
+    void mediaSync.run().catch((e) => console.error('media reconciliation failed:', e));
+    void encodeQueue.recover().catch((e) => console.error('encode queue recovery failed:', e));
   })
   .catch((err) => {
     console.error(err);

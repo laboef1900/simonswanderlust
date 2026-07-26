@@ -100,6 +100,7 @@
           <input id="deHeroFile" type="file" accept="image/*" />
           <input id="deHeroAlt" type="text" placeholder="Alt text (DE)" />
           <button type="button" id="deHeroUpload" class="btn-secondary">Upload hero</button>
+          <button type="button" id="deHeroLibrary" class="btn-secondary">Choose from library</button>
           <button type="button" id="deHeroSuggest" class="btn-secondary">Suggest alt text</button>
           <p id="deHeroStatus" class="muted"></p>
           <input id="deHeroSrc" type="hidden" />
@@ -134,6 +135,7 @@
           <input id="enHeroFile" type="file" accept="image/*" />
           <input id="enHeroAlt" type="text" placeholder="Alt text (EN)" />
           <button type="button" id="enHeroUpload" class="btn-secondary">Upload hero</button>
+          <button type="button" id="enHeroLibrary" class="btn-secondary">Choose from library</button>
           <button type="button" id="enHeroSuggest" class="btn-secondary">Suggest alt text</button>
           <p id="enHeroStatus" class="muted"></p>
           <input id="enHeroSrc" type="hidden" />
@@ -182,6 +184,8 @@
     <script src="/admin/vendor/easymde.min.js"></script>
     <script src="/admin/llm.js"></script>
     <script src="/admin/alt-suggest.js"></script>
+    <script src="/admin/media-api.js"></script>
+    <script src="/admin/media-picker.js"></script>
     <script>
       'use strict';
       const $ = (id) => document.getElementById(id);
@@ -409,7 +413,12 @@
           $(locale + 'HeroHeight').value = body.height;
           // Hidden inputs are set programmatically — no input event fires.
           guard.markDirty();
-          statusEl.textContent = 'Hero uploaded: ' + body.src;
+          // Encoding is asynchronous now (see server.ts POST /upload): the URL
+          // and dimensions are final, but the variants land a few seconds later
+          // and Publish refuses until they do. Say so rather than letting the
+          // author wonder why the preview shows a broken image.
+          statusEl.textContent = 'Hero uploaded: ' + body.src
+            + (body.status === 'processing' ? ' — still processing (Publish waits for it)' : '');
         } catch (e) {
           statusEl.textContent = 'Upload failed: ' + e;
         }
@@ -417,6 +426,31 @@
 
       $('deHeroUpload').addEventListener('click', () => uploadHero('de'));
       $('enHeroUpload').addEventListener('click', () => uploadHero('en'));
+
+      // ---- pick an existing hero from the media library ----
+      // The library is the other half of "upload": most heroes already exist,
+      // and re-uploading one would mint a second copy of the same photo under
+      // a new content-hash key.
+      function pickHero(locale) {
+        MediaPicker.open({
+          onUnauthed: () => guard.redirectToLogin(),
+          onPick: (item) => {
+            $(locale + 'HeroSrc').value = item.src;
+            $(locale + 'HeroWidth').value = item.width;
+            $(locale + 'HeroHeight').value = item.height;
+            // Alt travels with the photo when the field is still empty — the
+            // library is where alt text is maintained.
+            const altInput = $(locale + 'HeroAlt');
+            const libraryAlt = item.alt && item.alt[locale];
+            if (libraryAlt && !altInput.value.trim()) altInput.value = libraryAlt;
+            // Hidden inputs are set programmatically — no input event fires.
+            guard.markDirty();
+            $(locale + 'HeroStatus').textContent = 'Hero from library: ' + item.src;
+          },
+        });
+      }
+      $('deHeroLibrary').addEventListener('click', () => pickHero('de'));
+      $('enHeroLibrary').addEventListener('click', () => pickHero('en'));
 
       // ---- body image upload + insert ----
       async function uploadBodyImg(locale) {
@@ -453,7 +487,8 @@
           const md = '![' + (altInput.value || '') + '](' + body.src + ')';
           mde.codemirror.replaceSelection(md);
 
-          statusEl.textContent = 'Inserted: ' + body.src;
+          statusEl.textContent = 'Inserted: ' + body.src
+            + (body.status === 'processing' ? ' — still processing (Publish waits for it)' : '');
           fileInput.value = '';
           altInput.value = '';
         } catch (e) {

@@ -17,3 +17,8 @@ ai-youtube-channel/
 
 # Runtime map basemap + glyphs (binaries, served by nginx) — never commit
 /map-assets/
+
+# npm/vitest scratch created by running a tool from the repo root (the real
+# trees are site/node_modules and uploader/node_modules, ignored in their own
+# .gitignore files).
+node_modules/

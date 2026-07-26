@@ -2,7 +2,7 @@ import { readdir } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import sharp from 'sharp';
 import { readExif } from './exif.js';
-import { VARIANT_FILE_RE } from './media.js';
+import { VARIANT_FILE_RE } from './media-files.js';
 import { isOriginalFile } from './storage.js';
 
 export interface ExifAudit {
