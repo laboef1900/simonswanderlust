@@ -1,7 +1,9 @@
 import type { DbPool } from './db.js';
+import { imagesMapError, normalizeGalleryFences, type ImageMeta } from './body-content.js';
 
 export type Locale = 'de' | 'en';
-export interface ImageDims { width: number; height: number }
+/** See `body-content.ts` — the single source of truth for this shape. */
+export type ImageDims = ImageMeta;
 export interface PageContent { locale: Locale; title: string; bodyMarkdown: string; images: Record<string, ImageDims> }
 export interface PagePair { key: string; de: PageContent; en: PageContent }
 
@@ -18,7 +20,27 @@ export function validatePagePair(pair: PagePair): void {
   if (!isSafePageKey(pair.key)) throw new PageError(`invalid page key "${pair.key}" (lowercase a-z, 0-9, hyphen)`);
   for (const locale of ['de', 'en'] as Locale[]) {
     if (pair[locale].locale !== locale) throw new PageError(`locale field mismatch for ${locale}`);
+    // Same control as posts: `images` is author-supplied jsonb that reaches
+    // the render boundary — see body-content.ts `imagesMapError`.
+    const err = imagesMapError(pair[locale].images);
+    if (err) throw new PageError(`${locale}: ${err}`);
   }
+}
+
+/**
+ * Save-time normalization, mirroring `draftWithDefaults` for posts: lift
+ * ```gallery per-line metadata into the `images` map so a page body stores the
+ * canonical bare-URL fence. Runs inside `save()` in BOTH stores (after
+ * `validatePagePair`), so it is the single chokepoint for page writes.
+ */
+function pageWithDefaults(pair: PagePair): PagePair {
+  const fill = (c: PageContent): PageContent => {
+    const images = c.images ?? {};
+    if (typeof c.bodyMarkdown !== 'string') return { ...c, images };
+    const n = normalizeGalleryFences(c.bodyMarkdown, images);
+    return { ...c, bodyMarkdown: n.bodyMarkdown, images: n.images };
+  };
+  return { ...pair, de: fill(pair.de), en: fill(pair.en) };
 }
 
 export interface PageStore {
@@ -40,8 +62,9 @@ export function memoryPageStore(): PageStore {
     },
     async save(pair) {
       validatePagePair(pair);
+      const normalized = pageWithDefaults(pair);
       for (const locale of ['de', 'en'] as Locale[]) {
-        byKeyLocale.set(`${pair.key}:${locale}`, structuredClone({ ...pair[locale], locale }));
+        byKeyLocale.set(`${pair.key}:${locale}`, structuredClone({ ...normalized[locale], locale }));
       }
       return this.get(pair.key);
     },
@@ -70,8 +93,9 @@ export function pgPageStore(pool: DbPool): PageStore {
     },
     async save(pair) {
       validatePagePair(pair);
+      const normalized = pageWithDefaults(pair);
       for (const locale of ['de', 'en'] as Locale[]) {
-        const c = pair[locale];
+        const c = normalized[locale];
         await pool.query(
           `INSERT INTO pages (key, locale, title, body_markdown, images, updated_at)
            VALUES ($1,$2,$3,$4,$5::jsonb, now())

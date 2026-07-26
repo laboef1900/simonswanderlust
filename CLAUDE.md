@@ -165,7 +165,7 @@ blog/
 │       ├── scripts/travel-map.ts               #   MapLibre GL island; initializes full map and mini-maps
 │       └── layouts/  ·  styles/  ·  assets/
 └── uploader/                      # self-hosted app: CMS + image service + blog serving (Node/Fastify/sharp)
-    ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · settings · posts · build · backup · export · wxr-parse · wp-content · wp-images · wp-import
+    ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · settings · posts · pages · body-content · build · backup · export · preview · wxr-parse · wp-content · wp-images · wp-import
     ├── public/                    #   index.html (hero upload) · import.html (WordPress import) · editor/posts/about/settings/users
     ├── test/                      #   Vitest suites (integration suites run when TEST_DATABASE_URL is set)
     └── .env.example · README.md

@@ -18,3 +18,23 @@
   --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
 }
+
+/* ── gallery (```gallery fence → body-images.ts galleryNode) ──────────────
+ * Plain CSS classes, not Tailwind utilities, for three reasons:
+ *   (i)  uploader/src/preview.ts inlines its own STYLE and loads no Tailwind
+ *        at all, so this block has to be hand-written there anyway — and
+ *        preview.test.ts asserts the two stay in sync (the .keyfacts block is
+ *        the existing precedent for that hand-mirroring);
+ *   (ii) the planned justified layout drives per-photo flex ratios from
+ *        COMPUTED custom properties, which no class-name scanner can see;
+ *   (iii) it is one cohesive component rather than a utility soup.
+ * (Not because runtime-injected markup escapes Tailwind's source scanning — it
+ * doesn't: Tailwind 4 scans source text, src/lib/*.ts is in the scanned tree,
+ * and pictureNode's literal `class: 'my-8'` works on the live site today.)
+ * @ai-context docs/superpowers/specs/2026-07-26-media-library-and-galleries-design.md
+ */
+.jgal { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.75rem; margin: 2rem 0; }
+.jgal__item { margin: 0; }
+.jgal__item a { display: block; }
+.jgal__item img { display: block; width: 100%; height: auto; border-radius: 0.5rem; }
+.jgal__cap { margin-top: 0.4rem; font-size: 0.8rem; line-height: 1.4; color: #4a5563; }

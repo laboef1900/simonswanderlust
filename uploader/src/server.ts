@@ -18,7 +18,7 @@ import {
 import { SettingsError, type SettingsStore } from './settings.js';
 import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow } from './posts.js';
 import { renderPreviewHtml } from './preview.js';
-import { type PageStore, type PagePair, type PageContent, PageError } from './pages.js';
+import { type PageStore, type PagePair, type PageContent, type ImageDims, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
 import { importWxr } from './wp-import.js';
@@ -452,7 +452,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply
       .type('text/html; charset=utf-8')
       .header('cache-control', 'no-store')
-      .send(await renderPreviewHtml(pair, locale));
+      .send(await renderPreviewHtml(pair, locale, imageBase));
   });
 
   const upsert = async (req: { body: unknown }, reply: import('fastify').FastifyReply, tk: string) => {
@@ -591,7 +591,11 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         locale: loc,
         title: String(src.title ?? ''),
         bodyMarkdown: String(src.bodyMarkdown ?? ''),
-        images: (src.images ?? {}) as Record<string, { width: number; height: number }>,
+        // @ai-warning: this cast is the reason `validatePagePair` runs
+        // `imagesMapError` — the map is whatever JSON the client sent, and it
+        // ends up at the render boundary in site/src/lib/body-images.ts.
+        // Never "simplify" the validation away on the strength of this type.
+        images: (src.images ?? {}) as Record<string, ImageDims>,
       };
     };
     const pair: PagePair = { key, de: mkLocale('de'), en: mkLocale('en') };

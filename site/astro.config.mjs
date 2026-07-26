@@ -19,6 +19,16 @@ export default defineConfig({
     locales: ['de', 'en'],
     routing: { prefixDefaultLocale: false },
   },
+  // @ai-warning: keep in lockstep with MARKDOWN_OPTIONS in
+  // src/lib/render-markdown.ts (the uploader's draft preview renders through
+  // that module) — render-markdown.test.ts asserts the two agree.
+  // 'gallery' must stay excluded from syntax highlighting: it is how the
+  // ```gallery fence keeps its `language-gallery` class through
+  // rehype-sanitize so body-images.ts can turn it into a photo grid.
+  markdown: {
+    syntaxHighlight: { type: 'shiki', excludeLangs: ['math', 'gallery'] },
+    shikiConfig: { theme: 'github-dark' },
+  },
   integrations: [mdx(), sitemap()],
   vite: { plugins: [tailwindcss()] },
 });

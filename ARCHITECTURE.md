@@ -69,7 +69,13 @@ Plus the **`pgdata`** volume — Postgres data.
    `ASTRO_TELEMETRY_DISABLED=1`. Astro's Content Layer loader (`site/src/lib/postgres-loader.ts`)
    `SELECT`s the published rows and turns each into a content entry. Post bodies are rendered
    Markdown → HTML, **sanitized**, and body images become responsive `<picture>`
-   (`site/src/lib/body-images.ts`).
+   (`site/src/lib/body-images.ts`). A ` ```gallery ` fence (one image URL per line) becomes a
+   photo grid in the same pass — its URLs are allow-listed against the image host's origin,
+   because that markup is injected *after* the sanitizer runs (see
+   [SECURITY.md](SECURITY.md#content-injected-after-sanitize-body-images-and-galleries)). The
+   fence's per-line `| WIDTHxHEIGHT | alt="…" | caption="…"` metadata is lifted into the row's
+   `images` map at save time by `uploader/src/body-content.ts`, and re-attached by the MDX
+   exporter so a backup round-trips.
 5. **Release** — the build lands in a fresh `releases/<timestamp>` dir under `/data/site` (built
    into a CWD-local tmp dir first to dodge an `EXDEV` rename across the volume boundary, then
    `cp`'d), then the `current` symlink is **atomically** swapped to it (old releases pruned, keeping

@@ -1,8 +1,14 @@
 import { randomUUID } from 'node:crypto';
+import { imagesMapError, normalizeGalleryFences, type ImageMeta } from './body-content.js';
 
 export type Locale = 'de' | 'en';
 export interface HeroImage { src: string; width: number; height: number; alt: string }
-export interface ImageDims { width: number; height: number }
+/**
+ * Intrinsic dimensions plus the optional gallery alt/caption — see
+ * `body-content.ts`, the single source of truth for the shape. Kept as a local
+ * alias because `ImageDims` is the name the rest of the uploader already uses.
+ */
+export type ImageDims = ImageMeta;
 export interface PostLocale {
   locale: Locale; slug: string; title: string; excerpt: string;
   heroImage: HeroImage; bodyMarkdown: string; images: Record<string, ImageDims>;
@@ -198,7 +204,12 @@ export function normalizeBodyImages(
   bodyMarkdown: string,
   images: Record<string, ImageDims>,
 ): { bodyMarkdown: string; images: Record<string, ImageDims> } {
-  const merged: Record<string, ImageDims> = { ...images };
+  // Gallery fences first: a ```gallery line may carry `| WxH | alt="…"`
+  // metadata that belongs in the images map (see body-content.ts). Its output
+  // contains no <BodyImage> tags, so the two passes are independent.
+  const gal = normalizeGalleryFences(bodyMarkdown, images);
+  bodyMarkdown = gal.bodyMarkdown;
+  const merged: Record<string, ImageDims> = { ...gal.images };
   // Attrs are consumed in disjoint chunks — "quoted", {braced}, or any char that opens
   // neither and isn't '>' — so a '>' or '/>' inside a quoted value can't terminate the tag.
   const tagRe = /<BodyImage\s+((?:"[^"]*"|\{[^}]*\}|[^>"{])*?)\/>/g;
@@ -228,11 +239,22 @@ export function normalizeBodyImages(
  * (`coordinates`, `heroImage`) so a draft can never write NULL (Postgres 23502).
  * The placeholders match the WordPress-import defaults and still fail
  * `validateForPublish` until the author completes them.
- * Also normalizes pasted `<BodyImage …/>` tags — this is the single chokepoint
- * shared by memoryPostStore and pgPostStore (and the WP importer via upsertDraft).
+ * Also normalizes pasted `<BodyImage …/>` tags and ```gallery fences, and
+ * validates the `images` map — this is the single chokepoint shared by
+ * memoryPostStore and pgPostStore (and the WP importer via upsertDraft).
+ * @ai-warning The validation MUST live here, not in `validateDraft`: the WXR
+ * importer calls `upsertDraft` directly (wp-import.ts) and never runs
+ * `validateDraft`, so validation placed there alone would leave every imported
+ * post's `images` map unchecked. See body-content.ts `imagesMapError` for why
+ * an unchecked map is an XSS vector rather than a tidiness problem.
  */
 function draftWithDefaults(pair: PostPair): PostPair {
-  const fillLocale = (l: PostLocale): PostLocale => {
+  // The locale is passed in rather than read off `l`: a partial draft payload
+  // can omit `locale` at runtime despite the TS type, and the error message
+  // must still name which side failed.
+  const fillLocale = (l: PostLocale, locale: Locale): PostLocale => {
+    const err = imagesMapError(l.images);
+    if (err) throw new PostError(`${locale}: ${err}`);
     const filled: PostLocale = {
       ...l,
       heroImage: l.heroImage ?? PLACEHOLDER_HERO,
@@ -246,8 +268,8 @@ function draftWithDefaults(pair: PostPair): PostPair {
   return {
     ...pair,
     shared: { ...pair.shared, coordinates: pair.shared.coordinates ?? { lat: 0, lng: 0 } },
-    de: fillLocale(pair.de),
-    en: fillLocale(pair.en),
+    de: fillLocale(pair.de, 'de'),
+    en: fillLocale(pair.en, 'en'),
   };
 }
 

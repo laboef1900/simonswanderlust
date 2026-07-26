@@ -81,17 +81,35 @@ const STYLE = `
   article figure { margin: 2rem 0; }
   article pre { overflow-x: auto; padding: 1rem; border-radius: 0.5rem; }
   article blockquote { border-left: 3px solid #d23b30; margin-left: 0; padding-left: 1rem; color: #4a5563; }
+  /* @ai-warning: hand-mirrored from site/src/styles/global.css (the .keyfacts
+     block above is the same pattern). This page loads NO site CSS, so without
+     these rules a gallery renders as a stacked column of full-width images.
+     preview.test.ts asserts every .jgal selector in global.css appears here —
+     change the two together. */
+  .jgal { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.75rem; margin: 2rem 0; }
+  .jgal__item { margin: 0; }
+  .jgal__item a { display: block; }
+  .jgal__item img { display: block; width: 100%; height: auto; border-radius: 0.5rem; }
+  .jgal__cap { margin-top: 0.4rem; font-size: 0.8rem; line-height: 1.4; color: #4a5563; }
 `;
 
 /**
  * Full standalone HTML page for one locale of a post pair. All frontmatter
  * strings are HTML-escaped; the body goes through renderMarkdown →
  * transformBodyImages (which sanitizes the HTML before injecting <picture>).
+ *
+ * @param imageOrigin the app's own image base URL (`cfg.baseUrl`) — the only
+ *   origin a ```gallery fence may reference. Passed in rather than read from
+ *   the environment so `transformBodyImages` stays pure: it runs both under
+ *   `astro build` and here under tsx, where `import.meta.env` does not exist.
+ *   Sourcing it from the app's own config (instead of the site build's
+ *   `PUBLIC_BASE_URL` fallback) is what makes draft galleries work on a dev
+ *   machine as well as in production.
  */
-export async function renderPreviewHtml(pair: PostPair, locale: Locale): Promise<string> {
+export async function renderPreviewHtml(pair: PostPair, locale: Locale, imageOrigin: string): Promise<string> {
   const post = pair[locale];
   const shared = pair.shared;
-  const body = transformBodyImages(await renderMarkdown(post.bodyMarkdown), post.images);
+  const body = transformBodyImages(await renderMarkdown(post.bodyMarkdown), post.images, imageOrigin);
 
   const parsedDate = shared.date ? new Date(shared.date) : undefined;
   const metaParts = [
