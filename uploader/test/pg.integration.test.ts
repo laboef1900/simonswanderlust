@@ -358,6 +358,72 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     await expect(store.getRevision(created.translationKey, randomUUID())).resolves.toBeNull();
   });
 
+  it('round-trips the trip date unchanged east of UTC (no toISOString day-shift)', async () => {
+    // Regression: node-postgres parses a `date` column to LOCAL midnight, so
+    // formatting it with toISOString() reported the previous day on a UTC+X
+    // host — and since the editor saves what it loaded, every re-save walked
+    // the date back another day. Run under TZ=Europe/Zurich to see it fail.
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    const base = {
+      translationKey: '', status: 'draft' as const,
+      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de' as const, slug: 'tz-de', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en' as const, slug: 'tz-en', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    };
+    const created = await store.upsertDraft(base);
+    const loaded = await store.get(created.translationKey);
+    expect(loaded?.shared.date).toBe('2024-10-03');
+    expect((await store.list()).find((p) => p.translationKey === created.translationKey)?.date).toBe('2024-10-03');
+    // Saving what was loaded must not drift the date.
+    const resaved = await store.upsertDraft({ ...loaded!, translationKey: created.translationKey });
+    expect(resaved.shared.date).toBe('2024-10-03');
+    await pool.end();
+  });
+
+  // @ai-warning: pgPostStore.list() is covered ONLY here. posts.test.ts
+  // exercises the memory store, so a pg-only list() regression (e.g. a column
+  // dropped from the narrowed SELECT) passes a default `npm test` — this suite
+  // is describe.skip without TEST_DATABASE_URL.
+  it('list() summaries carry hero, trip date, country and region from the narrowed SELECT', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    const created = await store.upsertDraft({
+      translationKey: '', status: 'draft',
+      shared: { date: '2024-10-03', country: 'Rumänien', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de', slug: 'sum-de', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/hero', width: 1600, height: 900, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en', slug: 'sum-en', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/hero', width: 1600, height: 900, alt: 'a' }, bodyMarkdown: '', images: {} },
+    });
+    const summary = (await store.list()).find((p) => p.translationKey === created.translationKey);
+    expect(summary).toMatchObject({
+      heroSrc: 'https://i/hero', heroWidth: 1600,
+      date: '2024-10-03', country: 'Rumänien', region: 'europe',
+      // has_en_body is now computed in SQL, since body_markdown left the SELECT.
+      hasEnBody: false,
+    });
+    await pool.end();
+  });
+
+  it('list() falls back to the EN hero when the DE row has the empty-src placeholder', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    const created = await store.upsertDraft({
+      translationKey: '', status: 'draft',
+      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de', slug: 'fb-de', title: 'T', excerpt: 'e', heroImage: { src: '', width: 0, height: 0, alt: '' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en', slug: 'fb-en', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/en-hero', width: 800, height: 600, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    });
+    const summary = (await store.list()).find((p) => p.translationKey === created.translationKey);
+    expect(summary).toMatchObject({ heroSrc: 'https://i/en-hero', heroWidth: 800 });
+    await pool.end();
+  });
+
   it('prunes the history to the newest REVISION_CAP snapshots', async () => {
     const store = pgPostStore(pool);
     let cur = await store.upsertDraft(base('cap', 'v1'));

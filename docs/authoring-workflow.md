@@ -113,6 +113,26 @@ list marks such posts with an **edited** badge and the editor status line shows
 *has unpublished changes*. Your edits go live only when you hit **Publish** again, which
 refreshes the snapshot.
 
+### Finding posts, and acting on several at once
+
+The Posts list shows a hero thumbnail per post plus its country and trip date, and has a
+**search / status / region / country / sort** toolbar above it. All of that runs in the browser
+against the already-loaded list, so it is instant and never hits the server — that is the right
+trade at this size and is documented to move server-side once the list grows to a few hundred
+posts. A post with no hero yet shows a dashed placeholder instead of a broken image.
+
+Tick the checkboxes to select posts (the header checkbox selects everything currently visible,
+i.e. it respects the filters), then use **Publish**, **Unpublish** or **Delete** in the bar that
+appears. Admin-only, like their single-post equivalents. Two things worth knowing:
+
+- **The whole batch triggers one rebuild**, at the end — not one per post. Bulk publish also
+  writes each post's MDX backup, exactly like publishing one at a time.
+- **Failures are reported per post, and the rest of the batch still runs.** A post that fails
+  validation (or a half-created pair with only one locale row) is listed by name in the status
+  box with its reason; everything else goes through.
+- **Bulk delete asks you to type `DELETE`.** There is no undo — revisions are per-save snapshots
+  of a post, so deleting the post takes them with it.
+
 ### Export / backup
 
 The **Export all** button (Posts list) writes MDX backup files for all posts to

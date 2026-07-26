@@ -746,6 +746,126 @@ describe('POST /users/me/password (change password)', () => {
   });
 });
 
+describe('POST /posts/bulk', () => {
+  const sample = (slug: string) => ({
+    translationKey: '', status: 'draft',
+    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de', slug: `de-${slug}`, title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en', slug: `en-${slug}`, title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+  });
+
+  const create = async (b: Built, cookie: { sid: string }, slug: string): Promise<string> => {
+    const res = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample(slug) });
+    return res.json().translationKey;
+  };
+  const bulk = async (b: Built, cookie: { sid: string } | undefined, payload: Record<string, unknown>) =>
+    b.app.inject({ method: 'POST', url: '/posts/bulk', headers: { 'content-type': 'application/json' }, ...(cookie ? { cookies: cookie } : {}), payload });
+
+  it('is admin-only: 401 anonymous, 403 for a non-admin author', async () => {
+    const b = build();
+    expect((await bulk(b, undefined, { action: 'publish', keys: ['x'] })).statusCode).toBe(401);
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    expect((await bulk(b, cookie, { action: 'publish', keys: ['x'] })).statusCode).toBe(403);
+  });
+
+  it('rejects an unknown action, a non-array keys, an empty selection and an oversize batch', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    expect((await bulk(b, cookie, { action: 'drop-table', keys: ['x'] })).statusCode).toBe(400);
+    expect((await bulk(b, cookie, { action: 'publish', keys: 'x' })).statusCode).toBe(400);
+    expect((await bulk(b, cookie, { action: 'publish', keys: [] })).statusCode).toBe(400);
+    const many = Array.from({ length: 101 }, (_, i) => `k${i}`);
+    const tooMany = await bulk(b, cookie, { action: 'publish', keys: many });
+    expect(tooMany.statusCode).toBe(400);
+    expect(tooMany.json().error).toMatch(/at most 100/);
+  });
+
+  it('publishes several posts with ONE rebuild and writes an MDX backup for each', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder, backupDir: join(dir, 'backup') });
+    const { cookie } = await authed(b);
+    const tks = [await create(b, cookie, 'a'), await create(b, cookie, 'b')];
+    const res = await bulk(b, cookie, { action: 'publish', keys: tks });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ action: 'publish', succeeded: 2, failed: 0, build: { ok: true, release: 'r1' } });
+    expect(s.calls.length).toBe(1); // one build for the whole batch, not one per post
+    // exportPost must not be skipped on the bulk path.
+    expect(existsSync(join(dir, 'backup', 'trips', 'de', 'de-a.mdx'))).toBe(true);
+    expect(existsSync(join(dir, 'backup', 'trips', 'en', 'en-b.mdx'))).toBe(true);
+    const list = (await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json();
+    expect(list.every((p: { status: string }) => p.status === 'published')).toBe(true);
+  });
+
+  it('reports failures per post instead of aborting the batch', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const good = await create(b, cookie, 'a');
+    const res = await bulk(b, cookie, { action: 'publish', keys: [good, 'does-not-exist'] });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toMatchObject({ succeeded: 1, failed: 1 });
+    expect(body.results).toContainEqual({ key: good, ok: true });
+    expect(body.results).toContainEqual({ key: 'does-not-exist', ok: false, error: 'post not found' });
+    expect(s.calls.length).toBe(1); // the successful one still went live
+  });
+
+  it('surfaces a validation failure per post without touching the others', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const ok = await create(b, cookie, 'a');
+    const incomplete = sample('b'); incomplete.de.excerpt = '';
+    const bad = (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: incomplete })).json().translationKey;
+    const body = (await bulk(b, cookie, { action: 'publish', keys: [ok, bad] })).json();
+    expect(body).toMatchObject({ succeeded: 1, failed: 1 });
+    expect(body.results.find((r: { key: string }) => r.key === bad).error).toMatch(/excerpt required/);
+  });
+
+  it('unpublish reports a draft as a per-post failure', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const tk = await create(b, cookie, 'a');
+    const body = (await bulk(b, cookie, { action: 'unpublish', keys: [tk] })).json();
+    expect(body).toMatchObject({ succeeded: 0, failed: 1 });
+    expect(body.results[0].error).toBe('post is not published');
+  });
+
+  it('deletes drafts WITHOUT rebuilding, but rebuilds when a deleted post was live', async () => {
+    // Mirrors DELETE /posts/:tk's wasPublished rule: nothing that was on the
+    // public site changed, so there is nothing to rebuild.
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const draft = await create(b, cookie, 'a');
+    const dropDrafts = await bulk(b, cookie, { action: 'delete', keys: [draft] });
+    expect(dropDrafts.json()).toMatchObject({ succeeded: 1, failed: 0 });
+    expect(dropDrafts.json().build).toBeUndefined();
+    expect(s.calls.length).toBe(0);
+
+    const live = await create(b, cookie, 'b');
+    await b.app.inject({ method: 'POST', url: `/posts/${live}/publish`, cookies: cookie });
+    expect(s.calls.length).toBe(1); // the publish
+    const dropLive = await bulk(b, cookie, { action: 'delete', keys: [live] });
+    expect(dropLive.json()).toMatchObject({ succeeded: 1, build: { ok: true, release: 'r1' } });
+    expect(s.calls.length).toBe(2);
+  });
+
+  it('de-duplicates repeated keys so a post is acted on (and reported) once', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const tk = await create(b, cookie, 'a');
+    const body = (await bulk(b, cookie, { action: 'publish', keys: [tk, tk, tk] })).json();
+    expect(body.results).toHaveLength(1);
+    expect(body).toMatchObject({ succeeded: 1, failed: 0 });
+  });
+
+  it('a failed rebuild is surfaced but the store changes still land', async () => {
+    const s = stubBuilder({ ok: false, error: 'a build is already running' });
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const tk = await create(b, cookie, 'a');
+    const body = (await bulk(b, cookie, { action: 'publish', keys: [tk] })).json();
+    expect(body).toMatchObject({ succeeded: 1, build: { ok: false, error: 'a build is already running' } });
+    expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('published');
+  });
+});
+
 describe('posts editor', () => {
   const sample = () => ({
     translationKey: '', status: 'draft',
@@ -904,6 +1024,16 @@ describe('posts editor', () => {
     expect(del.statusCode).toBe(200);
     expect(del.json()).toEqual({ deleted: true, build: { ok: false, error: 'a build is already running' } });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).statusCode).toBe(404);
+  });
+
+  it('GET /posts summaries carry the hero, trip date, country and region for the list UI', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const [summary] = (await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json();
+    expect(summary).toMatchObject({
+      heroSrc: 'https://i/h', heroWidth: 9,
+      date: '2024-10-03', country: 'X', region: 'europe',
+    });
   });
 
   it('GET /posts/:tk includes updatedAt, and a PUT echoing it saves fine', async () => {

@@ -517,6 +517,81 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send({ published: true, build, updatedAt: published?.updatedAt });
   });
 
+  // Bulk publish / unpublish / delete from the posts list. Admin-only for the
+  // same reason the single-post routes are: every action here changes what the
+  // public site serves.
+  //
+  // Three things this deliberately does NOT do:
+  //  • It does not abort on the first failure. `posts.get()` returns null for a
+  //    stranded single-locale pair that `list()` still shows, so a perfectly
+  //    ordinary selection can contain a key that cannot be acted on — report it
+  //    per post and carry on.
+  //  • It does not rebuild per post. `createSiteBuilder` already coalesces
+  //    concurrent builds one-deep, so N calls would be correct but would
+  //    serialise N full Astro builds; mutate first, then build once.
+  //  • It does not skip the MDX backup. The single-post publish route runs
+  //    `exportPost` best-effort afterwards; omitting it here would silently
+  //    leave bulk-published posts without a backup.
+  const BULK_ACTIONS = ['publish', 'unpublish', 'delete'] as const;
+  type BulkAction = (typeof BULK_ACTIONS)[number];
+  /** Cap: an unbounded array is an authenticated N-round-trip amplifier against
+   *  the process that also serves the blog. */
+  const MAX_BULK_KEYS = 100;
+
+  app.post('/posts/bulk', { preHandler: requireAdmin }, async (req, reply) => {
+    const b = (req.body ?? {}) as { action?: unknown; keys?: unknown };
+    const action = String(b.action ?? '') as BulkAction;
+    if (!BULK_ACTIONS.includes(action)) {
+      return reply.code(400).send({ error: `action must be one of ${BULK_ACTIONS.join(', ')}` });
+    }
+    if (!Array.isArray(b.keys)) return reply.code(400).send({ error: 'keys must be an array' });
+    if (b.keys.length > MAX_BULK_KEYS) {
+      return reply.code(400).send({ error: `at most ${MAX_BULK_KEYS} posts per request` });
+    }
+    // Dedupe: a repeated key would otherwise be processed (and reported) twice.
+    const keys = [...new Set(b.keys.map((k) => String(k)))].filter((k) => k !== '');
+    if (keys.length === 0) return reply.code(400).send({ error: 'keys must not be empty' });
+
+    const results: { key: string; ok: boolean; error?: string }[] = [];
+    // Whether anything that was actually LIVE changed — a bulk delete of drafts
+    // only needs no rebuild, mirroring DELETE /posts/:tk's `wasPublished` rule.
+    let liveChanged = false;
+    for (const tk of keys) {
+      try {
+        const pair = await posts.get(tk);
+        if (!pair) throw new PostError('post not found');
+        if (action === 'publish') {
+          validateForPublish(pair);
+          await posts.publish(tk);
+          const published = await posts.get(tk);
+          if (published) await exportPost(published, cfg.backupDir).catch(() => { /* best-effort backup */ });
+          liveChanged = true;
+        } else if (action === 'unpublish') {
+          if (pair.status !== 'published') throw new PostError('post is not published');
+          await posts.unpublish(tk);
+          liveChanged = true;
+        } else {
+          if (pair.status === 'published') liveChanged = true;
+          await posts.remove(tk);
+        }
+        results.push({ key: tk, ok: true });
+      } catch (e) {
+        // Never leak an internal error to the client (global-handler contract):
+        // PostError messages are ours and safe; anything else is logged and
+        // reported generically.
+        if (e instanceof PostError) {
+          results.push({ key: tk, ok: false, error: e.message });
+        } else {
+          console.error(`bulk ${action} failed for ${tk}:`, e);
+          results.push({ key: tk, ok: false, error: 'internal error' });
+        }
+      }
+    }
+    const succeeded = results.filter((r) => r.ok).length;
+    const build = liveChanged ? await cfg.builder.build() : undefined;
+    return reply.send({ action, succeeded, failed: results.length - succeeded, results, ...(build ? { build } : {}) });
+  });
+
   // @ai-warning: the emergency brake — flips a published pair back to draft and
   // rebuilds so the live site drops it. Same trust boundary as publish: admin-only.
   app.post('/posts/:tk/unpublish', { preHandler: requireAdmin }, async (req, reply) => {

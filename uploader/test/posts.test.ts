@@ -26,6 +26,26 @@ describe('memoryPostStore', () => {
     expect(list[0]).toMatchObject({ titleDe: 'Bukarest', slugDe: 'bukarest', slugEn: 'bucharest', status: 'draft' });
   });
 
+  it('list summaries carry the hero, trip date, country and region for the list UI', async () => {
+    const s = memoryPostStore();
+    const created = await s.upsertDraft(pair());
+    const [summary] = await s.list();
+    expect(summary).toMatchObject({
+      translationKey: created.translationKey,
+      heroSrc: 'https://img/h', heroWidth: 768,
+      date: '2024-10-03', country: 'Rumänien', region: 'europe',
+    });
+  });
+
+  it('list falls back to the EN hero when the DE row still has the empty-src placeholder', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.de.heroImage = { src: '', width: 0, height: 0, alt: '' };
+    p.en.heroImage = { src: 'https://img/en-hero', width: 800, height: 600, alt: 'a' };
+    await s.upsertDraft(p);
+    expect((await s.list())[0]).toMatchObject({ heroSrc: 'https://img/en-hero', heroWidth: 800 });
+  });
+
   it('get returns the full pair; update preserves the key', async () => {
     const s = memoryPostStore();
     const created = await s.upsertDraft(pair());
