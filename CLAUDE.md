@@ -337,10 +337,12 @@ Use comments to leave hints for future sessions:
   an EXIF allow-list instead of full metadata (no GPS/XMP/IPTC), `POST /upload` rejects
   multi-file requests with 413 instead of silently dropping files, an explicit `requestTimeout`
   is set, and a new `audit-exif` CLI subcommand reports the stored corpus's actual EXIF/GPS
-  exposure (found 102 variants with EXIF, zero with GPS). A `strip-gps` remediation subcommand
-  was deliberately **not** built in this phase — that audit came back clean, so it is deferred
+  exposure (found 102 variants with EXIF, zero with GPS, against the **local development
+  corpus** — the server has not yet been audited). A `strip-gps` remediation subcommand was
+  deliberately **not** built in this phase — that audit came back clean, so it is deferred
   until a server-side `audit-exif` run finds otherwise. See
-  `docs/superpowers/specs/2026-07-26-media-library-and-galleries-design.md`.
+  `docs/superpowers/specs/2026-07-26-media-library-and-galleries-design.md` (branch
+  `feature/phase-0-exif-privacy`).
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details.
 
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.

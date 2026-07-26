@@ -109,9 +109,10 @@ time. This contract is mirrored on the blog side in `site/src/lib/images.ts`.
   is written. `docker compose exec app node --import tsx src/cli.ts audit-exif`.
 - `strip-gps` — **not yet built.** It remediates the historical corpus (a lossy re-encode for
   the keys with no retained original), and is scoped to be added only if a server-side
-  `audit-exif` run finds GPS-carrying variants. A pre-release audit of the production corpus
-  found 102 variant files with EXIF and zero with GPS, so it wasn't built speculatively — the
-  pipeline fix above already stops new GPS exposure regardless.
+  `audit-exif` run finds GPS-carrying variants. A pre-release audit of the **local development
+  corpus** (not the server) found 102 variant files with EXIF and zero with GPS, so it wasn't
+  built speculatively — the pipeline fix above already stops new GPS exposure regardless. The
+  server's corpus has not yet been audited; see SECURITY.md.
 
 Host-based routing keeps the two domains on one process: the image-variant static handler is
 registered with a Fastify **host constraint** for the hostname of `PUBLIC_BASE_URL` (overridable

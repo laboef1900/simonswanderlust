@@ -97,14 +97,23 @@ them from the static mount).
 **Widening this list is a privacy change, not a refactor.** `audit-exif`
 (`docker compose exec app node --import tsx src/cli.ts audit-exif`) is a
 read-only scan of the stored corpus reporting how many variants carry EXIF
-and how many carry GPS. A read-only audit of the production corpus at
-shipping time found 102 variant files with EXIF and **zero** with GPS — the
-blog's camera has no GPS receiver, so the exposure was latent rather than
-active. Because that audit was clean, a remediation `strip-gps` command was
-not built in this phase; it is scoped to be added only if a future
-`audit-exif` run (in particular against `/data/images` on the server) finds
-otherwise. Until then, the pipeline fix above covers every upload going
-forward, but the historical corpus is unchanged.
+and how many carry GPS (in either the EXIF GPS IFD or an XMP packet). A
+read-only audit of the **local development corpus** (not the server — that
+corpus was not reachable from the environment this audit ran in) at shipping
+time found 102 variant files with EXIF and **zero** with GPS. Separately,
+the blog's own camera has no GPS receiver, but the audited corpus itself
+cannot support a claim about *why* it came back clean: 88 of the 102
+variants carry EXIF with no Make, no Model and no Software at all, and the
+remaining 14 carry only `Software: Capture One Macintosh` — i.e. these are
+processed exports whose metadata was already largely stripped before it
+reached this corpus, not a direct read of camera-original files.
+Because that audit was clean, a remediation `strip-gps` command was not
+built in this phase; it is scoped to be added only if a future `audit-exif`
+run **against the server's `/data/images`** finds otherwise — that audit is
+still outstanding, and is the correct next step before relying on this
+finding for the production corpus (which may contain WordPress-imported
+photos from other devices and years). Until then, the pipeline fix above
+covers every upload going forward, but the historical corpus is unchanged.
 
 ## SSRF protection (WordPress import)
 
