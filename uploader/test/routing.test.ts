@@ -14,6 +14,9 @@ import type { DbBackup } from '../src/backup.js';
 
 const IMG = 'img.simonswanderlust.com';
 const MAIN = 'simonswanderlust.com';
+/** Local-dev IMG_HOST (uploader/.env.example): the only host that exists, so the
+ *  image mount shadows the blog mount and the img-host blog fallback engages. */
+const LOCAL = 'localhost:3000';
 
 const SETTINGS: Settings = defaultSettings();
 const fakeStore = (): SettingsStore => {
@@ -119,7 +122,7 @@ describe('host routing', () => {
 
   it('serves the released blog on the img host too (local-dev shadowing fallback)', async () => {
     await release('r1', { 'index.html': '<h1>blog</h1>', '404.html': 'nf' });
-    const res = await build().inject({ method: 'GET', url: '/', headers: { host: IMG } });
+    const res = await build({ imgHost: LOCAL }).inject({ method: 'GET', url: '/', headers: { host: LOCAL } });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toContain('text/html');
     expect(res.body).toContain('blog');
@@ -127,11 +130,11 @@ describe('host routing', () => {
 
   it('does not 500 on a directory path on the img host (301s like the main host)', async () => {
     await release('r1', { 'index.html': 'home', '404.html': 'nf', 'rumaenien/index.html': 'trip' });
-    const app = build();
-    const res = await app.inject({ method: 'GET', url: '/rumaenien', headers: { host: IMG } });
+    const app = build({ imgHost: LOCAL });
+    const res = await app.inject({ method: 'GET', url: '/rumaenien', headers: { host: LOCAL } });
     expect(res.statusCode).toBe(301);
     expect(res.headers.location).toBe('/rumaenien/');
-    const ok = await app.inject({ method: 'GET', url: '/rumaenien/', headers: { host: IMG } });
+    const ok = await app.inject({ method: 'GET', url: '/rumaenien/', headers: { host: LOCAL } });
     expect(ok.statusCode).toBe(200);
     expect(ok.body).toBe('trip');
   });
@@ -141,21 +144,21 @@ describe('host routing', () => {
       'index.html': 'home', '404.html': 'nf',
       'robots.txt': 'User-agent: *', 'rss.xml': '<rss/>',
     });
-    const app = build();
+    const app = build({ imgHost: LOCAL });
     // RFC 9309: a robots.txt not served as text/plain is treated as absent.
-    const txt = await app.inject({ method: 'GET', url: '/robots.txt', headers: { host: IMG } });
+    const txt = await app.inject({ method: 'GET', url: '/robots.txt', headers: { host: LOCAL } });
     expect(txt.statusCode).toBe(200);
     expect(txt.headers['content-type']).toContain('text/plain');
-    const xml = await app.inject({ method: 'GET', url: '/rss.xml', headers: { host: IMG } });
+    const xml = await app.inject({ method: 'GET', url: '/rss.xml', headers: { host: LOCAL } });
     expect(xml.statusCode).toBe(200);
     expect(xml.headers['content-type']).toMatch(/xml/);
   });
 
   it('sets the same cache headers on the img host as the main host serves', async () => {
     await release('r1', { 'index.html': 'home', '404.html': 'nf', '_astro/app.css': 'body{}' });
-    const app = build();
+    const app = build({ imgHost: LOCAL });
     const main = await app.inject({ method: 'GET', url: '/_astro/app.css', headers: { host: MAIN } });
-    const img = await app.inject({ method: 'GET', url: '/_astro/app.css', headers: { host: IMG } });
+    const img = await app.inject({ method: 'GET', url: '/_astro/app.css', headers: { host: LOCAL } });
     expect(img.statusCode).toBe(200);
     expect(img.headers['content-type']).toContain('text/css');
     expect(main.headers['cache-control']).toBeDefined();
@@ -165,7 +168,7 @@ describe('host routing', () => {
 
   it('404s a genuinely missing path on the img host', async () => {
     await release('r1', { 'index.html': 'home', '404.html': 'nf' });
-    const res = await build().inject({ method: 'GET', url: '/nope/', headers: { host: IMG } });
+    const res = await build({ imgHost: LOCAL }).inject({ method: 'GET', url: '/nope/', headers: { host: LOCAL } });
     expect(res.statusCode).toBe(404);
   });
 
@@ -177,6 +180,83 @@ describe('host routing', () => {
     const blog = await app.inject({ method: 'GET', url: '/', headers: { host: MAIN } });
     expect(blog.headers['x-frame-options']).toBeUndefined();
     expect(blog.headers['x-content-type-options']).toBe('nosniff');
+  });
+});
+
+describe('img-host blog fallback gate (local dev only)', () => {
+  it('does NOT serve the blog on a production img host (no duplicate crawlable site)', async () => {
+    await mkdir(join(dir, 'images'), { recursive: true });
+    await writeFile(join(dir, 'images', 'k-640.webp'), 'img-bytes');
+    await release('r1', {
+      'index.html': '<h1>blog</h1>', '404.html': 'nf', 'rumaenien/index.html': 'trip',
+    });
+    const app = build(); // imgHost = img.simonswanderlust.com
+    for (const url of ['/', '/rumaenien/', '/index.html']) {
+      const res = await app.inject({ method: 'GET', url, headers: { host: IMG } });
+      expect(res.statusCode).toBe(404);
+      expect(res.body).not.toContain('blog');
+      expect(res.body).not.toContain('trip');
+    }
+    // The arm is off entirely: not even the trailing-slash 301 fires.
+    const dirUrl = await app.inject({ method: 'GET', url: '/rumaenien', headers: { host: IMG } });
+    expect(dirUrl.statusCode).toBe(404);
+    expect(dirUrl.headers.location).toBeUndefined();
+    // …while the image host keeps doing its actual job.
+    const img = await app.inject({ method: 'GET', url: '/k-640.webp', headers: { host: IMG } });
+    expect(img.statusCode).toBe(200);
+    expect(img.headers['cache-control']).toContain('immutable');
+  });
+
+  it('engages for every loopback authority form (port, bare, IPv4 block, bracketed IPv6)', async () => {
+    await release('r1', { 'index.html': '<h1>blog</h1>', '404.html': 'nf' });
+    for (const authority of ['localhost:3000', 'localhost', '127.0.0.1:3000', '127.0.0.1', '127.1.2.3', '[::1]:3000', '[::1]']) {
+      const res = await build({ imgHost: authority })
+        .inject({ method: 'GET', url: '/', headers: { host: authority } });
+      expect(res.statusCode, authority).toBe(200);
+      expect(res.body, authority).toContain('blog');
+    }
+  });
+
+  it('stays off for hostnames that merely look local (evil.localhost, img.localhost)', async () => {
+    await release('r1', { 'index.html': '<h1>blog</h1>', '404.html': 'nf' });
+    // *.localhost resolves to loopback for some resolvers, but a dev who gives
+    // images their own hostname has no shadowing collision to work around —
+    // so only the exact loopback names open the fallback.
+    for (const authority of ['evil.localhost', 'img.localhost', 'localhost.example.com', '127.0.0.1.example.com']) {
+      const res = await build({ imgHost: authority })
+        .inject({ method: 'GET', url: '/', headers: { host: authority } });
+      expect(res.statusCode, authority).toBe(404);
+      expect(res.body, authority).not.toContain('blog');
+    }
+  });
+
+  it('keys off the configured img host, never off the request Host header', async () => {
+    await release('r1', { 'index.html': '<h1>blog</h1>', '404.html': 'custom not found' });
+    const app = build(); // production config
+    // A client claiming to be localhost gets the ordinary blog treatment (blog
+    // mount, then 404.html) — it cannot flip the deployment into the local branch.
+    const spoofed = await app.inject({ method: 'GET', url: '/nope/', headers: { host: LOCAL } });
+    expect(spoofed.statusCode).toBe(404);
+    expect(spoofed.body).toBe('custom not found');
+    const onImg = await app.inject({ method: 'GET', url: '/nope/', headers: { host: IMG } });
+    expect(onImg.statusCode).toBe(404);
+    expect(onImg.body).toBe('Not found');
+  });
+
+  it('leaves admin and image serving untouched under a loopback img host', async () => {
+    await mkdir(join(dir, 'images'), { recursive: true });
+    await writeFile(join(dir, 'images', 'k-640.webp'), 'img-bytes');
+    await release('r1', { 'index.html': 'home', '404.html': 'nf', 'rumaenien/index.html': 'trip' });
+    const app = build({ imgHost: LOCAL });
+    const admin = await app.inject({ method: 'GET', url: '/admin/', headers: { host: LOCAL } });
+    expect(admin.statusCode).toBe(200);
+    const img = await app.inject({ method: 'GET', url: '/k-640.webp', headers: { host: LOCAL } });
+    expect(img.statusCode).toBe(200);
+    expect(img.headers['cache-control']).toContain('immutable');
+    // The directory 301 keeps the query string.
+    const redir = await app.inject({ method: 'GET', url: '/rumaenien?utm_source=x', headers: { host: LOCAL } });
+    expect(redir.statusCode).toBe(301);
+    expect(redir.headers.location).toBe('/rumaenien/?utm_source=x');
   });
 });
 

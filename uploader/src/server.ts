@@ -46,6 +46,32 @@ export interface ServerConfig {
 
 const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
 
+/** IPv4 loopback block (127.0.0.0/8) — matched after WHATWG normalization, which
+ *  canonicalizes shorthands (`127.1` → `127.0.0.1`) and rejects out-of-range octets. */
+const LOOPBACK_IPV4_RE = /^127(?:\.\d{1,3}){3}$/;
+
+/**
+ * True iff a host *authority* — `localhost:3000`, `127.0.0.1:3000`, `[::1]:3000`,
+ * `img.simonswanderlust.com` — names the loopback interface. Parsed with the WHATWG
+ * URL parser rather than string matching, so an optional port and bracketed IPv6 are
+ * handled correctly; an unparseable authority counts as non-local.
+ *
+ * Only the exact loopback names qualify. `evil.localhost` does not, even though some
+ * resolvers map every `*.localhost` name to 127.0.0.1: this predicate exists solely to
+ * detect the one-hostname local-dev setup that makes the image mount shadow the blog
+ * mount (see setNotFoundHandler), and giving images their own hostname is precisely the
+ * setup that has no such collision.
+ */
+function isLoopbackAuthority(authority: string): boolean {
+  let hostname: string;
+  try {
+    ({ hostname } = new URL(`http://${authority}`));
+  } catch {
+    return false;
+  }
+  return hostname === 'localhost' || hostname === '[::1]' || LOOPBACK_IPV4_RE.test(hostname);
+}
+
 export function buildServer(cfg: ServerConfig): FastifyInstance {
   // @fastify/static requires an absolute root; tolerate a relative STORAGE_DIR
   // (e.g. ./data/images from env) by resolving against the process cwd.
@@ -609,19 +635,26 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send(summary);
   });
 
+  // @ai-note: the image host doubles as a blog host so that LOCAL DEV works, and
+  // ONLY for local dev. uploader/.env.example tells you to set IMG_HOST=localhost:3000
+  // for a bare local run; the image mount's host constraint then matches every request
+  // on the only host that exists, shadowing the blog mount. Measured with that config:
+  // without the arm below `/` and `/rumaenien/` 404 (`/admin/` and image variants serve
+  // either way); with it they serve.
+  // @ai-warning: this must never engage in production. With IMG_HOST=img.simonswanderlust.com
+  // an ungated arm publishes a second, fully crawlable copy of the blog on the image
+  // subdomain (duplicate content, split SEO). The gate is computed once here from the
+  // *configured* imgHost and never from the request's Host header, so a spoofed Host
+  // cannot talk a production deployment into the local branch; when it is off, the image
+  // host plain-404s non-image paths exactly as it did before the arm existed (513bf5f).
+  const imgHostServesBlog = isLoopbackAuthority(cfg.imgHost);
+
   // 404/503 for the blog; plain 404 for the img host and non-GET methods.
   app.setNotFoundHandler(async (req, reply) => {
     const host = req.headers.host ?? '';
     if (req.method !== 'GET' && req.method !== 'HEAD') return reply.code(404).send({ error: 'not found' });
     if (host === cfg.imgHost) {
-      // @ai-note: the image host doubles as a blog host so that LOCAL DEV works.
-      // With IMG_HOST=localhost:3000 (see uploader/.env.example) the image mount's
-      // host constraint matches every request on the only host that exists, so it
-      // shadows the blog mount and blog URLs would otherwise all 404. In
-      // production the two hosts differ and this arm is near-dead code.
-      // @ai-warning: this rationale is inferred from the code + .env.example —
-      // it is not stated in any spec. Confirm before relying on it.
-      //
+      if (!imgHostServesBlog) return reply.code(404).send('Not found');
       // Delegated to @fastify/static's reply.sendFile (decorated by the /admin/
       // mount, which does not set decorateReply:false) instead of a hand-rolled
       // readFile: that buys the full mime database, ETag/Last-Modified, range
