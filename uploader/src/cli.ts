@@ -106,12 +106,36 @@ async function setPasswordMain(username: string | undefined, passwordArg: string
   }
 }
 
+async function auditExifMain(): Promise<void> {
+  const { auditExif } = await import('./exif-audit.js');
+  const storageDir = process.env.STORAGE_DIR ?? './data/images';
+  const r = await auditExif(storageDir);
+  console.log(`scanned ${r.variants} variant file(s) across ${r.keys} key(s) in ${storageDir}`);
+  console.log(`  carrying EXIF : ${r.withExif}`);
+  console.log(`  carrying GPS  : ${r.withGps}`);
+  if (r.withGps === 0) {
+    console.log('\nNo stored variant carries GPS. No rewrite is needed.');
+    return;
+  }
+  console.log(`\n${r.gpsKeys.length} key(s) publish coordinates:`);
+  for (const k of r.gpsKeys) console.log(`  ${k}`);
+  if (r.gpsKeysWithoutOriginal.length) {
+    console.log(
+      `\n${r.gpsKeysWithoutOriginal.length} of them have NO -orig file and can only be ` +
+      're-encoded from an existing variant (one generation of quality loss):',
+    );
+    for (const k of r.gpsKeysWithoutOriginal) console.log(`  ${k}`);
+  }
+  console.log('\nBack up first, then: node --import tsx src/cli.ts strip-gps --dry-run');
+}
+
 async function main(): Promise<void> {
+  if (process.argv[2] === 'audit-exif') return auditExifMain();
   if (process.argv[2] === 'restore') return restoreMain(process.argv[3]);
   if (process.argv[2] === 'set-password') return setPasswordMain(process.argv[3], process.argv[4]);
   const [, , file, key, alt = ''] = process.argv;
   if (!file || !key) {
-    console.error('usage: npm run upload -- <imageFile> <key> [alt]   |   docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/<file>   |   docker compose exec app node --import tsx src/cli.ts set-password <username> [newPassword]');
+    console.error('usage: npm run upload -- <imageFile> <key> [alt]   |   docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/<file>   |   docker compose exec app node --import tsx src/cli.ts set-password <username> [newPassword]   |   docker compose exec app node --import tsx src/cli.ts audit-exif');
     process.exit(1);
   }
   const opts: StorageOptions = {
