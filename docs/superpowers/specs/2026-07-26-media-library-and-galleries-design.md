@@ -89,8 +89,21 @@ webp 640 variant -> exif 340 bytes  GPS: {"GPSLatitudeRef":"N","GPSLatitude":[63
 avif 640 variant -> exif 340 bytes  GPS: {...identical...}
 ```
 
-Anyone can download a photo from the blog and read where it was taken — including home, if any
-published photo was shot there.
+The code propagates whatever EXIF the source carries, GPS included, into every public file.
+
+**Measured exposure, and it is better than the code implies.** A read-only scan of the stored
+corpus (`uploader/data/images`, 102 variant files across 19 keys) found **102 carrying EXIF and
+zero carrying GPS** — consistent with the Leica Q2 having no GPS receiver, so the sources never
+had coordinates to leak. This is therefore a **latent** defect, not an active breach: the day a
+geotagged photo is uploaded (a phone shot, or anything geotagged via the Leica FOTOS app), it
+would publish coordinates silently.
+
+That distinction changes the remediation, not the fix. The pipeline change still ships in Phase 0.
+The expensive part — rewriting the existing corpus — becomes **conditional on an audit**, because
+re-encoding is not free: sharp cannot rewrite metadata without re-encoding, and **7 of the 19
+local keys have no `-orig` file** to re-encode losslessly from (originals postdate issue #21).
+The scan was of the local data directory, which may not mirror the server, so the audit runs
+there too before anything is rewritten.
 
 **Fix:** replace the blanket `.withMetadata()` with an explicit **allow-list re-injection**.
 Allow-listing rather than "removing GPS" is deliberate: sharp has no per-tag removal, and
@@ -106,25 +119,39 @@ Allow-listing rather than "removing GPS" is deliberate: sharp has no per-tag rem
 serialisation per tag must be settled by a round-trip test, not reasoned about. If a tag proves
 impractical to write back, drop it from the allow-list — never widen back to blanket metadata.
 
-**Existing published photos are still affected.** New CLI subcommand
-`node --import tsx src/cli.ts strip-gps [--dry-run]` rewrites every existing variant with the same
-allow-list. Three constraints, all load-bearing:
+**Remediating existing photos is audit-gated, not automatic.**
 
-1. **Atomic writes.** Write `${file}.tmp` in the same directory, verify it decodes with
-   `sharp().metadata()`, then `rename()` — the pattern `settings.ts` already uses. A crash
-   mid-rewrite must never leave a truncated variant, because the URL is content-hash-immutable and
-   cannot be replaced without editing every published post.
-2. **Preserve mtimes** (`utimes` after write). `backup.ts:90` selects archive members by
-   `mtimeMs >= sinceMs`, so a naive rewrite would make the next scheduled backup tar the entire
-   ~7 GB variant corpus — and image archives are deliberately never pruned.
-3. **Run a backup first** (Golden Rule 3), and require free space ≥ total variant bytes.
+`node --import tsx src/cli.ts audit-exif` is read-only, cheap and always safe: it walks
+`storageDir`, reports how many variants carry EXIF and how many carry GPS, and lists the affected
+keys and whether each still has an `-orig`. **Run this on the server first.** If it reports zero
+GPS — as the local corpus does — no rewrite is needed and Phase 0 is complete with the pipeline
+change alone.
 
-A companion `reencode <key>` subcommand regenerates variants from the retained `-orig`, so a
-damaged variant has a recovery path at all.
+Only if the audit finds GPS does `node --import tsx src/cli.ts strip-gps [--dry-run] [--key <k>]`
+run. It is deliberately the *last* resort, because **sharp cannot rewrite metadata without
+re-encoding**:
 
-Because variants are served `immutable, max-age=365d`, a browser that already cached a photo may
-keep the GPS-bearing copy for up to a year. There is no way around that short of changing URLs,
-which would break published posts. Run the pass and accept the cache tail.
+1. **Re-encode from `-orig` when present** — lossless source, output quality identical to a fresh
+   upload. **7 of the 19 local keys have no original** (originals postdate issue #21); those
+   require `--from-variants`, which re-encodes the largest existing variant and costs one
+   generation of lossy-on-lossy quality. The command refuses to touch them without that flag and
+   names them.
+2. **Atomic writes.** Write `${file}.tmp` in the same directory, verify it decodes with
+   `sharp().metadata()`, then `rename()` — the pattern `settings.ts` already uses. A truncated
+   variant is unrecoverable: the URL is content-hash-immutable and cannot be replaced without
+   editing every published post.
+3. **Preserve mtimes** (`utimes` after write). `backup.ts:90` selects archive members by
+   `mtimeMs >= sinceMs`, so a naive rewrite makes the next scheduled backup tar the entire variant
+   corpus — and image archives are deliberately never pruned.
+4. **Run a backup first** (Golden Rule 3), and require free space ≥ total variant bytes. Resumable
+   per key, so an interrupted run continues rather than restarting.
+
+A companion `reencode <key>` subcommand regenerates variants from the retained `-orig`, giving a
+damaged variant a recovery path at all — which it does not have today.
+
+Because variants are served `immutable, max-age=365d`, a browser that already cached a photo keeps
+the old copy for up to a year. There is no way around that short of changing URLs, which would
+break published posts.
 
 > `@ai-warning` for `pipeline.ts`: never reintroduce a blanket `withMetadata()`. Metadata on
 > public variants is an explicit allow-list; widening it is a privacy change, not a refactor.
