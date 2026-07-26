@@ -17,9 +17,18 @@ export const VARIANT_FILE_RE = /-(\d+)\.(avif|webp)$/;
 // issue #21). listMedia deliberately ignores it (it is a private DR asset, not a
 // gallery item), but deleteMedia must remove it alongside the variants so
 // deleting an image doesn't orphan its full-resolution original on disk.
-const ORIGINAL_FILE_RE = /-orig\.[a-z0-9]+$/i;
+export const ORIGINAL_FILE_RE = /-orig\.[a-z0-9]+$/i;
 
-export interface MediaItem {
+/**
+ * What the DISK says about one storage key.
+ *
+ * @ai-warning Not to be confused with `media-store.ts`'s `MediaItem`, which is
+ * the DATABASE row (title, alt, tags, folder, EXIF, status). This module walks
+ * the filesystem and knows nothing about metadata; the module split — and this
+ * type's name — exist precisely so "disk" and "database" are unambiguous now
+ * that both exist. `media-sync.ts` reconciles the two.
+ */
+export interface MediaFiles {
   key: string;
   /** All variant files for this key, storageDir-relative POSIX paths, sorted by width then format. */
   files: string[];
@@ -38,7 +47,7 @@ interface VariantFile { rel: string; width: number; format: string }
  * Walk storageDir and group variant files by their storage key
  * (relative path with the `-{width}.{fmt}` suffix stripped).
  */
-export async function listMedia(storageDir: string): Promise<MediaItem[]> {
+export async function listMedia(storageDir: string): Promise<MediaFiles[]> {
   const root = resolve(storageDir);
   let entries;
   try {
@@ -59,7 +68,7 @@ export async function listMedia(storageDir: string): Promise<MediaItem[]> {
     byKey.set(key, list);
   }
 
-  const items: MediaItem[] = [];
+  const items: MediaFiles[] = [];
   for (const [key, files] of [...byKey.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     files.sort((a, b) => a.width - b.width || a.format.localeCompare(b.format));
     const webps = files.filter((f) => f.format === 'webp');

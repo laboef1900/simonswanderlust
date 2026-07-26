@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
-import { readExif, toRational, allowedExif, cleanExifString } from '../src/exif.js';
+import { readExif, toRational, allowedExif, cleanExifString, gpsToDecimal, parseExif } from '../src/exif.js';
 
 /** A JPEG carrying camera tags, a full GPS IFD, and an ICC profile. */
 async function geotagged(): Promise<Buffer> {
@@ -153,5 +153,70 @@ describe('allowedExif', () => {
     // accessors would shift the timestamp by the runner's offset.
     const allow = allowedExif(await rawExif(await geotagged()));
     expect(allow?.IFD2.DateTimeOriginal).toBe('2026:07:04 18:23:11');
+  });
+});
+
+describe('gpsToDecimal', () => {
+  // @ai-warning: exif-reader returns rationals ALREADY DIVIDED ([63, 4, 33.12]),
+  // not as numerator/denominator pairs. Most DMS snippets online assume the
+  // pair form and produce garbage here.
+  it('converts a pre-divided DMS triple', () => {
+    expect(gpsToDecimal([63, 4, 33.12], 'N')).toBeCloseTo(63.0759, 4);
+    expect(gpsToDecimal([10, 23, 19.44], 'E')).toBeCloseTo(10.3887, 4);
+  });
+
+  it('negates for the S and W hemispheres', () => {
+    expect(gpsToDecimal([33, 52, 0], 'S')).toBeCloseTo(-33.8667, 4);
+    expect(gpsToDecimal([70, 30, 0], 'W')).toBeCloseTo(-70.5, 4);
+  });
+
+  it('returns null for a NaN component — the zero-denominator rational case', () => {
+    // This guard is what stops a broken coordinate reaching the database.
+    expect(gpsToDecimal([NaN, 0, 0], 'N')).toBeNull();
+    expect(gpsToDecimal([63, 4, Number.POSITIVE_INFINITY], 'N')).toBeNull();
+  });
+
+  it('returns null for a malformed or out-of-range triple', () => {
+    expect(gpsToDecimal(undefined, 'N')).toBeNull();
+    expect(gpsToDecimal([63], 'N')).toBeNull();
+    expect(gpsToDecimal('63,4,33', 'N')).toBeNull();
+    expect(gpsToDecimal([999, 0, 0], 'E')).toBeNull();
+    expect(gpsToDecimal(['63', '4', '33'], 'N')).toBeNull();
+  });
+});
+
+describe('parseExif', () => {
+  it('extracts capture time, camera, lens and GPS from a real round-trip', async () => {
+    const out = parseExif(await rawExif(await geotagged()));
+    expect(out.camera).toBe('Leica Camera AG LEICA Q2');
+    expect(out.lens).toBe('SUMMILUX 1:1.7/28 ASPH.');
+    expect(out.lat).toBeCloseTo(63.0759, 3);
+    expect(out.lng).toBeCloseTo(10.3887, 3);
+    // @ai-warning: EXIF wall-clock is relabelled as UTC by exif-reader — read
+    // it with getUTC* only, or photos are mislabelled across timezones.
+    expect(out.takenAt?.getUTCHours()).toBe(18);
+    expect(out.takenAt?.getUTCMinutes()).toBe(23);
+  });
+
+  it('returns all-null for missing, empty or garbage EXIF instead of throwing', () => {
+    // exif-reader THROWS on malformed input rather than returning null.
+    for (const raw of [undefined, Buffer.alloc(0), Buffer.from('not exif at all'), Buffer.from([0xff, 0xd8, 0x00])]) {
+      expect(parseExif(raw)).toEqual({ takenAt: null, camera: null, lens: null, lat: null, lng: null });
+    }
+  });
+
+  it('leaves lat/lng null for a photo with no GPS IFD', async () => {
+    const plain = await sharp({ create: { width: 10, height: 10, channels: 3, background: { r: 0, g: 0, b: 0 } } })
+      .withExif({ IFD0: { Make: 'Canon' } }).jpeg().toBuffer();
+    const out = parseExif(await rawExif(plain));
+    expect(out.camera).toBe('Canon');
+    expect(out).toMatchObject({ lat: null, lng: null });
+  });
+
+  it('caps an absurdly long camera string', async () => {
+    const long = await sharp({ create: { width: 10, height: 10, channels: 3, background: { r: 0, g: 0, b: 0 } } })
+      .withExif({ IFD0: { Model: 'M'.repeat(500) } }).jpeg().toBuffer();
+    // The length cap keeps a multi-megabyte Model out of every /media response.
+    expect(parseExif(await rawExif(long)).camera?.length).toBeLessThanOrEqual(120);
   });
 });

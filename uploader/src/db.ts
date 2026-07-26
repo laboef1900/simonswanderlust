@@ -120,6 +120,65 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
     [ABOUT_SEED.de.title, ABOUT_SEED.de.body, ABOUT_SEED.en.title, ABOUT_SEED.en.body],
   );
 
+  // @ai-note The media library (issue #64). A `media` row is metadata ABOUT a
+  // file under STORAGE_DIR — the filesystem stays the source of truth for a
+  // file's existence, so photos survive a database loss (media-sync.ts
+  // reconciles the two).
+  // @ai-warning `status` defaults to 'processing', NOT 'ready' — fail closed.
+  // Every insert sets it explicitly, so the default only fires when an insert
+  // forgets the column; defaulting to 'ready' would declare a photo with no
+  // variants publishable, which is exactly what the publish gate exists to
+  // prevent. `width`/`height` default to 0 meaning "unknown" (the backfill can
+  // genuinely produce that from an unreadable probe), because db.ts's
+  // convention makes a DEFAULT mandatory on NOT NULL columns.
+  // @ai-warning The CHECK constraint below is WRITE-ONCE: `CREATE TABLE IF NOT
+  // EXISTS` will not alter it on an already-deployed database, so adding a new
+  // MediaStatus later silently fails in production while passing on a fresh CI
+  // database. Widening it needs an explicit `ALTER TABLE ... DROP CONSTRAINT /
+  // ADD CONSTRAINT` appended to the column-migrations section below.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS media (
+      key           text PRIMARY KEY,
+      folder        text NOT NULL DEFAULT '',
+      title         text NOT NULL DEFAULT '',
+      alt_de        text NOT NULL DEFAULT '',
+      alt_en        text NOT NULL DEFAULT '',
+      caption_de    text NOT NULL DEFAULT '',
+      caption_en    text NOT NULL DEFAULT '',
+      tags          text[] NOT NULL DEFAULT '{}',
+      width         integer NOT NULL DEFAULT 0,
+      height        integer NOT NULL DEFAULT 0,
+      orig_bytes    bigint  NOT NULL DEFAULT 0,
+      variant_bytes bigint  NOT NULL DEFAULT 0,
+      status        text NOT NULL DEFAULT 'processing'
+                    CHECK (status IN ('processing','ready','failed','missing')),
+      error         text,
+      taken_at      timestamptz,
+      camera        text,
+      lens          text,
+      lat           double precision,
+      lng           double precision,
+      uploaded_at   timestamptz NOT NULL DEFAULT now(),
+      uploaded_by   uuid REFERENCES users(id) ON DELETE SET NULL
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS media_folder_idx   ON media (folder)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS media_taken_at_idx ON media (taken_at DESC NULLS LAST)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS media_uploaded_idx ON media (uploaded_at DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS media_tags_idx     ON media USING gin (tags)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS media_status_idx   ON media (status) WHERE status <> 'ready'`);
+  // @ai-note media_folders is the SINGLE source of truth for the folder tree.
+  // Every write that sets a `folder` also upserts the folder row and its
+  // ancestors — deliberately avoiding a "folder exists if a row OR any
+  // media.folder starts with it" union rule, which is two sources of truth and
+  // a bug farm.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS media_folders (
+      path       text PRIMARY KEY,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
   // --- column migrations -----------------------------------------------------
   // @ai-note Schema evolution convention (issue #32): `CREATE TABLE IF NOT
   // EXISTS` silently no-ops on a database that already has the table, so a

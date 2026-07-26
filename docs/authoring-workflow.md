@@ -161,6 +161,45 @@ image URL, language-appropriate alt):
 > (i.e. not uploaded via the editor toolbar and not pasted as a `<BodyImage …/>` tag) — it
 > renders as a plain `<img>` without the responsive treatment.
 
+### The media library
+
+`/admin/media.html` is where photos live. Drop files onto the drop zone (or use **Choose files**
+— drag-and-drop is only an enhancement) and they upload into the currently selected folder.
+
+**Uploads return immediately; encoding happens in the background.** The URL and dimensions you
+get back are final, but the responsive AVIF/WebP variants take a few seconds per photo — around
+19 s for a 24 MP frame — so a freshly uploaded photo shows a **processing** badge and its
+thumbnail appears once it is done. You can close the tab: uploading needs the tab open,
+encoding does not.
+
+Two consequences worth knowing:
+
+- **Publish refuses while a post's photos are still processing**, with a message naming them.
+  That is deliberate — publishing early would put URLs on the live site that 404 until the
+  encode lands.
+- **A failed encode shows in the library** with a short reason, and **Retry encoding** re-queues
+  it. The untouched original is always kept, so a retry is lossless.
+
+Folders are **virtual**: moving a photo never changes its URL, so reorganising the library can
+never break a published post. Renaming a folder moves its whole subtree (`Iceland` moves
+`Iceland/South` but not `Iceland 2024`), and a folder must be empty before it can be deleted.
+Folder rename and delete, and deleting a photo, are admin-only.
+
+Select photos by clicking, shift-clicking or ctrl/cmd-clicking; the grid is fully keyboard
+operable (arrows move, `Space` toggles, `Shift`+arrow extends, `Ctrl/Cmd`+`A` selects all).
+The detail panel on the right edits title, both alt texts, both captions, tags and folder;
+camera, lens and capture date are read-only, read from the photo's EXIF.
+
+> Photo GPS is stored for you but is **never published** — image variants carry an EXIF
+> allow-list with no location at all, and the API hides coordinates from non-admin accounts.
+
+**Rescan disk** (admin) reconciles the database with `/data/images`: it adds rows for photos that
+predate the library, copies existing alt text from posts that already use them (exact URL matches
+only), and flags rows whose files have gone missing without deleting the metadata.
+
+In the post editor, the hero fields now offer **Choose from library** alongside **Upload hero** —
+most heroes already exist, and re-uploading one would just mint a second copy under a new key.
+
 ### Galleries
 
 Several photos in one grid go in a fenced block with the language `gallery`, one image URL per

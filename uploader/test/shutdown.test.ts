@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createShutdown, type ShutdownHooks } from '../src/shutdown.js';
 
-function harness(opts: { close?: () => Promise<unknown>; end?: () => Promise<unknown> } = {}) {
+function harness(opts: {
+  close?: () => Promise<unknown>; end?: () => Promise<unknown>;
+  drain?: () => Promise<unknown>; withDrain?: boolean;
+} = {}) {
   const calls: string[] = [];
   const logs: string[] = [];
   const errors: string[] = [];
@@ -9,6 +12,9 @@ function harness(opts: { close?: () => Promise<unknown>; end?: () => Promise<unk
   const exited = new Promise<number>((resolve) => { resolveExit = resolve; });
   const hooks: ShutdownHooks = {
     close: async () => { calls.push('close'); if (opts.close) await opts.close(); },
+    ...(opts.drain || opts.withDrain
+      ? { drain: async () => { calls.push('drain'); if (opts.drain) await opts.drain(); } }
+      : {}),
     end: async () => { calls.push('end'); if (opts.end) await opts.end(); },
     exit: (code) => { calls.push(`exit(${code})`); resolveExit(code); },
     log: (msg) => { logs.push(msg); },
@@ -25,6 +31,25 @@ describe('createShutdown', () => {
     expect(h.calls).toEqual(['close', 'end', 'exit(0)']);
     expect(h.logs).toEqual(['received SIGTERM, shutting down']);
     expect(h.errors).toEqual([]);
+  });
+
+  // @ai-warning: drain MUST sit between close and end. In-flight encodes keep
+  // running after the HTTP server stops accepting connections, and their final
+  // setStatus write needs the pg pool — without this, every `docker stop` logs
+  // a rejection and leaves rows stuck in `processing`.
+  it('runs close → drain → end → exit(0) when a drain hook is supplied', async () => {
+    const h = harness({ withDrain: true });
+    h.onSignal('SIGTERM');
+    expect(await h.exited).toBe(0);
+    expect(h.calls).toEqual(['close', 'drain', 'end', 'exit(0)']);
+  });
+
+  it('exits 1 without ending the pool when drain() rejects', async () => {
+    const h = harness({ drain: async () => { throw new Error('drain failed'); } });
+    h.onSignal('SIGTERM');
+    expect(await h.exited).toBe(1);
+    expect(h.calls).toEqual(['close', 'drain', 'exit(1)']);
+    expect(h.errors[0]).toContain('drain failed');
   });
 
   it('exits 1 without ending the pool when close() rejects', async () => {

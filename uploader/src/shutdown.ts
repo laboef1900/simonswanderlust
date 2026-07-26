@@ -6,6 +6,17 @@
 
 export interface ShutdownHooks {
   close: () => Promise<unknown>; // stop accepting connections, drain in-flight requests
+  /**
+   * Let background work finish before the backing resources go away.
+   *
+   * @ai-warning This must run BETWEEN close and end. The encode queue keeps
+   * working after the HTTP server stops accepting connections, and its final
+   * `setStatus` write needs the pg pool. Without the drain step, `pool.end()`
+   * fires while jobs are in flight, every `docker stop` logs a rejection, and
+   * rows are left stuck in `processing` — which the next boot then has to
+   * recover. Optional so callers with no background work can omit it.
+   */
+  drain?: () => Promise<unknown>;
   end: () => Promise<unknown>;   // release backing resources (pg pool)
   exit: (code: number) => void;
   log: (msg: string) => void;
@@ -13,9 +24,9 @@ export interface ShutdownHooks {
 }
 
 /**
- * Returns a signal handler that runs close → end → exit(0) exactly once;
- * repeat signals while (or after) shutting down are ignored. Any rejection
- * is error-logged and exits 1.
+ * Returns a signal handler that runs close → drain → end → exit(0) exactly
+ * once; repeat signals while (or after) shutting down are ignored. Any
+ * rejection is error-logged and exits 1.
  */
 export function createShutdown(hooks: ShutdownHooks): (signal: string) => void {
   let started = false;
@@ -25,6 +36,7 @@ export function createShutdown(hooks: ShutdownHooks): (signal: string) => void {
     hooks.log(`received ${signal}, shutting down`);
     hooks
       .close()
+      .then(() => (hooks.drain ? hooks.drain() : undefined))
       .then(() => hooks.end())
       .then(() => hooks.exit(0))
       .catch((err: unknown) => {

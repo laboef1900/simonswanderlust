@@ -32,6 +32,42 @@ export interface ProcessOptions {
   webpQuality?: number;
 }
 
+export interface ImageProbe {
+  /** Orientation-corrected intrinsic size — what `processImage` will produce. */
+  width: number;
+  height: number;
+  /** Extension for the retained original, matching what storeOriginal writes. */
+  ext: string;
+  /** Raw EXIF bytes, for `parseExif` — sharp exposes EXIF only as a Buffer. */
+  exif: Buffer | undefined;
+}
+
+/**
+ * Read dimensions and format WITHOUT re-encoding.
+ *
+ * The async upload path needs the intrinsic size to answer the request
+ * immediately; a metadata-only probe does that in ~0.0002 s where the full
+ * re-encode `processImage` performs costs ~0.467 s (and the encode itself
+ * ~19 s for a 24 MP frame).
+ *
+ * @ai-warning The SVG case is why this cannot simply use `metadata().format`.
+ * The re-encode probe reports `png` for SVG input (sharp rasterises it) and
+ * `processImage` therefore stores the untouched bytes as `-orig.png`, which is
+ * DELIBERATE: a publicly served `-orig.svg` would be a stored-XSS vector on
+ * the image host. `metadata()` honestly reports `svg`, so the two disagree —
+ * verified empirically — and this maps it back to `png` to keep the two paths
+ * writing the same filename. Do not "fix" that mapping.
+ */
+export async function probeImage(input: Buffer): Promise<ImageProbe> {
+  const meta = await sharp(input, { failOn: 'none' }).metadata();
+  // `autoOrient` is sharp's orientation-corrected size; `width`/`height` are
+  // the raw stored ones, which are swapped for a 90°-rotated photo.
+  const width = meta.autoOrient?.width ?? meta.width ?? 0;
+  const height = meta.autoOrient?.height ?? meta.height ?? 0;
+  const format = meta.format === 'svg' ? 'png' : meta.format ?? '';
+  return { width, height, ext: EXT_BY_FORMAT[format] ?? format, exif: meta.exif };
+}
+
 /**
  * Auto-orients via EXIF, re-injects ONLY the allow-listed camera metadata,
  * and encodes AVIF + WebP at each contract width without upscaling.

@@ -432,7 +432,144 @@ small {
   background: #f9fafb;
 }
 
-/* ---- media library ---- */
+/* ---- media library (issue #64) ---- */
+.drop-zone {
+  border: 2px dashed var(--line-control);
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  text-align: center;
+  transition: border-color 0.15s, background 0.15s;
+}
+.drop-zone.is-over { border-color: var(--red); background: #fef2f2; }
+.drop-zone p { margin: 0 0 0.75rem; }
+.drop-zone__pick { display: inline-flex; flex-direction: column; gap: 0.4rem; align-items: center; }
+.drop-zone__pick > span {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.upload-queue { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.3rem; }
+.upload-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  padding: 0.25rem 0.4rem;
+  border-bottom: 1px solid var(--line);
+}
+.upload-row__name { overflow-wrap: anywhere; }
+.upload-row__state { white-space: nowrap; color: var(--muted); }
+
+.media-layout {
+  display: grid;
+  grid-template-columns: 12rem minmax(0, 1fr) 16rem;
+  gap: 1.25rem;
+  align-items: start;
+}
+.media-sidebar { min-width: 0; }
+.media-main { min-width: 0; }
+.media-detail { min-width: 0; }
+.media-detail label { display: block; margin-top: 0.6rem; }
+.media-detail input, .media-detail select { width: 100%; }
+
+.folder-tree { list-style: none; margin: 0 0 0.75rem; padding: 0; }
+.folder-btn {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0.3rem 0.4rem;
+  text-align: left;
+  background: transparent;
+  color: var(--ink);
+  border: 0;
+  font-size: 0.82rem;
+  border-radius: 0.3rem;
+}
+.folder-btn:hover { background: #f3f4f6; }
+.folder-btn.is-current { background: var(--navy); color: #fff; }
+.folder-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.folder-actions button { margin-top: 0; font-size: 0.68rem; padding: 0.3rem 0.5rem; }
+
+.media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 0.6rem;
+}
+.media-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  cursor: pointer;
+  background: #fff;
+}
+.media-cell:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+.media-cell.is-selected { border-color: var(--red); box-shadow: 0 0 0 1px var(--red) inset; }
+.media-cell__thumb {
+  aspect-ratio: 4 / 3;
+  background: #f3f4f6;
+  border-radius: 0.3rem;
+  overflow: hidden;
+}
+.media-cell__thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.media-cell__thumb .thumb-placeholder { display: block; width: 100%; height: 100%; }
+.media-cell__badge {
+  align-self: flex-start;
+  padding: 0.1rem 0.4rem;
+  border-radius: 9999px;
+  background: #fef3c7;
+  color: #92400e;
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.media-cell__title { font-size: 0.78rem; overflow-wrap: anywhere; }
+.media-cell__used { font-size: 0.68rem; color: var(--muted); overflow-wrap: anywhere; }
+
+.media-pager { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; }
+.media-pager button { margin-top: 0; }
+
+.keyfacts-mini { display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.6rem; margin: 0.4rem 0 0; }
+.keyfacts-mini dt {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.keyfacts-mini dd { margin: 0; font-size: 0.78rem; overflow-wrap: anywhere; }
+
+.filter-field--check { flex-direction: row; align-items: center; gap: 0.4rem; }
+.filter-field--check input { width: auto; }
+
+/* First native <dialog> in the admin — same choice as the blog lightbox, for
+   the same reasons: focus trap, Esc, inert background and ::backdrop for free. */
+dialog.admin-modal {
+  border: 1px solid var(--line-strong);
+  border-radius: 0.5rem;
+  padding: 1.25rem;
+  max-width: min(56rem, 92vw);
+  width: 100%;
+  color: var(--ink);
+  background: #fff;
+}
+dialog.admin-modal::backdrop { background: rgba(20, 42, 66, 0.45); }
+dialog.admin-modal .media-grid { max-height: 55vh; overflow-y: auto; }
+.admin-modal__head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+.admin-modal__foot { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem; }
+.admin-modal__foot button { margin-top: 0; }
+
+@media (max-width: 900px) {
+  .media-layout { grid-template-columns: 1fr; }
+}
+
 .media-thumb {
   display: block;
   width: 72px;

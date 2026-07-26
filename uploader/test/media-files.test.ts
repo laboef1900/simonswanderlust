@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { listMedia, deleteMedia, imageUsage, VARIANT_FILE_RE } from '../src/media.js';
+import { listMedia, deleteMedia, imageUsage, VARIANT_FILE_RE } from '../src/media-files.js';
 import type { PostUsageRow } from '../src/posts.js';
 import type { PagePair } from '../src/pages.js';
 
@@ -103,8 +103,9 @@ const SRC = 'https://img.example/trips/x/hero';
 function post(over: {
   tk?: string; title?: string; heroSrc?: string; body?: string; images?: Record<string, { width: number; height: number }>;
 }): PostUsageRow[] {
-  return (['de', 'en'] as const).map(() => ({
+  return (['de', 'en'] as const).map((locale) => ({
     translationKey: over.tk ?? 'p1',
+    locale,
     title: over.title ?? 'Titel',
     heroImage: { src: over.heroSrc ?? 'https://img.example/other/hero', width: 9, height: 9, alt: 'a' },
     bodyMarkdown: over.body ?? '## body',

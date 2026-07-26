@@ -12,26 +12,98 @@
         <nav id="mainnav" aria-label="Admin"></nav>
         <p class="eyebrow">Expedition Log · Image Station</p>
         <h1>Media</h1>
-        <p class="lede">Every uploaded image and its responsive variants — copy a URL or heroImage snippet for reuse, or delete images no post or page references anymore.</p>
+        <p class="lede">Drop photos to upload them, sort them into folders, and give each one a title, alt text and caption. Uploads return immediately — the responsive variants encode in the background.</p>
         <p class="muted" id="whoami"></p>
       </div>
     </header>
 
     <main>
       <section class="card">
-        <p id="loadMsg" class="muted">Loading…</p>
-        <table id="mediaTable" class="posts-table" style="display:none">
-          <thead>
-            <tr>
-              <th></th>
-              <th>Key</th>
-              <th>Size</th>
-              <th>Used in</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="mediaList"></tbody>
-        </table>
+        <div id="dropZone" class="drop-zone">
+          <p><strong>Drop photos here</strong> to upload them into the selected folder.</p>
+          <!-- Drag-and-drop is an enhancement; the visible file input is the
+               real control, so the feature is keyboard-operable. -->
+          <label class="drop-zone__pick">
+            <span>Or choose files</span>
+            <input id="fileInput" type="file" accept="image/*" multiple />
+          </label>
+        </div>
+        <div id="uploadQueue" class="upload-queue" hidden></div>
+      </section>
+
+      <section class="card media-layout">
+        <aside class="media-sidebar">
+          <p class="section-label">Folders</p>
+          <ul id="folderTree" class="folder-tree"></ul>
+          <div class="folder-actions">
+            <button id="newFolder" type="button" class="btn-secondary">New folder</button>
+            <button id="renameFolder" type="button" class="btn-secondary">Rename</button>
+            <button id="deleteFolder" type="button" class="btn-remove">Delete</button>
+          </div>
+        </aside>
+
+        <div class="media-main">
+          <div class="posts-filters">
+            <label class="filter-field">
+              <span>Search</span>
+              <input id="fSearch" type="search" placeholder="Key, title, alt or caption" autocomplete="off" />
+            </label>
+            <label class="filter-field">
+              <span>Status</span>
+              <select id="fStatus">
+                <option value="">All</option>
+                <option value="ready">Ready</option>
+                <option value="processing">Processing</option>
+                <option value="failed">Failed</option>
+                <option value="missing">Missing</option>
+              </select>
+            </label>
+            <label class="filter-field">
+              <span>Sort</span>
+              <select id="fSort">
+                <option value="uploaded">Uploaded</option>
+                <option value="taken">Taken</option>
+                <option value="title">Title</option>
+                <option value="key">Key</option>
+              </select>
+            </label>
+            <label class="filter-field">
+              <span>Order</span>
+              <select id="fOrder">
+                <option value="desc">Descending</option>
+                <option value="asc">Ascending</option>
+              </select>
+            </label>
+            <label class="filter-field filter-field--check">
+              <span>Subfolders</span>
+              <input id="fRecursive" type="checkbox" checked />
+            </label>
+            <button id="rescan" type="button" class="btn-secondary">Rescan disk</button>
+          </div>
+
+          <div class="bulk-bar" id="bulkTools" hidden>
+            <span id="selCount" aria-live="polite"></span>
+            <label class="filter-field">
+              <span>Move to</span>
+              <select id="moveTarget"></select>
+            </label>
+            <button id="moveSelected" type="button">Move</button>
+            <button id="retrySelected" type="button">Retry encoding</button>
+            <button id="clearSelection" type="button" class="btn-remove">Clear</button>
+          </div>
+
+          <!-- aria-multiselectable + roving tabindex: arrows move focus, Space
+               toggles, Shift+Arrow extends, Ctrl/Cmd+A selects all. -->
+          <div id="grid" class="media-grid" role="listbox" aria-multiselectable="true" aria-label="Photos"></div>
+
+          <div class="media-pager">
+            <button id="prevPage" type="button" class="btn-secondary">Previous</button>
+            <span id="pageInfo" class="muted"></span>
+            <button id="nextPage" type="button" class="btn-secondary">Next</button>
+          </div>
+        </div>
+
+        <aside id="detail" class="media-detail"></aside>
       </section>
 
       <div class="route" aria-hidden="true">
@@ -45,150 +117,7 @@
     </main>
 
     <script src="/admin/auth.js"></script>
-    <script>
-      const $ = (id) => document.getElementById(id);
-
-      // Mirrors the heroImage YAML block returned by /upload (storage.ts);
-      // alt is left blank for the author to fill in.
-      function snippetFor(m) {
-        return [
-          'heroImage:',
-          "  src: '" + m.src + "'",
-          '  width: ' + m.width,
-          '  height: ' + m.height,
-          "  alt: ''",
-        ].join('\n');
-      }
-
-      async function copyText(text, label) {
-        try {
-          await navigator.clipboard.writeText(text);
-          $('out').textContent = label + ' copied to clipboard.';
-        } catch {
-          // Clipboard unavailable (e.g. plain-http remote) — show it for manual copy.
-          $('out').textContent = text;
-        }
-      }
-
-      function actionButton(label, onClick) {
-        const btn = document.createElement('button');
-        btn.textContent = label;
-        btn.addEventListener('click', onClick);
-        return btn;
-      }
-
-      async function load() {
-        const res = await fetch('/images');
-        if (res.status === 401) { location.href = '/login'; return; }
-        if (res.status === 403) { location.href = '/admin/'; return; }
-        if (!res.ok) { $('out').textContent = 'Could not load media: ' + res.status; return; }
-        const items = await res.json();
-        $('loadMsg').style.display = 'none';
-        const tbody = $('mediaList');
-        tbody.innerHTML = '';
-        if (!items.length) {
-          const tr = document.createElement('tr');
-          const td = document.createElement('td');
-          td.colSpan = 5;
-          td.textContent = 'No images yet. Upload one via Hero upload or the post editor.';
-          td.style.textAlign = 'center';
-          td.style.color = '#6b7280';
-          tr.appendChild(td);
-          tbody.appendChild(tr);
-        } else {
-          for (const m of items) {
-            const tr = document.createElement('tr');
-
-            const tdThumb = document.createElement('td');
-            if (m.thumbUrl) {
-              const img = document.createElement('img');
-              img.src = m.thumbUrl;
-              img.alt = '';
-              img.loading = 'lazy';
-              img.className = 'media-thumb';
-              tdThumb.appendChild(img);
-            }
-            tr.appendChild(tdThumb);
-
-            const tdKey = document.createElement('td');
-            const code = document.createElement('code');
-            code.className = 'media-key';
-            code.textContent = m.key;
-            tdKey.appendChild(code);
-            tr.appendChild(tdKey);
-
-            const tdDims = document.createElement('td');
-            tdDims.className = 'media-dims';
-            tdDims.textContent = m.width && m.height ? m.width + ' × ' + m.height : '—';
-            tr.appendChild(tdDims);
-
-            const tdUsed = document.createElement('td');
-            const usedLabel = m.usedIn.map((u) => (u.title || u.key) + ' (' + u.kind + ')').join(', ');
-            tdUsed.textContent = usedLabel || '—';
-            tr.appendChild(tdUsed);
-
-            const tdActions = document.createElement('td');
-            const actions = document.createElement('div');
-            actions.className = 'media-actions';
-
-            const btnUrl = actionButton('Copy URL', () => copyText(m.src, 'URL'));
-            btnUrl.className = 'btn-secondary';
-            actions.appendChild(btnUrl);
-
-            const btnSnippet = actionButton('Copy snippet', () => copyText(snippetFor(m), 'heroImage snippet'));
-            btnSnippet.className = 'btn-secondary';
-            if (!m.width || !m.height) {
-              btnSnippet.disabled = true;
-              btnSnippet.title = 'Dimensions unknown — cannot build a heroImage snippet.';
-            }
-            actions.appendChild(btnSnippet);
-
-            const btnDelete = actionButton('Delete', async () => {
-              const ok = confirm('Delete "' + m.key + '" and all ' + m.files.length + ' variant file(s)? Already-built pages keep referencing it until the next rebuild.');
-              if (!ok) return;
-              try {
-                const res2 = await fetch('/images/' + m.key, { method: 'DELETE' });
-                if (res2.status === 401) { location.href = '/login'; return; }
-                const body = await res2.json().catch(() => ({}));
-                if (res2.ok) {
-                  // Refresh first — load() writes its own status line, so the
-                  // deletion confirmation must be set after it to survive.
-                  await load();
-                  $('out').textContent = 'Deleted ' + m.key + ' (' + body.deleted + ' files).';
-                } else {
-                  $('out').textContent = 'Delete failed: ' + (body.error || res2.status);
-                }
-              } catch (e) {
-                $('out').textContent = 'Delete failed: ' + (e instanceof Error ? e.message : e);
-              }
-            });
-            if (m.usedIn.length) {
-              btnDelete.disabled = true;
-              btnDelete.title = 'In use by: ' + usedLabel;
-            }
-            actions.appendChild(btnDelete);
-
-            tdActions.appendChild(actions);
-            tr.appendChild(tdActions);
-
-            tbody.appendChild(tr);
-          }
-        }
-        $('mediaTable').style.display = 'table';
-        $('out').textContent = items.length + ' image(s) loaded.';
-      }
-
-      (async () => {
-        const s = await Auth.ensureAuthed({ admin: true });
-        if (!s) return;
-        Auth.renderHeader(s);
-        try {
-          await load();
-        } catch (e) {
-          $('loadMsg').textContent = 'Could not load media — is the server reachable?';
-          $('out').textContent = 'Could not load media: ' + (e instanceof Error ? e.message : e);
-        }
-      })();
-    </script>
+    <script src="/admin/media-api.js"></script>
+    <script src="/admin/media-browser.js"></script>
   </body>
 </html>

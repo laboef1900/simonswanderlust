@@ -47,6 +47,40 @@ change about the security posture.
   and their batch form **`POST /posts/bulk`** (`{action, keys[]}` — the `action` is checked
   against a fixed allow-list and `keys` is capped at 100 per request, since an unbounded array
   is an authenticated N-round-trip amplifier against the process that also serves the blog).
+- **Media library** — browsing (`GET /media`, `GET /media/items/*`) and editing a photo's own
+  metadata are **session-level**, a deliberate downgrade from the admin-only `GET /images` they
+  replace: the gallery picker needs authors to browse. What makes that safe is the redaction
+  below. The bulk-irreversible operations stay admin-only — `DELETE /media/items/*`,
+  `PATCH /media/folders` (rename) and `DELETE /media/folders` — because media has no revision
+  history the way posts do. `POST /media/rescan` is admin-only too.
+
+### Media metadata redaction
+
+`GET /media` and `GET /media/items/*` strip **`exif.lat`, `exif.lng` and `uploadedBy`** for
+non-admin users (`redactForNonAdmin`, `uploader/src/media-store.ts`). Camera, lens and capture
+time are kept — they are useful and carry no location.
+
+> **This is what keeps the Phase 0 privacy fix intact.** Published image variants carry no GPS
+> at all (the EXIF allow-list above), but the library *stores* coordinates as private metadata
+> for the author. Serving those through a gate that any author can pass would reintroduce
+> exactly the exposure the allow-list removed. `server.test.ts` asserts the redaction itself,
+> not merely the status code.
+
+### Upload preconditions
+
+`POST /upload` refuses with **507** when `/data` lacks headroom for the whole cost of the photo
+(the retained original plus its variant set) plus a reserve that keeps a site build and a backup
+able to run — see `uploader/src/disk.ts`. A full `/data` otherwise fails mid-pipeline and can
+leave a partial variant set with no complete record. Free space is also reported on `/health`,
+but **never as a health verdict**: a low-space 503 would trigger a restart loop, which makes a
+full disk strictly worse.
+
+Encoding runs in a bounded background queue: at most 2 concurrent encodes, a backlog cap that
+returns **429** rather than accepting unbounded work, and a shared lock (`work-lock.ts`) that
+makes a site build and image encoding mutually exclusive so the container cannot OOM with both
+running. Encode failures are recorded as a **fixed enum** (`decode_failed`, `encode_failed`,
+`write_failed`, `no_space`), never a raw message — libvips embeds filesystem paths in its errors
+and the library UI displays that field.
   Non-admin authors may create and edit drafts but **cannot push content to the public site,
   take it down, or change a published slug** — only admins publish.
 
@@ -69,7 +103,7 @@ multiple replicas, limits would be counted per replica.)
 
 ## Input validation
 
-- **Storage keys** pass `assertSafeKey` in `storeVariants` — the central chokepoint for every write
+- **Storage keys** pass `assertSafeKey` in `storeOriginal` — the central chokepoint for every write
   path (direct upload *and* the WordPress re-host path). Keys must match `^[a-z0-9][a-z0-9/_-]*$`
   with no `..` or `//`, so a write can never escape `STORAGE_DIR` (path-traversal defense).
 - **Imported slugs** are validated at the WordPress-import boundary; a group with an unsafe slug is

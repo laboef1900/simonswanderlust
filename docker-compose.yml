@@ -16,6 +16,25 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://img.simonswanderlust.com}
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-images}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-images}}
       IMG_HOST: ${IMG_HOST:-img.simonswanderlust.com}
+    # Memory ceiling (issue #71). Without one, a spike takes the whole `app`
+    # container down — blog, admin, image host and any in-flight build together.
+    #
+    # @ai-warning: sized as max(build, encode) + baseline, NOT their sum,
+    # because uploader/src/work-lock.ts makes a site build and image encoding
+    # MUTUALLY EXCLUSIVE. If that lock is ever removed, this number is wrong.
+    #   · astro build:  ~0.47 GB peak RSS measured on the current corpus
+    #                   (`/usr/bin/time -l node …/astro.mjs build`, 19 pages)
+    #   · encoding:     ~1.94 GB per 24 MP frame × ENCODE_CONCURRENCY 2 ≈ 3.9 GB
+    #   · app baseline: Fastify + pg, well under 0.5 GB
+    # ⇒ max(0.47, 3.9) + 0.5 ≈ 4.4 GB, rounded up.
+    #
+    # @ai-warning: memswap_limit MUST equal mem_limit. Docker otherwise defaults
+    # total swap to 2× mem_limit, so the container thrashes into swap instead of
+    # being bounded — which on a small VPS is slower than an OOM and much harder
+    # to diagnose. Lower BOTH together if the host has less RAM than this; the
+    # encode concurrency (2) is the knob that makes a smaller ceiling safe.
+    mem_limit: 4608m
+    memswap_limit: 4608m
     volumes:
       - ./uploader/data:/data
       # The map basemap + fonts are baked into the image (served at /map/).

@@ -134,3 +134,77 @@ export function allowedExif(raw: Buffer | undefined): AllowedExif | null {
   if (Object.keys(IFD0).length === 0 && Object.keys(IFD2).length === 0) return null;
   return { IFD0, IFD2 };
 }
+
+/**
+ * The READ side: what the media library stores about a photo.
+ *
+ * Distinct from `allowedExif` above, which decides what gets WRITTEN into
+ * public variants. GPS is deliberately extracted here and never there — the
+ * library keeps coordinates as private metadata for the author (and the API
+ * redacts them from non-admins), while published files carry none.
+ */
+export interface MediaExif {
+  /**
+   * @ai-warning EXIF wall-clock with no zone. exif-reader relabels those digits
+   * as UTC (`new Date(Date.UTC(...))`), so a shot taken at 18:23 in Norway is
+   * stored as 18:23Z. Format it with `getUTC*` accessors ONLY — a local-time
+   * formatter double-shifts it and silently mislabels photos across timezones.
+   */
+  takenAt: Date | null;
+  camera: string | null;
+  lens: string | null;
+  lat: number | null;
+  lng: number | null;
+}
+
+const EMPTY_EXIF: MediaExif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+
+/**
+ * Convert an EXIF GPS degrees/minutes/seconds triple to a signed decimal.
+ *
+ * @ai-note exif-reader returns rationals ALREADY DIVIDED (`[63, 4, 33.12]`),
+ * not as numerator/denominator pairs — most DMS snippets online assume the
+ * pair form and produce garbage here. The `Number.isFinite` guard is what
+ * stops a zero-denominator rational (which arrives as NaN) reaching the
+ * database as a broken coordinate.
+ */
+export function gpsToDecimal(dms: unknown, ref: unknown): number | null {
+  if (!Array.isArray(dms) || dms.length < 2) return null;
+  const [d = 0, m = 0, s = 0] = dms as number[];
+  if (![d, m, s].every((n) => typeof n === 'number' && Number.isFinite(n))) return null;
+  const dec = d + m / 60 + s / 3600;
+  if (!Number.isFinite(dec)) return null;
+  const signed = ref === 'S' || ref === 'W' ? -dec : dec;
+  // A malformed triple can still produce an out-of-range value; a coordinate
+  // outside the globe is not worth storing.
+  if (Math.abs(signed) > 180) return null;
+  return signed;
+}
+
+/**
+ * Parse the camera metadata the library shows. Never throws — malformed EXIF
+ * is a normal input here, not an error.
+ *
+ * @ai-warning IFD grouping is not flat: the body is under `Image`, the lens
+ * and capture time under `Photo`, GPS under `GPSInfo`. exif-reader's bundled
+ * .d.ts understates their nullability (partial corruption parses fine with
+ * `Image: null`), so use optional chaining rather than truthiness.
+ */
+export function parseExif(raw: Buffer | undefined): MediaExif {
+  const tags = readExif(raw);
+  if (!tags) return { ...EMPTY_EXIF };
+  const takenAt = tags.Photo?.DateTimeOriginal;
+  const lat = gpsToDecimal(tags.GPSInfo?.GPSLatitude, tags.GPSInfo?.GPSLatitudeRef);
+  const lng = gpsToDecimal(tags.GPSInfo?.GPSLongitude, tags.GPSInfo?.GPSLongitudeRef);
+  return {
+    takenAt: takenAt instanceof Date && !Number.isNaN(takenAt.getTime()) ? takenAt : null,
+    // Make and Model are separate tags; the library shows one "camera" string.
+    camera: cleanExifString(
+      [cleanExifString(tags.Image?.Make), cleanExifString(tags.Image?.Model)].filter(Boolean).join(' ') || null,
+    ),
+    lens: cleanExifString(tags.Photo?.LensModel),
+    // Latitude is bounded tighter than longitude.
+    lat: lat !== null && Math.abs(lat) <= 90 ? lat : null,
+    lng,
+  };
+}

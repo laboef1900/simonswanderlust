@@ -7,7 +7,13 @@ import { create as createTar } from 'tar';
 import type { BackupSchedule } from './settings.js';
 import { POST_SNAPSHOT_SQL, type DbPool } from './db.js';
 
-export const DUMP_VERSION = 2;
+/**
+ * v3 added `media` + `media_folders` (issue #64); v2 added `pages`.
+ * @ai-warning Bumping this ALSO requires widening the allow-list guard in
+ * `restoreDatabase` — otherwise every newly written dump becomes unrestorable,
+ * and a test that only checks "an old dump still restores" passes anyway.
+ */
+export const DUMP_VERSION = 3;
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
 export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 
@@ -54,9 +60,18 @@ export async function dumpDatabase(db: Queryable, dir: string, now: Date = new D
      FROM posts ORDER BY created_at`,
   )).rows;
   const pages = (await db.query('SELECT key, locale, title, body_markdown, images FROM pages ORDER BY key, locale')).rows;
+  // The media library's metadata. The FILES are captured by the incremental
+  // images archive, not here — without these rows a restore would bring the
+  // photos back but lose every folder, caption and tag, which is the worst
+  // kind of partial recovery.
+  const media = (await db.query('SELECT * FROM media ORDER BY key')).rows;
+  const mediaFolders = (await db.query('SELECT path, created_at FROM media_folders ORDER BY path')).rows;
   const name = `db-${fileStamp(now)}.json.gz`;
   mkdirSync(dir, { recursive: true });
-  const payload = JSON.stringify({ version: DUMP_VERSION, createdAt: now.toISOString(), tables: { users, posts, pages } });
+  const payload = JSON.stringify({
+    version: DUMP_VERSION, createdAt: now.toISOString(),
+    tables: { users, posts, pages, media, media_folders: mediaFolders },
+  });
   atomicWrite(join(dir, name), gzipSync(payload));
   return name;
 }
@@ -222,23 +237,46 @@ export function createDbBackup(
 interface Dump {
   version: number;
   createdAt: string;
-  tables: { users: Record<string, unknown>[]; posts: Record<string, unknown>[]; pages?: Record<string, unknown>[] };
+  tables: {
+    users: Record<string, unknown>[];
+    posts: Record<string, unknown>[];
+    pages?: Record<string, unknown>[];
+    media?: Record<string, unknown>[];
+    media_folders?: Record<string, unknown>[];
+  };
 }
 
 const asJsonb = (v: unknown): string | null => (v == null ? null : JSON.stringify(v));
+
+/**
+ * `media.tags` is `text[]`, not jsonb.
+ * @ai-warning It CANNOT round-trip through `asJsonb` the way every other
+ * non-scalar column does — a JSON string bound to a `text[]` column is either
+ * a type error or, worse, one array element containing literal JSON. It needs
+ * a real JS array bound with an explicit `::text[]` cast.
+ */
+const asTextArray = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
 
 /** Restore a dump inside one transaction. Deleting users cascades to sessions
  * (FK ON DELETE CASCADE), so every login is invalidated. */
 export async function restoreDatabase(
   pool: DbPool,
   filePath: string,
-): Promise<{ users: number; posts: number; pages: number }> {
+): Promise<{ users: number; posts: number; pages: number; media: number }> {
   const dump = JSON.parse(gunzipSync(readFileSync(filePath)).toString('utf8')) as Dump;
-  if (dump.version !== 1 && dump.version !== 2) throw new BackupError(`unsupported dump version ${dump.version}`);
+  // @ai-warning An ALLOW-LIST, not a minimum. Every DUMP_VERSION bump must be
+  // added here or dumps written by the new code are unrestorable.
+  if (![1, 2, 3].includes(dump.version)) throw new BackupError(`unsupported dump version ${dump.version}`);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     await client.query('DELETE FROM posts');
+    // @ai-warning media MUST be deleted before users. `media.uploaded_by`
+    // references `users(id) ON DELETE SET NULL`, so deleting users first would
+    // null out every uploader attribution on rows that are about to be
+    // re-inserted anyway — silent, and only visible long after the restore.
+    await client.query('DELETE FROM media');
+    await client.query('DELETE FROM media_folders');
     await client.query('DELETE FROM users');
     for (const u of dump.tables.users) {
       await client.query(
@@ -286,8 +324,35 @@ export async function restoreDatabase(
         );
       }
     }
+    // v1/v2 dumps predate the media library and carry no media tables — leave
+    // existing rows alone rather than wiping metadata the dump never captured.
+    // (The DELETEs above already ran; re-inserting nothing is the correct
+    // outcome for a dump that genuinely had no media, and for an older dump
+    // the files on disk are still there, so `POST /media/rescan` rebuilds the
+    // rows.)
+    for (const f of dump.tables.media_folders ?? []) {
+      await client.query(
+        `INSERT INTO media_folders (path, created_at) VALUES ($1, $2) ON CONFLICT (path) DO NOTHING`,
+        [f.path, f.created_at ?? new Date()],
+      );
+    }
+    for (const m of dump.tables.media ?? []) {
+      await client.query(
+        `INSERT INTO media (key, folder, title, alt_de, alt_en, caption_de, caption_en, tags,
+                            width, height, orig_bytes, variant_bytes, status, error,
+                            taken_at, camera, lens, lat, lng, uploaded_at, uploaded_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::text[],$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+        [m.key, m.folder, m.title, m.alt_de, m.alt_en, m.caption_de, m.caption_en, asTextArray(m.tags),
+         m.width, m.height, m.orig_bytes, m.variant_bytes, m.status, m.error ?? null,
+         m.taken_at ?? null, m.camera ?? null, m.lens ?? null, m.lat ?? null, m.lng ?? null,
+         m.uploaded_at ?? new Date(), m.uploaded_by ?? null],
+      );
+    }
     await client.query('COMMIT');
-    return { users: dump.tables.users.length, posts: dump.tables.posts.length, pages: dump.tables.pages?.length ?? 0 };
+    return {
+      users: dump.tables.users.length, posts: dump.tables.posts.length,
+      pages: dump.tables.pages?.length ?? 0, media: dump.tables.media?.length ?? 0,
+    };
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;

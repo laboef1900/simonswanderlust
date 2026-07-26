@@ -166,7 +166,9 @@ blog/
 │       └── layouts/  ·  styles/  ·  assets/
 └── uploader/                      # self-hosted app: CMS + image service + blog serving (Node/Fastify/sharp)
     ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · settings · posts · pages · body-content · build · backup · export · preview · wxr-parse · wp-content · wp-images · wp-import
+    │                              #   media-files (disk) · media-store (database) · media-sync (reconcile) · encode-queue · work-lock · disk · exif
     ├── public/                    #   index.html (hero upload) · import.html (WordPress import) · editor/posts/about/settings/users
+    │                              #   media.html + media-api/media-browser/media-picker.js · posts-filter.js
     ├── test/                      #   Vitest suites (integration suites run when TEST_DATABASE_URL is set)
     └── .env.example · README.md
 ```
