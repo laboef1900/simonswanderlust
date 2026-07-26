@@ -91,12 +91,22 @@ avif 640 variant -> exif 340 bytes  GPS: {...identical...}
 
 The code propagates whatever EXIF the source carries, GPS included, into every public file.
 
-**Measured exposure, and it is better than the code implies.** A read-only scan of the stored
-corpus (`uploader/data/images`, 102 variant files across 19 keys) found **102 carrying EXIF and
-zero carrying GPS** — consistent with the Leica Q2 having no GPS receiver, so the sources never
-had coordinates to leak. This is therefore a **latent** defect, not an active breach: the day a
-geotagged photo is uploaded (a phone shot, or anything geotagged via the Leica FOTOS app), it
-would publish coordinates silently.
+**Measured exposure, and it is better than the code implies.** A read-only scan of the **local
+development** corpus (`uploader/data/images`, 102 variant files across 19 keys) found **102
+carrying EXIF and zero carrying GPS**, in EXIF *and* XMP.
+
+Be careful with the reason, because the intuitive one is not what the data shows. The audited
+variants are processed exports whose metadata was already largely stripped: **88 of the 102 carry
+no `Make`, `Model` or `Software` at all**, and the remaining 14 carry only
+`Software = Capture One Macintosh`. "The Leica Q2 has no GPS receiver" is true independently, but
+it is *not* what this audit established, and it does not generalise to WordPress-imported photos
+shot on other devices in other years.
+
+So the defect is **latent on the corpus that was measured** — not proven latent everywhere. The
+server's corpus was never reachable from the development environment and remains unaudited; run
+`audit-exif` there before relying on this finding. The day a geotagged photo is uploaded (a phone
+shot, or anything geotagged via the Leica FOTOS app), the old code would have published
+coordinates silently.
 
 That distinction changes the remediation, not the fix. The pipeline change still ships in Phase 0.
 The expensive part — rewriting the existing corpus — becomes **conditional on an audit**, because
