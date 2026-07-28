@@ -53,6 +53,13 @@ change about the security posture.
   below. The bulk-irreversible operations stay admin-only — `DELETE /media/items/*`,
   `PATCH /media/folders` (rename) and `DELETE /media/folders` — because media has no revision
   history the way posts do. `POST /media/rescan` is admin-only too.
+  The line is **reversibility, not blast radius**: `POST /media/move` (up to 100 photos) and
+  `POST /media/folders` (create) are session-level even though a move is a bulk write, because
+  folders are *virtual* — moving a photo never changes its URL, so no move can break a published
+  post, and any move can be undone by moving it back. A folder rename rewrites a whole subtree in
+  one statement and a delete is unrecoverable, which is why those two sit on the other side.
+  `POST /media/retry` is session-level for the same reason: it re-encodes from the retained
+  original, and the encode queue's `MAX_BACKLOG`/concurrency caps bound what it can cost.
 
 ### Media metadata redaction
 

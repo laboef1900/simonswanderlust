@@ -3,10 +3,45 @@ import {
   escapeMeta, unescapeMeta, galleryFencesToMdx, imagesMapError, normalizeGalleryFences,
   type ImageMeta,
 } from '../src/body-content.js';
+import type { ImageDims } from '../../site/src/lib/body-images.js';
 
 const A = 'https://img.example.com/trips/x/a-1a2b3c4d';
 const B = 'https://img.example.com/trips/x/b-9f8e7d6c';
 const fence = (lines: string) => '```gallery\n' + lines + '\n```';
+
+// The `images` entry shape is declared independently in this tree
+// (`ImageMeta`) and in the site tree (`ImageDims`) — separate tsconfigs, so
+// neither can simply import the other's canonical definition. Because every
+// added field is OPTIONAL, widening one side alone keeps BOTH `tsc` and
+// `astro check` green, and the only symptom is galleries rendering with empty
+// alt and no captions on a fully green build.
+//
+// preview.ts already imports across the boundary, so this can be a compile-time
+// assertion rather than an @ai-warning comment.
+//
+// @ai-warning It takes BOTH checks below, and plain assignment is not one of
+// them. Assigning each type to the other passes even when one side has grown an
+// extra optional field — excess-property checking only applies to object
+// literals, and an absent optional satisfies the other side — which is exactly
+// the divergence this exists to catch. So:
+//   · MUTUAL catches a changed or newly-required field (`alt: number`,
+//     `alt: string` vs `alt?: string`), which key comparison alone would miss.
+//   · SAME_KEYS catches an added OPTIONAL field, which assignability misses.
+// Verified by breaking each direction in turn. Do not "simplify" this to one.
+type Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+type SameKeys<A, B> = [keyof A] extends [keyof B] ? ([keyof B] extends [keyof A] ? true : false) : false;
+
+const SHAPES_MATCH: Mutual<ImageMeta, ImageDims> = true;
+const KEYS_MATCH: SameKeys<ImageMeta, ImageDims> = true;
+
+describe('ImageMeta ↔ site ImageDims stay structurally identical', () => {
+  it('is enforced by the type-checker, not by a comment', () => {
+    // The assertions are the two `const`s above — `true` stops being assignable
+    // the moment the shapes drift. This body only keeps the suite honest about
+    // them existing.
+    expect([SHAPES_MATCH, KEYS_MATCH]).toEqual([true, true]);
+  });
+});
 
 describe('imagesMapError', () => {
   it('accepts an absent, empty or well-formed map', () => {
@@ -115,6 +150,43 @@ describe('normalizeGalleryFences', () => {
     const out = normalizeGalleryFences(body, {});
     expect(out.bodyMarkdown).toBe(`${fence(A)}\n\ntext\n\n${fence(B)}`);
     expect(Object.keys(out.images)).toEqual([A, B]);
+  });
+
+  // @ai-warning: this is how docs/authoring-workflow.md demonstrates the syntax
+  // — a 4-backtick wrapper around a 3-backtick gallery example. Rewriting the
+  // inner fence destroys the very dimensions and captions being demonstrated,
+  // and the renderer never treats it as a gallery either (it is code, not a
+  // block), so normalizing it is wrong on both counts.
+  it('leaves a ```gallery example nested inside an outer fence completely alone', () => {
+    const body = `\`\`\`\`\n\`\`\`gallery\n${A} | 3000x2000 | alt="Blick"\n\`\`\`\n\`\`\`\``;
+    const out = normalizeGalleryFences(body, {});
+    expect(out.bodyMarkdown).toBe(body);
+    expect(out.images).toEqual({});
+  });
+
+  it('leaves a gallery example nested inside a ~~~ fence alone', () => {
+    const body = `~~~\n\`\`\`gallery\n${A} | 800x600\n\`\`\`\n~~~`;
+    expect(normalizeGalleryFences(body, {}).bodyMarkdown).toBe(body);
+  });
+
+  // CommonMark lets a closing fence be LONGER than the opening one. The
+  // renderer follows that rule, so a scanner that requires equal length would
+  // render the block as a gallery while never normalizing it.
+  it('closes on a longer fence, as CommonMark does', () => {
+    const body = `\`\`\`gallery\n${A} | 800x600\n\`\`\`\`\n\ntext`;
+    const out = normalizeGalleryFences(body, {});
+    expect(out.bodyMarkdown).toBe(`\`\`\`gallery\n${A}\n\`\`\`\`\n\ntext`);
+    expect(out.images[A]).toEqual({ width: 800, height: 600 });
+  });
+
+  it('does not treat text after an unterminated fence as a new gallery', () => {
+    const body = `\`\`\`js\nconst a = 1;\n\n\`\`\`gallery\n${A} | 800x600`;
+    expect(normalizeGalleryFences(body, {}).bodyMarkdown).toBe(body);
+  });
+
+  it('preserves CRLF line endings on a rewritten photo line', () => {
+    const body = `\`\`\`gallery\r\n${A} | 800x600\r\n\`\`\`\r\n`;
+    expect(normalizeGalleryFences(body, {}).bodyMarkdown).toBe(`\`\`\`gallery\r\n${A}\r\n\`\`\`\r\n`);
   });
 });
 

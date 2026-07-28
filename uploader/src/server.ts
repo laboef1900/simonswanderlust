@@ -361,6 +361,15 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // row (crash between upsertDraft's two locale INSERTs), and that row's image
   // references must still block deletion. Do not cache across requests (state
   // lives in backing services).
+  //
+  // @ai-note This loads EVERY post body (both locales) plus every page on each
+  // call, and `imageUsage()` then scans that corpus once per item — so a page
+  // of GET /media costs O(pageSize × corpus). Acceptable at this size and
+  // deliberately not cached, but it is the same cost that made `list()` drop
+  // body_markdown from its SELECT (see PostListRow in posts.ts): once the
+  // corpus is large enough to notice, usage belongs in SQL (an index over the
+  // referenced URLs) rather than a full-corpus scan per request. The delete
+  // routes need it whatever happens; the listing route is the one to move.
   const usageCorpus = async (): Promise<{ posts: PostUsageRow[]; pages: PagePair[] }> => {
     const [postRows, pageKeys] = await Promise.all([cfg.posts.usageRows(), cfg.pages.keys()]);
     const pagePairs = await Promise.all(pageKeys.map((k) => cfg.pages.get(k)));
@@ -467,21 +476,36 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   // Re-queue failed encodes. The original is still on disk, so this is just a
   // status flip plus an enqueue — re-encoding overwrites the same filenames.
+  //
+  // @ai-warning A failed enqueue MUST roll the status back. Flipping to
+  // `processing` and then hitting a full backlog strands the key: the row says
+  // `processing` with nothing queued, and nothing recovers it — this route
+  // skips `processing` (below), the UI only offers Retry for `failed`, and the
+  // publish gate blocks every post referencing it until the next restart runs
+  // encodeQueue.recover().
+  // The flip has to come FIRST despite that, not after a successful enqueue:
+  // the queue can start the job immediately, and a fast encode would then
+  // write `ready` before our write landed, leaving the row stuck at
+  // `processing` after a perfectly successful encode.
   app.post('/media/retry', { preHandler: requireAuth }, async (req, reply) => {
     const b = (req.body ?? {}) as { keys?: unknown };
     const keys = Array.isArray(b.keys) ? b.keys.map(String).slice(0, MAX_BULK_KEYS) : [];
     let queued = 0;
     for (const key of keys) {
       const item = await cfg.media.get(key);
+      // `missing` is retryable too: media-sync marks a row missing when its
+      // files vanish, and the retained original may well still be there.
       if (!item || item.status === 'ready' || item.status === 'processing') continue;
       await cfg.media.setStatus(key, 'processing');
       try {
         cfg.encodeQueue.enqueue(key);
-        queued++;
       } catch (e) {
+        await cfg.media.setStatus(key, item.status, item.error ?? undefined)
+          .catch((err) => console.error(`could not restore status for ${key}:`, err));
         if (e instanceof BacklogFullError) return reply.code(429).send({ error: e.message, queued });
         throw e;
       }
+      queued++;
     }
     return reply.send({ ok: true, queued });
   });
@@ -871,6 +895,17 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   //  • It does not skip the MDX backup. The single-post publish route runs
   //    `exportPost` best-effort afterwards; omitting it here would silently
   //    leave bulk-published posts without a backup.
+  //
+  // @ai-warning This request is UNBOUNDED IN WALL-CLOCK TIME, and nothing in
+  // this process bounds it: Fastify's `requestTimeout` only caps how long the
+  // server waits to RECEIVE a request, not how long a handler may run. A
+  // 100-key publish is 100 × (validate + publish + get + exportPost) plus one
+  // full Astro build, all before the first byte of the response. The only real
+  // ceiling is the reverse proxy's read timeout — which is exactly what issue
+  // #72 is about, and the reason MAX_BULK_KEYS exists at all. If that ever
+  // starts timing out in practice, the fix is to return the per-post results
+  // before triggering the build (the client already polls nothing, so it would
+  // need a follow-up call), NOT to raise the proxy timeout.
   const BULK_ACTIONS = ['publish', 'unpublish', 'delete'] as const;
   type BulkAction = (typeof BULK_ACTIONS)[number];
 

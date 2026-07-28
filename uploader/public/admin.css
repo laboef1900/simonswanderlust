@@ -426,6 +426,11 @@ small {
 .bulk-bar[hidden] { display: none; }
 
 .posts-table .col-select { width: 2rem; }
+/* The select-all box is hidden for non-admins (who get no row checkboxes and no
+   bulk bar). Pinned explicitly for the same reason as .bulk-bar[hidden]: the
+   base `input, textarea, select` rule sets no `display` today, so [hidden]
+   works — but adding one later would silently resurrect the control. */
+.posts-table .col-select input[hidden] { display: none; }
 .posts-table .col-thumb { width: 84px; }
 .thumb-placeholder {
   border: 1px dashed var(--line-control);

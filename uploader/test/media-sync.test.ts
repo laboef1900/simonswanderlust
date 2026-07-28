@@ -143,6 +143,32 @@ describe('createMediaSync', () => {
     expect(await store.get('trips/gone/hero')).toMatchObject({ status: 'missing', title: 'Keep me' });
   });
 
+  // @ai-warning: the prune used to read ONE page of ready rows, and list()
+  // caps pageSize at MAX_PAGE_SIZE (200) — so past 200 photos it silently
+  // stopped sweeping and still reported success. Naive pagination is no better:
+  // marking a row `missing` drops it out of the `status = 'ready'` filter, so
+  // every mutation shifts the rows under the next OFFSET and skips one. This
+  // needs MORE than one page and MORE missing rows than fit in a page to fail
+  // against either bug.
+  it('marks every vanished row missing, past the pageSize cap', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    const total = 450; // > 2 × MAX_PAGE_SIZE
+    for (let i = 0; i < total; i++) {
+      const key = `library/2025/photo-${String(i).padStart(3, '0')}`;
+      await store.upsert({ key, status: 'ready', width: 8, height: 6, origBytes: 0, exif: noExif, uploadedBy: null });
+    }
+    // One survivor with real files on disk; everything else has vanished.
+    await writeVariant('library/2025/photo-123', 640);
+
+    const report = await sync(store).run();
+    expect(report.markedMissing).toBe(total - 1);
+    expect(await store.get('library/2025/photo-123')).toMatchObject({ status: 'ready' });
+    for (const i of [0, 199, 200, 201, 399, 449]) {
+      const key = `library/2025/photo-${String(i).padStart(3, '0')}`;
+      expect(await store.get(key)).toMatchObject({ key, status: 'missing' });
+    }
+  });
+
   // @ai-warning: an upload in flight has a row but not yet a full file set.
   it('skips non-ready rows when pruning, so an in-flight upload is not marked missing', async () => {
     const store = memoryMediaStore({ baseUrl: BASE });

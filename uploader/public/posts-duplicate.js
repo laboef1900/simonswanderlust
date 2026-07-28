@@ -36,15 +36,26 @@ window.PostsDuplicate = (function () {
     var now = today && typeof today.getUTCFullYear === 'function' ? today : new Date();
     var pad = function (n) { return String(n).padStart(2, '0'); };
     var isoDate = now.getUTCFullYear() + '-' + pad(now.getUTCMonth() + 1) + '-' + pad(now.getUTCDate());
+    // Deep-copy every carried structure. The caller serializes this straight to
+    // JSON and navigates away, so aliasing is harmless TODAY — but the function
+    // reads as a copy, is unit-tested as a copy, and the moment anything mutates
+    // the payload before sending (adding a default, stripping a field) it would
+    // silently edit the SOURCE post's in-memory object too.
+    //
+    // @ai-warning JSON round-trip, not structuredClone: this file also runs
+    // inside `vm.runInNewContext` in the unit tests, where only ECMAScript
+    // intrinsics exist — `structuredClone` is a host global and is undefined
+    // there. JSON is lossless for this payload, which is JSON on the wire anyway.
+    var clone = function (v) { return v === undefined ? undefined : JSON.parse(JSON.stringify(v)); };
     var locale = function (src, slug) {
       return {
         locale: src.locale,
         slug: slug,
-        title: src.title,          // the author rewrites it; an empty one blocks validateDraft
+        title: src.title,                 // the author rewrites it; an empty one blocks validateDraft
         excerpt: src.excerpt,
-        heroImage: src.heroImage,  // cheap to replace; a placeholder would just mean re-uploading
+        heroImage: clone(src.heroImage),  // cheap to replace; a placeholder would just mean re-uploading
         bodyMarkdown: src.bodyMarkdown,
-        images: src.images || {},  // mandatory — see above
+        images: clone(src.images) || {},  // mandatory — see above
       };
     };
     return {
@@ -61,9 +72,9 @@ window.PostsDuplicate = (function () {
         // The repeating structure this feature exists for. Spread only when
         // present so the copy does not gain empty keys the source never had.
         ...(pair.shared.route ? { route: pair.shared.route } : {}),
-        ...(pair.shared.stops && pair.shared.stops.length ? { stops: pair.shared.stops } : {}),
+        ...(pair.shared.stops && pair.shared.stops.length ? { stops: clone(pair.shared.stops) } : {}),
         ...(pair.shared.keyFacts && Object.keys(pair.shared.keyFacts).length
-          ? { keyFacts: pair.shared.keyFacts } : {}),
+          ? { keyFacts: clone(pair.shared.keyFacts) } : {}),
       },
       de: locale(pair.de, slugs.de),
       en: locale(pair.en, slugs.en),

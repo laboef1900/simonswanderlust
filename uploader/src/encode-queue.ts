@@ -20,7 +20,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { processImage } from './pipeline.js';
-import { storeVariantFiles } from './storage.js';
+import { assertSafeKey, storeVariantFiles } from './storage.js';
 import type { MediaError, MediaStore } from './media-store.js';
 import type { WorkLock } from './work-lock.js';
 
@@ -60,8 +60,19 @@ export interface EncodeQueueOptions {
   error?: (msg: string, err: unknown) => void;
 }
 
-/** Locate the retained original for a key, whatever extension it was stored with. */
+/**
+ * Locate the retained original for a key, whatever extension it was stored with.
+ *
+ * @ai-warning Re-asserts the key even though it came out of the `media` table.
+ * Every write path validates before storing, so a stored key is trustworthy
+ * today — but this is the one filesystem read that builds a path from database
+ * content rather than from a request, and `storeVariantFiles` (which the caller
+ * runs on the same key straight afterwards) asserts too. Keeping the read side
+ * symmetric means a future write path that forgets the guard fails here rather
+ * than reading outside STORAGE_DIR.
+ */
 async function readOriginal(storageDir: string, key: string): Promise<Buffer> {
+  assertSafeKey(key);
   const dir = join(storageDir, dirname(key));
   const base = basename(key);
   const entries = await readdir(dir, { withFileTypes: true });

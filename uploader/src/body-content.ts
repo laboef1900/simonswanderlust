@@ -15,10 +15,12 @@
  * needs no extra schema — the DE row carries German text, the EN row English.
  *
  * @ai-warning `site/src/lib/body-images.ts` declares this shape independently
- * (it is a different tree with its own tsconfig). Widen both together: because
- * the extra fields are optional, `tsc` and `astro check` stay green when only
- * one side is widened, and the symptom is galleries rendering with empty alt
- * and no captions on a green build.
+ * as `ImageDims` (a different tree with its own tsconfig). Widen both together:
+ * because the extra fields are optional, `tsc` and `astro check` stay green
+ * when only one side is widened, and the symptom is galleries rendering with
+ * empty alt and no captions on a green build. `test/body-content.test.ts` pins
+ * the two together with a compile-time assertion — plain assignment does NOT
+ * catch this, see the comment there before changing it.
  */
 export interface ImageMeta { width: number; height: number; alt?: string; caption?: string }
 
@@ -95,11 +97,10 @@ export function unescapeMeta(s: string): string {
 }
 
 /**
- * A ```gallery fenced block. Only column-0 backtick fences are matched — that
- * is what the editor and `export.ts` produce, and being conservative here
- * means an indented example inside a post about galleries is left alone.
+ * Opens a fenced block: up to 3 spaces of indent (CommonMark), then a run of
+ * 3+ backticks or tildes, then the info string.
  */
-const GALLERY_FENCE_RE = /^((`{3,})gallery[ \t]*\r?\n)([\s\S]*?)(^\2[ \t\r]*$)/gm;
+const FENCE_OPEN_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 
 /** A line is a comment/spacer when blank or `#`-prefixed (spec §Body encoding). */
 function isSkippableLine(line: string): boolean {
@@ -107,18 +108,65 @@ function isSkippableLine(line: string): boolean {
   return t === '' || t.startsWith('#');
 }
 
-/** Apply `rewriteLine` to every photo line of every ```gallery fence. */
+/**
+ * Apply `rewriteLine` to every photo line of every ```gallery fence.
+ *
+ * @ai-warning A line scanner, deliberately NOT a regex over the whole body. The
+ * regex this replaced (`/^((`{3,})gallery…)([\s\S]*?)(^\2…)/gm`) got two things
+ * wrong, both of which corrupt an author's text rather than merely missing a
+ * gallery:
+ *
+ *  1. It matched a ```gallery fence NESTED INSIDE another fence. That is
+ *     exactly how docs/authoring-workflow.md demonstrates the syntax — a
+ *     4-backtick wrapper around a 3-backtick gallery example — so a post
+ *     *about* galleries had its example silently rewritten to a bare URL on
+ *     save, destroying the dimensions and captions being demonstrated.
+ *  2. Its closing fence had to be exactly as long as the opening one (`\2`).
+ *     CommonMark lets a closing fence be LONGER, so a ```gallery closed with
+ *     ```` was not matched at all — and since the renderer *does* follow
+ *     CommonMark, that block rendered as a gallery while never being
+ *     normalized, i.e. the two disagreed about what the block was.
+ *
+ * Opening a gallery fence still requires column 0 (what the editor and
+ * `export.ts` produce). Recognising an ENCLOSING fence is deliberately more
+ * liberal — indent and tildes included — because being generous about what
+ * protects content is the safe direction to be wrong in.
+ */
 function rewriteFences(body: string, rewriteLine: (line: string) => string): string {
-  return body.replace(
-    GALLERY_FENCE_RE,
-    (_match, open: string, _fence: string, inner: string, close: string) => {
-      const rewritten = inner
-        .split('\n')
-        .map((line) => (isSkippableLine(line) ? line : rewriteLine(line)))
-        .join('\n');
-      return `${open}${rewritten}${close}`;
-    },
-  );
+  const lines = body.split('\n');
+  let open: { marker: string; len: number; isGallery: boolean } | null = null;
+
+  return lines
+    .map((raw) => {
+      // Keep CRLF intact: split('\n') leaves the '\r' on the line.
+      const cr = raw.endsWith('\r') ? '\r' : '';
+      const line = cr ? raw.slice(0, -1) : raw;
+
+      if (open) {
+        // A closing fence is the same character, at least as long, nothing else.
+        const close = new RegExp(`^ {0,3}\\${open.marker}{${open.len},}[ \\t]*$`);
+        if (close.test(line)) {
+          open = null;
+          return raw;
+        }
+        if (!open.isGallery || isSkippableLine(line)) return raw;
+        return rewriteLine(line) + cr;
+      }
+
+      const m = FENCE_OPEN_RE.exec(line);
+      if (!m) return raw;
+      const [, indent = '', fence = '', info = ''] = m;
+      const marker = fence[0] ?? '`';
+      // CommonMark: a backtick fence's info string may not contain a backtick.
+      if (marker === '`' && info.includes('`')) return raw;
+      open = {
+        marker,
+        len: fence.length,
+        isGallery: indent === '' && marker === '`' && info.trim() === 'gallery',
+      };
+      return raw;
+    })
+    .join('\n');
 }
 
 const DIMS_RE = /^(\d{1,6})x(\d{1,6})$/;

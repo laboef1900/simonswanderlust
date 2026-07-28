@@ -15,6 +15,13 @@ export interface ShutdownHooks {
    * fires while jobs are in flight, every `docker stop` logs a rejection, and
    * rows are left stuck in `processing` — which the next boot then has to
    * recover. Optional so callers with no background work can omit it.
+   *
+   * @ai-note Best-effort, NOT a guarantee. An encode waiting on the shared
+   * work-lock cannot finish until an in-flight `astro build` releases it, so a
+   * drain can outlast `docker stop`'s 10 s grace and get SIGKILLed. That is
+   * acceptable — it degrades to exactly the pre-drain behaviour, which
+   * `encodeQueue.recover()` already heals on the next boot — but do not add a
+   * step here whose correctness depends on the drain completing.
    */
   drain?: () => Promise<unknown>;
   end: () => Promise<unknown>;   // release backing resources (pg pool)

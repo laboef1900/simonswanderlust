@@ -112,10 +112,36 @@ describe('PostsDuplicate.duplicatePayload — identity resets', () => {
     expect(copy.status).toBe('draft');
   });
 
+  // This previously asserted only on `coordinates` — the ONE field that is a
+  // fresh literal regardless — so it passed while every carried-over structure
+  // (images, stops, keyFacts, heroImage) was still shared by reference with the
+  // source. Check the carried ones, which are the ones that can actually alias.
   it('does not alias the source objects (editing the copy cannot mutate the original)', () => {
     const c = api.duplicatePayload(source, slugs, TODAY);
+
     c.shared.coordinates.lat = 99;
     expect(source.shared.coordinates.lat).toBe(63.43);
+
+    c.de.images['https://img/x/y']!.alt = 'mutated';
+    expect(source.de.images['https://img/x/y']!.alt).toBe('Fjord');
+
+    c.de.heroImage.alt = 'mutated';
+    expect(source.de.heroImage.alt).toBe('Fjord');
+
+    c.shared.stops![0]!.name = 'mutated';
+    expect(source.shared.stops![0]!.name).toBe('Trondheim');
+
+    c.shared.keyFacts!['Währung'] = 'mutated';
+    expect(source.shared.keyFacts!['Währung']).toBe('NOK');
+  });
+
+  it('carries structures by value, not by reference', () => {
+    const c = api.duplicatePayload(source, slugs, TODAY);
+    expect(c.de.images).toEqual(source.de.images);
+    expect(c.de.images).not.toBe(source.de.images);
+    expect(c.shared.stops).not.toBe(source.shared.stops);
+    expect(c.shared.keyFacts).not.toBe(source.shared.keyFacts);
+    expect(c.de.heroImage).not.toBe(source.de.heroImage);
   });
 });
 

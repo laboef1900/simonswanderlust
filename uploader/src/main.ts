@@ -130,10 +130,22 @@ app
         console.log(r.ok ? `initial build released ${r.release}` : `initial build failed: ${r.error}`));
     }
     housekeeping();
-    // Reconcile disk ↔ database and resume anything a crash left half-encoded.
-    // Both run AFTER listen() and never block boot; a failure is logged, not fatal.
-    void mediaSync.run().catch((e) => console.error('media reconciliation failed:', e));
-    void encodeQueue.recover().catch((e) => console.error('encode queue recovery failed:', e));
+    // Reconcile disk ↔ database, THEN resume anything left half-encoded. Runs
+    // AFTER listen() and never blocks boot; a failure is logged, not fatal.
+    //
+    // @ai-warning The order is load-bearing — these must not run concurrently.
+    // mediaSync inserts a backfilled crashed upload (an `-orig.*` on disk with
+    // no variants) as `processing`, and recover() re-seeds the queue from
+    // `status = 'processing'`. Fired in parallel, recover() — a single query —
+    // always finishes before the sync's disk walk, so it never sees those rows;
+    // POST /media/retry skips `processing` and the UI only offers Retry for
+    // `failed`, so nothing could un-stick them until the next restart, while
+    // the publish gate blocked every post referencing them.
+    void mediaSync
+      .run()
+      .catch((e) => console.error('media reconciliation failed:', e))
+      .then(() => encodeQueue.recover())
+      .catch((e) => console.error('encode queue recovery failed:', e));
   })
   .catch((err) => {
     console.error(err);
