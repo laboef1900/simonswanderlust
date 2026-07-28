@@ -187,6 +187,7 @@
     <script src="/admin/llm.js"></script>
     <script src="/admin/alt-suggest.js"></script>
     <script src="/admin/media-api.js"></script>
+    <script src="/admin/picker-selection.js"></script>
     <script src="/admin/media-picker.js"></script>
     <script src="/admin/gallery-fence.js"></script>
     <script>
@@ -442,19 +443,47 @@
         const existing = GalleryFence.fenceAt(body, cursor);
         const current = existing ? GalleryFence.parse(existing.text) : { directives: [], lines: [] };
 
+        // What this post already says about each photo, which must survive a
+        // re-serialize: the fence's own line metadata if the author typed some
+        // and has not saved yet, otherwise the `images` entry it was lifted into.
+        // Without this the library's alt/caption would overwrite the author's on
+        // every edit — see the @ai-warning on GalleryFence.serialize.
+        const images = locale === 'de' ? deImages : enImages;
+        const postMeta = {};
+        current.lines.forEach((line) => {
+          const stored = images[line.src] || {};
+          const alt = line.alt !== undefined ? line.alt : stored.alt;
+          const caption = line.caption !== undefined ? line.caption : stored.caption;
+          if (typeof alt !== 'string' && typeof caption !== 'string') return;
+          postMeta[line.src] = {};
+          if (typeof alt === 'string') postMeta[line.src].alt = alt;
+          if (typeof caption === 'string') postMeta[line.src].caption = caption;
+        });
+
         MediaPicker.open({
           multiple: true,
           preselect: current.lines.map((l) => l.src),
+          confirmLabel: existing ? 'Update gallery' : 'Insert gallery',
+          emptyHint: existing
+            ? 'Nothing selected — confirming now removes this gallery.'
+            : 'Nothing selected yet — click photos above.',
           onUnauthed: () => guard.redirectToLogin(),
           onPick: (items) => {
             // Directives (e.g. #66's `#layout:`) are carried through verbatim —
-            // editing a gallery must not silently reset its layout.
-            const fence = GalleryFence.serialize(items, locale, current.directives);
+            // editing a gallery must not silently reset its layout. An empty
+            // selection means "remove the block", so emit no fence at all.
+            const fence = items.length
+              ? GalleryFence.serialize(items, locale, current.directives, postMeta)
+              : '';
             const out = GalleryFence.replaceFenceAt(body, cursor, fence);
-            mde.value(out.body);
+            if (out.start === out.end && out.text === '') return;
+            // A range edit, not mde.value(): replaceRange keeps CodeMirror's undo
+            // history (and fires a change event, which marks the guard dirty).
+            cm.replaceRange(out.text, cm.posFromIndex(out.start), cm.posFromIndex(out.end));
             guard.markDirty();
-            $(locale + 'BodyImgStatus').textContent =
-              (out.replaced ? 'Gallery updated: ' : 'Gallery inserted: ') + items.length + ' photo(s)';
+            $(locale + 'BodyImgStatus').textContent = !items.length
+              ? 'Gallery removed'
+              : (out.replaced ? 'Gallery updated: ' : 'Gallery inserted: ') + items.length + ' photo(s)';
           },
         });
       }

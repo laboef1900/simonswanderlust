@@ -29,13 +29,30 @@ interface ParsedLine {
   alt?: string;
   caption?: string;
 }
+type PostMeta = Record<string, { alt?: string; caption?: string }>;
+interface Edit {
+  text: string;
+  start: number;
+  end: number;
+  replaced: boolean;
+}
 interface Api {
   escapeMeta(s: string): string;
   unescapeMeta(s: string): string;
-  serialize(items: PickedItem[], locale: 'de' | 'en', directives?: string[]): string;
+  serialize(
+    items: PickedItem[],
+    locale: 'de' | 'en',
+    directives?: string[],
+    postMeta?: PostMeta,
+  ): string;
   parse(text: string): { directives: string[]; lines: ParsedLine[] };
   fenceAt(body: string, cursor: number): { text: string; start: number; end: number } | null;
-  replaceFenceAt(body: string, cursor: number, fence: string): { body: string; replaced: boolean };
+  replaceFenceAt(body: string, cursor: number, fence: string): Edit;
+}
+
+/** What `cm.replaceRange(text, from, to)` does, so tests can assert on the result. */
+function apply(body: string, edit: Edit): string {
+  return body.slice(0, edit.start) + edit.text + body.slice(edit.end);
 }
 
 function load(): Api {
@@ -155,6 +172,43 @@ describe('serialize', () => {
     expect(photoLines).toHaveLength(1);
     expect(photoLines[0]).toContain('/ok');
   });
+
+  // @ai-warning The picker re-serializes from MEDIA LIBRARY rows, but the stored
+  // fence is bare URLs — the post's own alt/caption live in its `images` map.
+  // Without postMeta winning here, adding one photo to a gallery silently
+  // overwrote every other photo's post-specific text with the library default,
+  // because normalizeGalleryFences lets a value on the line beat the stored one.
+  describe('postMeta — what this post already says wins over the library row', () => {
+    const meta: PostMeta = {
+      'https://img.example.com/trips/x/a': { alt: 'Hand-tuned alt', caption: 'Hand-tuned caption' },
+    };
+
+    it('emits the post metadata instead of the library alt and caption', () => {
+      const out = G.serialize([item()], 'de', [], meta);
+      expect(out).toContain('alt="Hand-tuned alt" | caption="Hand-tuned caption"');
+      expect(out).not.toContain('Berg');
+    });
+
+    it('respects a deliberately cleared value rather than refilling it', () => {
+      const out = G.serialize([item()], 'de', [], { 'https://img.example.com/trips/x/a': { alt: '' } });
+      expect(out).not.toContain('alt=');
+      // caption is absent from postMeta, so the library value still fills in
+      expect(out).toContain('caption="Am Morgen"');
+    });
+
+    it('falls back to the library row for a photo the post has never seen', () => {
+      const out = G.serialize([item({ src: 'https://img.example.com/new' })], 'de', [], meta);
+      expect(out).toContain('alt="Berg"');
+    });
+
+    it('escapes post metadata exactly as it escapes library metadata', () => {
+      const out = G.serialize([item()], 'de', [], {
+        'https://img.example.com/trips/x/a': { alt: 'a | b', caption: 'two\nlines' },
+      });
+      expect(out.split('\n')).toHaveLength(3);
+      expect((out.split('\n')[1] ?? '').split('|')).toHaveLength(4);
+    });
+  });
 });
 
 describe('parse', () => {
@@ -236,6 +290,59 @@ describe('the server accepts what the picker emits', () => {
     expect(bodyMarkdown).not.toContain('alt=');
   });
 
+  // The full "edit an existing gallery" loop, which is where metadata is lost if
+  // anything in the chain forgets the post's own text: the stored fence is bare
+  // URLs, so `parse` yields no alt/caption, and the picker re-serializes from
+  // library rows. `postMeta` is what carries the post's `images` entry across.
+  it('re-editing a gallery keeps the post’s alt and caption, not the library’s', () => {
+    const stored = '```gallery\nhttps://i/a\n```';
+    const storedImages: Record<string, { width: number; height: number; alt?: string; caption?: string }> = {
+      'https://i/a': { width: 10, height: 20, alt: 'Hand-tuned alt', caption: 'Hand-tuned caption' },
+    };
+    const libraryRow = {
+      src: 'https://i/a',
+      width: 10,
+      height: 20,
+      alt: { de: 'Library alt' },
+      caption: { de: 'Library caption' },
+    };
+
+    // What editor.html does: parse the fence, layer the post's images map under it.
+    const parsed = G.parse(stored);
+    expect(parsed.lines).toEqual([{ src: 'https://i/a' }]); // nothing to recover from the line itself
+    const postMeta: PostMeta = {};
+    for (const line of parsed.lines) {
+      postMeta[line.src] = {
+        alt: line.alt ?? storedImages[line.src]?.alt,
+        caption: line.caption ?? storedImages[line.src]?.caption,
+      };
+    }
+
+    const fence = G.serialize([libraryRow], 'de', parsed.directives, postMeta);
+    const { images } = normalizeGalleryFences(fence, storedImages);
+    expect(images['https://i/a']).toEqual({
+      width: 10,
+      height: 20,
+      alt: 'Hand-tuned alt',
+      caption: 'Hand-tuned caption',
+    });
+  });
+
+  it('a photo added to an existing gallery still gets the library metadata', () => {
+    const fence = G.serialize(
+      [
+        { src: 'https://i/a', width: 10, height: 20, alt: { de: 'Library A' } },
+        { src: 'https://i/new', width: 30, height: 40, alt: { de: 'Library new' } },
+      ],
+      'de',
+      [],
+      { 'https://i/a': { alt: 'Hand-tuned' } },
+    );
+    const { images } = normalizeGalleryFences(fence, { 'https://i/a': { width: 10, height: 20, alt: 'Hand-tuned' } });
+    expect(images['https://i/a']?.alt).toBe('Hand-tuned');
+    expect(images['https://i/new']?.alt).toBe('Library new');
+  });
+
   it('survives a fence carrying a #66 layout directive', () => {
     const fence = G.serialize(
       [{ src: 'https://i/a', width: 10, height: 20, alt: { de: 'A' } }],
@@ -252,26 +359,84 @@ describe('the server accepts what the picker emits', () => {
 
 describe('replaceFenceAt', () => {
   const body = 'intro\n\n```gallery\nhttps://i/a\n```\n\noutro';
+  const FENCE = '```gallery\nhttps://i/b\n```';
 
-  it('replaces the fence the cursor sits inside', () => {
+  it('replaces the fence the cursor sits inside, as a range edit', () => {
     const cursor = body.indexOf('https://i/a');
-    const out = G.replaceFenceAt(body, cursor, '```gallery\nhttps://i/b\n```');
+    const out = G.replaceFenceAt(body, cursor, FENCE);
     expect(out.replaced).toBe(true);
-    expect(out.body).toBe('intro\n\n```gallery\nhttps://i/b\n```\n\noutro');
+    // The range covers the fence and nothing else — this is what lets the editor
+    // use cm.replaceRange and keep CodeMirror's undo history, where the old
+    // mde.value(wholeDocument) discarded it.
+    expect(body.slice(out.start, out.end)).toBe('```gallery\nhttps://i/a\n```');
+    expect(apply(body, out)).toBe('intro\n\n```gallery\nhttps://i/b\n```\n\noutro');
   });
 
   it('inserts at the cursor when it is not inside a fence', () => {
-    const out = G.replaceFenceAt(body, 0, '```gallery\nhttps://i/c\n```');
+    const out = G.replaceFenceAt(body, 0, FENCE);
     expect(out.replaced).toBe(false);
-    expect(out.body).toContain('https://i/c');
-    expect(out.body).toContain('https://i/a'); // the existing gallery is untouched
+    expect(apply(body, out)).toContain('https://i/b');
+    expect(apply(body, out)).toContain('https://i/a'); // the existing gallery is untouched
   });
 
   it('never damages a fence it does not own', () => {
     const withCode = 'a\n\n```js\nconst x = 1;\n```\n\nb';
-    const out = G.replaceFenceAt(withCode, withCode.indexOf('const'), '```gallery\nhttps://i/d\n```');
+    const out = G.replaceFenceAt(withCode, withCode.indexOf('const'), FENCE);
     expect(out.replaced).toBe(false);
-    expect(out.body).toContain('const x = 1;');
+    expect(apply(withCode, out)).toContain('const x = 1;');
+  });
+
+  // A fence only opens at column 0. Splicing raw at the cursor produced
+  // `some te```gallery…` — literal text that neither the renderer nor
+  // normalizeGalleryFences treats as a gallery, i.e. a silent no-op for the
+  // author. Every insertion must land on its own line.
+  describe('insertion always produces a real fence', () => {
+    const opensAtColumnZero = (out: string) =>
+      out.split('\n').some((l) => l === '```gallery');
+
+    it('breaks out of a mid-paragraph cursor', () => {
+      const prose = 'some text here';
+      const out = G.replaceFenceAt(prose, 5, FENCE);
+      const next = apply(prose, out);
+      expect(opensAtColumnZero(next)).toBe(true);
+      expect(next).toBe('some \n\n```gallery\nhttps://i/b\n```\n\ntext here');
+    });
+
+    it('does not stack blank lines when the cursor is already on one', () => {
+      const prose = 'a\n\nb';
+      expect(apply(prose, G.replaceFenceAt(prose, 3, FENCE))).toBe('a\n\n```gallery\nhttps://i/b\n```\n\nb');
+    });
+
+    it('pads a cursor at the start of a line following text', () => {
+      const prose = 'a\nb';
+      expect(apply(prose, G.replaceFenceAt(prose, 2, FENCE))).toBe('a\n\n```gallery\nhttps://i/b\n```\n\nb');
+    });
+
+    it('adds no padding at the very start or very end of the body', () => {
+      expect(apply('', G.replaceFenceAt('', 0, FENCE))).toBe(FENCE);
+      expect(apply('a\n\n', G.replaceFenceAt('a\n\n', 3, FENCE))).toBe('a\n\n' + FENCE);
+    });
+  });
+
+  describe('an empty fence removes the gallery', () => {
+    it('takes the surrounding blank line with it', () => {
+      const out = G.replaceFenceAt(body, body.indexOf('https://i/a'), '');
+      expect(out.replaced).toBe(true);
+      expect(apply(body, out)).toBe('intro\n\noutro');
+    });
+
+    it('leaves a trailing gallery cleanly removed', () => {
+      const trailing = 'intro\n\n```gallery\nhttps://i/a\n```';
+      const out = G.replaceFenceAt(trailing, trailing.length - 1, '');
+      expect(apply(trailing, out)).toBe('intro\n\n');
+    });
+
+    it('is a no-op when the cursor is not in a gallery', () => {
+      const out = G.replaceFenceAt(body, 0, '');
+      expect(out.replaced).toBe(false);
+      expect(out.start).toBe(out.end);
+      expect(apply(body, out)).toBe(body);
+    });
   });
 });
 
@@ -312,5 +477,34 @@ describe('fenceAt', () => {
     // not an editable gallery.
     const nested = '````\n```gallery\nhttps://i/a\n```\n````\n';
     expect(G.fenceAt(nested, nested.indexOf('https://i/a'))).toBeNull();
+  });
+
+  // @ai-warning These four pin `fenceAt` to the SAME definition of "a gallery"
+  // as rewriteFences in src/body-content.ts. Where they disagree the damage is
+  // silent and asymmetric: a block only the picker claims gets replaced without
+  // ever being normalized, and one only the server claims gets a second fence
+  // nested inside it.
+  describe('agrees with the server about what a gallery is', () => {
+    it('does not claim a fence whose info string merely starts with "gallery"', () => {
+      const other = '```gallery-notes\nhttps://i/a\n```\n';
+      expect(G.fenceAt(other, other.indexOf('https://i/a'))).toBeNull();
+    });
+
+    it('claims a 4-backtick gallery, which the server treats as one', () => {
+      const wide = '````gallery\nhttps://i/a\n````\n';
+      expect(G.fenceAt(wide, wide.indexOf('https://i/a'))?.text).toBe('````gallery\nhttps://i/a\n````');
+    });
+
+    it('does not claim an indented gallery fence (the server requires column 0)', () => {
+      const indented = '  ```gallery\n  https://i/a\n  ```\n';
+      expect(G.fenceAt(indented, indented.indexOf('https://i/a'))).toBeNull();
+    });
+
+    it('ignores a backtick in an info string, which CommonMark says cannot open a fence', () => {
+      // `a ``` b` is inline code, not a fence — so the ```gallery below is a
+      // real, editable top-level gallery and not the inside of an open block.
+      const body = 'text ```js `x` weird\n\n```gallery\nhttps://i/a\n```\n';
+      expect(G.fenceAt(body, body.indexOf('https://i/a'))?.text).toBe('```gallery\nhttps://i/a\n```');
+    });
   });
 });

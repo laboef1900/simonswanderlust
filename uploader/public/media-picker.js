@@ -26,31 +26,18 @@ window.MediaPicker = (function () {
    * (an array of photo URLs) seeds the selection so "Edit gallery" reopens with
    * the current photos already chosen.
    *
-   * @ai-note `preselect` matches on `src`, not `key`, because that is what a
-   * gallery fence line actually stores. Deriving a key from a URL would mean
-   * assuming the image base URL has no path component — `src` is
-   * `${baseUrl}/${key}`, so a base with a path breaks the derivation. Comparing
-   * the URL the caller already has avoids the assumption entirely.
+   * With `multiple: true`, `onPick` may also receive an EMPTY array — the author
+   * cleared the selection, which for a gallery means "remove this block".
    *
-   * @ai-note Selection is held as item OBJECTS, not keys, because it must
-   * survive paging: a photo picked on page 1 is gone from `state.items` once
-   * the author pages to 2, and the caller needs its dimensions and alt text.
+   * The ordering model (preselect adoption across pages, what an author's own
+   * reordering protects) lives in picker-selection.js, where it is tested.
    */
   function open(opts) {
     var o = opts || {};
     var multiple = !!o.multiple;
     var client = api.makeClient({ onUnauthed: o.onUnauthed || function () { location.href = '/login'; } });
-    var state = { items: [], total: 0, q: '', page: 1, pageSize: 40, picked: [] };
-
-    var preselectOrder = (o.preselect || []).slice();
-    var pendingPreselect = preselectOrder.slice();
-
-    function indexOfKey(key) {
-      for (var i = 0; i < state.picked.length; i++) {
-        if (state.picked[i].key === key) return i;
-      }
-      return -1;
-    }
+    var state = { items: [], total: 0, q: '', page: 1, pageSize: 40 };
+    var picked = window.PickerSelection.create({ preselect: o.preselect });
 
     var dialog = document.createElement('dialog');
     dialog.className = 'admin-modal';
@@ -88,28 +75,41 @@ window.MediaPicker = (function () {
       dialog.appendChild(strip);
     }
 
-    function move(from, to) {
-      if (to < 0 || to >= state.picked.length) return;
-      var moved = state.picked.splice(from, 1)[0];
-      state.picked.splice(to, 0, moved);
-      render();
-      // Keep focus on the button the author just used, at its new position.
-      var sel = stripList.querySelectorAll('.picker-strip__item');
-      var target = sel[to];
-      if (target) {
-        var btn = target.querySelector(from > to ? '[data-act="up"]' : '[data-act="down"]');
-        if (btn) btn.focus();
+    /**
+     * Focus a button in the strip row at `index`, preferring `act`.
+     *
+     * @ai-note The fallbacks are the point, not defensive padding. Moving a photo
+     * to the first or last position — the two most common reorders — leaves the
+     * button the author just pressed disabled at its new position, and `.focus()`
+     * on a disabled button is a no-op that drops focus to <body>, i.e. out of the
+     * author's place in the dialog.
+     */
+    function focusInRow(index, act) {
+      var rows = stripList.querySelectorAll('.picker-strip__item');
+      var row = rows[index] || rows[rows.length - 1];
+      if (!row) { choose.focus(); return; }
+      var order = [act, act === 'up' ? 'down' : 'up', 'remove'];
+      for (var i = 0; i < order.length; i++) {
+        var btn = row.querySelector('[data-act="' + order[i] + '"]');
+        if (btn && !btn.disabled) { btn.focus(); return; }
       }
+      choose.focus();
+    }
+
+    function move(from, to) {
+      if (!picked.move(from, to)) return;
+      render();
+      focusInRow(to, from > to ? 'up' : 'down');
     }
 
     function renderStrip() {
       if (!multiple) return;
       stripList.innerHTML = '';
-      if (!state.picked.length) {
-        stripList.appendChild(el('li', 'muted', 'Nothing selected yet — click photos above.'));
+      if (!picked.size()) {
+        stripList.appendChild(el('li', 'muted', o.emptyHint || 'Nothing selected yet — click photos above.'));
         return;
       }
-      state.picked.forEach(function (item, i) {
+      picked.items().forEach(function (item, i) {
         var li = el('li', 'picker-strip__item');
         var label = item.title || item.key.split('/').pop();
         if (item.thumbSrc) {
@@ -132,16 +132,20 @@ window.MediaPicker = (function () {
         var down = el('button', 'btn-secondary', '↓');
         down.type = 'button';
         down.dataset.act = 'down';
-        down.disabled = i === state.picked.length - 1;
+        down.disabled = i === picked.size() - 1;
         down.setAttribute('aria-label', 'Move ' + label + ' later');
         down.addEventListener('click', function () { move(i, i + 1); });
 
         var drop = el('button', 'btn-remove', '×');
         drop.type = 'button';
+        drop.dataset.act = 'remove';
         drop.setAttribute('aria-label', 'Remove ' + label + ' from the gallery');
         drop.addEventListener('click', function () {
-          state.picked.splice(i, 1);
+          picked.remove(i);
           render();
+          // The row is gone; land on whatever took its place rather than <body>.
+          if (picked.size()) focusInRow(i, 'remove');
+          else choose.focus();
         });
 
         [up, down, drop].forEach(function (b) { li.appendChild(b); });
@@ -155,10 +159,18 @@ window.MediaPicker = (function () {
     var prev = el('button', 'btn-secondary', 'Previous');
     var next = el('button', 'btn-secondary', 'Next');
     var cancel = el('button', 'btn-remove', 'Cancel');
-    var choose = el('button', null, multiple ? 'Insert gallery' : 'Use this photo');
+    var choose = el('button', null, o.confirmLabel || (multiple ? 'Insert gallery' : 'Use this photo'));
     [prev, next, cancel, choose].forEach(function (b) { b.type = 'button'; foot.appendChild(b); });
     dialog.appendChild(foot);
     document.body.appendChild(dialog);
+
+    /** Move the roving tabindex to `index` and focus it. */
+    function focusCell(index) {
+      var cells = grid.querySelectorAll('.media-cell');
+      if (!cells[index]) return;
+      for (var i = 0; i < cells.length; i++) cells[i].tabIndex = i === index ? 0 : -1;
+      cells[index].focus();
+    }
 
     function render() {
       grid.innerHTML = '';
@@ -166,9 +178,10 @@ window.MediaPicker = (function () {
       pager.textContent = 'Page ' + state.page;
       prev.disabled = state.page <= 1;
       next.disabled = state.page * state.pageSize >= state.total;
-      choose.disabled = state.picked.length === 0;
+      // Multi-select may commit an empty selection: that removes the gallery.
+      choose.disabled = !multiple && picked.size() === 0;
       state.items.forEach(function (item, index) {
-        var at = indexOfKey(item.key);
+        var at = picked.indexOf(item.key);
         var cell = el('div', 'media-cell' + (at >= 0 ? ' is-selected' : ''));
         cell.setAttribute('role', 'option');
         cell.setAttribute('aria-selected', at >= 0 ? 'true' : 'false');
@@ -197,16 +210,37 @@ window.MediaPicker = (function () {
             + item.usedIn.map(function (u) { return u.title; }).join(', ')));
         }
         var pick = function () {
-          if (!multiple) { state.picked = [item]; render(); return; }
-          var existing = indexOfKey(item.key);
-          if (existing >= 0) state.picked.splice(existing, 1);
-          else state.picked.push(item);
+          if (multiple) picked.toggle(item);
+          else picked.set(item);
           render();
         };
         cell.addEventListener('click', pick);
         cell.addEventListener('dblclick', function () { pick(); commit(); });
+        // Roving tabindex needs arrow keys to rove: without them only the first
+        // cell is reachable by Tab, which makes selecting several photos for a
+        // gallery impossible without a pointer (WCAG 2.2 AA). Same shape as
+        // media-browser.js's onGridKey, including its column arithmetic.
         cell.addEventListener('keydown', function (ev) {
-          if (ev.key === ' ' || ev.key === 'Enter') { ev.preventDefault(); pick(); }
+          if (ev.key === ' ' || ev.key === 'Enter') {
+            ev.preventDefault();
+            pick();
+            focusCell(index); // render() rebuilt the grid — the old node is gone
+            return;
+          }
+          var cols = 1;
+          if (grid.firstElementChild) {
+            cols = Math.max(1, Math.round(grid.clientWidth / grid.firstElementChild.offsetWidth)) || 1;
+          }
+          var to = null;
+          if (ev.key === 'ArrowRight') to = index + 1;
+          else if (ev.key === 'ArrowLeft') to = index - 1;
+          else if (ev.key === 'ArrowDown') to = index + cols;
+          else if (ev.key === 'ArrowUp') to = index - cols;
+          else if (ev.key === 'Home') to = 0;
+          else if (ev.key === 'End') to = state.items.length - 1;
+          if (to === null) return;
+          ev.preventDefault();
+          focusCell(Math.max(0, Math.min(state.items.length - 1, to)));
         });
         grid.appendChild(cell);
       });
@@ -220,23 +254,11 @@ window.MediaPicker = (function () {
         var res = await client.list({ q: state.q, status: 'ready', page: state.page, pageSize: state.pageSize });
         state.items = res.items;
         state.total = res.total;
-        // Seed from `preselect` once, on first load: the caller knows the keys
-        // of the current gallery but not the rows, so adopt whichever of them
-        // this page carries. Any not on this page are added as the author pages
-        // to them — a preselected key the library no longer has simply drops,
-        // which is the correct outcome for a deleted photo.
-        if (pendingPreselect.length) {
-          res.items.forEach(function (item) {
-            var want = pendingPreselect.indexOf(item.src);
-            if (want >= 0 && indexOfKey(item.key) < 0) {
-              state.picked.push(item);
-              pendingPreselect.splice(want, 1);
-            }
-          });
-          state.picked.sort(function (a, b) {
-            return preselectOrder.indexOf(a.src) - preselectOrder.indexOf(b.src);
-          });
-        }
+        // The caller knows the URLs of the current gallery but not the rows, so
+        // adopt whichever of them this page carries; the rest are picked up as
+        // the author pages to them. See picker-selection.js for what adoption
+        // may and may not reorder.
+        picked.adopt(res.items);
         render();
       } catch (e) {
         grid.innerHTML = '';
@@ -250,10 +272,12 @@ window.MediaPicker = (function () {
     }
 
     function commit() {
-      if (!state.picked.length) return;
-      var picked = state.picked.slice();
+      var items = picked.items();
+      // Single-select has nothing to say with an empty selection; multi-select
+      // does — "no photos" is how an author removes a gallery.
+      if (!multiple && !items.length) return;
       close();
-      if (o.onPick) o.onPick(multiple ? picked : picked[0]);
+      if (o.onPick) o.onPick(multiple ? items : items[0]);
     }
 
     var debounce = null;

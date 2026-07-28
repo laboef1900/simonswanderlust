@@ -49,7 +49,9 @@ window.GalleryFence = (function () {
   var ATTR_RE = /^(alt|caption)="([^"]*)"$/;
   var MAX_TEXT = 1000;
 
-  var FENCE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+  // Mirrors FENCE_OPEN_RE in src/body-content.ts: up to 3 spaces of indent
+  // (CommonMark), a run of 3+ backticks or tildes, then the info string.
+  var FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 
   function usableDim(n) {
     return typeof n === 'number' && isFinite(n) && Math.floor(n) === n && n > 0 && n <= 999999;
@@ -61,15 +63,32 @@ window.GalleryFence = (function () {
     return typeof v === 'string' ? v : '';
   }
 
+  function metaFor(map, src) {
+    if (!map || typeof map !== 'object') return {};
+    var v = map[src];
+    return v && typeof v === 'object' ? v : {};
+  }
+
   /**
-   * serialize(items, locale, directives?) → a complete ```gallery block.
+   * serialize(items, locale, directives?, postMeta?) → a complete ```gallery block.
    *
    * `directives` are `#`-prefixed lines carried through from an existing fence
    * (e.g. #66's `#layout: slider`). They are emitted first and never parsed —
    * this module has no opinion about what they mean, only that editing a
    * gallery must not silently discard them.
+   *
+   * `postMeta` maps a photo URL to the alt/caption already recorded FOR THIS
+   * POST (its `images` entry, plus anything hand-typed on the fence line). It
+   * wins over the media library's own alt/caption.
+   *
+   * @ai-warning `postMeta` is load-bearing, not a nicety. `normalizeGalleryFences`
+   * lets a value present on the line beat the stored `images` entry
+   * (src/body-content.ts), and the stored fence is bare URLs — so without this,
+   * re-serializing from library rows silently overwrites every photo's
+   * post-specific alt and caption with the library defaults, at save time, where
+   * the author cannot see it happen.
    */
-  function serialize(items, locale, directives) {
+  function serialize(items, locale, directives, postMeta) {
     var lines = [];
     (directives || []).forEach(function (d) {
       var t = String(d).trim();
@@ -82,9 +101,15 @@ window.GalleryFence = (function () {
       // renderer skips such a photo, so it must never reach the fence.
       if (!usableDim(item.width) || !usableDim(item.height)) return;
 
-      var parts = [item.src.trim(), item.width + 'x' + item.height];
-      var alt = pickLocale(item.alt, locale).slice(0, MAX_TEXT);
-      var caption = pickLocale(item.caption, locale).slice(0, MAX_TEXT);
+      var src = item.src.trim();
+      var prior = metaFor(postMeta, src);
+      var parts = [src, item.width + 'x' + item.height];
+      // An empty string in `postMeta` is a deliberate clear and is respected;
+      // only an absent key falls back to the library row.
+      var alt = (typeof prior.alt === 'string' ? prior.alt : pickLocale(item.alt, locale)).slice(0, MAX_TEXT);
+      var caption = (typeof prior.caption === 'string'
+        ? prior.caption
+        : pickLocale(item.caption, locale)).slice(0, MAX_TEXT);
       if (alt !== '') parts.push('alt="' + escapeMeta(alt) + '"');
       if (caption !== '') parts.push('caption="' + escapeMeta(caption) + '"');
       lines.push(parts.join(' | '));
@@ -142,18 +167,24 @@ window.GalleryFence = (function () {
    * reopen the picker with the current photos preselected and the current
    * directives preserved.
    *
-   * Only a fence whose info string starts `gallery` is eligible: a ```js block
-   * the author happens to be editing must never be swallowed. Opening requires
-   * column 0, matching what the editor and export.ts produce; a closing fence
-   * may be LONGER than its opener, per CommonMark — the same rule the server's
-   * line scanner follows (see rewriteFences in src/body-content.ts, which was
-   * rewritten from a regex for exactly this reason).
+   * @ai-warning What counts as a gallery MUST match `rewriteFences` in
+   * src/body-content.ts exactly, or the two disagree about which block is which:
+   * a fence the picker thinks it owns but the server does not gets replaced
+   * without ever being normalized, and one the server treats as a gallery but
+   * the picker cannot see gets a second fence nested inside it. Hence the same
+   * three conditions as the server — column 0, backticks, info string exactly
+   * `gallery` — rather than a `startsWith('```gallery')` shortcut, which would
+   * claim ```gallery-notes and miss a 4-backtick ````gallery. Recognising an
+   * ENCLOSING fence stays deliberately liberal (indent and tildes included),
+   * also matching the server: being generous about what protects content is the
+   * safe direction to be wrong in. A closing fence may be LONGER than its
+   * opener, per CommonMark.
    */
   function fenceAt(body, cursor) {
     var text = String(body == null ? '' : body);
     var lines = text.split('\n');
     var pos = 0;
-    var open = null; // { start, marker, isGallery }
+    var open = null; // { start, marker, len, isGallery }
 
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
@@ -163,21 +194,25 @@ window.GalleryFence = (function () {
 
       var m = FENCE_RE.exec(line);
       if (!m) continue;
+      var indent = m[1] || '';
+      var run = m[2] || '';
+      var info = m[3] || '';
+      var marker = run.charAt(0);
 
       if (open === null) {
+        // CommonMark: a backtick fence's info string may not contain a backtick.
+        if (marker === '`' && info.indexOf('`') >= 0) continue;
         open = {
           start: lineStart,
-          marker: m[1],
-          isGallery: line.indexOf('```gallery') === 0,
+          marker: marker,
+          len: run.length,
+          isGallery: indent === '' && marker === '`' && info.trim() === 'gallery',
         };
         continue;
       }
 
-      // A closer must be a bare run of the same character, at least as long.
-      var isCloser = line.trim() === m[1]
-        && m[1].charAt(0) === open.marker.charAt(0)
-        && m[1].length >= open.marker.length;
-      if (!isCloser) continue;
+      // A closer is the same character, at least as long, and nothing else.
+      if (marker !== open.marker || run.length < open.len || info.trim() !== '') continue;
 
       if (open.isGallery && cursor >= open.start && cursor <= lineEnd) {
         return { text: text.slice(open.start, lineEnd), start: open.start, end: lineEnd };
@@ -187,20 +222,55 @@ window.GalleryFence = (function () {
     return null;
   }
 
+  /** Newlines immediately before `at`, capped at the 2 a blank line needs. */
+  function runBefore(text, at) {
+    var n = 0;
+    while (n < 2 && at - n - 1 >= 0 && text.charAt(at - n - 1) === '\n') n++;
+    return n;
+  }
+
   /**
-   * replaceFenceAt(body, cursor, fence) → { body, replaced }
+   * replaceFenceAt(body, cursor, fence) → { text, start, end, replaced }
    *
-   * Replace the gallery fence under the cursor ("Edit gallery"), or insert at
-   * the cursor when there is none ("Insert gallery").
+   * A RANGE EDIT, not a new document: `text` replaces `[start, end)`. The caller
+   * applies it with `cm.replaceRange`, which keeps CodeMirror's undo history —
+   * `mde.value()` would discard it, so a mis-inserted gallery could not be undone.
+   *
+   * Replaces the gallery fence under the cursor ("Edit gallery"), or inserts at
+   * the cursor when there is none ("Insert gallery"). An empty `fence` removes
+   * the block under the cursor, and is a no-op when there is none.
+   *
+   * @ai-note Insertion pads with blank lines as needed. A fence must open at
+   * column 0 to be a fence at all, so splicing raw at a mid-paragraph cursor
+   * would produce literal text that the renderer and `normalizeGalleryFences`
+   * both ignore — a gallery that silently is not one.
    */
   function replaceFenceAt(body, cursor, fence) {
     var text = String(body == null ? '' : body);
+    var block = String(fence == null ? '' : fence);
     var found = fenceAt(text, cursor);
-    if (found) {
-      return { body: text.slice(0, found.start) + fence + text.slice(found.end), replaced: true };
+
+    if (found && block === '') {
+      // Removal: swallow the blank line the fence left behind, so repeated
+      // insert/remove cycles do not stack up empty lines.
+      var end = found.end;
+      var after = 0;
+      while (text.charAt(end + after) === '\n') after++;
+      var keep = Math.max(0, Math.min(after, 2 - runBefore(text, found.start)));
+      return { text: '', start: found.start, end: end + after - keep, replaced: true };
     }
+    if (found) return { text: block, start: found.start, end: found.end, replaced: true };
+    if (block === '') {
+      var noop = Math.max(0, Math.min(text.length, Number(cursor) || 0));
+      return { text: '', start: noop, end: noop, replaced: false };
+    }
+
     var at = Math.max(0, Math.min(text.length, Number(cursor) || 0));
-    return { body: text.slice(0, at) + fence + text.slice(at), replaced: false };
+    var prefix = at === 0 ? '' : new Array(2 - runBefore(text, at) + 1).join('\n');
+    var trailing = 0;
+    while (trailing < 2 && text.charAt(at + trailing) === '\n') trailing++;
+    var suffix = at === text.length ? '' : new Array(2 - trailing + 1).join('\n');
+    return { text: prefix + block + suffix, start: at, end: at, replaced: false };
   }
 
   return {
