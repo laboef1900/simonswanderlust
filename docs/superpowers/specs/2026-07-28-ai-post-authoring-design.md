@@ -6,7 +6,7 @@
 `uploader/src/server.ts`, `uploader/public/settings.html`, `uploader/public/editor.html`, docs
 (`PRODUCT.md`, `CLAUDE.md`, `SECURITY.md`, `ARCHITECTURE.md`) and a new `authoring/` tree.
 **No change to `site/`.**
-**Closes:** #67
+**Refs:** #67 — this is the design only; the issue stays open for implementation.
 **Builds on:** `2026-06-24-postgres-cms-phase-b-design.md` (the in-admin editor and the `PostPair`
 contract), `2026-07-03-single-app-container-design.md` (the `app`/`db` topology and the DHI runtime),
 `2026-07-26-media-library-and-galleries-design.md` (`GET /media` at session level with redaction),
@@ -123,7 +123,7 @@ Four slices, sequenced. All four are writes the app already knows how to make; t
 - **No streaming into the editor.** There is no SSE/WS path on posts, so "watch it type" is a
   *second* server change, not a client-side choice. Explicitly out of scope.
 - **No new server→LLM call, and no proxying a model through `safeFetch`.** Preserved verbatim from
-  `CLAUDE.md:302-304`, and **still true under revision 2**: the trigger endpoint calls the *sidecar*,
+  `CLAUDE.md:302-304`, and **still true under revision 3**: the trigger endpoint calls the *sidecar*,
   which is not a model. Fastify never opens a connection to Anthropic or to LM Studio. The rule
   constrains what the app may talk to, and a compose-internal service on the app's own network is not
   what it was written to prevent.
@@ -334,13 +334,9 @@ retry a failed tier against the next one — a tier-1 auth failure must surface 
 failure, not quietly become an API charge. "Priority" here means the order in which the owner should
 prefer to configure them, and the order the settings UI should present.
 
-The existing `lmBaseUrl` default already ends in `/v1` (`settings.ts:26`), so the tier-3 shape is the
-one this codebase has been talking to since the alt-text feature shipped. A second consumer of a
-familiar contract, not a new integration style.
-
-The existing `lmBaseUrl` default already ends in `/v1` (`settings.ts:26`), so the OpenAI-compatible
-shape is the one this codebase has been talking to since the alt-text feature shipped. This is a
-second consumer of a familiar contract, not a new integration style.
+The existing `lmBaseUrl` default already ends in `/v1` (`settings.ts:26`), so the tier-3
+OpenAI-compatible shape is the one this codebase has been talking to since the alt-text feature
+shipped. A second consumer of a familiar contract, not a new integration style.
 
 **This is the feature's most valuable property and should not be traded away later:** with
 `openai-compatible` selected, AI post authoring runs with zero third-party egress and zero cost,
@@ -381,7 +377,7 @@ redaction from scratch. The sidecar sidesteps that rather than solving it.
 
 ## Credential scope and handling
 
-**The sidecar authenticates as a dedicated non-admin author.**
+**The sidecar authenticates to nothing on this stack.** It holds model credentials and no others.
 
 - **CMS credential: none.** Decision 7 removed it. No account is provisioned, no password is stored,
   no session is created. The sidecar cannot reach the CMS API even if it tried — it is never given
@@ -396,38 +392,38 @@ redaction from scratch. The sidecar sidesteps that rather than solving it.
 today — `backup.ts` dumps `users`, `posts`, `pages`, `media`, `media_folders`
 (`uploader/src/backup.ts:59-73`) and tars files under `/data/images` (`:80-119`); `settings.json` is
 not covered by either. Keep it that way, and state it in `SECURITY.md` so a future "back up settings
-too" change has to confront it deliberately. (Corollary, worth documenting: the *author account's*
-scrypt hash **is** in the DB dump, like every other user's. That is the existing, accepted posture
-for user rows, not a new exposure — but it is why the sidecar's password must be independently
-rotatable.)
+too" change has to confront it deliberately.
 
-**What the non-admin credential can still reach, and why that is accepted:**
+**What the app's own session can reach on the sidecar's behalf, and why that is accepted.** Revision 3
+left no CMS identity to scope, so this is no longer a question about the sidecar's rights — it is a
+question about which endpoints the *authoring handler*, running inside the app under the owner's own
+session, must be kept away from. It calls exactly one thing: `posts.upsertDraft`.
 
 - `POST /import` (`server.ts:1102`) is session-level. It parses an uploaded WXR file and re-hosts its
-  remote images through `safeFetch` (SSRF guard, timeout, streamed size cap). A compromised sidecar
-  could therefore drive outbound fetches from the app process. Accepted: the guard is the control,
-  it is unchanged, and the alternative (tightening `/import` to admin-only) is a behavioural change
-  to the human importer workflow that this design does not justify on its own. **Flag it in
-  `SECURITY.md` as a reachable-by-machine-identity surface.** The sidecar itself never calls it.
+  remote images through `safeFetch` (SSRF guard, timeout, streamed size cap). Under revision 1 a
+  compromised sidecar could have driven those fetches; it now has no way to call anything. Left on
+  record because the `safeFetch` guard is what makes session-level acceptable for it at all, and
+  because tightening `/import` to admin-only would be a behavioural change to the human importer
+  workflow that this design does not justify on its own.
 - `POST /export` (`server.ts:1095`) writes MDX backups into `/data/backup`. Bounded, idempotent,
-  non-destructive. The sidecar never calls it.
+  non-destructive. Not on the authoring path.
 - `POST /upload`, `POST /media/move`, `POST /media/folders`, `POST /media/retry` are session-level by
   the **reversibility** rule documented in `SECURITY.md:50-63`. A move never changes an image URL, so
   no move can break a published post.
 
-**What it deliberately cannot reach.** Granting admin would hand a container that talks to a third
-party and ingests untrusted text: publish/unpublish/delete (`server.ts:859`, `:972`, `:995`), bulk
-actions (`:912`), `POST /rebuild` (`:1036`), settings writes (`:592`), user creation (`:679`),
-irreversible media deletion (`:567`), and `GET /backups/:name` — **a downloadable full database
-dump** (`:1082`). That would invert the headline benefit: remove an Anthropic key from the app and,
-in exchange, place a long-lived app-admin credential next to a third-party API.
+**What the authoring path must never reach**, and what §Testing's first test asserts: publish /
+unpublish / delete (`server.ts:859`, `:972`, `:995`), bulk actions (`:912`), `POST /rebuild`
+(`:1036`), settings writes (`:592`), user creation (`:679`), irreversible media deletion (`:567`),
+and `GET /backups/:name` — **a downloadable full database dump** (`:1082`). Revision 1 kept the AI
+away from these with a credential that lacked the role; revision 3 keeps it away with a handler that
+does not call them, which is cheaper but easier to erode. Hence the test.
 
-**`trustProxy` note.** Fastify is constructed with `trustProxy: true` (`uploader/src/server.ts:102`,
-`@ai-warning` at `:91-94`), so it reads `X-Forwarded-For` from any caller. The sidecar would be the
-first non-browser client on that network and could choose its own rate-limit bucket. Pre-existing and
-not exploitable from outside (the app is only reachable through the trusted reverse proxy), but it
-becomes newly relevant once a non-human identity exists on the internal network — record it as
-accepted residual risk rather than discovering it later.
+**`trustProxy` note — a risk revisions 1–2 had and revision 3 does not.** Fastify is constructed with
+`trustProxy: true` (`uploader/src/server.ts:102`, `@ai-warning` at `:91-94`), so it reads
+`X-Forwarded-For` from any caller. A sidecar that called the app would have been the first non-browser
+client on that network and could have chosen its own rate-limit bucket. **Decision 7 reverses the
+direction of the connection**, so no new client appears and the concern lapses. Recorded because the
+reversal is the reason, and a future change that has the sidecar call back into the app revives it.
 
 ## The four slices
 
@@ -590,21 +586,23 @@ steps. Keep the response shape narrow and assert it in a test.
 
 **The answer this design gives is capability, not filtering:**
 
-1. **The agent holds a non-admin, drafts-only credential.** Successful injection can make the agent
-   write bad prose into a draft. It cannot publish it, cannot delete a post, cannot create a user,
-   cannot pull a database dump, cannot change settings, and cannot trigger a rebuild. This is the
-   whole reason drafts-only matters, and it is the point issue #67's earlier framing left implicit:
-   injected text steers a client that holds CMS credentials.
+1. **The model's client can write nothing at all.** Successful injection can make the sidecar return
+   bad prose. It cannot publish, cannot delete a post, cannot create a user, cannot pull a database
+   dump, cannot change settings, and cannot trigger a rebuild — not because a credential lacks the
+   role, but because the sidecar has no CMS address, no session, and no database. This is what
+   decision 7 bought, and it is the point issue #67's framing (a client holding CMS credentials) was
+   written before.
 2. **A human publishes.** Every AI-written word passes a human admin before it is public.
 3. **Untrusted content is fenced in the prompt.** Post bodies and media metadata are passed inside an
    explicit delimiter with a standing instruction that content within it is data to be worked on,
    never instructions to be followed. This reduces but does not eliminate the risk; state it as
    mitigation, not as a solved problem.
-4. **The agent's write is shape-checked before it is sent.** The sidecar diffs the composed
-   `PostPair` against the fetched one and aborts if anything outside the slice's declared writable
-   fields changed — slug, status, `images`, `heroImage`, `shared`. An injection that talks the model
-   into rewriting a slug fails at the client, before the request, rather than relying on the server's
-   `slug_locked` 409 as the only backstop.
+4. **The write is shape-checked in the app, before it reaches `upsertDraft`.** The authoring handler
+   diffs the pair it is about to write against the one it fetched and aborts if anything outside the
+   slice's declared writable fields changed — slug, status, `images`, `heroImage`, `shared`. An
+   injection that talks the model into rewriting a slug fails here rather than relying on the store's
+   `slug_locked` 409 as the only backstop. **This check belongs to the app, not the sidecar**: a
+   guard the untrusted-text-handling process runs on itself is not a guard. §Testing table-drives it.
 
 **Residual risk, accepted and recorded:** a successful injection can produce plausible-looking German
 or English prose that a hurried reviewer publishes. Nothing in this design prevents that; the human
@@ -626,7 +624,7 @@ instead is make every failure a *local, visible, non-destructive* failure of one
 | Sidecar unreachable | The trigger call fails fast at the app. Nothing is written. This is the one failure the *owner* sees immediately, so its message must name the `authoring` service and the `profiles:` gate — "is it running?" is the first thing to check. |
 | 409 `conflict` on the final write | The app aborts with "someone edited this while I was working — reload the editor and re-run". No retry: re-applying would discard the human edit that caused the conflict. |
 | Model auth failure | Tier 1: the subscription login profile expired or the volume was lost — re-authenticate the CLI. Tier 2: bad `ANTHROPIC_API_KEY`. **Must surface as a tier-specific auth error and must NOT silently fall through to another tier** (§Provider abstraction). |
-| Sidecar crashes mid-run | Nothing was written. The container's `restart` policy must **not** be `unless-stopped` — a crashed authoring run should stay dead, not silently re-run and spend tokens. |
+| Sidecar crashes mid-run | Nothing was written; the app's poll for that run reports failure. The **run** must not be retried — a silently re-run draft spends tokens nobody asked for — but the **service** is long-lived under decision 1, so `restart: unless-stopped` is correct and a crash-once-stay-dead policy would leave the editor button permanently broken. The two are separable precisely because run state lives in the app (§Run state), not in the sidecar: a restarted sidecar comes back with nothing to resume. |
 | Partial write (server crash between the two locale INSERTs) | Pre-existing hazard, unchanged: `upsertDraft` writes `de` and `en` as two non-transactional INSERTs, and `pgPostStore.get()` returns `null` for a stranded single-locale key (`posts.ts:95-101`). Media usage scans already work around it via `usageRows()`. The sidecar surfaces the resulting 404 rather than papering over it. |
 
 **Observability stays as-is.** Plain text to stdout, captured by Docker (`CLAUDE.md`, Observability).
@@ -658,12 +656,13 @@ the repo's own rules as contradicting the deployed stack.
 
   > *"**Auth:** Cookie-based sessions with admin/non-admin roles; rate-limited login."*
 
-  Still accurate — the sidecar uses exactly this mechanism — but it now describes a machine identity
-  as well as a human one, and should say so.
+  **Needs no amendment under revision 3.** Revisions 1–2 would have made it describe a machine
+  identity as well as a human one; decision 7 removed the machine identity, so every session on this
+  stack still belongs to a person. Listed here only so the next reader can see the question was asked
+  and answered, not skipped.
 
 - **Principle 1 — "Author-first workflow"** (`PRODUCT.md:51`) says *"no multi-tenant complexity"*.
-  A second, non-human identity brushes against it. Not a contradiction (there is still one author),
-  but worth an explicit sentence rather than a silent stretch.
+  **Also untouched** — see open question 5. The deployment still has exactly one identity.
 
 ### `CLAUDE.md` § 4 AI/LLM Security (`CLAUDE.md:302-304`)
 
@@ -684,19 +683,29 @@ Verbatim today:
    to `api.anthropic.com` is precisely a new outbound surface. It is not in the `app` process, but it
    is in the stack, and the sentence as written no longer holds. Say so plainly.
 
-The section also needs: the sidecar is drafts-only and non-admin; imported WordPress text is untrusted
-model input; and the existing "treat model output as untrusted" clause now covers post bodies, not
-just alt text.
+The section also needs: drafting is drafts-only and the sidecar writes nothing; imported WordPress
+text is untrusted model input; and the existing "treat model output as untrusted" clause now covers
+post bodies, not just alt text.
 
 ### `SECURITY.md`
 
 Add a section for the new service covering **network position** (compose-internal, no published
-port, profile-gated out of the default `up`), **credential handling** (non-admin author account via
-environment; Anthropic key via environment; neither in `/data`, neither in `/data/backup` — and the
-`backup.ts` behaviour that currently guarantees it), and **authorization scope** (the exact endpoint
-list above, and the explicit statement that publish/rebuild/settings/users/backups/media-delete are
-not reachable). Also record the two accepted residual risks: `trustProxy` rate-limit bucket selection
-by a non-browser client, and `POST /import`'s `safeFetch` surface being reachable at session level.
+port, profile-gated out of the default `up`), **credential handling** (model credentials only — a
+subscription login profile on the sidecar's own volume, or `ANTHROPIC_API_KEY` in `authoring/.env`;
+no CMS credential exists; nothing on `/data`, nothing in `/data/backup` — and the `backup.ts`
+behaviour that currently guarantees it), and **authorization scope** (the authoring handler calls
+`upsertDraft` and nothing else; publish/rebuild/settings/users/backups/media-delete are not on its
+path, asserted by the test named first in §Testing). Record that no spend metering exists anywhere in
+this repo and that the concurrency cap is the only bound on run frequency. Also record the accepted
+residual risk that `POST /import`'s `safeFetch` surface is reachable at session level — pre-existing,
+and no longer reachable by a machine identity now that there is none.
+
+> **`trustProxy` no longer applies.** Revisions 1–2 recorded it as a new residual risk: the sidecar
+> would have been the first non-browser client on the internal network and could have chosen its own
+> `X-Forwarded-For` rate-limit bucket (`server.ts:102`, `@ai-warning` at `:91-94`). Under decision 7
+> the sidecar never calls the app at all — the connection runs the other way — so no new client
+> appears. The `trustProxy` note in §Credential scope is kept as context, not as a risk this design
+> introduces.
 
 ### `ARCHITECTURE.md`
 
@@ -769,8 +778,16 @@ Requirements this places on the implementation:
 
 - **Bound the map.** Cap concurrent runs and evict completed entries on a timer, or a long-lived
   `app` accumulates run records forever. This is the only real leak risk in the design.
+- **The concurrency cap is also the abuse control — say so where it is implemented.** `POST
+  /authoring/runs` is `requireAuth` and costs tokens per call, and decision 6 puts no spend cap in
+  this repo. Nothing else bounds how fast the button can be pressed: `rate-limit.ts` covers auth
+  endpoints only. A small cap (single-author blog: 1–2 concurrent, further requests rejected rather
+  than queued) is what stands between a stuck editor tab and an afternoon of billing.
 - **A poll for an unknown run id returns "failed", not 404.** After a restart the editor must get a
   definite answer it can show the owner, not an ambiguity it has to guess about.
+- **A run is polled by the session that started it.** With one author this is bookkeeping rather than
+  a control, but recording the owning user id on the run record costs a line and keeps the endpoint
+  honest if a second account ever exists. Do not skip it on the grounds that there is only one user.
 - **Say so in `ARCHITECTURE.md`** next to the encode-queue description, so the asymmetry reads as a
   decision rather than an oversight.
 
