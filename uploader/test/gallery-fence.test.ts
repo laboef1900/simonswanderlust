@@ -34,6 +34,7 @@ interface Api {
   unescapeMeta(s: string): string;
   serialize(items: PickedItem[], locale: 'de' | 'en', directives?: string[]): string;
   parse(text: string): { directives: string[]; lines: ParsedLine[] };
+  fenceAt(body: string, cursor: number): { text: string; start: number; end: number } | null;
   replaceFenceAt(body: string, cursor: number, fence: string): { body: string; replaced: boolean };
 }
 
@@ -271,5 +272,45 @@ describe('replaceFenceAt', () => {
     const out = G.replaceFenceAt(withCode, withCode.indexOf('const'), '```gallery\nhttps://i/d\n```');
     expect(out.replaced).toBe(false);
     expect(out.body).toContain('const x = 1;');
+  });
+});
+
+describe('fenceAt', () => {
+  const body = 'intro\n\n```gallery\n#layout: slider\nhttps://i/a\n```\n\nouttro';
+
+  it('returns the whole fence when the cursor is inside it', () => {
+    const found = G.fenceAt(body, body.indexOf('https://i/a'));
+    expect(found?.text).toBe('```gallery\n#layout: slider\nhttps://i/a\n```');
+  });
+
+  it('is inclusive of both delimiter lines', () => {
+    expect(G.fenceAt(body, body.indexOf('```gallery'))).not.toBeNull();
+    expect(G.fenceAt(body, body.indexOf('```', body.indexOf('https://i/a')))).not.toBeNull();
+  });
+
+  it('returns null outside any fence', () => {
+    expect(G.fenceAt(body, 0)).toBeNull();
+    expect(G.fenceAt(body, body.length - 1)).toBeNull();
+  });
+
+  it('ignores a non-gallery fence', () => {
+    const js = 'a\n\n```js\nconst x = 1;\n```\n';
+    expect(G.fenceAt(js, js.indexOf('const'))).toBeNull();
+  });
+
+  it('handles a closing fence longer than its opener (CommonMark)', () => {
+    // rewriteFences in body-content.ts was rewritten from a regex precisely
+    // because the old one required the closer to match the opener's length.
+    const longer = '```gallery\nhttps://i/a\n`````\n';
+    const found = G.fenceAt(longer, longer.indexOf('https://i/a'));
+    expect(found?.text).toBe('```gallery\nhttps://i/a\n`````');
+  });
+
+  it('does not treat a gallery example nested in a wrapper fence as editable', () => {
+    // docs/authoring-workflow.md demonstrates the syntax with a 4-backtick
+    // wrapper around a 3-backtick gallery. The inner block is documentation,
+    // not an editable gallery.
+    const nested = '````\n```gallery\nhttps://i/a\n```\n````\n';
+    expect(G.fenceAt(nested, nested.indexOf('https://i/a'))).toBeNull();
   });
 });

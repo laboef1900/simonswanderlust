@@ -797,3 +797,27 @@ a:hover { color: var(--red-light); }
     font-size: 0.72rem;
   }
 }
+
+/* ── gallery picker: the ordering strip (#75) ─────────────────────────────
+ * Gallery order is the fence's line order, so the author has to see and
+ * change it. Reordering is buttons rather than drag handles because it must
+ * be operable without a pointer (WCAG 2.2 AA) — drag-only would fail.
+ */
+.picker-strip { border-top: 1px solid #e3e6ea; margin-top: 0.75rem; padding-top: 0.75rem; }
+.picker-strip h3 { font-size: 0.85rem; margin: 0 0 0.5rem; color: #4a5563; font-weight: 600; }
+.picker-strip__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; max-height: 11rem; overflow-y: auto; }
+.picker-strip__item { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.35rem; border: 1px solid #e3e6ea; border-radius: 4px; background: #fff; }
+.picker-strip__item img { width: 2.5rem; height: 2.5rem; object-fit: cover; border-radius: 3px; flex: none; }
+.picker-strip__pos { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.75rem; color: #4a5563; min-width: 1.25rem; text-align: right; flex: none; }
+.picker-strip__name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem; }
+.picker-strip__item button { flex: none; padding: 0.15rem 0.45rem; font-size: 0.85rem; line-height: 1.2; }
+
+/* Position badge on a selected grid cell, so grid and strip agree at a glance. */
+.media-cell { position: relative; }
+.media-cell__order {
+  position: absolute; top: 0.25rem; left: 0.25rem; z-index: 1;
+  min-width: 1.35rem; height: 1.35rem; padding: 0 0.3rem;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: #142a42; color: #fff;
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.7rem; font-weight: 600;
+}

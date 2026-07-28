@@ -116,6 +116,7 @@
           <input id="deBodyImgAlt" type="text" placeholder="Alt text (DE)" />
           <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert body image</button>
           <button type="button" id="deBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
+          <button type="button" id="deGallery" class="btn-secondary">Insert / edit gallery</button>
           <p id="deBodyImgStatus" class="muted"></p>
         </div>
       </section>
@@ -151,6 +152,7 @@
           <input id="enBodyImgAlt" type="text" placeholder="Alt text (EN)" />
           <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert body image</button>
           <button type="button" id="enBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
+          <button type="button" id="enGallery" class="btn-secondary">Insert / edit gallery</button>
           <p id="enBodyImgStatus" class="muted"></p>
         </div>
       </section>
@@ -186,6 +188,7 @@
     <script src="/admin/alt-suggest.js"></script>
     <script src="/admin/media-api.js"></script>
     <script src="/admin/media-picker.js"></script>
+    <script src="/admin/gallery-fence.js"></script>
     <script>
       'use strict';
       const $ = (id) => document.getElementById(id);
@@ -426,6 +429,38 @@
 
       $('deHeroUpload').addEventListener('click', () => uploadHero('de'));
       $('enHeroUpload').addEventListener('click', () => uploadHero('en'));
+
+      // ---- insert or edit a ```gallery block (#75) ----
+      // The picker writes the same line format an author would type by hand;
+      // normalizeGalleryFences lifts it into `images` at save. Nothing here
+      // touches the images map directly — see public/gallery-fence.js.
+      function galleryFor(locale) {
+        const mde = locale === 'de' ? deMDE : enMDE;
+        const cm = mde.codemirror;
+        const body = mde.value();
+        const cursor = cm.indexFromPos(cm.getCursor());
+        const existing = GalleryFence.fenceAt(body, cursor);
+        const current = existing ? GalleryFence.parse(existing.text) : { directives: [], lines: [] };
+
+        MediaPicker.open({
+          multiple: true,
+          preselect: current.lines.map((l) => l.src),
+          onUnauthed: () => guard.redirectToLogin(),
+          onPick: (items) => {
+            // Directives (e.g. #66's `#layout:`) are carried through verbatim —
+            // editing a gallery must not silently reset its layout.
+            const fence = GalleryFence.serialize(items, locale, current.directives);
+            const out = GalleryFence.replaceFenceAt(body, cursor, fence);
+            mde.value(out.body);
+            guard.markDirty();
+            $(locale + 'BodyImgStatus').textContent =
+              (out.replaced ? 'Gallery updated: ' : 'Gallery inserted: ') + items.length + ' photo(s)';
+          },
+        });
+      }
+
+      $('deGallery').addEventListener('click', () => galleryFor('de'));
+      $('enGallery').addEventListener('click', () => galleryFor('en'));
 
       // ---- pick an existing hero from the media library ----
       // The library is the other half of "upload": most heroes already exist,

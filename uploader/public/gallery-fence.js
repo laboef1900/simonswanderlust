@@ -136,22 +136,24 @@ window.GalleryFence = (function () {
   }
 
   /**
-   * replaceFenceAt(body, cursor, fence) → { body, replaced }
+   * fenceAt(body, cursor) → { text, start, end } | null
    *
-   * If the cursor sits inside a ```gallery fence, replace that whole fence
-   * ("Edit gallery"). Otherwise insert at the cursor ("Insert gallery").
+   * Locate the ```gallery fence the cursor sits inside, so "Edit gallery" can
+   * reopen the picker with the current photos preselected and the current
+   * directives preserved.
    *
-   * Only a fence whose info string is exactly `gallery` is eligible: a ```js
-   * block the author is editing must never be swallowed. Opening requires
-   * column 0, matching what the editor and export.ts produce; the closing fence
-   * may be longer than the opener, per CommonMark — the same rule the server's
-   * line scanner follows.
+   * Only a fence whose info string starts `gallery` is eligible: a ```js block
+   * the author happens to be editing must never be swallowed. Opening requires
+   * column 0, matching what the editor and export.ts produce; a closing fence
+   * may be LONGER than its opener, per CommonMark — the same rule the server's
+   * line scanner follows (see rewriteFences in src/body-content.ts, which was
+   * rewritten from a regex for exactly this reason).
    */
-  function replaceFenceAt(body, cursor, fence) {
+  function fenceAt(body, cursor) {
     var text = String(body == null ? '' : body);
     var lines = text.split('\n');
     var pos = 0;
-    var open = null; // { start, end, marker }
+    var open = null; // { start, marker, isGallery }
 
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
@@ -163,32 +165,40 @@ window.GalleryFence = (function () {
       if (!m) continue;
 
       if (open === null) {
-        if (line.indexOf('```gallery') !== 0) {
-          // A non-gallery fence: skip to its close so its body can't be
-          // mistaken for top-level content.
-          var closer = m[1];
-          for (var j = i + 1; j < lines.length; j++) {
-            pos += lines[j].length + 1;
-            var cm = FENCE_RE.exec(lines[j]);
-            if (cm && cm[1].charAt(0) === closer.charAt(0) && cm[1].length >= closer.length
-              && lines[j].trim() === cm[1]) { i = j; break; }
-            i = j;
-          }
-          continue;
-        }
-        open = { start: lineStart, marker: m[1] };
-      } else if (line.trim() === m[1] && m[1].charAt(0) === open.marker.charAt(0)
-        && m[1].length >= open.marker.length) {
-        if (cursor >= open.start && cursor <= lineEnd) {
-          return {
-            body: text.slice(0, open.start) + fence + text.slice(lineEnd),
-            replaced: true,
-          };
-        }
-        open = null;
+        open = {
+          start: lineStart,
+          marker: m[1],
+          isGallery: line.indexOf('```gallery') === 0,
+        };
+        continue;
       }
-    }
 
+      // A closer must be a bare run of the same character, at least as long.
+      var isCloser = line.trim() === m[1]
+        && m[1].charAt(0) === open.marker.charAt(0)
+        && m[1].length >= open.marker.length;
+      if (!isCloser) continue;
+
+      if (open.isGallery && cursor >= open.start && cursor <= lineEnd) {
+        return { text: text.slice(open.start, lineEnd), start: open.start, end: lineEnd };
+      }
+      open = null;
+    }
+    return null;
+  }
+
+  /**
+   * replaceFenceAt(body, cursor, fence) → { body, replaced }
+   *
+   * Replace the gallery fence under the cursor ("Edit gallery"), or insert at
+   * the cursor when there is none ("Insert gallery").
+   */
+  function replaceFenceAt(body, cursor, fence) {
+    var text = String(body == null ? '' : body);
+    var found = fenceAt(text, cursor);
+    if (found) {
+      return { body: text.slice(0, found.start) + fence + text.slice(found.end), replaced: true };
+    }
     var at = Math.max(0, Math.min(text.length, Number(cursor) || 0));
     return { body: text.slice(0, at) + fence + text.slice(at), replaced: false };
   }
@@ -198,6 +208,7 @@ window.GalleryFence = (function () {
     unescapeMeta: unescapeMeta,
     serialize: serialize,
     parse: parse,
+    fenceAt: fenceAt,
     replaceFenceAt: replaceFenceAt,
   };
 })();
