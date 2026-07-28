@@ -78,9 +78,18 @@ window.MediaPicker = (function () {
     // drag handles.
     var strip = null;
     var stripList = null;
+    var stripCount = null;
     if (multiple) {
       strip = el('div', 'picker-strip');
-      strip.appendChild(el('h3', null, 'Selected — this is the order they appear in'));
+      var stripHead = el('div', 'picker-strip__head');
+      stripHead.appendChild(el('h3', null, 'Selected — this is the order they appear in'));
+      // The list scrolls, so the count has to be stated: an author who cannot
+      // see the whole strip still needs to know how many photos they are about
+      // to write, and how many of those the current view is not showing.
+      stripCount = el('span', 'muted');
+      stripCount.setAttribute('role', 'status');
+      stripHead.appendChild(stripCount);
+      strip.appendChild(stripHead);
       stripList = el('ol', 'picker-strip__list');
       stripList.setAttribute('aria-label', 'Selected photos, in gallery order');
       strip.appendChild(stripList);
@@ -117,7 +126,13 @@ window.MediaPicker = (function () {
     function renderStrip() {
       if (!multiple) return;
       stripList.innerHTML = '';
-      if (!picked.size()) {
+      var total = picked.size();
+      var offscreen = picked.unresolved();
+      stripCount.textContent = total === 0
+        ? ''
+        : total + ' photo(s)'
+          + (offscreen ? ' — ' + offscreen + ' not in this view, still in the gallery' : '');
+      if (!total) {
         stripList.appendChild(el('li', 'muted', o.emptyHint || 'Nothing selected yet — click photos above.'));
         return;
       }
@@ -235,7 +250,11 @@ window.MediaPicker = (function () {
           render();
         };
         cell.addEventListener('click', pick);
-        cell.addEventListener('dblclick', function () { pick(); commit(); });
+        // Double-click-to-confirm only makes sense when one photo IS the answer.
+        // In multi-select the author is still building a list, and a stray
+        // double-click would close the dialog on whatever happened to be chosen
+        // — which, for a gallery, is a write to the post.
+        if (!multiple) cell.addEventListener('dblclick', function () { pick(); commit(); });
         // Roving tabindex needs arrow keys to rove: without them only the first
         // cell is reachable by Tab, which makes selecting several photos for a
         // gallery impossible without a pointer (WCAG 2.2 AA). Same shape as

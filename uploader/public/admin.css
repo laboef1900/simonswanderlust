@@ -805,7 +805,9 @@ a:hover { color: var(--red-light); }
  * be operable without a pointer (WCAG 2.2 AA) — drag-only would fail.
  */
 .picker-strip { border-top: 1px solid var(--line); margin-top: 0.75rem; padding-top: 0.75rem; }
-.picker-strip h3 { font-size: 0.85rem; margin: 0 0 0.5rem; color: var(--muted); font-weight: 600; }
+.picker-strip__head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0 0 0.5rem; }
+.picker-strip h3 { font-size: 0.85rem; margin: 0; color: var(--muted); font-weight: 600; }
+.picker-strip__head .muted { font-size: 0.72rem; }
 .picker-strip__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; max-height: 11rem; overflow-y: auto; }
 .picker-strip__item { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.35rem; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
 .picker-strip__item img { width: 2.5rem; height: 2.5rem; object-fit: cover; border-radius: 3px; flex: none; }
