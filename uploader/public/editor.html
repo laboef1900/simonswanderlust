@@ -116,6 +116,7 @@
           <input id="deBodyImgAlt" type="text" placeholder="Alt text (DE)" />
           <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert body image</button>
           <button type="button" id="deBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
+          <button type="button" id="deGallery" class="btn-secondary">Insert / edit gallery</button>
           <p id="deBodyImgStatus" class="muted"></p>
         </div>
       </section>
@@ -151,6 +152,7 @@
           <input id="enBodyImgAlt" type="text" placeholder="Alt text (EN)" />
           <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert body image</button>
           <button type="button" id="enBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
+          <button type="button" id="enGallery" class="btn-secondary">Insert / edit gallery</button>
           <p id="enBodyImgStatus" class="muted"></p>
         </div>
       </section>
@@ -185,7 +187,9 @@
     <script src="/admin/llm.js"></script>
     <script src="/admin/alt-suggest.js"></script>
     <script src="/admin/media-api.js"></script>
+    <script src="/admin/picker-selection.js"></script>
     <script src="/admin/media-picker.js"></script>
+    <script src="/admin/gallery-fence.js"></script>
     <script>
       'use strict';
       const $ = (id) => document.getElementById(id);
@@ -426,6 +430,99 @@
 
       $('deHeroUpload').addEventListener('click', () => uploadHero('de'));
       $('enHeroUpload').addEventListener('click', () => uploadHero('en'));
+
+      // ---- insert or edit a ```gallery block (#75) ----
+      // The picker writes the same line format an author would type by hand;
+      // normalizeGalleryFences lifts it into `images` at save. Nothing here
+      // touches the images map directly — see public/gallery-fence.js.
+      function galleryFor(locale) {
+        const mde = locale === 'de' ? deMDE : enMDE;
+        const cm = mde.codemirror;
+        const body = mde.value();
+        const cursor = cm.indexFromPos(cm.getCursor());
+        const existing = GalleryFence.fenceAt(body, cursor);
+        const current = existing ? GalleryFence.parse(existing.text) : { directives: [], lines: [] };
+
+        // What this post already says about each photo, which must survive a
+        // re-serialize: the fence's own line metadata if the author typed some
+        // and has not saved yet, otherwise the `images` entry it was lifted into.
+        // Without this the library's alt/caption would overwrite the author's on
+        // every edit — see the @ai-warning on GalleryFence.serialize.
+        const images = locale === 'de' ? deImages : enImages;
+        const status = $(locale + 'BodyImgStatus');
+        const postMeta = {};
+        current.lines.forEach((line) => {
+          const stored = images[line.src] || {};
+          const alt = line.alt !== undefined ? line.alt : stored.alt;
+          const caption = line.caption !== undefined ? line.caption : stored.caption;
+          if (typeof alt !== 'string' && typeof caption !== 'string') return;
+          postMeta[line.src] = {};
+          if (typeof alt === 'string') postMeta[line.src].alt = alt;
+          if (typeof caption === 'string') postMeta[line.src].caption = caption;
+        });
+
+        // An unterminated fence's extent runs to end-of-post, so there is no
+        // safe range to replace. Say so instead of eating the rest of the body.
+        if (existing && existing.unterminated) {
+          status.textContent = 'This gallery block has no closing ``` — close it, then try again.';
+          return;
+        }
+
+        // Seed the picker with the gallery's CURRENT photos as full items, built
+        // from the fence plus the post's images map. The library pages 40 at a
+        // time by upload date, so an older post's photos are typically on no page
+        // the author visits — seeding from the post is what keeps them in the
+        // selection (and therefore in the fence) regardless. `fromPost` also tells
+        // serialize to preserve a photo whose dimensions we cannot resolve rather
+        // than dropping it. See the @ai-warning in picker-selection.js.
+        const preselect = current.lines.map((line) => {
+          const stored = images[line.src] || {};
+          return {
+            src: line.src,
+            width: line.width ?? stored.width,
+            height: line.height ?? stored.height,
+            fromPost: true,
+          };
+        });
+
+        MediaPicker.open({
+          multiple: true,
+          preselect,
+          confirmLabel: existing ? 'Update gallery' : 'Insert gallery',
+          emptyHint: existing
+            ? 'Nothing selected — confirming now removes this gallery.'
+            : 'Nothing selected yet — click photos above.',
+          onUnauthed: () => guard.redirectToLogin(),
+          onPick: (items) => {
+            // Directives (e.g. #66's `#layout:`) are carried through verbatim —
+            // editing a gallery must not silently reset its layout. An empty
+            // selection means "remove the block", so emit no fence at all.
+            const fence = items.length
+              ? GalleryFence.serialize(items, locale, current.directives, postMeta)
+              : '';
+            const out = GalleryFence.replaceFenceAt(body, cursor, fence);
+            if (out.blocked === 'unterminated') {
+              status.textContent = 'The block around the cursor has no closing ``` — close it, then try again.';
+              return;
+            }
+            if (out.start === out.end && out.text === '') return;
+            // A range edit, not mde.value(): replaceRange keeps CodeMirror's undo
+            // history (and fires a change event, which marks the guard dirty).
+            cm.replaceRange(out.text, cm.posFromIndex(out.start), cm.posFromIndex(out.end));
+            guard.markDirty();
+            // Count the lines actually written, not the photos picked: serialize
+            // drops a newly picked photo whose dimensions are unusable.
+            const written = GalleryFence.parse(fence).lines.length;
+            status.textContent = !items.length
+              ? 'Gallery removed'
+              : (out.replaced ? 'Gallery updated: ' : 'Gallery inserted: ') + written + ' photo(s)'
+                + (written < items.length ? ` (${items.length - written} skipped — no usable dimensions)` : '');
+          },
+        });
+      }
+
+      $('deGallery').addEventListener('click', () => galleryFor('de'));
+      $('enGallery').addEventListener('click', () => galleryFor('en'));
 
       // ---- pick an existing hero from the media library ----
       // The library is the other half of "upload": most heroes already exist,

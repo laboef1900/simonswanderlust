@@ -596,9 +596,19 @@ blog/
     page cap, `mediaSync.run()` is sequenced before `encodeQueue.recover()`, `POST /media/retry`
     rolls back its status flip on a failed enqueue, `memoryMediaStore.upsert` mirrors the pg
     `ON CONFLICT` clause, and `duplicatePayload` deep-copies the structures it carries.
+- **Done:** #75 gallery picker (2026-07-28) — "Insert / edit gallery" on both locale tabs of the
+  editor opens the media library in multi-select mode with an ordering strip, and writes the same
+  ```gallery text an author would type by hand (no server change; `normalizeGalleryFences` still
+  lifts the metadata at the store chokepoint). Two invariants carry the weight, both with
+  `@ai-warning`s and tests: the picker seeds its selection from the POST, not from whichever library
+  page is loaded, or editing an older post's gallery silently drops the photos the library never
+  paged into view; and `public/gallery-fence.js`'s fence scanner must agree with `rewriteFences` in
+  `src/body-content.ts` about what a gallery is and where it ends — `test/gallery-fence-parity.test.ts`
+  runs both over one corpus, and is the only thing keeping the duplicated rule honest.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
-  started, deliberately: #66 (gallery polish — justified layout + lightbox), #75 (gallery picker),
-  #67 (AI authoring), #68 (production EXIF audit), #72 (Traefik timeouts). See
-  `docs/superpowers/plans/IMPLEMENTATION-PROMPT.md` for why each is excluded.
+  started, deliberately: #66 (gallery polish — justified layout + lightbox), #67 (AI authoring —
+  design spec landed 2026-07-28, implementation not started), #68 (production EXIF audit),
+  #72 (Traefik timeouts). See `docs/superpowers/plans/IMPLEMENTATION-PROMPT.md` for why each is
+  excluded.
 
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.
