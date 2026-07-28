@@ -104,11 +104,14 @@ maybe('pgMediaStore (integration)', () => {
     expect([...out]).toEqual(['busy-key']);
   });
 
-  it('claimNextProcessing returns the oldest processing row', async () => {
+  // The query encodeQueue.recover() re-seeds the backlog from.
+  it('lists processing rows oldest-first for queue recovery', async () => {
     await add('new', { status: 'processing' });
     await pool.query(`UPDATE media SET uploaded_at = now() - interval '1 day' WHERE key = 'new'`);
     await add('newer', { status: 'processing' });
-    expect((await store.claimNextProcessing())?.key).toBe('new');
+    await add('done', { status: 'ready' });
+    const { items } = await store.list({ status: 'processing', sort: 'uploaded', order: 'asc' });
+    expect(items.map((i) => i.key)).toEqual(['new', 'newer']);
   });
 
   it('renames a folder subtree by exact match plus prefix, never a same-prefix sibling', async () => {

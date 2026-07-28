@@ -15,7 +15,7 @@ import { readdir, stat } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import sharp from 'sharp';
 import { ORIGINAL_FILE_RE, VARIANT_FILE_RE } from './media-files.js';
-import type { MediaStore } from './media-store.js';
+import { MAX_PAGE_SIZE, type MediaStore } from './media-store.js';
 import type { PagePair } from './pages.js';
 import type { PostUsageRow } from './posts.js';
 
@@ -164,10 +164,25 @@ export function createMediaSync(opts: MediaSyncOptions) {
       // @ai-warning Skips rows that are not `ready`: an upload in flight has a
       // row but not yet a full file set, and a concurrent pass would otherwise
       // mark a perfectly healthy in-progress upload as missing.
-      const { items } = await opts.store.list({ status: 'ready', page: 1, pageSize: 200 });
-      for (const item of items) {
-        if (disk.has(item.key)) continue;
-        await opts.store.setStatus(item.key, 'missing');
+      //
+      // @ai-warning Two phases, and the split is load-bearing. `list()` caps
+      // pageSize at MAX_PAGE_SIZE, so a single page silently stopped sweeping
+      // at 200 photos — the sweep reported success having checked a fraction of
+      // the library. Paginating naively is no better: marking a row `missing`
+      // drops it out of the `status = 'ready'` filter, so every mutation
+      // shifts the rows underneath the next OFFSET and skips one. Collect the
+      // whole ready set first (no writes, so paging is stable), then mutate.
+      const readyKeys: string[] = [];
+      for (let page = 1; ; page++) {
+        const { items, total } = await opts.store.list({
+          status: 'ready', sort: 'key', order: 'asc', page, pageSize: MAX_PAGE_SIZE,
+        });
+        readyKeys.push(...items.map((i) => i.key));
+        if (items.length < MAX_PAGE_SIZE || readyKeys.length >= total) break;
+      }
+      for (const key of readyKeys) {
+        if (disk.has(key)) continue;
+        await opts.store.setStatus(key, 'missing');
         report.markedMissing++;
       }
 

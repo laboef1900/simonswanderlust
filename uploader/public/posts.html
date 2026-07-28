@@ -177,10 +177,12 @@
       // a silently-derived one is what gets published by accident.
       async function duplicatePost(p) {
         const title = p.titleDe || '(untitled)';
-        const suggest = (slug) => (slug ? slug + '-kopie' : '');
-        const slugDe = prompt('New DE slug for the copy of "' + title + '":', suggest(p.slugDe));
+        // Locale-appropriate suffix: these are only prefills the author edits,
+        // but the EN slug is a public URL and `norway-2024-kopie` is not English.
+        const suggest = (slug, suffix) => (slug ? slug + suffix : '');
+        const slugDe = prompt('New DE slug for the copy of "' + title + '":', suggest(p.slugDe, '-kopie'));
         if (slugDe === null) return;
-        const slugEn = prompt('New EN slug for the copy:', suggest(p.slugEn));
+        const slugEn = prompt('New EN slug for the copy:', suggest(p.slugEn, '-copy'));
         if (slugEn === null) return;
         const slugs = { de: slugDe.trim(), en: slugEn.trim() };
         const problem = PostsDuplicate.slugError(slugs);
@@ -423,6 +425,12 @@
       }
 
       function syncSelectAll() {
+        // Hidden for non-admins, who get no per-row checkboxes either — the bulk
+        // bar stays hidden regardless, so leaving it visible was a control that
+        // silently filled `selected` and then did nothing.
+        const isAdmin = Boolean(me && me.isAdmin);
+        $('selectAll').hidden = !isAdmin;
+        if (!isAdmin) return;
         const visible = visiblePosts();
         const all = visible.length > 0 && visible.every((p) => selected.has(p.translationKey));
         const some = visible.some((p) => selected.has(p.translationKey));
@@ -481,6 +489,7 @@
       });
 
       $('selectAll').addEventListener('change', () => {
+        if (!me || !me.isAdmin) return; // belt-and-braces; the box is hidden too
         const visible = visiblePosts();
         if ($('selectAll').checked) visible.forEach((p) => selected.add(p.translationKey));
         else visible.forEach((p) => selected.delete(p.translationKey));

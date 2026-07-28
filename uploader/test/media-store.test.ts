@@ -178,6 +178,27 @@ describe('memoryMediaStore', () => {
     expect(again).toMatchObject({ title: 'Kept', alt: { de: 'DE', en: 'EN' }, status: 'processing' });
   });
 
+  // @ai-warning: pgMediaStore's ON CONFLICT clause keeps stored text when the
+  // INCOMING value is empty (`CASE WHEN EXCLUDED.title = '' THEN media.title`),
+  // not when it is absent. A memory store written with `?? existing` agrees on
+  // the omitted case above and disagrees here — and since most unit tests run
+  // against the memory store, that divergence would pass CI unnoticed.
+  it('upsert keeps existing text when a re-upload sends it EMPTY, matching the pg ON CONFLICT rule', async () => {
+    const s = store();
+    await add(s, 'k', { title: 'Kept', alt: { de: 'DE', en: 'EN' }, caption: { de: 'CD', en: 'CE' }, tags: ['t'] });
+    const again = await add(s, 'k', { title: '', alt: { de: '', en: '' }, caption: { de: '', en: '' }, tags: [] });
+    expect(again).toMatchObject({
+      title: 'Kept', alt: { de: 'DE', en: 'EN' }, caption: { de: 'CD', en: 'CE' }, tags: ['t'],
+    });
+  });
+
+  it('upsert still takes a non-empty replacement, and always takes status/dimensions', async () => {
+    const s = store();
+    await add(s, 'k', { title: 'Old', tags: ['a'] });
+    const again = await add(s, 'k', { title: 'New', tags: ['b'], status: 'failed', width: 10, height: 20 });
+    expect(again).toMatchObject({ title: 'New', tags: ['b'], status: 'failed', width: 10, height: 20 });
+  });
+
   it('patch edits metadata and 404s for an unknown key', async () => {
     const s = store();
     await add(s, 'k');
@@ -206,11 +227,17 @@ describe('memoryMediaStore', () => {
     expect((await s.get('k'))?.error).toBeNull();
   });
 
-  it('claimNextProcessing returns the oldest processing row, or null', async () => {
+  // This is the query encodeQueue.recover() re-seeds the backlog from — the
+  // only reader of `status = 'processing'`, since claimNextProcessing() (which
+  // duplicated it, unused, on both stores) was removed.
+  it('lists processing rows oldest-first for queue recovery', async () => {
     const s = store();
-    expect(await s.claimNextProcessing()).toBeNull();
+    expect((await s.list({ status: 'processing' })).items).toEqual([]);
     await add(s, 'k1', { status: 'processing' });
-    expect((await s.claimNextProcessing())?.key).toBe('k1');
+    await add(s, 'k2', { status: 'ready' });
+    const { items, total } = await s.list({ status: 'processing', sort: 'uploaded', order: 'asc' });
+    expect(items.map((i) => i.key)).toEqual(['k1']);
+    expect(total).toBe(1);
   });
 });
 

@@ -67,8 +67,7 @@ export interface MediaStore {
   remove(key: string): Promise<void>;
   /** Publish gate: which of these keys are not `ready` (unknown keys are NOT returned). */
   notReadyKeys(keys: string[]): Promise<Set<string>>;
-  /** Claim one `processing` row for encoding, oldest first; null when the queue is empty. */
-  claimNextProcessing(): Promise<MediaItem | null>;
+  /** Set a row's status; `e` is stored only for `failed` and cleared otherwise. */
   setStatus(key: string, s: MediaStatus, e?: MediaError): Promise<void>;
   setVariantBytes(key: string, bytes: number): Promise<void>;
   folders(): Promise<string[]>;
@@ -294,19 +293,27 @@ export function memoryMediaStore(opts: MediaStoreOptions): MediaStore {
     async upsert(item) {
       assertSafeFolder(item.folder ?? '');
       const existing = rows.get(item.key);
+      // @ai-warning Mirror pgMediaStore's ON CONFLICT clause EXACTLY, blank-for-
+      // blank. Its rule is "an empty incoming value keeps what is stored" (a
+      // re-upload of the same bytes must not blank an existing title/alt), NOT
+      // "an absent one" — `?? existing` diverges the moment a caller sends an
+      // explicit '' or []. Most unit tests run against this store, so any drift
+      // here passes CI and only shows up in production.
+      const keep = (incoming: string | undefined, stored: string | undefined): string =>
+        cleanText(incoming) || stored || '';
       const row: MemRow = {
         key: item.key,
-        folder: item.folder ?? existing?.folder ?? '',
-        title: cleanText(item.title ?? existing?.title ?? ''),
+        folder: item.folder ?? '',                     // pg: folder = EXCLUDED.folder
+        title: keep(item.title, existing?.title),
         alt: {
-          de: cleanText(item.alt?.de ?? existing?.alt.de ?? ''),
-          en: cleanText(item.alt?.en ?? existing?.alt.en ?? ''),
+          de: keep(item.alt?.de, existing?.alt.de),
+          en: keep(item.alt?.en, existing?.alt.en),
         },
         caption: {
-          de: cleanText(item.caption?.de ?? existing?.caption.de ?? ''),
-          en: cleanText(item.caption?.en ?? existing?.caption.en ?? ''),
+          de: keep(item.caption?.de, existing?.caption.de),
+          en: keep(item.caption?.en, existing?.caption.en),
         },
-        tags: item.tags ? normalizeTags(item.tags) : existing?.tags ?? [],
+        tags: normalizeTags(item.tags).length > 0 ? normalizeTags(item.tags) : existing?.tags ?? [],
         width: item.width, height: item.height,
         origBytes: item.origBytes,
         variantBytes: existing?.variantBytes ?? 0,
@@ -347,12 +354,6 @@ export function memoryMediaStore(opts: MediaStoreOptions): MediaStore {
         if (r && r.status !== 'ready') out.add(k);
       }
       return out;
-    },
-    async claimNextProcessing() {
-      const pending = [...rows.values()]
-        .filter((r) => r.status === 'processing')
-        .sort((a, b) => a.uploadedAt.getTime() - b.uploadedAt.getTime());
-      return pending[0] ? toItem(pending[0]) : null;
     },
     async setStatus(key, s, e) {
       const r = rows.get(key);
@@ -584,16 +585,6 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
         `SELECT key FROM media WHERE key = ANY($1::text[]) AND status <> 'ready'`, [keys],
       );
       return new Set(rows.map((r) => r.key));
-    },
-    async claimNextProcessing() {
-      // The single-process deployment means no two workers race here, but
-      // FOR UPDATE SKIP LOCKED costs nothing and keeps this correct if that
-      // ever changes.
-      const { rows } = await pool.query<MediaRow>(
-        `SELECT ${COLS} FROM media WHERE status = 'processing'
-          ORDER BY uploaded_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED`,
-      );
-      return rows[0] ? rowToItem(rows[0], baseUrl) : null;
     },
     async setStatus(key, s, e) {
       await pool.query(`UPDATE media SET status = $1, error = $2 WHERE key = $3`, [s, s === 'failed' ? e ?? null : null, key]);

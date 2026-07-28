@@ -10,12 +10,16 @@ import { srcset, fallbackSrc, variantWidths, type RemoteHeroImage } from './imag
  * One entry of a post/page `images` map: the intrinsic dimensions plus the
  * optional per-locale alt/caption a gallery renders.
  *
- * @ai-warning There are THREE independent declarations of this shape —
- * `uploader/src/body-content.ts` (re-exported by `posts.ts`/`pages.ts`) and
- * this one — and they must widen together. Because the extra fields are
- * optional, `tsc`/`astro check` stay green when only one side is widened; the
- * failure mode is galleries rendering with empty alt and no captions on a
- * green build.
+ * @ai-warning Declared independently here and in `uploader/src/body-content.ts`
+ * as `ImageMeta` (re-exported as `ImageDims` by `posts.ts`/`pages.ts`) — two
+ * trees, two tsconfigs, so neither can import the other's canonical type. They
+ * must widen TOGETHER: because the extra fields are optional, `tsc` and
+ * `astro check` both stay green when only one side is widened, and the failure
+ * mode is galleries rendering with empty alt and no captions on a green build.
+ * `uploader/test/body-content.test.ts` now pins the two shapes together with a
+ * compile-time key-set + mutual-assignability assertion, so that drift fails
+ * the build — but the assertion lives in the uploader tree, which means a
+ * `site`-only check (`astro check` alone) still will not catch it.
  */
 export interface ImageDims { width: number; height: number; alt?: string; caption?: string }
 const SIZES = '(min-width: 768px) 720px, 100vw';
