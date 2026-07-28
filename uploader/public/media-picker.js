@@ -86,8 +86,15 @@ window.MediaPicker = (function () {
       // The list scrolls, so the count has to be stated: an author who cannot
       // see the whole strip still needs to know how many photos they are about
       // to write, and how many of those the current view is not showing.
+      //
+      // It doubles as the strip's live region (the same visible-count pattern as
+      // media.html and posts.html). Reordering otherwise has NO announced
+      // outcome — pressing ↑ moves a row the author cannot see and re-labels
+      // nothing, so a screen-reader user hears "Move X earlier, button" and is
+      // told nothing about what happened (WCAG 2.2 AA, SC 4.1.3).
       stripCount = el('span', 'muted');
-      stripCount.setAttribute('role', 'status');
+      stripCount.setAttribute('aria-live', 'polite');
+      stripCount.setAttribute('aria-atomic', 'true');
       stripHead.appendChild(stripCount);
       strip.appendChild(stripHead);
       stripList = el('ol', 'picker-strip__list');
@@ -117,8 +124,13 @@ window.MediaPicker = (function () {
       choose.focus();
     }
 
+    /** One-shot message for the strip's live region, consumed by renderStrip. */
+    var announce = '';
+
     function move(from, to) {
+      var label = labelOf(picked.items()[from] || {});
       if (!picked.move(from, to)) return;
+      announce = 'Moved ' + label + ' to position ' + (to + 1) + ' of ' + picked.size() + '.';
       render();
       focusInRow(to, from > to ? 'up' : 'down');
     }
@@ -128,10 +140,14 @@ window.MediaPicker = (function () {
       stripList.innerHTML = '';
       var total = picked.size();
       var offscreen = picked.unresolved();
-      stripCount.textContent = total === 0
+      var summary = total === 0
         ? ''
         : total + ' photo(s)'
           + (offscreen ? ' — ' + offscreen + ' not in this view, still in the gallery' : '');
+      // The action, then the standing count — so the announcement says what
+      // changed and the text left on screen still says where things stand.
+      stripCount.textContent = [announce, summary].filter(Boolean).join(' ');
+      announce = '';
       if (!total) {
         stripList.appendChild(el('li', 'muted', o.emptyHint || 'Nothing selected yet — click photos above.'));
         return;
@@ -177,6 +193,7 @@ window.MediaPicker = (function () {
         drop.setAttribute('aria-label', 'Remove ' + label + ' from the gallery');
         drop.addEventListener('click', function () {
           picked.remove(i);
+          announce = 'Removed ' + label + '.';
           render();
           // The row is gone; land on whatever took its place rather than <body>.
           if (picked.size()) focusInRow(i, 'remove');
