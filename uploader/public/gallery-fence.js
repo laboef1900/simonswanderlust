@@ -343,6 +343,11 @@ window.GalleryFence = (function () {
   }
 
   return {
+    // escapeMeta/unescapeMeta have no caller in the page — serialize and parse
+    // use them internally. They are exported so test/gallery-fence.test.ts can
+    // compare them character for character against src/body-content.ts's pair,
+    // which is the only thing keeping the duplicated rule honest. Do not drop
+    // them as dead exports; that deletes the test's handle on the invariant.
     escapeMeta: escapeMeta,
     unescapeMeta: unescapeMeta,
     serialize: serialize,
