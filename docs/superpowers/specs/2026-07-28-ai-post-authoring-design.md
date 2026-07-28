@@ -2,8 +2,9 @@
 
 **Date:** 2026-07-28
 **Status:** Draft, revision 3 (owner decisions folded in 2026-07-28)
-**Repos touched:** blog repo — `docker-compose.yml`, `uploader/src/settings.ts`,
-`uploader/src/server.ts`, `uploader/public/settings.html`, `uploader/public/editor.html`, docs
+**Repos touched:** blog repo — `docker-compose.yml`, `.github/workflows/release.yml` (a second GHCR
+image; see §The `authoring` service), `uploader/src/settings.ts`, `uploader/src/server.ts`,
+`uploader/public/settings.html`, `uploader/public/editor.html`, docs
 (`PRODUCT.md`, `CLAUDE.md`, `SECURITY.md`, `ARCHITECTURE.md`) and a new `authoring/` tree.
 **No change to `site/`.**
 **Refs:** #67 — this is the design only; the issue stays open for implementation.
@@ -55,9 +56,18 @@ button → POST /authoring/runs        (app, requireAuth, async → 202 + run id
    ├─ app loads the post (or the pasted notes) and builds a prompt
    ├─ app POSTs {prompt, context} to the sidecar over the compose network
    ├─ sidecar calls the model and returns {title, excerpt, bodyMarkdown}
-   └─ app validates the shape and calls posts.upsertDraft(pair, baseUpdatedAt)
-      IN-PROCESS — the same call POST /posts already makes (server.ts:827)
+   └─ app shape-checks, then validateDraft(pair), then posts.upsertDraft(pair, baseUpdatedAt)
+      IN-PROCESS — see the validateDraft warning below
 ```
+
+**⚠ `upsertDraft` is not the whole of `POST /posts` — call `validateDraft` yourself.** The route is
+`validateDraft(pair)` at `server.ts:826` and *then* `posts.upsertDraft(...)` at `:827`. Going
+in-process skips the line above, which is precisely the bypass the codebase already documents: the
+`@ai-warning` at `posts.ts:265-270` exists because the WXR importer calls `upsertDraft` directly and
+never runs `validateDraft`. Every place this spec leans on `validateDraft` as a gate — the
+non-blank-German-title rule, the "slug is format-checked only when present" rule, slice 1's
+acceptance criteria — is true **only if the authoring handler calls it explicitly**. Add it to the
+handler and assert it in a test, or those guarantees are prose.
 
 **What this buys, and why it is worth reversing revision 2's framing for:**
 
@@ -183,11 +193,22 @@ slice 4's blocker and `DELETE /images/*` as part of the admin blast radius. Both
 `GET /media` is `requireAuth` (`server.ts:400`) and `DELETE /media/items/*` is `requireAdmin`
 (`server.ts:567`). **Slice 4 is therefore no longer blocked** — the blocker shipped with #64.
 
-**Non-admins cannot see GPS or uploader identity.** `serializeMedia` (`server.ts:389`) routes every
-non-admin media row through `redactForNonAdmin` (`uploader/src/media-store.ts:219-221`), which nulls
-`exif.lat`, `exif.lng`, and `uploadedBy`. The sidecar, being non-admin, therefore never receives
-coordinates — the Phase 0 privacy fix holds against this new identity by construction, not by
-convention.
+**⚠ GPS redaction does NOT come for free on this path — decision 7 moved the read out from under it.**
+`redactForNonAdmin` (`uploader/src/media-store.ts:219-221`) nulls `exif.lat`, `exif.lng` and
+`uploadedBy`, and it has **exactly one call site**: `serializeMedia` (`server.ts:389`), the HTTP
+response serializer, applied only when `req.authUser?.isAdmin` is false.
+
+Revisions 1–2 got redaction by construction, because the sidecar read `GET /media` as a non-admin.
+Under decision 7 the app does the reading — in-process via `cfg.media.list()`, or over HTTP under the
+**owner's own session**, and the owner is the admin. Both return coordinates in full.
+
+**Therefore, mandatory for slice 4:** the authoring handler MUST pass every media row through
+`redactForNonAdmin` **unconditionally**, ignoring the session's role, before any of it reaches a
+prompt. This is the only thing standing between the media library and a POST to `api.anthropic.com`,
+and `CLAUDE.md` §3 forbids GPS leaving this system. Assert it with a test that seeds a row with
+`lat`/`lng` and greps the composed prompt — role-independence is the property, so the test must run
+as an **admin**, which is the case that currently fails. Do not restate the old "non-admin, therefore
+redacted" argument anywhere: there is no non-admin identity left to carry it.
 
 **Authentication is browser-shaped, and there is no service-account concept.** Verified: `users.ts`
 models a user as `{id, username, passwordHash, isAdmin, createdAt}` (`uploader/src/users.ts:34-39`)
@@ -229,26 +250,61 @@ compose stack (default `up`: app + db only)
   There are no `profiles:` entries in the file today, so this is the first one — say so in the
   comment. The compose file also declares no explicit `networks:`, so the sidecar joins the same
   default project network as `app` and `db` and reaches the app at `http://app:3000`.
-- **No published port.** Nothing outside the compose network can reach it, in either direction.
+- **No published port**, so nothing outside the compose network can reach it **inbound**. That is the
+  only thing omitting a port buys — it does not constrain what the sidecar dials out to, as the
+  egress bullet below makes plain.
 - **Its own image**, built from a new `authoring/` tree in this repo (Dockerfile + prompts +
   a thin entrypoint). It is *not* built from the root `Dockerfile` and shares nothing with the `app`
-  image.
+  image. **How it is produced needs deciding before implementation, and the obvious answer is
+  wrong:** adding `build: ./authoring` to compose contradicts `ARCHITECTURE.md:18-20`
+  (*"`docker-compose.yml` has no `build:` key, so `docker compose up -d --build` is a no-op"*) and the
+  compose header's "Compose only RUNS the published image". The consistent option is a second GHCR
+  image built by a tag-triggered job — which means `.github/workflows/release.yml` is touched, and
+  this spec's "Repos touched" header must say so. Pin this in the implementation plan.
 - **Egress to `api.anthropic.com` only** is the intent. Docker's default bridge does not enforce
   that; treat host-level egress restriction as an operational recommendation in `SECURITY.md`, not
   as a control this design implements. Mark as **unimplemented**, not as a mitigation.
+- **⚠ The sidecar CAN reach the app; it simply has no reason and no credential to.** Compose declares
+  no `networks:`, so Docker's embedded DNS resolves `app` from the sidecar — `POST /login`
+  (rate-limited), `POST /setup` (zero-users guarded) and `/health` are reachable, and it could set
+  `X-Forwarded-For` against `trustProxy: true` (`server.ts:102`). Anywhere this spec says the sidecar
+  "is never given an address" for the CMS, read it as **holds no credential**, which is the true and
+  weaker claim. Closing the gap properly needs a dedicated compose network the sidecar shares with
+  nothing — a change this design does not specify. Recorded as accepted residual risk: the sidecar is
+  the one process that both ingests untrusted prose and talks to a third party.
 
 ### The trigger endpoint (owner decision 1)
 
 One new route on the app: **`POST /authoring/runs`**, `requireAuth` (drafting is author-level work;
-publishing stays admin-only and the sidecar still cannot publish). It forwards the request to
-`http://authoring:<port>/run` on the compose network and returns immediately.
+publishing stays admin-only and the sidecar cannot publish).
 
-**It must be asynchronous.** A drafting run takes minutes. `POST /posts/:tk/publish` already awaits
-the full in-process Astro build before responding (`server.ts:862-880`), and that synchronous-await
-shape is precisely what makes publish sensitive to proxy timeouts — `requestTimeout: 120_000` bounds
-*receiving* a request, not handler duration (`@ai-note`, `server.ts:95-100`). **Do not repeat that
-shape here.** The endpoint returns `202` with a run id; the editor polls for status. The existing
-encode queue is the in-repo precedent for fire-and-poll.
+**Asynchronous to the browser, synchronous to the sidecar. Be precise about which "returns
+immediately" is meant** — the earlier phrasing left the result with no way home, and an implementer
+cannot proceed without this:
+
+```
+browser → POST /authoring/runs
+            └─ app registers run id, returns 202 IMMEDIATELY to the browser
+               and continues the work in a detached async task:
+                 app → POST http://authoring:<port>/run   (ONE request)
+                       … the app awaits this for minutes …
+                 app ← 200 {title, excerpt, bodyMarkdown} on the SAME response
+                 app → redactForNonAdmin / shape check / posts.upsertDraft()
+                 app → run record ends 'done' or 'failed'
+browser → GET /authoring/runs/:id   (polls; the editor opens the draft on 'done')
+```
+
+**The sidecar answers on the request it was given and never initiates a connection to the app.** That
+is what keeps §Credential scope's claim true and keeps the `trustProxy` concern lapsed. A callback,
+a webhook, or a queue the app drains would all reopen it — do not add one.
+
+**The 202 is to the browser only.** `POST /posts/:tk/publish` awaits the full in-process Astro build
+before responding (`server.ts:862-880`), and that shape is what makes publish sensitive to proxy
+timeouts — `requestTimeout: 120_000` bounds *receiving* a request, not handler duration (`@ai-note`,
+`server.ts:95-100`). The detached task avoids that for the browser leg. The app→sidecar leg is a
+different matter: it is an internal call not passing the reverse proxy, and it is bounded by
+`authoringTimeoutMs` (default 600 000), **not** by a short timeout. The existing encode queue is the
+in-repo precedent for fire-and-poll.
 
 **Do not use `safeFetch` for this call.** Two reasons, and the first is not the one you would expect:
 
@@ -257,14 +313,22 @@ encode queue is the in-repo precedent for fire-and-poll.
    that resolves to a private address is not caught here" (`uploader/src/safe-fetch.ts:18-24`). A
    compose service name passes the guard. So safeFetch is not a barrier here; it is simply the wrong
    tool.
-2. `DEFAULT_TIMEOUT_MS = 15_000` (`safe-fetch.ts:14`). Even the *trigger* leg should not inherit a
-   guard tuned for fetching remote images, and none of safeFetch's protections (SSRF blocklist,
-   25 MB streamed cap) are relevant to a single POST at a hardcoded internal hostname.
+2. `DEFAULT_TIMEOUT_MS = 15_000` (`safe-fetch.ts:14`). A drafting call runs for minutes, so the one
+   protection that would actually apply is the one that would break it, and none of the others (SSRF
+   blocklist, 25 MB streamed cap) is relevant to a single POST at a fixed internal hostname.
 
-Use a small dedicated client instead: fixed hostname from configuration, no user-supplied URL, short
-timeout on the trigger leg only. **The hostname must never become configurable from the settings
-page** — that would turn a narrow internal call into an operator-controlled SSRF primitive, which is
-exactly what `safeFetch` exists to prevent elsewhere.
+Use a small dedicated client instead: no user-supplied URL, no redirect following, and
+`authoringTimeoutMs` as the deadline.
+
+**Where the hostname may live, exactly** — it is a security boundary, so state it rather than saying
+"hardcoded" and "from configuration" in the same breath:
+
+- **Allowed:** a literal default in the app's source (`http://authoring:8080`), overridable by an
+  **environment variable on the `app` service** for local development.
+- **Forbidden:** the JSON settings store, any admin-UI field, and any part of the request body or
+  query string. Any of those turns a narrow internal call into an operator- or caller-controlled SSRF
+  primitive, which is exactly what `safeFetch` exists to prevent elsewhere. This is the one config
+  value `.env` may grow for this feature, and only because settings-store placement would be worse.
 
 ### Settings-driven configuration (owner decisions 2 and 3)
 
@@ -291,11 +355,24 @@ the `authoring` service needs `extra_hosts: ["host.docker.internal:host-gateway"
 `docker-compose.yml`, or the host's LAN IP instead. State this in the deploy notes; it is the most
 likely first-run failure.
 
-**⚠ Every new field must be registered in three places** or it silently reverts to its default on
-every restart: `defaultSettings()` (`settings.ts:25-34`), `validate()` (`:36-61`), **and** the
-explicit per-key merge whitelist in `createSettingsStore` (`:69-76`). The whitelist is opt-in by
-design — *"Pick known keys only, so truly unknown fields in an older settings.json are dropped"* —
-so a field missing from it is read, discarded, and re-defaulted with no error.
+**⚠ Every new field must be registered in FOUR places** — five counting the UI. Miss one and the
+failure is silent in a different way each time:
+
+| Place | Miss it and… |
+|---|---|
+| `defaultSettings()` (`settings.ts:24-34`) | the field is `undefined` until someone saves it |
+| `validate()` (`:36-61`) | out-of-range values reach consumers unchecked |
+| the merge whitelist in `createSettingsStore()` (`:69-76`) | it is read from disk, **discarded**, and re-defaulted on every restart, with no error |
+| **the per-key whitelist in `POST /settings` (`server.ts:595-601`)** | **the admin UI cannot write it at all** — the page posts it and the server silently drops it |
+| `uploader/public/settings.html` | there is no control to set it |
+
+The store-side whitelist is opt-in by design — *"Pick known keys only, so truly unknown fields in an
+older settings.json are dropped"* — and `POST /settings` mirrors that shape independently.
+
+**§Testing's settings round-trip does not cover the fourth.** A test that writes through the *store*
+and reloads exercises three of the four; the route's whitelist sits above it and stays untested. Drive
+the round-trip through `POST /settings` → reload → `GET /settings` instead, or add a second case that
+does.
 
 **⚠ A load-time validation failure reverts the entire store to defaults, silently** (`settings.ts:
 80-84`: `catch { current = {...defaults} }`). Adding six fields adds six new ways to trip a fallback
@@ -307,6 +384,14 @@ way an older `settings.json` could fail.
 any signed-in author (`server.ts:610-622`). The authoring fields hold no secret, so exposing them
 there is defensible — but they are not needed by the browser, so **keep them off `/ai-config`** and
 read them admin-side via `GET /settings`. Smaller surface, no argument to have later.
+
+**Consequence for the editor button, which needs deciding:** drafting is author-level
+(`POST /authoring/runs` is `requireAuth`), but `GET /settings` is `requireAdmin` (`server.ts:588`),
+so a non-admin author's browser cannot see whether authoring is configured at all. Do **not** solve
+this by moving the fields onto `/ai-config` — that widens the read surface for a cosmetic gain.
+Render the button unconditionally for any signed-in author and let the run fail with the
+"sidecar unreachable" message §Failure modes already specifies. One narrow addition is acceptable if
+that proves too blunt: a boolean `authoringEnabled` on `/ai-config`, carrying no configuration values.
 
 ### Provider abstraction (owner decision 3)
 
@@ -380,8 +465,8 @@ redaction from scratch. The sidecar sidesteps that rather than solving it.
 **The sidecar authenticates to nothing on this stack.** It holds model credentials and no others.
 
 - **CMS credential: none.** Decision 7 removed it. No account is provisioned, no password is stored,
-  no session is created. The sidecar cannot reach the CMS API even if it tried — it is never given
-  an address for it.
+  no session is created. It can *reach* the app over the compose network (see the ⚠ under §The
+  `authoring` service) but has nothing to authenticate with, so every mutating route answers 401.
 - **Model credential, tier 1 (primary):** a subscription login profile on the sidecar's own named
   volume. Never on `/data`, never in the settings store, never in `authoring/.env`.
 - **Model credential, tier 2:** `ANTHROPIC_API_KEY` in `authoring/.env`. Never written to `/data`,
@@ -430,6 +515,19 @@ reversal is the reason, and a future change that has the sidecar call back into 
 Each is separable and independently shippable. Slices 1–3 need no server capability that does not
 already exist; slice 4 needs `GET /media`, which shipped with #64.
 
+**Read every "flow" below as in-process.** They are written in HTTP terms — `GET /posts/:tk`,
+`PUT /posts/:tk`, `POST /posts` — because that is the vocabulary for *what* each slice reads and
+writes, and those contracts are unchanged. Under decision 7 nobody makes those requests: the
+authoring handler calls `posts.get()` / `posts.upsertDraft()` directly. Two consequences apply to
+every slice and are not repeated in each:
+
+- **`validateDraft` is yours to call** (see §Division of labour's ⚠). The routes call it; the store
+  does not.
+- **`PostError` codes are thrown, not returned as HTTP status.** Where a slice says "a 409 with
+  `code: 'conflict'`", in-process that is a `PostError` with `code === 'conflict'`; `server.ts:832`
+  is where the *route* maps it to 409. The authoring handler does its own mapping onto the run
+  record's status, and the editor sees that — not a 409.
+
 ### Slice 1 — Draft from rough notes (DE)
 
 The owner pastes rough notes; the agent produces a German draft.
@@ -447,8 +545,10 @@ sidecar returns `{title, excerpt, bodyMarkdown}` → app composes
 - `heroImage` and `images` are omitted; `draftWithDefaults` fills them (`posts.ts:280-281`).
 - `shared` carries only what the notes actually state; `coordinates` defaults to `{lat:0,lng:0}`
   (`posts.ts:290`). The agent never invents coordinates, `countryCode`, or `date`.
-- Exactly **one** write. Verified by `GET /posts/:tk/revisions` returning an empty list for a
-  freshly created post (no pre-save state existed to snapshot).
+- Exactly **one** write, producing **zero** revisions: the snapshot is guarded by `if (existing)`
+  (`posts.ts:342`, `:536`), and a create has no pre-save state. Verified by `GET /posts/:tk/revisions`
+  returning an empty list. (§Testing's "exactly one new revision" applies to slices 2–3, which
+  overwrite an existing pair — not here.)
 - The post is `status: 'draft'` and does not appear on the public site until a human publishes.
 - Body Markdown contains no `<BodyImage>` tags and no ```` ```gallery ```` fences — the agent has no
   image to reference yet, and both are normalized at the store chokepoint
@@ -486,9 +586,15 @@ Same shape as slice 2, different prompt: the agent rewrites or extends one local
   pipeline own those. `images` in particular is validated at the store chokepoint
   (`posts.ts:276`, `imagesMapError`) precisely because the WXR importer bypasses `validateDraft`; the
   agent has no business writing it.
-- If the body references images, their `![alt](src)` lines and their `images` entries survive the
-  rewrite unchanged. A dropped `images` key silently loses gallery alt and captions
-  (`CLAUDE.md` @ai-warning, Contract-First Boundaries).
+- **Every image the body referenced before the rewrite still appears in it afterwards, enforced by an
+  explicit check.** This is the likeliest real data loss in the whole design and nothing else catches
+  it: `bodyMarkdown` is the field the model is *supposed* to rewrite, so §Prompt injection's
+  writable-field diff cannot see inside it, and `normalizeBodyImages` merges into the incoming map
+  without pruning (`posts.ts:223-255`) — so a dropped `![alt](src)` line leaves the `images` entry
+  behind and the photo simply **vanishes from the post** while every other check stays green. The
+  guard is cheap: collect the multiset of `src`s from `![…](…)`, `<BodyImage>` tags and ```` ```gallery ````
+  lines before and after, and abort the run on any loss. A gained src is also suspect — the model has
+  no business inventing image URLs — so treat the comparison as equality, not containment.
 - Refuses to run against a post whose `status` is `'published'` **unless** the owner passes an
   explicit flag: editing a published post's working copy is legal (the published snapshot is
   preserved — `posts.ts:355-357`) but it silently creates unpublished changes the owner may not
@@ -504,8 +610,11 @@ and non-GPS EXIF (camera, lens, capture date) → compose a draft → **one** `P
 
 **Acceptance criteria**
 
-- Uses only fields the API returns to a non-admin. `exif.lat`/`exif.lng`/`uploadedBy` are `null` by
-  redaction; the agent must not attempt to infer or request coordinates.
+- **Every row passes through `redactForNonAdmin` before it reaches the prompt, regardless of the
+  session's role** — see the ⚠ above. `exif.lat`/`exif.lng`/`uploadedBy` reach the model only if this
+  is forgotten, and the run executes as the admin owner, so nothing else nulls them. The model is
+  never asked to infer or request coordinates either, but that is a prompt convention; the redaction
+  call is the control.
 - Paginates properly: `GET /media` defaults to 50 per page (`media-store.ts:114`) and returns
   `{total, items}` (`server.ts:421-427`). A folder with more than one page must not be silently
   truncated.
@@ -539,11 +648,13 @@ present (`uploader/src/server.ts:818-824`); `assertNotStale` returns immediately
 it **overwrites whatever the owner has open in a browser tab**, and the *owner's* next Save then 409s,
 telling them **they** are stale. This is a spec requirement, not an implementation detail.
 
-**3. On 409, stop.** A `conflict` code means a human wrote while the agent was thinking. The run
-aborts and reports; it never re-fetches and re-applies, because doing so would discard the human
-edit that produced the conflict. `duplicate_slug` and `slug_locked` also surface as 409
-(`server.ts:832`) and should be unreachable if slices 2–4 honour "never touch the slug"; treat them
-as bugs in the agent, not as retryable conditions.
+**3. On `conflict`, stop.** In-process this is a `PostError` with `code === 'conflict'`, not an HTTP
+409 — `server.ts:832` is where the *route* maps the code to a status, and the authoring path does not
+go through the route (§The four slices). It means a human wrote while the model was thinking: the run
+aborts and reports; it never re-fetches and re-applies, because doing so would discard the human edit
+that produced the conflict. `duplicate_slug` and `slug_locked` arrive the same way and should be
+unreachable if slices 2–4 honour "never touch the slug"; treat them as bugs in the handler, not as
+retryable conditions. **A vanished post throws nothing at all** — see §Failure modes.
 
 **What the build layer already handles.** No coordination is needed on the build side:
 `createSiteBuilder` coalesces concurrent builds one-deep (`uploader/src/build.ts:88-127`),
@@ -574,22 +685,39 @@ That residual risk is bounded by three things already true:
 
 1. **Every result is a draft.** Publishing stays a human admin action in the browser, so a poisoned
    draft cannot reach the public site without someone reading it first.
-2. **The app validates the shape before writing.** The sidecar returns
-   `{title, excerpt, bodyMarkdown}` and nothing else; there is no field in that response that could
-   carry a slug, a status, an `images` map, or a hero image.
+2. **The app validates the shape before writing** — one guard, specified once below.
 3. **`imagesMapError` still guards the store chokepoint** (`posts.ts:276`) for anything that does
    reach `upsertDraft`, exactly as it does for the WXR importer today.
 
-**Do not let (2) erode.** The moment the sidecar's response grows a field that maps to something
-structural — a slug, a URL, an `images` entry — this reverts to a write-capability problem with extra
-steps. Keep the response shape narrow and assert it in a test.
+### The pre-write guard, specified once
+
+Earlier drafts described this three different ways — a narrow response contract, a diff against the
+fetched pair, and a rejection test — which read as three guards and are not. **It is two steps, both
+in the app, and neither is optional:**
+
+**Step 1 — parse the sidecar response into exactly `{title, excerpt, bodyMarkdown}`, all strings.**
+Construct a fresh object with those three keys; never spread the response. Any other key is *dropped
+without error*, which is why §Testing can table-drive a response carrying `slug`/`status`/`images`/
+`heroImage`/`shared` and assert none of it survives: the contract forbids sending them, and the parse
+is what makes the contract true rather than aspirational. **Do not let this erode** — the moment the
+response grows a structural field, this reverts to a write-capability problem with extra steps.
+
+**Step 2 — compose the pair the app will write, then diff it against the pair the app fetched**, and
+abort if anything outside the slice's declared writable fields differs (slug, status, `images`,
+`heroImage`, `shared`, and the locale the slice does not own). Step 1 already makes step 2 hard to
+fail, and that is the point: step 2 catches a bug in the app's own composition logic, not just a
+misbehaving sidecar. **For slice 1 there is no fetched pair**, so step 2 degrades to asserting the
+composed pair's non-writable fields equal `draftWithDefaults`' output — the same check against a
+different baseline, not a skipped check.
+
+Both steps run in the app. A guard the untrusted-text-handling process runs on itself is not a guard.
 
 **The answer this design gives is capability, not filtering:**
 
 1. **The model's client can write nothing at all.** Successful injection can make the sidecar return
    bad prose. It cannot publish, cannot delete a post, cannot create a user, cannot pull a database
    dump, cannot change settings, and cannot trigger a rebuild — not because a credential lacks the
-   role, but because the sidecar has no CMS address, no session, and no database. This is what
+   role, but because the sidecar has no CMS credential, no session, and no database. This is what
    decision 7 bought, and it is the point issue #67's framing (a client holding CMS credentials) was
    written before.
 2. **A human publishes.** Every AI-written word passes a human admin before it is public.
@@ -597,12 +725,12 @@ steps. Keep the response shape narrow and assert it in a test.
    explicit delimiter with a standing instruction that content within it is data to be worked on,
    never instructions to be followed. This reduces but does not eliminate the risk; state it as
    mitigation, not as a solved problem.
-4. **The write is shape-checked in the app, before it reaches `upsertDraft`.** The authoring handler
-   diffs the pair it is about to write against the one it fetched and aborts if anything outside the
-   slice's declared writable fields changed — slug, status, `images`, `heroImage`, `shared`. An
-   injection that talks the model into rewriting a slug fails here rather than relying on the store's
-   `slug_locked` 409 as the only backstop. **This check belongs to the app, not the sidecar**: a
-   guard the untrusted-text-handling process runs on itself is not a guard. §Testing table-drives it.
+4. **The pre-write guard above.** An injection that talks the model into rewriting a slug dies at
+   step 1 (the field never survives parsing) and again at step 2 (the diff), rather than relying on
+   the store's `slug_locked` `PostError` as the only backstop. Note what it cannot do: the guard sees
+   `bodyMarkdown` as one opaque writable field, so injected *prose* passes it by design — that is
+   what item 1's capability argument and item 2's human review are for. Slice 3's image-preservation
+   check is the one content-level check, and it exists because losing a photo is not an opinion.
 
 **Residual risk, accepted and recorded:** a successful injection can produce plausible-looking German
 or English prose that a hurried reviewer publishes. Nothing in this design prevents that; the human
@@ -623,6 +751,7 @@ instead is make every failure a *local, visible, non-destructive* failure of one
 | `db` down | The app's own read fails before the sidecar is ever called. Nothing is written; the button reports the error. |
 | Sidecar unreachable | The trigger call fails fast at the app. Nothing is written. This is the one failure the *owner* sees immediately, so its message must name the `authoring` service and the `profiles:` gate — "is it running?" is the first thing to check. |
 | 409 `conflict` on the final write | The app aborts with "someone edited this while I was working — reload the editor and re-run". No retry: re-applying would discard the human edit that caused the conflict. |
+| **The post is deleted while the run is in flight** | **Must be handled explicitly; the concurrency contract does not cover it.** `assertNotStale` is guarded by `if (existing)` in both stores (`posts.ts:339` memory, `:530` pg), so when the row is gone the staleness check *silently passes* and `upsertDraft` happily **recreates the deleted post** — carrying its old slugs, which may then throw `duplicate_slug` if a human reused one. Neither outcome is acceptable: the owner deleted it. The handler MUST re-read the pair immediately before writing and abort the run if it has vanished. Reachable via `DELETE /posts/:tk` (`server.ts:995`) or a bulk action (`:912`) during the minutes the model is thinking. |
 | Model auth failure | Tier 1: the subscription login profile expired or the volume was lost — re-authenticate the CLI. Tier 2: bad `ANTHROPIC_API_KEY`. **Must surface as a tier-specific auth error and must NOT silently fall through to another tier** (§Provider abstraction). |
 | Sidecar crashes mid-run | Nothing was written; the app's poll for that run reports failure. The **run** must not be retried — a silently re-run draft spends tokens nobody asked for — but the **service** is long-lived under decision 1, so `restart: unless-stopped` is correct and a crash-once-stay-dead policy would leave the editor button permanently broken. The two are separable precisely because run state lives in the app (§Run state), not in the sidecar: a restarted sidecar comes back with nothing to resume. |
 | Partial write (server crash between the two locale INSERTs) | Pre-existing hazard, unchanged: `upsertDraft` writes `de` and `en` as two non-transactional INSERTs, and `pgPostStore.get()` returns `null` for a stranded single-locale key (`posts.ts:95-101`). Media usage scans already work around it via `usageRows()`. The sidecar surfaces the resulting 404 rather than papering over it. |
@@ -631,8 +760,10 @@ instead is make every failure a *local, visible, non-destructive* failure of one
 The app logs the run's start, the translation key it touched, and the outcome. The sidecar logs the
 model call and its outcome, and **never logs the model credential or the prompt body** — imported
 post text passes through it, and that text is exactly what §Prompt injection says not to trust.
-Neither process can log GPS coordinates: the app reads media through the same `redactForNonAdmin`
-path, and the sidecar never sees media at all.
+Neither process can log GPS coordinates **provided slice 4's mandatory `redactForNonAdmin` call is in
+place** — it is what keeps coordinates out of the prompt, and therefore out of the sidecar, which
+otherwise sees whatever the app sends it. Do not treat this as automatic: it is a call someone has to
+make, on a path whose session is the admin's.
 
 ## Documented commitments this amends
 
@@ -687,6 +818,21 @@ The section also needs: drafting is drafts-only and the sidecar writes nothing; 
 text is untrusted model input; and the existing "treat model output as untrusted" clause now covers
 post bodies, not just alt text.
 
+**`CLAUDE.md` — four more statements this falsifies.** `:302-304` is the one everybody thinks of, but
+it is not the only place the repo asserts the current shape, and a future session reads the Project
+Overview first:
+
+- `:34` — *"**Enabled profiles:** … AI (one narrow feature)."* Two features now.
+- `:62-64` — *"The blog has **one** small AI feature: editor-integrated alt-text suggestions … (the
+  server never contacts the model; **no new server SSRF surface**)."* Same claim as `:302`, stated
+  earlier and read sooner. The parenthetical stays true of the `app` process and false of the stack.
+- `:506` — the repo-structure comment *"`docker-compose.yml` # app + db (WordPress-style, two
+  services)"*. Three, one profile-gated.
+- `:601` — the status list records #67 as *"Not started, deliberately"*.
+
+**`ARCHITECTURE.md:30`** describes `settings.json` as *"admin-configurable settings (backup
+schedule/retention)"* — it gains the LM and authoring fields.
+
 ### `SECURITY.md`
 
 Add a section for the new service covering **network position** (compose-internal, no published
@@ -700,12 +846,13 @@ this repo and that the concurrency cap is the only bound on run frequency. Also 
 residual risk that `POST /import`'s `safeFetch` surface is reachable at session level — pre-existing,
 and no longer reachable by a machine identity now that there is none.
 
-> **`trustProxy` no longer applies.** Revisions 1–2 recorded it as a new residual risk: the sidecar
-> would have been the first non-browser client on the internal network and could have chosen its own
-> `X-Forwarded-For` rate-limit bucket (`server.ts:102`, `@ai-warning` at `:91-94`). Under decision 7
-> the sidecar never calls the app at all — the connection runs the other way — so no new client
-> appears. The `trustProxy` note in §Credential scope is kept as context, not as a risk this design
-> introduces.
+> **`trustProxy` — the risk shrinks but does not vanish.** Revisions 1–2 had the sidecar calling the
+> app as a routine matter, making it the first non-browser client on the internal network, free to
+> choose its own `X-Forwarded-For` rate-limit bucket (`server.ts:102`, `@ai-warning` at `:91-94`).
+> Decision 7 reverses the intended direction, so nothing on the authoring path is such a client. But
+> reachability is a property of the network, not of intent, and compose puts the sidecar on the same
+> default network (see §The `authoring` service): a *compromised* sidecar can still dial `app:3000`
+> and pick its bucket. Record it as accepted residual risk with a reduced likelihood, not as retired.
 
 ### `ARCHITECTURE.md`
 
@@ -725,27 +872,47 @@ introduces **no** server-side model call.
 > owns the write path, so nearly all the testable behaviour is in `uploader/`, and the sidecar is
 > reduced to a stub-able text service.
 
-**The load-bearing test — write it first.** Assert that the authoring path **never** reaches
-`publish`, `unpublish`, `rebuild`, or any admin route. Under revision 3 drafts-only is a code
-invariant rather than a credential scope (§Division of labour), which means this test *is* the
-guarantee. Without it, a future edit to one handler silently grants the AI publish rights.
+**The load-bearing test — write it first.** Assert that a run leaves the post's stored `status`
+unchanged and adds no published output: seed a published post, run the authoring path, and assert
+`status` and the published snapshot are byte-identical afterwards. Also assert the handler never
+calls `publish`, `unpublish` or `rebuild`.
+
+**Be honest about what that buys.** Under revision 3 drafts-only is a code invariant rather than a
+credential scope (§Division of labour), and a *negative* assertion over a code path can only cover the
+inputs someone thought to write. This test is a **canary, not a guarantee** — it catches the erosion
+people actually commit (a handler quietly gaining a publish call) and cannot catch a path nobody
+tested. That is why the stored-`status` assertion comes first: it checks real state rather than a
+spy, so it fails for reasons the author did not anticipate. A credential could not be edited
+carelessly; this can, and the test is the cheapest thing standing in for it.
 
 **`uploader/test/` — the new surface:**
 
 - `POST /authoring/runs` requires a session (401 unauthenticated) and does **not** require admin —
   drafting is author-level.
-- It returns `202` and does not block. Assert the handler returns before the stubbed sidecar call
-  resolves; a synchronous await here would reintroduce publish's proxy-timeout problem.
-- The pre-write shape check rejects a sidecar response carrying `slug`, `status`, `images`,
-  `heroImage`, or `shared`. Table-drive it — this check is what keeps prompt injection an
-  output-quality problem rather than a write-capability one (§Prompt injection).
-- Exactly one `upsertDraft` per run, and exactly one new revision. Assert against
-  `GET /posts/:tk/revisions`, not against a spy, so the `REVISION_CAP` accounting is real.
-- `updatedAt` is echoed on every write to an existing post, and a stale value produces `409
-  conflict` with no retry.
-- Settings round-trip: each new `authoring*` field survives a store reload. This is the cheap test
-  that catches the three-place registration trap — a field missing from the merge whitelist passes
-  `update()` and fails only after a restart.
+- It returns `202` **to the browser** before the sidecar call resolves, while the detached task keeps
+  running (§The trigger endpoint). Assert both halves: the early 202, and that the write still lands.
+- The rate limit and the concurrency cap both reject: `N+1` concurrent runs is refused rather than
+  queued, and the fixed window refuses a burst. This is the only bound on spend (§Run state).
+- **Media redaction is role-independent.** Seed a media row with `exif.lat`/`lng`, run slice 4 **as an
+  admin**, and assert no coordinate appears in the composed prompt. Running it as a non-admin proves
+  nothing — `serializeMedia` would redact anyway, and the admin case is the one that ships.
+- **Images survive a slice-3 rewrite.** Stub a model response that drops one `![alt](src)` line and
+  assert the run aborts rather than writing.
+- The pre-write guard: step 1 drops unknown keys, step 2's diff aborts on a changed non-writable
+  field. Table-drive a response carrying `slug`, `status`, `images`, `heroImage`, `shared`
+  (§The pre-write guard).
+- `validateDraft` is called on the in-process path. Assert a pair with a blank German title is
+  rejected — it would otherwise sail past, since the store does not check it.
+- Deleting the post mid-run aborts the write rather than recreating it (§Failure modes).
+- Exactly one `upsertDraft` per run. **One new revision for slices 2–3; zero for slice 1**, where no
+  pre-save state existed. Assert against `GET /posts/:tk/revisions`, not a spy, so the `REVISION_CAP`
+  accounting is real.
+- `updatedAt` is echoed on every write to an existing post, and a stale value aborts the run with
+  `PostError.code === 'conflict'` and no retry.
+- Settings round-trip **through `POST /settings`**, not through the store: write each new `authoring*`
+  field over HTTP, reload, and read it back. A store-only round-trip misses the route's own per-key
+  whitelist, which is the fourth of the four registration places (§Settings-driven configuration) and
+  the one whose failure mode is "the admin UI cannot save this field at all".
 
 **Sidecar unit tests** — provider selection resolves to the configured tier and **does not fall
 through** to another tier on an auth failure (§Provider abstraction); the response shape is exactly
@@ -778,21 +945,52 @@ Requirements this places on the implementation:
 
 - **Bound the map.** Cap concurrent runs and evict completed entries on a timer, or a long-lived
   `app` accumulates run records forever. This is the only real leak risk in the design.
-- **The concurrency cap is also the abuse control — say so where it is implemented.** `POST
-  /authoring/runs` is `requireAuth` and costs tokens per call, and decision 6 puts no spend cap in
-  this repo. Nothing else bounds how fast the button can be pressed: `rate-limit.ts` covers auth
-  endpoints only. A small cap (single-author blog: 1–2 concurrent, further requests rejected rather
-  than queued) is what stands between a stuck editor tab and an afternoon of billing.
+- **Cap concurrency AND rate — they are different controls and only one of them is a spend bound.**
+  A concurrency cap bounds simultaneity, so at cap 1 a stuck editor tab that re-fires on every
+  completion still produces unbounded *sequential* runs, billing all afternoon at exactly the rate
+  the cap permits. `POST /authoring/runs` is `requireAuth`, costs tokens per call, has an
+  `authoringTimeoutMs` of 600 000, and decision 6 puts no spend cap in this repo — so this endpoint
+  needs both: a small concurrency cap (1–2, rejecting rather than queueing) **and** a fixed-window
+  rate limit. The repo already has the primitive: `fixedWindowLimiter` (`uploader/src/rate-limit.ts:19`).
+  Non-Goals correctly notes it is auth-only today; extending it to one more route is a few lines and
+  is the difference between a bounded and an unbounded bill.
 - **A poll for an unknown run id returns "failed", not 404.** After a restart the editor must get a
   definite answer it can show the owner, not an ambiguity it has to guess about.
-- **A run is polled by the session that started it.** With one author this is bookkeeping rather than
-  a control, but recording the owning user id on the run record costs a line and keeps the endpoint
-  honest if a second account ever exists. Do not skip it on the grounds that there is only one user.
+- **A run is polled by the session that started it.** Record the owning user id on the run record;
+  a poll from a different user gets the same "failed" answer as an unknown id, so the endpoint never
+  reveals that someone else's run exists. Note the ordering this implies: unknown ⇒ failed, and after
+  a restart *every* id is unknown, so the ownership check only ever fires within one process
+  lifetime. With one author that is bookkeeping — but it costs a line and it is the difference
+  between "not a control" and "not implemented" if a second account ever exists.
+
 - **Say so in `ARCHITECTURE.md`** next to the encode-queue description, so the asymmetry reads as a
   decision rather than an oversight.
 
 If a future change makes a run write *before* it finishes — streaming partial drafts, say — this
 decision is void and run state must move to Postgres. Note that in the code.
+
+## Rollback and containment
+
+`CLAUDE.md`'s Change Risk table puts "anything touching authn/authz or sessions" at **High risk** and
+requires a documented rollback or containment plan. This adds an authenticated route, a container and
+a credential at rest, so it qualifies. The plan is unusually cheap, which is a reason to write it
+down rather than to skip it:
+
+- **Containment is the `profiles:` gate.** `docker compose stop authoring` (or simply not passing
+  `--profile authoring`) removes the model client, the credential at rest and the egress in one
+  action, with zero effect on serving the blog — `app` + `db` are what the default `up` brings up
+  either way. The editor button then fails with "sidecar unreachable", which §Failure modes already
+  requires to name the service and the profile.
+- **Rollback of the app image** is the standard promote-by-tag flow (`IMAGE_TAG` in the server's
+  `.env`). The new route is additive; nothing in the existing schema or `/data` layout changes, so a
+  rollback needs no data migration.
+- **What rollback does NOT undo:** drafts already written. They are ordinary posts and stay in
+  Postgres, which is the intended outcome — but say so, because "roll back the feature" and "undo
+  what it wrote" are different requests. Deleting an unwanted draft is the existing admin action.
+- **Blast radius if the sidecar is compromised:** it holds a model credential and can reach `app:3000`
+  unauthenticated (see §The `authoring` service). It cannot write content. Revoke by rotating the
+  Anthropic key or invalidating the CLI login profile on its volume — independently of every other
+  secret in the stack, which is why the credential lives in `authoring/.env` and not the root `.env`.
 
 ## Open questions (for the owner — do not answer these in implementation)
 
@@ -830,8 +1028,23 @@ decision is void and run state must move to Postgres. Note that in the code.
 The **Claude agent CLI's own surface** — its headless invocation form, how it authenticates (API key
 vs. subscription login), whether it needs a writable `HOME`, and how it is installed into a container
 image — was **not** verified against this repository or against current Anthropic documentation while
-writing this spec, because none of it is present in the codebase. Everything above is written to be
-correct regardless of those answers: the design's load-bearing claims are about *this* repo's HTTP
-API, auth model, and container topology. Pin the CLI's exact invocation, auth mode, and image
-contents in the implementation plan, against current documentation, before writing the
-`authoring/Dockerfile`.
+writing this spec, because none of it is present in the codebase.
+
+**Everything about *this repo* above is verified; the tier-1 claims are not, and decision 5 makes
+tier 1 the primary path.** Do not read the paragraph above as "nothing important depends on this".
+Four claims rest entirely on unverified CLI behaviour, and each should be pinned in the
+implementation plan before the `authoring/Dockerfile` is written:
+
+1. *"Tier 1 needs a writable `HOME` on a persisted volume — this is its defining constraint."* If the
+   CLI can authenticate from an environment variable instead, the volume and its handling requirements
+   disappear.
+2. **§Why not inside the `app` container** is argued around what tier 1 needs (shell, package manager,
+   writable `HOME`). The conclusion — keep the model client out of the DHI runtime — survives on its
+   own merits for tiers 2 and 3, but the *argument as written* is tier-1 shaped.
+3. `authoringModel` defaulting to `'claude-opus-5'` assumes the CLI takes a model id in that form.
+4. Open question 4's *"Tier 1 … has **no per-token cost at all**"* is asserted flatly and is not
+   checkable from this repo.
+
+**One question this spec does not answer and should not:** whether driving a subscription login from
+an unattended container is within the terms of that subscription. That is the owner's call and must
+be made explicitly rather than inherited from this document's silence.
