@@ -18,19 +18,31 @@ window.MediaPicker = (function () {
   }
 
   /**
+   * A human name for a row. Falls back through the URL because a photo carried
+   * in from a post's gallery is a placeholder with no `key` and no `title` until
+   * its library row is adopted.
+   */
+  function labelOf(item) {
+    if (item.title) return item.title;
+    var path = item.key || item.src || '';
+    return String(path).split('/').pop() || String(path);
+  }
+
+  /**
    * open({ onPick, onUnauthed, multiple, preselect })
    *
    * Resolves through onPick with the chosen media item — the full row, so the
    * caller gets src/width/height/alt without a second request. With
-   * `multiple: true` it resolves with an ORDERED ARRAY instead, and `preselect`
-   * (an array of photo URLs) seeds the selection so "Edit gallery" reopens with
-   * the current photos already chosen.
+   * `multiple: true` it resolves with an ORDERED ARRAY instead.
+   *
+   * `preselect` is an array of ITEM OBJECTS the caller already has, not URLs —
+   * `{src, width, height}` reconstructed from the caller's own data is enough.
+   * The whole selection therefore exists before the first library request, which
+   * is what stops a photo the library never pages into view from being dropped
+   * on confirm. See the @ai-warning in picker-selection.js.
    *
    * With `multiple: true`, `onPick` may also receive an EMPTY array — the author
    * cleared the selection, which for a gallery means "remove this block".
-   *
-   * The ordering model (preselect adoption across pages, what an author's own
-   * reordering protects) lives in picker-selection.js, where it is tested.
    */
   function open(opts) {
     var o = opts || {};
@@ -111,16 +123,24 @@ window.MediaPicker = (function () {
       }
       picked.items().forEach(function (item, i) {
         var li = el('li', 'picker-strip__item');
-        var label = item.title || item.key.split('/').pop();
+        var label = labelOf(item);
         if (item.thumbSrc) {
           var img = document.createElement('img');
           img.src = item.thumbSrc;
           img.alt = '';
           img.loading = 'lazy';
           li.appendChild(img);
+        } else {
+          li.appendChild(el('span', 'thumb-placeholder'));
         }
         li.appendChild(el('span', 'picker-strip__pos', String(i + 1)));
         li.appendChild(el('span', 'picker-strip__name', label));
+        // A photo carried in from the post whose library row has not been seen
+        // yet. It is fully selected and will be written back — it just has no
+        // thumbnail. Say so rather than letting it look like a broken entry.
+        if (!picked.isResolved(i)) {
+          li.appendChild(el('span', 'picker-strip__pending', 'in gallery'));
+        }
 
         var up = el('button', 'btn-secondary', '↑');
         up.type = 'button';
@@ -181,7 +201,7 @@ window.MediaPicker = (function () {
       // Multi-select may commit an empty selection: that removes the gallery.
       choose.disabled = !multiple && picked.size() === 0;
       state.items.forEach(function (item, index) {
-        var at = picked.indexOf(item.key);
+        var at = picked.indexOf(item.src);
         var cell = el('div', 'media-cell' + (at >= 0 ? ' is-selected' : ''));
         cell.setAttribute('role', 'option');
         cell.setAttribute('aria-selected', at >= 0 ? 'true' : 'false');
@@ -203,7 +223,7 @@ window.MediaPicker = (function () {
         cell.appendChild(thumb);
         var badge = api.statusLabel(item);
         if (badge) cell.appendChild(el('span', 'media-cell__badge', badge));
-        cell.appendChild(el('span', 'media-cell__title', item.title || item.key.split('/').pop()));
+        cell.appendChild(el('span', 'media-cell__title', labelOf(item)));
         if (item.usedIn && item.usedIn.length) {
           // "Did I already use this shot?" is a picker-time question.
           cell.appendChild(el('span', 'media-cell__used', 'used in: '

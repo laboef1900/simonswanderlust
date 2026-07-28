@@ -224,6 +224,22 @@ most heroes already exist, and re-uploading one would just mint a second copy un
 
 ### Galleries
 
+**The easy way: "Insert / edit gallery".** Each locale tab has the button next to "Insert body
+image". Put the cursor where the gallery should go — or anywhere inside an existing one — and it
+opens the media library in multi-select mode. Click photos to add them, use ↑ / ↓ to set the order
+(that *is* the order they appear in), and × to drop one. Confirming writes the fence below for you;
+confirming with nothing selected removes the gallery. The photos already in the gallery are
+pre-selected the moment the dialog opens, whichever library page they happen to live on, and a photo
+that is no longer in the library is kept too — marked `in gallery` and with no thumbnail — so
+editing a gallery never quietly loses a photo. Alt text and captions you have already written for
+*this post* win over the media library's own; only newly added photos take the library's.
+
+Two cases it will refuse rather than guess: a gallery whose closing ` ``` ` is missing (its extent
+would run to the end of the post), and a cursor inside a code block that is likewise unclosed. It
+tells you which; close the fence and try again.
+
+Everything below is what that button writes, and is still the format to hand-edit.
+
 Several photos in one grid go in a fenced block with the language `gallery`, one image URL per
 line. Order is line order; blank lines and `#`-prefixed lines are ignored.
 

@@ -449,6 +449,7 @@
         // Without this the library's alt/caption would overwrite the author's on
         // every edit — see the @ai-warning on GalleryFence.serialize.
         const images = locale === 'de' ? deImages : enImages;
+        const status = $(locale + 'BodyImgStatus');
         const postMeta = {};
         current.lines.forEach((line) => {
           const stored = images[line.src] || {};
@@ -460,9 +461,33 @@
           if (typeof caption === 'string') postMeta[line.src].caption = caption;
         });
 
+        // An unterminated fence's extent runs to end-of-post, so there is no
+        // safe range to replace. Say so instead of eating the rest of the body.
+        if (existing && existing.unterminated) {
+          status.textContent = 'This gallery block has no closing ``` — close it, then try again.';
+          return;
+        }
+
+        // Seed the picker with the gallery's CURRENT photos as full items, built
+        // from the fence plus the post's images map. The library pages 40 at a
+        // time by upload date, so an older post's photos are typically on no page
+        // the author visits — seeding from the post is what keeps them in the
+        // selection (and therefore in the fence) regardless. `fromPost` also tells
+        // serialize to preserve a photo whose dimensions we cannot resolve rather
+        // than dropping it. See the @ai-warning in picker-selection.js.
+        const preselect = current.lines.map((line) => {
+          const stored = images[line.src] || {};
+          return {
+            src: line.src,
+            width: line.width ?? stored.width,
+            height: line.height ?? stored.height,
+            fromPost: true,
+          };
+        });
+
         MediaPicker.open({
           multiple: true,
-          preselect: current.lines.map((l) => l.src),
+          preselect,
           confirmLabel: existing ? 'Update gallery' : 'Insert gallery',
           emptyHint: existing
             ? 'Nothing selected — confirming now removes this gallery.'
@@ -476,14 +501,22 @@
               ? GalleryFence.serialize(items, locale, current.directives, postMeta)
               : '';
             const out = GalleryFence.replaceFenceAt(body, cursor, fence);
+            if (out.blocked === 'unterminated') {
+              status.textContent = 'The block around the cursor has no closing ``` — close it, then try again.';
+              return;
+            }
             if (out.start === out.end && out.text === '') return;
             // A range edit, not mde.value(): replaceRange keeps CodeMirror's undo
             // history (and fires a change event, which marks the guard dirty).
             cm.replaceRange(out.text, cm.posFromIndex(out.start), cm.posFromIndex(out.end));
             guard.markDirty();
-            $(locale + 'BodyImgStatus').textContent = !items.length
+            // Count the lines actually written, not the photos picked: serialize
+            // drops a newly picked photo whose dimensions are unusable.
+            const written = GalleryFence.parse(fence).lines.length;
+            status.textContent = !items.length
               ? 'Gallery removed'
-              : (out.replaced ? 'Gallery updated: ' : 'Gallery inserted: ') + items.length + ' photo(s)';
+              : (out.replaced ? 'Gallery updated: ' : 'Gallery inserted: ') + written + ' photo(s)'
+                + (written < items.length ? ` (${items.length - written} skipped — no usable dimensions)` : '');
           },
         });
       }

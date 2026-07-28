@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { escapeMeta, unescapeMeta, normalizeGalleryFences } from '../src/body-content.js';
+import { escapeMeta, unescapeMeta, normalizeGalleryFences, galleryFencesToMdx } from '../src/body-content.js';
 
 // gallery-fence.js is a plain browser IIFE (window.GalleryFence) holding the
 // gallery picker's pure serialize/parse logic. Run it in a vm sandbox — same
@@ -479,11 +479,6 @@ describe('fenceAt', () => {
     expect(G.fenceAt(nested, nested.indexOf('https://i/a'))).toBeNull();
   });
 
-  // @ai-warning These four pin `fenceAt` to the SAME definition of "a gallery"
-  // as rewriteFences in src/body-content.ts. Where they disagree the damage is
-  // silent and asymmetric: a block only the picker claims gets replaced without
-  // ever being normalized, and one only the server claims gets a second fence
-  // nested inside it.
   describe('agrees with the server about what a gallery is', () => {
     it('does not claim a fence whose info string merely starts with "gallery"', () => {
       const other = '```gallery-notes\nhttps://i/a\n```\n';

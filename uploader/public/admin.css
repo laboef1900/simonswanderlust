@@ -811,7 +811,12 @@ a:hover { color: var(--red-light); }
 .picker-strip__item img { width: 2.5rem; height: 2.5rem; object-fit: cover; border-radius: 3px; flex: none; }
 .picker-strip__pos { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.75rem; color: var(--muted); min-width: 1.25rem; text-align: right; flex: none; }
 .picker-strip__name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem; }
-.picker-strip__item button { flex: none; padding: 0.15rem 0.45rem; font-size: 0.85rem; line-height: 1.2; }
+/* margin-top is reset explicitly: .btn-secondary sets 0.6rem and .btn-remove
+   sets 0, so without this the ↑/↓ buttons sit lower than the × beside them. */
+.picker-strip__item button { flex: none; margin-top: 0; padding: 0.25rem 0.45rem; font-size: 0.85rem; line-height: 1.2; min-height: 1.6rem; }
+.picker-strip__item .thumb-placeholder { width: 2.5rem; height: 2.5rem; border-radius: 3px; flex: none; background: rgba(20, 42, 66, 0.06); }
+/* A photo carried in from the post whose library row has not been paged in yet. */
+.picker-strip__pending { flex: none; font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.62rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 
 /* Position badge on a selected grid cell, so grid and strip agree at a glance.
    `.media-cell` carries the `position: relative` this anchors to. */

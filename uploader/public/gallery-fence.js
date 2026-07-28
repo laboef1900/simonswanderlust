@@ -97,11 +97,20 @@ window.GalleryFence = (function () {
 
     (items || []).forEach(function (item) {
       if (!item || typeof item.src !== 'string' || item.src.trim() === '') return;
-      // A 0-dimension row is what an unreadable probe leaves behind. The
-      // renderer skips such a photo, so it must never reach the fence.
-      if (!usableDim(item.width) || !usableDim(item.height)) return;
-
       var src = item.src.trim();
+
+      // A 0-dimension row is what an unreadable probe leaves behind, and the
+      // renderer skips such a photo — so a NEWLY PICKED one must never reach the
+      // fence. A photo already in the post is different: dropping it would
+      // delete an author's photo to avoid writing a line that was already there.
+      // Emit the bare URL, which is exactly the stored form, and leave whatever
+      // the `images` map holds for it untouched (normalizeGalleryFences returns
+      // a single-field line unchanged).
+      if (!usableDim(item.width) || !usableDim(item.height)) {
+        if (item.fromPost) lines.push(src);
+        return;
+      }
+
       var prior = metaFor(postMeta, src);
       var parts = [src, item.width + 'x' + item.height];
       // An empty string in `postMeta` is a deliberate clear and is respected;
@@ -167,24 +176,38 @@ window.GalleryFence = (function () {
    * reopen the picker with the current photos preselected and the current
    * directives preserved.
    *
-   * @ai-warning What counts as a gallery MUST match `rewriteFences` in
-   * src/body-content.ts exactly, or the two disagree about which block is which:
-   * a fence the picker thinks it owns but the server does not gets replaced
-   * without ever being normalized, and one the server treats as a gallery but
-   * the picker cannot see gets a second fence nested inside it. Hence the same
-   * three conditions as the server — column 0, backticks, info string exactly
-   * `gallery` — rather than a `startsWith('```gallery')` shortcut, which would
-   * claim ```gallery-notes and miss a 4-backtick ````gallery. Recognising an
-   * ENCLOSING fence stays deliberately liberal (indent and tildes included),
-   * also matching the server: being generous about what protects content is the
-   * safe direction to be wrong in. A closing fence may be LONGER than its
-   * opener, per CommonMark.
+   * @ai-warning What counts as a gallery, and where a fence ends, MUST match
+   * `rewriteFences` in src/body-content.ts exactly, or the two disagree about
+   * which block is which: a fence the picker thinks it owns but the server does
+   * not gets replaced without ever being normalized, and one the server treats
+   * as a gallery but the picker cannot see gets a second fence nested inside it.
+   * `test/gallery-fence.test.ts` runs both scanners over one corpus and compares
+   * — add cases there rather than trusting this comment. Three rules earn their
+   * keep, all of them found by that comparison disagreeing:
+   *
+   *  1. The gallery test is the server's three conditions — column 0, backticks,
+   *     info string exactly `gallery` — not `startsWith('```gallery')`, which
+   *     claimed ```gallery-notes and missed a 4-backtick ````gallery.
+   *  2. A closer's tail is `[ \t]*`, NOT `.trim() === ''`. `String.trim` also
+   *     strips NBSP, U+2028 and friends, so a fence line ending in a pasted NBSP
+   *     closed the block here and not on the server.
+   *  3. An unterminated fence runs to EOF, as CommonMark and the server both
+   *     have it. Returning null instead made the picker nest a second gallery
+   *     inside the first.
+   *
+   * Recognising an ENCLOSING fence stays deliberately liberal (indent and tildes
+   * included), also matching the server: being generous about what protects
+   * content is the safe direction to be wrong in.
    */
-  function fenceAt(body, cursor) {
-    var text = String(body == null ? '' : body);
+  /** Mirrors the server's closing-fence regex tail — space and tab only. */
+  var CLOSER_TAIL_RE = /^[ \t]*$/;
+
+  /** Every top-level fenced block in `text`, in order. */
+  function scanFences(text) {
     var lines = text.split('\n');
+    var blocks = [];
     var pos = 0;
-    var open = null; // { start, marker, len, isGallery }
+    var open = null;
 
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
@@ -212,14 +235,36 @@ window.GalleryFence = (function () {
       }
 
       // A closer is the same character, at least as long, and nothing else.
-      if (marker !== open.marker || run.length < open.len || info.trim() !== '') continue;
-
-      if (open.isGallery && cursor >= open.start && cursor <= lineEnd) {
-        return { text: text.slice(open.start, lineEnd), start: open.start, end: lineEnd };
-      }
+      if (marker !== open.marker || run.length < open.len || !CLOSER_TAIL_RE.test(info)) continue;
+      blocks.push({ start: open.start, end: lineEnd, isGallery: open.isGallery, unterminated: false });
       open = null;
     }
+
+    if (open !== null) {
+      blocks.push({ start: open.start, end: text.length, isGallery: open.isGallery, unterminated: true });
+    }
+    return blocks;
+  }
+
+  /** The fenced block the cursor sits in, gallery or not — null outside every fence. */
+  function blockAt(text, cursor) {
+    var blocks = scanFences(text);
+    for (var i = 0; i < blocks.length; i++) {
+      if (cursor >= blocks[i].start && cursor <= blocks[i].end) return blocks[i];
+    }
     return null;
+  }
+
+  function fenceAt(body, cursor) {
+    var text = String(body == null ? '' : body);
+    var block = blockAt(text, cursor);
+    if (!block || !block.isGallery) return null;
+    return {
+      text: text.slice(block.start, block.end),
+      start: block.start,
+      end: block.end,
+      unterminated: block.unterminated,
+    };
   }
 
   /** Newlines immediately before `at`, capped at the 2 a blank line needs. */
@@ -230,7 +275,7 @@ window.GalleryFence = (function () {
   }
 
   /**
-   * replaceFenceAt(body, cursor, fence) → { text, start, end, replaced }
+   * replaceFenceAt(body, cursor, fence) → { text, start, end, replaced, blocked? }
    *
    * A RANGE EDIT, not a new document: `text` replaces `[start, end)`. The caller
    * applies it with `cm.replaceRange`, which keeps CodeMirror's undo history —
@@ -240,15 +285,27 @@ window.GalleryFence = (function () {
    * the cursor when there is none ("Insert gallery"). An empty `fence` removes
    * the block under the cursor, and is a no-op when there is none.
    *
-   * @ai-note Insertion pads with blank lines as needed. A fence must open at
-   * column 0 to be a fence at all, so splicing raw at a mid-paragraph cursor
-   * would produce literal text that the renderer and `normalizeGalleryFences`
-   * both ignore — a gallery that silently is not one.
+   * When `blocked` is set the caller must make NO edit and show the reason:
+   *   'unterminated' — the gallery under the cursor has no closing fence, so its
+   *                    extent runs to EOF and replacing it would eat the rest of
+   *                    the post. Ask the author to close it instead of guessing.
+   *
+   * @ai-note Insertion pads with blank lines as needed, and relocates out of an
+   * enclosing fence. A fence must open at column 0 to be a fence at all, so
+   * splicing raw at a mid-paragraph cursor produces literal text the renderer and
+   * `normalizeGalleryFences` both ignore — a gallery that silently is not one.
+   * Worse, splicing inside a ```js block makes the new gallery's CLOSER close the
+   * js fence, turning the code into prose and leaving the js closer to open an
+   * unterminated block over the rest of the body.
    */
   function replaceFenceAt(body, cursor, fence) {
     var text = String(body == null ? '' : body);
     var block = String(fence == null ? '' : fence);
     var found = fenceAt(text, cursor);
+
+    if (found && found.unterminated) {
+      return { text: '', start: found.start, end: found.start, replaced: false, blocked: 'unterminated' };
+    }
 
     if (found && block === '') {
       // Removal: swallow the blank line the fence left behind, so repeated
@@ -266,6 +323,18 @@ window.GalleryFence = (function () {
     }
 
     var at = Math.max(0, Math.min(text.length, Number(cursor) || 0));
+
+    // The cursor is inside some OTHER fenced block (a ```js example, say).
+    // Inserting there would make this gallery's closer close that block. Land
+    // after it instead — the only position that is both safe and predictable.
+    var enclosing = blockAt(text, at);
+    if (enclosing) {
+      if (enclosing.unterminated) {
+        return { text: '', start: at, end: at, replaced: false, blocked: 'unterminated' };
+      }
+      at = enclosing.end;
+    }
+
     var prefix = at === 0 ? '' : new Array(2 - runBefore(text, at) + 1).join('\n');
     var trailing = 0;
     while (trailing < 2 && text.charAt(at + trailing) === '\n') trailing++;
