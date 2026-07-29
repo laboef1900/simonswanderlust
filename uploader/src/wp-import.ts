@@ -2,6 +2,7 @@ import { parseWxr, type ParsedPost } from './wxr-parse.js';
 import { htmlToMarkdown } from './wp-content.js';
 import { rehostImage, type RehostResult } from './wp-images.js';
 import { isSafeSlug, type ImageDims, type PostLocale, type PostPair, type PostStore } from './posts.js';
+import { rewriteFences } from './body-content.js';
 
 export interface ImportSummary { imported: number; updated: number; skipped: number; warnings: string[] }
 export interface ImportDeps {
@@ -43,6 +44,34 @@ async function buildLocale(
       images[r.src] = { width: r.width, height: r.height };
     } catch (e) { warnings.push(`image ${url} for ${p.slug}: ${(e as Error).message}`); }
   }
+
+  // Gallery fences (from Elementor slideshows). Two passes over the SAME
+  // scanner `normalizeGalleryFences` uses, because re-hosting is async and
+  // rewriteFences is not: pass 1 collects the URLs, pass 2 substitutes.
+  // @ai-warning: reuse `rewriteFences` rather than matching fences here. #75
+  // already had to pin a second scanner (public/gallery-fence.js) against it
+  // with gallery-fence-parity.test.ts; a third copy would silently disagree
+  // about where a fence ends and drop or corrupt an author's photos.
+  const galleryUrls: string[] = [];
+  rewriteFences(body, (line) => {
+    const url = (line.split('|')[0] ?? '').trim();
+    if (/^https?:\/\//.test(url) && !galleryUrls.includes(url)) galleryUrls.push(url);
+    return line;
+  });
+  const rehosted = new Map<string, RehostResult>();
+  for (const url of galleryUrls) {
+    try {
+      rehosted.set(url, await rehost(url, `trips/${p.slug}/${nameFromUrl(url)}`, ''));
+    } catch (e) { warnings.push(`gallery image ${url} for ${p.slug}: ${(e as Error).message}`); }
+  }
+  body = rewriteFences(body, (line) => {
+    const fields = line.split('|').map((f) => f.trim());
+    const url = fields[0] ?? '';
+    const r = rehosted.get(url);
+    if (!r) return line; // fetch failed — keep the original so nothing is lost
+    images[r.src] = { width: r.width, height: r.height };
+    return [r.src, `${r.width}x${r.height}`, ...fields.slice(1)].join(' | ');
+  });
   return { locale: p.locale, slug: p.slug, title: p.title, excerpt: p.excerpt, heroImage, bodyMarkdown: body, images };
 }
 
