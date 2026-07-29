@@ -86,11 +86,40 @@ const STYLE = `
      these rules a gallery renders as a stacked column of full-width images.
      preview.test.ts asserts every .jgal selector in global.css appears here —
      change the two together. */
-  .jgal { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.75rem; margin: 2rem 0; }
-  .jgal__item { margin: 0; }
+  .jgal { margin-block: 2rem; container-type: inline-size; }
+  .jgal__item { margin: 0; min-width: 0; }
   .jgal__item a { display: block; }
   .jgal__item img { display: block; width: 100%; height: auto; border-radius: 0.5rem; }
   .jgal__cap { margin-top: 0.4rem; font-size: 0.8rem; line-height: 1.4; color: #4a5563; }
+  .jgal__item a:focus-visible, .jgal__track:focus-visible { outline: 3px solid #d23b30; outline-offset: 3px; }
+  .jgal--breakout, .jgal--slider { --jgal-w: min(100% + 24rem, 100vw - 3.5rem, 1112px); width: var(--jgal-w); margin-inline: calc((100% - var(--jgal-w)) / 2); }
+  .jgal--breakout, .jgal--column { display: flex; flex-direction: column; gap: 0.75rem; }
+  .jgal__row { display: flex; flex-wrap: nowrap; gap: 0.75rem; max-width: var(--jgal-maxw, none); }
+  .jgal__row > .jgal__item { flex: calc(var(--r) * 100) 1 0; }
+  .jgal--slider { position: relative; }
+  .jgal__track { display: flex; flex-wrap: nowrap; gap: 0.75rem; overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth; scrollbar-width: thin; padding-bottom: 0.5rem; }
+  .jgal__track > .jgal__item { flex: 0 0 calc((100% - 1.5rem) / 3); scroll-snap-align: start; }
+  .jgal__track > .jgal__item img { aspect-ratio: 3 / 2; object-fit: cover; }
+  /* The nav buttons stay hidden here for real: the preview page loads no JS,
+     so nothing would ever reveal them. The rules are mirrored anyway, because
+     the parity test compares selector sets, not what the preview uses. */
+  .jgal__nav { position: absolute; top: calc(50% - 1.75rem); z-index: 1; display: flex; align-items: center; justify-content: center; width: 2.75rem; height: 2.75rem; padding: 0; border: 0; border-radius: 999px; background: rgb(20 42 66 / 0.82); color: #fff; font-size: 1.5rem; line-height: 1; cursor: pointer; }
+  .jgal__nav[hidden] { display: none; }
+  .jgal__nav--prev { left: 0.5rem; }
+  .jgal__nav--next { right: 0.5rem; }
+  .jgal__nav:disabled { opacity: 0.3; cursor: default; }
+  .jgal__nav:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+  @container (max-width: 900px) {
+    .jgal__track > .jgal__item { flex-basis: calc((100% - 0.75rem) / 2); }
+  }
+  @container (max-width: 600px) {
+    .jgal__row { flex-wrap: wrap; }
+    .jgal__row > .jgal__item { flex: 1 0 100%; }
+    .jgal__track > .jgal__item { flex-basis: 100%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .jgal__track { scroll-behavior: auto; }
+  }
 `;
 
 /**

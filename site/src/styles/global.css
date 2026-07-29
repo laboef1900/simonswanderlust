@@ -33,8 +33,77 @@
  * and pictureNode's literal `class: 'my-8'` works on the live site today.)
  * @ai-context docs/superpowers/specs/2026-07-26-media-library-and-galleries-design.md
  */
-.jgal { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.75rem; margin: 2rem 0; }
-.jgal__item { margin: 0; }
+/* Shared by all three modes. `container-type` drives the stacking query below
+ * — it is the first container query in site/src, and it is what lets the
+ * gallery respond to its OWN width rather than the viewport's (a break-out
+ * gallery is wider than its parent, so a media query would measure the wrong
+ * box). The lightbox's <dialog> lives in the top layer, which escapes this
+ * containment — a position:fixed div would not have. */
+.jgal { margin-block: 2rem; container-type: inline-size; }
+.jgal__item { margin: 0; min-width: 0; }
 .jgal__item a { display: block; }
 .jgal__item img { display: block; width: 100%; height: auto; border-radius: 0.5rem; }
 .jgal__cap { margin-top: 0.4rem; font-size: 0.8rem; line-height: 1.4; color: #4a5563; }
+.jgal__item a:focus-visible, .jgal__track:focus-visible { outline: 3px solid #d23b30; outline-offset: 3px; }
+
+/* Full-bleed break-out. 24rem is the measured overhang either side of the
+ * 728px story column (728 + 24rem = 1112 exactly); `100vw - 3.5rem` keeps it
+ * off the edge and clear of the classic scrollbar, which 100vw includes.
+ * NOT `margin-left: 50%; transform: translateX(-50%)` — a transform makes the
+ * element a containing block for fixed-position descendants, which would trap
+ * the lightbox dialog inside the gallery. */
+.jgal--breakout, .jgal--slider { --jgal-w: min(100% + 24rem, 100vw - 3.5rem, 1112px); width: var(--jgal-w); margin-inline: calc((100% - var(--jgal-w)) / 2); }
+
+/* ── justified rows (breakout + column) ──────────────────────────────────
+ * @ai-note Row MEMBERSHIP is fixed at build time by gallery-layout.ts, for a
+ * 1112px (breakout) or 728px (column) container. Only the justification WITHIN
+ * a row is fluid: `--r` lets the browser redo that arithmetic at any width, so
+ * between the stacking breakpoint and the design width the same rows simply get
+ * shorter. This is an accepted trade-off — do not read the ratios as making the
+ * layout fully responsive, and do not "fix" it by re-partitioning in CSS. */
+.jgal--breakout, .jgal--column { display: flex; flex-direction: column; gap: 0.75rem; }
+/* --jgal-maxw caps the LAST row so a short remainder is not stretched to full
+ * width (a lone portrait would render 1112 wide and ~1668 tall). It is a
+ * maximum, so below the design width it simply stops binding. */
+.jgal__row { display: flex; flex-wrap: nowrap; gap: 0.75rem; max-width: var(--jgal-maxw, none); }
+/* The `* 100` is load-bearing: flex-grow values summing to less than 1
+ * distribute only that fraction of the free space, so a lone portrait
+ * (--r: 0.667) rendered 808px instead of 1112px with a bare `var(--r)`.
+ * `flex-basis: 0` + `nowrap` is likewise deliberate — the popular wrap-based
+ * "pure CSS justified gallery" measured rows of 507px and 741px against a
+ * 300px target. */
+.jgal__row > .jgal__item { flex: calc(var(--r) * 100) 1 0; }
+
+/* ── slider ──────────────────────────────────────────────────────────────
+ * @ai-note This mode CROPS (uniform tiles, object-fit: cover) — the opposite
+ * of what the justified modes do. Deliberate: it buys a conventional carousel
+ * feel, and is why the slider is one mode of three rather than the only one. */
+.jgal--slider { position: relative; }
+.jgal__track { display: flex; flex-wrap: nowrap; gap: 0.75rem; overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth; scrollbar-width: thin; padding-bottom: 0.5rem; }
+.jgal__track > .jgal__item { flex: 0 0 calc((100% - 1.5rem) / 3); scroll-snap-align: start; }
+.jgal__track > .jgal__item img { aspect-ratio: 3 / 2; object-fit: cover; }
+/* Rendered `hidden` at build time and revealed by the island: with JS off the
+ * track still scrolls by keyboard and touch, and an inert button would be a
+ * lie. Absolutely positioned in BOTH states so revealing them cannot move the
+ * layout — the island must never cause a shift. */
+.jgal__nav { position: absolute; top: calc(50% - 1.75rem); z-index: 1; display: flex; align-items: center; justify-content: center; width: 2.75rem; height: 2.75rem; padding: 0; border: 0; border-radius: 999px; background: rgb(20 42 66 / 0.82); color: #fff; font-size: 1.5rem; line-height: 1; cursor: pointer; }
+.jgal__nav[hidden] { display: none; }
+.jgal__nav--prev { left: 0.5rem; }
+.jgal__nav--next { right: 0.5rem; }
+.jgal__nav:disabled { opacity: 0.3; cursor: default; }
+.jgal__nav:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+
+@container (max-width: 900px) {
+  .jgal__track > .jgal__item { flex-basis: calc((100% - 0.75rem) / 2); }
+}
+/* Below this the rows stack — one photo per line, in every mode. MUST match
+ * STACK_WIDTH in body-images.ts, which derives the `sizes` hint from it. */
+@container (max-width: 600px) {
+  .jgal__row { flex-wrap: wrap; }
+  .jgal__row > .jgal__item { flex: 1 0 100%; }
+  .jgal__track > .jgal__item { flex-basis: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jgal__track { scroll-behavior: auto; }
+}
