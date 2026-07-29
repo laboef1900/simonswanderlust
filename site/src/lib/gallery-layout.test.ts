@@ -23,6 +23,10 @@ const rowHeight = (ratios: number[], width: number) =>
 const sizes = (ratios: number[], width = BREAKOUT_WIDTH) =>
   partitionRows(ratios, width).map((row) => row.ratios.length);
 
+/** The cap expressed back in CSS px, for readable assertions. */
+const capPx = (row: { maxWidthFraction: number | null }, width = BREAKOUT_WIDTH) =>
+  row.maxWidthFraction === null ? null : row.maxWidthFraction * width;
+
 const repeat = (n: number, r: number) => Array.from({ length: n }, () => r);
 
 describe('readLayoutMode', () => {
@@ -164,37 +168,63 @@ describe('partitionRows — row heights', () => {
 });
 
 describe('partitionRows — the last row is capped, not stretched', () => {
-  it('caps a lone portrait instead of blowing it up to the full width', () => {
+  it('caps a lone photo at the fallback height when there is no row above it', () => {
     const [row] = partitionRows([PORTRAIT], BREAKOUT_WIDTH);
     // Justified it would be 1112 wide and ~1668 tall. Capped it is ~300×450.
-    expect(row?.maxWidth).toBeCloseTo(MAX_LAST_ROW_HEIGHT * PORTRAIT, 5);
+    expect(capPx(row!)).toBeCloseTo(MAX_LAST_ROW_HEIGHT * PORTRAIT, 5);
   });
 
-  it('caps a lone landscape remainder row', () => {
+  it('matches the row above instead, so a remainder reads as a partial row', () => {
     const rows = partitionRows(repeat(7, LANDSCAPE), BREAKOUT_WIDTH);
-    const last = rows[rows.length - 1];
-    expect(last?.ratios).toEqual([LANDSCAPE]);
-    expect(last?.maxWidth).toBeCloseTo(MAX_LAST_ROW_HEIGHT * LANDSCAPE, 5);
+    const last = rows[rows.length - 1]!;
+    const above = rows[rows.length - 2]!;
+    expect(last.ratios).toEqual([LANDSCAPE]);
+    // Its capped height equals the height of the row above it — not the 450
+    // fallback, which would have made the final photo the biggest on the page.
+    const cappedHeight = capPx(last)! / LANDSCAPE;
+    expect(cappedHeight).toBeCloseTo(rowHeight(above.ratios, BREAKOUT_WIDTH), 5);
+    expect(cappedHeight).toBeLessThan(MAX_LAST_ROW_HEIGHT);
+  });
+
+  it('keeps the remainder matching the row above at OTHER rendered widths too', () => {
+    // This is what the fraction buys. Row membership is fixed at the design
+    // width, but the gallery renders at every width down to the stacking
+    // breakpoint — and a pixel cap computed at 1112 left a 242px-tall
+    // remainder beside 167px rows on a tablet.
+    const rows = partitionRows(repeat(7, LANDSCAPE), BREAKOUT_WIDTH);
+    const last = rows[rows.length - 1]!;
+    const above = rows[rows.length - 2]!;
+    expect(last.maxWidthFraction).not.toBeNull();
+    for (const rendered of [BREAKOUT_WIDTH, 950, 780, 640]) {
+      const width = last.maxWidthFraction! * rendered;
+      const sum = last.ratios.reduce((a, r) => a + r, 0);
+      const lastHeight = (width - (last.ratios.length - 1) * ROW_GAP) / sum;
+      const aboveHeight = rowHeight(above.ratios, rendered);
+      const drift = Math.abs(lastHeight - aboveHeight) / aboveHeight;
+      expect(drift, `at ${rendered}px`).toBeLessThan(0.05);
+    }
   });
 
   it('leaves the cap off when it would not bind — the row fills the width', () => {
-    // Three landscapes justify to ~242px tall, well under the cap, so a
+    // Three landscapes justify to ~242px tall, well under the fallback, so a
     // max-width would only get in the way.
     const [row] = partitionRows(repeat(3, LANDSCAPE), BREAKOUT_WIDTH);
-    expect(row?.maxWidth).toBeNull();
+    expect(row?.maxWidthFraction).toBeNull();
   });
 
   it('never caps a row that is not the last one', () => {
     const rows = partitionRows(repeat(7, LANDSCAPE), BREAKOUT_WIDTH);
-    for (const row of rows.slice(0, -1)) expect(row.maxWidth).toBeNull();
+    for (const row of rows.slice(0, -1)) expect(row.maxWidthFraction).toBeNull();
   });
 
   it('accounts for the gaps when capping a multi-photo last row', () => {
     const rows = partitionRows([...repeat(3, LANDSCAPE), PORTRAIT, PORTRAIT], BREAKOUT_WIDTH);
     const last = rows[rows.length - 1]!;
+    const above = rows[rows.length - 2]!;
     expect(last.ratios.length).toBeGreaterThan(1);
     const sum = last.ratios.reduce((a, r) => a + r, 0);
-    expect(last.maxWidth).toBeCloseTo(MAX_LAST_ROW_HEIGHT * sum + (last.ratios.length - 1) * ROW_GAP, 5);
+    const capHeight = rowHeight(above.ratios, BREAKOUT_WIDTH);
+    expect(capPx(last)).toBeCloseTo(capHeight * sum + (last.ratios.length - 1) * ROW_GAP, 5);
   });
 });
 

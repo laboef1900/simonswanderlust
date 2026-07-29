@@ -36,14 +36,19 @@ export const ROW_GAP = 12;
 export const TARGET_ROW_HEIGHT = 300;
 
 /**
- * Ceiling for the LAST row's height, in CSS px.
+ * Ceiling for the last row's height when there is NO row above it to match —
+ * a gallery that fits on one line.
  *
- * A justified gallery's final row is short of a full row, so stretching it to
- * the container width would blow it up — a lone portrait would render 1112 wide
- * and ~1668 tall, taller than most viewports. Capping instead lets a short last
- * row fill the width when it comfortably can (two landscapes justify to ~367)
- * and stops it when it cannot. 1.5 × the target is the widest that still reads
- * as part of the same gallery.
+ * A short final row must not be stretched to the container width: a lone
+ * portrait would render 1112 wide and ~1668 tall, taller than most viewports.
+ * But a two-landscape gallery justifies to a comfortable ~367 and should fill
+ * the width, so the bound is 1.5 × the target rather than the target itself.
+ *
+ * @ai-note When the gallery HAS more than one row, this constant does not
+ * apply — the last row is capped at the height of the row above it instead
+ * (see partitionRows). That is what makes a remainder read as a partial row
+ * rather than an oversized finale, and it is why the cap has to be recomputed
+ * per gallery rather than being one number.
  */
 export const MAX_LAST_ROW_HEIGHT = TARGET_ROW_HEIGHT * 1.5;
 
@@ -52,15 +57,15 @@ export interface GalleryRow {
   /** `width / height` per photo, in document order. */
   ratios: number[];
   /**
-   * Upper bound on the row's rendered width in CSS px, or `null` when the row
-   * should always fill its container.
+   * Upper bound on the row's width as a FRACTION of the container (0–1), or
+   * `null` when the row should always fill it.
    *
-   * Only ever set on the last row. It is a MAXIMUM, not a fixed size, which is
-   * what keeps the layout honest at other viewport widths: below the design
-   * width the row is narrower than the cap, the cap stops binding, and the
-   * ratios re-justify as usual.
+   * Only ever set on the last row. A fraction rather than a pixel value on
+   * purpose: the row above it also scales with the container, so a px cap
+   * computed at the design width would drift out of step everywhere else — a
+   * remainder capped at 363px sat 242px tall next to 167px rows on a tablet.
    */
-  maxWidth: number | null;
+  maxWidthFraction: number | null;
 }
 
 const MODES = new Set<string>(GALLERY_MODES);
@@ -148,11 +153,16 @@ export function partitionRows(ratios: readonly number[], containerWidth: number)
   rows.push(row);
 
   return rows.map((ratiosInRow, i) => {
-    if (i !== rows.length - 1) return { ratios: ratiosInRow, maxWidth: null };
+    if (i !== rows.length - 1) return { ratios: ratiosInRow, maxWidthFraction: null };
+    // Match the row above, so a remainder reads as a partial row instead of an
+    // oversized finale — at every viewport width, since that row's height and
+    // this cap scale together. With no row above, fall back to the constant.
+    const previous = rows[i - 1];
+    const capHeight = previous ? heightAt(previous, width) : MAX_LAST_ROW_HEIGHT;
     const sum = ratiosInRow.reduce((a, x) => a + x, 0);
-    const capped = MAX_LAST_ROW_HEIGHT * sum + (ratiosInRow.length - 1) * ROW_GAP;
-    // A cap wider than the container never binds — omitting it keeps the
+    const capped = capHeight * sum + (ratiosInRow.length - 1) * ROW_GAP;
+    // A cap at or above the container never binds — omitting it keeps the
     // emitted style attribute (and the DOM) free of noise.
-    return { ratios: ratiosInRow, maxWidth: capped < width ? capped : null };
+    return { ratios: ratiosInRow, maxWidthFraction: capped < width ? capped / width : null };
   });
 }

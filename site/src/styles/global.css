@@ -64,7 +64,9 @@
 .jgal--breakout, .jgal--column { display: flex; flex-direction: column; gap: 0.75rem; }
 /* --jgal-maxw caps the LAST row so a short remainder is not stretched to full
  * width (a lone portrait would render 1112 wide and ~1668 tall). It is a
- * maximum, so below the design width it simply stops binding. */
+ * PERCENTAGE of the container, not a pixel value, so the remainder keeps
+ * matching the height of the row above it as the container resizes — a px cap
+ * computed at 1112 left a 242px-tall remainder beside 167px rows on a tablet. */
 .jgal__row { display: flex; flex-wrap: nowrap; gap: 0.75rem; max-width: var(--jgal-maxw, none); }
 /* The `* 100` is load-bearing: flex-grow values summing to less than 1
  * distribute only that fraction of the free space, so a lone portrait
@@ -99,7 +101,10 @@
 /* Below this the rows stack — one photo per line, in every mode. MUST match
  * STACK_WIDTH in body-images.ts, which derives the `sizes` hint from it. */
 @container (max-width: 600px) {
-  .jgal__row { flex-wrap: wrap; }
+  /* max-width: none is load-bearing — --jgal-maxw is a percentage of the
+   * container, so without this the stacked last row would sit at a third of
+   * the width with full-width photos inside it. */
+  .jgal__row { flex-wrap: wrap; max-width: none; }
   .jgal__row > .jgal__item { flex: 1 0 100%; }
   .jgal__track > .jgal__item { flex-basis: 100%; }
 }

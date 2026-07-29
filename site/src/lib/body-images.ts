@@ -227,12 +227,15 @@ function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 'slide
   return rows.map((row) => {
     const slice = photos.slice(taken, taken + row.ratios.length);
     taken += row.ratios.length;
-    const rowWidth = row.maxWidth ?? width;
+    const rowWidth = (row.maxWidthFraction ?? 1) * width;
     const gaps = (row.ratios.length - 1) * ROW_GAP;
     const height = (rowWidth - gaps) / row.ratios.reduce((a, r) => a + r, 0);
+    // A PERCENTAGE, not pixels: the cap tracks the row above it as the
+    // container resizes. See GalleryRow.maxWidthFraction.
+    const cap = row.maxWidthFraction;
     return h(
       'div',
-      { class: 'jgal__row', ...(row.maxWidth === null ? {} : { style: `--jgal-maxw:${row.maxWidth.toFixed(2)}px` }) },
+      { class: 'jgal__row', ...(cap === null ? {} : { style: `--jgal-maxw:${(cap * 100).toFixed(2)}%` }) },
       slice.map((photo, i) => {
         const ratio = row.ratios[i] ?? 1;
         // `--r` drives `flex: calc(var(--r) * 100) 1 0`. The `* 100` is in the

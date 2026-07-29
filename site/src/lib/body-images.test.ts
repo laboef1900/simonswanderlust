@@ -148,10 +148,12 @@ describe('transformBodyImages — gallery layout modes', () => {
     expect(items(out)).toHaveLength(7);
   });
 
-  it('caps the last row instead of stretching it', () => {
+  it('caps the last row instead of stretching it, as a container percentage', () => {
     const out = transformBodyImages(manyFence(), many, ORIGIN);
-    // 450 (the cap) × 1.5 = 675: the lone trailing landscape, not 1112 wide.
-    expect(out).toContain('--jgal-maxw:675.00px');
+    // The lone trailing landscape matches the 3-up row above it (~242 tall ×
+    // 1.5 = ~363 of 1112), not the full 1112 width. A percentage, not pixels,
+    // so it keeps matching as the container resizes.
+    expect(out).toContain('--jgal-maxw:32.61%');
     // …and only there. Full rows fill their container.
     expect(out.match(/--jgal-maxw/g) ?? []).toHaveLength(1);
   });

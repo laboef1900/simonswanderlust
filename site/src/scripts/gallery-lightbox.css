@@ -1,0 +1,124 @@
+/*
+ * Lightbox chrome. Deliberately NOT in global.css: the lightbox is the island's
+ * own surface — it exists only where gallery-lightbox.ts is loaded, and it is
+ * explicitly absent from the uploader's draft preview (spec §Draft preview
+ * limitation), where clicking a photo just opens the full-size image. Keeping
+ * it here means it ships with its script (the same colocation travel-map.ts
+ * uses for maplibre-gl.css) and does not become dead CSS hand-mirrored into
+ * uploader/src/preview.ts by the .jgal parity guard.
+ *
+ * The gallery LAYOUT css does live in global.css and is mirrored — the preview
+ * needs it. Do not move layout rules here to dodge that guard.
+ *
+ * @ai-context docs/superpowers/specs/2026-07-29-gallery-layout-modes-and-lightbox-design.md
+ */
+
+.jgal__lb {
+  width: 100%;
+  max-width: 100vw;
+  height: 100%;
+  max-height: 100dvh;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+.jgal__lb::backdrop {
+  background: rgb(10 16 24 / 0.94);
+}
+
+.jgal__lb-fig {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  height: 100%;
+  margin: 0;
+  padding: 1rem;
+}
+
+.jgal__lb-img {
+  max-width: 100%;
+  max-height: 78dvh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 0.25rem;
+  background: rgb(255 255 255 / 0.04);
+}
+
+.jgal__lb-cap {
+  max-width: 60ch;
+  margin: 0;
+  color: #eef1f5;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.jgal__lb-btn {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.12);
+  color: #fff;
+  font-size: 1.75rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.jgal__lb-btn:hover {
+  background: rgb(255 255 255 / 0.22);
+}
+
+.jgal__lb-btn:focus-visible {
+  outline: 3px solid #ff5a4e;
+  outline-offset: 2px;
+}
+
+.jgal__lb-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.jgal__lb-close { top: 0.75rem; right: 0.75rem; font-size: 1.5rem; }
+.jgal__lb-prev { top: calc(50% - 1.5rem); left: 0.75rem; }
+.jgal__lb-next { top: calc(50% - 1.5rem); right: 0.75rem; }
+
+/* Visually hidden, still announced. */
+.jgal__lb-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/*
+ * Measured gap: the browser does NOT lock page scroll behind a modal <dialog>,
+ * so without this the story scrolls under the backdrop. Safe here because no
+ * ancestor on the story route sets overflow-x, which makes <html> the scroller.
+ */
+html:has(dialog.jgal__lb[open]) {
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .jgal__lb[open] { animation: jgal-lb-in 140ms ease-out; }
+  @keyframes jgal-lb-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+}

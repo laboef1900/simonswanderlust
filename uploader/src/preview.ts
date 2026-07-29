@@ -113,7 +113,7 @@ const STYLE = `
     .jgal__track > .jgal__item { flex-basis: calc((100% - 0.75rem) / 2); }
   }
   @container (max-width: 600px) {
-    .jgal__row { flex-wrap: wrap; }
+    .jgal__row { flex-wrap: wrap; max-width: none; }
     .jgal__row > .jgal__item { flex: 1 0 100%; }
     .jgal__track > .jgal__item { flex-basis: 100%; }
   }
