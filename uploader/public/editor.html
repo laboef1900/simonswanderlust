@@ -431,6 +431,15 @@
       $('deHeroUpload').addEventListener('click', () => uploadHero('de'));
       $('enHeroUpload').addEventListener('click', () => uploadHero('en'));
 
+      // Layout modes (#66). The labels are the admin's; the VALUES must match
+      // GALLERY_MODES in site/src/lib/gallery-layout.ts, which is what the
+      // renderer accepts — an unknown value silently falls back to break-out.
+      const GALLERY_LAYOUTS = [
+        { value: 'breakout', label: 'Break-out (wide)' },
+        { value: 'column', label: 'Column (text width)' },
+        { value: 'slider', label: 'Slider (carousel)' },
+      ];
+
       // ---- insert or edit a ```gallery block (#75) ----
       // The picker writes the same line format an author would type by hand;
       // normalizeGalleryFences lifts it into `images` at save. Nothing here
@@ -488,17 +497,22 @@
         MediaPicker.open({
           multiple: true,
           preselect,
+          layouts: GALLERY_LAYOUTS,
+          layout: GalleryFence.layoutOf(current.directives),
           confirmLabel: existing ? 'Update gallery' : 'Insert gallery',
           emptyHint: existing
             ? 'Nothing selected — confirming now removes this gallery.'
             : 'Nothing selected yet — click photos above.',
           onUnauthed: () => guard.redirectToLogin(),
-          onPick: (items) => {
-            // Directives (e.g. #66's `#layout:`) are carried through verbatim —
-            // editing a gallery must not silently reset its layout. An empty
-            // selection means "remove the block", so emit no fence at all.
+          onPick: (items, opts) => {
+            // Only the LAYOUT directive is rewritten; every other `#` line the
+            // author typed is carried through verbatim, and a gallery whose
+            // layout was not touched comes back byte-identical (withLayout
+            // writes nothing for the default mode).
+            const directives = GalleryFence.withLayout(current.directives, (opts || {}).layout);
+            // An empty selection means "remove the block", so emit no fence.
             const fence = items.length
-              ? GalleryFence.serialize(items, locale, current.directives, postMeta)
+              ? GalleryFence.serialize(items, locale, directives, postMeta)
               : '';
             const out = GalleryFence.replaceFenceAt(body, cursor, fence);
             if (out.blocked === 'unterminated') {

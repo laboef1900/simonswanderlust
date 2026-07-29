@@ -7,6 +7,7 @@ import RouteDivider from '../RouteDivider.astro';
 import Stamp from '../Stamp.astro';
 import Toc from '../Toc.astro';
 import StoryMiniMap from '../StoryMiniMap.astro';
+import GalleryIsland from '../GalleryIsland.astro';
 import { useTranslations } from '../../i18n/ui';
 import { coordsLabel, dateLabel, entryLabel } from '../../lib/format';
 import { byLocale, entryNumberOf, localeOf, pathOf, translationOf, type Trip } from '../../lib/trips';
@@ -102,6 +103,7 @@ const jsonLd = serializeJsonLd(
     <article class="prose prose-lg max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-headings:break-words prose-p:break-words prose-a:font-semibold prose-a:text-brand-red prose-a:no-underline hover:prose-a:underline prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:bg-navy/[0.02] prose-blockquote:py-3 prose-blockquote:px-5 prose-blockquote:italic prose-blockquote:text-navy prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red">
       <Content />
     </article>
+    <GalleryIsland locale={locale} />
 
     <StoryMiniMap trip={trip} locale={locale} />
 

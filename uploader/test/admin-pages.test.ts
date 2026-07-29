@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { GALLERY_MODES } from '../../site/src/lib/gallery-layout.js';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
@@ -342,6 +343,20 @@ describe('admin page wiring', () => {
       // no bare login redirect may survive — it would drop the ?next= return URL
       expect(page).not.toMatch(/location\.href = '\/login/);
     }
+  });
+
+  it('the gallery picker offers exactly the layout modes the renderer accepts', () => {
+    // A fourth label here, or a renamed value, would give the author a mode the
+    // site silently falls back to break-out for — the failure is invisible in
+    // the admin and only shows up on the published page.
+    const block = editor.slice(editor.indexOf('const GALLERY_LAYOUTS'));
+    const values = [...block.slice(0, block.indexOf('];')).matchAll(/value: '([a-z]+)'/g)].map((m) => m[1]);
+    expect(values).toEqual([...GALLERY_MODES]);
+    expect(editor).toContain('layouts: GALLERY_LAYOUTS');
+    // Seeded from the fence and written back through withLayout, so editing a
+    // gallery cannot silently reset the layout the author chose.
+    expect(editor).toContain('GalleryFence.layoutOf(current.directives)');
+    expect(editor).toContain('GalleryFence.withLayout(current.directives,');
   });
 
   it('every fetch path surfaces a visible error on network failure', () => {

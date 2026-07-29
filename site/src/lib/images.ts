@@ -66,6 +66,18 @@ export function srcset(image: RemoteHeroImage, format: ImageFormat): string {
     .join(', ');
 }
 
+/**
+ * The largest variant that exists for a photo.
+ *
+ * Two callers, which is why it lives here rather than inline: the gallery's
+ * `<a href>` (the no-JS "open full size" target) and the lightbox island that
+ * enhances it.
+ */
+export function largestVariant(image: RemoteHeroImage, format: ImageFormat = 'webp'): string {
+  const widths = variantWidths(image.width);
+  return `${image.src}-${widths[widths.length - 1]}.${format}`;
+}
+
 /** Plain <img src> fallback — prefers the 1280 webp, else the largest available. */
 export function fallbackSrc(image: RemoteHeroImage): string {
   const widths = variantWidths(image.width);

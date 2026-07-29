@@ -516,11 +516,13 @@ blog/
 │       ├── i18n/ui.ts                          # ALL UI strings, both locales (completeness-tested)
 │       ├── lib/                                # tested helpers: paths, trips, format, images, map data
 │       │   ├── postgres-loader.ts              #   Astro Content Layer loader — syncs trips from Postgres at build time
-│       │   ├── body-images.ts                  #   transforms Markdown body: <BodyImage> → <picture>, ```gallery → grid
+│       │   ├── body-images.ts                  #   transforms Markdown body: <BodyImage> → <picture>, ```gallery → gallery
+│       │   ├── gallery-layout.ts               #   justified-row partition + #layout: directive reader (pure; also runs under tsx)
 │       │   └── map-data.ts                     #   export tripPins() and tripGeometry() for map layers
 │       ├── components/pages/                   # shared per-page components
 │       ├── pages/                              # thin locale routes (de at root, en under /en/)
 │       ├── scripts/travel-map.ts               #   MapLibre GL island; initializes full map and mini-maps
+│       ├── scripts/gallery-lightbox.ts         #   <dialog> lightbox + slider controls; loaded via GalleryIsland.astro
 │       └── layouts/  ·  styles/  ·  assets/
 └── uploader/                      # self-hosted app: CMS + image service + blog serving (Node/Fastify/sharp)
     ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · settings · posts · pages · body-content · build · backup · export · preview · wxr-parse · wp-content · wp-images · wp-import
@@ -605,10 +607,23 @@ blog/
   paged into view; and `public/gallery-fence.js`'s fence scanner must agree with `rewriteFences` in
   `src/body-content.ts` about what a gallery is and where it ends — `test/gallery-fence-parity.test.ts`
   runs both over one corpus, and is the only thing keeping the duplicated rule honest.
+- **Done:** #66 gallery polish (2026-07-29) — three layout modes selected by a `#layout:` line
+  **inside** the fence (an info-string argument on the opener is unimplementable: the info string
+  is discarded before `body-images.ts` ever sees it), plus a `<dialog>` lightbox on all three.
+  `site/src/lib/gallery-layout.ts` holds the justified-row partition and the directive reader,
+  pure and `astro:`-free because draft preview runs it under `tsx`. An unknown or missing mode
+  falls back to `breakout`, so pre-#66 galleries render unchanged. The last row is capped at the
+  height of the row **above** it, emitted as a container percentage — a fixed-pixel cap computed
+  at the design width left the remainder 450px tall beside 210px rows on a tablet. The mode is
+  chosen in #75's picker (`layouts`/`layout` options; `GalleryFence.layoutOf`/`withLayout`), whose
+  directive round-trip is the risk the #66 review named and is now tested against the renderer's
+  own reader. `preview.test.ts`'s CSS parity guard was **strengthened**, not weakened: it now
+  scrapes selectors nested inside `@container` blocks too, where the new breakpoints live.
+  Lightbox CSS lives with its island rather than in `global.css`, so it is not dead CSS
+  hand-mirrored into `preview.ts` — the lightbox does not run in draft preview at all.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
-  started, deliberately: #66 (gallery polish — justified layout + lightbox), #67 (AI authoring —
-  design spec landed 2026-07-28, implementation not started), #68 (production EXIF audit),
-  #72 (Traefik timeouts). See `docs/superpowers/plans/IMPLEMENTATION-PROMPT.md` for why each is
-  excluded.
+  started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
+  started), #68 (production EXIF audit), #72 (Traefik timeouts). See
+  `docs/superpowers/plans/IMPLEMENTATION-PROMPT.md` for why each is excluded.
 
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.

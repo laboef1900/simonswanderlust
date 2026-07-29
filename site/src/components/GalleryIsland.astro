@@ -1,0 +1,52 @@
+---
+/**
+ * Loads the gallery island on any page that can render a ```gallery fence.
+ *
+ * The gallery markup itself is injected HTML (body-images.ts), not a component,
+ * and Astro only bundles `<script>` tags it parses — hence a component whose
+ * whole job is to be that script tag. Same pattern as `travel-map.ts`, and the
+ * data-attribute handoff mirrors `data-readstory` in `MapPage.astro`.
+ *
+ * @ai-note The strings must come through here rather than from body-images.ts:
+ * that transform runs once per post body with no locale in scope (and also runs
+ * cross-tree in the uploader's draft preview, which has no `ui.ts` at all).
+ *
+ * @ai-context docs/superpowers/specs/2026-07-29-gallery-layout-modes-and-lightbox-design.md
+ */
+import { useTranslations, type Locale } from '../i18n/ui';
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const t = useTranslations(locale);
+---
+
+<div
+  id="gallery-labels"
+  hidden
+  data-slider={t('gallery.slider')}
+  data-viewer={t('gallery.viewer')}
+  data-close={t('gallery.close')}
+  data-prev={t('gallery.prev')}
+  data-next={t('gallery.next')}
+  data-position={t('gallery.position')}
+>
+</div>
+
+<script>
+  import { initGalleries } from '../scripts/gallery-lightbox';
+
+  const el = document.getElementById('gallery-labels');
+  if (el) {
+    initGalleries(document, {
+      slider: el.dataset.slider ?? '',
+      viewer: el.dataset.viewer ?? '',
+      close: el.dataset.close ?? '',
+      prev: el.dataset.prev ?? '',
+      next: el.dataset.next ?? '',
+      position: el.dataset.position ?? '',
+    });
+  }
+</script>

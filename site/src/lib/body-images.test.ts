@@ -75,6 +75,8 @@ describe('transformBodyImages — responsive <picture>', () => {
 
 const A = `${ORIGIN}/trips/patagonia/a-1a2b3c4d`;
 const B = `${ORIGIN}/trips/patagonia/b-9f8e7d6c`;
+/** Gallery items, however the active layout mode styles them. */
+const items = (html: string) => html.match(/<figure class="jgal__item"/g) ?? [];
 const gallery = {
   [A]: { width: 3000, height: 2000, alt: 'Sunrise over the towers', caption: 'Day 3' },
   [B]: { width: 2000, height: 3000, alt: 'The pass' },
@@ -83,9 +85,9 @@ const gallery = {
 describe('transformBodyImages — gallery fence', () => {
   it('turns a fence into a grid of figures', () => {
     const out = transformBodyImages(fence(`${A}\n${B}`), gallery, ORIGIN);
-    expect(out).toContain('<div class="jgal not-prose">');
+    expect(out).toContain('<div class="jgal jgal--breakout not-prose">');
     expect(out).not.toContain('<pre>');
-    expect(out.match(/<figure class="jgal__item">/g)).toHaveLength(2);
+    expect(items(out)).toHaveLength(2);
     expect(out).toContain(`href="${A}-3000.webp"`); // largest variant, no-JS target
     expect(out).toContain('alt="Sunrise over the towers"');
     expect(out).toContain('<figcaption class="jgal__cap">Day 3</figcaption>');
@@ -107,20 +109,90 @@ describe('transformBodyImages — gallery fence', () => {
 
   it('tolerates leftover per-line metadata (a body that never hit the save chokepoint)', () => {
     const out = transformBodyImages(fence(`${A} | 3000x2000 | alt="x"`), gallery, ORIGIN);
-    expect(out).toContain('<div class="jgal not-prose">');
+    expect(out).toContain('<div class="jgal jgal--breakout not-prose">');
     // Metadata comes from the images map, not the line.
     expect(out).toContain('alt="Sunrise over the towers"');
   });
 
   it('skips a URL with no images entry', () => {
     const out = transformBodyImages(fence(`${A}\n${ORIGIN}/unknown`), gallery, ORIGIN);
-    expect(out.match(/<figure class="jgal__item">/g)).toHaveLength(1);
+    expect(items(out)).toHaveLength(1);
   });
 
   it('leaves the <pre> in place when nothing in the fence resolves', () => {
     const out = transformBodyImages(fence(`${ORIGIN}/unknown`), gallery, ORIGIN);
     expect(out).toContain('language-gallery');
     expect(out).not.toContain('jgal');
+  });
+});
+
+describe('transformBodyImages — gallery layout modes', () => {
+  // Seven landscapes partition into 3 + 3 + 1 at the break-out width.
+  const many = Object.fromEntries(
+    Array.from({ length: 7 }, (_, i) => [`${ORIGIN}/trips/x/p${i}`, { width: 3000, height: 2000, alt: `p${i}` }]),
+  );
+  const manyFence = (directive = '') =>
+    fence([directive, ...Object.keys(many)].filter(Boolean).join('\n'));
+
+  it('defaults to breakout when the fence carries no directive', () => {
+    const out = transformBodyImages(fence(A), gallery, ORIGIN);
+    expect(out).toContain('class="jgal jgal--breakout not-prose"');
+  });
+
+  it('nests photos in rows and emits a ratio per photo', () => {
+    const out = transformBodyImages(manyFence(), many, ORIGIN);
+    // flex-wrap: nowrap on one container would put all seven on one line —
+    // the rows are the layout.
+    expect(out.match(/<div class="jgal__row/g) ?? []).toHaveLength(3); // 3 + 3 + 1
+    expect(out).toContain('style="--r:1.5000"');
+    expect(items(out)).toHaveLength(7);
+  });
+
+  it('caps the last row instead of stretching it, as a container percentage', () => {
+    const out = transformBodyImages(manyFence(), many, ORIGIN);
+    // The lone trailing landscape matches the 3-up row above it (~242 tall ×
+    // 1.5 = ~363 of 1112), not the full 1112 width. A percentage, not pixels,
+    // so it keeps matching as the container resizes.
+    expect(out).toContain('--jgal-maxw:32.61%');
+    // …and only there. Full rows fill their container.
+    expect(out.match(/--jgal-maxw/g) ?? []).toHaveLength(1);
+  });
+
+  it('switches to the column width on #layout: column', () => {
+    const out = transformBodyImages(manyFence('#layout: column'), many, ORIGIN);
+    expect(out).toContain('class="jgal jgal--column not-prose"');
+    // The narrower container fits fewer photos per row than break-out does.
+    expect((out.match(/<div class="jgal__row/g) ?? []).length).toBeGreaterThan(3);
+  });
+
+  it('renders a keyboard-scrollable track with hidden controls on #layout: slider', () => {
+    const out = transformBodyImages(manyFence('#layout: slider'), many, ORIGIN);
+    expect(out).toContain('class="jgal jgal--slider not-prose"');
+    expect(out).toContain('<div class="jgal__track" tabindex="0">');
+    expect(out).not.toContain('jgal__row');
+    // The buttons must ship hidden: with JS off they would do nothing, and the
+    // track scrolls on its own.
+    expect(out).toContain('hidden data-jgal-nav="prev"');
+    expect(out).toContain('hidden data-jgal-nav="next"');
+  });
+
+  it('falls back to breakout on an unknown mode rather than dropping the gallery', () => {
+    const out = transformBodyImages(manyFence('#layout: carousel'), many, ORIGIN);
+    expect(out).toContain('class="jgal jgal--breakout not-prose"');
+    expect(items(out)).toHaveLength(7);
+  });
+
+  it('never renders the directive as a photo or as text', () => {
+    const out = transformBodyImages(fence(`#layout: slider\n${A}`), gallery, ORIGIN);
+    expect(out).not.toContain('#layout');
+    expect(items(out)).toHaveLength(1);
+  });
+
+  it('derives sizes per photo, so a full-width panorama is not served a thumbnail', () => {
+    const pano = `${ORIGIN}/trips/x/pano`;
+    const out = transformBodyImages(fence(pano), { [pano]: { width: 4000, height: 1000, alt: 'p' } }, ORIGIN);
+    // Alone on its row at 4:1 it renders 1112 wide — the hint must say so.
+    expect(out).toContain('sizes="(min-width: 1112px) 1112px');
   });
 });
 

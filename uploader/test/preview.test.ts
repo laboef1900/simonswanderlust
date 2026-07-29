@@ -170,7 +170,7 @@ describe('renderPreviewHtml', () => {
     p.de.bodyMarkdown = `\`\`\`gallery\n${a}\n\`\`\``;
     p.de.images = { [a]: { width: 3000, height: 2000, alt: 'Altstadt bei Nacht', caption: 'Tag 2' } };
     const html = await renderPreviewHtml(p, 'de', ORIGIN);
-    expect(html).toContain('class="jgal not-prose"');
+    expect(html).toContain('class="jgal jgal--breakout not-prose"');
     expect(html).toContain('alt="Altstadt bei Nacht"');
     expect(html).toContain('Tag 2');
   });
@@ -207,7 +207,10 @@ describe('preview gallery CSS mirrors the site stylesheet', () => {
   it('declares every .jgal selector that global.css does', async () => {
     const globalCss = read('../../site/src/styles/global.css');
     const previewSrc = read('../src/preview.ts');
-    const selectors = [...globalCss.matchAll(/^\.jgal[^{]*/gm)].map((m) => m[0].trim());
+    // Leading whitespace is allowed so rules nested inside @container blocks
+    // are scraped too — #66 put the stacking and slides-per-view breakpoints
+    // there, and an unindented-only scrape would have let exactly those drift.
+    const selectors = [...globalCss.matchAll(/^\s*\.jgal[^{]*/gm)].map((m) => m[0].trim());
     expect(selectors.length).toBeGreaterThan(0);
     for (const selector of selectors) expect(previewSrc).toContain(selector);
   });

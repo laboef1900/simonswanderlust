@@ -29,7 +29,7 @@ window.MediaPicker = (function () {
   }
 
   /**
-   * open({ onPick, onUnauthed, multiple, preselect })
+   * open({ onPick, onUnauthed, multiple, preselect, layouts, layout })
    *
    * Resolves through onPick with the chosen media item — the full row, so the
    * caller gets src/width/height/alt without a second request. With
@@ -43,6 +43,12 @@ window.MediaPicker = (function () {
    *
    * With `multiple: true`, `onPick` may also receive an EMPTY array — the author
    * cleared the selection, which for a gallery means "remove this block".
+   *
+   * `layouts` is an optional list of `{value, label}` shown as a select in the
+   * strip head, seeded from `layout`. The chosen value comes back as the second
+   * argument to `onPick` (`{layout}`); it is `null` when no list was passed.
+   * The picker treats the values as opaque — deciding what a mode means, and
+   * writing it into the fence, is the caller's job.
    */
   function open(opts) {
     var o = opts || {};
@@ -79,6 +85,7 @@ window.MediaPicker = (function () {
     var strip = null;
     var stripList = null;
     var stripCount = null;
+    var layoutSelect = null;
     if (multiple) {
       strip = el('div', 'picker-strip');
       var stripHead = el('div', 'picker-strip__head');
@@ -96,6 +103,31 @@ window.MediaPicker = (function () {
       stripCount.setAttribute('aria-live', 'polite');
       stripCount.setAttribute('aria-atomic', 'true');
       stripHead.appendChild(stripCount);
+
+      // Layout mode (#66). Lives here rather than in the editor page because
+      // the mode belongs to the gallery, and this dialog is where a gallery is
+      // composed — picking photos and choosing how they sit are one decision.
+      // Only the VALUE crosses back to the caller; the picker has no idea what
+      // the modes mean, and writes no directive itself.
+      if (o.layouts && o.layouts.length) {
+        var layoutWrap = el('span', 'picker-strip__layout');
+        var layoutId = 'picker-layout-' + Math.random().toString(36).slice(2, 8);
+        var layoutLabel = el('label', null, 'Layout');
+        layoutLabel.setAttribute('for', layoutId);
+        layoutSelect = document.createElement('select');
+        layoutSelect.id = layoutId;
+        o.layouts.forEach(function (mode) {
+          var opt = document.createElement('option');
+          opt.value = mode.value;
+          opt.textContent = mode.label;
+          layoutSelect.appendChild(opt);
+        });
+        layoutSelect.value = o.layout || o.layouts[0].value;
+        layoutWrap.appendChild(layoutLabel);
+        layoutWrap.appendChild(layoutSelect);
+        stripHead.appendChild(layoutWrap);
+      }
+
       strip.appendChild(stripHead);
       stripList = el('ol', 'picker-strip__list');
       stripList.setAttribute('aria-label', 'Selected photos, in gallery order');
@@ -332,8 +364,10 @@ window.MediaPicker = (function () {
       // Single-select has nothing to say with an empty selection; multi-select
       // does — "no photos" is how an author removes a gallery.
       if (!multiple && !items.length) return;
+      // Read the mode BEFORE close() removes the dialog from the document.
+      var layout = layoutSelect ? layoutSelect.value : null;
       close();
-      if (o.onPick) o.onPick(multiple ? items : items[0]);
+      if (o.onPick) o.onPick(multiple ? items : items[0], { layout: layout });
     }
 
     var debounce = null;

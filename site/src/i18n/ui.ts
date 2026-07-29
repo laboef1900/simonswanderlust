@@ -39,6 +39,15 @@ const de = {
   'story.next': 'Nächste Geschichte',
   'story.pagination': 'Weitere Geschichten',
   'story.otherLang': 'Read this story in English',
+  // Gallery island (site/src/scripts/gallery-lightbox.ts). The strings reach the
+  // script through data attributes on GalleryIsland.astro — the gallery markup
+  // itself is injected by body-images.ts, which has no locale.
+  'gallery.slider': 'Fotogalerie, horizontal scrollbar',
+  'gallery.viewer': 'Fotoansicht',
+  'gallery.close': 'Schließen',
+  'gallery.prev': 'Vorheriges Foto',
+  'gallery.next': 'Nächstes Foto',
+  'gallery.position': 'Foto {current} von {total}',
   'region.europe': 'Europa',
   'region.north-america': 'Nordamerika',
   'region.south-america': 'Südamerika',
@@ -93,6 +102,12 @@ const en: Record<UIKey, string> = {
   'story.next': 'Next story',
   'story.pagination': 'More stories',
   'story.otherLang': 'Diese Geschichte auf Deutsch lesen',
+  'gallery.slider': 'Photo gallery, scrolls horizontally',
+  'gallery.viewer': 'Photo viewer',
+  'gallery.close': 'Close',
+  'gallery.prev': 'Previous photo',
+  'gallery.next': 'Next photo',
+  'gallery.position': 'Photo {current} of {total}',
   'region.europe': 'Europe',
   'region.north-america': 'North America',
   'region.south-america': 'South America',

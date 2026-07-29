@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   fallbackSrc,
   imageOrigin,
+  largestVariant,
   PROD_IMAGE_ORIGIN,
   srcset,
   variantWidths,
@@ -64,6 +65,31 @@ describe('fallbackSrc', () => {
     expect(
       fallbackSrc({ src: 'https://img.simonswanderlust.com/trips/x/hero', width: 1280, height: 800, alt: '' }),
     ).toBe('https://img.simonswanderlust.com/trips/x/hero-1280.webp');
+  });
+});
+
+describe('largestVariant', () => {
+  it('returns the intrinsic-width variant, not the largest standard width', () => {
+    expect(largestVariant(big)).toBe(
+      'https://img.simonswanderlust.com/trips/rhodes-2021/hero-2560.webp',
+    );
+  });
+
+  it('never upscales a source smaller than the standard widths', () => {
+    expect(largestVariant(small)).toBe(
+      'https://img.simonswanderlust.com/trips/bucharest-2024/hero-768.webp',
+    );
+  });
+
+  it('can address another format', () => {
+    expect(largestVariant(big, 'avif')).toBe(
+      'https://img.simonswanderlust.com/trips/rhodes-2021/hero-2560.avif',
+    );
+  });
+
+  it('agrees with srcset about which variants exist', () => {
+    // The href would 404 if these ever disagreed.
+    expect(srcset(big, 'webp')).toContain(`${largestVariant(big)} 2560w`);
   });
 });
 
