@@ -70,8 +70,16 @@ Plus the **`pgdata`** volume — Postgres data.
    `SELECT`s the published rows and turns each into a content entry. Post bodies are rendered
    Markdown → HTML, **sanitized**, and body images become responsive `<picture>`
    (`site/src/lib/body-images.ts`). A ` ```gallery ` fence (one image URL per line) becomes a
-   photo grid in the same pass — its URLs are allow-listed against the image host's origin,
-   because that markup is injected *after* the sanitizer runs (see
+   photo gallery in the same pass, in one of three layout modes selected by a `#layout:` line
+   inside the fence — `breakout` (default; justified rows in a 1112px full-bleed break-out),
+   `column` (the same rows at the 728px story width) or `slider` (a scroll-snap carousel).
+   The row partition is computed at build time by `site/src/lib/gallery-layout.ts`, which is
+   kept pure and dependency-free because draft preview runs it under `tsx` too. An unknown or
+   missing mode falls back to `breakout`, so every gallery authored before the modes existed
+   still renders. `site/src/scripts/gallery-lightbox.ts` adds a `<dialog>` lightbox and the
+   slider's controls as progressive enhancement — every photo is a real `<a>` to its largest
+   variant, so the gallery works with JavaScript off. Gallery URLs are allow-listed against
+   the image host's origin, because that markup is injected *after* the sanitizer runs (see
    [SECURITY.md](SECURITY.md#content-injected-after-sanitize-body-images-and-galleries)). The
    fence's per-line `| WIDTHxHEIGHT | alt="…" | caption="…"` metadata is lifted into the row's
    `images` map at save time by `uploader/src/body-content.ts`, and re-attached by the MDX

@@ -808,6 +808,11 @@ a:hover { color: var(--red-light); }
 .picker-strip__head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0 0 0.5rem; }
 .picker-strip h3 { font-size: 0.85rem; margin: 0; color: var(--muted); font-weight: 600; }
 .picker-strip__head .muted { font-size: 0.72rem; }
+/* Layout mode (#66). `width: auto` on the select is explicit: the admin's base
+   stylesheet stretches form controls to 100%, which here would push the strip
+   heading onto its own line. */
+.picker-strip__layout { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--muted); }
+.picker-strip__layout select { margin: 0; padding: 0.2rem 0.35rem; font-size: 0.78rem; min-height: 1.7rem; width: auto; }
 .picker-strip__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; max-height: 11rem; overflow-y: auto; }
 .picker-strip__item { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.35rem; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
 .picker-strip__item img { width: 2.5rem; height: 2.5rem; object-fit: cover; border-radius: 3px; flex: none; }

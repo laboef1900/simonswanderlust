@@ -44,6 +44,47 @@ window.GalleryFence = (function () {
       .replace(/&amp;/g, '&');
   }
 
+  // ── the #layout: directive (#66) ───────────────────────────────────────
+  //
+  // @ai-warning LAYOUT_RE and LAYOUTS duplicate LAYOUT_DIRECTIVE_RE and
+  // GALLERY_MODES in site/src/lib/gallery-layout.ts, for the same reason
+  // escapeMeta does: a browser IIFE cannot import an ESM module from the other
+  // tree. The two MUST agree about what counts as a directive and what values
+  // are known, or the picker shows "Break-out" for a gallery the site renders
+  // as a slider — a silent lie about the author's own choice, only visible
+  // after publishing. test/gallery-fence.test.ts runs both over one corpus.
+  var LAYOUTS = ['breakout', 'column', 'slider'];
+  var DEFAULT_LAYOUT = 'breakout';
+  var LAYOUT_RE = /^\s*#\s*layout\s*:\s*(\S*)\s*$/i;
+
+  /** The mode a fence's directives select. First wins; unknown ⇒ the default. */
+  function layoutOf(directives) {
+    var lines = directives || [];
+    for (var i = 0; i < lines.length; i++) {
+      var m = LAYOUT_RE.exec(String(lines[i]));
+      if (!m) continue;
+      var value = String(m[1] || '').toLowerCase();
+      return LAYOUTS.indexOf(value) >= 0 ? value : DEFAULT_LAYOUT;
+    }
+    return DEFAULT_LAYOUT;
+  }
+
+  /**
+   * `directives` with the layout set to `mode`, preserving every other line.
+   *
+   * The default mode writes NO directive: a gallery the author never changed
+   * the layout of comes back out byte-identical, so switching modes and back
+   * leaves no trace in the body. An unknown mode is treated as the default
+   * rather than written through, so the picker can never author a directive
+   * the renderer would reject.
+   */
+  function withLayout(directives, mode) {
+    var kept = (directives || []).filter(function (d) { return !LAYOUT_RE.test(String(d)); });
+    var value = LAYOUTS.indexOf(String(mode).toLowerCase()) >= 0 ? String(mode).toLowerCase() : DEFAULT_LAYOUT;
+    if (value === DEFAULT_LAYOUT) return kept;
+    return ['#layout: ' + value].concat(kept);
+  }
+
   // Mirrors DIMS_RE / ATTR_RE and MAX_TEXT in src/body-content.ts.
   var DIMS_RE = /^(\d{1,6})x(\d{1,6})$/;
   var ATTR_RE = /^(alt|caption)="([^"]*)"$/;
@@ -350,6 +391,10 @@ window.GalleryFence = (function () {
     // them as dead exports; that deletes the test's handle on the invariant.
     escapeMeta: escapeMeta,
     unescapeMeta: unescapeMeta,
+    LAYOUTS: LAYOUTS,
+    DEFAULT_LAYOUT: DEFAULT_LAYOUT,
+    layoutOf: layoutOf,
+    withLayout: withLayout,
     serialize: serialize,
     parse: parse,
     fenceAt: fenceAt,

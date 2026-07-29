@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { escapeMeta, unescapeMeta, normalizeGalleryFences, galleryFencesToMdx } from '../src/body-content.js';
+// Cross-tree, exactly as preview.ts imports the render pipeline: the renderer's
+// directive reader is the authority the picker's copy is measured against.
+import {
+  DEFAULT_GALLERY_MODE,
+  GALLERY_MODES,
+  readLayoutMode,
+} from '../../site/src/lib/gallery-layout.js';
 
 // gallery-fence.js is a plain browser IIFE (window.GalleryFence) holding the
 // gallery picker's pure serialize/parse logic. Run it in a vm sandbox — same
@@ -48,6 +55,10 @@ interface Api {
   parse(text: string): { directives: string[]; lines: ParsedLine[] };
   fenceAt(body: string, cursor: number): { text: string; start: number; end: number } | null;
   replaceFenceAt(body: string, cursor: number, fence: string): Edit;
+  LAYOUTS: string[];
+  DEFAULT_LAYOUT: string;
+  layoutOf(directives: string[]): string;
+  withLayout(directives: string[], mode: string): string[];
 }
 
 /** What `cm.replaceRange(text, from, to)` does, so tests can assert on the result. */
@@ -501,5 +512,109 @@ describe('fenceAt', () => {
       const body = 'text ```js `x` weird\n\n```gallery\nhttps://i/a\n```\n';
       expect(G.fenceAt(body, body.indexOf('https://i/a'))?.text).toBe('```gallery\nhttps://i/a\n```');
     });
+  });
+});
+
+
+describe('#layout: directive — the picker\'s half of the rule (#66)', () => {
+  const gf = load();
+
+  it('agrees with the renderer about every mode it offers', () => {
+    expect(gf.LAYOUTS).toEqual([...GALLERY_MODES]);
+    expect(gf.DEFAULT_LAYOUT).toBe(DEFAULT_GALLERY_MODE);
+  });
+
+  // @ai-warning This is the parity guard, and it is the only thing keeping
+  // layoutOf honest against readLayoutMode: a browser IIFE cannot import the
+  // site's ESM module, so the directive rule is written out twice. If they
+  // diverge the picker shows one mode and the site renders another, silently,
+  // and only after publishing.
+  it('reads the same mode out of a directive as readLayoutMode does', () => {
+    const corpus = [
+      '#layout: breakout', '#layout: column', '#layout: slider',
+      '#layout:slider', '# layout: slider', '   #layout :  slider   ',
+      '#LAYOUT: Slider', '#layout: carousel', '#layout:', '#layout',
+      '#layout: slider extra', '# just a note', '#', '',
+      '#layout: SLIDER', '#Layout:Column',
+    ];
+    for (const line of corpus) {
+      expect(gf.layoutOf([line]), line).toBe(readLayoutMode(line));
+    }
+  });
+
+  it('agrees on which of several directives wins', () => {
+    const lines = ['# a note', '#layout: slider', '#layout: column'];
+    expect(gf.layoutOf(lines)).toBe(readLayoutMode(lines.join('\n')));
+    expect(gf.layoutOf(lines)).toBe('slider');
+  });
+
+  it('defaults to break-out for a fence with no directive at all', () => {
+    expect(gf.layoutOf([])).toBe('breakout');
+  });
+
+  it('writes no directive for the default, so an untouched gallery is unchanged', () => {
+    expect(gf.withLayout([], 'breakout')).toEqual([]);
+    expect(gf.withLayout(['#layout: slider'], 'breakout')).toEqual([]);
+  });
+
+  it('replaces the layout directive and keeps every other comment line', () => {
+    expect(gf.withLayout(['# shot on the pass', '#layout: column'], 'slider'))
+      .toEqual(['#layout: slider', '# shot on the pass']);
+  });
+
+  it('never writes a mode the renderer would reject', () => {
+    // A bogus value must not be written through: the fence would then carry a
+    // directive the site silently ignores, so the picker would keep showing a
+    // mode the reader never gets.
+    for (const bogus of ['carousel', '', 'SLIDER; drop table', 'breakout ', 'slider\n#layout: column']) {
+      const out = gf.withLayout([], bogus);
+      const text = out.join('\n');
+      expect(readLayoutMode(text), bogus).toBe(gf.layoutOf(out));
+      expect(gf.LAYOUTS, bogus).toContain(gf.layoutOf(out));
+    }
+  });
+
+  it('round-trips a directive through parse → withLayout → serialize', () => {
+    // The risk the #66 review named: #75's picker regenerating a fence must not
+    // clobber the layout an author chose.
+    const fence = [
+      '```gallery',
+      '#layout: slider',
+      '# a note the picker knows nothing about',
+      'https://img.test/a | 3000x2000 | alt="A"',
+      '```',
+    ].join('\n');
+    const parsed = gf.parse(fence);
+    expect(gf.layoutOf(parsed.directives)).toBe('slider');
+
+    // Re-serializing with the mode unchanged keeps both directives…
+    const same = gf.serialize(
+      parsed.lines.map((l) => ({ src: l.src, width: l.width!, height: l.height! })),
+      'de',
+      gf.withLayout(parsed.directives, 'slider'),
+      { 'https://img.test/a': { alt: 'A' } },
+    );
+    expect(same).toContain('#layout: slider');
+    expect(same).toContain('# a note the picker knows nothing about');
+    expect(readLayoutMode(same)).toBe('slider');
+
+    // …and switching to the default drops only the layout line.
+    const switched = gf.serialize(
+      parsed.lines.map((l) => ({ src: l.src, width: l.width!, height: l.height! })),
+      'de',
+      gf.withLayout(parsed.directives, 'breakout'),
+      {},
+    );
+    expect(switched).not.toContain('#layout');
+    expect(switched).toContain('# a note the picker knows nothing about');
+    expect(readLayoutMode(switched)).toBe('breakout');
+  });
+
+  it('survives normalizeGalleryFences — the directive is not mistaken for a photo', () => {
+    const body = ['```gallery', '#layout: slider', 'https://img.test/a | 3000x2000 | alt="A"', '```'].join('\n');
+    const out = normalizeGalleryFences(body, {});
+    expect(out.bodyMarkdown).toContain('#layout: slider');
+    expect(readLayoutMode(out.bodyMarkdown)).toBe('slider');
+    expect(Object.keys(out.images)).toEqual(['https://img.test/a']);
   });
 });

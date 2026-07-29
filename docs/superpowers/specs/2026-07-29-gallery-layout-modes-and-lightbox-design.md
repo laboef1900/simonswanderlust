@@ -24,7 +24,8 @@ among landscapes leaves roughly a third of the block as dead background.
 - Three selectable layout modes, chosen per gallery, defaulting to the widest one.
 - A lightbox on **all three** modes.
 - Every gallery authored before this change keeps rendering, unchanged, with no migration.
-- No new packages. No new server endpoints. No data-model change.
+- No new **runtime** packages, no new server endpoints, no data-model change. (`happy-dom` was
+  added to `site/` as a dev dependency for the island's test suite — nothing ships to a reader.)
 
 ## Layout modes
 
@@ -81,11 +82,25 @@ line wins, so a stray second one cannot silently override the author's choice.
 `astro build`. It must stay dependency-free and `astro:`-free, or `GET /posts/:tk/preview` breaks.
 
 - `readLayoutMode(fenceText): GalleryMode` — the directive reader described above.
-- `partitionRows(ratios, opts): number[][]` — the justified-row partition. Greedy: extend the
-  current row while doing so brings its height closer to the target; close it otherwise. The last
-  row is capped at the target height rather than stretched to fill the width.
-- `LAYOUT_WIDTHS` / `ROW_GAP` / `TARGET_ROW_HEIGHT` — the measured constants, exported so the
-  tests assert against the same numbers the renderer uses.
+- `partitionRows(ratios, containerWidth): GalleryRow[]` — the justified-row partition. Greedy:
+  extend the current row while doing so brings its height closer to the target; close it
+  otherwise. The last row is **capped rather than stretched**, and the cap rule changed under
+  measurement:
+
+  - It is capped at the height of the row **above** it, so a remainder reads as a partial row.
+    A flat 1.5 × target ceiling made the final photo the largest on the page — 450 px tall beside
+    297 px rows at the design width, and 450 beside 210 on a tablet.
+  - With no row above (a gallery that fits on one line) the ceiling is `MAX_LAST_ROW_HEIGHT`
+    (1.5 × target). That lets two landscapes fill the width at ~367 while stopping a lone
+    portrait at ~300 × 450 instead of 1112 × 1668.
+  - The cap is emitted as a **fraction of the container**, not a pixel value. The row above scales
+    with the container; a px cap computed at 1112 does not, so the two drift apart at every other
+    width. Measured at 1440 / 834 / 390: remainder 296.8 vs 297.0, 207.6 vs 205.8, stacked.
+  - The CSS must clear the cap where rows stack (`max-width: none` in the `@container` block) —
+    a percentage cap would otherwise leave the stacked last row at a third of the width.
+- `BREAKOUT_WIDTH` / `COLUMN_WIDTH` / `containerWidthFor(mode)` / `ROW_GAP` /
+  `TARGET_ROW_HEIGHT` / `MAX_LAST_ROW_HEIGHT` — the measured constants, exported so the tests
+  assert against the same numbers the renderer uses.
 
 ### `site/src/lib/body-images.ts` (changed)
 
@@ -114,11 +129,19 @@ with its own test, because the lightbox becomes the second caller the previous r
 Plain CSS classes, not Tailwind utilities — custom-property-driven flex is not expressible as
 utilities.
 
-**`preview.test.ts` scrapes every `^\.jgal[^{]*` selector out of `global.css` and requires each one
-in `preview.ts`'s `STYLE`.** This is a hard constraint on this work: three modes plus a lightbox is
-a meaningful amount of new CSS, all of which the guard forces into `preview.ts`. Satisfy it; do not
-weaken it. The lightbox rules are mirrored too even though the lightbox does not run in draft
-preview — dead but required, and cheaper than renaming selectors to dodge the guard.
+**`preview.test.ts` scrapes every `.jgal` selector out of `global.css` and requires each one in
+`preview.ts`'s `STYLE`.** This is a hard constraint on this work: three modes is a meaningful
+amount of new CSS, all of which the guard forces into `preview.ts`. It was **strengthened** rather
+than merely satisfied — the scrape now allows leading whitespace, so rules nested inside
+`@container` blocks are covered too. The new stacking and slides-per-view breakpoints live exactly
+there, and an unindented-only scrape would have let precisely those drift (20 selectors covered
+before, 25 after).
+
+**Lightbox CSS is the one exception, and not by dodging the guard.** It lives in
+`site/src/scripts/gallery-lightbox.css`, imported by the island — the same colocation
+`travel-map.ts` uses for `maplibre-gl.css`. The lightbox does not run in draft preview at all, so
+putting its rules in `global.css` would force a block of permanently dead CSS into `preview.ts`.
+Layout CSS, which the preview genuinely needs, stays in `global.css` and stays mirrored.
 
 Measured details encoded as CSS comments:
 
@@ -131,6 +154,11 @@ Measured details encoded as CSS comments:
   and 1112 px rows simply get shorter; below 600 px a container query stacks them. This is an
   accepted trade-off, not a solved problem — and it is in the CSS comment because the next person
   to read it will assume the layout is fluid.
+- **`sizes` is derived per photo** from the build-time partition, not from one conservative
+  constant. Three clauses — a pixel width at and above the design width, the photo's share of the
+  container between there and the stacking breakpoint, and `100vw` below it. One constant for the
+  whole gallery is wrong in both directions: a lone full-width panorama would be served a 640 px
+  variant, or a 3-up row would be served 1920 px ones.
 - **Break-out:** `--jgal-w: min(100% + 24rem, 100vw - 3.5rem, 1112px)` with
   `margin-inline: calc((100% - var(--jgal-w)) / 2)`. Not `margin-left: 50%; transform:
   translateX(-50%)` — a transform makes the element a containing block for fixed-position
@@ -179,14 +207,22 @@ back on confirm.
 
 `uploader/public/gallery-fence.js` gains `layoutOf(directives)` and `withLayout(directives, mode)`.
 `serialize()` already re-emits directives verbatim, so an author who hand-typed a directive the
-picker does not understand keeps it. Round-tripping a `#layout:` directive through the picker gets
-an explicit test — the risk the #66 re-review named.
+picker does not understand keeps it. The default mode writes **no** directive, so a gallery whose
+layout was never touched round-trips byte-identical.
+
+`layoutOf` duplicates the renderer's directive rule — a browser IIFE cannot import an ESM module
+from the other tree, the same constraint that forced `escapeMeta` to be written twice. A parity
+test in `test/gallery-fence.test.ts` imports `readLayoutMode` cross-tree and runs both over one
+corpus, and `test/admin-pages.test.ts` pins the editor's offered values to `GALLERY_MODES`. Without
+those, the picker can show one mode while the site renders another — silently, and only after
+publishing.
 
 ## Testing
 
 | Area | Coverage |
 | --- | --- |
-| `gallery-layout.test.ts` | The ten partition cases named on #66 (1/2/3/7/13 landscape, 9 and 13 mixed, 5 portraits, a lone 4:1 panorama, a panorama in a mix), plus the directive reader including unknown-value, missing, casing and duplicate-directive cases |
+| `gallery-layout.test.ts` | The ten partition cases named on #66 (1/2/3/7/13 landscape, 9 and 13 mixed, 5 portraits, a lone 4:1 panorama, a panorama in a mix), the greedy invariant as a property, the cap rules including the cross-width drift check, plus the directive reader including unknown-value, missing, casing and duplicate-directive cases |
+| `gallery-lightbox.test.ts` | The island's DOM behaviour under happy-dom — keys, clamping, disabled/hidden states, modifier-click passthrough, and that wiring the slider writes no inline style |
 | `images.test.ts` | `largestVariant` |
 | `body-images.test.ts` | Per-mode markup, ratio emission, row nesting, and that the #65 URL/coercion defences still reject what they rejected before |
 | `preview.test.ts` | The CSS parity guard, unchanged and unweakened |
@@ -199,7 +235,11 @@ an explicit test — the risk the #66 re-review named.
 - **Three modes is three times the CSS surface**, mirrored into `preview.ts`. The parity test makes
   drift loud but does not make the volume smaller.
 - **Row membership fixed at build time** — accepted, documented in the CSS.
-- **Dead lightbox CSS in `preview.ts`** — accepted, cheaper than dodging the parity guard.
+- **The directive rule is written twice** (renderer and picker) — unavoidable across the two
+  trees, and held together by a cross-tree parity test rather than by discipline.
+- **happy-dom is a new dev dependency** in `site/`, for one suite. Justified because the island's
+  accessibility behaviour *is* DOM behaviour: the repo's existing `vm`-sandbox precedent covers
+  pure logic and cannot reach keyboard handling, focus, or `<dialog>` state.
 
 ## Out of scope
 
