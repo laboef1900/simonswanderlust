@@ -152,12 +152,13 @@ time. This contract is mirrored on the blog side in `site/src/lib/images.ts`.
   EXIF and how many carry GPS, and (when any do) which storage keys and whether each has a
   retained `-orig` to re-encode from. Gates whether a remediation pass is needed at all; nothing
   is written. `docker compose exec app node --import tsx src/cli.ts audit-exif`.
-- `strip-gps` — **not yet built.** It remediates the historical corpus (a lossy re-encode for
-  the keys with no retained original), and is scoped to be added only if a server-side
-  `audit-exif` run finds GPS-carrying variants. A pre-release audit of the **local development
-  corpus** (not the server) found 102 variant files with EXIF and zero with GPS, so it wasn't
-  built speculatively — the pipeline fix above already stops new GPS exposure regardless. The
-  server's corpus has not yet been audited; see SECURITY.md.
+- `strip-gps` — **not built, and its trigger never fired.** It would remediate the historical
+  corpus (a lossy re-encode for the keys with no retained original), scoped to be added only if
+  an `audit-exif` run found GPS-carrying variants. Audits found 102 variant files with EXIF and
+  zero with GPS. The "server corpus is unaudited" caveat that used to sit here was retired on
+  2026-07-29 with issue #68: there is no production deployment yet, and the WXR importer re-hosts
+  via `processImage`, so imported photos pass the `allowedExif()` allow-list at encode time — the
+  allow-list is upstream of the importer, not beside it. See SECURITY.md.
 
 Host-based routing keeps the two domains on one process: the image-variant static handler is
 registered with a Fastify **host constraint** for the hostname of `PUBLIC_BASE_URL` (overridable

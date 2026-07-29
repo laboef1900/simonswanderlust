@@ -152,12 +152,27 @@ remaining 14 carry only `Software: Capture One Macintosh` — i.e. these are
 processed exports whose metadata was already largely stripped before it
 reached this corpus, not a direct read of camera-original files.
 Because that audit was clean, a remediation `strip-gps` command was not
-built in this phase; it is scoped to be added only if a future `audit-exif`
-run **against the server's `/data/images`** finds otherwise — that audit is
-still outstanding, and is the correct next step before relying on this
-finding for the production corpus (which may contain WordPress-imported
-photos from other devices and years). Until then, the pipeline fix above
-covers every upload going forward, but the historical corpus is unchanged.
+built in this phase.
+
+**The "server corpus" caveat this section used to carry is now resolved
+(2026-07-29, issue #68 closed as obsolete).** It reserved judgement pending
+an `audit-exif` run against a production `/data/images` holding
+WordPress-imported photos from other devices and years. Two things settled
+it: there is no production deployment (Phase 4, the DNS cutover, has not
+started), and the WordPress import itself cannot introduce the exposure —
+`wp-images.ts` re-hosts through `processImage` in `pipeline.ts`, the same
+path as any upload, so every imported variant passes through `allowedExif()`
+at encode time. The allow-list sits **upstream** of the importer, not beside
+it.
+
+That was then exercised for real: the 2026-07-29 WXR import re-hosted **665
+photos** shot on other devices between 2021 and 2024, all encoded through
+the allow-list. The only variants ever published without it are the 102 that
+predate the fix, audited twice with identical results.
+
+`strip-gps` therefore remains unbuilt, correctly — its trigger never fired.
+Re-run `audit-exif` if a pre-#62 variant corpus is ever copied onto a server
+wholesale; that is the one path that could reintroduce the question.
 
 ## SSRF protection (WordPress import)
 

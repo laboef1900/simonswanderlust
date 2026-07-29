@@ -1,10 +1,14 @@
 # simonswanderlust-images
 
 Self-hosted image uploader **and admin CMS** for the Astro blog: uploads a photo and generates
-responsive AVIF/WebP variants (EXIF/GPS preserved), and hosts the in-admin editor and WordPress
+responsive AVIF/WebP variants, and hosts the in-admin editor, the media library and the WordPress
 import — and, since the single-app-container merge, **also serves the public blog itself**
 and runs its Astro builds in-process (no separate build server). How it fits the rest of the
 stack: [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Security model: [`../SECURITY.md`](../SECURITY.md).
+
+> Published variants carry an **eight-tag EXIF allow-list**, not the source metadata — no GPS, no
+> XMP, no IPTC. The untouched `-orig` retains everything but is never served. Widening that list
+> is a privacy change; see [`../SECURITY.md`](../SECURITY.md).
 
 ## Contract
 
@@ -134,6 +138,52 @@ Full details in [`../SECURITY.md`](../SECURITY.md); the essentials:
   to the public site or change a published slug; only admins can publish.
 - **WordPress import is SSRF-guarded.** Remote image fetches reject internal/loopback addresses,
   time out, and cap the download size; imported slugs are validated before anything is written.
+
+## Media library
+
+`/admin/media.html` is the browsable store behind every photo the blog serves — one row per
+storage key, not per variant file. Bulk drag-and-drop upload, virtual folders (a `media_folders`
+table; moving a photo re-labels it, it does not move bytes on disk), search, and per-item alt text
+that the gallery picker reuses.
+
+Encoding is **asynchronous**: an upload lands, its row goes `processing`, and `encode-queue.ts`
+works the backlog at concurrency 2. A build preempts the queue — both take the same mutex in
+`work-lock.ts`, so a publish never competes with an encode. Rows survive restarts:
+`encodeQueue.recover()` re-seeds from `status = 'processing'` on boot, and `media-sync` reconciles
+disk against the database (backfilling rows for keys already on disk, harvesting alt text by exact
+URL match, and flagging rows whose file has vanished).
+
+Two consequences worth knowing:
+
+- **Publishing is gated on encode state.** A post referencing a photo that is not yet `ready` is
+  refused rather than published with a broken image.
+- **`GET /media` redacts for non-admins** — GPS (`lat`/`lng`) and uploader identity are stripped.
+  Never return a raw row.
+
+Irreversible operations (`DELETE /media/items/*`, `PATCH`/`DELETE /media/folders`,
+`POST /media/rescan`) are admin-only.
+
+## Galleries
+
+Several photos render as one grid from a fenced ```` ```gallery ```` block, one image URL per line.
+Authors get it from **"Insert / edit gallery"** on either locale tab, which opens the library in
+multi-select mode with an ordering strip; the button writes exactly the text a person would type by
+hand. Per-line `| WxH | alt="…" | caption="…"` metadata is lifted into the post's `images` map at
+the store chokepoint (`normalizeGalleryFences`), leaving the body as bare URLs.
+
+Three layout modes, selected by a `#layout:` line **inside** the fence — `breakout` (default,
+justified rows wider than the story column), `column` (justified rows aligned to body text), and
+`slider`. All three get a `<dialog>` lightbox. An unknown or absent directive falls back to
+`breakout`. The directive lives inside the fence rather than on the opener because an info-string
+argument is discarded before the renderer ever sees it.
+
+Author-facing detail is in [`../docs/authoring-workflow.md`](../docs/authoring-workflow.md).
+
+> **Gallery markup is injected *after* `rehype-sanitize`**, so it inherits none of its protections.
+> URLs are allow-listed by **origin equality** (never a prefix match), alt/caption are coerced with
+> `String()`, and dimensions are validated before reaching markup arithmetic. Validation lives at
+> the `posts.ts`/`pages.ts` store chokepoint, not in `validateDraft` — the WXR importer bypasses
+> the latter.
 
 ## AI alt-text (local LM Studio)
 
