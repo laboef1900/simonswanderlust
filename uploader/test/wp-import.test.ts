@@ -101,9 +101,9 @@ ${['de', 'en']
     const store = memoryPostStore();
     await importWxr(galleryXml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost });
 
-    // every gallery photo was fetched (both locales)
-    expect(seen.filter((u) => u === 'https://wp/one.jpg')).toHaveLength(2);
-    expect(seen.filter((u) => u === 'https://wp/two.jpg')).toHaveLength(2);
+    // a photo shared by both translations is fetched and encoded ONCE
+    expect(seen.filter((u) => u === 'https://wp/one.jpg')).toHaveLength(1);
+    expect(seen.filter((u) => u === 'https://wp/two.jpg')).toHaveLength(1);
 
     const pair = (await store.get((await store.list())[0]!.translationKey))!;
     const de = pair.de.bodyMarkdown;
@@ -111,6 +111,44 @@ ${['de', 'en']
     expect(de).toContain('```gallery\nhttps://img/one\nhttps://img/two\n```'); // normalized to bare URLs
     expect(pair.de.images['https://img/one']).toEqual({ width: 640, height: 480, alt: 'Hoatzin' });
     expect(pair.de.images['https://img/two']).toEqual({ width: 640, height: 480, alt: 'Kingfisher' });
+    // ...and both locales point at that single copy
+    expect(pair.en.bodyMarkdown).toContain('```gallery\nhttps://img/one\nhttps://img/two\n```');
+    expect(pair.en.images['https://img/one']).toEqual({ width: 640, height: 480, alt: 'Hoatzin' });
+  });
+
+  it('stores a shared photo under one key, taken from the locale processed first', async () => {
+    const anchor = (href: string) =>
+      `<a href="${href}" data-elementor-lightbox-slideshow="g1" data-elementor-lightbox-title="t"></a>`;
+    const xmlPair = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/"
+  xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/"
+  xmlns:wp="http://wordpress.org/export/1.2/">
+<channel>
+${['de', 'en']
+  .map(
+    (loc) => `  <item>
+    <title>K ${loc}</title>
+    <wp:post_name><![CDATA[key-${loc}]]></wp:post_name>
+    <wp:post_type><![CDATA[post]]></wp:post_type>
+    <wp:status><![CDATA[publish]]></wp:status>
+    <wp:post_date><![CDATA[2021-07-25 00:00:00]]></wp:post_date>
+    <excerpt:encoded><![CDATA[]]></excerpt:encoded>
+    <content:encoded><![CDATA[${anchor('https://wp/shared.jpg')}]]></content:encoded>
+    <category domain="language" nicename="${loc}"><![CDATA[${loc}]]></category>
+    <category domain="post_translations" nicename="pll_k"><![CDATA[pll_k]]></category>
+  </item>`,
+  )
+  .join('\n')}
+</channel>
+</rss>`;
+    const keys: string[] = [];
+    const store = memoryPostStore();
+    await importWxr(xmlPair, {
+      postStore: store, storageDir: '/tmp', baseUrl: 'https://img',
+      rehost: async (_u, key) => { keys.push(key); return { src: 'https://img/s', width: 1, height: 1 }; },
+    });
+    expect(keys).toEqual(['trips/key-de/shared']);
   });
 
   it('skips a group whose slug is unsafe (path-traversal defense) without storing it', async () => {

@@ -20,6 +20,34 @@ function nameFromUrl(url: string): string {
   return base.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'image';
 }
 
+/**
+ * Re-host `url` once per translation pair.
+ *
+ * @ai-warning A DE/EN pair is two rows describing the SAME trip, so its two
+ * bodies reference the same photos — 650 distinct images arrived as 1,338
+ * fetch+encode calls in the 2026-06-24 export, each pair byte-identical. The
+ * cache is scoped to one pair (created per group in importWxr), never global:
+ * two different trips that happen to reuse a photo still get their own copy
+ * under their own slug, so deleting one trip cannot strip another's images.
+ * Within a pair that risk does not exist — `upsertDraft` writes both rows
+ * under one translation_key and they are created and deleted together.
+ *
+ * Consequence: the stored key comes from whichever locale is built first (de),
+ * so an EN post's photos live under the DE slug. That is deliberate.
+ */
+type RehostFn = (url: string, key: string, alt: string) => Promise<RehostResult>;
+
+function sharedRehost(rehost: RehostFn): RehostFn {
+  const byUrl = new Map<string, Promise<RehostResult>>();
+  return (url, key, alt) => {
+    const hit = byUrl.get(url);
+    if (hit) return hit;
+    const p = rehost(url, key, alt);
+    byUrl.set(url, p);
+    return p;
+  };
+}
+
 async function buildLocale(
   p: ParsedPost, attachments: Map<string, string>,
   rehost: (url: string, key: string, alt: string) => Promise<RehostResult>,
@@ -101,12 +129,14 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
     const prior = bySlug.get(de.slug) ?? bySlug.get(en.slug);
     if (prior?.status === 'published') { summary.skipped++; summary.warnings.push(`${de.slug}/${en.slug}: already published — not overwritten`); continue; }
     try {
+      // One cache per pair: de and en describe the same trip and share photos.
+      const pairRehost = sharedRehost(rehost);
       const pair: PostPair = {
         translationKey: prior?.translationKey ?? '',
         status: 'draft',
         shared: { date: de.date, country: '', countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } },
-        de: await buildLocale(de, attachments, rehost, summary.warnings),
-        en: await buildLocale(en, attachments, rehost, summary.warnings),
+        de: await buildLocale(de, attachments, pairRehost, summary.warnings),
+        en: await buildLocale(en, attachments, pairRehost, summary.warnings),
       };
       await deps.postStore.upsertDraft(pair);
       if (prior) summary.updated++; else summary.imported++;
