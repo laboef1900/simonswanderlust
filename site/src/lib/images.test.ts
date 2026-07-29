@@ -4,6 +4,7 @@ import {
   imageOrigin,
   largestVariant,
   PROD_IMAGE_ORIGIN,
+  retargetImageOrigins,
   srcset,
   variantWidths,
   type RemoteHeroImage,
@@ -108,5 +109,59 @@ describe('imageOrigin', () => {
   it('falls back on a non-string or unparsable value instead of emitting a broken hint', () => {
     expect(imageOrigin(42)).toBe(PROD_IMAGE_ORIGIN);
     expect(imageOrigin('img.simonswanderlust.com')).toBe(PROD_IMAGE_ORIGIN);
+  });
+});
+
+describe('retargetImageOrigins', () => {
+  const IMG = 'https://img.simonswanderlust.com';
+
+  it('re-points registered image URLs at the configured origin, in body and map alike', () => {
+    const out = retargetImageOrigins(
+      {
+        heroSrc: 'http://localhost:3000/trips/rhodos/hero',
+        images: { 'http://localhost:3000/trips/rhodos/a': { width: 10, height: 5 } },
+        body: '```gallery\nhttp://localhost:3000/trips/rhodos/a\n```',
+      },
+      IMG,
+    );
+    expect(out.heroSrc).toBe(`${IMG}/trips/rhodos/hero`);
+    expect(Object.keys(out.images)).toEqual([`${IMG}/trips/rhodos/a`]);
+    expect(out.body).toContain(`${IMG}/trips/rhodos/a`);
+    expect(out.body).not.toContain('localhost');
+  });
+
+  it('leaves ordinary links alone — only registered images are rewritten', () => {
+    const body = 'See [Kopenhagen](https://de.wikipedia.org/wiki/Kopenhagen) and\nhttp://localhost:3000/trips/x/a';
+    const out = retargetImageOrigins(
+      { heroSrc: '', images: { 'http://localhost:3000/trips/x/a': { width: 1, height: 1 } }, body },
+      IMG,
+    );
+    expect(out.body).toContain('https://de.wikipedia.org/wiki/Kopenhagen');
+    expect(out.body).toContain(`${IMG}/trips/x/a`);
+  });
+
+  it('does not corrupt a key that is a prefix of another key', () => {
+    const out = retargetImageOrigins(
+      {
+        heroSrc: '',
+        images: {
+          'http://localhost:3000/trips/x/a': { width: 1, height: 1 },
+          'http://localhost:3000/trips/x/a-2': { width: 1, height: 1 },
+        },
+        body: 'http://localhost:3000/trips/x/a\nhttp://localhost:3000/trips/x/a-2',
+      },
+      IMG,
+    );
+    expect(out.body.split('\n')).toEqual([`${IMG}/trips/x/a`, `${IMG}/trips/x/a-2`]);
+    expect(Object.keys(out.images).sort()).toEqual([`${IMG}/trips/x/a`, `${IMG}/trips/x/a-2`]);
+  });
+
+  it('is a no-op when the content already matches the origin', () => {
+    const input = {
+      heroSrc: `${IMG}/trips/x/hero`,
+      images: { [`${IMG}/trips/x/a`]: { width: 1, height: 1 } },
+      body: `${IMG}/trips/x/a`,
+    };
+    expect(retargetImageOrigins(input, IMG)).toEqual(input);
   });
 });
