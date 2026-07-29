@@ -223,6 +223,12 @@ function itemNode(
 function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 'slider'>) {
   const width = containerWidthFor(mode);
   const rows = partitionRows(photos.map((p) => p.image.width / p.image.height), width);
+  // @ai-note Photos are re-associated with their ratios BY POSITION, which is
+  // only sound because partitionRows cannot drop one here: galleryPhotos has
+  // already rejected any photo whose width/height are not positive integers, so
+  // every ratio is finite and positive and the partition's own guard never
+  // fires. Feed it unvalidated dimensions and this slicing silently pairs each
+  // photo with the wrong ratio from that point on.
   let taken = 0;
   return rows.map((row) => {
     const slice = photos.slice(taken, taken + row.ratios.length);
