@@ -647,11 +647,31 @@ blog/
   `posts` table and the Astro loader (`postgres-loader.ts`) were already per-row/per-locale;
   only the uploader's `PostShared`/`PostLocale` split, the editor UI, MDX export, and the WXR
   importer's placeholder needed to change.
+- **Done:** #85 WXR importer hardening (2026-07-30) — the importer survives a real export.
+  Four decorators around the existing `rehost` seam, in a load-bearing order pinned by tests:
+  `sharedRehost( resume+tally( retry( pace( rehostImage ) ) ) )`. Retry and pacing MUST stay below
+  `sharedRehost`, which memoises **rejected** promises. Pacing is an **elapsed gate**, so a
+  fetch+encode that already outlasted the delay pays nothing. Retry covers only transient
+  `FetchError`s, classified off new additive `kind`/`status`/`code` tags rather than message text —
+  never a `sharp` decode or an `ENOSPC`, and never `ENOTFOUND`.
+  **Resumability is derived from disk, with no state file**: the importer's keys are deterministic
+  and un-hashed (every other write path appends `-<hash8>` via `contentHashKey`), so
+  `/data/images` *is* the record and `walkStorageKeys` already indexes it. Fail-closed on a partial
+  variant set; the hero slot is never resumed because its key encodes no URL identity. Blast radius
+  is bounded by `retryBudget` (retries only, so a large export still works), a per-host
+  consecutive-failure breaker, and a single-flight 409 on `POST /import` — needed because "run it
+  again" is now the documented recovery path. Warnings come from one place instead of three, carry a
+  stable reason instead of the raw undici message (which leaked an RFC1918 oracle to non-admin
+  authors), and are capped. See
+  `docs/superpowers/specs/2026-07-30-wxr-import-hardening-design.md` and `SECURITY.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
-  started), #72 (Traefik timeouts). #85 (WXR importer robustness — no throttle, no retry,
-  synchronous route) was filed from the import run. #68 (production EXIF audit) was **closed as
-  obsolete** 2026-07-29. See `docs/superpowers/plans/IMPLEMENTATION-PROMPT.md` for why each is
+  started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**
+  2026-07-29. Filed out of #85 and deliberately excluded from it: a publish-time refusal on leftover
+  `wp-content` URLs (a partial import is now *visible* but still publishable), `/import` →
+  `requireAdmin`, a `/data` free-space precondition on `/import`, work-lock participation for import
+  encodes, a per-import cap on distinct images, `nameFromUrl` non-injectivity, and the `bySlug`
+  cross-locale slug collision. See `docs/superpowers/plans/IMPLEMENTATION-PROMPT.md` for why each is
   excluded.
 
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.

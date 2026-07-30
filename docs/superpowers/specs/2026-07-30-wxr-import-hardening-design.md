@@ -70,9 +70,17 @@ than missed:
 remote-fetch step. Everything here composes around it. Nothing moves into `buildLocale`'s loops.
 
 ```
-per pair:  sharedRehost( resume( pace( retry( rehostImage ) ) ) )
-           └ existing    └──────── created once per import run ────────┘
+per pair:  sharedRehost( resume+tally( retry( pace( rehostImage ) ) ) )
+           └ existing    └────────── created once per import run ──────────┘
 ```
+
+**`pace` sits inside `retry`, not outside it.** An earlier draft of this spec had
+`pace( retry( … ) )`; implementation showed the inner position is strictly better and it is
+what shipped. Outside, only the first attempt of each image passes the gate, so the gate's
+`nextAt` is never advanced by a retry and the image *after* a retried one can fire
+immediately. Inside, every actual network attempt is paced and the gate stays accurate — and
+it costs nothing, because a backoff of 5 s already satisfies a 1.2 s gate, so no extra sleep
+is emitted. Every invariant below holds either way; this position holds them more cleanly.
 
 **The order is an invariant, not a detail.** It is pinned by `test/wp-import.test.ts`.
 
@@ -151,9 +159,11 @@ Given a candidate key, `resume` returns a `RehostResult` iff **all** hold:
 1. The key is **not** a hero slot (see below).
 2. `walkStorageKeys` recorded a `largestVariant` for that exact key.
 3. The **complete** expected variant set exists: every `variantWidths(w) × FORMATS` filename.
-4. `probeImage` on the largest webp yields positive dimensions. (`probeImage` takes a `Buffer`
-   (`pipeline.ts:61`), so the file is read — one sequential read of a few hundred KB per resumed
-   photo, negligible against a 5 s fetch+encode.)
+4. `sharp(<largest webp>).metadata()` yields a positive height **and** a width equal to the one
+   parsed from the filename — which makes this a dimension-identity check, not merely an
+   existence check. Reads by path rather than through `probeImage` (which takes a `Buffer`),
+   matching the existing `probeDims` helper in `media-sync.ts:85-92`. Sub-millisecond per photo,
+   against a ~5 s fetch+encode.
 
 Then `src = ${baseUrl}/${key}`, recomputed from the **live** config.
 
@@ -466,7 +476,8 @@ resume: await createRehostResume({ storageDir: cfg.storageDir, baseUrl: cfg.base
 Consequently `main.ts` needs no change at all — no new path derivation, no new injected store, and
 no new entry in `ARCHITECTURE.md`'s env table. The complete file list is: `safe-fetch.ts`,
 `wp-images.ts`, `wp-import.ts`, `settings.ts`, `server.ts`, `public/settings.html`,
-`public/import.html`, plus tests and docs.
+`public/import.html`, `public/admin.css` (one `.notice-warn` rule for the partial-import
+callout), plus tests and docs.
 
 **Coherence note, accepted:** `POST /settings` is `requireAdmin` while `POST /import` is
 `requireAuth`, so a non-admin author runs an import governed by knobs they cannot read or change.
