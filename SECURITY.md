@@ -189,6 +189,54 @@ fetches go through `safeFetch` (`uploader/src/safe-fetch.ts`), which:
 (The former LM Studio caption feature — the app's only other outbound-fetch surface — was removed
 in July 2026; the WordPress importer is now the sole remote-fetch path.)
 
+### Retry changes the shape of two accepted gaps (issue #85, 2026-07-30)
+
+`POST /import` now retries a failed image download up to `importRetries` times. `safeFetch` is
+unchanged and is re-entered from scratch on every attempt, so `assertFetchableUrl` re-validates each
+time — a test counts validations per attempt to keep it that way. But two **previously single-shot**
+accepted weaknesses become multi-shot, which is a change to the security model rather than a bug:
+
+- `assertFetchableUrl` is a pre-resolution **string** check, so a hostname that resolves to a
+  private address is not caught (documented above as out of scope for a single-tenant deployment).
+- `safeFetch` uses `redirect: 'follow'`, so redirect hops are never re-inspected.
+
+A DNS-rebinding or redirecting attacker therefore gets up to `importRetries + 1` attempts per URL
+instead of one. `redirect: 'manual'` with a per-hop re-assert was considered and **declined for
+now**: WordPress media URLs legitimately redirect, and breaking the importer to narrow a gap that is
+already accepted for this deployment is the wrong trade. Compensating controls, all in
+`uploader/src/wp-import.ts`:
+
+- **`retryBudget`** (default 200) caps *retry* attempts across an entire import, so the extra load
+  this feature can generate is bounded at +200 fetches per import regardless of export size — not
+  `retries × N`.
+- **A per-host consecutive-failure breaker** (default 20) abandons a host for the rest of the run.
+  This is the only control that bounds *first* attempts, and it matters: because the re-host cache is
+  scoped per translation pair, one attachment URL referenced from N groups is fetched N times, which
+  a 25 MiB export can push to roughly 40,000 requests against a single third-party URL. The breaker
+  reduces that to ~20 whenever the target is failing.
+- **Single-flight** — `POST /import` returns 409 while an import is running. The pacing gate is
+  per-run state, so without mutual exclusion K concurrent imports give the victim K× the configured
+  request rate and the throttle provides no aggregate guarantee at all.
+- **Only transient fetch failures are retried.** The SSRF refusal (`kind: 'blocked'`), an unusable
+  URL, an oversized response, a 4xx other than 429, a permanently unresolvable host
+  (`ENOTFOUND`), and *anything that is not a `FetchError`* are never retried. In particular a
+  `sharp` decode failure or an `ENOSPC` is not — re-downloading the same bytes to feed sharp again
+  is memory pressure, not recovery.
+
+**Not bounded:** the count of *successful* fetches against a host that keeps answering. Pacing makes
+that polite rather than fewer. A per-import cap on distinct images is filed separately.
+
+### Import failure reasons are deliberately vague
+
+`isBlockedHost` blocks loopback and link-local literals but **not RFC1918**, and `POST /import` is
+`requireAuth` rather than `requireAdmin`. Before #85 a failed image returned the raw undici text to
+the author — `connect ECONNREFUSED 10.0.0.5:8080` — a working internal-network mapping and
+service-fingerprinting oracle. Import warnings now carry a stable reason ("network error", "blocked
+address", "download failed", …) plus the URL the author supplied themselves; the underlying message,
+HTTP status and error code go to **stdout only**. `failureReason` in `uploader/src/wp-import.ts`
+carries an `@ai-warning` against widening it, and the warning list is capped so a dead CDN cannot
+return >1,300 URL-bearing strings in one response.
+
 ## Output sanitization (stored XSS)
 
 Post bodies are DB-stored Markdown rendered to HTML at build time. Before that HTML reaches the

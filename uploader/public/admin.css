@@ -291,6 +291,18 @@ small {
 
 .muted { color: var(--muted); font-size: 0.88rem; margin-top: 0.4rem; }
 
+/* A result that succeeded but is incomplete — e.g. a WordPress import whose
+   photos partly failed. Colour is not the only signal: the left rule and the
+   wording carry it too (CLAUDE.md, accessibility). */
+.notice-warn {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.8rem;
+  border-left: 3px solid #b45309;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 0.88rem;
+}
+
 #list { list-style: none; padding: 0; }
 #list li {
   display: flex;

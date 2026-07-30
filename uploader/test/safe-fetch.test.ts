@@ -45,3 +45,66 @@ describe('safeFetch', () => {
     await expect(safeFetch('https://example.com/a.jpg', { fetchImpl: hang, timeoutMs: 10 })).rejects.toThrow(FetchError);
   });
 });
+
+/**
+ * The retry policy in wp-import.ts branches on `kind`/`status`/`code` rather than
+ * on message text (issue #85). These assert the tagging exists and is stable —
+ * without them the importer would have to regex human-readable messages, the
+ * duplicated-parsing-rule mistake gallery-fence-parity.test.ts already guards.
+ */
+describe('FetchError classification', () => {
+  const caught = async (fn: () => Promise<unknown>): Promise<FetchError> => {
+    try {
+      await fn();
+    } catch (e) {
+      if (e instanceof FetchError) return e;
+      throw e;
+    }
+    throw new Error('expected a FetchError');
+  };
+
+  it('tags an unusable URL as invalid-url, whatever makes it unusable', () => {
+    for (const raw of ['not a url', 'ftp://example.com/a', 'http://user:pass@example.com/a']) {
+      let err: unknown;
+      try { assertFetchableUrl(raw); } catch (e) { err = e; }
+      expect((err as FetchError).kind, raw).toBe('invalid-url');
+    }
+  });
+
+  it('tags an SSRF-guard refusal as blocked, distinctly from a malformed URL', () => {
+    let err: unknown;
+    try { assertFetchableUrl('http://169.254.169.254/latest/meta-data/'); } catch (e) { err = e; }
+    expect((err as FetchError).kind).toBe('blocked');
+  });
+
+  it('tags a non-2xx response as http and carries the status', async () => {
+    const fetchImpl = (async () => new Response('nope', { status: 503 })) as unknown as typeof fetch;
+    const err = await caught(() => safeFetch('https://example.com/a.jpg', { fetchImpl }));
+    expect(err.kind).toBe('http');
+    expect(err.status).toBe(503);
+  });
+
+  it('tags a byte-cap breach as too-large', async () => {
+    const fetchImpl = (async () => new Response(new Uint8Array(1000))) as unknown as typeof fetch;
+    const err = await caught(() => safeFetch('https://example.com/a.jpg', { fetchImpl, maxBytes: 100 }));
+    expect(err.kind).toBe('too-large');
+  });
+
+  it('tags an abort as timeout', async () => {
+    const hang = ((_url: string, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      })) as unknown as typeof fetch;
+    const err = await caught(() => safeFetch('https://example.com/a.jpg', { fetchImpl: hang, timeoutMs: 10 }));
+    expect(err.kind).toBe('timeout');
+  });
+
+  it('tags a transport failure as network and carries cause.code through', async () => {
+    const boom = (async () => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
+    }) as unknown as typeof fetch;
+    const err = await caught(() => safeFetch('https://example.com/a.jpg', { fetchImpl: boom }));
+    expect(err.kind).toBe('network');
+    expect(err.code).toBe('ENOTFOUND');
+  });
+});

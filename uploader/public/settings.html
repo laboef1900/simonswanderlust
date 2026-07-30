@@ -61,6 +61,22 @@
         <label for="backupRetention">Backups to keep</label>
         <input id="backupRetention" type="number" min="1" max="100" />
 
+        <p class="section-label">WordPress import</p>
+        <label for="importDelayMs">Delay between image downloads (ms)</label>
+        <input id="importDelayMs" type="number" min="0" max="10000" />
+        <p class="muted">
+          How long to wait between fetching photos from the old site. 0 is as fast as
+          possible, which is what got the importer cut off after 37 images; 1200 completed
+          all 665.
+        </p>
+
+        <label for="importRetries">Retries per image</label>
+        <input id="importRetries" type="number" min="0" max="5" />
+        <p class="muted">
+          Extra attempts after a download fails, spaced 5s / 15s / 45s. Only transient
+          failures are retried — a blocked address or a missing file is not.
+        </p>
+
         <button id="backupNow">Back up now</button>
         <button id="rebuild">Rebuild site now</button>
 
@@ -102,6 +118,8 @@
         $('prompt').value = s.captionPrompt || '';
         $('backupSchedule').value = s.backupSchedule || 'off';
         $('backupRetention').value = s.backupRetention ?? 14;
+        $('importDelayMs').value = s.importDelayMs ?? 1200;
+        $('importRetries').value = s.importRetries ?? 3;
         const sel = $('model');
         if (s.lmModel && ![...sel.options].some((o) => o.value === s.lmModel)) {
           sel.add(new Option(s.lmModel, s.lmModel));
@@ -173,6 +191,8 @@
               captionPrompt: $('prompt').value,
               backupSchedule: $('backupSchedule').value,
               backupRetention: Number($('backupRetention').value),
+              importDelayMs: Number($('importDelayMs').value),
+              importRetries: Number($('importRetries').value),
             }),
           });
         } catch (e) {

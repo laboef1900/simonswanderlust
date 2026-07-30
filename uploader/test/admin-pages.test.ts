@@ -426,3 +426,61 @@ describe('admin page wiring', () => {
     expect(about.match(/autosave: \{ enabled: false \}/g)).toHaveLength(2);
   });
 });
+
+/**
+ * Issue #85's two settings fields, and the copy that explains the new recovery
+ * behaviour. A settings field needs markup AND `fill()` AND the POST body —
+ * miss one and it either never displays or never persists, and nothing else
+ * catches it: the server tests exercise the API, not the page.
+ */
+describe('settings.html import pacing fields', () => {
+  const html = readFileSync('public/settings.html', 'utf8');
+
+  it('renders an input for each field, bounded to match the server', () => {
+    // Bounds are duplicated in the server's validate() by necessity; keeping the
+    // numbers here identical is what makes the client-side rejection agree.
+    expect(html).toMatch(/<input id="importDelayMs"[^>]*min="0"[^>]*max="10000"/);
+    expect(html).toMatch(/<input id="importRetries"[^>]*min="0"[^>]*max="5"/);
+  });
+
+  it('labels both inputs for screen readers', () => {
+    expect(html).toMatch(/<label for="importDelayMs">/);
+    expect(html).toMatch(/<label for="importRetries">/);
+  });
+
+  it('populates both from the loaded settings', () => {
+    expect(html).toMatch(/\$\('importDelayMs'\)\.value = s\.importDelayMs/);
+    expect(html).toMatch(/\$\('importRetries'\)\.value = s\.importRetries/);
+  });
+
+  it('sends both in the save payload', () => {
+    expect(html).toMatch(/importDelayMs: Number\(\$\('importDelayMs'\)\.value\)/);
+    expect(html).toMatch(/importRetries: Number\(\$\('importRetries'\)\.value\)/);
+  });
+});
+
+describe('import.html recovery copy', () => {
+  const html = readFileSync('public/import.html', 'utf8');
+
+  // After #85 this IS the user-facing recovery story: the request usually
+  // outlives the browser's patience, and re-running resumes from disk.
+  it('tells the author the import survives a browser timeout and that re-running resumes', () => {
+    expect(html).toMatch(/continues on the server/i);
+    expect(html).toMatch(/again/i);
+    expect(html).toMatch(/resum/i);
+  });
+
+  // The whole complaint in #85 is that `imported: 9, skipped: 0` read as a clean
+  // success while 95% of the photos had silently kept their wp-content URL.
+  it('shows the image tally alongside the post counts', () => {
+    expect(html).toMatch(/data\.images/);
+    // the counts line reports hosted-of-total, not just the post numbers
+    expect(html).toMatch(/\$\('counts'\)[\s\S]{0,400}hosted/);
+  });
+
+  it('calls out un-hosted photos rather than leaving them to the warning list', () => {
+    expect(html).toMatch(/\.failed > 0/);
+    // a dedicated element, announced, not a colour-only cue
+    expect(html).toMatch(/id="importPartial"[^>]*role="status"/);
+  });
+});
