@@ -1,4 +1,52 @@
-export class FetchError extends Error {}
+/**
+ * Why a fetch failed, as a stable tag rather than message text.
+ *
+ * `invalid-url` covers every way the URL itself is unusable (unparseable,
+ * non-http scheme, embedded credentials) — nothing branches on those
+ * separately. `blocked` is deliberately distinct: it is the SSRF guard
+ * refusing, which is a policy decision rather than a malformed input.
+ *
+ * @ai-context docs/superpowers/specs/2026-07-30-wxr-import-hardening-design.md
+ *   §Retry classification — issue #85.
+ */
+export type FetchErrorKind =
+  | 'invalid-url'
+  | 'blocked'
+  | 'http'
+  | 'timeout'
+  | 'too-large'
+  | 'network';
+
+/**
+ * @ai-warning The retry policy for the WordPress importer branches on `kind`,
+ * `status` and `code` — NOT on `message`. Keep the tags accurate when adding a
+ * throw site, and keep the messages byte-identical when refactoring: a wrong
+ * tag silently converts a permanent failure into four attempts with 65 s of
+ * backoff, per image. The policy itself lives in wp-import.ts on purpose —
+ * this module reports facts, it does not decide what to do about them.
+ */
+export class FetchError extends Error {
+  readonly kind: FetchErrorKind;
+  /** HTTP status, for `kind === 'http'`. */
+  readonly status?: number;
+  /** Transport error code from `err.cause.code` (e.g. `ENOTFOUND`), for `kind === 'network'`. */
+  readonly code?: string;
+
+  constructor(message: string, kind: FetchErrorKind, extra?: { status?: number; code?: string }) {
+    super(message);
+    this.kind = kind;
+    if (extra?.status !== undefined) this.status = extra.status;
+    if (extra?.code !== undefined) this.code = extra.code;
+  }
+}
+
+/** `err.cause.code` when the runtime supplied one — undici nests transport codes there. */
+function causeCode(e: unknown): string | undefined {
+  const cause = (e as { cause?: unknown }).cause;
+  if (typeof cause !== 'object' || cause === null) return undefined;
+  const code = (cause as { code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
+}
 
 export interface SafeFetchOptions {
   timeoutMs?: number;
@@ -42,16 +90,16 @@ export function assertFetchableUrl(raw: string): URL {
   try {
     url = new URL(raw);
   } catch {
-    throw new FetchError(`invalid URL: ${raw}`);
+    throw new FetchError(`invalid URL: ${raw}`, 'invalid-url');
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new FetchError(`unsupported URL scheme "${url.protocol}" (only http/https)`);
+    throw new FetchError(`unsupported URL scheme "${url.protocol}" (only http/https)`, 'invalid-url');
   }
   if (url.username || url.password) {
-    throw new FetchError('URL must not contain credentials');
+    throw new FetchError('URL must not contain credentials', 'invalid-url');
   }
   if (isBlockedHost(url.hostname)) {
-    throw new FetchError(`refusing to fetch internal address: ${url.hostname}`);
+    throw new FetchError(`refusing to fetch internal address: ${url.hostname}`, 'blocked');
   }
   return url;
 }
@@ -71,7 +119,7 @@ export async function safeFetch(raw: string, opts: SafeFetchOptions = {}): Promi
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await doFetch(url, { signal: controller.signal, redirect: 'follow' });
-    if (!res.ok) throw new FetchError(`download failed (HTTP ${res.status}) for ${raw}`);
+    if (!res.ok) throw new FetchError(`download failed (HTTP ${res.status}) for ${raw}`, 'http', { status: res.status });
 
     const contentType = res.headers.get('content-type') ?? '';
     const reader = res.body?.getReader();
@@ -86,7 +134,7 @@ export async function safeFetch(raw: string, opts: SafeFetchOptions = {}): Promi
         total += value.byteLength;
         if (total > maxBytes) {
           await reader.cancel();
-          throw new FetchError(`response exceeds the ${maxBytes}-byte limit for ${raw}`);
+          throw new FetchError(`response exceeds the ${maxBytes}-byte limit for ${raw}`, 'too-large');
         }
         chunks.push(value);
       }
@@ -95,9 +143,9 @@ export async function safeFetch(raw: string, opts: SafeFetchOptions = {}): Promi
   } catch (e) {
     if (e instanceof FetchError) throw e;
     if ((e as Error).name === 'AbortError' || controller.signal.aborted) {
-      throw new FetchError(`request timed out after ${timeoutMs}ms for ${raw}`);
+      throw new FetchError(`request timed out after ${timeoutMs}ms for ${raw}`, 'timeout');
     }
-    throw new FetchError(`request failed for ${raw}: ${(e as Error).message}`);
+    throw new FetchError(`request failed for ${raw}: ${(e as Error).message}`, 'network', { code: causeCode(e) });
   } finally {
     clearTimeout(timer);
   }
