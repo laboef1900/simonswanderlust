@@ -272,8 +272,36 @@ Two things silently drop a photo from the grid, both deliberate:
 > galleries locally. Draft previews in the admin are unaffected — they use the app's own
 > configured image base.
 
-Galleries work in **page** bodies (the About page) on the same terms. The draft preview renders
-them; per the current phase there is no lightbox, so clicking a photo opens the full-size image.
+#### Layout modes
+
+A gallery picks one of three layouts with a `#layout:` line **inside** the fence. The picker sets
+it for you; by hand it looks like this:
+
+````
+```gallery
+#layout: column
+https://img.simonswanderlust.com/trips/rhodes-2021/a-1a2b3c4d | 3000x2000 | alt="Blick über die Bucht"
+```
+````
+
+| Mode | What it does |
+| --- | --- |
+| `breakout` | **Default.** Justified rows, wider than the story column. |
+| `column` | Justified rows aligned to the body-text column. |
+| `slider` | One horizontally scrollable row. |
+
+The directive goes **inside** the fence, not on the opener — ` ```gallery layout=slider ` does not
+work, because the info string is discarded before the renderer sees it. It must be a whole line, so
+a `#layout:` sequence inside an `alt="…"` value stays content. The first one wins, and an unknown
+or missing mode falls back to `breakout` — which is why galleries written before layout modes
+existed render exactly as they did.
+
+In the justified modes the last row is capped at the height of the row above it, so a short final
+row can't leave one photo towering over the rest.
+
+Galleries work in **page** bodies (the About page) on the same terms. Clicking any photo opens a
+lightbox, in all three modes. The draft preview renders galleries but **not** the lightbox — it is
+a separate island that only runs on the built site.
 
 ---
 

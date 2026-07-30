@@ -569,10 +569,13 @@ blog/
   EXIF allow-list instead of full metadata (no GPS/XMP/IPTC), `POST /upload` rejects multi-file
   requests with 413 instead of silently dropping files, an explicit `requestTimeout` is set, and a
   new `audit-exif` CLI subcommand reports the stored corpus's actual EXIF/GPS exposure (found 102
-  variants with EXIF, zero with GPS, against the **local development corpus** — the server has not
-  yet been audited). A `strip-gps` remediation subcommand was deliberately **not** built: that
-  audit came back clean, so it is deferred until a server-side `audit-exif` run finds otherwise.
-  See `docs/superpowers/specs/2026-07-26-media-library-and-galleries-design.md`.
+  variants with EXIF, zero with GPS). A `strip-gps` remediation subcommand was deliberately **not**
+  built, and its trigger never fired. The "server corpus unaudited" caveat was retired 2026-07-29
+  (#68 closed as obsolete): there is no production deployment, and the WXR importer re-hosts via
+  `processImage`, so imported photos clear `allowedExif()` at encode time — the allow-list is
+  **upstream** of the importer. The 2026-07-29 WXR import then re-hosted 665 photos from other
+  devices/years through it. See
+  `docs/superpowers/specs/2026-07-26-media-library-and-galleries-design.md`.
 - **Done:** Backend rework, epic #69 (2026-07-28) — four approved issues, landed as PRs #76–#79:
   - **#65 galleries** — a fenced ```gallery block rendered as a photo grid, with per-line
     `| WxH | alt="…" | caption="…"` metadata lifted into the `images` map on save and re-attached by
@@ -621,9 +624,22 @@ blog/
   scrapes selectors nested inside `@container` blocks too, where the new breakpoints live.
   Lightbox CSS lives with its island rather than in `global.css`, so it is not dead CSS
   hand-mirrored into `preview.ts` — the lightbox does not run in draft preview at all.
+- **Done:** WordPress content import (2026-07-29) — the real WXR export imported: 9 DE/EN pairs,
+  **665 photos re-hosted**, all under their live WordPress slugs. Required fixing the importer,
+  which silently dropped every gallery: Elementor renders galleries as bare `<a href>` anchors with
+  no usable `<img>`, so Turndown produced empty `[](url)` links that the re-host pass never matched.
+  `wp-content.ts` now folds Elementor slideshows into ```gallery fences using the widget's own
+  `data-elementor-lightbox-slideshow` (grouping) and `-title` (alt), and re-hosts once per
+  translation pair. Ten published stub posts were deleted first — eight were fictional placeholders
+  with no WordPress counterpart, and two carried **wrong EN slugs** (`4-days-in-bucharest`,
+  `sun-and-adventure-rhodes`) that violated the SEO slug contract; the import restored the real
+  ones. Imported posts are drafts with placeholder `country`/`region`/`coordinates` that
+  `validateForPublish` rejects until an author completes them.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
-  started), #68 (production EXIF audit), #72 (Traefik timeouts). See
-  `docs/superpowers/plans/IMPLEMENTATION-PROMPT.md` for why each is excluded.
+  started), #72 (Traefik timeouts). #85 (WXR importer robustness — no throttle, no retry,
+  synchronous route) was filed from the import run. #68 (production EXIF audit) was **closed as
+  obsolete** 2026-07-29. See `docs/superpowers/plans/IMPLEMENTATION-PROMPT.md` for why each is
+  excluded.
 
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.
