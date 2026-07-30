@@ -667,11 +667,28 @@ blog/
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**
-  2026-07-29. Filed out of #85 and deliberately excluded from it: a publish-time refusal on leftover
-  `wp-content` URLs (a partial import is now *visible* but still publishable), `/import` →
-  `requireAdmin`, a `/data` free-space precondition on `/import`, work-lock participation for import
-  encodes, a per-import cap on distinct images, `nameFromUrl` non-injectivity, and the `bySlug`
-  cross-locale slug collision. See `docs/superpowers/plans/IMPLEMENTATION-PROMPT.md` for why each is
-  excluded.
+  2026-07-29. See `docs/superpowers/plans/IMPLEMENTATION-PROMPT.md` for why each is excluded.
+- **Filed out of #85 and deliberately excluded from it** (each with its reason in the §Scope table of
+  `docs/superpowers/specs/2026-07-30-wxr-import-hardening-design.md`):
+  - **#91 publish gate rejects leftover `wp-content` URLs** — *the one that matters most.* A partial
+    import is now **visible** but still **publishable**: `validateForPublish` checks only the hero
+    `src`, and `notReadyPhotos` reports clean because `srcToKey` returns `null` for a foreign origin.
+    Body images hot-link the old WordPress domain and gallery photos vanish at render — and after
+    Phase 4's DNS cutover both 404.
+  - **#92 move the import off the request path** onto `encode-queue.ts`/`work-lock.ts` with a progress
+    endpoint (#85's "Better" option). Progress state that survives a restart likely means a new table,
+    so it is a schema change and high-risk in its own right.
+  - **#93 `safeFetch` re-asserts on redirect hops** (`redirect: 'manual'`). Declined in #90 because WP
+    media URLs legitimately redirect. See `SECURITY.md` — retry widened this per-URL window.
+  - **#94 `/data` free-space precondition on `/import`** (`/upload` has one; an import writes ~11 GB).
+  - **#95 import encodes take `work-lock`**, so sharp cannot run beside `astro build`.
+  - **#96 per-import cap on distinct images** — bounds the *pre-existing* first-attempt amplification
+    against a host that keeps answering, which #85 deliberately did not claim to bound.
+  - **#97 `/import` → `requireAdmin`** (every comparable surface already is).
+  - **#98 `nameFromUrl` non-injectivity** — `foo.jpg`/`foo.png` collide on one key. Any fix must keep
+    keys deterministic; #85's disk-derived resume depends on that.
+  - **#99 `bySlug` flattens DE and EN slugs** — a group can bind to the wrong `translationKey` and
+    `upsertDraft` then overwrites the wrong post. Touches Golden Rule 2.
+  - **#100 `ImportSummary.skipped` conflates four outcomes** — #85 fixed this for the image tier only.
 
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.
