@@ -338,9 +338,9 @@ describe('media library', () => {
 
   const draftUsing = (src: string) => ({
     translationKey: '', status: 'draft',
-    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-    de: { locale: 'de', slug: 'media-de', title: 'Mediennutzer', excerpt: 'e', heroImage: { src, width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-    en: { locale: 'en', slug: 'media-en', title: 'Media user', excerpt: 'e', heroImage: { src: 'https://i/other', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de', slug: 'media-de', title: 'Mediennutzer', excerpt: 'e', country: 'X', heroImage: { src, width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en', slug: 'media-en', title: 'Media user', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/other', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
 
   it('GET /media requires a session but NOT admin — the gallery picker needs authors', async () => {
@@ -928,9 +928,9 @@ describe('POST /users/me/password (change password)', () => {
 describe('POST /posts/bulk', () => {
   const sample = (slug: string) => ({
     translationKey: '', status: 'draft',
-    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-    de: { locale: 'de', slug: `de-${slug}`, title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-    en: { locale: 'en', slug: `en-${slug}`, title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de', slug: `de-${slug}`, title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en', slug: `en-${slug}`, title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
 
   const create = async (b: Built, cookie: { sid: string }, slug: string): Promise<string> => {
@@ -1053,9 +1053,9 @@ describe('publish gate (encode status)', () => {
   const IMG = 'https://img.simonswanderlust.com';
   const pairUsing = (heroSrc: string, images: Record<string, unknown> = {}) => ({
     translationKey: '', status: 'draft',
-    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-    de: { locale: 'de', slug: 'gate-de', title: 'T', excerpt: 'e', heroImage: { src: heroSrc, width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images },
-    en: { locale: 'en', slug: 'gate-en', title: 'T', excerpt: 'e', heroImage: { src: heroSrc, width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images },
+    shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de', slug: 'gate-de', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: heroSrc, width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images },
+    en: { locale: 'en', slug: 'gate-en', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: heroSrc, width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images },
   });
 
   const create = async (b: Built, cookie: { sid: string }, payload: Record<string, unknown>) =>
@@ -1141,9 +1141,9 @@ describe('publish gate (encode status)', () => {
 describe('posts editor', () => {
   const sample = () => ({
     translationKey: '', status: 'draft',
-    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-    de: { locale: 'de', slug: 'de-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-    en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de', slug: 'de-s', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
 
   it('GET /posts 401 without auth', async () => {
@@ -1381,9 +1381,9 @@ describe('posts editor', () => {
 describe('post revisions endpoints', () => {
   const sample = () => ({
     translationKey: '', status: 'draft',
-    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-    de: { locale: 'de', slug: 'de-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-    en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de', slug: 'de-s', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
 
   it('401 anonymous', async () => {
@@ -1472,9 +1472,9 @@ describe('POST /rebuild and GET /health', () => {
   // by the existing publish tests.
   const sample = () => ({
     translationKey: '', status: 'draft',
-    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-    de: { locale: 'de', slug: 'de-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-    en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de', slug: 'de-s', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
 
   it('health is public and reports the DB as up, plus free disk space', async () => {
@@ -1628,9 +1628,9 @@ describe('pages routes', () => {
 describe('GET /posts/:tk/preview', () => {
   const draft = () => ({
     translationKey: '', status: 'draft',
-    shared: { date: '2024-10-03', country: 'Rumänien', countryCode: 'RO', region: 'europe', coordinates: { lat: 44.4, lng: 26.1 } },
-    de: { locale: 'de', slug: 'bukarest', title: 'Entwurf Bukarest', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## Anreise', images: {} },
-    en: { locale: 'en', slug: 'bucharest', title: 'Bucharest draft', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## Arrival', images: {} },
+    shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 44.4, lng: 26.1 } },
+    de: { locale: 'de', slug: 'bukarest', title: 'Entwurf Bukarest', excerpt: 'e', country: 'Rumänien', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## Anreise', images: {} },
+    en: { locale: 'en', slug: 'bucharest', title: 'Bucharest draft', excerpt: 'e', country: 'Romania', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## Arrival', images: {} },
   });
 
   it('401 without auth', async () => {

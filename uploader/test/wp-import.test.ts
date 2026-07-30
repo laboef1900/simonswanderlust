@@ -16,7 +16,10 @@ describe('importWxr', () => {
     const first = list[0]!;
     expect(first).toMatchObject({ slugDe: 'rhodos-abenteuer', slugEn: 'rhodes-adventure', status: 'draft' });
     const pair = await store.get(first.translationKey);
-    expect(pair!.shared).toMatchObject({ date: '2021-07-25', country: '', countryCode: 'XX', region: 'europe' });
+    expect(pair!.shared).toMatchObject({ date: '2021-07-25', countryCode: 'XX', region: 'europe' });
+    // country is per-locale and left blank for the author to fill in per language.
+    expect(pair!.de.country).toBe('');
+    expect(pair!.en.country).toBe('');
     expect(pair!.de.heroImage.src).toBe('https://img/x');
     expect(pair!.de.bodyMarkdown).toContain('## Überschrift');
     expect(pair!.de.bodyMarkdown).toContain('![Strand](https://img/x)'); // body image rewritten

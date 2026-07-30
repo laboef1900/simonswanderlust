@@ -38,9 +38,6 @@
         <label for="fmDate">Date</label>
         <input id="fmDate" type="date" />
 
-        <label for="fmCountry">Country</label>
-        <input id="fmCountry" type="text" placeholder="e.g. Greece" />
-
         <label for="fmCountryCode">Country code (2 letters)</label>
         <input id="fmCountryCode" type="text" maxlength="2" placeholder="GR" style="text-transform:uppercase" />
 
@@ -71,12 +68,6 @@
           <div id="stopsList"></div>
           <button type="button" id="addStop" class="btn-secondary">+ Add stop</button>
         </div>
-
-        <div id="keyFactsContainer">
-          <p class="section-label" style="margin-top:1.25rem">Key facts (optional)</p>
-          <div id="keyFactsList"></div>
-          <button type="button" id="addKeyFact" class="btn-secondary">+ Add key fact</button>
-        </div>
       </section>
 
       <!-- DE/EN tabs -->
@@ -92,8 +83,17 @@
         <label for="deTitle">Title</label>
         <input id="deTitle" type="text" placeholder="Reiseberichte aus …" />
 
+        <label for="deCountry">Country</label>
+        <input id="deCountry" type="text" placeholder="z. B. Griechenland" />
+
         <label for="deExcerpt">Excerpt</label>
         <textarea id="deExcerpt" rows="3" placeholder="Eine kurze Zusammenfassung…"></textarea>
+
+        <div id="deKeyFactsContainer">
+          <p class="section-label">Key facts (optional)</p>
+          <div id="deKeyFactsList"></div>
+          <button type="button" id="deAddKeyFact" class="btn-secondary">+ Add key fact</button>
+        </div>
 
         <label>Hero image</label>
         <div class="hero-picker">
@@ -128,8 +128,17 @@
         <label for="enTitle">Title</label>
         <input id="enTitle" type="text" placeholder="Travel stories from …" />
 
+        <label for="enCountry">Country</label>
+        <input id="enCountry" type="text" placeholder="e.g. Greece" />
+
         <label for="enExcerpt">Excerpt</label>
         <textarea id="enExcerpt" rows="3" placeholder="A short summary…"></textarea>
+
+        <div id="enKeyFactsContainer">
+          <p class="section-label">Key facts (optional)</p>
+          <div id="enKeyFactsList"></div>
+          <button type="button" id="enAddKeyFact" class="btn-secondary">+ Add key fact</button>
+        </div>
 
         <label>Hero image</label>
         <div class="hero-picker">
@@ -272,8 +281,8 @@
         $('slugFieldEn').value = slugify($('enTitle').value);
       });
 
-      // ---- key facts (optional rows) ----
-      function addKeyFactRow(label = '', value = '') {
+      // ---- key facts (optional rows, per locale) ----
+      function addKeyFactRow(locale, label = '', value = '') {
         const row = document.createElement('div');
         row.className = 'keyfact-row';
 
@@ -298,13 +307,14 @@
         row.appendChild(lInput);
         row.appendChild(vInput);
         row.appendChild(remove);
-        $('keyFactsList').appendChild(row);
+        $(locale + 'KeyFactsList').appendChild(row);
       }
 
-      $('addKeyFact').addEventListener('click', () => addKeyFactRow());
+      $('deAddKeyFact').addEventListener('click', () => addKeyFactRow('de'));
+      $('enAddKeyFact').addEventListener('click', () => addKeyFactRow('en'));
 
-      function collectKeyFacts() {
-        const rows = $('keyFactsList').querySelectorAll('.keyfact-row');
+      function collectKeyFacts(locale) {
+        const rows = $(locale + 'KeyFactsList').querySelectorAll('.keyfact-row');
         if (!rows.length) return undefined;
         const obj = {};
         rows.forEach((r) => {
@@ -623,7 +633,6 @@
       function buildPayload() {
         const shared = {
           date: $('fmDate').value || undefined,
-          country: $('fmCountry').value.trim() || undefined,
           countryCode: $('fmCountryCode').value.trim().toUpperCase() || undefined,
           region: $('fmRegion').value || undefined,
           coordinates: ($('fmLat').value && $('fmLng').value)
@@ -631,7 +640,6 @@
             : undefined,
           stops: collectStops(),
           route: $('fmRoute').value.trim() || undefined,
-          keyFacts: collectKeyFacts(),
         };
 
         // Remove undefined keys for a clean payload
@@ -649,11 +657,13 @@
             slug: $(slugFieldId).value.trim(),
             title: $(loc + 'Title').value.trim(),
             excerpt: $(loc + 'Excerpt').value.trim(),
+            country: $(loc + 'Country').value.trim(),
             heroImage: heroSrc
               ? { src: heroSrc, width: heroW || 0, height: heroH || 0, alt: heroAlt }
               : undefined,
             bodyMarkdown: mde.value(),
             images: loc === 'de' ? { ...deImages } : { ...enImages },
+            keyFacts: collectKeyFacts(loc),
           };
         }
 
@@ -792,10 +802,10 @@
       });
 
       // ---- load existing post ----
-      function populateKeyFacts(facts) {
-        $('keyFactsList').innerHTML = '';
+      function populateKeyFacts(locale, facts) {
+        $(locale + 'KeyFactsList').innerHTML = '';
         if (!facts || typeof facts !== 'object') return;
-        Object.entries(facts).forEach(([l, v]) => addKeyFactRow(l, v));
+        Object.entries(facts).forEach(([l, v]) => addKeyFactRow(locale, l, v));
       }
 
       function populateStops(stops) {
@@ -809,7 +819,9 @@
       function populateLocale(loc, data) {
         if (!data) return;
         $(loc + 'Title').value = data.title || '';
+        $(loc + 'Country').value = data.country || '';
         $(loc + 'Excerpt').value = data.excerpt || '';
+        populateKeyFacts(loc, data.keyFacts);
         const mde = loc === 'de' ? deMDE : enMDE;
         mde.value(data.bodyMarkdown || '');
         // Written unconditionally: buildPayload() omits heroImage when unset, so
@@ -842,7 +854,6 @@
         // round-trip because the stash simply omits the key).
         const shared = post.shared || {};
         $('fmDate').value = shared.date || '';
-        $('fmCountry').value = shared.country || '';
         $('fmCountryCode').value = shared.countryCode || '';
         $('fmRegion').value = shared.region || '';
         const coords = shared.coordinates || {};
@@ -850,7 +861,6 @@
         $('fmLng').value = coords.lng ?? '';
         $('fmRoute').value = shared.route || '';
         populateStops(shared.stops);
-        populateKeyFacts(shared.keyFacts);
 
         populateLocale('de', post.de);
         populateLocale('en', post.en);

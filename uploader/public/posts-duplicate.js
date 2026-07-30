@@ -53,9 +53,12 @@ window.PostsDuplicate = (function () {
         slug: slug,
         title: src.title,                 // the author rewrites it; an empty one blocks validateDraft
         excerpt: src.excerpt,
+        country: src.country,             // the repeating structure this feature exists for
         heroImage: clone(src.heroImage),  // cheap to replace; a placeholder would just mean re-uploading
         bodyMarkdown: src.bodyMarkdown,
         images: clone(src.images) || {},  // mandatory — see above
+        // Spread only when present so the copy does not gain an empty key the source never had.
+        ...(src.keyFacts && Object.keys(src.keyFacts).length ? { keyFacts: clone(src.keyFacts) } : {}),
       };
     };
     return {
@@ -66,15 +69,12 @@ window.PostsDuplicate = (function () {
       shared: {
         date: isoDate,                       // reset (identity)
         coordinates: { lat: 0, lng: 0 },     // reset (identity) — see @ai-warning
-        country: pair.shared.country,
         countryCode: pair.shared.countryCode,
         region: pair.shared.region,
         // The repeating structure this feature exists for. Spread only when
         // present so the copy does not gain empty keys the source never had.
         ...(pair.shared.route ? { route: pair.shared.route } : {}),
         ...(pair.shared.stops && pair.shared.stops.length ? { stops: clone(pair.shared.stops) } : {}),
-        ...(pair.shared.keyFacts && Object.keys(pair.shared.keyFacts).length
-          ? { keyFacts: clone(pair.shared.keyFacts) } : {}),
       },
       de: locale(pair.de, slugs.de),
       en: locale(pair.en, slugs.en),

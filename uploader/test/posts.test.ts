@@ -3,15 +3,15 @@ import { memoryPostStore, normalizeBodyImages, PostError, REVISION_CAP, validate
 import { renderPostToMdx } from '../src/export.js';
 
 function pair(overrides: Partial<PostPair> = {}): PostPair {
-  const loc = (locale: 'de' | 'en', slug: string, title: string) => ({
-    locale, slug, title, excerpt: 'x',
+  const loc = (locale: 'de' | 'en', slug: string, title: string, country: string) => ({
+    locale, slug, title, excerpt: 'x', country,
     heroImage: { src: 'https://img/h', width: 768, height: 512, alt: 'a' },
     bodyMarkdown: '## Hi', images: {},
   });
   return {
     translationKey: '', status: 'draft',
-    shared: { date: '2024-10-03', country: 'Rumänien', countryCode: 'RO', region: 'europe', coordinates: { lat: 44.4, lng: 26.1 } },
-    de: loc('de', 'bukarest', 'Bukarest'), en: loc('en', 'bucharest', 'Bucharest'),
+    shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 44.4, lng: 26.1 } },
+    de: loc('de', 'bukarest', 'Bukarest', 'Rumänien'), en: loc('en', 'bucharest', 'Bucharest', 'Romania'),
     ...overrides,
   };
 }
@@ -190,6 +190,61 @@ describe('memoryPostStore', () => {
   });
 });
 
+// Issue #87: country and keyFacts are per-locale prose (the DB column was
+// always per-row), but the app layer used to funnel both through one
+// PostShared.country/.keyFacts value — so the second writeLocale() call in
+// upsertDraft silently overwrote the first locale's value with the second's,
+// and a save always left both rows holding whichever locale saved last. This
+// suite pins the fix: PostLocale carries its own country/keyFacts, and a save
+// followed by a reload must return each locale's OWN value, not the other's.
+describe('country and keyFacts are per-locale (issue #87)', () => {
+  it('round-trips different DE and EN country through save and reload', async () => {
+    const s = memoryPostStore();
+    const created = await s.upsertDraft(pair({
+      de: { ...pair().de, country: 'Rumänien' },
+      en: { ...pair().en, country: 'Romania' },
+    }));
+    const reloaded = await s.get(created.translationKey);
+    expect(reloaded?.de.country).toBe('Rumänien');
+    expect(reloaded?.en.country).toBe('Romania');
+  });
+
+  it('round-trips different DE and EN key facts through save and reload', async () => {
+    const s = memoryPostStore();
+    const created = await s.upsertDraft(pair({
+      de: { ...pair().de, keyFacts: { Einwohner: '19 Millionen' } },
+      en: { ...pair().en, keyFacts: { Population: '19 million' } },
+    }));
+    const reloaded = await s.get(created.translationKey);
+    expect(reloaded?.de.keyFacts).toEqual({ Einwohner: '19 Millionen' });
+    expect(reloaded?.en.keyFacts).toEqual({ Population: '19 million' });
+  });
+
+  it('list summary prefers the DE country, falling back to EN when DE is blank', async () => {
+    const s = memoryPostStore();
+    const withDe = await s.upsertDraft(pair({
+      de: { ...pair().de, country: 'Rumänien' }, en: { ...pair().en, country: 'Romania' },
+    }));
+    const deBlank = await s.upsertDraft(pair({
+      de: { ...pair().de, slug: 'other-de', country: '' }, en: { ...pair().en, slug: 'other-en', country: 'Iceland' },
+    }));
+    const list = await s.list();
+    expect(list.find((p) => p.translationKey === withDe.translationKey)?.country).toBe('Rumänien');
+    expect(list.find((p) => p.translationKey === deBlank.translationKey)?.country).toBe('Iceland');
+  });
+
+  it('re-saving one locale does not clobber the other locale\'s country (the original bug)', async () => {
+    const s = memoryPostStore();
+    const created = await s.upsertDraft(pair({
+      de: { ...pair().de, country: 'Rumänien' }, en: { ...pair().en, country: 'Romania' },
+    }));
+    // A second save that only touches the DE body must not disturb EN's country.
+    const resaved = await s.upsertDraft({ ...created, de: { ...created.de, bodyMarkdown: '## edited' } });
+    expect(resaved.de.country).toBe('Rumänien');
+    expect(resaved.en.country).toBe('Romania');
+  });
+});
+
 describe('memoryPostStore optimistic concurrency', () => {
   it('get() and upsertDraft() return the stored updatedAt', async () => {
     const s = memoryPostStore();
@@ -291,6 +346,9 @@ describe('post validation', () => {
     expect(() => validateForPublish(pair({ shared: { ...pair().shared, region: 'mars' as never } }))).toThrow(PostError);
     expect(() => validateForPublish(pair({ en: { ...pair().en, excerpt: '' } }))).toThrow(PostError);
     expect(() => validateForPublish(pair({ de: { ...pair().de, heroImage: { ...pair().de.heroImage, alt: '' } } }))).toThrow(PostError);
+    // country is per-locale (issue #87) — each locale needs its own to publish.
+    expect(() => validateForPublish(pair({ de: { ...pair().de, country: '' } }))).toThrow(/de: country required/);
+    expect(() => validateForPublish(pair({ en: { ...pair().en, country: '' } }))).toThrow(/en: country required/);
   });
   it('publish rejects out-of-range coordinates', () => {
     expect(() => validateForPublish(pair({ shared: { ...pair().shared, coordinates: { lat: 91, lng: 0 } } }))).toThrow(/lat/);
@@ -517,7 +575,7 @@ describe('upsertDraft fills NOT-NULL defaults on a partial draft', () => {
     const partial = {
       translationKey: '',
       status: 'draft',
-      shared: { date: '2024-09-29', country: '', countryCode: 'XX', region: 'europe' },
+      shared: { date: '2024-09-29', countryCode: 'XX', region: 'europe' },
       de: { locale: 'de', slug: 'partial-de', title: 'X', excerpt: '', bodyMarkdown: '', images: {} },
       en: { locale: 'en', slug: 'partial-en', title: 'Y', excerpt: '', bodyMarkdown: '', images: {} },
     } as unknown as PostPair;
@@ -525,5 +583,9 @@ describe('upsertDraft fills NOT-NULL defaults on a partial draft', () => {
     expect(saved.shared.coordinates).toEqual({ lat: 0, lng: 0 });
     expect(saved.de.heroImage).toEqual({ src: '', width: 0, height: 0, alt: '' });
     expect(saved.en.heroImage).toEqual({ src: '', width: 0, height: 0, alt: '' });
+    // country is a required PostLocale column (NOT NULL) — a partial payload
+    // omitting it entirely must default to '' rather than write undefined.
+    expect(saved.de.country).toBe('');
+    expect(saved.en.country).toBe('');
   });
 });

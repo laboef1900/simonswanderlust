@@ -635,6 +635,18 @@ blog/
   `sun-and-adventure-rhodes`) that violated the SEO slug contract; the import restored the real
   ones. Imported posts are drafts with placeholder `country`/`region`/`coordinates` that
   `validateForPublish` rejects until an author completes them.
+- **Done:** #87 fix — `country` and `keyFacts` moved from `PostShared` to `PostLocale`
+  (2026-07-30). Both were app-layer fields shared across the DE/EN pair even though the `posts`
+  table already stores them per row, so `upsertDraft`'s two `writeLocale` calls always wrote
+  whichever locale saved last into both rows, and `get()` read the DE row's values back for both —
+  the English page silently showed the German country name after any save. `stops[].name` stays
+  shared for now: unlike `country`/`keyFacts`, it mixes geographic (non-prose) lat/lng with a
+  translatable name in one array, and a correct per-locale split needs either duplicated
+  coordinates (drift risk) or index-parallel per-locale name arrays (desync risk on reorder) — a
+  bigger design decision than this fix, left for a follow-up if it's ever prioritized. The
+  `posts` table and the Astro loader (`postgres-loader.ts`) were already per-row/per-locale;
+  only the uploader's `PostShared`/`PostLocale` split, the editor UI, MDX export, and the WXR
+  importer's placeholder needed to change.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #85 (WXR importer robustness — no throttle, no retry,
