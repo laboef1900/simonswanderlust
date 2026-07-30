@@ -29,7 +29,7 @@ import { renderPreviewHtml } from './preview.js';
 import { type PageStore, type PagePair, type PageContent, type ImageDims, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
-import { importWxr } from './wp-import.js';
+import { importWxr, type ImportDeps, type ImportSummary } from './wp-import.js';
 import { createRehostResume } from './wp-images.js';
 import { fixedWindowLimiter, rateLimitPreHandler, type RateLimiter } from './rate-limit.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
@@ -55,6 +55,14 @@ export interface ServerConfig {
   encodeQueue: EncodeQueue;
   /** Disk↔database reconciliation, triggered by POST /media/rescan. */
   mediaSync?: { run: () => Promise<SyncReport> };
+  /**
+   * The WXR importer. Injectable for the same reason as `loginLimiter` and
+   * `mediaSync`: the real one's pacing and retry behaviour cannot be observed
+   * from a route test, because every failure mode reachable without a network
+   * (the SSRF guard, an unresolvable host) is classified NON-retryable by
+   * design, and the retryable ones cost 15 s each.
+   */
+  importRunner?: (xml: string, deps: ImportDeps) => Promise<ImportSummary>;
 }
 
 /**
@@ -1135,7 +1143,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         return reply.code(400).send({ error: 'not a WordPress export (.xml) file' });
       }
       const { importDelayMs, importRetries } = cfg.settings.get();
-      const summary = await importWxr(xml, {
+      const summary = await (cfg.importRunner ?? importWxr)(xml, {
         postStore: cfg.posts, storageDir: cfg.storageDir, baseUrl: cfg.baseUrl,
         delayMs: importDelayMs,
         retries: importRetries,

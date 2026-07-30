@@ -45,6 +45,22 @@ const pairOf = (
   group: string, deSlug: string, enSlug: string, deHtml: string, enHtml = '<p>x</p>',
 ): string => wxr(`${item('de', deSlug, group, deHtml)}\n${item('en', enSlug, group, enHtml)}`);
 
+/** A pair WITH a featured image, so the hero slot is exercised. */
+const pairWithHero = (heroUrl: string, deImgs: string[]): string => wxr([
+  `  <item>
+    <title>hero</title>
+    <wp:post_id><![CDATA[900]]></wp:post_id>
+    <wp:post_type><![CDATA[attachment]]></wp:post_type>
+    <wp:status><![CDATA[inherit]]></wp:status>
+    <wp:attachment_url><![CDATA[${heroUrl}]]></wp:attachment_url>
+  </item>`,
+  item('de', 'de-1', 'gh', imgs(...deImgs)).replace(
+    '\n  </item>',
+    '\n    <wp:postmeta><wp:meta_key><![CDATA[_thumbnail_id]]></wp:meta_key><wp:meta_value><![CDATA[900]]></wp:meta_value></wp:postmeta>\n  </item>',
+  ),
+  item('en', 'en-1', 'gh', '<p>x</p>'),
+].join('\n'));
+
 /**
  * A fake clock, a recording `sleep`, and a scriptable `rehost`.
  *
@@ -411,12 +427,87 @@ describe('importWxr blast-radius bounds', () => {
     expect(s.warnings.join(' ')).toMatch(/consecutive failures/i);
   });
 
+  // The reset is what this pins, so the failure run must be long enough to trip
+  // the breaker if the reset were removed: fail, fail, SUCCEED, fail, fail with a
+  // limit of 3 must fetch all five. Without the reset the counter reaches 3 on
+  // the fourth URL and the fifth is never attempted.
   it('forgives a host that recovers', async () => {
     let n = 0;
-    const h = harness({ fail: () => (++n <= 2 ? network() : null) });
-    await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/c.jpg', 'https://wp/d.jpg')), h,
-      { retries: 0, hostFailureLimit: 3 });
-    expect(h.calls).toHaveLength(4); // never tripped: the run of failures broke at 2
+    const h = harness({ fail: () => (++n === 3 ? null : network()) });
+    const urls = ['a', 'b', 'c', 'd', 'e'].map((x) => `https://wp/${x}.jpg`);
+    await run(pairOf('g', 'de-1', 'en-1', imgs(...urls)), h, { retries: 0, hostFailureLimit: 3 });
+    expect(h.calls).toHaveLength(5);
+  });
+
+  /**
+   * @ai-warning The breaker exists to notice "this host is refusing us", so only
+   * a HOST-SHAPED failure may count toward it. A 404, an oversized response, an
+   * unusable URL, a sharp decode failure or an ENOSPC on our own /data are facts
+   * about one resource (or about us), not about the host.
+   *
+   * Counting them is not a cosmetic mistake: a trip whose photos were deleted
+   * from the WordPress media library is a contiguous run of 404s, which abandons
+   * a perfectly healthy host and leaves every later trip's photos un-fetched.
+   * And because the run of 404s repeats identically on the next import, the
+   * breaker trips at the same point every time — so re-running, the recovery
+   * action this whole feature is built around, can never converge.
+   */
+  it('does not blame the host for individual photos that are simply gone', async () => {
+    const dead = (u: string) => (u.includes('dead') ? new FetchError('x', 'http', { status: 404 }) : null);
+    const h = harness({ fail: dead });
+    const body = wxr([
+      item('de', 'de-1', 'g1', imgs('https://wp/ok1.jpg')),
+      item('en', 'en-1', 'g1', '<p>x</p>'),
+      item('de', 'de-2', 'g2', imgs(...[1, 2, 3, 4, 5].map((n) => `https://wp/dead${n}.jpg`))),
+      item('en', 'en-2', 'g2', '<p>x</p>'),
+      item('de', 'de-3', 'g3', imgs('https://wp/ok2.jpg', 'https://wp/ok3.jpg')),
+      item('en', 'en-3', 'g3', '<p>x</p>'),
+    ].join('\n'));
+    const s = await run(body, h, { retries: 0, hostFailureLimit: 3 });
+    // The healthy photos of the LAST trip must still be fetched.
+    expect(h.calls).toContain('https://wp/ok2.jpg');
+    expect(h.calls).toContain('https://wp/ok3.jpg');
+    expect(s.images).toEqual({ total: 8, hosted: 3, failed: 5 });
+  });
+
+  it('does not blame the host for a decode failure on our side', async () => {
+    const h = harness({ fail: (u) => (u.includes('bad') ? new Error('unsupported image format') : null) });
+    const urls = [...[1, 2, 3, 4].map((n) => `https://wp/bad${n}.jpg`), 'https://wp/good.jpg'];
+    const h2 = await run(pairOf('g', 'de-1', 'en-1', imgs(...urls)), h, { retries: 0, hostFailureLimit: 3 });
+    expect(h.calls).toContain('https://wp/good.jpg');
+    expect(h2.images).toEqual({ total: 5, hosted: 1, failed: 4 });
+  });
+
+  // Both bounds truncate work, so both must be traceable in BOTH channels — the
+  // response can drop them to the cap, the log cannot.
+  it('logs the retry-budget notice, not only appends it to a capped list', async () => {
+    const logged: string[] = [];
+    const h = harness({ fail: () => network() });
+    const urls = Array.from({ length: 6 }, (_, i) => `https://dead/p${i}.jpg`);
+    // hostFailureLimit high enough that the breaker cannot fire first and mask it.
+    await run(pairOf('g', 'de-1', 'en-1', imgs(...urls)), h,
+      { retries: 3, retryBudget: 2, hostFailureLimit: 999, log: (m) => logged.push(m) });
+    expect(logged.join('\n')).toMatch(/retry budget/i);
+  });
+
+  it('logs the host-breaker notice', async () => {
+    const logged: string[] = [];
+    const h = harness({ fail: () => network() });
+    const urls = Array.from({ length: 6 }, (_, i) => `https://dead/p${i}.jpg`);
+    await run(pairOf('g', 'de-1', 'en-1', imgs(...urls)), h,
+      { retries: 0, hostFailureLimit: 3, log: (m) => logged.push(m) });
+    expect(logged.join('\n')).toMatch(/stopped fetching dead after 3 consecutive failures/i);
+  });
+
+  it('keeps the truncation notices in the response even when the cap is reached', async () => {
+    const h = harness({ fail: () => network() });
+    const urls = Array.from({ length: 260 }, (_, i) => `https://dead/p${i}.jpg`);
+    const s = await run(pairOf('g', 'de-1', 'en-1', imgs(...urls)), h,
+      { retries: 0, hostFailureLimit: 3, log: () => {} });
+    // "stopped fetching <host>" is the NOTICE. The per-image warnings happen to
+    // share the phrase "consecutive failures", so matching that would pass even
+    // with the notice dropped.
+    expect(s.warnings.join(' ')).toMatch(/stopped fetching/i);
   });
 });
 
@@ -475,6 +566,56 @@ describe('importWxr reporting', () => {
   });
 });
 
+describe('importWxr layering', () => {
+  const network = () => new FetchError('boom', 'network');
+
+  /**
+   * @ai-warning The gate lives INSIDE the retry loop, so every network attempt is
+   * paced and `nextAt` stays accurate. Moving it outside changes this order to
+   * ['fetch:a','sleep:5000','fetch:a','fetch:b'] — the single gate entry for `a`
+   * sets nextAt to t+1200, the 5 s backoff overshoots it, and `b` then fires with
+   * no spacing at all. This assertion is the only thing distinguishing the two.
+   */
+  it('gates every attempt, not just the first of each image', async () => {
+    const h = harness({ fail: (u, attempt) => (u.includes('a.jpg') && attempt < 1 ? network() : null) });
+    await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg')), h,
+      { delayMs: 1200, retries: 1 });
+    expect(h.order).toEqual([
+      'fetch:https://wp/a.jpg', 'sleep:5000',
+      'fetch:https://wp/a.jpg', 'sleep:1200',
+      'fetch:https://wp/b.jpg',
+    ]);
+  });
+
+  /**
+   * Invariant: the SSRF guard runs on EVERY attempt. `assertFetchableUrl` is
+   * called inside `safeFetch` and builds a fresh `URL`, which `safeFetch` passes
+   * straight to `fetch` — so a distinct instance per call is exactly the
+   * "not hoisted out of the retry loop" property. Uses the REAL safeFetch.
+   */
+  it('re-validates the URL through safeFetch on every retry attempt', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'wprevalidate-'));
+    const baseUrl = 'https://img.example';
+    const jpg = await sharp({ create: { width: 700, height: 500, channels: 3, background: '#345' } }).jpeg().toBuffer();
+    const seen: unknown[] = [];
+    let n = 0;
+    const fetchImpl = (async (u: URL | string) => {
+      seen.push(u);
+      return ++n < 3 ? new Response('busy', { status: 503 }) : new Response(new Uint8Array(jpg));
+    }) as unknown as typeof fetch;
+    const sleeps: number[] = [];
+    const s = await importWxr(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg')), {
+      postStore: memoryPostStore(), storageDir, baseUrl,
+      rehost: (url, key, alt) => rehostImage(url, key, alt, { storageDir, baseUrl, fetchImpl }),
+      delayMs: 0, retries: 2, sleep: async (ms) => { sleeps.push(ms); }, log: () => {},
+    });
+    expect(seen).toHaveLength(3);
+    expect(new Set(seen).size).toBe(3);
+    expect(sleeps).toEqual([5000, 15000]); // a real 503 is retryable
+    expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+  });
+});
+
 describe('importWxr resumability', () => {
   it('skips a photo the resume index already has, without fetching or pacing', async () => {
     const h = harness();
@@ -483,6 +624,39 @@ describe('importWxr resumability', () => {
     expect(h.calls).toEqual(['https://wp/b.jpg']);
     expect(h.order).toEqual(['fetch:https://wp/b.jpg']); // no sleep for the resumed one
     expect(s.images).toEqual({ total: 2, hosted: 2, failed: 0 });
+  });
+
+  /**
+   * @ai-warning This is the ONLY thing tying `trips/<slug>/hero` (wp-import.ts)
+   * to `HERO_KEY_RE` (wp-images.ts). The two modules must agree or the hero
+   * silently becomes resumable, and changing a post's featured image in
+   * WordPress would then keep the old photo forever.
+   */
+  it('always re-fetches the hero, whose key encodes no url identity', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'wphero-'));
+    const baseUrl = 'https://img.example';
+    const jpg = await sharp({ create: { width: 800, height: 600, channels: 3, background: '#345' } }).jpeg().toBuffer();
+    const calls: string[] = [];
+    const fetchImpl = (async (u: URL | string) => {
+      calls.push(String(u));
+      return new Response(new Uint8Array(jpg));
+    }) as unknown as typeof fetch;
+    const store = memoryPostStore();
+    const deps = async (): Promise<ImportDeps> => ({
+      postStore: store, storageDir, baseUrl,
+      rehost: (url, key, alt) => rehostImage(url, key, alt, { storageDir, baseUrl, fetchImpl }),
+      resume: await createRehostResume({ storageDir, baseUrl }),
+      delayMs: 0, retries: 0, log: () => {},
+    });
+    const body = pairWithHero('https://wp/hero.jpg', ['https://wp/a.jpg']);
+
+    await importWxr(body, await deps());
+    expect([...calls].sort()).toEqual(['https://wp/a.jpg', 'https://wp/hero.jpg']);
+
+    calls.length = 0;
+    await importWxr(body, await deps());
+    // The body image resumes from disk; the hero does not.
+    expect(calls).toEqual(['https://wp/hero.jpg']);
   });
 
   // The real thing: two runs against one storageDir, real rehostImage, real

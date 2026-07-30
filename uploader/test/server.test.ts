@@ -7,6 +7,8 @@ import type { BackupState, DbBackup } from '../src/backup.js';
 import sharp from 'sharp';
 import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
+import { rehostImage } from '../src/wp-images.js';
+import type { ImportSummary } from '../src/wp-import.js';
 import { defaultSettings, validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
 import { memoryUserStore, type UserStore } from '../src/users.js';
@@ -1548,14 +1550,22 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
     expect(warnings).not.toMatch(/ECONNREFUSED|refusing to fetch/);
   });
 
-  it('paces fetches using the configured delay', async () => {
-    const b = build({ settings: fakeStore({ ...SETTINGS, importDelayMs: 200 }) });
+  const OK: ImportSummary = { imported: 1, updated: 0, skipped: 0, images: { total: 0, hosted: 0, failed: 0 }, warnings: [] };
+
+  it('threads the configured pacing and the resume index into the importer', async () => {
+    let seen: Parameters<NonNullable<ServerConfig['importRunner']>>[1] | null = null;
+    const b = build({
+      settings: fakeStore({ ...SETTINGS, importDelayMs: 900, importRetries: 4 }),
+      importRunner: async (_xml, deps) => { seen = deps; return OK; },
+    });
     const { cookie } = await authed(b);
-    const started = Date.now();
-    await postImport(b, cookie, wxrWith(...blocked(3)));
-    // 3 images ⇒ 2 gate waits. Proves the route threads the setting through
-    // rather than using importWxr's inert default of 0.
-    expect(Date.now() - started).toBeGreaterThanOrEqual(380);
+    await postImport(b, cookie, wxrWith(...blocked(1)));
+    // Deterministic, unlike timing the real gate — and it pins `retries`, which
+    // no observable route behaviour can reach (every network-free failure mode is
+    // deliberately non-retryable).
+    expect(seen!.delayMs).toBe(900);
+    expect(seen!.retries).toBe(4);
+    expect(seen!.resume).toBeDefined();
   });
 
   // @ai-warning Resumability makes "just run the import again" the documented
@@ -1564,13 +1574,18 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
   // host at 2x the configured rate, and race storeVariantFiles' non-atomic
   // writes into a mixed variant set. Not work-lock — one flag and a 409.
   it('refuses a second import while one is still running', async () => {
-    const b = build({ settings: fakeStore({ ...SETTINGS, importDelayMs: 600 }) });
+    let release = (): void => {};
+    let entered = (): void => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const reached = new Promise<void>((r) => { entered = r; });
+    const b = build({ importRunner: async () => { entered(); await gate; return OK; } });
     const { cookie } = await authed(b);
-    const first = postImport(b, cookie, wxrWith(...blocked(3)));
-    await new Promise((r) => { setTimeout(r, 50); });
-    const second = await postImport(b, cookie, wxrWith(...blocked(3)));
+    const first = postImport(b, cookie, wxrWith(...blocked(1)));
+    await reached; // the first import is provably mid-flight — no sleeps, no flake
+    const second = await postImport(b, cookie, wxrWith(...blocked(1)));
     expect(second.statusCode).toBe(409);
     expect(second.json().error).toMatch(/already running/i);
+    release();
     expect((await first).statusCode).toBe(200);
   });
 
@@ -1580,14 +1595,29 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
     expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(200);
   });
 
+  // The finally block: without it one unhandled failure wedges the endpoint
+  // until the process restarts.
   it('releases the single-flight flag even when the import throws', async () => {
-    const posts = memoryPostStore();
-    posts.upsertDraft = async () => { throw new Error('boom'); };
-    const b = build({ posts }); const { cookie } = await authed(b);
-    // The per-group catch turns this into skipped:1 rather than a 500...
-    expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(200);
-    // ...and either way the next import must not be locked out.
-    expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(200);
+    let calls = 0;
+    const b = build({ importRunner: async () => { calls++; throw new Error('boom'); } });
+    const { cookie } = await authed(b);
+    expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(500);
+    expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(500);
+    expect(calls).toBe(2); // the second request got through, i.e. the flag was released
+  });
+
+  // The route-level resume wiring, end to end: pre-host the photo the export
+  // references, then import an export whose URL the SSRF guard would REFUSE.
+  // A hit is therefore the only way this can report hosted:1.
+  it('resumes a photo already on disk instead of downloading it again', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const jpg = await sharp({ create: { width: 900, height: 600, channels: 3, background: '#345' } }).jpeg().toBuffer();
+    const fetchImpl = (async () => new Response(new Uint8Array(jpg))) as unknown as typeof fetch;
+    await rehostImage('https://seed/p0.jpg', 'trips/imp-de/p0', 'a',
+      { storageDir: dir, baseUrl: 'https://img.simonswanderlust.com', fetchImpl });
+
+    const res = await postImport(b, cookie, wxrWith('http://127.0.0.1/p0.jpg'));
+    expect(res.json()).toMatchObject({ images: { total: 1, hosted: 1, failed: 0 } });
   });
 });
 

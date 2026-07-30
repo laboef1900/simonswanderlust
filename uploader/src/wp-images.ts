@@ -1,11 +1,9 @@
-import { stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { processImage } from './pipeline.js';
 import { assertSafeKey, storeVariants } from './storage.js';
 import { safeFetch } from './safe-fetch.js';
-import { walkStorageKeys } from './media-sync.js';
-import { VARIANT_FILE_RE } from './media-files.js';
 import { FORMATS, variantWidths } from './variants.js';
 
 export interface RehostResult { src: string; width: number; height: number }
@@ -53,19 +51,38 @@ export interface RehostResume {
  */
 const HERO_KEY_RE = /(?:^|\/)hero$/;
 
+/**
+ * Matches `<name>-orig.<ext>` for one key basename — the untouched original
+ * `storeOriginal` retains. `name` comes from a key that has already passed
+ * `assertSafeKey`, so it holds no regex metacharacters, but escape it anyway
+ * rather than relying on that from two modules away.
+ */
+const ORIG_OF = (name: string): RegExp =>
+  new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-orig\\.[a-z0-9]+$`, 'i');
+
 export async function createRehostResume(
   opts: { storageDir: string; baseUrl: string },
 ): Promise<RehostResume> {
-  // ONE snapshot for the whole run, deliberately never refreshed: two pairs can
-  // then never read each other's in-run writes, and a `nameFromUrl` collision
-  // within a pair still fetches twice and lets the second overwrite the first,
-  // exactly as it did before this feature existed.
-  const onDisk = await walkStorageKeys(opts.storageDir);
   const base = opts.baseUrl.replace(/\/+$/, '');
 
-  /** Every variant `storeVariantFiles` must have written for this intrinsic width. */
-  const expectedVariants = (key: string, width: number): string[] =>
-    variantWidths(width).flatMap((w) => FORMATS.map((f) => `${key}-${w}.${f}`));
+  // One directory listing per directory for the whole run, cached and
+  // deliberately never refreshed. Two pairs live under different
+  // `trips/<slug>/` prefixes, so neither can read the other's in-run writes, and
+  // a `nameFromUrl` collision within a pair still fetches twice and lets the
+  // second overwrite the first, exactly as it did before this feature existed.
+  const listings = new Map<string, Set<string>>();
+  const entriesOf = async (dir: string): Promise<Set<string>> => {
+    const hit = listings.get(dir);
+    if (hit) return hit;
+    let names: Set<string>;
+    try {
+      names = new Set(await readdir(join(opts.storageDir, dir)));
+    } catch {
+      names = new Set(); // missing directory ⇒ nothing has been re-hosted here
+    }
+    listings.set(dir, names);
+    return names;
+  };
 
   return {
     async lookup(key) {
@@ -74,38 +91,54 @@ export async function createRehostResume(
       // the key is derived from an attacker-influenced export.
       try { assertSafeKey(key); } catch { return null; }
 
-      const hit = onDisk.get(key);
-      if (!hit?.largestVariant) return null;
+      const slash = key.lastIndexOf('/');
+      const dir = slash === -1 ? '' : key.slice(0, slash);
+      const name = key.slice(slash + 1);
+      const names = await entriesOf(dir);
 
-      // `variantWidths` always ends with the intrinsic width, so the largest
-      // webp's FILENAME carries it (variants.ts:15-16).
-      const width = Number(VARIANT_FILE_RE.exec(hit.largestVariant)?.[1] ?? 0);
-      if (!Number.isInteger(width) || width <= 0) return null;
+      // @ai-warning The intrinsic width MUST come from the retained original,
+      // never from the largest surviving variant. `storeVariants` writes the
+      // original first and then the variants in ASCENDING width
+      // (storage.ts:150 then pipeline.ts's `for (const w of
+      // variantWidths(width))`), so a SIGKILL / OOM / ENOSPC truncates the TOP
+      // widths — and a top-truncated set is byte-for-byte indistinguishable
+      // from a complete set for a smaller photo. Deriving the expected set from
+      // what survived would therefore accept it, resume at a silently
+      // downscaled size, and never re-fetch on this run or any later one.
+      const orig = [...names].find((n) => ORIG_OF(name).test(n));
+      if (orig === undefined) return null;
 
-      // Fail closed on a partial set. `storeVariantFiles` writes with plain
-      // `writeFile` and has no cleanup on failure, so a crashed encode or an
-      // ENOSPC leaves some files and no record — trusting that would publish a
-      // srcset pointing at variants nobody ever wrote.
-      for (const rel of expectedVariants(key, width)) {
-        try {
-          const st = await stat(join(opts.storageDir, rel));
-          if (!st.isFile() || st.size === 0) return null;
-        } catch {
-          return null;
+      let width = 0;
+      let height = 0;
+      try {
+        const meta = await sharp(join(opts.storageDir, dir, orig)).metadata();
+        // Match `probeImage`: the orientation-corrected size is what
+        // `processImage` recorded and what the variants were resized against.
+        width = meta.autoOrient?.width ?? meta.width ?? 0;
+        height = meta.autoOrient?.height ?? meta.height ?? 0;
+      } catch {
+        return null; // unreadable or truncated original ⇒ re-fetch
+      }
+      if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) return null;
+
+      // Fail closed on a partial set, measured against the original's width.
+      // `storeVariantFiles` writes with plain `writeFile` and has no cleanup on
+      // failure, so a crashed encode leaves files and no record — trusting that
+      // would publish a srcset pointing at variants nobody ever wrote.
+      for (const w of variantWidths(width)) {
+        for (const format of FORMATS) {
+          const file = `${name}-${w}.${format}`;
+          if (!names.has(file)) return null;
+          try {
+            const st = await stat(join(opts.storageDir, dir, file));
+            if (!st.isFile() || st.size === 0) return null;
+          } catch {
+            return null;
+          }
         }
       }
 
-      // Height comes from the file that will actually be served, never from a
-      // record that could outlive it. The width check makes this a
-      // dimension-identity test, not merely an existence test.
-      try {
-        const meta = await sharp(join(opts.storageDir, hit.largestVariant)).metadata();
-        const height = meta.height ?? 0;
-        if (meta.width !== width || height <= 0) return null;
-        return { src: `${base}/${key}`, width, height };
-      } catch {
-        return null;
-      }
+      return { src: `${base}/${key}`, width, height };
     },
   };
 }

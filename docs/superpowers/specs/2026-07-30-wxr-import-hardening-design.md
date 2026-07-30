@@ -144,26 +144,40 @@ photo upload, the bulk media library, and the CLI — appends `-<hash8>` via `co
 (`server.ts:288`, `cli.ts:17`). So the **un-hashed** `trips/<slug>/<name>` namespace belongs
 exclusively to the WXR importer.
 
-`walkStorageKeys(storageDir)` (`media-sync.ts:48`) already builds `key -> { hasVariants,
-largestVariant, origBytes }` in one recursive `readdir`, is already tested, and already runs at
-every boot. `variantWidths(intrinsic)` always appends the intrinsic width as its last element
-(`variants.ts:15-16`), so the largest webp variant's **filename encodes the intrinsic width**, and
-`probeImage` reads the height from that file in ~0.2 ms (`pipeline.ts:61-69`). Variants are not
-upscaled and preserve aspect ratio, so at the intrinsic width the variant's dimensions *are* the
-`RehostResult`'s dimensions.
+`storeVariants` writes the untouched **original** first (`storage.ts:150`) and only then the
+variants, in ascending width (`pipeline.ts`'s `for (const w of variantWidths(width))`). So the
+original is the one file guaranteed to survive any truncation, and it is the **only independent
+record of the intrinsic width**. `processImage` derives its recorded `width`/`height` from that same
+original via `probeImage`'s orientation-corrected size, and variants are neither upscaled nor
+distorted, so re-probing the original reproduces the exact `RehostResult` the first run returned.
+
+**The expected variant set must be derived from the original, never from the surviving variants.**
+This is the single subtlety in the whole feature and the first implementation got it wrong: because
+truncation removes the TOP widths, a top-truncated set is byte-for-byte indistinguishable from a
+complete set for a smaller photo. Deriving the expected set from what survived therefore accepts it,
+resumes at a silently downscaled size, and — since nothing 404s, the site's `srcset` being computed
+from the recorded width — never re-fetches on that run or any later one. Measured on a 1400 px photo:
+7 of the 8 possible kill points resumed with wrong dimensions.
 
 ### The lookup
 
 Given a candidate key, `resume` returns a `RehostResult` iff **all** hold:
 
 1. The key is **not** a hero slot (see below).
-2. `walkStorageKeys` recorded a `largestVariant` for that exact key.
-3. The **complete** expected variant set exists: every `variantWidths(w) × FORMATS` filename.
-4. `sharp(<largest webp>).metadata()` yields a positive height **and** a width equal to the one
-   parsed from the filename — which makes this a dimension-identity check, not merely an
-   existence check. Reads by path rather than through `probeImage` (which takes a `Buffer`),
-   matching the existing `probeDims` helper in `media-sync.ts:85-92`. Sub-millisecond per photo,
-   against a ~5 s fetch+encode.
+2. `assertSafeKey(key)` passes — re-asserted at the read boundary, because this builds filesystem
+   paths from an attacker-influenced export.
+3. The retained original `<name>-orig.<ext>` is present, and `sharp(<orig>).metadata()` yields
+   positive orientation-corrected dimensions. Reads by path rather than through `probeImage` (which
+   takes a `Buffer`), matching the existing `probeDims` helper in `media-sync.ts:85-92`; metadata
+   reads a header, not the pixels.
+4. **Every** `variantWidths(origWidth) × FORMATS` file exists and is non-empty. `variantWidths` and
+   `FORMATS` are the same functions `processImage` generates from, so the expected set is exact —
+   no false negatives are possible.
+
+Directory listings are cached per directory for the run (one `readdir` per `trips/<slug>/`, so one
+per pair) rather than taking a recursive walk of all of `/data/images`. That is both cheaper than
+`walkStorageKeys` — which additionally `stat`s every original in the whole corpus — and free of a
+dependency from `wp-images.ts` on `media-sync.ts`.
 
 Then `src = ${baseUrl}/${key}`, recomputed from the **live** config.
 
@@ -185,11 +199,12 @@ runs first, `sharedRehost` memoises it by URL, and the body reference receives t
 
 ### The disk index is built once per run and deliberately not refreshed
 
-`walkStorageKeys` runs once, before the first pair. It therefore does **not** see files the same run
-writes. That is wanted, and it is what makes two behaviours hold:
+Each directory is listed on first access and then cached. A listing therefore does **not** see files
+the same run writes into it afterwards. That is wanted, and it is what makes two behaviours hold:
 
-- Two pairs can never read each other's in-run writes, so the cross-trip scoping invariant cannot be
-  weakened by ordering.
+- Two pairs live under different `trips/<slug>/` prefixes and are listed separately, so neither can
+  read the other's in-run writes and the cross-trip scoping invariant cannot be weakened by
+  ordering.
 - A `nameFromUrl` collision within a pair (`foo.jpg` and `foo.png` both → key `…/foo`) still fetches
   twice and lets the second overwrite the first, exactly as today. A refreshed index would have
   changed that silently.
@@ -353,6 +368,15 @@ multiply it by up to `retries + 1`. Compensating controls:
   included. A success resets the counter. This is the control that makes a 429 or a dead host cost
   seconds instead of hours, and it is the only control that bounds the **pre-existing** first-attempt
   amplification: the 40,400-fetch scenario becomes ~20.
+
+  **Only a host-shaped failure counts toward it**, reusing the same `isRetryableFetchError`
+  classifier. A 404, an oversized response, an unusable URL, a `sharp` decode failure or an `ENOSPC`
+  on our own `/data` are facts about one resource (or about us), not evidence the host is refusing
+  us. Counting them is not cosmetic: a trip whose photos were deleted from the WordPress media
+  library is a contiguous run of 404s, which would abandon a healthy host and strand every later
+  trip's photos — and because that run repeats identically next time, the breaker would trip at the
+  same point on every re-run, so the import could **never converge**. Re-running is the documented
+  recovery path, so "never converges" would be a broken feature rather than a conservative one.
 - **Single-flight (M2).** The gate is per-run state, so without mutual exclusion K concurrent imports
   give the victim K× the configured rate and the throttle provides no aggregate guarantee at all.
 - **No silent caps.** Every bound that truncates work emits a warning and a stdout line. A truncated
@@ -392,9 +416,11 @@ dimensions of the file that will actually be served.
 
 Each is stated so it can be tested, and each has a test.
 
-1. **Layer order.** `sharedRehost( resume( pace( retry( rehost ) ) ) )`. A resume hit emits no
+1. **Layer order.** `sharedRehost( resume+tally( retry( pace( rehost ) ) ) )`. A resume hit emits no
    sleep and no fetch. A URL shared by both locales of a pair produces exactly one `resume` call and
-   at most `retries + 1` fetch attempts.
+   at most `retries + 1` fetch attempts. The gate is inside the retry loop, so *every* attempt is
+   paced — pinned by an exact expected `order` array, which is the only assertion that distinguishes
+   the two nestings.
 2. **Pair scoping survives.** A URL shared by two *different* trips is re-hosted twice, under two
    keys differing by slug. This is `wp-import.ts:23-37`'s "deleting one trip cannot strip another's
    images", and it now holds **structurally** — the key contains the slug — rather than by
@@ -407,11 +433,20 @@ Each is stated so it can be tested, and each has a test.
    `hosted` and as no fetch.
 5. **Only the fetch is retried.** A non-`FetchError` produces exactly one attempt.
 6. **Every attempt re-validates the URL.** `assertFetchableUrl` runs once per attempt.
-7. **Fail-closed resume.** An incomplete variant set on disk re-fetches.
+7. **Fail-closed resume.** An incomplete variant set on disk re-fetches — including a set truncated
+   at the TOP widths, which is the shape a crash actually leaves, and a set whose original is gone.
+   Tested at every truncation point of an interrupted 6-variant write, and mutation-verified against
+   the variant-derived implementation this replaced.
 8. **One import at a time.** A second concurrent `POST /import` gets 409 and performs no work.
 9. **No infrastructure detail in the response.** No `status`, no `code`, no undici message.
 10. **Existing behaviour preserved.** All seven current `wp-import.test.ts` cases pass unchanged,
     and `importWxr`'s own defaults (`delayMs: 0`, `retries: 0`) keep them instant.
+11. **A truncated run is never silent.** Both bounds emit a warning that the response cap can never
+    drop (a separate priority channel) *and* a stdout line.
+12. **The hero key format and `HERO_KEY_RE` agree.** Pinned across the two modules by an end-to-end
+    test: a re-run re-fetches the hero and nothing else.
+13. **Resume is an optimisation, not a dependency.** A `lookup` that throws degrades to "fetch it",
+    keeping `hosted + failed === total` and emitting a log line rather than losing the image.
 
 ## Recovery behaviour
 

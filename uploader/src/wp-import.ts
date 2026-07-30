@@ -155,6 +155,7 @@ export function failureReason(e: unknown): string {
  * embedding a full URL, in one JSON body on a route with no response-size limit.
  */
 function warningSink(cap = WARNING_CAP) {
+  const priority: string[] = [];
   const kept: string[] = [];
   let dropped = 0;
   return {
@@ -162,8 +163,21 @@ function warningSink(cap = WARNING_CAP) {
       if (kept.length < cap) kept.push(msg);
       else dropped++;
     },
+    /**
+     * A notice that work was TRUNCATED (a bound tripped). Never dropped, and
+     * listed first.
+     *
+     * @ai-warning These must not go through `push`. They are appended after the
+     * per-image warnings, so in exactly the high-failure runs they exist to
+     * report, the cap would swallow them — leaving a truncated import looking
+     * merely partial. "No silent caps" is the whole point of issue #85.
+     */
+    pushPriority(msg: string): void {
+      priority.push(msg);
+    },
     finish(): string[] {
-      return dropped > 0 ? [...kept, `…and ${dropped} more (see server logs)`] : kept;
+      const tail = dropped > 0 ? [`…and ${dropped} more (see server logs)`] : [];
+      return [...priority, ...kept, ...tail];
     },
   };
 }
@@ -184,7 +198,7 @@ function warningSink(cap = WARNING_CAP) {
  */
 function resilientRehost(rehost: RehostFn, cfg: {
   delayMs: number; retries: number; retryBudget: number; hostFailureLimit: number;
-  sleep: (ms: number) => Promise<void>; now: () => number;
+  sleep: (ms: number) => Promise<void>; now: () => number; log: (msg: string) => void;
 }): RehostFn & { notices: string[] } {
   let nextAt = -Infinity;
   let retriesLeft = cfg.retryBudget;
@@ -211,12 +225,24 @@ function resilientRehost(rehost: RehostFn, cfg: {
         if (host !== null) consecutiveFailures.set(host, 0);
         return r;
       } catch (e) {
-        if (host !== null) {
+        // @ai-warning ONLY a host-shaped failure counts toward the breaker, which
+        // is why this reuses the retry classifier. A 404, an oversized response,
+        // an unusable URL, a sharp decode failure or an ENOSPC on our own /data
+        // are facts about one resource (or about us) — not evidence the host is
+        // refusing us. Counting them means a trip whose photos were deleted from
+        // the WordPress media library is a contiguous run of 404s that abandons a
+        // healthy host and strands every later trip's photos; and since that run
+        // repeats identically next time, the breaker trips at the same point on
+        // every re-run, so the import can never converge. Re-running is the
+        // documented recovery path, so "never converges" is a broken feature.
+        if (host !== null && isRetryableFetchError(e)) {
           const n = (consecutiveFailures.get(host) ?? 0) + 1;
           consecutiveFailures.set(host, n);
           if (n >= cfg.hostFailureLimit && !abandoned.has(host)) {
             abandoned.add(host);
-            notices.push(`stopped fetching ${host} after ${n} consecutive failures`);
+            const notice = `stopped fetching ${host} after ${n} consecutive failures`;
+            notices.push(notice);
+            cfg.log(`import: ${notice}`);
           }
         }
         const hostGone = host !== null && abandoned.has(host);
@@ -224,7 +250,9 @@ function resilientRehost(rehost: RehostFn, cfg: {
         if (retriesLeft <= 0) {
           if (!budgetReported) {
             budgetReported = true;
-            notices.push(`retry budget of ${cfg.retryBudget} exhausted; later failures were not retried`);
+            const notice = `retry budget of ${cfg.retryBudget} exhausted; later failures were not retried`;
+            notices.push(notice);
+            cfg.log(`import: ${notice}`);
           }
           throw e;
         }
@@ -315,6 +343,7 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
     hostFailureLimit: deps.hostFailureLimit ?? DEFAULT_HOST_FAILURE_LIMIT,
     sleep: deps.sleep ?? ((ms) => new Promise((r) => { setTimeout(r, ms); })),
     now: deps.now ?? (() => Date.now()),
+    log,
   });
 
   /**
@@ -327,7 +356,16 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
    */
   const runRehost: RehostFn = async (url, key, alt) => {
     images.total++;
-    const already = await deps.resume?.lookup(key);
+    // @ai-note Resumability is an OPTIMISATION, so a broken index must degrade to
+    // "fetch it" rather than fail the image. Without this guard a throwing lookup
+    // would propagate into buildLocale's silent catch: no warning, and
+    // hosted + failed !== total.
+    let already: RehostResult | null = null;
+    try {
+      already = (await deps.resume?.lookup(key)) ?? null;
+    } catch (e) {
+      log(`import: resume lookup failed for ${key}, re-fetching: ${(e as Error).message}`);
+    }
     if (already) { images.hosted++; return already; }
     try {
       const r = await resilient(url, key, alt);
@@ -378,7 +416,7 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
     } catch (e) { summary.skipped++; warnings.push(`${de.slug}/${en.slug}: ${(e as Error).message}`); }
   }
 
-  for (const notice of resilient.notices) warnings.push(notice);
+  for (const notice of resilient.notices) warnings.pushPriority(notice);
 
   // @ai-note stdout, not only the response. A real export is a multi-minute
   // single request that the reverse proxy or the browser usually abandons
