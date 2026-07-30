@@ -37,9 +37,9 @@ maybe('backup round-trip (Postgres)', () => {
     // pg.integration.test.ts (PostPair requires both locales).
     const base = {
       translationKey: '', status: 'draft' as const,
-      shared: { date: '2026-01-01', country: 'Rumänien', countryCode: 'RO', region: 'europe', coordinates: { lat: 45, lng: 25 } },
-      de: { locale: 'de' as const, slug: 'test-reise', title: 'Test', excerpt: 'x', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hallo', images: {} },
-      en: { locale: 'en' as const, slug: 'test-trip', title: 'Test', excerpt: 'x', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hello', images: {} },
+      shared: { date: '2026-01-01', countryCode: 'RO', region: 'europe', coordinates: { lat: 45, lng: 25 } },
+      de: { locale: 'de' as const, slug: 'test-reise', title: 'Test', excerpt: 'x', country: 'Rumänien', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hallo', images: {} },
+      en: { locale: 'en' as const, slug: 'test-trip', title: 'Test', excerpt: 'x', country: 'Romania', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hello', images: {} },
     };
     const createdPair = await posts.upsertDraft(base);
     // Publish, then save a draft edit: the dump must carry BOTH the working

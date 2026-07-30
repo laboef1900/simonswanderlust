@@ -100,7 +100,7 @@ async function buildLocale(
     images[r.src] = { width: r.width, height: r.height };
     return [r.src, `${r.width}x${r.height}`, ...fields.slice(1)].join(' | ');
   });
-  return { locale: p.locale, slug: p.slug, title: p.title, excerpt: p.excerpt, heroImage, bodyMarkdown: body, images };
+  return { locale: p.locale, slug: p.slug, title: p.title, excerpt: p.excerpt, country: '', heroImage, bodyMarkdown: body, images };
 }
 
 export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSummary> {
@@ -134,7 +134,7 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
       const pair: PostPair = {
         translationKey: prior?.translationKey ?? '',
         status: 'draft',
-        shared: { date: de.date, country: '', countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } },
+        shared: { date: de.date, countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } },
         de: await buildLocale(de, attachments, pairRehost, summary.warnings),
         en: await buildLocale(en, attachments, pairRehost, summary.warnings),
       };

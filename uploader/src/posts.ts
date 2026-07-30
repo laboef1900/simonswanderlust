@@ -10,14 +10,14 @@ export interface HeroImage { src: string; width: number; height: number; alt: st
  */
 export type ImageDims = ImageMeta;
 export interface PostLocale {
-  locale: Locale; slug: string; title: string; excerpt: string;
+  locale: Locale; slug: string; title: string; excerpt: string; country: string;
   heroImage: HeroImage; bodyMarkdown: string; images: Record<string, ImageDims>;
+  keyFacts?: Record<string, string>;
 }
 export interface PostShared {
-  date: string; country: string; countryCode: string; region: string;
+  date: string; countryCode: string; region: string;
   coordinates: { lat: number; lng: number };
   stops?: { name: string; lat: number; lng: number }[]; route?: string;
-  keyFacts?: Record<string, string>;
 }
 export interface PostPair {
   translationKey: string; status: 'draft' | 'published';
@@ -155,6 +155,7 @@ function validateLocale(p: PostLocale): void {
   checkSlug(p.slug);
   if (!p.title.trim()) throw new PostError(`${p.locale}: title required`);
   if (!p.excerpt.trim()) throw new PostError(`${p.locale}: excerpt required`);
+  if (!p.country.trim()) throw new PostError(`${p.locale}: country required`);
   if (!p.bodyMarkdown.trim()) throw new PostError(`${p.locale}: body required`);
   if (!p.heroImage) throw new PostError(`${p.locale}: heroImage required`);
   const h = p.heroImage;
@@ -195,7 +196,6 @@ export function validateForPublish(pair: PostPair): void {
       }
     });
   }
-  if (!s.country.trim()) throw new PostError('country required');
   if (!s.date.trim()) throw new PostError('date required');
   validateLocale(pair.de);
   validateLocale(pair.en);
@@ -279,6 +279,7 @@ function draftWithDefaults(pair: PostPair): PostPair {
       ...l,
       heroImage: l.heroImage ?? PLACEHOLDER_HERO,
       images: l.images ?? {},
+      country: l.country ?? '',
     };
     // Partial draft payloads can omit bodyMarkdown at runtime despite the TS type.
     if (typeof filled.bodyMarkdown !== 'string') return filled;
@@ -314,7 +315,9 @@ export function memoryPostStore(): PostStore {
             status: p.status, updatedAt: p.updatedAt, hasUnpublishedChanges: p.hasUnpublishedChanges,
             hasEnBody: Boolean(p.en.bodyMarkdown && p.en.bodyMarkdown.trim()),
             heroSrc: hero?.src ?? '', heroWidth: hero?.width ?? 0,
-            date: p.shared.date ?? '', country: p.shared.country ?? '', region: p.shared.region ?? '',
+            // DE-led with an EN fallback, same precedent as the hero above — a
+            // pair may have only the EN row's country filled in.
+            date: p.shared.date ?? '', country: p.de.country || p.en.country || '', region: p.shared.region ?? '',
           };
         });
     },
@@ -447,11 +450,11 @@ function dateText(date: Date | string | null | undefined): string {
 }
 
 function rowLocale(r: PostRow): PostLocale {
-  return { locale: r.locale, slug: r.slug, title: r.title, excerpt: r.excerpt, heroImage: r.hero_image, bodyMarkdown: r.body_markdown, images: r.images ?? {} };
+  return { locale: r.locale, slug: r.slug, title: r.title, excerpt: r.excerpt, country: r.country, heroImage: r.hero_image, bodyMarkdown: r.body_markdown, images: r.images ?? {}, ...(r.key_facts ? { keyFacts: r.key_facts } : {}) };
 }
 function rowShared(r: PostRow): PostShared {
   const d = dateText(r.date);
-  return { date: d, country: r.country, countryCode: r.country_code, region: r.region, coordinates: r.coordinates, ...(r.stops ? { stops: r.stops } : {}), ...(r.route ? { route: r.route } : {}), ...(r.key_facts ? { keyFacts: r.key_facts } : {}) };
+  return { date: d, countryCode: r.country_code, region: r.region, coordinates: r.coordinates, ...(r.stops ? { stops: r.stops } : {}), ...(r.route ? { route: r.route } : {}) };
 }
 
 export function pgPostStore(pool: DbPool): PostStore {
@@ -465,9 +468,9 @@ export function pgPostStore(pool: DbPool): PostStore {
          country_code=EXCLUDED.country_code, region=EXCLUDED.region, excerpt=EXCLUDED.excerpt, hero_image=EXCLUDED.hero_image,
          coordinates=EXCLUDED.coordinates, stops=EXCLUDED.stops, route=EXCLUDED.route, key_facts=EXCLUDED.key_facts,
          body_markdown=EXCLUDED.body_markdown, images=EXCLUDED.images, updated_at=now()`,
-      [randomUUID(), tk, p.locale, p.slug, p.title, shared.date, shared.country, shared.countryCode, shared.region,
+      [randomUUID(), tk, p.locale, p.slug, p.title, shared.date, p.country, shared.countryCode, shared.region,
        p.excerpt, JSON.stringify(p.heroImage), JSON.stringify(shared.coordinates),
-       shared.stops?.length ? JSON.stringify(shared.stops) : null, shared.route ?? null, shared.keyFacts ? JSON.stringify(shared.keyFacts) : null,
+       shared.stops?.length ? JSON.stringify(shared.stops) : null, shared.route ?? null, p.keyFacts ? JSON.stringify(p.keyFacts) : null,
        p.bodyMarkdown, JSON.stringify(p.images), status],
     );
   }
@@ -492,7 +495,8 @@ export function pgPostStore(pool: DbPool): PostStore {
           hasUnpublishedChanges: rowHasUnpublishedChanges(e.de) || rowHasUnpublishedChanges(e.en),
           hasEnBody: Boolean(e.en?.has_body),
           heroSrc: hero?.src ?? '', heroWidth: hero?.width ?? 0,
-          date: dateText(shared?.date), country: shared?.country ?? '', region: shared?.region ?? '',
+          // DE-led with an EN fallback, same precedent as the hero above.
+          date: dateText(shared?.date), country: e.de?.country || e.en?.country || '', region: shared?.region ?? '',
         };
       });
     },

@@ -33,7 +33,7 @@ export function renderPostToMdx(pair: PostPair, locale: Locale): string {
     '---',
     `title: ${q(p.title)}`,
     `date: ${s.date}`,
-    `country: ${q(s.country)}`,
+    `country: ${q(p.country)}`,
     `countryCode: ${q(s.countryCode)}`,
     `region: ${q(s.region)}`,
     `translationKey: ${q(pair.translationKey)}`,
@@ -47,9 +47,9 @@ export function renderPostToMdx(pair: PostPair, locale: Locale): string {
   ];
   if (s.route) lines.push(`route: ${q(s.route)}`);
   if (s.stops?.length) lines.push(`stops: ${JSON.stringify(s.stops)}`);
-  if (s.keyFacts && Object.keys(s.keyFacts).length) {
+  if (p.keyFacts && Object.keys(p.keyFacts).length) {
     lines.push('keyFacts:');
-    for (const [k, v] of Object.entries(s.keyFacts)) lines.push(`  ${q(k)}: ${q(v)}`);
+    for (const [k, v] of Object.entries(p.keyFacts)) lines.push(`  ${q(k)}: ${q(v)}`);
   }
   lines.push('---', '', bodyToMdx(p).trim(), '');
   return lines.join('\n');

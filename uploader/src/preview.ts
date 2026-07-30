@@ -143,7 +143,7 @@ export async function renderPreviewHtml(pair: PostPair, locale: Locale, imageOri
   const parsedDate = shared.date ? new Date(shared.date) : undefined;
   const metaParts = [
     parsedDate && !Number.isNaN(parsedDate.getTime()) ? dateLabel(parsedDate, locale) : '',
-    shared.country,
+    post.country,
   ].filter((part) => part.trim() !== '');
   // {lat:0,lng:0} is the incomplete-draft placeholder (see draftWithDefaults
   // in posts.ts) — don't render a bogus "0.0000° N" line for it.
@@ -168,7 +168,7 @@ ${heroHtml(post.heroImage)}
   <h1>${escapeHtml(title)}</h1>
   ${hasCoords ? `<p class="coords">${escapeHtml(coordsLabel(shared.coordinates))}</p>` : ''}
   ${post.excerpt.trim() !== '' ? `<p class="lede">${escapeHtml(post.excerpt)}</p>` : ''}
-  ${keyFactsHtml(shared.keyFacts)}
+  ${keyFactsHtml(post.keyFacts)}
   <article>
 ${body}
   </article>

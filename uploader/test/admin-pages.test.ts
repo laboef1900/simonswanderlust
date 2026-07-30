@@ -376,14 +376,17 @@ describe('admin page wiring', () => {
     // `if (shared.route)`-style guard resurrects server values the user deleted
     // when a stash is restored over an already-loaded post.
     expect(editor).toContain("$('fmDate').value = shared.date || ''");
-    expect(editor).toContain("$('fmCountry').value = shared.country || ''");
     expect(editor).toContain("$('fmCountryCode').value = shared.countryCode || ''");
     expect(editor).toContain("$('fmRegion').value = shared.region || ''");
     expect(editor).toContain("$('fmRoute').value = shared.route || ''");
     expect(editor).toContain('const coords = shared.coordinates || {}');
     expect(editor).toContain('const hero = data.heroImage || {}');
-    expect(editor).not.toMatch(/if \(shared\.(date|country|countryCode|region|route|coordinates)\)/);
-    expect(editor).not.toMatch(/if \(data\.heroImage\)/);
+    // country and keyFacts moved per-locale (issue #87) — same unconditional-write
+    // contract applies to populateLocale as to populateForm.
+    expect(editor).toContain("$(loc + 'Country').value = data.country || ''");
+    expect(editor).toContain('populateKeyFacts(loc, data.keyFacts)');
+    expect(editor).not.toMatch(/if \(shared\.(date|countryCode|region|route|coordinates)\)/);
+    expect(editor).not.toMatch(/if \(data\.(heroImage|country|keyFacts)\)/);
   });
 
   it('declining the restore prompt keeps the stash (non-destructive) instead of wiping it', () => {

@@ -104,9 +104,9 @@ maybe('postgres stores (integration)', () => {
     const stamp = Date.now();
     const post = await pgPostStore(pool).upsertDraft({
       translationKey: '', status: 'draft',
-      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de', slug: `rerun-de-${stamp}`, title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-      en: { locale: 'en', slug: `rerun-en-${stamp}`, title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de', slug: `rerun-de-${stamp}`, title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en', slug: `rerun-en-${stamp}`, title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     });
 
     await expect(ensureSchema(pool)).resolves.toBeUndefined();
@@ -123,9 +123,9 @@ maybe('postgres stores (integration)', () => {
 maybe('pgPostStore (integration)', () => {
   const base = {
     translationKey: '', status: 'draft' as const,
-    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-    de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-    en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   };
 
   it('round-trips a pair, publishes, and enforces slug immutability', async () => {
@@ -137,8 +137,8 @@ maybe('pgPostStore (integration)', () => {
     const base = {
       translationKey: '', status: 'draft' as const,
       shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 }, stops },
-      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b\n\n<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />', images: {} },
-      en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b\n\n<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />', images: {} },
+      en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     };
     const created = await store.upsertDraft(base);
     const fetched = await store.get(created.translationKey);
@@ -165,9 +165,9 @@ maybe('pgPostStore (integration)', () => {
     const store = pgPostStore(pool);
     const base = {
       translationKey: '', status: 'draft' as const,
-      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de' as const, slug: 'snap-de', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## live', images: {} },
-      en: { locale: 'en' as const, slug: 'snap-en', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## live', images: {} },
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de' as const, slug: 'snap-de', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## live', images: {} },
+      en: { locale: 'en' as const, slug: 'snap-en', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## live', images: {} },
     };
     const created = await store.upsertDraft(base);
     const tk = created.translationKey;
@@ -240,9 +240,9 @@ maybe('pgPostStore (integration)', () => {
     const store = pgPostStore(pool);
     const base = {
       translationKey: '', status: 'draft' as const,
-      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-      en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     };
     const created = await store.upsertDraft(base);
     expect((await store.list()).find((p) => p.translationKey === created.translationKey)?.hasEnBody).toBe(true);
@@ -270,9 +270,9 @@ maybe('pgPostStore (integration)', () => {
     const store = pgPostStore(pool);
     const base = {
       translationKey: '', status: 'draft' as const,
-      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-      en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     };
     const created = await store.upsertDraft(base);
     // Simulate a crash between upsertDraft's two non-transactional locale
@@ -296,9 +296,9 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
   let pool: DbPool;
   const base = (slug: string, title = 'T') => ({
     translationKey: '', status: 'draft' as const,
-    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-    de: { locale: 'de' as const, slug: `${slug}-de`, title, excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-    en: { locale: 'en' as const, slug: `${slug}-en`, title, excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de' as const, slug: `${slug}-de`, title, excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en' as const, slug: `${slug}-en`, title, excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
   beforeAll(async () => {
     pool = createPool(url!);
@@ -369,9 +369,9 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     const store = pgPostStore(pool);
     const base = {
       translationKey: '', status: 'draft' as const,
-      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de' as const, slug: 'tz-de', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-      en: { locale: 'en' as const, slug: 'tz-en', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de' as const, slug: 'tz-de', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en' as const, slug: 'tz-en', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     };
     const created = await store.upsertDraft(base);
     const loaded = await store.get(created.translationKey);
@@ -394,9 +394,9 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     const store = pgPostStore(pool);
     const created = await store.upsertDraft({
       translationKey: '', status: 'draft',
-      shared: { date: '2024-10-03', country: 'Rumänien', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de', slug: 'sum-de', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/hero', width: 1600, height: 900, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-      en: { locale: 'en', slug: 'sum-en', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/hero', width: 1600, height: 900, alt: 'a' }, bodyMarkdown: '', images: {} },
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de', slug: 'sum-de', title: 'T', excerpt: 'e', country: 'Rumänien', heroImage: { src: 'https://i/hero', width: 1600, height: 900, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en', slug: 'sum-en', title: 'T', excerpt: 'e', country: 'Romania', heroImage: { src: 'https://i/hero', width: 1600, height: 900, alt: 'a' }, bodyMarkdown: '', images: {} },
     });
     const summary = (await store.list()).find((p) => p.translationKey === created.translationKey);
     expect(summary).toMatchObject({
@@ -415,9 +415,9 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     const store = pgPostStore(pool);
     const created = await store.upsertDraft({
       translationKey: '', status: 'draft',
-      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de', slug: 'fb-de', title: 'T', excerpt: 'e', heroImage: { src: '', width: 0, height: 0, alt: '' }, bodyMarkdown: '## b', images: {} },
-      en: { locale: 'en', slug: 'fb-en', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/en-hero', width: 800, height: 600, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de', slug: 'fb-de', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: '', width: 0, height: 0, alt: '' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en', slug: 'fb-en', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/en-hero', width: 800, height: 600, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     });
     const summary = (await store.list()).find((p) => p.translationKey === created.translationKey);
     expect(summary).toMatchObject({ heroSrc: 'https://i/en-hero', heroWidth: 800 });

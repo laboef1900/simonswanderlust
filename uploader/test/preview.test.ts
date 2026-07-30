@@ -14,26 +14,27 @@ function pair(overrides: Partial<PostPair> = {}): PostPair {
     status: 'draft',
     shared: {
       date: '2024-10-03',
-      country: 'Rumänien',
       countryCode: 'RO',
       region: 'europe',
       coordinates: { lat: 44.4268, lng: 26.1025 },
-      keyFacts: { Währung: 'Leu', Sprache: 'Rumänisch' },
     },
     de: {
       locale: 'de',
       slug: 'bukarest',
       title: 'Bukarest im Herbst',
       excerpt: 'Ein Wochenende in der Hauptstadt.',
+      country: 'Rumänien',
       heroImage: { src: 'https://img.example.com/trips/bukarest/hero', width: 1600, height: 900, alt: 'Altstadt' },
       bodyMarkdown: '## Anreise\n\n**fett** und mehr.',
       images: {},
+      keyFacts: { Währung: 'Leu', Sprache: 'Rumänisch' },
     },
     en: {
       locale: 'en',
       slug: 'bucharest',
       title: 'Bucharest in autumn',
       excerpt: 'A weekend in the capital.',
+      country: 'Romania',
       heroImage: { src: '', width: 0, height: 0, alt: '' }, // the draft placeholder
       bodyMarkdown: 'Plain text.',
       images: {},
@@ -77,8 +78,8 @@ describe('renderPreviewHtml', () => {
   it('HTML-escapes hostile frontmatter strings (title, country, key facts, alt)', async () => {
     const p = pair();
     p.de.title = '<script>x</script>';
-    p.shared.country = '<b>evil</b>';
-    p.shared.keyFacts = { '<i>k</i>': '"v" & more' };
+    p.de.country = '<b>evil</b>';
+    p.de.keyFacts = { '<i>k</i>': '"v" & more' };
     p.de.heroImage.alt = '"><script>y</script>';
     const html = await renderPreviewHtml(p, 'de', ORIGIN);
     expect(html).not.toContain('<script>x</script>');
@@ -115,7 +116,7 @@ describe('renderPreviewHtml', () => {
       height: 900,
       alt: undefined as unknown as string, // missing 'alt' key in the jsonb
     };
-    p.shared.keyFacts = { Höhe: 42 as unknown as string }; // a number, not a string
+    p.de.keyFacts = { Höhe: 42 as unknown as string }; // a number, not a string
     const html = await renderPreviewHtml(p, 'de', ORIGIN);
     expect(html).toContain('class="hero"'); // hero still renders (dims are valid)
     expect(html).toContain('alt=""'); // undefined alt coerced to empty string
@@ -149,6 +150,17 @@ describe('renderPreviewHtml', () => {
     const html = await renderPreviewHtml(pair(), 'de', ORIGIN);
     expect(html).toContain('<dt>Währung</dt>');
     expect(html).toContain('<dd>Leu</dd>');
+  });
+
+  // Issue #87: country and key facts are per-locale — the EN preview must show
+  // its OWN country, never the DE row's.
+  it('shows each locale\'s own country, not the other locale\'s', async () => {
+    const de = await renderPreviewHtml(pair(), 'de', ORIGIN);
+    const en = await renderPreviewHtml(pair(), 'en', ORIGIN);
+    expect(de).toContain('Rumänien');
+    expect(en).not.toContain('Rumänien');
+    expect(en).toContain('Romania');
+    expect(de).not.toContain('Romania');
   });
 
   it('carries a draft banner and a robots noindex meta', async () => {

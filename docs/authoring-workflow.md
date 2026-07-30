@@ -91,7 +91,9 @@ needed. Content is stored in **Postgres**; MDX files are generated automatically
    | **Coordinates** | `lat`, `lng` decimal |
    | **Body** | Markdown (EasyMDE editor). Embed photos via the body toolbar's inline upload — it inserts a markdown image (`![alt](URL)`) and records the dimensions automatically. Pasted `<BodyImage …/>` tags (from an MDX backup or the upload page) also work: they're converted on save. |
 
-4. Switch to the **English** tab and fill in the EN fields (title, excerpt, alt text, body).
+4. Switch to the **English** tab and fill in the EN fields (title, country, excerpt, key facts,
+   alt text, body) — **country** and **key facts** are per-locale and do NOT carry over from the
+   German tab, so enter the English country name (e.g. "Greece", not "Griechenland") here too.
    The slug and shared fields (date, countryCode, region, coordinates) carry over automatically.
 5. Click **Save draft** — both locale rows are written to Postgres. The post is not yet live.
 
@@ -349,7 +351,7 @@ Notes:
 
 - [ ] Photos uploaded — hero and body images via the editor's inline upload, or pre-uploaded via `/admin/` (hero); snippets/URLs ready.
 - [ ] In the editor: DE tab filled — slug (matches live WordPress slug, never renamed), title, date, country, countryCode, region, excerpt, heroImage fields, body photos inserted via the toolbar (or pasted `<BodyImage …/>` tags — converted on save) with DE alt text.
-- [ ] In the editor: EN tab filled — title, excerpt, EN hero alt text, EN body with its own photo inserts (EN alt text).
+- [ ] In the editor: EN tab filled — title, country (its own field — does not carry over from DE), excerpt, EN hero alt text, EN body with its own photo inserts (EN alt text).
 - [ ] **Save draft** — both locale rows written to Postgres; the live site is never affected by a save.
 - [ ] **Publish** — snapshots the content as the live version and triggers the rebuild automatically.
 - [ ] Verify the post renders at `/<slug>/` and `/en/<slug>/`, hero + body images load.
