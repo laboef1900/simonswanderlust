@@ -132,7 +132,7 @@ function isSkippableLine(line: string): boolean {
  * liberal — indent and tildes included — because being generous about what
  * protects content is the safe direction to be wrong in.
  */
-function rewriteFences(body: string, rewriteLine: (line: string) => string): string {
+export function rewriteFences(body: string, rewriteLine: (line: string) => string): string {
   const lines = body.split('\n');
   let open: { marker: string; len: number; isGallery: boolean } | null = null;
 
