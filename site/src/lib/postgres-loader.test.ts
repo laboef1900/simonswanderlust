@@ -40,7 +40,7 @@ const row = {
 
 describe('rowToEntryInput', () => {
   it('builds id as `${locale}/${slug}` and camelCase data matching the schema', () => {
-    const e = rowToEntryInput(row as never);
+    const e = rowToEntryInput(row as never, 'https://img');
     expect(e.id).toBe('de/reisebericht-4-tage-bukarest');
     expect(e.data.translationKey).toBe('bucharest-2024');
     expect(e.data.countryCode).toBe('RO');
@@ -54,8 +54,8 @@ describe('rowToEntryInput', () => {
   // JSON round-tripped object — the mapping must be identical to a live row.
   it('maps a jsonb published-snapshot shape identically to a live-row shape', () => {
     const snapshot = { ...row, date: '2024-10-03' };
-    const live = rowToEntryInput(row as never);
-    const snap = rowToEntryInput(snapshot as never);
+    const live = rowToEntryInput(row as never, 'https://img');
+    const snap = rowToEntryInput(snapshot as never, 'https://img');
     expect(snap.id).toBe(live.id);
     expect(snap.data).toEqual(live.data);
     expect(snap.body).toBe(live.body);

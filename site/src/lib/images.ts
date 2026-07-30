@@ -59,6 +59,54 @@ export function variantWidths(
   return [...smaller, intrinsicWidth];
 }
 
+/**
+ * Re-point a post's own image URLs at `origin`, so one database renders
+ * correctly in every environment.
+ *
+ * The uploader stamps its `PUBLIC_BASE_URL` into content at upload/import time
+ * — the hero `src`, every key of the `images` map, and every URL written into
+ * the body. Nothing downstream swaps it: `srcset()` below concatenates onto the
+ * stored string, and the gallery allow-list in `body-images.ts` compares the
+ * stored origin by EXACT EQUALITY. So content imported against
+ * `http://localhost:3000` renders broken images on a server, and its galleries
+ * fail the allow-list and fall back to a code block. This makes the stored
+ * origin advisory instead of binding.
+ *
+ * @ai-warning Only URLs the post REGISTERED as images are rewritten — the
+ * `images` map keys plus the hero. A blanket origin replace over the body would
+ * also rewrite ordinary prose links (these posts link to Wikipedia and to other
+ * posts on this blog), and locally the blog and the image host are the SAME
+ * origin, so there is no origin test that separates them.
+ *
+ * Replacement runs longest-key-first: `…/a` is a prefix of `…/a-2`, and
+ * rewriting the short one first would corrupt the long one.
+ */
+export function retargetImageOrigins<V>(
+  content: { heroSrc: string; images: Record<string, V>; body: string },
+  origin: string,
+): { heroSrc: string; images: Record<string, V>; body: string } {
+  const retarget = (url: string): string => {
+    let u: URL;
+    try { u = new URL(url); } catch { return url; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return url;
+    return `${origin}${u.pathname}${u.search}${u.hash}`;
+  };
+
+  const images: Record<string, V> = {};
+  const renames: [string, string][] = [];
+  for (const [key, value] of Object.entries(content.images)) {
+    const next = retarget(key);
+    images[next] = value;
+    if (next !== key) renames.push([key, next]);
+  }
+
+  renames.sort((a, b) => b[0].length - a[0].length);
+  let body = content.body;
+  for (const [from, to] of renames) body = body.split(from).join(to);
+
+  return { heroSrc: content.heroSrc === '' ? '' : retarget(content.heroSrc), images, body };
+}
+
 /** Responsive srcset string for one format. */
 export function srcset(image: RemoteHeroImage, format: ImageFormat): string {
   return variantWidths(image.width)
