@@ -30,6 +30,9 @@ Self-hosted, single-author travel CMS with a custom bilingual editor, automatic 
 - **Pages:** Login, Photo Upload (index), Posts list, Post Editor, Media Library, About Page editor, Import (WordPress WXR), Settings, Users management.
 - **Auth:** Cookie-based sessions with admin/non-admin roles; rate-limited login.
 - **Editor:** Bilingual DE/EN tabs, slug preview, hero image picker, body markdown with EasyMDE, key facts and stops editors, revision history, preview, publish/unpublish.
+- **Media library:** One browsable store for every hosted photo — bulk drag-and-drop upload, virtual folders, search, per-item alt text. Encoding runs asynchronously behind a queue that a site build preempts; publishing is refused while a referenced photo is still encoding. GPS and uploader identity are redacted for non-admin authors.
+- **Galleries:** Multiple photos render as one grid from a fenced `gallery` block, composed via an "Insert / edit gallery" picker that reuses the library's own alt text. Three layout modes (justified rows at breakout or column width, or a slider), each with a lightbox.
+- **Photo privacy:** Published variants carry an eight-tag EXIF allow-list — no GPS, XMP or IPTC — applied at encode time, so it covers WordPress-imported photos as well as direct uploads.
 - **Tech stack:** Fastify server, plain HTML/CSS/JS admin UI (no framework), PostgreSQL, Docker.
 - **Constraint:** Admin UI is vanilla HTML/CSS/JS served as static files from `uploader/public/`; no bundler and no framework. The only build step copies vendored fonts and EasyMDE into `public/` (`Dockerfile` runs `scripts/copy-fonts.mjs` and `scripts/copy-easymde.mjs`), so `public/fonts/` and `public/vendor/` are generated, not checked in.
 
