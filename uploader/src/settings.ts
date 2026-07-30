@@ -12,6 +12,14 @@ export interface Settings {
   captionPrompt: string;
   backupSchedule: BackupSchedule;
   backupRetention: number;
+  /**
+   * WordPress-import pacing (issue #85). `importDelayMs: 0` restores pre-#85
+   * behaviour and is a legitimate choice for a source host on the LAN — blast
+   * radius is bounded by wp-import's retry budget and per-host breaker, not by
+   * this lower bound.
+   */
+  importDelayMs: number;
+  importRetries: number;
 }
 
 export class SettingsError extends Error {}
@@ -30,6 +38,10 @@ export function defaultSettings(): Settings {
     captionPrompt: DEFAULT_PROMPT,
     backupSchedule: 'off',
     backupRetention: 14,
+    // The spacing and retry count the 2026-07-29 migration actually completed
+    // 665 photos with; at zero spacing the source host cut us off after 37.
+    importDelayMs: 1200,
+    importRetries: 3,
   };
 }
 
@@ -57,6 +69,12 @@ export function validate(s: Settings): Settings {
   if (!Number.isInteger(s.backupRetention) || s.backupRetention < 1 || s.backupRetention > 100) {
     throw new SettingsError('Backup retention must be a whole number between 1 and 100.');
   }
+  if (!Number.isInteger(s.importDelayMs) || s.importDelayMs < 0 || s.importDelayMs > 10000) {
+    throw new SettingsError('Import delay must be a whole number of milliseconds between 0 and 10000.');
+  }
+  if (!Number.isInteger(s.importRetries) || s.importRetries < 0 || s.importRetries > 5) {
+    throw new SettingsError('Import retries must be a whole number between 0 and 5.');
+  }
   return s;
 }
 
@@ -74,6 +92,8 @@ export function createSettingsStore({ path, defaults }: { path: string; defaults
     if (fromFile.captionPrompt !== undefined) merged.captionPrompt = fromFile.captionPrompt;
     if (fromFile.backupSchedule !== undefined) merged.backupSchedule = fromFile.backupSchedule;
     if (fromFile.backupRetention !== undefined) merged.backupRetention = fromFile.backupRetention;
+    if (fromFile.importDelayMs !== undefined) merged.importDelayMs = fromFile.importDelayMs;
+    if (fromFile.importRetries !== undefined) merged.importRetries = fromFile.importRetries;
     // Validate on load too, not just on update(): a hand-edited or partially
     // written settings.json must not serve out-of-range values (e.g. a negative
     // captionTimeoutMs reaching the browser's abort timer). Reject → safe defaults.

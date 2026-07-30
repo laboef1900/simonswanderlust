@@ -30,6 +30,7 @@ import { type PageStore, type PagePair, type PageContent, type ImageDims, PageEr
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
 import { importWxr } from './wp-import.js';
+import { createRehostResume } from './wp-images.js';
 import { fixedWindowLimiter, rateLimitPreHandler, type RateLimiter } from './rate-limit.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
@@ -55,6 +56,15 @@ export interface ServerConfig {
   /** Disk↔database reconciliation, triggered by POST /media/rescan. */
   mediaSync?: { run: () => Promise<SyncReport> };
 }
+
+/**
+ * Whether a WordPress import is running right now (issue #85).
+ *
+ * @ai-note Module-scoped, so it is per PROCESS, which is the right granularity:
+ * the app runs as a single container and the resource it protects (the source
+ * host's patience, plus `${storageDir}` variant writes) is per process too.
+ */
+let importInFlight = false;
 
 const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
 
@@ -599,6 +609,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (b.captionPrompt !== undefined) partial.captionPrompt = String(b.captionPrompt);
     if (b.backupSchedule !== undefined) partial.backupSchedule = String(b.backupSchedule);
     if (b.backupRetention !== undefined) partial.backupRetention = Number(b.backupRetention);
+    if (b.importDelayMs !== undefined) partial.importDelayMs = Number(b.importDelayMs);
+    if (b.importRetries !== undefined) partial.importRetries = Number(b.importRetries);
     try {
       return reply.send(cfg.settings.update(partial));
     } catch (e) {
@@ -1100,18 +1112,47 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   app.post('/import', { preHandler: requireAuth }, async (req, reply) => {
-    let xml = '';
-    for await (const part of req.parts()) {
-      if (part.type === 'file') xml = (await part.toBuffer()).toString('utf8');
+    // @ai-warning ONE import at a time. Resumability (issue #85) makes "run the
+    // import again" the documented recovery path when the browser or the reverse
+    // proxy gives up on a multi-minute request, so concurrent runs stopped being
+    // hypothetical. Two of them would each see a mostly-empty resume index and
+    // re-fetch everything (the very double-charging resumability exists to
+    // prevent), hit the source host at twice the configured rate — the pacing
+    // gate is per-run state and gives no aggregate guarantee — race
+    // storeVariantFiles' non-atomic writes into a variant set mixing two source
+    // images, and run two sharp pipelines inside one mem_limit'd container.
+    // Deliberately NOT work-lock: no lock is taken and no queue is involved.
+    if (importInFlight) {
+      return reply.code(409).send({ error: 'an import is already running; wait for it to finish' });
     }
-    if (!xml.includes('<rss') || !xml.includes('wordpress.org/export')) {
-      return reply.code(400).send({ error: 'not a WordPress export (.xml) file' });
+    importInFlight = true;
+    try {
+      let xml = '';
+      for await (const part of req.parts()) {
+        if (part.type === 'file') xml = (await part.toBuffer()).toString('utf8');
+      }
+      if (!xml.includes('<rss') || !xml.includes('wordpress.org/export')) {
+        return reply.code(400).send({ error: 'not a WordPress export (.xml) file' });
+      }
+      const { importDelayMs, importRetries } = cfg.settings.get();
+      const summary = await importWxr(xml, {
+        postStore: cfg.posts, storageDir: cfg.storageDir, baseUrl: cfg.baseUrl,
+        delayMs: importDelayMs,
+        retries: importRetries,
+        // A FRESH disk walk per import, which is why this is built here rather
+        // than injected once at boot like `settings` or `dbBackup`.
+        resume: await createRehostResume({ storageDir: cfg.storageDir, baseUrl: cfg.baseUrl }),
+        log: (msg) => console.log(msg),
+      });
+      if (summary.imported === 0 && summary.updated === 0 && summary.skipped === 0) {
+        return reply.code(400).send({ error: 'no importable posts found in export' });
+      }
+      return reply.send(summary);
+    } finally {
+      // finally, not after send: a throw here would otherwise wedge the endpoint
+      // until the process restarts.
+      importInFlight = false;
     }
-    const summary = await importWxr(xml, { postStore: cfg.posts, storageDir: cfg.storageDir, baseUrl: cfg.baseUrl });
-    if (summary.imported === 0 && summary.updated === 0 && summary.skipped === 0) {
-      return reply.code(400).send({ error: 'no importable posts found in export' });
-    }
-    return reply.send(summary);
   });
 
   // @ai-note: the image host doubles as a blog host so that LOCAL DEV works, and

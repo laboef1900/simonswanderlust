@@ -24,7 +24,12 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'imgsrv-'));
 });
 
-const SETTINGS: Settings = defaultSettings();
+// @ai-note Import pacing is switched OFF for the route suite: the fixture's
+// image URLs are unreachable, and the production default (1200 ms spacing, 3
+// retries) would add real sleeps to every import test for no coverage. The
+// pacing itself is covered in wp-import.test.ts with an injected clock; the
+// tests below that DO exercise it set the values explicitly.
+const SETTINGS: Settings = { ...defaultSettings(), importDelayMs: 0, importRetries: 0 };
 function fakeStore(init: Settings = SETTINGS): SettingsStore {
   let cur = { ...init };
   return { get: () => ({ ...cur }), update: (p) => { cur = validate({ ...cur, ...p }); return { ...cur }; } };
@@ -599,7 +604,7 @@ describe('settings endpoints', () => {
     const admin = await authed(b, { username: 'admin' });
     const res = await b.app.inject({ method: 'GET', url: '/settings', cookies: admin.cookie });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual(defaultSettings());
+    expect(res.json()).toEqual(SETTINGS);
   });
 
   it('POST /settings is admin-only: 403 for authors', async () => {
@@ -625,6 +630,36 @@ describe('settings endpoints', () => {
     expect(res.json()).toMatchObject({ backupSchedule: 'daily', backupRetention: 5 });
     const after = await b.app.inject({ method: 'GET', url: '/settings', cookies: cookie });
     expect(after.json()).toMatchObject({ backupSchedule: 'daily', backupRetention: 5 });
+  });
+
+  // @ai-warning POST /settings has its OWN allow-list, separate from
+  // settings.ts's known-key pick. A field missing from it is silently ignored by
+  // the API while every unit test on settings.ts still passes, and tsc catches
+  // neither. This test is that allow-list.
+  it('POST /settings persists the WordPress-import pacing knobs', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({
+      method: 'POST', url: '/settings',
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { importDelayMs: 2500, importRetries: 1 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ importDelayMs: 2500, importRetries: 1 });
+    const after = await b.app.inject({ method: 'GET', url: '/settings', cookies: cookie });
+    expect(after.json()).toMatchObject({ importDelayMs: 2500, importRetries: 1 });
+  });
+
+  it('POST /settings 400 on out-of-range import pacing', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    for (const payload of [{ importDelayMs: 99999 }, { importRetries: 9 }]) {
+      const res = await b.app.inject({
+        method: 'POST', url: '/settings',
+        headers: { 'content-type': 'application/json' }, cookies: cookie, payload,
+      });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+    }
   });
 
   it('POST /settings 400 on invalid backup retention', async () => {
@@ -1464,6 +1499,95 @@ describe('WordPress import', () => {
     const res = await b.app.inject({ method: 'POST', url: '/import', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('no importable posts found in export');
+  });
+
+  // ---- issue #85 ----------------------------------------------------------
+
+  const wxrWith = (...urls: string[]): string => `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/"
+  xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/"
+  xmlns:wp="http://wordpress.org/export/1.2/">
+<channel>
+${(['de', 'en'] as const).map((loc) => `  <item>
+    <title>t ${loc}</title>
+    <wp:post_name><![CDATA[imp-${loc}]]></wp:post_name>
+    <wp:post_type><![CDATA[post]]></wp:post_type>
+    <wp:status><![CDATA[publish]]></wp:status>
+    <wp:post_date><![CDATA[2021-07-25 00:00:00]]></wp:post_date>
+    <excerpt:encoded><![CDATA[]]></excerpt:encoded>
+    <content:encoded><![CDATA[${loc === 'de' ? urls.map((u) => `<img src="${u}" alt="a" />`).join('') : '<p>x</p>'}]]></content:encoded>
+    <category domain="language" nicename="${loc}"><![CDATA[${loc}]]></category>
+    <category domain="post_translations" nicename="impg"><![CDATA[impg]]></category>
+  </item>`).join('\n')}
+</channel>
+</rss>`;
+
+  const postImport = (b: Built, cookie: Record<string, string>, xmlBody: string) => {
+    const form = new FormData();
+    form.append('file', xmlBody, { filename: 'export.xml', contentType: 'text/xml' });
+    return b.app.inject({ method: 'POST', url: '/import', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
+  };
+
+  // Every URL here is refused by safeFetch's SSRF guard, so it fails instantly
+  // and non-retryably — no network, no backoff, just the pacing gate.
+  const blocked = (n: number) => Array.from({ length: n }, (_, i) => `http://127.0.0.1/p${i}.jpg`);
+
+  it('reports how many images were actually hosted, so a partial import cannot look clean', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const res = await postImport(b, cookie, wxrWith(...blocked(3)));
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ imported: 1, images: { total: 3, hosted: 0, failed: 3 } });
+  });
+
+  it('does not leak the transport error behind a failed image', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const res = await postImport(b, cookie, wxrWith(...blocked(1)));
+    const warnings = (res.json().warnings as string[]).join(' ');
+    expect(warnings).toMatch(/blocked address/);
+    expect(warnings).not.toMatch(/ECONNREFUSED|refusing to fetch/);
+  });
+
+  it('paces fetches using the configured delay', async () => {
+    const b = build({ settings: fakeStore({ ...SETTINGS, importDelayMs: 200 }) });
+    const { cookie } = await authed(b);
+    const started = Date.now();
+    await postImport(b, cookie, wxrWith(...blocked(3)));
+    // 3 images ⇒ 2 gate waits. Proves the route threads the setting through
+    // rather than using importWxr's inert default of 0.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(380);
+  });
+
+  // @ai-warning Resumability makes "just run the import again" the documented
+  // recovery path, so concurrency stops being hypothetical. Two runs would both
+  // see a mostly-empty resume index and both fetch everything, hit the source
+  // host at 2x the configured rate, and race storeVariantFiles' non-atomic
+  // writes into a mixed variant set. Not work-lock — one flag and a 409.
+  it('refuses a second import while one is still running', async () => {
+    const b = build({ settings: fakeStore({ ...SETTINGS, importDelayMs: 600 }) });
+    const { cookie } = await authed(b);
+    const first = postImport(b, cookie, wxrWith(...blocked(3)));
+    await new Promise((r) => { setTimeout(r, 50); });
+    const second = await postImport(b, cookie, wxrWith(...blocked(3)));
+    expect(second.statusCode).toBe(409);
+    expect(second.json().error).toMatch(/already running/i);
+    expect((await first).statusCode).toBe(200);
+  });
+
+  it('accepts another import once the first has finished', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(200);
+    expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(200);
+  });
+
+  it('releases the single-flight flag even when the import throws', async () => {
+    const posts = memoryPostStore();
+    posts.upsertDraft = async () => { throw new Error('boom'); };
+    const b = build({ posts }); const { cookie } = await authed(b);
+    // The per-group catch turns this into skipped:1 rather than a 500...
+    expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(200);
+    // ...and either way the next import must not be locked out.
+    expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(200);
   });
 });
 

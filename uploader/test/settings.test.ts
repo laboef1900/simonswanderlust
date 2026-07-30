@@ -142,3 +142,61 @@ describe('LM settings validation', () => {
     expect(onDisk.lmModel).toBe('my/vlm');
   });
 });
+
+/**
+ * Issue #85: the WordPress importer's pacing knobs. Not `.env` — CLAUDE.md
+ * reserves that for bootstrap values and puts app settings here.
+ */
+describe('import settings', () => {
+  it('defaults to the spacing the 2026-07-29 migration actually completed with', () => {
+    const d = defaultSettings();
+    expect(d.importDelayMs).toBe(1200);
+    expect(d.importRetries).toBe(3);
+  });
+
+  // @ai-warning validate() runs on LOAD too, and one bad value rejects the WHOLE
+  // file back to defaults — a default that failed its own validator would
+  // silently wipe the owner's LM and backup config.
+  it('has defaults that pass its own validator', () => {
+    expect(() => validate(defaultSettings())).not.toThrow();
+  });
+
+  it('accepts both ends of each range', () => {
+    for (const importDelayMs of [0, 10000]) {
+      expect(() => validate({ ...DEFAULTS, importDelayMs })).not.toThrow();
+    }
+    for (const importRetries of [0, 5]) {
+      expect(() => validate({ ...DEFAULTS, importRetries })).not.toThrow();
+    }
+  });
+
+  it('rejects out-of-range, fractional, and non-numeric values', () => {
+    for (const bad of [-1, 10001, 1.5, Number.NaN]) {
+      expect(() => validate({ ...DEFAULTS, importDelayMs: bad }), `delay ${bad}`).toThrow(SettingsError);
+    }
+    for (const bad of [-1, 6, 1.5, Number.NaN]) {
+      expect(() => validate({ ...DEFAULTS, importRetries: bad }), `retries ${bad}`).toThrow(SettingsError);
+    }
+  });
+
+  // 0 restores pre-#85 behaviour on purpose: importing from a WordPress on the
+  // LAN has no reason to pace. Blast radius is bounded by the retry budget and
+  // the per-host breaker, not by this lower bound.
+  it('allows a zero delay, which disables pacing', () => {
+    const store = createSettingsStore({ path: join(dir, 'settings.json'), defaults: DEFAULTS });
+    expect(store.update({ importDelayMs: 0 }).importDelayMs).toBe(0);
+  });
+
+  it('round-trips through the file and survives an older settings.json without the keys', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ backupSchedule: 'daily', lmModel: 'my/vlm' }));
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(store.get().importDelayMs).toBe(1200);        // merged from defaults
+    expect(store.get().backupSchedule).toBe('daily');    // and nothing else was lost
+    store.update({ importDelayMs: 2500, importRetries: 1 });
+    const onDisk = JSON.parse(await readFile(path, 'utf8'));
+    expect(onDisk.importDelayMs).toBe(2500);
+    expect(onDisk.importRetries).toBe(1);
+    expect(createSettingsStore({ path, defaults: DEFAULTS }).get().importDelayMs).toBe(2500);
+  });
+});
