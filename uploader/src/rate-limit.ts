@@ -44,3 +44,52 @@ export function rateLimitPreHandler(limiter: RateLimiter) {
     }
   };
 }
+
+export interface AccountLimiter {
+  /** Returns true if the account is locked due to excessive failed attempts. */
+  isLocked(username: string): boolean;
+  /** Records a failed login attempt for the username. */
+  recordFailure(username: string): void;
+  /** Clears failures on successful login for the username. */
+  recordSuccess(username: string): void;
+}
+
+/**
+ * In-memory account lockout limiter for defending against distributed-IP brute-force attacks.
+ */
+export function accountLockoutLimiter({ max = 5, windowMs = 900_000, now = () => Date.now() }: Partial<RateLimitOptions> = {}): AccountLimiter {
+  const failures = new Map<string, { count: number; resetAt: number }>();
+  const normalize = (u: string) => u.toLowerCase().trim();
+  return {
+    isLocked(username) {
+      if (!username) return false;
+      const key = normalize(username);
+      const t = now();
+      const entry = failures.get(key);
+      if (!entry) return false;
+      if (t >= entry.resetAt) {
+        failures.delete(key);
+        return false;
+      }
+      return entry.count >= max;
+    },
+    recordFailure(username) {
+      if (!username) return;
+      const key = normalize(username);
+      const t = now();
+      if (failures.size > 10_000) {
+        for (const [k, v] of failures) if (v.resetAt <= t) failures.delete(k);
+      }
+      const entry = failures.get(key);
+      if (!entry || t >= entry.resetAt) {
+        failures.set(key, { count: 1, resetAt: t + windowMs });
+      } else {
+        entry.count++;
+      }
+    },
+    recordSuccess(username) {
+      if (!username) return;
+      failures.delete(normalize(username));
+    },
+  };
+}

@@ -32,7 +32,8 @@ export const POST_SNAPSHOT_SQL = `jsonb_build_object(
   'date', to_char(date, 'YYYY-MM-DD'), 'country', country, 'country_code', country_code,
   'region', region, 'excerpt', excerpt, 'hero_image', hero_image, 'coordinates', coordinates,
   'stops', stops, 'route', route, 'key_facts', key_facts,
-  'body_markdown', body_markdown, 'images', images
+  'body_markdown', body_markdown, 'images', images,
+  'categories', categories, 'tags', tags, 'scheduled_at', scheduled_at
 )`;
 
 export async function ensureSchema(pool: DbPool): Promise<void> {
@@ -75,6 +76,11 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   // an unrelated rebuild (issue #20). Additive, idempotent migration.
   await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS published_snapshot jsonb`);
   await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS published_at timestamptz`);
+  await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS categories text[] NOT NULL DEFAULT '{}'`);
+  await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}'`);
+  await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS scheduled_at timestamptz`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS posts_categories_idx ON posts USING gin (categories)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS posts_tags_idx ON posts USING gin (tags)`);
   // One-time backfill for rows published before the column existed. The
   // `published_snapshot IS NULL` guard makes re-runs no-ops, so a working copy
   // edited after the first backfill is never promoted into the snapshot.

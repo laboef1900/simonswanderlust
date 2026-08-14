@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Image Station · Simon's Wanderlust</title>
+    <title>CMS Studio Dashboard · Simon's Wanderlust</title>
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body>
@@ -11,49 +11,95 @@
       <div class="masthead-inner">
         <nav id="mainnav" aria-label="Admin"></nav>
         <p class="eyebrow">Expedition Log · Image Station</p>
-        <h1>Photo upload</h1>
-        <p class="lede">
-          Upload a photo for a post. It's optimized into responsive AVIF/WebP and returns a
-          <code>heroImage</code> snippet for the editor's hero fields — plus, for non-hero
-          keys, a body snippet to paste into the post body (converted to a markdown image on save).
-        </p>
+        <h1>CMS Dashboard</h1>
+        <p class="lede">Overview of trip reports, content drafts, photo assets, and rapid upload tools.</p>
         <p class="muted" id="whoami"></p>
       </div>
     </header>
 
     <main>
-      <section class="card">
-        <label for="key">Key — e.g. trips/bucharest-2024/hero</label>
-        <input id="key" type="text" />
-        <p class="muted">
-          A short content-hash suffix is appended automatically, so re-uploads get a fresh URL —
-          the snippet below contains the final URL.
-        </p>
-        <label for="alt">Alt text</label>
-        <input id="alt" type="text" />
-        <button type="button" id="suggestAlt" class="btn-secondary">Suggest alt text</button>
-        <p class="muted" id="altStatus"></p>
-        <p class="muted" id="altHint"></p>
-        <label for="file">Photo</label>
-        <input id="file" type="file" accept="image/*" />
-        <button id="go">Upload</button>
-      </section>
-
-      <div class="route" aria-hidden="true">
-        <span class="dot"></span>
-        <span class="seg"></span>
-        <svg width="16" height="16" viewBox="0 0 16 16">
-          <path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" />
-        </svg>
-        <span class="seg"></span>
-        <span class="ring"></span>
+      <!-- Stats Overview Grid -->
+      <div class="cms-stats-grid" id="statsGrid">
+        <div class="cms-stat-card">
+          <div class="cms-stat-icon published">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          </div>
+          <div class="cms-stat-info">
+            <span class="cms-stat-val" id="statPublished">—</span>
+            <span class="cms-stat-label">Published Trips</span>
+          </div>
+        </div>
+        <div class="cms-stat-card">
+          <div class="cms-stat-icon draft">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </div>
+          <div class="cms-stat-info">
+            <span class="cms-stat-val" id="statDraft">—</span>
+            <span class="cms-stat-label">Working Drafts</span>
+          </div>
+        </div>
+        <div class="cms-stat-card">
+          <div class="cms-stat-icon scheduled">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </div>
+          <div class="cms-stat-info">
+            <span class="cms-stat-val" id="statTotal">—</span>
+            <span class="cms-stat-label">Total Stories</span>
+          </div>
+        </div>
+        <div class="cms-stat-card">
+          <div class="cms-stat-icon media">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+          </div>
+          <div class="cms-stat-info">
+            <span class="cms-stat-val" id="statMedia">—</span>
+            <span class="cms-stat-label">Photo Library</span>
+          </div>
+        </div>
       </div>
 
-      <p class="section-label">heroImage snippet</p>
-      <pre id="out">—</pre>
+      <div class="form-row-2">
+        <section class="card">
+          <h2>Quick Photo Upload</h2>
+          <p class="muted">Upload photos directly into the image processing pipeline to generate responsive AVIF/WebP variants and markdown snippets.</p>
+          
+          <label for="key">Key — e.g. trips/bucharest-2024/hero</label>
+          <input id="key" type="text" placeholder="trips/iceland-2026/hero" />
+          <p class="muted">A content hash is appended automatically for cache invalidation.</p>
+          
+          <label for="alt">Alt text</label>
+          <input id="alt" type="text" placeholder="Describe photo scene..." />
+          <button type="button" id="suggestAlt" class="btn-secondary">Suggest alt text</button>
+          <p class="muted" id="altStatus"></p>
+          <p class="muted" id="altHint"></p>
 
-      <p class="section-label" style="margin-top:1.25rem">Body snippet (non-hero keys — paste into the post body)</p>
-      <pre id="outBody">—</pre>
+          <label for="file">Photo File</label>
+          <input id="file" type="file" accept="image/*" />
+          <button id="go">Upload & Process</button>
+
+          <p class="section-label" style="margin-top:1.25rem">heroImage snippet</p>
+          <pre id="out">—</pre>
+
+          <p class="section-label" style="margin-top:1rem">Body snippet (paste into markdown body)</p>
+          <pre id="outBody">—</pre>
+        </section>
+
+        <section class="card">
+          <h2>Studio Quick Actions</h2>
+          <div style="display:flex; flex-direction:column; gap:0.75rem; margin-top:1rem;">
+            <a href="/admin/editor.html" class="btn-new" style="text-align:center;">+ Create New Trip Report</a>
+            <a href="/admin/posts.html" class="btn-secondary" style="text-align:center;">Browse All Content</a>
+            <a href="/admin/media.html" class="btn-secondary" style="text-align:center;">Manage Media Library</a>
+          </div>
+
+          <h3 style="margin-top:1.75rem; font-size:0.95rem; color:var(--ink);">System Info</h3>
+          <ul style="list-style:none; padding:0; margin:0.5rem 0 0; font-size:0.85rem; display:flex; flex-direction:column; gap:0.4rem;" id="sysInfo">
+            <li><strong>Engine:</strong> Fastify + Postgres</li>
+            <li><strong>Build Pipeline:</strong> Astro SSR/Static</li>
+            <li><strong>Locales:</strong> German (DE) / English (EN)</li>
+          </ul>
+        </section>
+      </div>
     </main>
 
     <script src="/admin/auth.js"></script>
@@ -82,10 +128,6 @@
           const body = await res.json();
           if (!res.ok) { out.textContent = 'Error: ' + (body.error || res.status); return; }
           out.textContent = body.snippet;
-          // Body-image paste format: the editor normalizes this tag to a markdown
-          // image on save, merging width/height into the post's images map.
-          // Alt escaping (&, ", <, > — & first) mirrors export.ts bodyToMdx so
-          // posts.ts normalizeBodyImages decodes the exact inverse.
           if (!/(^|\/)hero$/.test(key.trim())) {
             const escAlt = alt.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
               .replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -96,7 +138,6 @@
           out.textContent = 'Error: ' + e;
         }
       });
-      // Single generic alt field → fill with English; show German as a copyable hint.
       AltSuggest.wire({
         button: document.getElementById('suggestAlt'),
         fileInput: document.getElementById('file'),
@@ -105,7 +146,24 @@
         lang: 'en',
         hintEl: document.getElementById('altHint'),
       });
-      (async () => { const s = await Auth.ensureAuthed(); if (s) Auth.renderHeader(s); })();
+      (async () => {
+        const s = await Auth.ensureAuthed();
+        if (s) {
+          Auth.renderHeader(s);
+          try {
+            const res = await fetch('/api/cms/stats');
+            if (res.ok) {
+              const data = await res.json();
+              document.getElementById('statPublished').textContent = data.publishedPosts || 0;
+              document.getElementById('statDraft').textContent = data.draftPosts || 0;
+              document.getElementById('statTotal').textContent = data.totalPosts || 0;
+              document.getElementById('statMedia').textContent = data.mediaCount || 0;
+            }
+          } catch (e) {
+            console.error('Failed to load stats', e);
+          }
+        }
+      })();
     </script>
   </body>
 </html>

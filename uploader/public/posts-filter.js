@@ -59,7 +59,9 @@ window.PostsFilter = (function () {
 
   function matchesQuery(post, needle) {
     if (!needle) return true;
-    var haystack = [post.titleDe, post.slugDe, post.slugEn, post.country]
+    var cats = Array.isArray(post.categories) ? post.categories.join(' ') : '';
+    var tags = Array.isArray(post.tags) ? post.tags.join(' ') : '';
+    var haystack = [post.titleDe, post.slugDe, post.slugEn, post.country, cats, tags]
       .map(text).join(' ').toLowerCase();
     return haystack.indexOf(needle) !== -1;
   }

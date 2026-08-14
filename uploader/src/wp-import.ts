@@ -383,7 +383,7 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
 
   // existing posts by slug → status/key (for idempotency + published-skip)
   const existing = await deps.postStore.list();
-  const bySlug = new Map<string, { translationKey: string; status: 'draft' | 'published' }>();
+  const bySlug = new Map<string, { translationKey: string; status: import('./posts.js').PostStatus }>();
   for (const s of existing) { bySlug.set(s.slugDe, s); bySlug.set(s.slugEn, s); }
 
   const groups = new Map<string, ParsedPost[]>();

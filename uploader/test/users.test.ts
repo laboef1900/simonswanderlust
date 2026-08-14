@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hashPassword, verifyPassword, memoryUserStore, UserExistsError } from '../src/users.js';
+import { hashPassword, verifyPassword, memoryUserStore, UserExistsError, DUMMY_STORED_HASH } from '../src/users.js';
 
 describe('password hashing', () => {
   it('produces a scrypt string that is not the plaintext', () => {
@@ -14,6 +14,16 @@ describe('password hashing', () => {
   });
   it('rejects a malformed stored hash', () => {
     expect(verifyPassword('x', 'not-a-hash')).toBe(false);
+  });
+  it('rejects passwords exceeding maximum allowed length', () => {
+    const longPassword = 'a'.repeat(1025);
+    expect(() => hashPassword(longPassword)).toThrow(/maximum length/);
+    const validHash = hashPassword('validPassword');
+    expect(verifyPassword(longPassword, validHash)).toBe(false);
+  });
+  it('exports a valid DUMMY_STORED_HASH for timing-safe user checks', () => {
+    expect(typeof DUMMY_STORED_HASH).toBe('string');
+    expect(DUMMY_STORED_HASH.startsWith('scrypt$')).toBe(true);
   });
 });
 

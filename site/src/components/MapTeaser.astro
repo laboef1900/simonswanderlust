@@ -17,13 +17,26 @@ const stats = statsLine(tripStats(trips), t);
 
 <section class="relative overflow-hidden bg-navy text-white">
   <Contours />
+  {/* Decorative Cartographic Grid Overlay */}
+  <svg
+    aria-hidden="true"
+    class="pointer-events-none absolute inset-0 h-full w-full stroke-white/10 opacity-30"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <defs>
+      <pattern id="map-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+        <path d="M 40 0 L 0 0 0 40" fill="none" stroke="currentColor" stroke-width="0.5" stroke-dasharray="2 2" />
+      </pattern>
+    </defs>
+    <rect width="100%" height="100%" fill="url(#map-grid)" />
+  </svg>
   <div class="relative mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-10">
     <div>
-      <div class="flex items-center gap-2">
-        <span class="relative flex h-2 w-2">
-          <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-red opacity-75 motion-reduce:hidden"></span>
-          <span class="relative inline-flex h-2 w-2 rounded-full bg-brand-red"></span>
-        </span>
+      <div class="flex items-center gap-2.5">
+        <svg aria-hidden="true" focusable="false" class="h-5 w-5 text-brand-red-light shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z" />
+          <circle cx="12" cy="10" r="3" />
+        </svg>
         <h2 class="text-2xl font-extrabold">{t('home.mapTeaser.title')}</h2>
       </div>
       <p class="mt-1 font-mono text-xs tracking-[0.15em] text-brand-red-light">{stats}</p>
