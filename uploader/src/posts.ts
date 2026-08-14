@@ -9,6 +9,7 @@ export interface HeroImage { src: string; width: number; height: number; alt: st
  * alias because `ImageDims` is the name the rest of the uploader already uses.
  */
 export type ImageDims = ImageMeta;
+export type PostStatus = 'draft' | 'published' | 'scheduled' | 'archived';
 export interface PostLocale {
   locale: Locale; slug: string; title: string; excerpt: string; country: string;
   heroImage: HeroImage; bodyMarkdown: string; images: Record<string, ImageDims>;
@@ -18,9 +19,12 @@ export interface PostShared {
   date: string; countryCode: string; region: string;
   coordinates: { lat: number; lng: number };
   stops?: { name: string; lat: number; lng: number }[]; route?: string;
+  categories?: string[];
+  tags?: string[];
+  scheduledAt?: string | null;
 }
 export interface PostPair {
-  translationKey: string; status: 'draft' | 'published';
+  translationKey: string; status: PostStatus;
   shared: PostShared; de: PostLocale; en: PostLocale;
 }
 /**
@@ -34,7 +38,7 @@ export interface StoredPostPair extends PostPair { hasUnpublishedChanges: boolea
 /** Whole-pair snapshot of the working copy just BEFORE a save overwrote it (issue #28). */
 export type RevisionSnapshot = Pick<PostPair, 'status' | 'shared' | 'de' | 'en'>;
 export interface RevisionSummary {
-  id: string; savedAt: Date; titleDe: string; status: 'draft' | 'published';
+  id: string; savedAt: Date; titleDe: string; status: PostStatus;
 }
 export interface PostRevision extends RevisionSummary { snapshot: RevisionSnapshot }
 
@@ -42,7 +46,7 @@ export interface PostRevision extends RevisionSummary { snapshot: RevisionSnapsh
 export const REVISION_CAP = 20;
 export interface PostSummary {
   translationKey: string; titleDe: string; slugDe: string; slugEn: string;
-  status: 'draft' | 'published'; updatedAt: Date; hasUnpublishedChanges: boolean;
+  status: PostStatus; updatedAt: Date; hasUnpublishedChanges: boolean;
   /** EN-completeness hint for the write-DE-first workflow (true when the EN body is non-blank). */
   hasEnBody: boolean;
   /**
@@ -59,6 +63,9 @@ export interface PostSummary {
   heroSrc: string; heroWidth: number;
   /** Shared trip metadata, for the list's filters and sort. */
   date: string; country: string; region: string;
+  categories: string[];
+  tags: string[];
+  scheduledAt: string | null;
 }
 /** One stored locale row's image-referencing fields — the corpus for media usage scans. */
 export interface PostUsageRow {
@@ -104,6 +111,16 @@ export interface PostStore {
   listRevisions(translationKey: string): Promise<RevisionSummary[]>;
   /** One full revision snapshot, or null for an unknown (or malformed) id. */
   getRevision(translationKey: string, id: string): Promise<PostRevision | null>;
+  listCategories?(): Promise<{ name: string; count: number }[]>;
+  listTags?(): Promise<{ name: string; count: number }[]>;
+  getCmsStats?(): Promise<{
+    totalPosts: number;
+    draftPosts: number;
+    publishedPosts: number;
+    scheduledPosts: number;
+    totalCategories: number;
+    totalTags: number;
+  }>;
 }
 
 /**
@@ -318,6 +335,9 @@ export function memoryPostStore(): PostStore {
             // DE-led with an EN fallback, same precedent as the hero above — a
             // pair may have only the EN row's country filled in.
             date: p.shared.date ?? '', country: p.de.country || p.en.country || '', region: p.shared.region ?? '',
+            categories: p.shared.categories ?? [],
+            tags: p.shared.tags ?? [],
+            scheduledAt: p.shared.scheduledAt ?? null,
           };
         });
     },
@@ -389,6 +409,46 @@ export function memoryPostStore(): PostStore {
       const rev = (revisionsByKey.get(tk) ?? []).find((r) => r.id === id);
       return rev ? structuredClone(rev) : null;
     },
+    async listCategories() {
+      const counts = new Map<string, number>();
+      for (const p of byKey.values()) {
+        for (const cat of p.shared.categories ?? []) {
+          counts.set(cat, (counts.get(cat) ?? 0) + 1);
+        }
+      }
+      return [...counts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+    },
+    async listTags() {
+      const counts = new Map<string, number>();
+      for (const p of byKey.values()) {
+        for (const tag of p.shared.tags ?? []) {
+          counts.set(tag, (counts.get(tag) ?? 0) + 1);
+        }
+      }
+      return [...counts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+    },
+    async getCmsStats() {
+      let draft = 0, published = 0, scheduled = 0, archived = 0;
+      const cats = new Set<string>();
+      const tags = new Set<string>();
+      for (const p of byKey.values()) {
+        if (p.status === 'draft') draft++;
+        else if (p.status === 'published') published++;
+        else if (p.status === 'scheduled') scheduled++;
+        else if (p.status === 'archived') archived++;
+        (p.shared.categories ?? []).forEach((c) => cats.add(c));
+        (p.shared.tags ?? []).forEach((t) => tags.add(t));
+      }
+      return {
+        totalPosts: byKey.size,
+        draftPosts: draft,
+        publishedPosts: published,
+        scheduledPosts: scheduled,
+        archivedPosts: archived,
+        totalCategories: cats.size,
+        totalTags: tags.size,
+      };
+    },
   };
 }
 
@@ -399,23 +459,21 @@ interface PostRow {
   country: string; country_code: string; region: string; excerpt: string;
   hero_image: HeroImage; coordinates: { lat: number; lng: number };
   stops: PostShared['stops'] | null; route: string | null; key_facts: Record<string, string> | null;
-  body_markdown: string; images: Record<string, ImageDims>; status: 'draft' | 'published'; updated_at: Date;
+  body_markdown: string; images: Record<string, ImageDims>; status: PostStatus; updated_at: Date;
   published_at: Date | null;
+  categories: string[] | null;
+  tags: string[] | null;
+  scheduled_at: Date | string | null;
 }
 
-/**
- * The columns `list()` actually needs. Deliberately NOT `SELECT *`: that also
- * pulls `body_markdown`, `images` and `published_snapshot` (a full jsonb copy
- * of the whole post) for every row, purely to build a summary — the real cost
- * behind the "when should filtering move server-side?" question the admin list
- * documents. `has_en_body` is therefore computed in SQL, since dropping the
- * bodies means it can no longer be derived in TS.
- */
 interface PostListRow {
   translation_key: string; locale: Locale; slug: string; title: string;
-  status: 'draft' | 'published'; updated_at: Date; published_at: Date | null;
+  status: PostStatus; updated_at: Date; published_at: Date | null;
   hero_image: HeroImage | null; date: Date | string; country: string; region: string;
   has_body: boolean;
+  categories: string[] | null;
+  tags: string[] | null;
+  scheduled_at: Date | string | null;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -427,20 +485,6 @@ function rowHasUnpublishedChanges(
   return !!r && r.status === 'published' && r.published_at !== null && r.updated_at.getTime() > r.published_at.getTime();
 }
 
-/**
- * `date` arrives as a pg Date (or as text from a published snapshot) —
- * normalize to YYYY-MM-DD.
- *
- * @ai-warning Format from the LOCAL date components, never via
- * `toISOString()`. node-postgres parses a `date` column to **local** midnight,
- * so on any deployment east of UTC (the production host is Europe/Zurich)
- * `toISOString()` reports the *previous* day — `2024-10-03` came back as
- * `2024-10-02`, and because the editor saves what it loaded, every re-save
- * walked the trip date back another day. The published site was never affected
- * (POST_SNAPSHOT_SQL formats the date with `to_char` in SQL), which is why this
- * survived unnoticed. `site/src/lib/postgres-loader.ts` documents the same
- * local-midnight behaviour from the parsing side.
- */
 function dateText(date: Date | string | null | undefined): string {
   if (date instanceof Date) {
     const pad = (n: number) => String(n).padStart(2, '0');
@@ -454,49 +498,59 @@ function rowLocale(r: PostRow): PostLocale {
 }
 function rowShared(r: PostRow): PostShared {
   const d = dateText(r.date);
-  return { date: d, countryCode: r.country_code, region: r.region, coordinates: r.coordinates, ...(r.stops ? { stops: r.stops } : {}), ...(r.route ? { route: r.route } : {}) };
+  return {
+    date: d, countryCode: r.country_code, region: r.region, coordinates: r.coordinates,
+    ...(r.stops ? { stops: r.stops } : {}), ...(r.route ? { route: r.route } : {}),
+    categories: r.categories ?? [],
+    tags: r.tags ?? [],
+    scheduledAt: r.scheduled_at ? new Date(r.scheduled_at).toISOString() : null,
+  };
 }
 
 export function pgPostStore(pool: DbPool): PostStore {
   async function writeLocale(tk: string, status: string, shared: PostShared, p: PostLocale) {
     await pool.query(
       `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
-         excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now())
+         excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status,
+         categories, tags, scheduled_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21, now())
        ON CONFLICT (locale, slug) DO UPDATE SET
          translation_key=EXCLUDED.translation_key, title=EXCLUDED.title, date=EXCLUDED.date, country=EXCLUDED.country,
          country_code=EXCLUDED.country_code, region=EXCLUDED.region, excerpt=EXCLUDED.excerpt, hero_image=EXCLUDED.hero_image,
          coordinates=EXCLUDED.coordinates, stops=EXCLUDED.stops, route=EXCLUDED.route, key_facts=EXCLUDED.key_facts,
-         body_markdown=EXCLUDED.body_markdown, images=EXCLUDED.images, updated_at=now()`,
+         body_markdown=EXCLUDED.body_markdown, images=EXCLUDED.images, status=EXCLUDED.status,
+         categories=EXCLUDED.categories, tags=EXCLUDED.tags, scheduled_at=EXCLUDED.scheduled_at, updated_at=now()`,
       [randomUUID(), tk, p.locale, p.slug, p.title, shared.date, p.country, shared.countryCode, shared.region,
        p.excerpt, JSON.stringify(p.heroImage), JSON.stringify(shared.coordinates),
        shared.stops?.length ? JSON.stringify(shared.stops) : null, shared.route ?? null, p.keyFacts ? JSON.stringify(p.keyFacts) : null,
-       p.bodyMarkdown, JSON.stringify(p.images), status],
+       p.bodyMarkdown, JSON.stringify(p.images), status,
+       shared.categories ?? [], shared.tags ?? [], shared.scheduledAt ? new Date(shared.scheduledAt) : null],
     );
   }
   return {
     async list() {
       const { rows } = await pool.query<PostListRow>(
         `SELECT translation_key, locale, slug, title, status, updated_at, published_at,
-                hero_image, date, country, region, btrim(body_markdown) <> '' AS has_body
+                hero_image, date, country, region, btrim(body_markdown) <> '' AS has_body,
+                categories, tags, scheduled_at
            FROM posts ORDER BY updated_at DESC`,
       );
       const byKey = new Map<string, { de?: PostListRow; en?: PostListRow }>();
       for (const r of rows) { const e = byKey.get(r.translation_key) ?? {}; e[r.locale] = r; byKey.set(r.translation_key, e); }
       return [...byKey.entries()].map(([tk, e]) => {
-        // DE hero with an EN fallback (the list is DE-led, but a pair can have
-        // only the EN row's hero filled in — or only one locale row at all).
         const hero = e.de?.hero_image?.src ? e.de.hero_image : e.en?.hero_image;
         const shared = e.de ?? e.en;
         return {
           translationKey: tk, titleDe: e.de?.title ?? '', slugDe: e.de?.slug ?? '', slugEn: e.en?.slug ?? '',
-          status: (e.de?.status ?? e.en?.status ?? 'draft') as 'draft' | 'published',
+          status: (e.de?.status ?? e.en?.status ?? 'draft') as PostStatus,
           updatedAt: new Date(Math.max(e.de?.updated_at?.getTime() ?? 0, e.en?.updated_at?.getTime() ?? 0)),
           hasUnpublishedChanges: rowHasUnpublishedChanges(e.de) || rowHasUnpublishedChanges(e.en),
           hasEnBody: Boolean(e.en?.has_body),
           heroSrc: hero?.src ?? '', heroWidth: hero?.width ?? 0,
-          // DE-led with an EN fallback, same precedent as the hero above.
           date: dateText(shared?.date), country: e.de?.country || e.en?.country || '', region: shared?.region ?? '',
+          categories: shared?.categories ?? [],
+          tags: shared?.tags ?? [],
+          scheduledAt: shared?.scheduled_at ? new Date(shared.scheduled_at).toISOString() : null,
         };
       });
     },
@@ -603,7 +657,50 @@ export function pgPostStore(pool: DbPool): PostStore {
       );
       const r = rows[0];
       if (!r) return null;
-      return { id: r.id, savedAt: r.saved_at, titleDe: r.snapshot.de.title, status: r.snapshot.status, snapshot: r.snapshot };
+      return { id: r.id, savedAt: r.saved_at, titleDe: r.snapshot.de.title, status: r.snapshot.status as PostStatus, snapshot: r.snapshot };
+    },
+    async listCategories() {
+      const { rows } = await pool.query<{ category: string; count: string }>(
+        `SELECT unnest(categories) AS category, COUNT(DISTINCT translation_key) AS count
+           FROM posts WHERE categories <> '{}' GROUP BY category ORDER BY count DESC, category ASC`,
+      );
+      return rows.map((r) => ({ name: r.category, count: parseInt(r.count, 10) }));
+    },
+    async listTags() {
+      const { rows } = await pool.query<{ tag: string; count: string }>(
+        `SELECT unnest(tags) AS tag, COUNT(DISTINCT translation_key) AS count
+           FROM posts WHERE tags <> '{}' GROUP BY tag ORDER BY count DESC, tag ASC`,
+      );
+      return rows.map((r) => ({ name: r.tag, count: parseInt(r.count, 10) }));
+    },
+    async getCmsStats() {
+      const { rows: postStats } = await pool.query<{ status: string; count: string }>(
+        `SELECT status, COUNT(DISTINCT translation_key) AS count FROM posts GROUP BY status`,
+      );
+      let total = 0, draft = 0, published = 0, scheduled = 0, archived = 0;
+      for (const r of postStats) {
+        const cnt = parseInt(r.count, 10);
+        total += cnt;
+        if (r.status === 'draft') draft += cnt;
+        else if (r.status === 'published') published += cnt;
+        else if (r.status === 'scheduled') scheduled += cnt;
+        else if (r.status === 'archived') archived += cnt;
+      }
+      const { rows: catCount } = await pool.query<{ count: string }>(
+        `SELECT COUNT(DISTINCT cat) FROM (SELECT unnest(categories) AS cat FROM posts) sub`,
+      );
+      const { rows: tagCount } = await pool.query<{ count: string }>(
+        `SELECT COUNT(DISTINCT tag) FROM (SELECT unnest(tags) AS tag FROM posts) sub`,
+      );
+      return {
+        totalPosts: total,
+        draftPosts: draft,
+        publishedPosts: published,
+        scheduledPosts: scheduled,
+        archivedPosts: archived,
+        totalCategories: parseInt(catCount[0]?.count ?? '0', 10),
+        totalTags: parseInt(tagCount[0]?.count ?? '0', 10),
+      };
     },
   };
 }

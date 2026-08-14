@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fixedWindowLimiter } from '../src/rate-limit.js';
+import { fixedWindowLimiter, accountLockoutLimiter } from '../src/rate-limit.js';
 
 describe('fixedWindowLimiter', () => {
   it('allows up to max per window, then blocks', () => {
@@ -24,5 +24,33 @@ describe('fixedWindowLimiter', () => {
     expect(lim.check('a')).toBe(true);
     expect(lim.check('b')).toBe(true);
     expect(lim.check('a')).toBe(false);
+  });
+});
+
+describe('accountLockoutLimiter', () => {
+  it('locks account after max failed attempts and clears on success', () => {
+    let t = 1000;
+    const lim = accountLockoutLimiter({ max: 3, windowMs: 1000, now: () => t });
+    expect(lim.isLocked('simon')).toBe(false);
+    lim.recordFailure('Simon');
+    lim.recordFailure('simon');
+    expect(lim.isLocked('SIMON')).toBe(false);
+    lim.recordFailure('simon');
+    expect(lim.isLocked('simon')).toBe(true);
+
+    // Clears on successful login
+    lim.recordSuccess('Simon');
+    expect(lim.isLocked('simon')).toBe(false);
+  });
+
+  it('resets lock after windowMs elapses', () => {
+    let t = 1000;
+    const lim = accountLockoutLimiter({ max: 2, windowMs: 500, now: () => t });
+    lim.recordFailure('user');
+    lim.recordFailure('user');
+    expect(lim.isLocked('user')).toBe(true);
+
+    t = 1501;
+    expect(lim.isLocked('user')).toBe(false);
   });
 });

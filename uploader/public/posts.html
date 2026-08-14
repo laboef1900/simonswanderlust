@@ -32,9 +32,11 @@
           <label class="filter-field">
             <span>Status</span>
             <select id="fStatus">
-              <option value="">All</option>
+              <option value="">All Statuses</option>
               <option value="draft">Draft</option>
               <option value="published">Published</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="archived">Archived</option>
             </select>
           </label>
           <label class="filter-field">
@@ -363,15 +365,14 @@
 
           const tdStatus = document.createElement('td');
           const badge = document.createElement('span');
-          const safeStatus = ['draft', 'published'].includes(p.status) ? p.status : 'draft';
-          badge.className = 'status-badge status-' + safeStatus;
+          const safeStatus = ['draft', 'published', 'scheduled', 'archived'].includes(p.status) ? p.status : 'draft';
+          badge.className = 'status-pill ' + safeStatus;
           badge.textContent = p.status;
           tdStatus.appendChild(badge);
           if (p.status === 'published' && p.hasUnpublishedChanges) {
-            // Draft edits saved after the last Publish — the live site keeps
-            // serving the published snapshot until the next Publish.
             const edited = document.createElement('span');
-            edited.className = 'status-badge status-edited';
+            edited.className = 'status-pill draft';
+            edited.style.marginLeft = '0.35rem';
             edited.textContent = 'edited';
             edited.title = 'Has unpublished changes — the live post is unchanged until you Publish.';
             tdStatus.appendChild(edited);

@@ -12,6 +12,7 @@
     "upload": "tsx src/cli.ts",
     "copy:fonts": "node scripts/copy-fonts.mjs",
     "copy:easymde": "node scripts/copy-easymde.mjs",
+    "copy:vendor": "node scripts/copy-vendor.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -25,7 +26,9 @@
     "exif-reader": "^2.0.3",
     "fast-xml-parser": "^5.9.3",
     "fastify": "^5.9.0",
+    "htm": "^3.1.1",
     "pg": "^8.22.0",
+    "preact": "^10.29.8",
     "sharp": "^0.35.3",
     "tar": "^7.5.19",
     "tsx": "^4.23.0",

@@ -18,175 +18,254 @@
     </header>
 
     <main>
-      <!-- Slug / URL preview -->
-      <section class="card">
-        <label for="slugFieldDe">DE slug (auto-derived from DE title · locked once published)</label>
-        <div class="slug-preview">
-          <span class="slug-base">simonswanderlust.com/</span><input id="slugFieldDe" type="text" placeholder="derived-from-de-title" />
+      <!-- Top Navigation & Language Segmented Switcher -->
+      <div class="editor-topbar">
+        <a href="/admin/posts.html" class="action-link" style="display:inline-flex; align-items:center; gap:0.4rem;">
+          ← Back to Posts
+        </a>
+        <div class="lang-switch-bar">
+          <button type="button" class="tab-btn active" data-tab="de">
+            <span>🇩🇪</span> Deutsch <span class="lang-code">DE</span>
+          </button>
+          <button type="button" class="tab-btn" data-tab="en">
+            <span>🇬🇧</span> English <span class="lang-code">EN</span>
+          </button>
         </div>
-        <label for="slugFieldEn" style="margin-top:0.75rem">EN slug (auto-derived from EN title · locked once published)</label>
-        <div class="slug-preview">
-          <span class="slug-base">simonswanderlust.com/en/</span><input id="slugFieldEn" type="text" placeholder="derived-from-en-title" />
-        </div>
-        <p id="slugError" class="err" style="display:none"></p>
-      </section>
-
-      <!-- Shared frontmatter -->
-      <section class="card">
-        <h2 class="card-heading">Shared frontmatter</h2>
-
-        <label for="fmDate">Date</label>
-        <input id="fmDate" type="date" />
-
-        <label for="fmCountryCode">Country code (2 letters)</label>
-        <input id="fmCountryCode" type="text" maxlength="2" placeholder="GR" style="text-transform:uppercase" />
-
-        <label for="fmRegion">Region</label>
-        <select id="fmRegion">
-          <option value="">— select —</option>
-          <option value="europe">Europe</option>
-          <option value="north-america">North America</option>
-          <option value="south-america">South America</option>
-        </select>
-
-        <div class="form-row-2">
-          <div>
-            <label for="fmLat">Latitude</label>
-            <input id="fmLat" type="number" step="any" placeholder="37.9755" />
-          </div>
-          <div>
-            <label for="fmLng">Longitude</label>
-            <input id="fmLng" type="number" step="any" placeholder="23.7348" />
-          </div>
-        </div>
-
-        <label for="fmRoute">Route (optional)</label>
-        <input id="fmRoute" type="text" placeholder="e.g. Athens → Rhodes" />
-
-        <div id="stopsContainer">
-          <p class="section-label" style="margin-top:1.25rem">Stops (optional · mini-map waypoints)</p>
-          <div id="stopsList"></div>
-          <button type="button" id="addStop" class="btn-secondary">+ Add stop</button>
-        </div>
-      </section>
-
-      <!-- DE/EN tabs -->
-      <div class="tabs-bar">
-        <button type="button" class="tab-btn active" data-tab="de">Deutsch (DE)</button>
-        <button type="button" class="tab-btn" data-tab="en">English (EN)</button>
       </div>
 
-      <!-- DE locale -->
-      <section id="tab-de" class="card locale-tab">
-        <h2 class="card-heading">Deutsch</h2>
+      <div class="editor-workspace">
+        <!-- Main Canvas (Left Column) -->
+        <div class="editor-canvas">
+          
+          <!-- DE Locale Section -->
+          <section id="tab-de" class="locale-tab">
+            <!-- Title & Hero Box -->
+            <div class="editor-card">
+              <label for="deTitle">Article Title (Deutsch)</label>
+              <input id="deTitle" type="text" class="editor-title-input" placeholder="Titel des Reiseberichts…" />
 
-        <label for="deTitle">Title</label>
-        <input id="deTitle" type="text" placeholder="Reiseberichte aus …" />
+              <label for="slugFieldDe">DE Slug / Permanent Link</label>
+              <div class="slug-preview">
+                <span class="slug-base">simonswanderlust.com/</span>
+                <input id="slugFieldDe" type="text" placeholder="derived-from-de-title" />
+              </div>
 
-        <label for="deCountry">Country</label>
-        <input id="deCountry" type="text" placeholder="z. B. Griechenland" />
+              <!-- Hero Image Zone -->
+              <div style="margin-top: 1.25rem;">
+                <label>Hero Image (DE)</label>
+                <div class="hero-picker hero-banner-zone">
+                  <div class="hero-actions-row">
+                    <input id="deHeroFile" type="file" accept="image/*" />
+                    <button type="button" id="deHeroUpload" class="btn-secondary">Upload Hero</button>
+                    <button type="button" id="deHeroLibrary" class="btn-secondary">Choose from Library</button>
+                    <button type="button" id="deHeroSuggest" class="btn-secondary">✨ Suggest Alt-Text</button>
+                  </div>
+                  <input id="deHeroAlt" type="text" placeholder="Alt text for hero image (DE)" />
+                  <p id="deHeroStatus" class="muted"></p>
+                  <input id="deHeroSrc" type="hidden" />
+                  <input id="deHeroWidth" type="hidden" />
+                  <input id="deHeroHeight" type="hidden" />
+                </div>
+              </div>
+            </div>
 
-        <label for="deExcerpt">Excerpt</label>
-        <textarea id="deExcerpt" rows="3" placeholder="Eine kurze Zusammenfassung…"></textarea>
+            <!-- Excerpt & Key Facts Card -->
+            <div class="editor-card">
+              <h3 class="card-heading">Summary & Key Facts</h3>
 
-        <div id="deKeyFactsContainer">
-          <p class="section-label">Key facts (optional)</p>
-          <div id="deKeyFactsList"></div>
-          <button type="button" id="deAddKeyFact" class="btn-secondary">+ Add key fact</button>
+              <label for="deExcerpt">Excerpt / Summary (DE)</label>
+              <textarea id="deExcerpt" rows="3" placeholder="Eine kurze Zusammenfassung des Reiseberichts…"></textarea>
+
+              <div id="deKeyFactsContainer" style="margin-top: 1.25rem;">
+                <p class="section-label">Key Facts (DE)</p>
+                <div id="deKeyFactsList"></div>
+                <button type="button" id="deAddKeyFact" class="btn-secondary">+ Add Key Fact</button>
+              </div>
+            </div>
+
+            <!-- Body Markdown Editor Card -->
+            <div class="editor-card">
+              <div class="editor-card-header">
+                <h3 class="editor-card-title">Markdown Content</h3>
+              </div>
+
+              <label for="deBody" style="display:none">Body (Markdown)</label>
+              <textarea id="deBody"></textarea>
+
+              <div class="body-img-row editor-media-toolbar">
+                <input id="deBodyImgFile" type="file" accept="image/*" />
+                <input id="deBodyImgAlt" type="text" placeholder="Alt text for body image (DE)" />
+                <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert Image</button>
+                <button type="button" id="deBodyImgSuggest" class="btn-secondary">✨ Suggest Alt-Text</button>
+                <button type="button" id="deGallery" class="btn-secondary">🖼️ Insert / Edit Gallery</button>
+                <p id="deBodyImgStatus" class="muted"></p>
+              </div>
+            </div>
+          </section>
+
+          <!-- EN Locale Section -->
+          <section id="tab-en" class="locale-tab" style="display:none">
+            <!-- Title & Hero Box -->
+            <div class="editor-card">
+              <label for="enTitle">Article Title (English)</label>
+              <input id="enTitle" type="text" class="editor-title-input" placeholder="Trip Report Title…" />
+
+              <label for="slugFieldEn">EN Slug / Permanent Link</label>
+              <div class="slug-preview">
+                <span class="slug-base">simonswanderlust.com/en/</span>
+                <input id="slugFieldEn" type="text" placeholder="derived-from-en-title" />
+              </div>
+
+              <!-- Hero Image Zone -->
+              <div style="margin-top: 1.25rem;">
+                <label>Hero Image (EN)</label>
+                <div class="hero-picker hero-banner-zone">
+                  <div class="hero-actions-row">
+                    <input id="enHeroFile" type="file" accept="image/*" />
+                    <button type="button" id="enHeroUpload" class="btn-secondary">Upload Hero</button>
+                    <button type="button" id="enHeroLibrary" class="btn-secondary">Choose from Library</button>
+                    <button type="button" id="enHeroSuggest" class="btn-secondary">✨ Suggest Alt-Text</button>
+                  </div>
+                  <input id="enHeroAlt" type="text" placeholder="Alt text for hero image (EN)" />
+                  <p id="enHeroStatus" class="muted"></p>
+                  <input id="enHeroSrc" type="hidden" />
+                  <input id="enHeroWidth" type="hidden" />
+                  <input id="enHeroHeight" type="hidden" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Excerpt & Key Facts Card -->
+            <div class="editor-card">
+              <h3 class="card-heading">Summary & Key Facts</h3>
+
+              <label for="enExcerpt">Excerpt / Summary (EN)</label>
+              <textarea id="enExcerpt" rows="3" placeholder="A short summary of the trip report…"></textarea>
+
+              <div id="enKeyFactsContainer" style="margin-top: 1.25rem;">
+                <p class="section-label">Key Facts (EN)</p>
+                <div id="enKeyFactsList"></div>
+                <button type="button" id="enAddKeyFact" class="btn-secondary">+ Add Key Fact</button>
+              </div>
+            </div>
+
+            <!-- Body Markdown Editor Card -->
+            <div class="editor-card">
+              <div class="editor-card-header">
+                <h3 class="editor-card-title">Markdown Content</h3>
+              </div>
+
+              <label for="enBody" style="display:none">Body (Markdown)</label>
+              <textarea id="enBody"></textarea>
+
+              <div class="body-img-row editor-media-toolbar">
+                <input id="enBodyImgFile" type="file" accept="image/*" />
+                <input id="enBodyImgAlt" type="text" placeholder="Alt text for body image (EN)" />
+                <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert Image</button>
+                <button type="button" id="enBodyImgSuggest" class="btn-secondary">✨ Suggest Alt-Text</button>
+                <button type="button" id="enGallery" class="btn-secondary">🖼️ Insert / Edit Gallery</button>
+                <p id="enBodyImgStatus" class="muted"></p>
+              </div>
+            </div>
+          </section>
+
+          <p id="slugError" class="err" style="display:none"></p>
         </div>
 
-        <label>Hero image</label>
-        <div class="hero-picker">
-          <input id="deHeroFile" type="file" accept="image/*" />
-          <input id="deHeroAlt" type="text" placeholder="Alt text (DE)" />
-          <button type="button" id="deHeroUpload" class="btn-secondary">Upload hero</button>
-          <button type="button" id="deHeroLibrary" class="btn-secondary">Choose from library</button>
-          <button type="button" id="deHeroSuggest" class="btn-secondary">Suggest alt text</button>
-          <p id="deHeroStatus" class="muted"></p>
-          <input id="deHeroSrc" type="hidden" />
-          <input id="deHeroWidth" type="hidden" />
-          <input id="deHeroHeight" type="hidden" />
-        </div>
+        <!-- Sidebar Inspector (Right Column) -->
+        <aside class="editor-sidebar">
+          
+          <!-- Card 1: Status & Publishing -->
+          <div class="editor-card">
+            <h3 class="editor-card-title">Status & Schedule</h3>
+            <label for="fmStatus">Post Status</label>
+            <select id="fmStatus">
+              <option value="draft">Draft</option>
+              <option value="published">Published</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="archived">Archived</option>
+            </select>
 
-        <label>Body (Markdown)</label>
-        <textarea id="deBody"></textarea>
+            <label for="fmScheduledAt" style="margin-top:0.75rem">Scheduled Publish</label>
+            <input id="fmScheduledAt" type="datetime-local" />
+          </div>
 
-        <div class="body-img-row">
-          <input id="deBodyImgFile" type="file" accept="image/*" />
-          <input id="deBodyImgAlt" type="text" placeholder="Alt text (DE)" />
-          <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert body image</button>
-          <button type="button" id="deBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
-          <button type="button" id="deGallery" class="btn-secondary">Insert / edit gallery</button>
-          <p id="deBodyImgStatus" class="muted"></p>
-        </div>
-      </section>
+          <!-- Card 2: Expedition & Location Details -->
+          <div class="editor-card">
+            <h3 class="editor-card-title">Expedition Details</h3>
 
-      <!-- EN locale -->
-      <section id="tab-en" class="card locale-tab" style="display:none">
-        <h2 class="card-heading">English</h2>
+            <label for="fmDate">Trip Date</label>
+            <input id="fmDate" type="date" />
 
-        <label for="enTitle">Title</label>
-        <input id="enTitle" type="text" placeholder="Travel stories from …" />
+            <div class="form-row-2" style="margin-top:0.75rem">
+              <div>
+                <label for="fmCountryCode">Country (ISO)</label>
+                <input id="fmCountryCode" type="text" maxlength="2" placeholder="GR" style="text-transform:uppercase" />
+              </div>
+              <div>
+                <label for="fmRegion">Region</label>
+                <select id="fmRegion">
+                  <option value="">— Select —</option>
+                  <option value="europe">Europe</option>
+                  <option value="north-america">North America</option>
+                  <option value="south-america">South America</option>
+                </select>
+              </div>
+            </div>
 
-        <label for="enCountry">Country</label>
-        <input id="enCountry" type="text" placeholder="e.g. Greece" />
+            <div class="form-row-2" style="margin-top:0.75rem">
+              <div>
+                <label for="fmLat">Latitude</label>
+                <input id="fmLat" type="number" step="any" placeholder="37.9755" style="font-family:var(--mono)" />
+              </div>
+              <div>
+                <label for="fmLng">Longitude</label>
+                <input id="fmLng" type="number" step="any" placeholder="23.7348" style="font-family:var(--mono)" />
+              </div>
+            </div>
 
-        <label for="enExcerpt">Excerpt</label>
-        <textarea id="enExcerpt" rows="3" placeholder="A short summary…"></textarea>
+            <label for="fmRoute" style="margin-top:0.75rem">Route</label>
+            <input id="fmRoute" type="text" placeholder="e.g. Athens → Rhodes" />
 
-        <div id="enKeyFactsContainer">
-          <p class="section-label">Key facts (optional)</p>
-          <div id="enKeyFactsList"></div>
-          <button type="button" id="enAddKeyFact" class="btn-secondary">+ Add key fact</button>
-        </div>
+            <div id="stopsContainer">
+              <p class="section-label" style="margin-top:1.25rem">Waypoints / Stops</p>
+              <div id="stopsList"></div>
+              <button type="button" id="addStop" class="btn-secondary" style="width:100%">+ Add Stop</button>
+            </div>
+          </div>
 
-        <label>Hero image</label>
-        <div class="hero-picker">
-          <input id="enHeroFile" type="file" accept="image/*" />
-          <input id="enHeroAlt" type="text" placeholder="Alt text (EN)" />
-          <button type="button" id="enHeroUpload" class="btn-secondary">Upload hero</button>
-          <button type="button" id="enHeroLibrary" class="btn-secondary">Choose from library</button>
-          <button type="button" id="enHeroSuggest" class="btn-secondary">Suggest alt text</button>
-          <p id="enHeroStatus" class="muted"></p>
-          <input id="enHeroSrc" type="hidden" />
-          <input id="enHeroWidth" type="hidden" />
-          <input id="enHeroHeight" type="hidden" />
-        </div>
+          <!-- Card 3: Taxonomy -->
+          <div class="editor-card">
+            <h3 class="editor-card-title">Taxonomy</h3>
+            <label for="fmCategories">Categories</label>
+            <input id="fmCategories" type="text" placeholder="Expedition, Photography" />
 
-        <label>Body (Markdown)</label>
-        <textarea id="enBody"></textarea>
+            <label for="fmTags" style="margin-top:0.75rem">Tags</label>
+            <input id="fmTags" type="text" placeholder="Leica Q2, Greece" />
+          </div>
 
-        <div class="body-img-row">
-          <input id="enBodyImgFile" type="file" accept="image/*" />
-          <input id="enBodyImgAlt" type="text" placeholder="Alt text (EN)" />
-          <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert body image</button>
-          <button type="button" id="enBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
-          <button type="button" id="enGallery" class="btn-secondary">Insert / edit gallery</button>
-          <p id="enBodyImgStatus" class="muted"></p>
-        </div>
-      </section>
+          <!-- Card 4: Revisions -->
+          <div class="editor-card" id="revisionsCard" style="display:none">
+            <h3 class="editor-card-title">Revisions History</h3>
+            <p class="muted" style="font-size:0.78rem">Snapshots overwrote on save (last 20 kept).</p>
+            <ul id="revisionsList" class="revisions-list"></ul>
+            <p id="revisionsEmpty" class="muted" style="display:none">No revisions yet.</p>
+          </div>
 
-      <!-- Actions -->
-      <div class="editor-actions card">
-        <button id="saveDraft">Save draft</button>
-        <button id="previewBtn" type="button" class="btn-secondary">Open preview</button>
-        <button id="publishBtn" class="btn-publish">Publish</button>
-        <p id="actionStatus" class="muted"></p>
-        <p id="actionError" class="err" style="display:none"></p>
+        </aside>
       </div>
 
-      <!-- Revisions (issue #28): snapshots of what each save overwrote -->
-      <section class="card" id="revisionsCard" style="display:none">
-        <h2 class="card-heading">Revisions</h2>
-        <p class="muted">Each save keeps a snapshot of what it overwrote (newest first, last 20 kept). Restoring only fills the editor — review, then Save draft to keep it.</p>
-        <ul id="revisionsList" class="revisions-list"></ul>
-        <p id="revisionsEmpty" class="muted" style="display:none">No revisions yet — one appears each time a save overwrites this post.</p>
-      </section>
-
-      <div class="route" aria-hidden="true">
-        <span class="dot"></span><span class="seg"></span>
-        <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>
-        <span class="seg"></span><span class="ring"></span>
+      <!-- Sticky Master Action Bar -->
+      <div class="editor-sticky-bar">
+        <div class="bar-left">
+          <p id="actionStatus" class="muted" style="color:#ffffff; margin:0; font-size:0.85rem;"></p>
+          <p id="actionError" class="err" style="display:none; color:#fca5a5; margin:0; font-size:0.85rem;"></p>
+        </div>
+        <div class="bar-actions">
+          <button id="saveDraft" type="button" class="btn-secondary">Save Draft</button>
+          <button id="previewBtn" type="button" class="btn-ghost-preview">Open Preview ↗</button>
+          <button id="publishBtn" type="button" class="btn-primary-publish">Publish Post 🚀</button>
+        </div>
       </div>
     </main>
 
@@ -631,6 +710,12 @@
 
       // ---- assemble PostPair payload ----
       function buildPayload() {
+        const categoriesRaw = $('fmCategories') ? $('fmCategories').value.trim() : '';
+        const tagsRaw = $('fmTags') ? $('fmTags').value.trim() : '';
+        const scheduledAtVal = $('fmScheduledAt') ? $('fmScheduledAt').value : '';
+        const categories = categoriesRaw ? categoriesRaw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+        const tags = tagsRaw ? tagsRaw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+
         const shared = {
           date: $('fmDate').value || undefined,
           countryCode: $('fmCountryCode').value.trim().toUpperCase() || undefined,
@@ -640,6 +725,9 @@
             : undefined,
           stops: collectStops(),
           route: $('fmRoute').value.trim() || undefined,
+          categories,
+          tags,
+          scheduledAt: scheduledAtVal || undefined,
         };
 
         // Remove undefined keys for a clean payload
@@ -672,9 +760,11 @@
         Object.keys(de).forEach((k) => de[k] === undefined && delete de[k]);
         Object.keys(en).forEach((k) => en[k] === undefined && delete en[k]);
 
+        const selectedStatus = $('fmStatus') ? $('fmStatus').value : (isPublished ? 'published' : 'draft');
+
         return {
           translationKey: currentTk || undefined,
-          status: isPublished ? 'published' : 'draft',
+          status: selectedStatus,
           // Concurrency echo — JSON.stringify drops it when undefined (new post).
           updatedAt: loadedUpdatedAt || undefined,
           shared,
@@ -852,6 +942,13 @@
         // a restore over an already-loaded post must not resurrect values the
         // user had deliberately deleted (e.g. a cleared Route surviving a 401
         // round-trip because the stash simply omits the key).
+        if ($('fmStatus')) $('fmStatus').value = post.status || 'draft';
+        if ($('fmCategories')) $('fmCategories').value = Array.isArray(shared.categories) ? shared.categories.join(', ') : '';
+        if ($('fmTags')) $('fmTags').value = Array.isArray(shared.tags) ? shared.tags.join(', ') : '';
+        if ($('fmScheduledAt')) {
+          $('fmScheduledAt').value = shared.scheduledAt ? new Date(shared.scheduledAt).toISOString().slice(0, 16) : '';
+        }
+
         const shared = post.shared || {};
         $('fmDate').value = shared.date || '';
         $('fmCountryCode').value = shared.countryCode || '';

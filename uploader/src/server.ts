@@ -17,7 +17,7 @@ import { BacklogFullError, type EncodeQueue } from './encode-queue.js';
 import { parseExif } from './exif.js';
 import { diskSpace, insufficientSpace, formatBytes } from './disk.js';
 import type { SyncReport } from './media-sync.js';
-import { verifyPassword, type UserStore, UserExistsError } from './users.js';
+import { verifyPassword, type UserStore, UserExistsError, DUMMY_STORED_HASH, MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from './users.js';
 import type { SessionStore } from './sessions.js';
 import {
   SESSION_TTL_MS, loadUser, requireAuth, requireAdmin,
@@ -31,7 +31,7 @@ import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
 import { importWxr, type ImportDeps, type ImportSummary } from './wp-import.js';
 import { createRehostResume } from './wp-images.js';
-import { fixedWindowLimiter, rateLimitPreHandler, type RateLimiter } from './rate-limit.js';
+import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, type RateLimiter, type AccountLimiter } from './rate-limit.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
 
@@ -51,6 +51,7 @@ export interface ServerConfig {
   dbBackup: DbBackup;
   dbCheck: () => Promise<void>; // resolves iff the DB answers — probed by GET /health
   loginLimiter?: RateLimiter;
+  accountLimiter?: AccountLimiter;
   media: MediaStore;
   encodeQueue: EncodeQueue;
   /** Disk↔database reconciliation, triggered by POST /media/rescan. */
@@ -149,6 +150,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   // Per-IP throttle for the unauthenticated auth endpoints (brute-force defense).
   const loginLimiter = cfg.loginLimiter ?? fixedWindowLimiter({ max: 10, windowMs: 900_000 });
+  const accountLimiter = cfg.accountLimiter ?? accountLockoutLimiter();
   const limitAuth = rateLimitPreHandler(loginLimiter);
 
   // Unexpected errors (DB failures, bugs) must not leak internals to clients:
@@ -665,6 +667,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const username = String(b.username ?? '').trim();
     const password = String(b.password ?? '');
     if (!username || !password) return reply.code(400).send({ error: 'username and password are required' });
+    if (password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
+      return reply.code(400).send({ error: `password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} characters` });
+    }
     const user = await users.create({ username, password, isAdmin: true });
     const token = await sessions.create(user.id, SESSION_TTL_MS);
     setSessionCookie(reply, token, isSecureRequest(req));
@@ -676,9 +681,21 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const username = String(b.username ?? '').trim();
     const password = String(b.password ?? '');
     const user = await users.findByUsername(username);
-    if (!user || !verifyPassword(password, user.passwordHash)) {
+    // Constant-time execution: when username is missing, execute verifyPassword with DUMMY_STORED_HASH
+    // so response timing does not leak whether a username exists (CWE-208 mitigation).
+    const storedHash = user ? user.passwordHash : DUMMY_STORED_HASH;
+    const isValid = verifyPassword(password, storedHash);
+
+    if (accountLimiter.isLocked(username)) {
+      return reply.code(429).send({ error: 'account is temporarily locked due to excessive failed login attempts' });
+    }
+
+    if (!user || !isValid) {
+      if (username) accountLimiter.recordFailure(username);
       return reply.code(401).send({ error: 'invalid username or password' });
     }
+
+    accountLimiter.recordSuccess(username);
     const token = await sessions.create(user.id, SESSION_TTL_MS);
     setSessionCookie(reply, token, isSecureRequest(req));
     return reply.send({ username: user.username, isAdmin: user.isAdmin });
@@ -702,6 +719,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const password = String(b.password ?? '');
     const isAdmin = Boolean(b.isAdmin);
     if (!username || !password) return reply.code(400).send({ error: 'username and password are required' });
+    if (password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
+      return reply.code(400).send({ error: `password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} characters` });
+    }
     try {
       const user = await users.create({ username, password, isAdmin });
       return reply.send({ id: user.id, username: user.username, isAdmin: user.isAdmin, createdAt: user.createdAt });
@@ -732,6 +752,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const newPassword = String(b.newPassword ?? '');
     if (!currentPassword || !newPassword) {
       return reply.code(400).send({ error: 'current and new password are required' });
+    }
+    if (newPassword.length < MIN_PASSWORD_LENGTH || newPassword.length > MAX_PASSWORD_LENGTH || currentPassword.length > MAX_PASSWORD_LENGTH) {
+      return reply.code(400).send({ error: `new password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} characters` });
     }
     const user = req.authUser ? await users.findById(req.authUser.id) : null;
     if (!user) return reply.code(401).send({ error: 'unauthorized' });
@@ -872,6 +895,25 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const rev = await posts.getRevision(tk, id);
     if (!rev) return reply.code(404).send({ error: 'revision not found' });
     return reply.send(rev);
+  });
+
+  app.get('/api/categories', { preHandler: requireAuth }, async () => {
+    if (posts.listCategories) return posts.listCategories();
+    return [];
+  });
+
+  app.get('/api/tags', { preHandler: requireAuth }, async () => {
+    if (posts.listTags) return posts.listTags();
+    return [];
+  });
+
+  app.get('/api/cms/stats', { preHandler: requireAuth }, async () => {
+    const postStats = posts.getCmsStats ? await posts.getCmsStats() : { totalPosts: 0, draftPosts: 0, publishedPosts: 0, scheduledPosts: 0, archivedPosts: 0, totalCategories: 0, totalTags: 0 };
+    const mediaRes = await cfg.media.list({});
+    return {
+      ...postStats,
+      mediaCount: mediaRes.items.length,
+    };
   });
 
   // @ai-warning: publishing pushes content to the PUBLIC static site, so it is

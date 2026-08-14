@@ -6,13 +6,23 @@ const R = 8;
 const P = 1;
 const KEYLEN = 64;
 
+export const MAX_PASSWORD_LENGTH = 1024;
+export const MIN_PASSWORD_LENGTH = 12;
+
 export function hashPassword(password: string): string {
+  if (password.length > MAX_PASSWORD_LENGTH) {
+    throw new Error(`Password exceeds maximum length of ${MAX_PASSWORD_LENGTH} characters`);
+  }
   const salt = randomBytes(16);
   const hash = scryptSync(password, salt, KEYLEN, { N, r: R, p: P });
   return `scrypt$${N}$${R}$${P}$${salt.toString('hex')}$${hash.toString('hex')}`;
 }
 
+// Precomputed dummy hash for constant-time password verification when username is missing (CWE-208 mitigation)
+export const DUMMY_STORED_HASH = hashPassword('dummy_password_for_constant_time_verification_safety');
+
 export function verifyPassword(password: string, stored: string): boolean {
+  if (password.length > MAX_PASSWORD_LENGTH) return false;
   const parts = stored.split('$');
   if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
   const ns = parts[1];

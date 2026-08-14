@@ -779,7 +779,7 @@ describe('auth endpoints', () => {
     const res = await b.app.inject({
       method: 'POST', url: '/setup',
       headers: { 'content-type': 'application/json' },
-      payload: { username: 'simon', password: 'pw' },
+      payload: { username: 'simon', password: 'password123456' },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ username: 'simon', isAdmin: true });
@@ -787,9 +787,20 @@ describe('auth endpoints', () => {
     const again = await b.app.inject({
       method: 'POST', url: '/setup',
       headers: { 'content-type': 'application/json' },
-      payload: { username: 'x', password: 'y' },
+      payload: { username: 'x', password: 'password123456' },
     });
     expect(again.statusCode).toBe(409);
+  });
+
+  it('POST /setup rejects passwords shorter than 12 characters (400)', async () => {
+    const b = build();
+    const res = await b.app.inject({
+      method: 'POST', url: '/setup',
+      headers: { 'content-type': 'application/json' },
+      payload: { username: 'simon', password: 'short' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/between 12 and 1024 characters/);
   });
 
   it('POST /login succeeds with correct creds, generic 401 otherwise', async () => {
@@ -802,6 +813,20 @@ describe('auth endpoints', () => {
     expect(wrong.statusCode).toBe(401);
     const unknown = await b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'ghost', password: 'pw' } });
     expect(unknown.statusCode).toBe(401);
+    const oversized = await b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'simon', password: 'a'.repeat(1025) } });
+    expect(oversized.statusCode).toBe(401);
+  });
+
+  it('locks account after 5 failed login attempts (429)', async () => {
+    const b = build();
+    await b.users.create({ username: 'simon', password: 'password123456', isAdmin: false });
+    for (let i = 0; i < 5; i++) {
+      const res = await b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'simon', password: 'wrongpassword' } });
+      expect(res.statusCode).toBe(401);
+    }
+    const locked = await b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'simon', password: 'password123456' } });
+    expect(locked.statusCode).toBe(429);
+    expect(locked.json().error).toMatch(/account is temporarily locked/);
   });
 
   it('GET /login serves a real form so Enter submits (keyboard-only sign-in)', async () => {
@@ -847,8 +872,8 @@ describe('auth endpoints', () => {
   it('serializes concurrent /setup so only one admin is created (no TOCTOU)', async () => {
     const b = build();
     const [a, c] = await Promise.all([
-      b.app.inject({ method: 'POST', url: '/setup', headers: { 'content-type': 'application/json' }, payload: { username: 'first', password: 'pw' } }),
-      b.app.inject({ method: 'POST', url: '/setup', headers: { 'content-type': 'application/json' }, payload: { username: 'second', password: 'pw' } }),
+      b.app.inject({ method: 'POST', url: '/setup', headers: { 'content-type': 'application/json' }, payload: { username: 'first', password: 'password123456' } }),
+      b.app.inject({ method: 'POST', url: '/setup', headers: { 'content-type': 'application/json' }, payload: { username: 'second', password: 'password123456' } }),
     ]);
     const codes = [a.statusCode, c.statusCode].sort();
     expect(codes).toEqual([200, 409]);
@@ -874,7 +899,7 @@ describe('user management', () => {
   it('admin can list, add and remove users', async () => {
     const b = build();
     const { cookie } = await authed(b, { isAdmin: true, username: 'admin' });
-    const add = await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'bob', password: 'pw', isAdmin: false } });
+    const add = await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'bob', password: 'password123456', isAdmin: false } });
     expect(add.statusCode).toBe(200);
     const list = await b.app.inject({ method: 'GET', url: '/users', cookies: cookie });
     expect(list.json().map((u: { username: string }) => u.username)).toContain('bob');
@@ -893,8 +918,8 @@ describe('user management', () => {
   it('POST /users 409 on duplicate username', async () => {
     const b = build();
     const { cookie } = await authed(b, { isAdmin: true, username: 'admin' });
-    await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'bob', password: 'pw', isAdmin: false } });
-    const dup = await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'BOB', password: 'pw', isAdmin: false } });
+    await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'bob', password: 'password123456', isAdmin: false } });
+    const dup = await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'BOB', password: 'password123456', isAdmin: false } });
     expect(dup.statusCode).toBe(409);
   });
 });
@@ -904,21 +929,21 @@ describe('POST /users/me/password (change password)', () => {
     b.app.inject({ method: 'POST', url: '/users/me/password', headers: { 'content-type': 'application/json' }, ...(cookie ? { cookies: cookie } : {}), payload });
 
   it('401 unauthenticated', async () => {
-    const res = await change(build(), undefined, { currentPassword: 'pw', newPassword: 'new-pw' });
+    const res = await change(build(), undefined, { currentPassword: 'pw', newPassword: 'new-password-123' });
     expect(res.statusCode).toBe(401);
   });
 
   it('400 when a field is missing or empty', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    expect((await change(b, cookie, { newPassword: 'new-pw' })).statusCode).toBe(400);
+    expect((await change(b, cookie, { newPassword: 'new-password-123' })).statusCode).toBe(400);
     expect((await change(b, cookie, { currentPassword: 'pw', newPassword: '' })).statusCode).toBe(400);
   });
 
   it('400 (not 401 — admin JS redirects on 401) on a wrong current password', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    const res = await change(b, cookie, { currentPassword: 'wrong', newPassword: 'new-pw' });
+    const res = await change(b, cookie, { currentPassword: 'wrong', newPassword: 'new-password-123' });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('current password is incorrect');
   });
@@ -927,14 +952,14 @@ describe('POST /users/me/password (change password)', () => {
     const b = build();
     const { user, cookie } = await authed(b); // password 'pw'
     const otherToken = await b.sessions.create(user.id, 60_000);
-    const res = await change(b, cookie, { currentPassword: 'pw', newPassword: 'brand-new' });
+    const res = await change(b, cookie, { currentPassword: 'pw', newPassword: 'brand-new-password123' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     // Old password no longer logs in; the new one does.
     const login = (password: string) =>
       b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: user.username, password } });
     expect((await login('pw')).statusCode).toBe(401);
-    expect((await login('brand-new')).statusCode).toBe(200);
+    expect((await login('brand-new-password123')).statusCode).toBe(200);
     // The pre-existing other session and the caller's old session are dead…
     expect((await b.app.inject({ method: 'GET', url: '/settings', cookies: { sid: otherToken } })).statusCode).toBe(401);
     expect((await b.app.inject({ method: 'GET', url: '/settings', cookies: cookie })).statusCode).toBe(401);
@@ -947,9 +972,9 @@ describe('POST /users/me/password (change password)', () => {
   it('is rate-limited like the other password-verifying endpoints (429)', async () => {
     const b = build({ loginLimiter: fixedWindowLimiter({ max: 2, windowMs: 60_000 }) });
     const { cookie } = await authed(b);
-    expect((await change(b, cookie, { currentPassword: 'wrong', newPassword: 'x' })).statusCode).toBe(400);
-    expect((await change(b, cookie, { currentPassword: 'wrong', newPassword: 'x' })).statusCode).toBe(400);
-    expect((await change(b, cookie, { currentPassword: 'wrong', newPassword: 'x' })).statusCode).toBe(429);
+    expect((await change(b, cookie, { currentPassword: 'wrong', newPassword: 'new-password-123' })).statusCode).toBe(400);
+    expect((await change(b, cookie, { currentPassword: 'wrong', newPassword: 'new-password-123' })).statusCode).toBe(400);
+    expect((await change(b, cookie, { currentPassword: 'wrong', newPassword: 'new-password-123' })).statusCode).toBe(429);
   });
 
   it('limitAuth runs before requireAuth: unauthenticated requests consume the limiter too', async () => {
