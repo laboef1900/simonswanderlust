@@ -664,6 +664,15 @@ blog/
   stable reason instead of the raw undici message (which leaked an RFC1918 oracle to non-admin
   authors), and are capped. See
   `docs/superpowers/specs/2026-07-30-wxr-import-hardening-design.md` and `SECURITY.md`.
+- **Done:** #100 honest post-tier counters in `ImportSummary` (2026-08-25) — the old single
+  `skipped` conflated four unrelated outcomes, so a re-run of an already-published export read
+  the same as an export rejected at the import boundary. The summary now names each bucket —
+  `imported`, `updated`, `skippedPublished`, `rejected` (a missing translation or an unsafe
+  slug, i.e. the path-traversal defence firing), `failed` (a thrown `upsertDraft`) — and every
+  group lands in exactly one, so the buckets sum to the group count. `POST /import` 400s only
+  when the export yields no groups at all: an all-published re-run is a 200 with
+  `skippedPublished`, and `import.html` shows each bucket by name with a dedicated callout for
+  `rejected` — the same treatment #85 gave un-hosted photos.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**
@@ -689,6 +698,5 @@ blog/
     keys deterministic; #85's disk-derived resume depends on that.
   - **#99 `bySlug` flattens DE and EN slugs** — a group can bind to the wrong `translationKey` and
     `upsertDraft` then overwrites the wrong post. Touches Golden Rule 2.
-  - **#100 `ImportSummary.skipped` conflates four outcomes** — #85 fixed this for the image tier only.
 
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.

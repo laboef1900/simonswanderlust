@@ -1501,7 +1501,7 @@ describe('WordPress import', () => {
     form.append('file', xml, { filename: 'export.xml', contentType: 'text/xml' });
     const res = await b.app.inject({ method: 'POST', url: '/import', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ imported: 1, skipped: 0 });
+    expect(res.json()).toMatchObject({ imported: 1, updated: 0, skippedPublished: 0, rejected: 0, failed: 0 });
     expect((await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json()).toHaveLength(1);
   });
 
@@ -1526,6 +1526,27 @@ describe('WordPress import', () => {
     const res = await b.app.inject({ method: 'POST', url: '/import', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('no importable posts found in export');
+  });
+
+  // issue #100: a re-run of an export whose posts are all already published is
+  // a 200 with `skippedPublished` — "nothing to do" is a success the author can
+  // read, not the 400 the old `skipped === 0` check returned (a 400 cannot say
+  // which posts were untouched and why).
+  it('reports an all-published re-run as 200 with skippedPublished, not a 400', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    // Seed a published pair under the slugs `wxrWith` exports.
+    const seed = {
+      translationKey: '', status: 'draft',
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de', slug: 'imp-de', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en', slug: 'imp-en', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    };
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: seed });
+    const tk = created.json().translationKey;
+    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const res = await postImport(b, cookie, wxrWith());
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ imported: 0, updated: 0, skippedPublished: 1, rejected: 0, failed: 0 });
   });
 
   // ---- issue #85 ----------------------------------------------------------
@@ -1575,7 +1596,7 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
     expect(warnings).not.toMatch(/ECONNREFUSED|refusing to fetch/);
   });
 
-  const OK: ImportSummary = { imported: 1, updated: 0, skipped: 0, images: { total: 0, hosted: 0, failed: 0 }, warnings: [] };
+  const OK: ImportSummary = { imported: 1, updated: 0, skippedPublished: 0, rejected: 0, failed: 0, images: { total: 0, hosted: 0, failed: 0 }, warnings: [] };
 
   it('threads the configured pacing and the resume index into the importer', async () => {
     let seen: Parameters<NonNullable<ServerConfig['importRunner']>>[1] | null = null;
