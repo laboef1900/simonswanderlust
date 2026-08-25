@@ -4,7 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { importWxr, type ImportDeps } from '../src/wp-import.js';
+import { importWxr, ImportTooLargeError, DEFAULT_MAX_IMAGES, type ImportDeps } from '../src/wp-import.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { createRehostResume, rehostImage, type RehostResult } from '../src/wp-images.js';
 import { FetchError } from '../src/safe-fetch.js';
@@ -508,6 +508,98 @@ describe('importWxr blast-radius bounds', () => {
     // share the phrase "consecutive failures", so matching that would pass even
     // with the notice dropped.
     expect(s.warnings.join(' ')).toMatch(/stopped fetching/i);
+  });
+});
+
+/**
+ * Issue #96: a per-import cap on the TOTAL number of distinct (pair, url)
+ * re-host operations. #85's `retryBudget` bounds retries and `hostFailureLimit`
+ * bounds a FAILING host, but neither bounds first attempts against a host that
+ * keeps answering — the re-host cache is per-pair, so one attachment URL
+ * referenced from N groups is fetched N times.
+ *
+ * @ai-context docs/superpowers/specs/2026-08-25-wxr-import-image-cap-design.md
+ */
+describe('importWxr image cap', () => {
+  // n DE/EN groups, each de body carrying ONE image of the SAME url — the
+  // exact amplification shape from the issue (one url, N groups → N fetches).
+  const manyGroups = (n: number, url: string): string => wxr(
+    Array.from({ length: n }, (_, i) =>
+      item('de', `de-${i}`, `g${i}`, `<img src="${url}" alt="a" />`) + '\n' +
+      item('en', `en-${i}`, `g${i}`, '<p>x</p>'),
+    ).join('\n'),
+  );
+
+  it('rejects an import whose distinct-image count exceeds the cap, fetching NOTHING', async () => {
+    const h = harness();
+    await expect(run(manyGroups(5, 'https://wp/same.jpg'), h, { maxImages: 4 }))
+      .rejects.toBeInstanceOf(ImportTooLargeError);
+    expect(h.calls).toHaveLength(0); // the pre-flight check must precede every fetch
+  });
+
+  it('names the count and the cap in the rejection', async () => {
+    const h = harness();
+    await expect(run(manyGroups(5, 'https://wp/same.jpg'), h, { maxImages: 4 }))
+      .rejects.toThrow('would re-host 5 distinct images, which exceeds the cap of 4');
+  });
+
+  it('logs the rejection to stdout, not only into the (absent) response', async () => {
+    const logged: string[] = [];
+    const h = harness();
+    await expect(run(manyGroups(5, 'https://wp/same.jpg'), h, { maxImages: 4, log: (m) => logged.push(m) }))
+      .rejects.toBeInstanceOf(ImportTooLargeError);
+    expect(logged.join('\n')).toMatch(/5 distinct images exceeds the cap of 4/i);
+  });
+
+  it('imports an export at exactly the cap (the bound is inclusive)', async () => {
+    const h = harness();
+    const s = await run(manyGroups(5, 'https://wp/same.jpg'), h, { maxImages: 5 });
+    expect(s.imported).toBe(5);
+    // same url, five distinct pairs → five fetches, five counted.
+    expect(h.calls).toHaveLength(5);
+    expect(s.images).toEqual({ total: 5, hosted: 5, failed: 0 });
+  });
+
+  it('counts a URL shared by both locales of a pair once, not twice', async () => {
+    const h = harness();
+    const s = await run(
+      pairOf('g', 'de-1', 'en-1', imgs('https://wp/same.jpg'), imgs('https://wp/same.jpg')),
+      h, { maxImages: 1 },
+    );
+    expect(h.calls).toHaveLength(1);
+    expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+  });
+
+  it('counts the hero (featured image) toward the cap', async () => {
+    const h = harness();
+    // pairWithHero: one hero + one body image on the de side → 2 distinct (pair, url).
+    const s = await run(pairWithHero('https://wp/hero.jpg', ['https://wp/body.jpg']), h, { maxImages: 2 });
+    expect(h.calls).toHaveLength(2);
+    expect(s.images).toEqual({ total: 2, hosted: 2, failed: 0 });
+  });
+
+  it('does not count images from groups that will be skipped', async () => {
+    const h = harness();
+    const body = wxr([
+      // g1 is missing its en translation → skipped; its 3 images must not count.
+      item('de', 'de-1', 'g1', imgs('https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/c.jpg')),
+      // g2 is valid with 1 image.
+      item('de', 'de-2', 'g2', imgs('https://wp/d.jpg')),
+      item('en', 'en-2', 'g2', '<p>x</p>'),
+    ].join('\n'));
+    const s = await run(body, h, { maxImages: 1 });
+    expect(s.skipped).toBe(1);
+    expect(s.imported).toBe(1);
+    expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+  });
+
+  it('defaults to a cap above any legitimate export, so ordinary imports are untouched', async () => {
+    const h = harness();
+    // 100 groups, 1 image each → 100 distinct, far below DEFAULT_MAX_IMAGES.
+    const s = await run(manyGroups(100, 'https://wp/same.jpg'), h);
+    expect(s.imported).toBe(100);
+    expect(s.images.total).toBe(100);
+    expect(DEFAULT_MAX_IMAGES).toBeGreaterThan(100);
   });
 });
 
