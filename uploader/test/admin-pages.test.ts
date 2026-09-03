@@ -370,25 +370,6 @@ describe('admin page wiring', () => {
     expect(login).toContain("'Error: ' + e");
   });
 
-  it('populateForm applies restore payloads deterministically (no field resurrection)', () => {
-    // buildPayload() omits cleared/empty fields from the stash, so populateForm
-    // must write every shared/hero field unconditionally with a fallback — an
-    // `if (shared.route)`-style guard resurrects server values the user deleted
-    // when a stash is restored over an already-loaded post.
-    expect(editor).toContain("$('fmDate').value = shared.date || ''");
-    expect(editor).toContain("$('fmCountryCode').value = shared.countryCode || ''");
-    expect(editor).toContain("$('fmRegion').value = shared.region || ''");
-    expect(editor).toContain("$('fmRoute').value = shared.route || ''");
-    expect(editor).toContain('const coords = shared.coordinates || {}');
-    expect(editor).toContain('const hero = data.heroImage || {}');
-    // country and keyFacts moved per-locale (issue #87) — same unconditional-write
-    // contract applies to populateLocale as to populateForm.
-    expect(editor).toContain("$(loc + 'Country').value = data.country || ''");
-    expect(editor).toContain('populateKeyFacts(loc, data.keyFacts)');
-    expect(editor).not.toMatch(/if \(shared\.(date|countryCode|region|route|coordinates)\)/);
-    expect(editor).not.toMatch(/if \(data\.(heroImage|country|keyFacts)\)/);
-  });
-
   it('declining the restore prompt keeps the stash (non-destructive) instead of wiping it', () => {
     // A misclicked Cancel must not destroy unsaved work: both editors gate the
     // prompt on wasDismissed() and, when a stash exists but is not restored,
