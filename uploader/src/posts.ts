@@ -452,7 +452,7 @@ export function memoryPostStore(): PostStore {
   };
 }
 
-import { POST_SNAPSHOT_SQL, type DbPool } from './db.js';
+import { POST_SNAPSHOT_SQL, type DbClient, type DbPool } from './db.js';
 
 interface PostRow {
   translation_key: string; locale: Locale; slug: string; title: string; date: Date | string;
@@ -507,25 +507,46 @@ function rowShared(r: PostRow): PostShared {
   };
 }
 
+/** The pg unique-violation raised by posts_locale_slug_idx — the race-safe slug backstop. */
+function isSlugCollision(e: unknown): boolean {
+  const err = e as { code?: string; constraint?: string };
+  return err.code === '23505' && err.constraint === 'posts_locale_slug_idx';
+}
+
+function localeParams(tk: string, status: string, shared: PostShared, p: PostLocale): unknown[] {
+  return [tk, p.locale, p.slug, p.title, shared.date, p.country, shared.countryCode, shared.region,
+    p.excerpt, JSON.stringify(p.heroImage), JSON.stringify(shared.coordinates),
+    shared.stops?.length ? JSON.stringify(shared.stops) : null, shared.route ?? null, p.keyFacts ? JSON.stringify(p.keyFacts) : null,
+    p.bodyMarkdown, JSON.stringify(p.images), status,
+    shared.categories ?? [], shared.tags ?? [], shared.scheduledAt ? new Date(shared.scheduledAt) : null];
+}
+
 export function pgPostStore(pool: DbPool): PostStore {
-  async function writeLocale(tk: string, status: string, shared: PostShared, p: PostLocale) {
-    await pool.query(
-      `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
+  // Plain INSERT: a (locale, slug) collision surfaces as 23505 from
+  // posts_locale_slug_idx and is mapped to duplicate_slug by the caller — never
+  // ON CONFLICT DO UPDATE, which re-assigned another pair's row (issue #106).
+  async function insertLocale(client: DbClient, tk: string, status: string, shared: PostShared, p: PostLocale) {
+    await client.query(
+      `INSERT INTO posts (translation_key, locale, slug, title, date, country, country_code, region,
          excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status,
-         categories, tags, scheduled_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21, now())
-       ON CONFLICT (locale, slug) DO UPDATE SET
-         translation_key=EXCLUDED.translation_key, title=EXCLUDED.title, date=EXCLUDED.date, country=EXCLUDED.country,
-         country_code=EXCLUDED.country_code, region=EXCLUDED.region, excerpt=EXCLUDED.excerpt, hero_image=EXCLUDED.hero_image,
-         coordinates=EXCLUDED.coordinates, stops=EXCLUDED.stops, route=EXCLUDED.route, key_facts=EXCLUDED.key_facts,
-         body_markdown=EXCLUDED.body_markdown, images=EXCLUDED.images, status=EXCLUDED.status,
-         categories=EXCLUDED.categories, tags=EXCLUDED.tags, scheduled_at=EXCLUDED.scheduled_at, updated_at=now()`,
-      [randomUUID(), tk, p.locale, p.slug, p.title, shared.date, p.country, shared.countryCode, shared.region,
-       p.excerpt, JSON.stringify(p.heroImage), JSON.stringify(shared.coordinates),
-       shared.stops?.length ? JSON.stringify(shared.stops) : null, shared.route ?? null, p.keyFacts ? JSON.stringify(p.keyFacts) : null,
-       p.bodyMarkdown, JSON.stringify(p.images), status,
-       shared.categories ?? [], shared.tags ?? [], shared.scheduledAt ? new Date(shared.scheduledAt) : null],
+         categories, tags, scheduled_at, id, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21, now())`,
+      [...localeParams(tk, status, shared, p), randomUUID()],
     );
+  }
+  // Writes by identity — (translation_key, locale) — so a slug rename updates
+  // the row in place instead of leaving the old-slug row behind. Never sets
+  // translation_key.
+  async function updateLocale(client: DbClient, tk: string, status: string, shared: PostShared, p: PostLocale) {
+    const res = await client.query(
+      `UPDATE posts SET slug=$3, title=$4, date=$5, country=$6, country_code=$7, region=$8, excerpt=$9,
+         hero_image=$10, coordinates=$11, stops=$12, route=$13, key_facts=$14, body_markdown=$15, images=$16,
+         status=$17, categories=$18, tags=$19, scheduled_at=$20, updated_at=now()
+       WHERE translation_key=$1 AND locale=$2`,
+      localeParams(tk, status, shared, p),
+    );
+    // The pair vanished between get() and this write (e.g. DELETE /posts/:tk).
+    if (res.rowCount !== 1) throw new PostError('post not found');
   }
   return {
     async list() {
@@ -561,8 +582,9 @@ export function pgPostStore(pool: DbPool): PostStore {
       return {
         translationKey: tk, status: de.status, shared: rowShared(de), de: rowLocale(de), en: rowLocale(en),
         hasUnpublishedChanges: rowHasUnpublishedChanges(de) || rowHasUnpublishedChanges(en),
-        // Max of both rows: writeLocale runs two statements with independent
-        // now() values, so de/en updated_at can differ by a tick.
+        // Max of both rows: since #106 both locale writes share one
+        // transaction (one now()), but rows written before it can differ by a
+        // tick, and publish()/unpublish() still stamp per statement.
         updatedAt: new Date(Math.max(de.updated_at.getTime(), en.updated_at.getTime())),
       };
     },
@@ -579,36 +601,54 @@ export function pgPostStore(pool: DbPool): PostStore {
       pair = draftWithDefaults(pair);
       const tk = pair.translationKey || randomUUID();
       const existing = await this.get(tk);
-      // @ai-note The read → check → snapshot → write sequence below is NOT
-      // transactional: two saves racing within the same ms window can both
-      // pass this check (single-process deployment; the losing state is still
-      // recoverable via its revision). A hard guarantee would need
-      // SELECT ... FOR UPDATE in one transaction — keep the timestamp compare
-      // in JS if that ever happens (see assertNotStale's @ai-warning).
+      // @ai-note The revision snapshot and BOTH locale writes run in one
+      // transaction, so a save is all-or-nothing and posts_locale_slug_idx is
+      // the race-safe backstop for the slug pre-check below (a losing racer
+      // gets duplicate_slug, never a re-assigned row — issue #106). What is
+      // still NOT serialized is the read → stale-check above: two saves racing
+      // within the same ms window can both pass assertNotStale (single-process
+      // deployment; the losing state is still recoverable via its revision).
+      // A hard guarantee would need SELECT ... FOR UPDATE inside this
+      // transaction — keep the timestamp compare in JS if that ever happens
+      // (see assertNotStale's @ai-warning).
       if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
-      for (const locale of ['de', 'en'] as Locale[]) {
-        const { rows } = await pool.query<{ translation_key: string }>(`SELECT translation_key FROM posts WHERE locale=$1 AND slug=$2`, [locale, pair[locale].slug]);
-        if (rows[0] && rows[0].translation_key !== tk) throw new PostError(`slug "${pair[locale].slug}" already in use for ${locale}`, 'duplicate_slug');
-        if (existing && existing.status === 'published' && existing[locale].slug !== pair[locale].slug) throw new PostError('cannot change the slug of a published post', 'slug_locked');
-      }
-      if (existing) {
-        // Snapshot the pre-save working copy so the overwrite is recoverable,
-        // then prune to the newest REVISION_CAP per post.
-        await pool.query(
-          `INSERT INTO post_revisions (id, translation_key, snapshot) VALUES ($1, $2, $3)`,
-          [randomUUID(), tk, JSON.stringify({ status: existing.status, shared: existing.shared, de: existing.de, en: existing.en })],
-        );
-        await pool.query(
-          `DELETE FROM post_revisions
-            WHERE translation_key = $1 AND id NOT IN (
-              SELECT id FROM post_revisions WHERE translation_key = $1
-               ORDER BY saved_at DESC, id DESC LIMIT $2)`,
-          [tk, REVISION_CAP],
-        );
-      }
       const status = existing?.status ?? 'draft';
-      await writeLocale(tk, status, pair.shared, { ...pair.de, locale: 'de' });
-      await writeLocale(tk, status, pair.shared, { ...pair.en, locale: 'en' });
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        for (const locale of ['de', 'en'] as Locale[]) {
+          const { rows } = await client.query<{ translation_key: string }>(`SELECT translation_key FROM posts WHERE locale=$1 AND slug=$2`, [locale, pair[locale].slug]);
+          if (rows[0] && rows[0].translation_key !== tk) throw new PostError(`slug "${pair[locale].slug}" already in use for ${locale}`, 'duplicate_slug');
+          if (existing && existing.status === 'published' && existing[locale].slug !== pair[locale].slug) throw new PostError('cannot change the slug of a published post', 'slug_locked');
+        }
+        if (existing) {
+          // Snapshot the pre-save working copy so the overwrite is recoverable,
+          // then prune to the newest REVISION_CAP per post.
+          await client.query(
+            `INSERT INTO post_revisions (id, translation_key, snapshot) VALUES ($1, $2, $3)`,
+            [randomUUID(), tk, JSON.stringify({ status: existing.status, shared: existing.shared, de: existing.de, en: existing.en })],
+          );
+          await client.query(
+            `DELETE FROM post_revisions
+              WHERE translation_key = $1 AND id NOT IN (
+                SELECT id FROM post_revisions WHERE translation_key = $1
+                 ORDER BY saved_at DESC, id DESC LIMIT $2)`,
+            [tk, REVISION_CAP],
+          );
+          await updateLocale(client, tk, status, pair.shared, { ...pair.de, locale: 'de' });
+          await updateLocale(client, tk, status, pair.shared, { ...pair.en, locale: 'en' });
+        } else {
+          await insertLocale(client, tk, status, pair.shared, { ...pair.de, locale: 'de' });
+          await insertLocale(client, tk, status, pair.shared, { ...pair.en, locale: 'en' });
+        }
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        if (isSlugCollision(e)) throw new PostError('slug already in use', 'duplicate_slug');
+        throw e;
+      } finally {
+        client.release();
+      }
       const saved = await this.get(tk);
       if (!saved) throw new PostError('failed to save post');
       return saved;

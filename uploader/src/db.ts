@@ -2,6 +2,8 @@ import pg from 'pg';
 
 const { Pool } = pg;
 export type DbPool = pg.Pool;
+/** A checked-out connection (`pool.connect()`), for multi-statement transactions. */
+export type DbClient = pg.PoolClient;
 
 const ABOUT_SEED = {
   de: {
@@ -200,4 +202,27 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   // the ALTER fails on populated tables. Never edit or reorder past
   // migrations; only append. No migration framework / schema_version table
   // by design — see ARCHITECTURE.md "Data model (Postgres)".
+
+  // @ai-note Identity invariant (issue #106): a post pair is exactly one row
+  // per (translation_key, locale). pgPostStore.upsertDraft writes by that key
+  // (UPDATE ... WHERE translation_key AND locale), so a slug rename can no
+  // longer leave the old-slug row behind; this unique index makes the
+  // invariant hold at the schema level too. Databases written before #106 may
+  // already carry duplicate rows — CREATE UNIQUE INDEX would fail the whole
+  // boot on them, and deleting rows here is out of the question (Golden Rule
+  // 3: never wipe data automatically). So: report and skip, never delete.
+  const dupes = await pool.query<{ translation_key: string; locale: string; n: number }>(
+    `SELECT translation_key, locale, count(*)::int AS n FROM posts GROUP BY translation_key, locale HAVING count(*) > 1`,
+  );
+  if (dupes.rows.length > 0) {
+    for (const d of dupes.rows) {
+      console.error(`[db] posts has ${d.n} rows for (translation_key=${d.translation_key}, locale=${d.locale})`);
+    }
+    console.error(
+      '[db] posts_tk_locale_idx was NOT created: duplicate (translation_key, locale) rows exist. ' +
+      'Resolve them first — DELETE /posts/:tk drops every row for a key, or by hand keep the row with the newest updated_at per pair — then restart.',
+    );
+  } else {
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS posts_tk_locale_idx ON posts (translation_key, locale)`);
+  }
 }

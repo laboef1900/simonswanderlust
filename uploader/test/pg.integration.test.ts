@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgUserStore, verifyPassword, UserExistsError } from '../src/users.js';
 import { pgSessionStore } from '../src/sessions.js';
@@ -288,6 +288,74 @@ maybe('pgPostStore (integration)', () => {
       bodyMarkdown: '## b',
       images: {},
     });
+    await pool.end();
+  });
+
+  it('renaming a draft slug updates the row in place and frees the old slug (#106)', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    const created = await store.upsertDraft(base);
+    const tk = created.translationKey;
+    const renamed = await store.upsertDraft({ ...created, de: { ...created.de, slug: 'renamed-de' } });
+    expect(renamed.de.slug).toBe('renamed-de');
+    // exactly one DE row for the key — no abandoned old-slug row left behind
+    const { rows } = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM posts WHERE translation_key=$1 AND locale='de'`, [tk]);
+    expect(rows[0]?.n).toBe(1);
+    expect((await store.get(tk))?.de.slug).toBe('renamed-de');
+    // the old slug is reusable by a brand-new pair
+    const other = await store.upsertDraft({ ...base, en: { ...base.en, slug: 'other-en' } });
+    expect(other.de.slug).toBe('de-slug');
+    expect(other.translationKey).not.toBe(tk);
+    expect(await store.list()).toHaveLength(2);
+    await pool.end();
+  });
+
+  it('posts_tk_locale_idx enforces one row per (translation_key, locale)', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const { rows } = await pool.query<{ indexname: string }>(`SELECT indexname FROM pg_indexes WHERE tablename='posts'`);
+    expect(rows.map((r) => r.indexname)).toContain('posts_tk_locale_idx');
+    const created = await pgPostStore(pool).upsertDraft(base);
+    await expect(pool.query(
+      `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region, excerpt, hero_image, coordinates, body_markdown)
+       VALUES ($1, $2, 'de', 'dupe-slug', 'T', '2024-10-03', 'X', 'RO', 'europe', 'e', '{}', '{}', 'b')`,
+      [randomUUID(), created.translationKey],
+    )).rejects.toMatchObject({ code: '23505' });
+    await pool.end();
+  });
+
+  it('ensureSchema reports pre-existing duplicate rows and skips the index instead of deleting', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const indexSql = `SELECT 1 FROM pg_indexes WHERE tablename='posts' AND indexname='posts_tk_locale_idx'`;
+    await pool.query(`DROP INDEX posts_tk_locale_idx`);
+    const tk = randomUUID();
+    for (const slug of ['old-slug', 'new-slug']) {
+      await pool.query(
+        `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region, excerpt, hero_image, coordinates, body_markdown)
+         VALUES ($1, $2, 'de', $3, 'T', '2024-10-03', 'X', 'RO', 'europe', 'e', '{}', '{}', 'b')`,
+        [randomUUID(), tk, slug],
+      );
+    }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(ensureSchema(pool)).resolves.toBeUndefined();
+      expect((await pool.query(indexSql)).rowCount).toBe(0);
+      const logged = spy.mock.calls.map((c) => String(c[0]));
+      expect(logged).toContain(`[db] posts has 2 rows for (translation_key=${tk}, locale=de)`);
+      expect(logged.some((l) => l.includes('posts_tk_locale_idx was NOT created'))).toBe(true);
+      // never deleted (Golden Rule 3)
+      expect((await pool.query(`SELECT count(*)::int AS n FROM posts WHERE translation_key=$1`, [tk])).rows[0].n).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+    await pool.query(`DELETE FROM posts WHERE translation_key=$1`, [tk]);
+    await ensureSchema(pool);
+    expect((await pool.query(indexSql)).rowCount).toBe(1);
     await pool.end();
   });
 });
