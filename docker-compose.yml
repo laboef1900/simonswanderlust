@@ -11,7 +11,8 @@ services:
     # uploader/src/main.ts) and reaps the spawned `astro build` child process.
     init: true
     ports:
-      - "3000:3000"
+      # Loopback only: the reverse proxy on the host is the sole ingress, and it is the one hop `trustProxy: 1` trusts (#108).
+      - "127.0.0.1:3000:3000"
     environment:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://img.simonswanderlust.com}
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-images}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-images}}

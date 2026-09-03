@@ -104,9 +104,15 @@ keep their sanitized messages. (`uploader/src/server.ts`)
 A per-client-IP fixed-window limiter throttles the password-verifying endpoints — the
 unauthenticated `/login` and `/setup`, plus the authenticated `POST /users/me/password` — to slow
 brute-force attempts. All three share the same per-IP bucket, so failed current-password guesses
-also count against login attempts from that IP. It is in-memory and dependency-free
-(`uploader/src/rate-limit.ts`); with a single container that is sufficient. (If ever scaled to
-multiple replicas, limits would be counted per replica.)
+also count against login attempts from that IP. The per-IP key is `req.ip` derived under
+`trustProxy: 1`: the address the single trusted reverse proxy appended to `X-Forwarded-For`;
+client-supplied (leftmost) entries are ignored, so rotating the header does not open a fresh
+bucket. `/login` additionally locks an account after repeated failures and checks that lock
+*before* running scrypt, so a locked account costs no hashing work. `POST /users/me/password` has
+its own per-account failure limiter keyed on the session's user id, so a hijacked session cannot
+brute-force the current password across many addresses. All of it is in-memory and
+dependency-free (`uploader/src/rate-limit.ts`); with a single container that is sufficient. (If
+ever scaled to multiple replicas, limits would be counted per replica.)
 
 ## Input validation
 
@@ -285,9 +291,11 @@ the admin's cookie against `POST /users`, `GET /backups/*` and `POST /posts/:tk/
   `/export`, `/backups`, `/rebuild`, `/health`); public blog pages carry only `nosniff`, at parity
   with the old nginx config. (CSP is intentionally omitted because the admin pages use inline
   scripts; a strict policy would need nonces.)
-- The app sets `trustProxy`, so it reads `X-Forwarded-*` for the client IP (rate limiting) and the
-  cookie `Secure` flag. **It must run behind a TLS-terminating reverse proxy that sets
-  `X-Forwarded-Proto`**, and port 3000 must not be exposed directly to the internet.
+- The app sets `trustProxy: 1` (exactly one trusted hop), so it reads `X-Forwarded-*` as set by
+  that one reverse proxy for the client IP (rate limiting) and the cookie `Secure` flag. **It must
+  run behind a TLS-terminating reverse proxy that sets `X-Forwarded-Proto`**; the compose file
+  publishes port 3000 on `127.0.0.1` only, so the host proxy is the sole ingress. A second proxy
+  layer needs the hop count raised to `2` — never `true`, which trusts client-supplied entries.
 - **The proxy must forward the original, verbatim `Host` header for both domains**
   (`simonswanderlust.com` and `img.simonswanderlust.com`) — nginx: `proxy_set_header Host $host;`.
   Image-vs-blog/admin routing is a single Fastify process that dispatches on the `Host` header
