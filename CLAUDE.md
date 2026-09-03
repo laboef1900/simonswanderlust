@@ -221,7 +221,7 @@ the `/data` volume and only changes via Publish, **Rebuild site now**, or `POST 
 
 | Service | Port | Exposure |
 | --- | --- | --- |
-| `app` (Fastify: blog + admin + images) | `3000` | **Public** — the only published port |
+| `app` (Fastify: blog + admin + images) | `3000` | **Loopback** (`127.0.0.1:3000`) — the only published port; the host's reverse proxy is the sole ingress (#108) |
 | `db` (Postgres 18) | `5432` | **Internal** — compose network only; never published to the host |
 | Astro dev server | `4321` | **Loopback** — local development only |
 
