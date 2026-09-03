@@ -1,6 +1,9 @@
 process.env.TZ = 'Europe/Berlin';
 
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,7 +40,10 @@ maybe('backup round-trip (Postgres)', () => {
     // pg.integration.test.ts (PostPair requires both locales).
     const base = {
       translationKey: '', status: 'draft' as const,
-      shared: { date: '2026-01-01', countryCode: 'RO', region: 'europe', coordinates: { lat: 45, lng: 25 } },
+      shared: {
+        date: '2026-01-01', countryCode: 'RO', region: 'europe', coordinates: { lat: 45, lng: 25 },
+        categories: ['reise'], tags: ['griechenland', 'sommer'], scheduledAt: '2026-10-01T08:00:00.000Z',
+      },
       de: { locale: 'de' as const, slug: 'test-reise', title: 'Test', excerpt: 'x', country: 'Rumänien', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hallo', images: {} },
       en: { locale: 'en' as const, slug: 'test-trip', title: 'Test', excerpt: 'x', country: 'Romania', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hello', images: {} },
     };
@@ -91,16 +97,28 @@ maybe('backup round-trip (Postgres)', () => {
     expect(de.work).toBe('Hallo v2');
     expect(de.live).toBe('Hallo');
     expect(de.p).toBeInstanceOf(Date);
+
+    // Column fidelity (issue #107): categories/tags/scheduled_at are app-layer
+    // columns the old explicit SELECT/INSERT lists omitted, so a restore silently
+    // reset every working copy to '{}' / '{}' / NULL.
+    const restored = await posts.get(createdPair.translationKey);
+    expect(restored?.shared.categories).toEqual(['reise']);
+    expect(restored?.shared.tags).toEqual(['griechenland', 'sommer']);
+    expect(restored?.shared.scheduledAt).toBe('2026-10-01T08:00:00.000Z');
+    const sched = (await pool.query(
+      `SELECT to_char(scheduled_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS s FROM posts WHERE locale='de'`,
+    )).rows[0] as { s: string };
+    expect(sched.s).toBe('2026-10-01T08:00:00.000Z');
   });
 
   it('rejects an unsupported dump version without touching data', async () => {
-    // @ai-warning: the guard is an ALLOW-LIST (1, 2, 3), not a minimum — so
+    // @ai-warning: the guard is an ALLOW-LIST (1, 2, 3, 4), not a minimum — so
     // this probes the next UNRELEASED version. Bump it whenever DUMP_VERSION
     // is bumped, or this stops testing anything.
     const { gzipSync } = await import('node:zlib');
     const { writeFileSync } = await import('node:fs');
     const bad = join(dir, 'db-20260101-000000.json.gz');
-    writeFileSync(bad, gzipSync(JSON.stringify({ version: 4, tables: { users: [], posts: [] } })));
+    writeFileSync(bad, gzipSync(JSON.stringify({ version: 5, tables: { users: [], posts: [] } })));
     await expect(restoreDatabase(pool, bad)).rejects.toThrow(/unsupported dump version/);
     expect((await pool.query('SELECT count(*) AS n FROM users')).rows[0].n).toBe('1');
   });
@@ -185,7 +203,7 @@ maybe('backup round-trip (Postgres)', () => {
     const dump = JSON.parse(
       (await import('node:zlib')).gunzipSync((await import('node:fs')).readFileSync(join(dir, name))).toString('utf8'),
     );
-    expect(dump.version).toBe(3);
+    expect(dump.version).toBe(4);
 
     await pool.query('DELETE FROM media');
     await pool.query('DELETE FROM media_folders');
@@ -217,5 +235,58 @@ maybe('backup round-trip (Postgres)', () => {
     })));
     const counts = await restoreDatabase(pool, v2);
     expect(counts.media).toBe(0);
+  });
+
+  it('a v3 dump (no categories/tags/scheduled_at keys) restores those columns at their defaults', async () => {
+    const now = new Date().toISOString();
+    const row = (locale: 'de' | 'en', slug: string) => ({
+      id: randomUUID(), translation_key: 'v3-tk', locale, slug, title: 'V3', date: '2026-02-02',
+      country: 'X', country_code: 'RO', region: 'europe', excerpt: 'x',
+      hero_image: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' },
+      coordinates: { lat: 45, lng: 25 }, stops: null, route: null, key_facts: null,
+      body_markdown: 'b', images: {}, status: 'draft', created_at: now, updated_at: now,
+      published_snapshot: null, published_at: null,
+    });
+    const v3 = join(dir, 'db-20260103-000000.json.gz');
+    writeFileSync(v3, gzipSync(JSON.stringify({
+      version: 3, createdAt: now,
+      tables: { users: [], posts: [row('de', 'v3-reise'), row('en', 'v3-trip')], pages: [], media: [], media_folders: [] },
+    })));
+    const counts = await restoreDatabase(pool, v3);
+    expect(counts.posts).toBe(2);
+    const back = (await pool.query(
+      `SELECT categories, tags, scheduled_at FROM posts WHERE translation_key='v3-tk' ORDER BY locale`,
+    )).rows as { categories: string[]; tags: string[]; scheduled_at: Date | null }[];
+    expect(back).toHaveLength(2);
+    for (const r of back) {
+      expect(r.categories).toEqual([]);
+      expect(r.tags).toEqual([]);
+      expect(r.scheduled_at).toBeNull();
+    }
+  });
+
+  it('dumps every column of posts, so the next added column cannot be silently dropped', async () => {
+    // @ai-warning: dumpDatabase uses an explicit column list for posts (to_char
+    // on `date`), so a column added in db.ts without touching backup.ts is
+    // silently absent from every dump and reset on restore — exactly how
+    // categories/tags/scheduled_at were lost (issue #107). This diff is the
+    // only thing that catches the next one.
+    const posts = pgPostStore(pool);
+    await pool.query('DELETE FROM posts');
+    await posts.upsertDraft({
+      translationKey: '', status: 'draft',
+      shared: { date: '2026-03-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 45, lng: 25 } },
+      de: { locale: 'de', slug: 'cols-reise', title: 'C', excerpt: 'x', country: 'Rumänien', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'b', images: {} },
+      en: { locale: 'en', slug: 'cols-trip', title: 'C', excerpt: 'x', country: 'Romania', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'b', images: {} },
+    });
+    const name = await dumpDatabase(pool, dir);
+    const dump = JSON.parse(gunzipSync(readFileSync(join(dir, name))).toString('utf8')) as {
+      tables: { posts: Record<string, unknown>[] };
+    };
+    const schemaCols = (await pool.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'posts'`,
+    )).rows.map((r) => r.column_name as string).sort();
+    expect(dump.tables.posts).toHaveLength(2);
+    expect(Object.keys(dump.tables.posts[0] ?? {}).sort()).toEqual(schemaCols);
   });
 });

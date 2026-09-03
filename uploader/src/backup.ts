@@ -8,12 +8,13 @@ import type { BackupSchedule } from './settings.js';
 import { POST_SNAPSHOT_SQL, type DbPool } from './db.js';
 
 /**
+ * v4 added `posts.categories`, `posts.tags` and `posts.scheduled_at` (issue #107);
  * v3 added `media` + `media_folders` (issue #64); v2 added `pages`.
  * @ai-warning Bumping this ALSO requires widening the allow-list guard in
  * `restoreDatabase` — otherwise every newly written dump becomes unrestorable,
  * and a test that only checks "an old dump still restores" passes anyway.
  */
-export const DUMP_VERSION = 3;
+export const DUMP_VERSION = 4;
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
 export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 
@@ -21,6 +22,12 @@ export class BackupError extends Error {}
 
 export interface Queryable {
   query(sql: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
+}
+
+/** A pool: hands out one dedicated client so a dump can run inside a single
+ * transaction. `pg.Pool` satisfies this structurally. */
+export interface Connectable extends Queryable {
+  connect(): Promise<Queryable & { release(): void }>;
 }
 
 export interface BackupState {
@@ -45,27 +52,47 @@ function fileStamp(now: Date): string {
 }
 
 /** Dump users + posts + pages (never sessions — disposable, and token hashes
- * don't belong in backups) as one gzipped, versioned JSON file. Returns the filename. */
-export async function dumpDatabase(db: Queryable, dir: string, now: Date = new Date()): Promise<string> {
-  const users = (await db.query('SELECT * FROM users ORDER BY created_at')).rows;
-  // @ai-warning: node-postgres parses `date` (a DATE column) as a LOCAL-midnight
-  // JS Date; JSON.stringify then serializes it in UTC, shifting the calendar day
-  // west of UTC (e.g. Europe/Berlin: 2026-01-01 -> "2025-12-31T23:00:00.000Z").
-  // Export it as text via to_char so the dump — and the eventual restore — carry
-  // the exact calendar date instead of a shifted timestamp.
-  const posts = (await db.query(
-    `SELECT id, translation_key, locale, slug, title, to_char(date, 'YYYY-MM-DD') AS date, country,
-       country_code, region, excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown,
-       images, status, created_at, updated_at, published_snapshot, published_at
-     FROM posts ORDER BY created_at`,
-  )).rows;
-  const pages = (await db.query('SELECT key, locale, title, body_markdown, images FROM pages ORDER BY key, locale')).rows;
-  // The media library's metadata. The FILES are captured by the incremental
-  // images archive, not here — without these rows a restore would bring the
-  // photos back but lose every folder, caption and tag, which is the worst
-  // kind of partial recovery.
-  const media = (await db.query('SELECT * FROM media ORDER BY key')).rows;
-  const mediaFolders = (await db.query('SELECT path, created_at FROM media_folders ORDER BY path')).rows;
+ * don't belong in backups) as one gzipped, versioned JSON file. Returns the filename.
+ * @ai-note The five SELECTs run on ONE client inside a REPEATABLE READ READ ONLY
+ * transaction, so they see the same snapshot. Autocommit on the pool would let a
+ * bulk delete of a post + its media land between two SELECTs and produce a dump
+ * whose posts reference media rows that are not in it. */
+export async function dumpDatabase(db: Connectable, dir: string, now: Date = new Date()): Promise<string> {
+  const client = await db.connect();
+  let users: Record<string, unknown>[];
+  let posts: Record<string, unknown>[];
+  let pages: Record<string, unknown>[];
+  let media: Record<string, unknown>[];
+  let mediaFolders: Record<string, unknown>[];
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    users = (await client.query('SELECT * FROM users ORDER BY created_at')).rows;
+    // @ai-warning: node-postgres parses `date` (a DATE column) as a LOCAL-midnight
+    // JS Date; JSON.stringify then serializes it in UTC, shifting the calendar day
+    // west of UTC (e.g. Europe/Berlin: 2026-01-01 -> "2025-12-31T23:00:00.000Z").
+    // Export it as text via to_char so the dump — and the eventual restore — carry
+    // the exact calendar date instead of a shifted timestamp.
+    posts = (await client.query(
+      `SELECT id, translation_key, locale, slug, title, to_char(date, 'YYYY-MM-DD') AS date, country,
+         country_code, region, excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown,
+         images, status, created_at, updated_at, published_snapshot, published_at,
+         categories, tags, scheduled_at
+       FROM posts ORDER BY created_at`,
+    )).rows;
+    pages = (await client.query('SELECT key, locale, title, body_markdown, images FROM pages ORDER BY key, locale')).rows;
+    // The media library's metadata. The FILES are captured by the incremental
+    // images archive, not here — without these rows a restore would bring the
+    // photos back but lose every folder, caption and tag, which is the worst
+    // kind of partial recovery.
+    media = (await client.query('SELECT * FROM media ORDER BY key')).rows;
+    mediaFolders = (await client.query('SELECT path, created_at FROM media_folders ORDER BY path')).rows;
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
   const name = `db-${fileStamp(now)}.json.gz`;
   mkdirSync(dir, { recursive: true });
   const payload = JSON.stringify({
@@ -181,7 +208,7 @@ export interface DbBackup {
 }
 
 export function createDbBackup(
-  opts: { db: Queryable; dir: string; retention: () => number; storageDir?: string },
+  opts: { db: Connectable; dir: string; retention: () => number; storageDir?: string },
 ): DbBackup {
   let running = false;
   return {
@@ -266,7 +293,7 @@ export async function restoreDatabase(
   const dump = JSON.parse(gunzipSync(readFileSync(filePath)).toString('utf8')) as Dump;
   // @ai-warning An ALLOW-LIST, not a minimum. Every DUMP_VERSION bump must be
   // added here or dumps written by the new code are unrestorable.
-  if (![1, 2, 3].includes(dump.version)) throw new BackupError(`unsupported dump version ${dump.version}`);
+  if (![1, 2, 3, 4].includes(dump.version)) throw new BackupError(`unsupported dump version ${dump.version}`);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -287,15 +314,19 @@ export async function restoreDatabase(
     for (const p of dump.tables.posts) {
       // published_snapshot/published_at are absent from older dumps → inserted
       // as NULL here, then backfilled below in this same transaction.
+      // categories/tags/scheduled_at are absent from v<=3 dumps → restored at
+      // their column defaults ('{}', '{}', NULL); nothing to backfill from.
       await client.query(
         `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
            excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status, created_at, updated_at,
-           published_snapshot, published_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15::jsonb,$16,$17::jsonb,$18,$19,$20,$21::jsonb,$22)`,
+           published_snapshot, published_at, categories, tags, scheduled_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15::jsonb,$16,$17::jsonb,$18,$19,$20,$21::jsonb,$22,
+           $23::text[],$24::text[],$25)`,
         [p.id, p.translation_key, p.locale, p.slug, p.title, p.date, p.country, p.country_code, p.region,
          p.excerpt, asJsonb(p.hero_image), asJsonb(p.coordinates), asJsonb(p.stops), p.route,
          asJsonb(p.key_facts), p.body_markdown, asJsonb(p.images), p.status, p.created_at, p.updated_at,
-         asJsonb(p.published_snapshot), p.published_at ?? null],
+         asJsonb(p.published_snapshot), p.published_at ?? null,
+         asTextArray(p.categories), asTextArray(p.tags), p.scheduled_at ?? null],
       );
     }
     // @ai-warning: pre-snapshot dumps (v1, and v2 files written before issue
