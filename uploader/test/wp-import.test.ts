@@ -104,7 +104,7 @@ describe('importWxr', () => {
   it('creates a draft pair with preserved slugs, placeholders, and re-hosted images', async () => {
     const store = memoryPostStore();
     const s = await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
-    expect(s).toMatchObject({ imported: 1, updated: 0, skipped: 0 });
+    expect(s).toMatchObject({ imported: 1, updated: 0, skippedPublished: 0, rejected: 0, failed: 0 });
     const list = await store.list();
     const first = list[0]!;
     expect(first).toMatchObject({ slugDe: 'rhodos-abenteuer', slugEn: 'rhodes-adventure', status: 'draft' });
@@ -247,7 +247,7 @@ ${['de', 'en']
     expect(keys).toEqual(['trips/key-de/shared']);
   });
 
-  it('skips a group whose slug is unsafe (path-traversal defense) without storing it', async () => {
+  it('rejects a group whose slug is unsafe (path-traversal defense) without storing it', async () => {
     const evilXml = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"
   xmlns:content="http://purl.org/rss/1.0/modules/content/"
@@ -282,7 +282,7 @@ ${['de', 'en']
     const rehostSpy = async () => { throw new Error('rehost must not be called for an unsafe slug'); };
     const s = await importWxr(evilXml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: rehostSpy });
     expect(s.imported).toBe(0);
-    expect(s.skipped).toBe(1);
+    expect(s).toMatchObject({ updated: 0, skippedPublished: 0, rejected: 1, failed: 0 });
     expect(s.warnings.join(' ')).toMatch(/slug/i);
     expect(await store.list()).toHaveLength(0);
   });
@@ -291,13 +291,13 @@ ${['de', 'en']
     const store = memoryPostStore();
     await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
     const again = await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
-    expect(again).toMatchObject({ imported: 0, updated: 1 });
+    expect(again).toMatchObject({ imported: 0, updated: 1, skippedPublished: 0, rejected: 0, failed: 0 });
     expect(await store.list()).toHaveLength(1);
-    // publish it, then re-import → skipped, content untouched
+    // publish it, then re-import → skippedPublished, content untouched
     const tk = (await store.list())[0]!.translationKey;
     await store.publish(tk);
     const third = await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
-    expect(third.skipped).toBe(1);
+    expect(third).toMatchObject({ imported: 0, updated: 0, skippedPublished: 1, rejected: 0, failed: 0 });
     expect(third.warnings.join(' ')).toMatch(/published/);
   });
 });
@@ -578,17 +578,17 @@ describe('importWxr image cap', () => {
     expect(s.images).toEqual({ total: 2, hosted: 2, failed: 0 });
   });
 
-  it('does not count images from groups that will be skipped', async () => {
+  it('does not count images from groups that will be rejected', async () => {
     const h = harness();
     const body = wxr([
-      // g1 is missing its en translation → skipped; its 3 images must not count.
+      // g1 is missing its en translation → rejected; its 3 images must not count.
       item('de', 'de-1', 'g1', imgs('https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/c.jpg')),
       // g2 is valid with 1 image.
       item('de', 'de-2', 'g2', imgs('https://wp/d.jpg')),
       item('en', 'en-2', 'g2', '<p>x</p>'),
     ].join('\n'));
     const s = await run(body, h, { maxImages: 1 });
-    expect(s.skipped).toBe(1);
+    expect(s.rejected).toBe(1);
     expect(s.imported).toBe(1);
     expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
   });
@@ -648,6 +648,38 @@ describe('importWxr reporting', () => {
     expect(s.images.failed).toBe(240);
     expect(s.warnings.length).toBeLessThanOrEqual(201);
     expect(s.warnings[s.warnings.length - 1]).toMatch(/and \d+ more/);
+  });
+
+  // issue #100: one bucket per outcome. "Already published" is a success, a
+  // rejected slug is the path-traversal defence firing, and a thrown upsert is
+  // a failure — none may share a counter with the others. Every group lands in
+  // exactly one bucket, so the buckets sum to the group count.
+  it('gives each outcome its own bucket, so the buckets sum to the group count', async () => {
+    const h = harness();
+    const body = wxr([
+      // g1: complete and new → imported.
+      item('de', 'de-1', 'g1', '<p>a</p>'),
+      item('en', 'en-1', 'g1', '<p>a</p>'),
+      // g2: no en translation → rejected.
+      item('de', 'de-2', 'g2', '<p>b</p>'),
+      // g3: path-traversal slug → rejected.
+      item('de', '../evil', 'g3', '<p>c</p>'),
+      item('en', 'en-3', 'g3', '<p>c</p>'),
+      // g4: new, but the store refuses the write → failed.
+      item('de', 'de-4', 'g4', '<p>d</p>'),
+      item('en', 'en-4', 'g4', '<p>d</p>'),
+    ].join('\n'));
+    const ok = memoryPostStore();
+    const refusing: PostStore = {
+      ...ok,
+      upsertDraft: (pair, baseUpdatedAt) =>
+        (pair.de.slug === 'de-4' ? Promise.reject(new Error('disk full')) : ok.upsertDraft(pair, baseUpdatedAt)),
+    };
+    const s = await run(body, h, {}, refusing);
+    expect(s).toMatchObject({ imported: 1, updated: 0, skippedPublished: 0, rejected: 2, failed: 1 });
+    expect(s.imported + s.updated + s.skippedPublished + s.rejected + s.failed).toBe(4);
+    // the buckets are honest: the store holds only the imported group.
+    expect((await refusing.list()).map((x) => x.slugDe)).toEqual(['de-1']);
   });
 
   it('logs the summary, because on a real export nobody receives the response', async () => {

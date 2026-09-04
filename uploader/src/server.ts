@@ -1202,7 +1202,11 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         if (e instanceof ImportTooLargeError) return reply.code(400).send({ error: e.message });
         throw e;
       }
-      if (summary.imported === 0 && summary.updated === 0 && summary.skipped === 0) {
+      // 400 only when the export yielded no groups at all. Every group lands in exactly
+      // one bucket (issue #100), so an all-published or all-rejected export is a 200
+      // with an honest summary — the old check 400'd a re-run of an already-published
+      // export, and a 400 cannot say WHICH groups were rejected and why.
+      if (summary.imported + summary.updated + summary.skippedPublished + summary.rejected + summary.failed === 0) {
         return reply.code(400).send({ error: 'no importable posts found in export' });
       }
       return reply.send(summary);
