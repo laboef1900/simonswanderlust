@@ -42,6 +42,7 @@
       <div id="results" style="display:none">
         <p id="counts"></p>
         <p id="importPartial" class="notice-warn" role="status" style="display:none"></p>
+        <p id="importRejected" class="notice-warn" role="alert" style="display:none"></p>
         <ul id="warnings"></ul>
         <p><a href="/admin/posts.html">Go to Posts to review drafts</a></p>
       </div>
@@ -84,12 +85,22 @@
         const data = await res.json();
         $('out').textContent = 'Done.';
 
-        // render counts, images included: the failure this page exists to make
-        // visible is a photo that silently kept its original WordPress URL, which
-        // the post counts alone report as a clean success.
+        // The photo tally stays alongside the post counts: the failure this page
+        // exists to make visible is a photo that silently kept its original
+        // WordPress URL, which the post counts alone report as a clean success.
         const img = data.images || { total: 0, hosted: 0, failed: 0 };
+        // issue #100: the old single "skipped" conflated "already published"
+        // (a success — nothing to do) with "rejected" (an import-boundary
+        // refusal) and "failed" (a thrown upsert), so the tally names each
+        // bucket instead of one misleading number.
+        const skippedPublished = data.skippedPublished || 0;
+        const rejected = data.rejected || 0;
+        const failed = data.failed || 0;
         $('counts').textContent =
-          'Imported: ' + data.imported + '  |  Updated: ' + data.updated + '  |  Skipped: ' + data.skipped
+          'Imported: ' + data.imported + '  |  Updated: ' + data.updated
+          + '  |  Skipped (published): ' + skippedPublished
+          + '  |  Rejected: ' + rejected
+          + '  |  Failed: ' + failed
           + '  |  Photos: ' + img.hosted + '/' + img.total + ' hosted';
 
         const partial = $('importPartial');
@@ -102,6 +113,22 @@
         } else {
           partial.textContent = '';
           partial.style.display = 'none';
+        }
+
+        // Rejected groups are the security signal — an unsafe slug is the
+        // path-traversal defence firing — so they get a callout, not a line in
+        // the warning list; the same treatment #85 gave un-hosted photos.
+        const rej = $('importRejected');
+        if (rejected > 0) {
+          rej.textContent =
+            rejected + ' post group(s) were rejected at the import boundary — a missing '
+            + 'translation, or a slug the importer will not accept (it would escape the '
+            + 'image storage directory). Nothing here was fetched or written; fix the '
+            + 'export and run the import again.';
+          rej.style.display = '';
+        } else {
+          rej.textContent = '';
+          rej.style.display = 'none';
         }
 
         // render warnings (XSS-safe: createElement + textContent only)

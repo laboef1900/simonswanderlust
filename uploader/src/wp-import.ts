@@ -1,7 +1,7 @@
 import { parseWxr, type ParsedPost } from './wxr-parse.js';
 import { htmlToMarkdown } from './wp-content.js';
 import { rehostImage, type RehostResult, type RehostResume } from './wp-images.js';
-import { isSafeSlug, type ImageDims, type PostLocale, type PostPair, type PostStore } from './posts.js';
+import { isSafeSlug, type ImageDims, type PostLocale, type PostPair, type PostStatus, type PostStore } from './posts.js';
 import { rewriteFences } from './body-content.js';
 import { FetchError } from './safe-fetch.js';
 
@@ -18,7 +18,12 @@ export interface ImportImageCounts {
 export interface ImportSummary {
   imported: number;
   updated: number;
-  skipped: number;
+  /** Already published before this run; deliberately not overwritten. A success, not a problem. */
+  skippedPublished: number;
+  /** Rejected at the import boundary: a missing translation, or a slug the importer refuses (path-traversal defence). Nothing was fetched or written for it. */
+  rejected: number;
+  /** `upsertDraft` threw a genuine failure. */
+  failed: number;
   images: ImportImageCounts;
   warnings: string[];
 }
@@ -39,6 +44,13 @@ export interface ImportDeps {
   retryBudget?: number;
   /** Consecutive failures after which a host is abandoned for the rest of the run. */
   hostFailureLimit?: number;
+  /**
+   * Cap on the TOTAL number of distinct (pair, url) re-host operations the import
+   * may perform, enforced BEFORE any fetch (issue #96). `retryBudget` bounds
+   * retries and `hostFailureLimit` bounds a FAILING host, but neither bounds
+   * first attempts against a host that keeps answering — this is the bound that does.
+   */
+  maxImages?: number;
   log?: (msg: string) => void;
 }
 
@@ -50,6 +62,20 @@ export const DEFAULT_RETRY_BUDGET = 200;
 export const DEFAULT_HOST_FAILURE_LIMIT = 20;
 /** Warnings returned to the client; the remainder is summarised and logged. */
 export const WARNING_CAP = 200;
+/**
+ * The most distinct (pair, url) re-host operations one import may perform
+ * (issue #96).
+ *
+ * @ai-warning The re-host cache is scoped to one translation pair, so an
+ * attachment URL declared once and referenced from N distinct groups is
+ * fetched N times; a 25 MiB upload of minimal DE/EN groups reaches ~40,400
+ * fetches of one third-party URL. `retryBudget` bounds retries and
+ * `hostFailureLimit` bounds a FAILING host, but neither bounds first attempts
+ * against a host that keeps answering — this is that bound. Set well above a
+ * legitimate export (the real one was 665 photos; a big blog is several
+ * thousand) and well below the ~40,400 attack.
+ */
+export const DEFAULT_MAX_IMAGES = 20_000;
 
 /** A short, slug-safe key segment from an image URL's filename. */
 function nameFromUrl(url: string): string {
@@ -95,6 +121,19 @@ function sharedRehost(rehost: RehostFn): RehostFn {
 
 /** A host abandoned after too many consecutive failures. Never retried. */
 class HostStoppedError extends Error {}
+
+/**
+ * The import would re-host more distinct images than `maxImages` allows
+ * (issue #96). Thrown BEFORE any fetch, so a rejected import performs no work
+ * and leaves no partial state. The `/import` route maps it to a 400 that names
+ * the count, so the author knows exactly why and how far over the cap they are.
+ */
+export class ImportTooLargeError extends Error {
+  constructor(readonly count: number, readonly cap: number) {
+    super(`import rejected: would re-host ${count} distinct images, which exceeds the cap of ${cap}`);
+    this.name = 'ImportTooLargeError';
+  }
+}
 
 /** `host` for rate-limiting purposes, or null when the URL will not parse. */
 function hostOf(url: string): string | null {
@@ -264,6 +303,34 @@ function resilientRehost(rehost: RehostFn, cfg: {
   return Object.assign(fn, { notices });
 }
 
+/**
+ * The distinct https?:// image URLs a single post would re-host: its hero
+ * (featured image) plus every body-image and gallery-fence URL.
+ *
+ * @ai-warning This mirrors `buildLocale`'s extraction EXACTLY — the same
+ * `htmlToMarkdown`, the same markdown-image regex, the same `rewriteFences`
+ * scan, the same scheme filter. The pre-flight count in `importWxr` (issue
+ * #96) is only as good as this agreement: if `buildLocale` ever changes which
+ * URLs it fetches, this must change with it, or the cap would count a different
+ * set than the import performs. `test/wp-import.test.ts` pins them to agree.
+ */
+function rehostUrlSet(p: ParsedPost, attachments: Map<string, string>): Set<string> {
+  const urls = new Set<string>();
+  const heroUrl = p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
+  if (heroUrl) urls.add(heroUrl);
+  const body = htmlToMarkdown(p.contentHtml);
+  for (const m of body.matchAll(/!\[([^\]]*)\]\(([^)]+)\)/g)) {
+    const url = m[2];
+    if (url && /^https?:\/\//.test(url)) urls.add(url);
+  }
+  rewriteFences(body, (line) => {
+    const url = (line.split('|')[0] ?? '').trim();
+    if (/^https?:\/\//.test(url)) urls.add(url);
+    return line;
+  });
+  return urls;
+}
+
 async function buildLocale(
   p: ParsedPost, attachments: Map<string, string>,
   rehost: (url: string, key: string, alt: string) => Promise<RehostResult>,
@@ -379,28 +446,48 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
     }
   };
 
-  const summary = { imported: 0, updated: 0, skipped: 0 };
+  // One bucket per outcome (issue #100): every group lands in exactly one, so
+  // imported + updated + skippedPublished + rejected + failed === group count.
+  const summary = { imported: 0, updated: 0, skippedPublished: 0, rejected: 0, failed: 0 };
 
   // existing posts by slug → status/key (for idempotency + published-skip)
   const existing = await deps.postStore.list();
-  const bySlug = new Map<string, { translationKey: string; status: import('./posts.js').PostStatus }>();
+  const bySlug = new Map<string, { translationKey: string; status: PostStatus }>();
   for (const s of existing) { bySlug.set(s.slugDe, s); bySlug.set(s.slugEn, s); }
 
   const groups = new Map<string, ParsedPost[]>();
   for (const p of posts) { const g = groups.get(p.group) ?? []; g.push(p); groups.set(p.group, g); }
 
+  // Validate every group up front, so the pre-flight image count (issue #96)
+  // counts EXACTLY the groups that will be imported — no more, no less.
+  const pending: { de: ParsedPost; en: ParsedPost; prior: { translationKey: string; status: PostStatus } | undefined }[] = [];
   for (const [group, members] of groups) {
     const de = members.find((m) => m.locale === 'de');
     const en = members.find((m) => m.locale === 'en');
-    if (!de || !en) { summary.skipped++; warnings.push(`group ${group}: missing ${de ? 'en' : 'de'} translation (${members.map((m) => m.slug).join(', ')})`); continue; }
+    if (!de || !en) { summary.rejected++; warnings.push(`group ${group}: missing ${de ? 'en' : 'de'} translation (${members.map((m) => m.slug).join(', ')})`); continue; }
     // @ai-warning: validate slugs at the import boundary BEFORE re-hosting images
     // or writing to the DB — an unsafe slug would otherwise become a storage path
     // segment (traversal) and a live URL.
     if (!isSafeSlug(de.slug) || !isSafeSlug(en.slug)) {
-      summary.skipped++; warnings.push(`group ${group}: unsafe slug (${de.slug} / ${en.slug}) — skipped`); continue;
+      summary.rejected++; warnings.push(`group ${group}: unsafe slug (${de.slug} / ${en.slug}) — rejected`); continue;
     }
     const prior = bySlug.get(de.slug) ?? bySlug.get(en.slug);
-    if (prior?.status === 'published') { summary.skipped++; warnings.push(`${de.slug}/${en.slug}: already published — not overwritten`); continue; }
+    if (prior?.status === 'published') { summary.skippedPublished++; warnings.push(`${de.slug}/${en.slug}: already published — not overwritten`); continue; }
+    pending.push({ de, en, prior });
+  }
+
+  // issue #96: bound the TOTAL number of first attempts BEFORE fetching anything.
+  // Count distinct (pair, url) — the same quantity `images.total` tallies per
+  // fetch — and reject before any of it happens.
+  const cap = deps.maxImages ?? DEFAULT_MAX_IMAGES;
+  let distinct = 0;
+  for (const g of pending) distinct += new Set([...rehostUrlSet(g.de, attachments), ...rehostUrlSet(g.en, attachments)]).size;
+  if (distinct > cap) {
+    log(`import: ${distinct} distinct images exceeds the cap of ${cap}; rejecting without fetching`);
+    throw new ImportTooLargeError(distinct, cap);
+  }
+
+  for (const { de, en, prior } of pending) {
     try {
       // One cache per pair: de and en describe the same trip and share photos.
       const pairRehost = sharedRehost(runRehost);
@@ -413,7 +500,7 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
       };
       await deps.postStore.upsertDraft(pair);
       if (prior) summary.updated++; else summary.imported++;
-    } catch (e) { summary.skipped++; warnings.push(`${de.slug}/${en.slug}: ${(e as Error).message}`); }
+    } catch (e) { summary.failed++; warnings.push(`${de.slug}/${en.slug}: ${(e as Error).message}`); }
   }
 
   for (const notice of resilient.notices) warnings.pushPriority(notice);
@@ -421,7 +508,8 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
   // @ai-note stdout, not only the response. A real export is a multi-minute
   // single request that the reverse proxy or the browser usually abandons
   // (issue #72), so the response is the one channel the author will not see.
-  log(`import finished: imported=${summary.imported} updated=${summary.updated} skipped=${summary.skipped} `
+  log(`import finished: imported=${summary.imported} updated=${summary.updated} `
+    + `skippedPublished=${summary.skippedPublished} rejected=${summary.rejected} failed=${summary.failed} `
     + `images=${images.hosted}/${images.total} hosted, ${images.failed} failed`);
 
   return { ...summary, images, warnings: warnings.finish() };
