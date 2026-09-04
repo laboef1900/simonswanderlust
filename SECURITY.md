@@ -216,10 +216,15 @@ already accepted for this deployment is the wrong trade. Compensating controls, 
   this feature can generate is bounded at +200 fetches per import regardless of export size — not
   `retries × N`.
 - **A per-host consecutive-failure breaker** (default 20) abandons a host for the rest of the run.
-  This is the only control that bounds *first* attempts, and it matters: because the re-host cache is
-  scoped per translation pair, one attachment URL referenced from N groups is fetched N times, which
-  a 25 MiB export can push to roughly 40,000 requests against a single third-party URL. The breaker
-  reduces that to ~20 whenever the target is failing.
+  This bounds *first* attempts against a **failing** host, and it matters: because the re-host
+  cache is scoped per translation pair, one attachment URL referenced from N groups is fetched N
+  times, which a 25 MiB export can push to roughly 40,000 requests against a single third-party
+  URL. The breaker reduces that to ~20 whenever the target is failing.
+- **A per-import cap on distinct images** (default 20,000) bounds *first* attempts against a host
+  that **keeps answering** — the case the breaker cannot reach. Before running, `importWxr` counts
+  the distinct (pair, url) re-host operations the import would perform and, if that exceeds
+  `maxImages`, throws `ImportTooLargeError` without fetching anything; the route maps it to a 400
+  naming the count. This is what closes the ~40,000-fetch exposure when the target returns 200.
 - **Single-flight** — `POST /import` returns 409 while an import is running. The pacing gate is
   per-run state, so without mutual exclusion K concurrent imports give the victim K× the configured
   request rate and the throttle provides no aggregate guarantee at all.
@@ -229,8 +234,11 @@ already accepted for this deployment is the wrong trade. Compensating controls, 
   `sharp` decode failure or an `ENOSPC` is not — re-downloading the same bytes to feed sharp again
   is memory pressure, not recovery.
 
-**Not bounded:** the count of *successful* fetches against a host that keeps answering. Pacing makes
-that polite rather than fewer. A per-import cap on distinct images is filed separately.
+**Bounded by the per-import cap:** the count of *successful* fetches against a host that keeps
+answering. Pacing (`delayMs`) makes them polite; the distinct-image cap makes them few — an export
+that would re-host more than `maxImages` (default 20,000) distinct (pair, url) images is rejected
+with a 400 before any fetch, so the ~40,000-fetch attack above no longer has a path against a host
+that answers.
 
 ### Import failure reasons are deliberately vague
 

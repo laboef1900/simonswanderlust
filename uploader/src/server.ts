@@ -29,7 +29,7 @@ import { renderPreviewHtml } from './preview.js';
 import { type PageStore, type PagePair, type PageContent, type ImageDims, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
-import { importWxr, type ImportDeps, type ImportSummary } from './wp-import.js';
+import { importWxr, ImportTooLargeError, type ImportDeps, type ImportSummary } from './wp-import.js';
 import { createRehostResume } from './wp-images.js';
 import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, type RateLimiter, type AccountLimiter } from './rate-limit.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
@@ -879,6 +879,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     // optional: callers without it (new posts, WP importer) skip the check.
     const { updatedAt, ...body } = (req.body ?? {}) as PostPair & { updatedAt?: unknown };
     const pair: PostPair = { ...body, translationKey: tk };
+    // PUT must never create: a stale tab saving a post an admin deleted must get
+    // a 404, not resurrect it (issue #106). POST passes tk='' and skips this.
+    if (tk && !(await posts.get(tk))) return reply.code(404).send({ error: 'post not found' });
     let baseUpdatedAt: Date | undefined;
     if (updatedAt !== undefined && updatedAt !== null) {
       baseUpdatedAt = new Date(String(updatedAt));
@@ -1204,16 +1207,28 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         return reply.code(400).send({ error: 'not a WordPress export (.xml) file' });
       }
       const { importDelayMs, importRetries } = cfg.settings.get();
-      const summary = await (cfg.importRunner ?? importWxr)(xml, {
-        postStore: cfg.posts, storageDir: cfg.storageDir, baseUrl: cfg.baseUrl,
-        delayMs: importDelayMs,
-        retries: importRetries,
-        // A FRESH disk walk per import, which is why this is built here rather
-        // than injected once at boot like `settings` or `dbBackup`.
-        resume: await createRehostResume({ storageDir: cfg.storageDir, baseUrl: cfg.baseUrl }),
-        log: (msg) => console.log(msg),
-      });
-      if (summary.imported === 0 && summary.updated === 0 && summary.skipped === 0) {
+      let summary: ImportSummary;
+      try {
+        summary = await (cfg.importRunner ?? importWxr)(xml, {
+          postStore: cfg.posts, storageDir: cfg.storageDir, baseUrl: cfg.baseUrl,
+          delayMs: importDelayMs,
+          retries: importRetries,
+          // A FRESH disk walk per import, which is why this is built here rather
+          // than injected once at boot like `settings` or `dbBackup`.
+          resume: await createRehostResume({ storageDir: cfg.storageDir, baseUrl: cfg.baseUrl }),
+          log: (msg) => console.log(msg),
+        });
+      } catch (e) {
+        // issue #96: an export whose distinct-image count exceeds the cap is
+        // rejected BEFORE any fetch — a 400 naming the count, not a 500.
+        if (e instanceof ImportTooLargeError) return reply.code(400).send({ error: e.message });
+        throw e;
+      }
+      // 400 only when the export yielded no groups at all. Every group lands in exactly
+      // one bucket (issue #100), so an all-published or all-rejected export is a 200
+      // with an honest summary — the old check 400'd a re-run of an already-published
+      // export, and a 400 cannot say WHICH groups were rejected and why.
+      if (summary.imported + summary.updated + summary.skippedPublished + summary.rejected + summary.failed === 0) {
         return reply.code(400).send({ error: 'no importable posts found in export' });
       }
       return reply.send(summary);
