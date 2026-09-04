@@ -44,6 +44,9 @@
               <label for="deTitle">Article Title (Deutsch)</label>
               <input id="deTitle" type="text" class="editor-title-input" placeholder="Titel des Reiseberichts…" />
 
+              <label for="deCountry">Country (Deutsch)</label>
+              <input id="deCountry" type="text" placeholder="z. B. Griechenland" />
+
               <label for="slugFieldDe">DE Slug / Permanent Link</label>
               <div class="slug-preview">
                 <span class="slug-base">simonswanderlust.com/</span>
@@ -109,6 +112,9 @@
             <div class="editor-card">
               <label for="enTitle">Article Title (English)</label>
               <input id="enTitle" type="text" class="editor-title-input" placeholder="Trip Report Title…" />
+
+              <label for="enCountry">Country (English)</label>
+              <input id="enCountry" type="text" placeholder="e.g. Greece" />
 
               <label for="slugFieldEn">EN Slug / Permanent Link</label>
               <div class="slug-preview">
@@ -942,6 +948,7 @@
         // a restore over an already-loaded post must not resurrect values the
         // user had deliberately deleted (e.g. a cleared Route surviving a 401
         // round-trip because the stash simply omits the key).
+        const shared = post.shared || {};
         if ($('fmStatus')) $('fmStatus').value = post.status || 'draft';
         if ($('fmCategories')) $('fmCategories').value = Array.isArray(shared.categories) ? shared.categories.join(', ') : '';
         if ($('fmTags')) $('fmTags').value = Array.isArray(shared.tags) ? shared.tags.join(', ') : '';
@@ -949,7 +956,6 @@
           $('fmScheduledAt').value = shared.scheduledAt ? new Date(shared.scheduledAt).toISOString().slice(0, 16) : '';
         }
 
-        const shared = post.shared || {};
         $('fmDate').value = shared.date || '';
         $('fmCountryCode').value = shared.countryCode || '';
         $('fmRegion').value = shared.region || '';
