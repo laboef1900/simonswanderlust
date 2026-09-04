@@ -52,6 +52,8 @@ export interface ServerConfig {
   dbCheck: () => Promise<void>; // resolves iff the DB answers — probed by GET /health
   loginLimiter?: RateLimiter;
   accountLimiter?: AccountLimiter;
+  /** Per-account failure limiter for POST /users/me/password, keyed on the session's user id. */
+  passwordLimiter?: AccountLimiter;
   media: MediaStore;
   encodeQueue: EncodeQueue;
   /** Disk↔database reconciliation, triggered by POST /media/rescan. */
@@ -108,9 +110,14 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // (e.g. ./data/images from env) by resolving against the process cwd.
   const storageDir = resolve(cfg.storageDir);
   // @ai-warning: trustProxy makes Fastify read X-Forwarded-* (so req.ip and the
-  // cookie `secure` flag reflect the real client). This is correct ONLY behind a
-  // trusted reverse proxy that sets X-Forwarded-Proto; if the container is ever
-  // exposed directly, clients could spoof those headers.
+  // cookie `secure` flag reflect the real client). `trustProxy: 1` trusts exactly
+  // ONE hop — the reverse proxy in front of the container — so req.ip is the
+  // RIGHTMOST X-Forwarded-For entry, the one that proxy appended; any leftmost,
+  // client-supplied entries are ignored. `true` trusted every hop, which made
+  // req.ip (and with it the per-IP auth limiter) spoofable by a client that
+  // rotates the header (#108). A second proxy layer needs `2`, never `true`.
+  // The compose file publishes port 3000 on loopback only, so the host proxy
+  // is the sole ingress and the one hop this trusts.
   // @ai-note: http.Server#requestTimeout bounds how long the server waits to
   // fully RECEIVE a request (headers + body) — it does not bound how long a
   // handler then takes to process it (e.g. encoding an upload). Fastify sets
@@ -118,7 +125,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // default, so without an explicit value a stalled request would never time
   // out at this layer. 120s is generous for even a large multipart upload
   // over a slow connection while still bounding one that stalls outright.
-  const app = Fastify({ logger: false, trustProxy: true, requestTimeout: 120_000 });
+  const app = Fastify({ logger: false, trustProxy: 1, requestTimeout: 120_000 });
   const { users, sessions } = cfg;
 
   // nosniff everywhere; clickjacking/referrer policies only on the admin/API
@@ -151,6 +158,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // Per-IP throttle for the unauthenticated auth endpoints (brute-force defense).
   const loginLimiter = cfg.loginLimiter ?? fixedWindowLimiter({ max: 10, windowMs: 900_000 });
   const accountLimiter = cfg.accountLimiter ?? accountLockoutLimiter();
+  const passwordLimiter = cfg.passwordLimiter ?? accountLockoutLimiter();
   const limitAuth = rateLimitPreHandler(loginLimiter);
 
   // Unexpected errors (DB failures, bugs) must not leak internals to clients:
@@ -681,14 +689,18 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const username = String(b.username ?? '').trim();
     const password = String(b.password ?? '');
     const user = await users.findByUsername(username);
+    // A locked account is refused BEFORE scrypt runs, so a client that already
+    // tripped the lockout cannot keep driving ~16 MiB / tens-of-ms hashes on
+    // the container that also serves the blog (#108). The lock only exists
+    // for usernames that have failed before, so this early return does not
+    // leak whether an unknown username exists.
+    if (accountLimiter.isLocked(username)) {
+      return reply.code(429).send({ error: 'account is temporarily locked due to excessive failed login attempts' });
+    }
     // Constant-time execution: when username is missing, execute verifyPassword with DUMMY_STORED_HASH
     // so response timing does not leak whether a username exists (CWE-208 mitigation).
     const storedHash = user ? user.passwordHash : DUMMY_STORED_HASH;
     const isValid = verifyPassword(password, storedHash);
-
-    if (accountLimiter.isLocked(username)) {
-      return reply.code(429).send({ error: 'account is temporarily locked due to excessive failed login attempts' });
-    }
 
     if (!user || !isValid) {
       if (username) accountLimiter.recordFailure(username);
@@ -744,8 +756,10 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   // Self-service password change (any authenticated user, own account only).
-  // Rate-limited like the other password-verifying endpoints: a hijacked
-  // session must not be able to brute-force the current password.
+  // Rate-limited like the other password-verifying endpoints (per-IP limitAuth)
+  // AND per account via passwordLimiter, keyed on the session's user id: a
+  // hijacked session must not be able to brute-force the current password,
+  // and the per-IP bucket alone is no bound on a client with many addresses.
   app.post('/users/me/password', { preHandler: [limitAuth, requireAuth] }, async (req, reply) => {
     const b = (req.body ?? {}) as { currentPassword?: unknown; newPassword?: unknown };
     const currentPassword = String(b.currentPassword ?? '');
@@ -758,11 +772,16 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     }
     const user = req.authUser ? await users.findById(req.authUser.id) : null;
     if (!user) return reply.code(401).send({ error: 'unauthorized' });
+    if (passwordLimiter.isLocked(user.id)) {
+      return reply.code(429).send({ error: 'too many failed attempts, please wait and try again' });
+    }
     // @ai-note: a wrong current password is a 400, NOT a 401 — the admin-page
     // fetch handlers redirect to /login on 401, which would boot the user mid-form.
     if (!verifyPassword(currentPassword, user.passwordHash)) {
+      passwordLimiter.recordFailure(user.id);
       return reply.code(400).send({ error: 'current password is incorrect' });
     }
+    passwordLimiter.recordSuccess(user.id);
     await users.setPassword(user.id, newPassword);
     await sessions.destroyAllForUser(user.id);
     // destroyAllForUser also killed the caller's own session — mint a fresh one

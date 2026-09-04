@@ -45,13 +45,18 @@ export function rateLimitPreHandler(limiter: RateLimiter) {
   };
 }
 
+/**
+ * Per-account failure limiter. The key is whatever identifies the account at
+ * the call site: the submitted username on /login, the session's user id on
+ * /users/me/password (the caller is already authenticated there).
+ */
 export interface AccountLimiter {
   /** Returns true if the account is locked due to excessive failed attempts. */
-  isLocked(username: string): boolean;
-  /** Records a failed login attempt for the username. */
-  recordFailure(username: string): void;
-  /** Clears failures on successful login for the username. */
-  recordSuccess(username: string): void;
+  isLocked(account: string): boolean;
+  /** Records a failed attempt for the account. */
+  recordFailure(account: string): void;
+  /** Clears failures on a successful attempt for the account. */
+  recordSuccess(account: string): void;
 }
 
 /**

@@ -869,6 +869,50 @@ describe('auth endpoints', () => {
     expect((await login()).statusCode).toBe(429); // 3rd attempt blocked
   });
 
+  it('per-IP limiter keys on the proxy-appended address, not a client-supplied X-Forwarded-For entry', async () => {
+    // trustProxy: 1 trusts only the socket hop (the reverse proxy), so req.ip is
+    // the RIGHTMOST X-Forwarded-For entry — the one the proxy appended. With
+    // `true` (#108) req.ip was the LEFTMOST, client-supplied entry, and rotating
+    // it opened a fresh bucket per request. This test fails on that regression.
+    const b = build({ loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
+    await b.users.create({ username: 'simon', password: 'pw', isAdmin: false });
+    const login = (xff: string) => b.app.inject({
+      method: 'POST', url: '/login',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': xff },
+      payload: { username: 'simon', password: 'bad' },
+    });
+    expect((await login('10.0.0.1, 198.51.100.7')).statusCode).toBe(401);
+    // Different leftmost entry, same rightmost: same bucket → limited.
+    expect((await login('10.0.0.2, 198.51.100.7')).statusCode).toBe(429);
+    // A different proxy-appended client gets its own bucket.
+    expect((await login('10.0.0.3, 203.0.113.9')).statusCode).toBe(401);
+  });
+
+  it('locked account is refused before password verification (no scrypt for a locked account)', async () => {
+    // The stored hash is observed through a counting getter: verifyPassword can
+    // only run if the handler read it, so zero reads on the locked attempt proves
+    // the 429 fired before any scrypt work (#108).
+    const inner = memoryUserStore();
+    await inner.create({ username: 'simon', password: 'pw', isAdmin: false });
+    let hashReads = 0;
+    const users: UserStore = {
+      ...inner,
+      async findByUsername(username) {
+        const u = await inner.findByUsername(username);
+        if (!u) return null;
+        return { ...u, get passwordHash() { hashReads++; return u.passwordHash; } };
+      },
+    };
+    const b = build({ users });
+    const login = () => b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'simon', password: 'bad' } });
+    for (let i = 0; i < 5; i++) expect((await login()).statusCode).toBe(401);
+    expect(hashReads).toBe(5);
+    hashReads = 0;
+    const locked = await login();
+    expect(locked.statusCode).toBe(429);
+    expect(hashReads).toBe(0);
+  });
+
   it('serializes concurrent /setup so only one admin is created (no TOCTOU)', async () => {
     const b = build();
     const [a, c] = await Promise.all([
@@ -984,6 +1028,24 @@ describe('POST /users/me/password (change password)', () => {
     const b = build({ loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
     expect((await change(b, undefined, { currentPassword: 'x', newPassword: 'y' })).statusCode).toBe(401);
     expect((await change(b, undefined, { currentPassword: 'x', newPassword: 'y' })).statusCode).toBe(429);
+  });
+
+  it('locks the account after 5 wrong current passwords (429), independent of the per-IP limiter', async () => {
+    // The per-IP bucket is wide open here, so only the per-account limiter can
+    // produce the 429 — a hijacked session spread across many addresses is
+    // still bounded (#108).
+    const b = build({ loginLimiter: fixedWindowLimiter({ max: 100, windowMs: 60_000 }) });
+    const { cookie } = await authed(b, { username: 'simon' });
+    const wrong = { currentPassword: 'wrong', newPassword: 'new-password-123' };
+    for (let i = 0; i < 5; i++) expect((await change(b, cookie, wrong)).statusCode).toBe(400);
+    const sixth = await change(b, cookie, wrong);
+    expect(sixth.statusCode).toBe(429);
+    expect(sixth.json().error).toBe('too many failed attempts, please wait and try again');
+    // Still locked for the CORRECT password while the lock holds.
+    expect((await change(b, cookie, { currentPassword: 'pw', newPassword: 'new-password-123' })).statusCode).toBe(429);
+    // A second user is unaffected.
+    const other = await authed(b, { username: 'bob' });
+    expect((await change(b, other.cookie, { currentPassword: 'pw', newPassword: 'new-password-123' })).statusCode).toBe(200);
   });
 });
 
