@@ -1285,6 +1285,13 @@ describe('posts editor', () => {
     expect((await b.app.inject({ method: 'POST', url: '/posts/nope/unpublish', cookies: cookie })).statusCode).toBe(404);
   });
 
+  it('PUT /posts/:tk 404s on an unknown key instead of creating a post', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const put = await b.app.inject({ method: 'PUT', url: '/posts/nope', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    expect(put.statusCode).toBe(404);
+    expect((await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json()).toHaveLength(0);
+  });
+
   it('deleting a draft removes it without rebuilding the site', async () => {
     const s = stubBuilder();
     const b = build({ builder: s.builder });

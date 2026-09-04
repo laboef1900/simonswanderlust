@@ -860,6 +860,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     // optional: callers without it (new posts, WP importer) skip the check.
     const { updatedAt, ...body } = (req.body ?? {}) as PostPair & { updatedAt?: unknown };
     const pair: PostPair = { ...body, translationKey: tk };
+    // PUT must never create: a stale tab saving a post an admin deleted must get
+    // a 404, not resurrect it (issue #106). POST passes tk='' and skips this.
+    if (tk && !(await posts.get(tk))) return reply.code(404).send({ error: 'post not found' });
     let baseUpdatedAt: Date | undefined;
     if (updatedAt !== undefined && updatedAt !== null) {
       baseUpdatedAt = new Date(String(updatedAt));

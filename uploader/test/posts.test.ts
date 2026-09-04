@@ -145,6 +145,19 @@ describe('memoryPostStore', () => {
     expect(renamed.de.slug).toBe('renamed');
   });
 
+  it('renaming a draft slug frees the old slug for another pair', async () => {
+    const s = memoryPostStore();
+    const c = await s.upsertDraft(pair());
+    const renamed = await s.upsertDraft({ ...c, de: { ...c.de, slug: 'renamed-de' } });
+    expect(renamed.de.slug).toBe('renamed-de');
+    expect((await s.get(c.translationKey))?.de.slug).toBe('renamed-de');
+    expect(await s.list()).toHaveLength(1);
+    // the abandoned slug is no longer squatted by the renamed pair
+    const other = await s.upsertDraft(pair({ en: { ...pair().en, slug: 'other-en' } }));
+    expect(other.de.slug).toBe('bukarest');
+    expect(other.translationKey).not.toBe(c.translationKey);
+  });
+
   it('remove deletes the pair and frees its slugs for reuse', async () => {
     const s = memoryPostStore();
     const c = await s.upsertDraft(pair());
