@@ -4,7 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { importWxr, type ImportDeps } from '../src/wp-import.js';
+import { importWxr, ImportTooLargeError, DEFAULT_MAX_IMAGES, type ImportDeps } from '../src/wp-import.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { createRehostResume, rehostImage, type RehostResult } from '../src/wp-images.js';
 import { FetchError } from '../src/safe-fetch.js';
@@ -104,7 +104,7 @@ describe('importWxr', () => {
   it('creates a draft pair with preserved slugs, placeholders, and re-hosted images', async () => {
     const store = memoryPostStore();
     const s = await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
-    expect(s).toMatchObject({ imported: 1, updated: 0, skipped: 0 });
+    expect(s).toMatchObject({ imported: 1, updated: 0, skippedPublished: 0, rejected: 0, failed: 0 });
     const list = await store.list();
     const first = list[0]!;
     expect(first).toMatchObject({ slugDe: 'rhodos-abenteuer', slugEn: 'rhodes-adventure', status: 'draft' });
@@ -247,7 +247,7 @@ ${['de', 'en']
     expect(keys).toEqual(['trips/key-de/shared']);
   });
 
-  it('skips a group whose slug is unsafe (path-traversal defense) without storing it', async () => {
+  it('rejects a group whose slug is unsafe (path-traversal defense) without storing it', async () => {
     const evilXml = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"
   xmlns:content="http://purl.org/rss/1.0/modules/content/"
@@ -282,7 +282,7 @@ ${['de', 'en']
     const rehostSpy = async () => { throw new Error('rehost must not be called for an unsafe slug'); };
     const s = await importWxr(evilXml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: rehostSpy });
     expect(s.imported).toBe(0);
-    expect(s.skipped).toBe(1);
+    expect(s).toMatchObject({ updated: 0, skippedPublished: 0, rejected: 1, failed: 0 });
     expect(s.warnings.join(' ')).toMatch(/slug/i);
     expect(await store.list()).toHaveLength(0);
   });
@@ -291,13 +291,13 @@ ${['de', 'en']
     const store = memoryPostStore();
     await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
     const again = await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
-    expect(again).toMatchObject({ imported: 0, updated: 1 });
+    expect(again).toMatchObject({ imported: 0, updated: 1, skippedPublished: 0, rejected: 0, failed: 0 });
     expect(await store.list()).toHaveLength(1);
-    // publish it, then re-import → skipped, content untouched
+    // publish it, then re-import → skippedPublished, content untouched
     const tk = (await store.list())[0]!.translationKey;
     await store.publish(tk);
     const third = await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
-    expect(third.skipped).toBe(1);
+    expect(third).toMatchObject({ imported: 0, updated: 0, skippedPublished: 1, rejected: 0, failed: 0 });
     expect(third.warnings.join(' ')).toMatch(/published/);
   });
 });
@@ -511,6 +511,98 @@ describe('importWxr blast-radius bounds', () => {
   });
 });
 
+/**
+ * Issue #96: a per-import cap on the TOTAL number of distinct (pair, url)
+ * re-host operations. #85's `retryBudget` bounds retries and `hostFailureLimit`
+ * bounds a FAILING host, but neither bounds first attempts against a host that
+ * keeps answering — the re-host cache is per-pair, so one attachment URL
+ * referenced from N groups is fetched N times.
+ *
+ * @ai-context docs/superpowers/specs/2026-08-25-wxr-import-image-cap-design.md
+ */
+describe('importWxr image cap', () => {
+  // n DE/EN groups, each de body carrying ONE image of the SAME url — the
+  // exact amplification shape from the issue (one url, N groups → N fetches).
+  const manyGroups = (n: number, url: string): string => wxr(
+    Array.from({ length: n }, (_, i) =>
+      item('de', `de-${i}`, `g${i}`, `<img src="${url}" alt="a" />`) + '\n' +
+      item('en', `en-${i}`, `g${i}`, '<p>x</p>'),
+    ).join('\n'),
+  );
+
+  it('rejects an import whose distinct-image count exceeds the cap, fetching NOTHING', async () => {
+    const h = harness();
+    await expect(run(manyGroups(5, 'https://wp/same.jpg'), h, { maxImages: 4 }))
+      .rejects.toBeInstanceOf(ImportTooLargeError);
+    expect(h.calls).toHaveLength(0); // the pre-flight check must precede every fetch
+  });
+
+  it('names the count and the cap in the rejection', async () => {
+    const h = harness();
+    await expect(run(manyGroups(5, 'https://wp/same.jpg'), h, { maxImages: 4 }))
+      .rejects.toThrow('would re-host 5 distinct images, which exceeds the cap of 4');
+  });
+
+  it('logs the rejection to stdout, not only into the (absent) response', async () => {
+    const logged: string[] = [];
+    const h = harness();
+    await expect(run(manyGroups(5, 'https://wp/same.jpg'), h, { maxImages: 4, log: (m) => logged.push(m) }))
+      .rejects.toBeInstanceOf(ImportTooLargeError);
+    expect(logged.join('\n')).toMatch(/5 distinct images exceeds the cap of 4/i);
+  });
+
+  it('imports an export at exactly the cap (the bound is inclusive)', async () => {
+    const h = harness();
+    const s = await run(manyGroups(5, 'https://wp/same.jpg'), h, { maxImages: 5 });
+    expect(s.imported).toBe(5);
+    // same url, five distinct pairs → five fetches, five counted.
+    expect(h.calls).toHaveLength(5);
+    expect(s.images).toEqual({ total: 5, hosted: 5, failed: 0 });
+  });
+
+  it('counts a URL shared by both locales of a pair once, not twice', async () => {
+    const h = harness();
+    const s = await run(
+      pairOf('g', 'de-1', 'en-1', imgs('https://wp/same.jpg'), imgs('https://wp/same.jpg')),
+      h, { maxImages: 1 },
+    );
+    expect(h.calls).toHaveLength(1);
+    expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+  });
+
+  it('counts the hero (featured image) toward the cap', async () => {
+    const h = harness();
+    // pairWithHero: one hero + one body image on the de side → 2 distinct (pair, url).
+    const s = await run(pairWithHero('https://wp/hero.jpg', ['https://wp/body.jpg']), h, { maxImages: 2 });
+    expect(h.calls).toHaveLength(2);
+    expect(s.images).toEqual({ total: 2, hosted: 2, failed: 0 });
+  });
+
+  it('does not count images from groups that will be rejected', async () => {
+    const h = harness();
+    const body = wxr([
+      // g1 is missing its en translation → rejected; its 3 images must not count.
+      item('de', 'de-1', 'g1', imgs('https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/c.jpg')),
+      // g2 is valid with 1 image.
+      item('de', 'de-2', 'g2', imgs('https://wp/d.jpg')),
+      item('en', 'en-2', 'g2', '<p>x</p>'),
+    ].join('\n'));
+    const s = await run(body, h, { maxImages: 1 });
+    expect(s.rejected).toBe(1);
+    expect(s.imported).toBe(1);
+    expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+  });
+
+  it('defaults to a cap above any legitimate export, so ordinary imports are untouched', async () => {
+    const h = harness();
+    // 100 groups, 1 image each → 100 distinct, far below DEFAULT_MAX_IMAGES.
+    const s = await run(manyGroups(100, 'https://wp/same.jpg'), h);
+    expect(s.imported).toBe(100);
+    expect(s.images.total).toBe(100);
+    expect(DEFAULT_MAX_IMAGES).toBeGreaterThan(100);
+  });
+});
+
 describe('importWxr reporting', () => {
   it('counts distinct photos per pair, so hosted + failed === total', async () => {
     const h = harness({ fail: (u) => (u.includes('b.jpg') ? new FetchError('x', 'blocked') : null) });
@@ -556,6 +648,38 @@ describe('importWxr reporting', () => {
     expect(s.images.failed).toBe(240);
     expect(s.warnings.length).toBeLessThanOrEqual(201);
     expect(s.warnings[s.warnings.length - 1]).toMatch(/and \d+ more/);
+  });
+
+  // issue #100: one bucket per outcome. "Already published" is a success, a
+  // rejected slug is the path-traversal defence firing, and a thrown upsert is
+  // a failure — none may share a counter with the others. Every group lands in
+  // exactly one bucket, so the buckets sum to the group count.
+  it('gives each outcome its own bucket, so the buckets sum to the group count', async () => {
+    const h = harness();
+    const body = wxr([
+      // g1: complete and new → imported.
+      item('de', 'de-1', 'g1', '<p>a</p>'),
+      item('en', 'en-1', 'g1', '<p>a</p>'),
+      // g2: no en translation → rejected.
+      item('de', 'de-2', 'g2', '<p>b</p>'),
+      // g3: path-traversal slug → rejected.
+      item('de', '../evil', 'g3', '<p>c</p>'),
+      item('en', 'en-3', 'g3', '<p>c</p>'),
+      // g4: new, but the store refuses the write → failed.
+      item('de', 'de-4', 'g4', '<p>d</p>'),
+      item('en', 'en-4', 'g4', '<p>d</p>'),
+    ].join('\n'));
+    const ok = memoryPostStore();
+    const refusing: PostStore = {
+      ...ok,
+      upsertDraft: (pair, baseUpdatedAt) =>
+        (pair.de.slug === 'de-4' ? Promise.reject(new Error('disk full')) : ok.upsertDraft(pair, baseUpdatedAt)),
+    };
+    const s = await run(body, h, {}, refusing);
+    expect(s).toMatchObject({ imported: 1, updated: 0, skippedPublished: 0, rejected: 2, failed: 1 });
+    expect(s.imported + s.updated + s.skippedPublished + s.rejected + s.failed).toBe(4);
+    // the buckets are honest: the store holds only the imported group.
+    expect((await refusing.list()).map((x) => x.slugDe)).toEqual(['de-1']);
   });
 
   it('logs the summary, because on a real export nobody receives the response', async () => {

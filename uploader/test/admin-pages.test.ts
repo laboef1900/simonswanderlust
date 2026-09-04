@@ -483,4 +483,17 @@ describe('import.html recovery copy', () => {
     // a dedicated element, announced, not a colour-only cue
     expect(html).toMatch(/id="importPartial"[^>]*role="status"/);
   });
+
+  // #100: `skipped` conflated "already published" (a success) with "rejected"
+  // (an import-boundary refusal, i.e. the path-traversal defence firing) and
+  // a thrown upsert. The tally must name each bucket, and the security signal
+  // gets a callout — the same treatment #85 gave un-hosted photos.
+  it('names each post bucket and calls out rejected groups', () => {
+    expect(html).toMatch(/data\.skippedPublished/);
+    expect(html).toMatch(/data\.rejected/);
+    expect(html).toMatch(/data\.failed/);
+    // a dedicated element, announced, not a colour-only cue
+    expect(html).toMatch(/id="importRejected"[^>]*role="alert"/);
+    expect(html).toMatch(/rejected > 0/);
+  });
 });
