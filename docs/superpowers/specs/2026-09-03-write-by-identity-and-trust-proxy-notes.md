@@ -53,10 +53,12 @@ there. There is no production deployment yet (CLAUDE.md, Phase 4 pending).
 
 ### Rollback
 
-- `DROP INDEX IF EXISTS posts_tk_locale_idx;` — the only schema change; no data is rewritten by
-  the migration.
-- Revert the `feature/106-write-by-identity` commit. The pre-fix code tolerates the index (it only
-  ever inserted duplicates by accident), so the index may stay in place after a code rollback.
+- Before reverting the application code, run `DROP INDEX IF EXISTS posts_tk_locale_idx;` — the
+  only schema change; no data is rewritten by the migration. The pre-fix INSERT path cannot keep
+  this index without breaking draft slug renames: a rename attempts a second row for the same
+  `(translation_key, locale)` and fails with 23505. Retaining the index is only degraded
+  containment with that known failure, not a clean rollback.
+- Revert the `feature/106-write-by-identity` commit.
 
 ## #108 — `trustProxy: 1`, lockout before scrypt, per-account limiter on password change
 
