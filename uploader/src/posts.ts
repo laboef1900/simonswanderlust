@@ -102,9 +102,10 @@ export interface PostStore {
   /**
    * Every stored locale row, regardless of locale pairing. Image-usage scans
    * must use this instead of list()+get(): pgPostStore.get() returns null for
-   * a key with only one locale row (upsertDraft writes de and en as two
-   * non-transactional INSERTs, so a crash in between strands one), and such a
-   * row's image references must still count as usage.
+   * a key with only one locale row. Legacy pre-#106 data or manual database
+   * repair can still contain such a stranded row even though current
+   * upsertDraft writes both locales atomically, and its image references must
+   * still count as usage.
    */
   usageRows(): Promise<PostUsageRow[]>;
   /** Revision summaries for a post, newest first (at most REVISION_CAP). */

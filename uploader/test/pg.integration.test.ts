@@ -275,8 +275,8 @@ maybe('pgPostStore (integration)', () => {
       en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     };
     const created = await store.upsertDraft(base);
-    // Simulate a crash between upsertDraft's two non-transactional locale
-    // INSERTs: only the de row survives.
+    // Simulate a stranded single-locale row from legacy pre-#106 data or a
+    // manual database repair. Current upsertDraft writes both rows atomically.
     await pool.query(`DELETE FROM posts WHERE translation_key = $1 AND locale = 'en'`, [created.translationKey]);
     expect(await store.get(created.translationKey)).toBeNull();
     const rows = await store.usageRows();
