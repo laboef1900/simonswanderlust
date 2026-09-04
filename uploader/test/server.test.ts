@@ -8,7 +8,7 @@ import sharp from 'sharp';
 import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
 import { rehostImage } from '../src/wp-images.js';
-import type { ImportSummary } from '../src/wp-import.js';
+import { ImportTooLargeError, type ImportSummary } from '../src/wp-import.js';
 import { defaultSettings, validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
 import { memoryUserStore, type UserStore } from '../src/users.js';
@@ -1629,6 +1629,17 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
     expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(500);
     expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(500);
     expect(calls).toBe(2); // the second request got through, i.e. the flag was released
+  });
+
+  // issue #96: an export whose distinct-image count exceeds the cap is rejected
+  // BEFORE any fetch. The route must map that to a 400 naming the count, not a
+  // 500 — the author needs to see that the export is too large, not a crash.
+  it('rejects an over-cap import with a 400 naming the count, not a 500', async () => {
+    const b = build({ importRunner: async () => { throw new ImportTooLargeError(40400, 20000); } });
+    const { cookie } = await authed(b);
+    const res = await postImport(b, cookie, wxrWith(...blocked(1)));
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/would re-host 40400 distinct images, which exceeds the cap of 20000/);
   });
 
   // The route-level resume wiring, end to end: pre-host the photo the export
