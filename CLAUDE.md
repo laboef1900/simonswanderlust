@@ -664,6 +664,15 @@ blog/
   stable reason instead of the raw undici message (which leaked an RFC1918 oracle to non-admin
   authors), and are capped. See
   `docs/superpowers/specs/2026-07-30-wxr-import-hardening-design.md` and `SECURITY.md`.
+- **Done:** #96 per-import cap on distinct images (2026-08-25) — bounds the first-attempt
+  amplification that #85 deliberately did not claim to cover. The re-host cache is scoped per
+  translation pair, so one attachment URL referenced from N groups is fetched N times, and a 25 MiB
+  export can reach roughly 40,400 fetches of one third-party URL that **keeps answering** (the
+  per-host breaker cuts that to ~20 only when the target is *failing*). `importWxr` now counts the
+  distinct (pair, url) re-host operations BEFORE fetching anything and, if the total exceeds
+  `maxImages` (default 20,000), throws `ImportTooLargeError` — no work performed, no partial state;
+  the `/import` route maps it to a 400 naming the count. 20,000 sits well above a legitimate export
+  (the real one was 665 photos) and well below the attack. See `SECURITY.md` (SSRF section).
 - **Done:** #100 honest post-tier counters in `ImportSummary` (2026-08-25) — the old single
   `skipped` conflated four unrelated outcomes, so a re-run of an already-published export read
   the same as an export rejected at the import boundary. The summary now names each bucket —
@@ -691,8 +700,6 @@ blog/
     media URLs legitimately redirect. See `SECURITY.md` — retry widened this per-URL window.
   - **#94 `/data` free-space precondition on `/import`** (`/upload` has one; an import writes ~11 GB).
   - **#95 import encodes take `work-lock`**, so sharp cannot run beside `astro build`.
-  - **#96 per-import cap on distinct images** — bounds the *pre-existing* first-attempt amplification
-    against a host that keeps answering, which #85 deliberately did not claim to bound.
   - **#97 `/import` → `requireAdmin`** (every comparable surface already is).
   - **#98 `nameFromUrl` non-injectivity** — `foo.jpg`/`foo.png` collide on one key. Any fix must keep
     keys deterministic; #85's disk-derived resume depends on that.
