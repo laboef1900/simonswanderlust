@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { list as listTar } from 'tar';
 import {
   dumpDatabase, listBackups, listImageArchives, pruneBackups, readState, writeState, isBackupDue,
-  createDbBackup, archiveImages, BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type Queryable,
+  createDbBackup, archiveImages, BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type Connectable,
 } from '../src/backup.js';
 
 let dir: string;
@@ -18,16 +18,17 @@ const fakeDb = (
   pages: Record<string, unknown>[] = [],
   media: Record<string, unknown>[] = [],
   mediaFolders: Record<string, unknown>[] = [],
-): Queryable => ({
+): Connectable => {
   // Order matters: 'FROM media_folders' also contains 'FROM media'.
-  query: async (sql: string) => ({
+  const query = async (sql: string) => ({
     rows: sql.includes('FROM users') ? users
       : sql.includes('FROM pages') ? pages
       : sql.includes('FROM media_folders') ? mediaFolders
       : sql.includes('FROM media') ? media
       : posts,
-  }),
-});
+  });
+  return { query, connect: async () => ({ query, release() {} }) };
+};
 
 describe('dumpDatabase', () => {
   it('writes a versioned gzipped JSON dump named after the timestamp', async () => {
@@ -46,7 +47,7 @@ describe('dumpDatabase', () => {
     expect(name).toBe('db-20260703-143005.json.gz');
     expect(BACKUP_FILE_RE.test(name)).toBe(true);
     const dump = JSON.parse(gunzipSync(await readFile(join(dir, name))).toString('utf8'));
-    expect(dump.version).toBe(3);
+    expect(dump.version).toBe(4);
     expect(dump.tables.users).toEqual([{ id: 'u1', username: 'simon' }]);
     expect(dump.tables.posts).toEqual([{ id: 'p1', slug: 's' }]);
     expect(dump.tables.pages).toEqual([{ key: 'about', locale: 'de', title: 'X', body_markdown: 'B', images: {} }]);
@@ -200,7 +201,10 @@ describe('createDbBackup.runNow', () => {
   });
 
   it('records the error and keeps lastSuccessAt on failure', async () => {
-    const bad: Queryable = { query: async () => { throw new Error('db down'); } };
+    const bad: Connectable = {
+      query: async () => { throw new Error('db down'); },
+      connect: async () => { throw new Error('db down'); },
+    };
     const b = createDbBackup({ db: bad, dir, retention: () => 5 });
     const s = await b.runNow();
     expect(s.lastError).toBe('db down');

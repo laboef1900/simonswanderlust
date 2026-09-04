@@ -233,13 +233,19 @@ botched restore, accidental delete), **not** against disk failure or host loss.
 `uploader/src/backup.ts` provides app-native logical dumps (no `pg_dump`, no sidecar container):
 
 - **Dump format** — one file per run, `/data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`, containing
-  `{ "version": 3, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […] } }`
-  with full column fidelity. `sessions` are **never** dumped — they're disposable, and token
-  hashes don't belong in a backup file. `version` lets restore reject incompatible dumps; the
-  guard is an **allow-list** (1, 2 and 3), so every bump must widen it or newly written dumps
-  become unrestorable. v1 predates `pages`, v2 predates the media tables; both still restore and
-  leave the tables they never captured alone (for media, `POST /media/rescan` rebuilds the rows
-  from the files on disk).
+  `{ "version": 4, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […] } }`
+  with full column fidelity — an integration test diffs the dumped `posts` keys against
+  `information_schema.columns`, so a column added in `db.ts` without touching `backup.ts` fails
+  the suite instead of silently vanishing from every backup. The five table reads run on one
+  client inside a single `REPEATABLE READ` snapshot, so a bulk delete during a backup can never
+  produce a dump whose `posts` reference `media` rows that aren't in it. `sessions` are
+  **never** dumped — they're disposable, and token hashes don't belong in a backup file.
+  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 4), so
+  every bump must widen it or newly written dumps become unrestorable. v1 predates `pages`, v2
+  predates the media tables, v3 predates `posts.categories`/`tags`/`scheduled_at`; all still
+  restore and leave what they never captured alone (for media, `POST /media/rescan` rebuilds the
+  rows from the files on disk; the v3 post columns come back at their defaults — `'{}'`, `'{}'`,
+  `NULL`).
   Two ordering details the naive version gets wrong: `media` and `media_folders` are deleted
   **before** `users` (`media.uploaded_by` is `ON DELETE SET NULL`, so the other order silently
   nulls every attribution), and `tags` is `text[]`, which cannot round-trip through the
