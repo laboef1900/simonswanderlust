@@ -92,7 +92,10 @@ export function expandShortcodes(html: string, attachments: ReadonlyMap<string, 
       return anchors.map((href) => `<a data-elementor-lightbox-slideshow="${group}" href="${href}"></a>`).join('');
     })
     .replace(/\[caption\b[^\]]*\]([\s\S]*?)\[\/caption\]/g, (_whole, inner: string) => {
-      const img = /<img\b[^>]*>/i.exec(inner);
+      // The image subtree is the <img> plus an enclosing <a>…</a> when WordPress
+      // linked it to the full-size file — that link is the reader's click-through
+      // and must survive (review finding on PR #157).
+      const img = /(?:<a\b[^>]*>\s*)?<img\b[^>]*>(?:\s*<\/a>)?/i.exec(inner);
       if (!img) return inner;
       const text = inner.slice(img.index + img[0].length).trim();
       return `<figure>${img[0]}${text ? `<figcaption>${text}</figcaption>` : ''}</figure>`;

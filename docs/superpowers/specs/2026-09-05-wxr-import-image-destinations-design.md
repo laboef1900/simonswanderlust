@@ -69,8 +69,9 @@ silently lost and caption markup shown as junk.
      which the export cannot express), is left as it was rather than emitted empty.
    - `[caption …]<img …> text[/caption]` → `<figure><img …><figcaption>text</figcaption></figure>`,
      which Turndown renders as the image followed by the caption as its own paragraph. Nothing is
-     lost and no shortcode markup is shown. A `[caption]` without an `<img>` is unwrapped to its
-     inner content.
+     lost and no shortcode markup is shown. When WordPress linked the image to its full-size file
+     (`<a href><img></a>`), the whole linked subtree is kept, so the reader's click-through survives
+     as `[![alt](thumb)](full)`. A `[caption]` without an `<img>` is unwrapped to its inner content.
    - Any other shortcode is unchanged (pre-existing behaviour). Counting and warning on them would
      need a warnings channel out of the pure `htmlToMarkdown`; not worth a second reporting path
      for a corpus that is Elementor-authored.
@@ -97,7 +98,8 @@ silently lost and caption markup shown as junk.
 7. A plain link and an empty destination are not images.
 8. `[gallery ids]` expands to one fence per shortcode, unknown ids are dropped, and a gallery with
    no `ids` or only unknown ids is left untouched; no expansion without an attachment map.
-9. `[caption]` yields the image followed by its caption text, with no shortcode markup left.
+9. `[caption]` yields the image followed by its caption text, with no shortcode markup left; a
+   linked image keeps its link.
 
 `test/wp-import.test.ts`, `describe('importWxr Turndown image destinations')`:
 

@@ -141,4 +141,15 @@ describe('htmlToMarkdown classic shortcodes', () => {
     expect(md).toContain('The old town at dusk');
     expect(md).not.toContain('caption');
   });
+
+  it('keeps the click-through link of a linked image inside [caption]', () => {
+    const md = htmlToMarkdown(
+      '[caption id="attachment_5" align="alignnone" width="300"]<a href="https://wp/full.jpg"><img src="https://wp/thumb.jpg" alt="A" /></a> Caption[/caption]',
+      attachments,
+    );
+    expect(md).toContain('[![A](https://wp/thumb.jpg)](https://wp/full.jpg)');
+    expect(md).toContain('Caption');
+    expect(md).not.toContain('</a>');
+    expect(markdownImages(md).map((i) => i.url)).toEqual(['https://wp/thumb.jpg']);
+  });
 });
