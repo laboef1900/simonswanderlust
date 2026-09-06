@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { renderPreviewHtml } from '../src/preview.js';
+import { previewCsp, renderPreviewHtml } from '../src/preview.js';
+import { SHIKI_CSS } from '../../site/src/lib/shiki-classes.js';
 import type { PostPair } from '../src/posts.js';
 
 /** The app's own image base — what server.ts passes as the gallery allow-list. */
@@ -205,6 +206,31 @@ describe('renderPreviewHtml', () => {
     p.shared.coordinates = { lat: 0, lng: 0 };
     const placeholder = await renderPreviewHtml(p, 'de', ORIGIN);
     expect(placeholder).not.toContain('0.0000° N');
+  });
+
+  // Issue #124: the schema allows no `style`, so a preview's code block only
+  // stays coloured if the page ships the class palette the build uses.
+  it('highlights a code block through classes and ships their stylesheet', async () => {
+    const html = await renderPreviewHtml(pair({
+      de: { ...pair().de, bodyMarkdown: '```js\nconst a = 1;\n```\n\n<p style="position:fixed">x</p>' },
+    }), 'de', ORIGIN);
+    expect(html).toContain(SHIKI_CSS);
+    expect(html).toContain('<span class="sh-c-f97583">const</span>');
+    expect(html).not.toContain('style=');
+  });
+});
+
+describe('previewCsp', () => {
+  it('denies everything but self/base-origin images and the inline styles the page needs', () => {
+    const csp = previewCsp('https://img.example.com/');
+    expect(csp).toBe(
+      "default-src 'none'; img-src 'self' https://img.example.com; style-src 'unsafe-inline'; " +
+        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    );
+  });
+
+  it('reduces a base URL with a path to its origin', () => {
+    expect(previewCsp('http://localhost:3000/images')).toContain("img-src 'self' http://localhost:3000;");
   });
 });
 

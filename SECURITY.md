@@ -321,8 +321,19 @@ Post bodies are DB-stored Markdown rendered to HTML at build time. Before that H
 public site it is run through **`rehype-sanitize`** (`site/src/lib/body-images.ts`), stripping
 `<script>`, inline event handlers, `javascript:` URLs, and `iframe`/`object`/`svg`. The schema is
 tuned so it does **not** break legitimate output: heading `id`s stay un-prefixed (so the table of
-contents `#anchor` links resolve) and code-span classes/inline styles (Shiki syntax colors) are
-preserved. Verified end-to-end against a published post carrying an XSS payload.
+contents `#anchor` links resolve) and `class` survives everywhere. Verified end-to-end against a
+published post carrying an XSS payload.
+
+**No element may carry `style`** (#124). Astro's Markdown renderer passes raw HTML through, so the
+sanitizer cannot distinguish a Shiki `<span style="color:…">` from an author-typed one — and an
+author-typed `style="position:fixed;inset:0;background:url(https://evil/…)"` would overlay every
+reader page (defacement) and fire a third-party request per view (reader IP leak), on the draft
+preview as well, so publish review would not catch it. Shiki therefore no longer emits inline
+styles at all: `site/src/lib/shiki-classes.ts` registers a transformer (in both
+`astro.config.mjs` and `MARKDOWN_OPTIONS`, lockstep-tested) that rewrites each colour into a
+class, and `SHIKI_CSS` — generated from the same theme object — is inlined by `Base.astro` and
+by the draft preview. `style` is off the schema for every element; the gallery `--r` ratios are
+the only inline styles on a page and are injected post-sanitize from computed numbers.
 
 > We deliberately use a maintained, allow-list sanitizer rather than hand-rolled escaping — the
 > cardinal rule of XSS defense.
@@ -351,9 +362,16 @@ protections, so they carry their own:
   render boundary additionally coerces with `String()` as a backstop.
 
 Why this is not merely theoretical: `GET /posts/:tk/preview` is `requireAuth` (**any** author, not
-just admins), runs the identical transform, and is served same-origin with `/admin/*` with no CSP.
-A non-admin author storing a payload in a draft that an admin then previews would run script with
-the admin's cookie against `POST /users`, `GET /backups/*` and `POST /posts/:tk/publish`.
+just admins), runs the identical transform, and is served same-origin with `/admin/*`. A non-admin
+author storing a payload in a draft that an admin then previews would run script with the admin's
+cookie against `POST /users`, `GET /backups/*` and `POST /posts/:tk/publish`. Since #124 the
+preview reply carries a deny-by-default **Content-Security-Policy** (`previewCsp` in
+`uploader/src/preview.ts`): `default-src 'none'; img-src 'self' <PUBLIC_BASE_URL origin>;
+style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`. The page
+is static markup with one inline `<style>` and no scripts, so a sanitizer regression that lets a
+`<script>` through becomes a blocked no-op on the admin origin rather than session XSS. Side
+effect, accepted: a draft that references an image on any other origin shows it broken in the
+preview even though the live site would load it.
 
 ## Transport, headers & proxy
 
@@ -361,8 +379,9 @@ the admin's cookie against `POST /users`, `GET /backups/*` and `POST /posts/:tk/
   `Referrer-Policy: no-referrer` are added only on the admin/API surface (`/admin`, `/login`,
   `/logout`, `/auth`, `/setup`, `/settings`, `/users`, `/posts`, `/upload`, `/import`,
   `/export`, `/backups`, `/rebuild`, `/health`); public blog pages carry only `nosniff`, at parity
-  with the old nginx config. (CSP is intentionally omitted because the admin pages use inline
-  scripts; a strict policy would need nonces.)
+  with the old nginx config. (CSP is intentionally omitted on the admin pages because they use
+  inline scripts; a strict policy would need nonces. The one exception is `GET /posts/:tk/preview`,
+  which renders author markup and has no scripts — see *Output sanitization*.)
 - The app sets `trustProxy: 1` (exactly one trusted hop), so it reads `X-Forwarded-*` as set by
   that one reverse proxy for the client IP (rate limiting) and the cookie `Secure` flag. **It must
   run behind a TLS-terminating reverse proxy that sets `X-Forwarded-Proto`**; the compose file
@@ -455,7 +474,7 @@ deliberate trade-off, not an oversight:
   custom `undici` `Agent` with `connect.lookup` — a new dependency, declined for the trusted,
   single-tenant deployment (`docs/superpowers/specs/2026-09-05-safe-fetch-redirects-design.md`).
 - The rate limiter and (non-pg) session/user fallbacks are per-process/in-memory.
-- No Content-Security-Policy on the admin app (inline scripts).
+- No Content-Security-Policy on the admin app (inline scripts), except on the draft preview.
 
 ## Reporting
 

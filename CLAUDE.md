@@ -841,6 +841,16 @@ blog/
   stores and the CLI `set-password` recovery path — which used to accept a 1-character admin
   password — share one rule. See `docs/superpowers/specs/2026-09-05-login-lockout-design.md` and
   `SECURITY.md` (*Rate limiting*).
+- **Done:** #124 no inline `style` in author markup + draft-preview CSP (2026-09-05) — the
+  sanitize schema allowed unconstrained `style` on `span`/`code`/`pre` for Shiki's colours, and
+  since Astro passes raw HTML through, an author could ship a full-viewport overlay with a
+  third-party `url()` to every reader page and the preview. Shiki now emits **classes** instead:
+  `site/src/lib/shiki-classes.ts` registers a transformer in both `astro.config.mjs` and
+  `MARKDOWN_OPTIONS` (still lockstep-tested) and generates `SHIKI_CSS` from the same theme
+  object, inlined by `Base.astro` and by `preview.ts`; `style` is off the schema for every
+  element. `GET /posts/:tk/preview` carries a deny-by-default CSP (`default-src 'none'`,
+  images from the app's own origin, inline styles only, no scripts). See
+  `docs/superpowers/specs/2026-09-05-sanitize-style-csp-design.md` and `SECURITY.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

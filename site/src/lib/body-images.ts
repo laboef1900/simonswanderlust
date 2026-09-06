@@ -74,7 +74,14 @@ const SLIDER_SIZES =
 // markup Astro emits so the page doesn't visibly regress —
 //  • clobberPrefix:'' keeps heading `id`s un-prefixed so <Toc> #slug anchors resolve
 //  • `id`/`className` are allowed so heading anchors and code classes survive
-//  • `style` is allowed only on code spans (Shiki inline syntax colors)
+//
+// @ai-warning No element may allow `style` (#124). The sanitizer cannot tell
+// Shiki's `<span style>` from an author-typed one, and an author-typed
+// `style="position:fixed;inset:0;background:url(https://evil/…)"` would reach
+// every reader page (defacement + a third-party request per view) and the
+// draft preview, which is same-origin with /admin/*. Shiki's colours therefore
+// arrive as classes instead (`shiki-classes.ts`), backed by SHIKI_CSS — do not
+// re-add `style` "for one element"; extend the class mapping.
 const baseAttrs = defaultSchema.attributes ?? {};
 const BODY_SCHEMA = {
   ...defaultSchema,
@@ -82,9 +89,6 @@ const BODY_SCHEMA = {
   attributes: {
     ...baseAttrs,
     '*': [...(baseAttrs['*'] ?? []), 'id', 'className'],
-    span: [...(baseAttrs.span ?? []), 'style'],
-    code: [...(baseAttrs.code ?? []), 'className', 'style'],
-    pre: [...(baseAttrs.pre ?? []), 'className', 'style'],
   },
 };
 
@@ -145,9 +149,10 @@ function textOf(node: unknown): string {
  *     URL: `raw.startsWith('https://img.simonswanderlust.com')` passes both
  *     `https://img.simonswanderlust.com.evil.com/x` (origin …com.evil.com) and
  *     `https://img.simonswanderlust.com@evil.com/x` (origin https://evil.com).
- *     A `javascript:` line lands in the <a href> below and fires — and
- *     GET /posts/:tk/preview renders this same transform at author level,
- *     same-origin with /admin/* and with no CSP.
+ *     A `javascript:` line lands in the <a href> below and fires on the
+ *     public site, which carries no CSP — and GET /posts/:tk/preview renders
+ *     this same transform at author level, same-origin with /admin/*, where
+ *     its deny-by-default CSP (#124) is a backstop, not a substitute.
  *  2. alt/caption are coerced with String(). The images map is untyped JSON,
  *     and hastscript treats a node-shaped object in a children array AS A NODE
  *     — `{type:'raw', value:'<script>…'}` would emit a live script tag,

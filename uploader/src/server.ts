@@ -26,7 +26,7 @@ import {
 } from './authn.js';
 import { SettingsError, type SettingsStore } from './settings.js';
 import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale } from './posts.js';
-import { renderPreviewHtml } from './preview.js';
+import { renderPreviewHtml, previewCsp } from './preview.js';
 import { type PageStore, type PagePair, type PageContent, type ImageDims, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
@@ -264,6 +264,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   // Declared before the upload route, which builds `src` from it.
   const imageBase = cfg.baseUrl.replace(/\/+$/, '');
+  // Built once: an unparseable base URL should fail here, at boot, not 500 a
+  // preview request later.
+  const previewPolicy = previewCsp(imageBase);
 
   /** Cap on any `keys[]` batch: an unbounded array is an authenticated
    *  N-round-trip amplifier against the process that also serves the blog. */
@@ -900,7 +903,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   // Server-side preview of a draft (or published) post, rendered through the
   // same markdown pipeline the site build uses (see src/preview.ts). Drafts
-  // are author territory, so requireAuth — publishing stays admin-only.
+  // are author territory, so requireAuth — publishing stays admin-only. The
+  // reply carries a deny-by-default CSP (#124): author markup renders here on
+  // the admin origin, so nothing but images and the page's own styles may load.
   app.get('/posts/:tk/preview', { preHandler: requireAuth }, async (req, reply) => {
     const q = (req.query ?? {}) as { locale?: unknown };
     const locale = q.locale === undefined ? 'de' : String(q.locale);
@@ -912,6 +917,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply
       .type('text/html; charset=utf-8')
       .header('cache-control', 'no-store')
+      .header('content-security-policy', previewPolicy)
       .send(await renderPreviewHtml(pair, locale, imageBase));
   });
 

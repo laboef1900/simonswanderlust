@@ -8,6 +8,7 @@ import Footer from '../components/Footer.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
 import { imageOrigin } from '../lib/images';
 import { PROD_SITE, type SeoImage } from '../lib/seo';
+import { SHIKI_CSS } from '../lib/shiki-classes';
 
 interface Props {
   title: string;
@@ -34,6 +35,11 @@ const otherLocale: Locale = locale === 'de' ? 'en' : 'de';
 // cannot reuse an anonymous-CORS connection; fonts ship locally via @fontsource,
 // so nothing on the page needs one.
 const imgOrigin = imageOrigin(import.meta.env.PUBLIC_BASE_URL);
+// Code-block colours as classes (#124): body HTML is sanitized with no `style`
+// allowed anywhere, so Shiki's palette ships as this generated stylesheet.
+// Unlayered on purpose — it must win over @tailwindcss/typography's `pre`
+// colours, which live in a cascade layer.
+const shikiStyle = `<style>${SHIKI_CSS}</style>`;
 ---
 
 <!doctype html>
@@ -80,6 +86,7 @@ const imgOrigin = imageOrigin(import.meta.env.PUBLIC_BASE_URL);
       )
     }
     <meta name="twitter:card" content={image ? 'summary_large_image' : 'summary'} />
+    <Fragment set:html={shikiStyle} />
   </head>
   <body class="flex min-h-dvh flex-col bg-canvas font-sans text-ink antialiased">
     <a

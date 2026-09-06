@@ -2285,4 +2285,23 @@ describe('GET /posts/:tk/preview', () => {
     expect(res.headers['x-frame-options']).toBe('DENY');
     expect(res.headers['x-content-type-options']).toBe('nosniff');
   });
+
+  // Issue #124: author markup renders on the admin origin here, so the reply
+  // carries a deny-by-default policy — only the app's own images and the
+  // page's inline styles are allowed.
+  it('sends a CSP that allows only base-origin images and inline styles', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draft() });
+    const tk = created.json().translationKey;
+    const res = await b.app.inject({ method: 'GET', url: `/posts/${tk}/preview?locale=de`, cookies: cookie });
+    const csp = String(res.headers['content-security-policy']);
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("img-src 'self' https://img.simonswanderlust.com");
+    expect(csp).toContain("style-src 'unsafe-inline'");
+    expect(csp).not.toContain('script-src');
+    // Other admin JSON routes stay without one — the policy is preview-specific.
+    const list = await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie });
+    expect(list.headers['content-security-policy']).toBeUndefined();
+  });
 });
