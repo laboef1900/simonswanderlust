@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -49,20 +49,87 @@ describe('createSettingsStore', () => {
     expect(onDisk.lmModel).toBe('my/local-vlm');
   });
 
-  it('falls back to defaults on a corrupt file', async () => {
+  it('falls back to defaults on a corrupt file and says so', async () => {
     const path = join(dir, 'settings.json');
     await writeFile(path, 'not json{');
-    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    const log = vi.fn();
+    const store = createSettingsStore({ path, defaults: DEFAULTS, log });
     expect(store.get()).toEqual(DEFAULTS);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/not valid JSON/));
   });
 
-  it('falls back to defaults when an on-disk value is out of range', async () => {
-    // A hand-edited/partially-written settings.json must not serve invalid values
-    // (e.g. a negative timeout reaching the browser abort timer) — validate on load.
+  it('falls back to defaults when the file is JSON but not an object', async () => {
     const path = join(dir, 'settings.json');
-    await writeFile(path, JSON.stringify({ captionTimeoutMs: -100, lmModel: 'my/vlm' }));
-    const store = createSettingsStore({ path, defaults: DEFAULTS });
-    expect(store.get()).toEqual(DEFAULTS); // whole file rejected, not partially trusted
+    await writeFile(path, '[1,2]');
+    const log = vi.fn();
+    expect(createSettingsStore({ path, defaults: DEFAULTS, log }).get()).toEqual(DEFAULTS);
+    expect(log).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not log when the file simply does not exist yet', () => {
+    const log = vi.fn();
+    createSettingsStore({ path: join(dir, 'settings.json'), defaults: DEFAULTS, log });
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  // Issue #112: one out-of-range LM field used to reject the WHOLE file back to
+  // defaults — flipping `backupSchedule` to 'off' with no log line, so daily
+  // backups silently stopped until someone opened the Settings page.
+  it('keeps every valid field when one on-disk value is invalid, and logs which one', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({
+      captionTimeoutMs: -100,          // invalid → its own default
+      lmModel: 'my/vlm',
+      backupSchedule: 'daily',
+      backupRetention: 30,
+      importDelayMs: 0,
+    }));
+    const log = vi.fn();
+    const store = createSettingsStore({ path, defaults: DEFAULTS, log });
+    const s = store.get();
+    expect(s.captionTimeoutMs).toBe(DEFAULTS.captionTimeoutMs); // the bad one is not served
+    expect(s.lmModel).toBe('my/vlm');
+    expect(s.backupSchedule).toBe('daily');
+    expect(s.backupRetention).toBe(30);
+    expect(s.importDelayMs).toBe(0);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('"captionTimeoutMs"'));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('between 1000 and 600000'));
+  });
+
+  it('rejects a wrong JSON type per field rather than trusting the type annotation', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({
+      lmModel: 42,                     // number where a string is expected
+      backupRetention: '7',            // string where a number is expected
+      captionPrompt: null,
+      backupSchedule: 'weekly',
+    }));
+    const log = vi.fn();
+    const s = createSettingsStore({ path, defaults: DEFAULTS, log }).get();
+    expect(s.lmModel).toBe(DEFAULTS.lmModel);
+    expect(s.backupRetention).toBe(DEFAULTS.backupRetention);
+    expect(s.captionPrompt).toBe(DEFAULTS.captionPrompt);
+    expect(s.backupSchedule).toBe('weekly');
+    expect(log.mock.calls.map((c) => c[0])).toEqual([
+      expect.stringContaining('"lmModel"'),
+      expect.stringContaining('"captionPrompt"'),
+      expect.stringContaining('"backupRetention"'),
+    ]);
+  });
+
+  it('logs to console.error by default', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ importRetries: 99 }));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(createSettingsStore({ path, defaults: DEFAULTS }).get().importRetries).toBe(DEFAULTS.importRetries);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining('"importRetries"'));
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('update validates, persists, and updates the cache', async () => {
@@ -154,9 +221,9 @@ describe('import settings', () => {
     expect(d.importRetries).toBe(3);
   });
 
-  // @ai-warning validate() runs on LOAD too, and one bad value rejects the WHOLE
-  // file back to defaults — a default that failed its own validator would
-  // silently wipe the owner's LM and backup config.
+  // @ai-warning A default that failed its own validator would make every
+  // update() that leaves that field untouched throw, so the owner could never
+  // save the Settings page again.
   it('has defaults that pass its own validator', () => {
     expect(() => validate(defaultSettings())).not.toThrow();
   });
