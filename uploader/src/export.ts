@@ -27,7 +27,9 @@ function bodyToMdx(p: PostLocale): string {
     // inverse — a raw '>' in alt would otherwise defeat its tag regex on paste-back.
     const escapedAlt = unescapeAltText(img.alt)
       .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    out = out.replaceAll(img.full, `<BodyImage src="${img.url}" width={${dims.width}} height={${dims.height}} alt="${escapedAlt}" />`);
+    const tag = `<BodyImage src="${img.url}" width={${dims.width}} height={${dims.height}} alt="${escapedAlt}" />`;
+    // Callback form: a string replacement would read `$&`/`$1` in the alt as tokens.
+    out = out.replaceAll(img.full, () => tag);
   }
   return out;
 }

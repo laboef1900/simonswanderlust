@@ -112,13 +112,14 @@ describe('renderPostToMdx', () => {
 
   it('round-trips a bracketed alt: escaped in the body, plain in the tag, escaped again on paste-back (#140)', () => {
     const src = 'https://img/x/y';
-    const body = 'Intro\n\n![Blick vom Gipfel \\[Norwegen\\] \\\\ hoch](https://img/x/y)\n';
+    // `$&` would be a replacement token if the tag were passed as a string.
+    const body = 'Intro\n\n![Blick vom Gipfel \\[Norwegen\\] \\\\ hoch $& $1](https://img/x/y)\n';
     const withBrackets: PostPair = {
       ...pair,
       de: { ...pair.de, bodyMarkdown: body, images: { [src]: { width: 1600, height: 1067 } } },
     };
     const mdx = renderPostToMdx(withBrackets, 'de');
-    expect(mdx).toContain('<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Blick vom Gipfel [Norwegen] \\ hoch" />');
+    expect(mdx).toContain('<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Blick vom Gipfel [Norwegen] \\ hoch $&amp; $1" />');
     const back = normalizeBodyImages(mdx.slice(mdx.indexOf('Intro')), {});
     expect(back.bodyMarkdown).toBe(body);
     expect(back.images).toEqual({ [src]: { width: 1600, height: 1067 } });
