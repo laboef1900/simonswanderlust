@@ -21,7 +21,7 @@ import type { ReconcileReport } from './media-sync.js';
 import { verifyPassword, type UserStore, UserExistsError, DUMMY_STORED_HASH, MAX_PASSWORD_LENGTH, passwordPolicyViolation, usernamePolicyViolation } from './users.js';
 import type { SessionStore } from './sessions.js';
 import {
-  SESSION_TTL_MS, loadUser, requireAuth, requireAdmin,
+  SESSION_TTL_MS, createAuthn,
   setSessionCookie, clearSessionCookie, isSecureRequest, SESSION_COOKIE,
 } from './authn.js';
 import { SettingsError, type SettingsStore } from './settings.js';
@@ -213,8 +213,11 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   app.register(multipart, {
     limits: { fileSize: 25 * 1024 * 1024, files: 1, parts: 8 },
   });
+  // No global session hook (#129): the blog, image host, basemap and admin
+  // static pages never read a session, so they never query for one. Only
+  // routes that declare one of these preHandlers resolve `req.authUser`.
   app.decorateRequest('authUser', null);
-  app.addHook('onRequest', async (req) => { req.authUser = await loadUser(req, users, sessions); });
+  const { optionalAuth, requireAuth, requireAdmin } = createAuthn(users, sessions);
 
   const here = dirname(fileURLToPath(import.meta.url));
   app.register(fastifyStatic, { root: join(here, '..', 'public'), prefix: '/admin/' });
@@ -717,7 +720,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   app.get('/login', (_req, reply) => reply.sendFile('login.html'));
 
-  app.get('/auth/status', async (req) => {
+  app.get('/auth/status', { preHandler: optionalAuth }, async (req) => {
     if (req.authUser) {
       return { authenticated: true, username: req.authUser.username, isAdmin: req.authUser.isAdmin, needsSetup: false };
     }
@@ -1228,7 +1231,10 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // per-poll logging. Blog serving stays DB-independent (static files from the
   // current release), so a down Postgres flips the container unhealthy without
   // taking the blog offline.
-  app.get('/health', async (req, reply) => {
+  // `optionalAuth` (#129): the route is public — the compose healthcheck polls
+  // it without a session — but it reads `req.authUser` for the admin-only disk
+  // report below, and since #129 only a declared preHandler resolves it.
+  app.get('/health', { preHandler: optionalAuth }, async (req, reply) => {
     // @ai-warning: free space and `release` are REPORTED, never a health
     // verdict (#73, #110). A low-space warning that flipped the container
     // unhealthy would trigger a restart loop, which makes a full disk strictly

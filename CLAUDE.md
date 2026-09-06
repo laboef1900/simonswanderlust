@@ -887,6 +887,17 @@ blog/
   had to wait for — `ensureSchema` sweeps orphans left by earlier deletes once per
   boot, and `GET /posts/:tk/revisions/:id` 404s when the post is gone, like the list route. See
   `docs/superpowers/specs/2026-09-06-delete-post-revisions-design.md` and `SECURITY.md`.
+- **Done:** #129 blog serving no longer depends on the session store (2026-09-06) — a global
+  `onRequest` hook resolved the `sid` cookie against Postgres on every request, so while the
+  database was down or hung every public page and image the owner's own browser loaded (the
+  admin cookie has `path=/` on the shared host) answered a sanitized 500 while anonymous readers
+  were fine — the opposite of the "blog stays up without the DB" design `/health` is built on.
+  `createAuthn(users, sessions)` now hands each route its preHandler (`optionalAuth`,
+  `requireAuth`, `requireAdmin`) and only a route that declares one queries for a session; the
+  blog, image host, basemap and `/admin/*` static pages never do. A failing store on a guarded
+  route stays a 500, never "anonymous". When this lands on `dev`, `/health` (#132: disk figure for
+  admins only) must declare `optionalAuth` — its own test fails otherwise. See
+  `docs/superpowers/specs/2026-09-06-lazy-session-resolution-design.md` and `SECURITY.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

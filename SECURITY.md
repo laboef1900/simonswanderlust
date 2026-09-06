@@ -36,6 +36,14 @@ change about the security posture.
   the **SHA-256 hash** of the token is stored in Postgres, so a database read cannot reproduce a
   live session. Cookies are marked `Secure` when the request is HTTPS. Sessions last 30 days and
   expired rows are swept hourly. (`uploader/src/sessions.ts`, `authn.ts`)
+- **The session is resolved only where it is read** (#129). There is no global per-request
+  session hook: `createAuthn` (`authn.ts`) hands each route one of three preHandlers —
+  `optionalAuth`, `requireAuth`, `requireAdmin` — and only a route that declares one queries
+  the session store. The public blog, the image host, the basemap and the `/admin/*` static
+  pages never do, so a down or hung Postgres cannot 500 the public site for the one browser that
+  carries the admin cookie, and a forged cookie on a public page costs no lookup. A store failure
+  on a guarded route is a sanitized 500, never "anonymous" — a database outage must not read as
+  "logged out". Spec: `docs/superpowers/specs/2026-09-06-lazy-session-resolution-design.md`.
 - **First-admin setup** (`/setup`) is only available while no users exist, and is **serialized**
   with a per-process lock so two concurrent requests cannot both create an admin (TOCTOU closed).
 - **Password changes** — `POST /users/me/password` lets an authenticated user rotate their own
