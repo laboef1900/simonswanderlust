@@ -146,7 +146,7 @@ export interface PostStore {
  * Date, so both sides here went through the SAME truncation; a SQL comparison
  * against the echoed value would false-conflict on every innocent save.
  */
-function assertNotStale(storedUpdatedAt: Date, baseUpdatedAt: Date | undefined): void {
+export function assertNotStale(storedUpdatedAt: Date, baseUpdatedAt: Date | undefined): void {
   if (baseUpdatedAt && storedUpdatedAt.getTime() > baseUpdatedAt.getTime()) {
     throw new PostError('post was modified since you opened it', 'conflict');
   }
@@ -211,6 +211,7 @@ function optStringArray(o: Record<string, unknown>, field: string, path: string)
  */
 export function validateDraft(pair: unknown): asserts pair is PostPair {
   if (!isPlainObject(pair)) throw new PostError('post payload must be an object');
+  if (pair.confirmSlugChange !== undefined && typeof pair.confirmSlugChange !== 'boolean') throw new PostError('confirmSlugChange must be a boolean');
   const shared = pair.shared;
   if (!isPlainObject(shared)) throw new PostError('shared must be an object');
   if (shared.date !== undefined && shared.date !== '') {
