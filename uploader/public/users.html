@@ -16,31 +16,33 @@
       </div>
     </header>
     <main>
-      <section class="card">
+      <!-- Real <form>s (not bare inputs plus a click handler) so that Enter in a
+           field submits — keyboard-only account management must work. -->
+      <form class="card" id="addForm">
         <h2>Add a user</h2>
         <label for="username">Username</label>
         <input id="username" type="text" autocomplete="off" />
         <label for="password">Password</label>
         <input id="password" type="password" autocomplete="new-password" />
         <label><input id="isAdmin" type="checkbox" /> Administrator</label>
-        <button id="add">Add user</button>
+        <button id="add" type="submit">Add user</button>
         <p class="section-label">Status</p>
-        <pre id="out">—</pre>
-      </section>
+        <pre id="out" role="status">—</pre>
+      </form>
       <section class="card">
         <h2>Existing users</h2>
         <ul id="list"></ul>
       </section>
-      <section class="card">
+      <form class="card" id="pwForm">
         <h2>Change my password</h2>
         <label for="curpw">Current password</label>
         <input id="curpw" type="password" autocomplete="current-password" />
         <label for="newpw">New password</label>
         <input id="newpw" type="password" autocomplete="new-password" />
-        <button id="changepw">Change password</button>
+        <button id="changepw" type="submit">Change password</button>
         <p class="section-label">Status</p>
-        <pre id="pwout">—</pre>
-      </section>
+        <pre id="pwout" role="status">—</pre>
+      </form>
     </main>
     <script src="/admin/auth.js"></script>
     <script>
@@ -86,7 +88,8 @@
           ul.appendChild(li);
         }
       }
-      $('add').addEventListener('click', async () => {
+      $('addForm').addEventListener('submit', async (ev) => {
+        ev.preventDefault();
         const username = $('username').value.trim();
         const password = $('password').value;
         const isAdmin = $('isAdmin').checked;
@@ -96,7 +99,8 @@
         if (res.ok) { $('out').textContent = 'Added ' + username + '.'; $('username').value = ''; $('password').value = ''; $('isAdmin').checked = false; load(); }
         else { const r = await res.json().catch(() => ({})); $('out').textContent = r.error || ('Failed: ' + res.status); }
       });
-      $('changepw').addEventListener('click', async () => {
+      $('pwForm').addEventListener('submit', async (ev) => {
+        ev.preventDefault();
         const currentPassword = $('curpw').value;
         const newPassword = $('newpw').value;
         if (!currentPassword || !newPassword) { $('pwout').textContent = 'Enter your current and new password.'; return; }

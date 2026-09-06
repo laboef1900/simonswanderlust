@@ -26,7 +26,11 @@
         <input id="password" type="password" autocomplete="current-password" />
         <button id="submit" type="submit">Sign in</button>
         <p class="section-label" style="margin-top:1.25rem">Status</p>
-        <pre id="out">—</pre>
+        <!-- Two live regions, the editor's pattern: progress is polite (a
+             status region must already exist to be announced), the failure —
+             the only feedback a locked-out user gets — interrupts. -->
+        <pre id="out" role="status">—</pre>
+        <p id="err" class="err" role="alert" style="display:none"></p>
       </form>
     </main>
     <script src="/admin/auth.js"></script>
@@ -48,12 +52,15 @@
           $('password').setAttribute('autocomplete', 'new-password');
         }
       }
+      function setStatus(msg) { $('out').textContent = msg || '—'; }
+      function showErr(msg) { const el = $('err'); el.textContent = msg; el.style.display = msg ? '' : 'none'; }
       $('login-form').addEventListener('submit', async (event) => {
         event.preventDefault();
+        showErr('');
         const username = $('username').value.trim();
         const password = $('password').value;
-        if (!username || !password) { $('out').textContent = 'Enter a username and password.'; return; }
-        $('out').textContent = needsSetup ? 'Creating…' : 'Signing in…';
+        if (!username || !password) { showErr('Enter a username and password.'); return; }
+        setStatus(needsSetup ? 'Creating…' : 'Signing in…');
         try {
           const res = await fetch(needsSetup ? '/setup' : '/login', {
             method: 'POST', headers: { 'content-type': 'application/json' },
@@ -61,9 +68,11 @@
           });
           if (res.ok) { location.href = nextPath; return; }
           const r = await res.json().catch(() => ({}));
-          $('out').textContent = r.error || ('Failed: ' + res.status);
+          setStatus('');
+          showErr(r.error || ('Failed: ' + res.status));
         } catch (e) {
-          $('out').textContent = 'Error: ' + e;
+          setStatus('');
+          showErr('Error: ' + e);
         }
       });
       init();

@@ -49,7 +49,7 @@ function element(): Element {
   };
 }
 
-function loadEditor(): { api: EditorApi; el: (id: string) => Element } {
+function loadEditor(): { api: EditorApi; el: (id: string) => Element; editors: { input: { attrs: Record<string, string> } }[] } {
   const elements = new Map<string, Element>();
   const el = (id: string): Element => {
     if (!ids.has(id)) throw new Error('no element #' + id + ' in editor.html');
@@ -67,10 +67,12 @@ function loadEditor(): { api: EditorApi; el: (id: string) => Element } {
   };
   class EasyMDE {
     private text = '';
-    codemirror = { on() {}, refresh() {}, getValue: () => this.text, setValue: (v: string) => { this.text = v; } };
+    input = { attrs: {} as Record<string, string>, setAttribute(k: string, v: string) { this.attrs[k] = v; } };
+    codemirror = { on() {}, refresh() {}, getValue: () => this.text, setValue: (v: string) => { this.text = v; }, getInputField: () => this.input };
     value(v?: string): string { if (v !== undefined) this.text = v; return this.text; }
     toTextArea() {}
   }
+  const editors: EasyMDE[] = [];
   const guard = { markDirty() {}, markClean() {}, snapshot() { return 0; }, stashNow() {}, tryRestore() { return null; }, dismissRestore() {}, wasDismissed() { return false; }, setKey() {}, redirectToLogin() {} };
   const ctx: Record<string, unknown> = {
     document: {
@@ -92,18 +94,19 @@ function loadEditor(): { api: EditorApi; el: (id: string) => Element } {
     alert() {},
     confirm: () => false,
     navigator: {},
-    EasyMDE,
+    EasyMDE: class extends EasyMDE { constructor() { super(); editors.push(this); } },
     Auth: { ensureAuthed: async () => null, renderHeader() {} },
     DraftGuard: { createDraftGuard: () => guard },
     MediaPicker: { open() {} },
     GalleryFence: {},
     AltSuggest: { wire() {} },
+    Tabs: { wire: () => ({ active: () => 'de' }) },
   };
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(script, ctx);
   const api = vm.runInContext('({ populateForm, buildPayload })', ctx) as EditorApi;
-  return { api, el };
+  return { api, el, editors };
 }
 
 function fullPair(): PostPair {
@@ -149,6 +152,11 @@ describe('editor.html inline script against its own markup', () => {
     expect(el('fmCategories').value).toBe('City, Culture');
     expect(el('fmTags').value).toBe('balkan, autumn');
     expect(el('fmScheduledAt').value).toBe('2024-11-01T09:30');
+  });
+
+  it('names the CodeMirror inputs EasyMDE swaps in for the labelled body textareas (SC 4.1.2)', () => {
+    const { editors } = loadEditor();
+    expect(editors.map((e) => e.input.attrs['aria-label'])).toEqual(['Body (Markdown, DE)', 'Body (Markdown, EN)']);
   });
 
   it('buildPayload round-trips what populateForm wrote', () => {
