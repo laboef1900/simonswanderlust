@@ -454,19 +454,25 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
   // imported + updated + skippedPublished + rejected + failed === group count.
   const summary = { imported: 0, updated: 0, skippedPublished: 0, rejected: 0, failed: 0 };
 
-  // Existing posts by (locale, slug) → status/key, for idempotency + published-skip.
+  // Existing posts by slug, ANY locale → the posts using it (idempotency + published-skip).
   //
-  // @ai-warning DE and EN slugs are SEPARATE namespaces (posts_locale_slug_idx is
-  // on (locale, slug); the same word may legitimately be one trip's DE slug and
-  // an unrelated trip's EN slug). The lookup MUST be keyed per locale — a flat
-  // map bound a group to whichever unrelated pair shared a slug across locales,
-  // and `upsertDraft` then overwrote that post (issue #99, Golden Rule 2).
+  // @ai-warning A slug is a shared namespace across locales here even though the
+  // database keys uniqueness per (locale, slug): the importer's storage keys are
+  // `trips/<slug>/…` with NO locale segment, so a group whose EN slug equals an
+  // unrelated post's DE slug would write its photos over that post's variant
+  // files. The old flat lookup went further and bound the group to that post's
+  // `translationKey`, so `upsertDraft` overwrote the post itself (issue #99,
+  // Golden Rule 2). Pair identity is therefore the (DE slug, EN slug) tuple as a
+  // unit, and ANY other overlap is a conflict — never a binding.
   const existing = await deps.postStore.list();
-  const byLocaleSlug = new Map<string, PostSummary>();
+  const owners = new Map<string, PostSummary[]>();
   for (const s of existing) {
-    if (s.slugDe) byLocaleSlug.set(`de:${s.slugDe}`, s);
-    if (s.slugEn) byLocaleSlug.set(`en:${s.slugEn}`, s);
+    for (const slug of new Set([s.slugDe, s.slugEn])) {
+      if (slug) owners.set(slug, [...(owners.get(slug) ?? []), s]);
+    }
   }
+  /** Slugs claimed by groups accepted earlier in THIS export — same namespace, same rule. */
+  const claimed = new Map<string, string>();
 
   const groups = new Map<string, ParsedPost[]>();
   for (const p of posts) { const g = groups.get(p.group) ?? []; g.push(p); groups.set(p.group, g); }
@@ -484,20 +490,27 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
     if (!isSafeSlug(de.slug) || !isSafeSlug(en.slug)) {
       summary.rejected++; warnings.push(`group ${group}: unsafe slug (${de.slug} / ${en.slug}) — rejected`); continue;
     }
-    // Pair identity is the (DE slug, EN slug) tuple as a UNIT. Binding on a
-    // single matching slug would either rename the other locale's live slug
-    // (SEO contract) or write into a post the author never meant to touch —
-    // so anything short of "both slugs match one pair" or "neither matches"
-    // is a conflict the author has to resolve in the editor, not here.
-    const priorDe = byLocaleSlug.get(`de:${de.slug}`);
-    const priorEn = byLocaleSlug.get(`en:${en.slug}`);
-    if (priorDe?.translationKey !== priorEn?.translationKey) {
+    // Pair identity is the (DE slug, EN slug) tuple as a UNIT: exactly one existing
+    // post touches either slug AND it owns both. Binding on a single matching slug
+    // would rename the other locale's live slug (SEO contract) or write into a post
+    // the author never meant to touch; a cross-locale namesake shares the image
+    // storage namespace. Every such overlap is for the author to resolve in the
+    // editor, not here.
+    const touching = [...new Set([...(owners.get(de.slug) ?? []), ...(owners.get(en.slug) ?? [])])];
+    const prior = touching.length === 1 && touching[0]!.slugDe === de.slug && touching[0]!.slugEn === en.slug ? touching[0] : undefined;
+    if (!prior && touching.length > 0) {
       summary.rejected++;
-      const named = [priorDe && `DE "${de.slug}" belongs to ${priorDe.slugDe}/${priorDe.slugEn}`, priorEn && `EN "${en.slug}" belongs to ${priorEn.slugDe}/${priorEn.slugEn}`].filter(Boolean).join('; ');
-      warnings.push(`${de.slug}/${en.slug}: slug conflict with an existing post (${named}) — rejected, nothing overwritten`);
+      warnings.push(`${de.slug}/${en.slug}: slug conflict with an existing post (${touching.map((t) => `${t.slugDe}/${t.slugEn}`).join(', ')}) — rejected, nothing overwritten`);
       continue;
     }
-    const prior = priorDe;
+    const earlier = claimed.get(de.slug) ?? claimed.get(en.slug);
+    if (earlier) {
+      summary.rejected++;
+      warnings.push(`${de.slug}/${en.slug}: slug conflict within this export (also used by ${earlier}) — rejected, nothing written`);
+      continue;
+    }
+    claimed.set(de.slug, `${de.slug}/${en.slug}`);
+    claimed.set(en.slug, `${de.slug}/${en.slug}`);
     if (prior?.status === 'published') { summary.skippedPublished++; warnings.push(`${de.slug}/${en.slug}: already published — not overwritten`); continue; }
     pending.push({ de, en, prior });
   }
