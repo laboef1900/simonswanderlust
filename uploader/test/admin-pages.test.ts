@@ -345,6 +345,14 @@ describe('admin page wiring', () => {
     }
   });
 
+  it('the sidebar user badge never interpolates the username into innerHTML (#131)', () => {
+    // The shell is one template literal assigned to innerHTML; the username is
+    // the only user-controlled string in it and must be set as text afterwards.
+    const shell = auth.slice(auth.indexOf('shell.innerHTML'), auth.indexOf('shell.querySelector'));
+    expect(shell).not.toMatch(/\$\{s\.username/);
+    expect(auth).toContain(".cms-user-name').textContent = s.username");
+  });
+
   it('the gallery picker offers exactly the layout modes the renderer accepts', () => {
     // A fourth label here, or a renamed value, would give the author a mode the
     // site silently falls back to break-out for — the failure is invisible in

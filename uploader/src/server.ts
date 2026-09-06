@@ -18,7 +18,7 @@ import type { WorkLock } from './work-lock.js';
 import { parseExif } from './exif.js';
 import { diskSpace, insufficientSpace, formatBytes } from './disk.js';
 import type { ReconcileReport } from './media-sync.js';
-import { verifyPassword, type UserStore, UserExistsError, DUMMY_STORED_HASH, MAX_PASSWORD_LENGTH, MAX_USERNAME_LENGTH, passwordPolicyViolation } from './users.js';
+import { verifyPassword, type UserStore, UserExistsError, DUMMY_STORED_HASH, MAX_PASSWORD_LENGTH, passwordPolicyViolation, usernamePolicyViolation } from './users.js';
 import type { SessionStore } from './sessions.js';
 import {
   SESSION_TTL_MS, loadUser, requireAuth, requireAdmin,
@@ -717,8 +717,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const username = String(b.username ?? '').trim();
     const password = String(b.password ?? '');
     if (!username || !password) return reply.code(400).send({ error: 'username and password are required' });
-    if (username.length > MAX_USERNAME_LENGTH) return reply.code(400).send({ error: `username must be at most ${MAX_USERNAME_LENGTH} characters` });
-    const violation = passwordPolicyViolation(password);
+    const violation = usernamePolicyViolation(username) ?? passwordPolicyViolation(password);
     if (violation) return reply.code(400).send({ error: violation });
     const user = await users.create({ username, password, isAdmin: true });
     const token = await sessions.create(user.id, SESSION_TTL_MS);
@@ -776,8 +775,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const password = String(b.password ?? '');
     const isAdmin = Boolean(b.isAdmin);
     if (!username || !password) return reply.code(400).send({ error: 'username and password are required' });
-    if (username.length > MAX_USERNAME_LENGTH) return reply.code(400).send({ error: `username must be at most ${MAX_USERNAME_LENGTH} characters` });
-    const violation = passwordPolicyViolation(password);
+    const violation = usernamePolicyViolation(username) ?? passwordPolicyViolation(password);
     if (violation) return reply.code(400).send({ error: violation });
     try {
       const user = await users.create({ username, password, isAdmin });

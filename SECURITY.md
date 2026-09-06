@@ -25,8 +25,13 @@ change about the security posture.
   The **password policy** is length-only (12–1024 characters — no composition rules, per ASVS 5.0
   §6.2.5) and is enforced inside `hashPassword` itself, so `/setup`, `POST /users`,
   `POST /users/me/password`, both user stores and the CLI `set-password` recovery path all share
-  one rule with no way around it (#109). Usernames are capped at 64 characters at creation.
-  (`uploader/src/users.ts`)
+  one rule with no way around it (#109). **Usernames** follow the same pattern (#131):
+  `usernamePolicyViolation` — 1–64 characters from `[A-Za-z0-9._-]`, plain ASCII identifiers, so
+  no markup, whitespace, or homoglyph can become a limiter key, a `lower(username)` lookup, an
+  `aria-label`, or a log line — is enforced inside both stores' `create` and checked up front by
+  `/setup` and `POST /users` for the 400. `/login` and the CLI still accept any stored name, so an
+  account that predates the rule keeps signing in. The admin shell in `auth.js` sets the username
+  into the sidebar badge with `textContent`, never `innerHTML`. (`uploader/src/users.ts`)
 - **Sessions** use a 256-bit random token sent as an **HttpOnly, `SameSite=Strict`** cookie; only
   the **SHA-256 hash** of the token is stored in Postgres, so a database read cannot reproduce a
   live session. Cookies are marked `Secure` when the request is HTTPS. Sessions last 30 days and

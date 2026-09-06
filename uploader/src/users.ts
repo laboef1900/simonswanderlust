@@ -13,6 +13,12 @@ export const MIN_PASSWORD_LENGTH = 12;
  * capping them bounds both (#109). 64 is generous for a login name.
  */
 export const MAX_USERNAME_LENGTH = 64;
+/**
+ * Plain ASCII identifiers only (#131): no markup, no whitespace, no homoglyphs
+ * that `lower()` would fold onto another account. Length is checked
+ * separately so the message can name the cap.
+ */
+const USERNAME_RE = /^[a-z0-9._-]+$/i;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -28,6 +34,32 @@ export function passwordPolicyViolation(password: string): string | null {
     return `password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} characters`;
   }
   return null;
+}
+
+export class UsernamePolicyError extends Error {}
+
+/**
+ * The one username rule for NEW accounts. Returns the user-facing violation,
+ * or null. Enforced by both stores' `create` (so any future creation path —
+ * a CLI `add-user`, say — inherits it) and checked up front by `/setup` and
+ * `POST /users` for the 400. Deliberately NOT applied to `/login`,
+ * `findByUsername` or `setPassword`: an account created before the rule may
+ * carry a longer or stranger name and must keep signing in (#109).
+ */
+export function usernamePolicyViolation(username: string): string | null {
+  if (username.length === 0 || username.length > MAX_USERNAME_LENGTH) {
+    return `username must be between 1 and ${MAX_USERNAME_LENGTH} characters`;
+  }
+  if (!USERNAME_RE.test(username)) {
+    return 'username may only contain letters, digits, ".", "_" and "-"';
+  }
+  return null;
+}
+
+/** @throws UsernamePolicyError */
+export function assertUsernamePolicy(username: string): void {
+  const violation = usernamePolicyViolation(username);
+  if (violation) throw new UsernamePolicyError(violation);
 }
 
 /**
@@ -109,6 +141,7 @@ export function memoryUserStore(): UserStore {
       return [...byId.values()].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
     },
     async create({ username, password, isAdmin }) {
+      assertUsernamePolicy(username);
       if ([...byId.values()].some((u) => sameName(u.username, username))) {
         throw new UserExistsError('username already exists');
       }
@@ -161,6 +194,7 @@ export function pgUserStore(pool: DbPool): UserStore {
       return rows.map(rowToUser);
     },
     async create({ username, password, isAdmin }) {
+      assertUsernamePolicy(username);
       const id = randomUUID();
       try {
         const { rows } = await pool.query<UserRow>(

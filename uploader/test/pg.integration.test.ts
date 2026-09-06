@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
-import { pgUserStore, verifyPassword, UserExistsError } from '../src/users.js';
+import { pgUserStore, verifyPassword, UserExistsError, UsernamePolicyError } from '../src/users.js';
 import { pgSessionStore } from '../src/sessions.js';
 import { pgPostStore, PostError, REVISION_CAP } from '../src/posts.js';
 
@@ -28,6 +28,8 @@ maybe('postgres stores (integration)', () => {
     const u = await users.create({ username: 'Simon', password: 'password123456', isAdmin: true });
     expect((await users.findByUsername('simon'))?.id).toBe(u.id);
     await expect(users.create({ username: 'simon', password: 'password-x-1234', isAdmin: false })).rejects.toBeInstanceOf(UserExistsError);
+    // #131: the store, not just the route, refuses a policy-violating name.
+    await expect(users.create({ username: `${Date.now()} spaced`, password: 'password123456', isAdmin: false })).rejects.toBeInstanceOf(UsernamePolicyError);
   });
 
   it('findById returns null for malformed (no 22P02) and unknown ids', async () => {
