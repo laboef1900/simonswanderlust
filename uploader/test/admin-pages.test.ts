@@ -12,6 +12,7 @@ const guardSrc = readFileSync('public/draft-guard.js', 'utf8');
 interface Stash {
   savedAt: string;
   payload: Record<string, unknown>;
+  key?: string;
 }
 interface Guard {
   markDirty(): void;
@@ -19,6 +20,7 @@ interface Guard {
   snapshot(): number;
   stashNow(): void;
   tryRestore(): Stash | null;
+  adopt(stash: Stash | null): void;
   dismissRestore(stash: Stash | null): void;
   wasDismissed(stash: Stash | null): boolean;
   setKey(newKey: string): void;
@@ -26,7 +28,8 @@ interface Guard {
 }
 interface DraftGuardApi {
   safeNextPath(raw: string | null): string;
-  createDraftGuard(opts: { storageKey: string; collect: () => unknown; debounceMs?: number }): Guard;
+  tabScopedKey(prefix: string): string;
+  createDraftGuard(opts: { storageKey: string; collect: () => unknown; debounceMs?: number; orphanPrefix?: string }): Guard;
 }
 interface StubEvent {
   defaultPrevented: boolean;
@@ -34,9 +37,11 @@ interface StubEvent {
   preventDefault: () => void;
 }
 
-function makeSandbox(opts: { throwStorage?: boolean } = {}) {
+// `store`/`session` may be shared across sandboxes to model two tabs: every
+// tab sees one localStorage, each has its own sessionStorage.
+function makeSandbox(opts: { throwStorage?: boolean; store?: Map<string, string>; session?: Map<string, string> } = {}) {
   const beforeUnload: Array<(e: StubEvent) => void> = [];
-  const store = new Map<string, string>();
+  const store = opts.store ?? new Map<string, string>();
   const timers = new Map<number, () => void>();
   let nextId = 1;
 
@@ -45,15 +50,19 @@ function makeSandbox(opts: { throwStorage?: boolean } = {}) {
         getItem: (): string | null => { throw new Error('quota exceeded'); },
         setItem: (): void => { throw new Error('quota exceeded'); },
         removeItem: (): void => { throw new Error('quota exceeded'); },
+        get length(): number { throw new Error('quota exceeded'); },
+        key: (): string | null => { throw new Error('quota exceeded'); },
       }
     : {
         getItem: (k: string): string | null => store.get(k) ?? null,
         setItem: (k: string, v: string): void => { store.set(k, String(v)); },
         removeItem: (k: string): void => { store.delete(k); },
+        get length(): number { return store.size; },
+        key: (i: number): string | null => [...store.keys()][i] ?? null,
       };
 
   // sessionStorage-backed dismissal marker (per-tab; separate from localStorage).
-  const session = new Map<string, string>();
+  const session = opts.session ?? new Map<string, string>();
   const sessionStorageStub = opts.throwStorage
     ? {
         getItem: (): string | null => { throw new Error('quota exceeded'); },
@@ -317,6 +326,112 @@ describe('DraftGuard.createDraftGuard', () => {
     expect(sb.fireBeforeUnload().defaultPrevented).toBe(true);
     expect(() => guard.markClean()).not.toThrow();
     expect(sb.fireBeforeUnload().defaultPrevented).toBe(false);
+  });
+});
+
+// #138: two "new post" tabs used to stash under one key, so the first save
+// re-keyed and deleted the other tab's work. Model two tabs as two sandboxes
+// over ONE localStorage, each with its own sessionStorage.
+describe('DraftGuard per-tab stash keys (#138)', () => {
+  const PREFIX = 'swl:draft:new';
+  const newTab = (store: Map<string, string>) => {
+    const sb = makeSandbox({ store });
+    const key = sb.api.tabScopedKey(PREFIX);
+    return { sb, key };
+  };
+
+  it('gives every page load its own key — a duplicated tab (copied sessionStorage) included', () => {
+    const store = new Map<string, string>();
+    const session = new Map<string, string>();
+    const a = makeSandbox({ store, session }).api.tabScopedKey(PREFIX);
+    const b = makeSandbox({ store, session }).api.tabScopedKey(PREFIX);
+    expect(a).not.toBe(b);
+    expect(a.startsWith(PREFIX + ':')).toBe(true);
+  });
+
+  it('a reloaded tab is offered its own previous stash through the orphan scan', () => {
+    const store = new Map<string, string>();
+    const first = newTab(store);
+    const g1 = first.sb.api.createDraftGuard({ storageKey: first.key, orphanPrefix: PREFIX + ':', collect: () => ({ title: 'typed' }) });
+    g1.markDirty(); first.sb.flushTimers();
+    const reloaded = newTab(store);
+    const g2 = reloaded.sb.api.createDraftGuard({ storageKey: reloaded.key, orphanPrefix: PREFIX + ':', collect: () => ({}) });
+    expect(g2.tryRestore()?.payload).toEqual({ title: 'typed' });
+  });
+
+  it('tab A saving no longer destroys tab B\'s stash', () => {
+    const store = new Map<string, string>();
+    const a = newTab(store);
+    const b = newTab(store);
+    const guardA = a.sb.api.createDraftGuard({ storageKey: a.key, orphanPrefix: PREFIX + ':', collect: () => ({ title: 'A' }) });
+    const guardB = b.sb.api.createDraftGuard({ storageKey: b.key, orphanPrefix: PREFIX + ':', collect: () => ({ title: 'B' }) });
+    guardA.markDirty(); a.sb.flushTimers();
+    guardB.markDirty(); b.sb.flushTimers();
+    // A saves: re-key to the real translationKey, then markClean
+    guardA.setKey('swl:draft:tk-a');
+    guardA.markClean();
+    expect(store.has('swl:draft:tk-a')).toBe(false);
+    // B's work is untouched and still restorable by B
+    expect(guardB.tryRestore()?.payload).toEqual({ title: 'B' });
+  });
+
+  it('a fresh tab is offered the newest orphaned new-post stash and takes it over on restore', () => {
+    const store = new Map<string, string>();
+    const crashed = newTab(store);
+    const older = newTab(store);
+    store.set(older.key, JSON.stringify({ savedAt: '2026-09-06T10:00:00.000Z', payload: { title: 'older' } }));
+    store.set(crashed.key, JSON.stringify({ savedAt: '2026-09-06T11:00:00.000Z', payload: { title: 'newest' } }));
+
+    const fresh = newTab(store);
+    const guard = fresh.sb.api.createDraftGuard({ storageKey: fresh.key, orphanPrefix: PREFIX + ':', collect: () => ({ title: 'restored+edited' }) });
+    const stash = guard.tryRestore();
+    expect(stash?.payload).toEqual({ title: 'newest' });
+    expect(stash?.key).toBe(crashed.key);
+
+    guard.adopt(stash);
+    // moved under this tab's key: not offered to a third tab, and this tab's
+    // stash/markClean touch only its own entry
+    expect(store.has(crashed.key)).toBe(false);
+    expect(JSON.parse(store.get(fresh.key) ?? '').payload).toEqual({ title: 'newest' });
+    guard.markDirty(); fresh.sb.flushTimers();
+    expect(JSON.parse(store.get(fresh.key) ?? '').payload).toEqual({ title: 'restored+edited' });
+    guard.markClean();
+    expect(store.has(fresh.key)).toBe(false);
+    expect(store.has(older.key)).toBe(true); // never touched
+  });
+
+  it('declining an orphan leaves it alone and is remembered for that stash only', () => {
+    const store = new Map<string, string>();
+    const other = newTab(store);
+    store.set(other.key, JSON.stringify({ savedAt: '2026-09-06T11:00:00.000Z', payload: { title: 'theirs' } }));
+    const fresh = newTab(store);
+    const guard = fresh.sb.api.createDraftGuard({ storageKey: fresh.key, orphanPrefix: PREFIX + ':', collect: () => ({ title: 'mine' }) });
+    const stash = guard.tryRestore();
+    guard.dismissRestore(stash);
+    expect(guard.wasDismissed(guard.tryRestore())).toBe(true);
+    // this tab keeps writing under ITS key, not the declined one
+    guard.markDirty(); fresh.sb.flushTimers();
+    expect(JSON.parse(store.get(other.key) ?? '').payload).toEqual({ title: 'theirs' });
+    expect(JSON.parse(store.get(fresh.key) ?? '').payload).toEqual({ title: 'mine' });
+    // its own stash now wins over the orphan on the next load
+    expect(guard.tryRestore()?.key).toBe(fresh.key);
+  });
+
+  it('an existing post (no orphanPrefix) never sees new-post orphans', () => {
+    const store = new Map<string, string>();
+    store.set(PREFIX + ':zzz', JSON.stringify({ savedAt: '2026-09-06T11:00:00.000Z', payload: { title: 'x' } }));
+    const sb = makeSandbox({ store });
+    const guard = sb.api.createDraftGuard({ storageKey: 'swl:draft:tk-1', collect: () => ({}) });
+    expect(guard.tryRestore()).toBeNull();
+  });
+
+  it('skips a corrupt orphan and still offers a good one', () => {
+    const store = new Map<string, string>();
+    store.set(PREFIX + ':bad', '{not json');
+    store.set(PREFIX + ':good', JSON.stringify({ savedAt: '2026-09-06T11:00:00.000Z', payload: { title: 'ok' } }));
+    const fresh = newTab(store);
+    const guard = fresh.sb.api.createDraftGuard({ storageKey: fresh.key, orphanPrefix: PREFIX + ':', collect: () => ({}) });
+    expect(guard.tryRestore()?.payload).toEqual({ title: 'ok' });
   });
 });
 

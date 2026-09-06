@@ -32,8 +32,8 @@ interface Element {
   appendChild(): void;
   remove(): void;
   focus(): void;
-  setAttribute(): void;
-  getAttribute(): null;
+  setAttribute(k: string, v: string): void;
+  getAttribute(k: string): string | null;
 }
 interface EditorApi {
   populateForm(post: unknown): void;
@@ -42,6 +42,7 @@ interface EditorApi {
 
 function element(): Element {
   const listeners: Record<string, (() => void)[]> = {};
+  const attrs: Record<string, string> = {};
   return {
     value: '', checked: false, textContent: '', innerHTML: '', hidden: false, disabled: false,
     dataset: {}, style: {},
@@ -49,12 +50,15 @@ function element(): Element {
     addEventListener(type, fn) { (listeners[type] ??= []).push(fn); },
     fire(type) { for (const fn of listeners[type] ?? []) fn(); },
     querySelector() { return null; }, querySelectorAll() { return []; },
-    appendChild() {}, remove() {}, focus() {}, setAttribute() {}, getAttribute() { return null; },
+    appendChild() {}, remove() {}, focus() {},
+    setAttribute(k: string, v: string) { attrs[k] = v; }, getAttribute(k: string) { return attrs[k] ?? null; },
   };
 }
 
-function loadEditor(): { api: EditorApi; el: (id: string) => Element; editors: { input: { attrs: Record<string, string> } }[] } {
+function loadEditor(): { api: EditorApi; el: (id: string) => Element; editors: { input: { attrs: Record<string, string> } }[]; created: Element[]; dirtyCalls: () => number } {
   const elements = new Map<string, Element>();
+  const created: Element[] = [];
+  let dirty = 0;
   const el = (id: string): Element => {
     if (!ids.has(id)) throw new Error('no element #' + id + ' in editor.html');
     let e = elements.get(id);
@@ -77,14 +81,14 @@ function loadEditor(): { api: EditorApi; el: (id: string) => Element; editors: {
     toTextArea() {}
   }
   const editors: EasyMDE[] = [];
-  const guard = { markDirty() {}, markClean() {}, snapshot() { return 0; }, stashNow() {}, tryRestore() { return null; }, dismissRestore() {}, wasDismissed() { return false; }, setKey() {}, redirectToLogin() {} };
+  const guard = { markDirty() { dirty += 1; }, markClean() {}, snapshot() { return 0; }, stashNow() {}, tryRestore() { return null; }, adopt() {}, dismissRestore() {}, wasDismissed() { return false; }, setKey() {}, redirectToLogin() {} };
   const ctx: Record<string, unknown> = {
     document: {
       getElementById: (id: string): Element | null => (ids.has(id) ? el(id) : null),
       querySelector: () => element(),
       querySelectorAll: () => [],
       addEventListener() {},
-      createElement: () => element(),
+      createElement: () => { const e = element(); created.push(e); return e; },
     },
     location: { search: '', pathname: '/admin/editor.html', href: '' },
     history: { replaceState() {} },
@@ -100,7 +104,7 @@ function loadEditor(): { api: EditorApi; el: (id: string) => Element; editors: {
     navigator: {},
     EasyMDE: class extends EasyMDE { constructor() { super(); editors.push(this); } },
     Auth: { ensureAuthed: async () => null, renderHeader() {} },
-    DraftGuard: { createDraftGuard: () => guard },
+    DraftGuard: { createDraftGuard: () => guard, tabScopedKey: (p: string) => p + ':test' },
     MediaPicker: { open() {} },
     GalleryFence: {},
     AltSuggest: { wire() {} },
@@ -110,7 +114,7 @@ function loadEditor(): { api: EditorApi; el: (id: string) => Element; editors: {
   vm.createContext(ctx);
   vm.runInContext(script, ctx);
   const api = vm.runInContext('({ populateForm, buildPayload })', ctx) as EditorApi;
-  return { api, el, editors };
+  return { api, el, editors, created, dirtyCalls: () => dirty };
 }
 
 function fullPair(): PostPair {
@@ -191,6 +195,22 @@ describe('editor.html inline script against its own markup', () => {
       'deCountry', 'enCountry', 'deHeroSrc', 'enHeroSrc', 'deHeroAlt', 'enHeroAlt']) {
       expect(el(id).value, id).toBe('');
     }
+  });
+
+  // #138: a remove button's click fires neither input nor change, so the
+  // delegated listeners never saw a row removal — no leave-page warning, and
+  // the stale stash resurrected the removed row on restore.
+  it('removing a key-fact or stop row marks the draft dirty', () => {
+    const { api, created, dirtyCalls } = loadEditor();
+    api.populateForm(fullPair());
+    const before = dirtyCalls();
+    const removeStop = created.find((e) => e.getAttribute('aria-label') === 'Remove stop');
+    const removeFact = created.find((e) => e.getAttribute('aria-label') === 'Remove key fact');
+    expect(removeStop && removeFact).toBeTruthy();
+    removeStop!.fire('click');
+    expect(dirtyCalls()).toBe(before + 1);
+    removeFact!.fire('click');
+    expect(dirtyCalls()).toBe(before + 2);
   });
 
   // Issue #122 (Golden Rule 2): the slug follows the title only while it is
