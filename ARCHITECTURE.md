@@ -140,7 +140,8 @@ in-flight jobs can still write their final status.
 original) ≈ **1.75 GB per 100 photos**, plus roughly the same again under `/data/backup` because
 originals are captured by the incremental image archive — so a 100-photo trip costs about
 **4 GB all-in**. `POST /upload` therefore refuses with **507** when `/data` lacks room for the
-photo's full cost plus a reserve that keeps a build and a backup able to run, and `GET /health`
+photo's full cost plus a reserve that keeps a build and a backup able to run; `POST /import`
+applies the same precondition sized from the photos it still has to fetch (#94); and `GET /health`
 reports free space (as information, never as a health verdict — see SECURITY.md). `heroImage` is a remote URL object
 `{src,width,height,alt}`; body images are referenced by URL and rendered as `<picture>` at build
 time. This contract is mirrored on the blog side in `site/src/lib/images.ts`.

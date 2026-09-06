@@ -8,7 +8,7 @@ import sharp from 'sharp';
 import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
 import { rehostImage } from '../src/wp-images.js';
-import { ImportTooLargeError, type ImportSummary } from '../src/wp-import.js';
+import { ImportTooLargeError, ImportInsufficientSpaceError, type ImportSummary } from '../src/wp-import.js';
 import { defaultSettings, validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
 import { memoryUserStore, type UserStore } from '../src/users.js';
@@ -1693,6 +1693,22 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
     expect(seen!.delayMs).toBe(900);
     expect(seen!.retries).toBe(4);
     expect(seen!.resume).toBeDefined();
+    // issue #94: the free-space probe reads the volume the images land on.
+    expect(seen!.diskSpace).toBeDefined();
+    const space = await seen!.diskSpace!();
+    expect(space.total).toBeGreaterThan(0);
+  });
+
+  // issue #94: same status /upload uses for the same condition; the sanitized
+  // message reaches the client, the numbers stay on stdout.
+  it('maps a refused-for-space import to a 507 carrying the sanitized message, not a 500', async () => {
+    const b = build({ importRunner: async () => { throw new ImportInsufficientSpaceError('not enough free disk space for this import (1.0 GB available, about 13 GB required for 640 photos)', 640, 1024 ** 3); } });
+    const { cookie } = await authed(b);
+    const res = await postImport(b, cookie, wxrWith(...blocked(1)));
+    expect(res.statusCode).toBe(507);
+    expect(res.json().error).toMatch(/not enough free disk space for this import/);
+    // and the single-flight flag was released
+    expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(507);
   });
 
   // @ai-warning Resumability makes "just run the import again" the documented

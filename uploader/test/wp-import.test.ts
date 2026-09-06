@@ -4,7 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { importWxr, ImportTooLargeError, DEFAULT_MAX_IMAGES, type ImportDeps } from '../src/wp-import.js';
+import { importWxr, ImportTooLargeError, ImportInsufficientSpaceError, DEFAULT_MAX_IMAGES, type ImportDeps } from '../src/wp-import.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { createRehostResume, rehostImage, type RehostResult } from '../src/wp-images.js';
 import { FetchError } from '../src/safe-fetch.js';
@@ -737,6 +737,114 @@ describe('importWxr layering', () => {
     expect(new Set(seen).size).toBe(3);
     expect(sleeps).toEqual([5000, 15000]); // a real 503 is retryable
     expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+  });
+});
+
+/**
+ * Issue #94: the /data free-space precondition, judged on the photos the run
+ * will actually fetch. `IMPORT_PHOTO_BYTES` × that count + the 2 GiB floor.
+ */
+describe('importWxr free-space precondition', () => {
+  const GiB = 1024 ** 3;
+  const MiB = 1024 ** 2;
+  const three = () => pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/c.jpg'));
+
+  it('refuses BEFORE any fetch when the volume cannot hold the photos to fetch', async () => {
+    const h = harness();
+    // floor + 3 × 17.5 MB ≈ 2.05 GiB required; 2 GiB + 20 MiB free is short.
+    const diskSpace = async () => ({ free: 2 * GiB + 20 * MiB, total: 100 * GiB });
+    await expect(run(three(), h, { diskSpace })).rejects.toBeInstanceOf(ImportInsufficientSpaceError);
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it('names the count and sizes without leaking the path, and maps 3 photos to the message', async () => {
+    const h = harness();
+    const diskSpace = async () => ({ free: 1 * GiB, total: 100 * GiB });
+    const err = await run(three(), h, { diskSpace }).catch((e: unknown) => e) as ImportInsufficientSpaceError;
+    expect(err).toBeInstanceOf(ImportInsufficientSpaceError);
+    expect(err.photos).toBe(3);
+    expect(err.freeBytes).toBe(1 * GiB);
+    expect(err.message).toMatch(/not enough free disk space for this import .*for 3 photos/);
+    expect(err.message).not.toContain('/tmp');
+  });
+
+  it('proceeds when there is room, and runs the whole import', async () => {
+    const h = harness();
+    const s = await run(three(), h, { diskSpace: async () => ({ free: 50 * GiB, total: 100 * GiB }) });
+    expect(s.imported).toBe(1);
+    expect(h.calls).toHaveLength(3);
+  });
+
+  // The post-ENOSPC re-run is the documented recovery path: the already-hosted
+  // majority is resumed from disk and must not be charged again, or a volume
+  // that could finish the import would refuse it forever.
+  it('charges only the photos the resume index does NOT hold', async () => {
+    const h = harness();
+    const resume = { lookup: async (key: string) => (key.endsWith('/c') ? null : { src: 'https://img/kept', width: 12, height: 34 }) };
+    // Room for 1 photo (floor + 20 MiB), not for 3.
+    const diskSpace = async () => ({ free: 2 * GiB + 20 * MiB, total: 100 * GiB });
+    const s = await run(three(), h, { diskSpace, resume });
+    expect(h.calls).toEqual(['https://wp/c.jpg']);
+    expect(s.images).toEqual({ total: 3, hosted: 3, failed: 0 });
+  });
+
+  // The hero's key encodes no url identity, so the real index (`HERO_KEY_RE`
+  // in wp-images.ts) never resumes it. The estimate delegates that decision to
+  // the index rather than duplicating the rule: it asks for the hero key too,
+  // under the key `buildLocale` will actually use, and charges what comes back null.
+  it('asks the index about the hero under its real key, so an unresumable hero is charged', async () => {
+    const h = harness();
+    const looked: string[] = [];
+    const resume = { lookup: async (key: string) => { looked.push(key); return key.endsWith('/hero') ? null : { src: 'https://img/kept', width: 12, height: 34 }; } };
+    // Body photo resumable, hero not → 1 photo to fetch; room for 0.
+    const diskSpace = async () => ({ free: 2 * GiB + 1 * MiB, total: 100 * GiB });
+    const err = await run(pairWithHero('https://wp/hero.jpg', ['https://wp/a.jpg']), h, { diskSpace, resume }).catch((e: unknown) => e) as ImportInsufficientSpaceError;
+    expect(err).toBeInstanceOf(ImportInsufficientSpaceError);
+    expect(err.photos).toBe(1);
+    expect(looked.sort()).toEqual(['trips/de-1/a', 'trips/de-1/hero']);
+  });
+
+  it('memoises resume lookups so the run does not probe disk twice per key', async () => {
+    const h = harness();
+    const looked: string[] = [];
+    const resume = { lookup: async (key: string) => { looked.push(key); return null; } };
+    await run(three(), h, { diskSpace: async () => ({ free: 50 * GiB, total: 100 * GiB }), resume });
+    expect(h.calls).toHaveLength(3);
+    expect(looked.sort()).toEqual(['trips/de-1/a', 'trips/de-1/b', 'trips/de-1/c']);
+  });
+
+  it('treats a throwing resume lookup as "will fetch" in the estimate, and re-fetches in the run', async () => {
+    const h = harness();
+    const resume = { lookup: async () => { throw new Error('index broken'); } };
+    const logged: string[] = [];
+    const s = await run(three(), h, { diskSpace: async () => ({ free: 50 * GiB, total: 100 * GiB }), resume, log: (m) => logged.push(m) });
+    expect(h.calls).toHaveLength(3);
+    expect(s.images).toEqual({ total: 3, hosted: 3, failed: 0 });
+    expect(logged.filter((m) => /resume lookup failed/.test(m))).toHaveLength(3); // once per key, not twice
+  });
+
+  it('skips the check when statfs fails — an unreadable volume must not block the import', async () => {
+    const h = harness();
+    const logged: string[] = [];
+    const s = await run(three(), h, { diskSpace: async () => { throw new Error('ENOENT'); }, log: (m) => logged.push(m) });
+    expect(s.imported).toBe(1);
+    expect(logged.join('\n')).toMatch(/free-space check skipped/);
+  });
+
+  it('skips the check when no probe is injected (pre-#94 behaviour, and the unit-test default)', async () => {
+    const h = harness();
+    const s = await run(three(), h);
+    expect(s.imported).toBe(1);
+  });
+
+  // The cap must be checked FIRST: an over-cap export is refused for its count,
+  // not diagnosed as a disk problem after probing 40,000 keys.
+  it('checks the image cap before the free-space estimate', async () => {
+    const h = harness();
+    let probed = false;
+    await expect(run(three(), h, { maxImages: 2, diskSpace: async () => { probed = true; return { free: 0, total: 1 }; } }))
+      .rejects.toBeInstanceOf(ImportTooLargeError);
+    expect(probed).toBe(false);
   });
 });
 
