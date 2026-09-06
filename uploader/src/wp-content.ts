@@ -23,6 +23,16 @@ const MARK = '\u0000';
 
 interface GalleryItem { group: string; href: string; title: string }
 
+/**
+ * The marker is ONE line, so every field must be line-safe. Elementor sources
+ * the title from the attachment caption/description — textareas — so a
+ * multi-line title used to split the marker over two lines that `foldGalleries`
+ * then emitted verbatim, U+0000 and all; Postgres refuses NUL in `text`, so the
+ * pair failed at `upsertDraft` AFTER every photo had been fetched (issue #143).
+ * Control characters (including a stray MARK) collapse to one space.
+ */
+const lineSafe = (s: string): string => s.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+
 td.addRule('elementorLightboxGallery', {
   filter: (node) =>
     node.nodeName === 'A' &&
@@ -30,16 +40,31 @@ td.addRule('elementorLightboxGallery', {
     (node.getAttribute('href') ?? '') !== '',
   replacement: (_content, node) => {
     const el = node as unknown as { getAttribute(n: string): string | null };
-    const group = el.getAttribute('data-elementor-lightbox-slideshow') ?? '';
-    const href = el.getAttribute('href') ?? '';
-    const title = el.getAttribute('data-elementor-lightbox-title') ?? '';
+    const group = lineSafe(el.getAttribute('data-elementor-lightbox-slideshow') ?? '');
+    const href = lineSafe(el.getAttribute('href') ?? '');
+    const title = lineSafe(el.getAttribute('data-elementor-lightbox-title') ?? '');
     return `\n${MARK}${group}${MARK}${href}${MARK}${title}${MARK}\n`;
   },
 });
 
+/**
+ * A marker that did not stand on its own line — Turndown prefixes every line of
+ * a blockquote with `> ` and of a list item with `- ` — cannot become a fence
+ * (a fence inside a blockquote is not a gallery to `rewriteFences`). Degrade it
+ * to the inline image it stands for, so the photo survives, the re-host pass
+ * still finds it (`markdownImages`), and no marker byte reaches the store.
+ */
+function inlineImage(href: string, title: string): string {
+  const alt = title.replace(/[\\[\]]/g, '\\$&');
+  const dest = /\s/.test(href) ? `<${href}>` : href.replace(/[()]/g, '\\$&');
+  return `![${alt}](${dest})`;
+}
+
 /** Collapse runs of adjacent marker lines sharing a slideshow id into one fence. */
 function foldGalleries(md: string): string {
-  const lineRe = new RegExp(`^${MARK}([^${MARK}]*)${MARK}([^${MARK}]*)${MARK}([^${MARK}]*)${MARK}$`);
+  const fieldRe = `([^${MARK}]*)${MARK}([^${MARK}]*)${MARK}([^${MARK}]*)${MARK}`;
+  const lineRe = new RegExp(`^${MARK}${fieldRe}$`);
+  const anyRe = new RegExp(`${MARK}${fieldRe}`, 'g');
   const out: string[] = [];
   let run: GalleryItem[] = [];
   const flush = (): void => {
@@ -60,7 +85,10 @@ function foldGalleries(md: string): string {
     }
     if (line.trim() === '' && run.length > 0) continue; // blank lines inside a run
     flush();
-    out.push(line);
+    // Fail closed: a prefixed marker becomes an inline image, and any marker
+    // byte left over (there should be none — `lineSafe` strips them from the
+    // fields) is dropped rather than stored.
+    out.push(line.replace(anyRe, (_w, _g: string, href: string, title: string) => inlineImage(href, title)).replaceAll(MARK, ''));
   }
   flush();
   return out.join('\n');

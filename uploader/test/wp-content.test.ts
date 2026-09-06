@@ -49,6 +49,35 @@ describe('htmlToMarkdown', () => {
     expect(md).toContain('[Download](https://wp/report.pdf)');
     expect(md).not.toContain('```gallery');
   });
+
+  // Issue #143: the gallery marker is a NUL-delimited line. Elementor sources
+  // the lightbox title from the attachment caption (a textarea), and Turndown
+  // prefixes blockquote/list lines — either used to leave U+0000 in the body,
+  // which Postgres refuses AFTER every photo of the pair was fetched.
+  describe('never leaks the gallery marker (issue #143)', () => {
+    const anchor = (title: string, href = 'https://wp/a.jpg') =>
+      `<a href="${href}" data-elementor-lightbox-slideshow="g1" data-elementor-lightbox-title="${title}"></a>`;
+
+    it('folds an anchor whose title spans lines, with the title collapsed to one line', () => {
+      const md = htmlToMarkdown(anchor('line one\nline two\r\n\tthree') + anchor('B'));
+      expect(md).not.toContain('\u0000');
+      expect(md).toBe('```gallery\nhttps://wp/a.jpg | alt="line one line two three"\nhttps://wp/a.jpg | alt="B"\n```');
+    });
+
+    it('degrades an anchor inside a blockquote or list item to an inline image the re-host pass finds', () => {
+      for (const html of [`<blockquote>${anchor('Day [1]')}</blockquote>`, `<ul><li>${anchor('Day [1]')}</li></ul>`]) {
+        const md = htmlToMarkdown(html);
+        expect(md).not.toContain('\u0000');
+        expect(md).not.toContain('```gallery');
+        expect(markdownImages(md)).toMatchObject([{ alt: 'Day \\[1\\]', url: 'https://wp/a.jpg' }]);
+      }
+    });
+
+    it('wraps a spaced destination and escapes parentheses in the degraded image', () => {
+      const md = htmlToMarkdown(`<blockquote>${anchor('', 'https://wp/my photo (1).jpg')}</blockquote>`);
+      expect(markdownImages(md).map((i) => i.url)).toEqual(['https://wp/my photo (1).jpg']);
+    });
+  });
 });
 
 /**

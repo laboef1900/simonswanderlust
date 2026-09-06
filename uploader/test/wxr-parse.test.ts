@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseWxr } from '../src/wxr-parse.js';
+import { parseWxr, WxrParseError } from '../src/wxr-parse.js';
 
 const xml = readFileSync(join(process.cwd(), 'test/fixtures/wxr-sample.xml'), 'utf8');
 
@@ -32,5 +32,21 @@ describe('parseWxr', () => {
 </rss>`;
     expect(() => parseWxr(noGroupWxr)).not.toThrow();
     expect(parseWxr(noGroupWxr).posts).toHaveLength(0);
+  });
+
+  // Issue #143: the parser's own throws (a truncated download cuts a CDATA or
+  // a tag; a bad DOCTYPE; the entity caps) were plain Errors that reached the
+  // global handler as a 500. They are one typed error with a fixed message and
+  // the parser's detail kept aside for the log.
+  it('throws WxrParseError for a truncated export, a malformed DOCTYPE or the entity cap, detail kept off the message', () => {
+    const truncated = xml.slice(0, Math.floor(xml.length / 2));
+    const entityBomb = `<!DOCTYPE r [${Array.from({ length: 2000 }, (_, i) => `<!ENTITY e${i} "x">`).join('')}]><rss/>`;
+    for (const bad of [truncated, '<!DOCTYPE rss [<!ELEMENT>]><rss/>', '<rss version="2.0><channel/></rss>', entityBomb]) {
+      let caught: unknown;
+      try { parseWxr(bad); } catch (e) { caught = e; }
+      expect(caught).toBeInstanceOf(WxrParseError);
+      expect((caught as WxrParseError).message).toBe('export is not well-formed XML');
+      expect((caught as WxrParseError).detail).not.toBe('');
+    }
   });
 });

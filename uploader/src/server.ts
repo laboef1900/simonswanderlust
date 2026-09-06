@@ -31,6 +31,7 @@ import { type PageStore, type PagePair, type PageContent, type ImageDims, PageEr
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
 import { prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type PreparedImport } from './wp-import.js';
+import { WxrParseError } from './wxr-parse.js';
 import { createImportRunner, memoryImportJobStore, ImportBusyError, type ImportRunner, type ImportJob } from './import-jobs.js';
 import { createRehostResume } from './wp-images.js';
 import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, type RateLimiter, type AccountLimiter } from './rate-limit.js';
@@ -1331,6 +1332,13 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         overwriteDrafts,
       });
     } catch (e) {
+      // issue #143: a truncated download or otherwise malformed file passes
+      // the sniff above but not the parser — the author's mistake, a 400; the
+      // parser's offset and context go to the log, not the client.
+      if (e instanceof WxrParseError) {
+        console.log(`import: ${e.message}: ${e.detail}`);
+        return reply.code(400).send({ error: e.message });
+      }
       // issue #96: an export whose distinct-image count exceeds the cap is
       // rejected BEFORE any fetch — a 400 naming the count, not a 500.
       if (e instanceof ImportTooLargeError) return reply.code(400).send({ error: e.message });
