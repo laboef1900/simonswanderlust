@@ -6,7 +6,7 @@ import { pgUserStore } from './users.js';
 import { pgSessionStore } from './sessions.js';
 import { pgPostStore } from './posts.js';
 import { pgPageStore } from './pages.js';
-import { createSiteBuilder } from './build.js';
+import { bootstrapRelease, createSiteBuilder } from './build.js';
 import { createDbBackup, isBackupDue } from './backup.js';
 import { createShutdown } from './shutdown.js';
 import { makeDbCheck } from './health.js';
@@ -128,11 +128,9 @@ app
   .then(() => {
     console.log(`app listening on :${port}`);
     // First boot on a fresh volume: populate the site in the background
-    // (blog routes 503 until the release lands). Restarts skip this.
-    if (!builder.hasRelease()) {
-      void builder.build().then((r) =>
-        console.log(r.ok ? `initial build released ${r.release}` : `initial build failed: ${r.error}`));
-    }
+    // (blog routes 503 until the release lands), retrying a failed build with
+    // backoff (#110). Restarts against an existing release skip this.
+    if (!builder.hasRelease()) void bootstrapRelease(builder, { log: (msg) => console.log(msg) });
     housekeeping();
     // Reconcile disk ↔ database, THEN resume anything left half-encoded. Runs
     // AFTER listen() and never blocks boot; a failure is logged, not fatal.

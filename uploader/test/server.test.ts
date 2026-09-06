@@ -1953,6 +1953,16 @@ describe('POST /rebuild and GET /health', () => {
     expect(res.json().ok).toBe(true);
   });
 
+  it('reports whether a release exists, as information — a missing one is not a verdict', async () => {
+    // #110: a fresh volume has no release for the first minutes and a persistent
+    // build failure is healed by a publish, not by a container restart.
+    const none = build({ builder: { build: async () => ({ ok: true, release: 'r' }), hasRelease: () => false } });
+    const res = await none.app.inject({ method: 'GET', url: '/health' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, release: false });
+    expect((await build().app.inject({ method: 'GET', url: '/health' })).json().release).toBe(true);
+  });
+
   it('health returns 503 without error detail when the DB probe fails', async () => {
     // Also pin the no-per-poll-logging property: the compose healthcheck fires
     // every 10s, so a failing probe must not spam docker logs.

@@ -5,7 +5,7 @@ import { postgresTripsLoader, rowToEntryInput } from './postgres-loader';
 // Shared fake-DB state for the mocked `pg` module (hoisted with the mock).
 const db = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[], sql: [] as string[] }));
 
-// The loader creates its own `new pg.Pool(DATABASE_URL)`, so mock `pg` and act
+// The loader creates its own pool (`loaderPool`, over `pg`), so mock `pg` and act
 // like Postgres for exactly the predicates under test: the loader only receives
 // rows its own WHERE clause actually selects. Reverting the loader to build
 // from the working columns would return the draft-edited/unbackfilled rows

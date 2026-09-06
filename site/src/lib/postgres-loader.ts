@@ -1,5 +1,5 @@
 import type { Loader } from 'astro/loaders';
-import pg from 'pg';
+import { loaderPool } from './loader-pool.js';
 import { transformBodyImages, type ImageDims } from './body-images.js';
 import { imageOrigin, retargetImageOrigins } from './images.js';
 
@@ -76,7 +76,7 @@ export function postgresTripsLoader(): Loader {
       // <pre> instead of a grid. That is the fail-safe direction — set
       // PUBLIC_BASE_URL (repo-root .env already does) to preview galleries.
       const galleryOrigin = imageOrigin(process.env.PUBLIC_BASE_URL);
-      const pool = new pg.Pool({ connectionString: url });
+      const pool = loaderPool(url);
       try {
         store.clear();
         // @ai-warning: build ONLY from the published snapshot (written by the
