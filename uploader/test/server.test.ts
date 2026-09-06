@@ -1517,6 +1517,19 @@ describe('posts editor', () => {
     expect(res.json().en.slug).toBe('en-s');
   });
 
+  it('a second tab saving after another tab confirmed a rename gets "conflict", not a consent error', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const put = (payload: Record<string, unknown>) => b.app.inject({ method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie, payload });
+    expect((await put({ ...sample(), de: { ...sample().de, slug: 'renamed-de' }, confirmSlugChange: true })).statusCode).toBe(200);
+    // tab B still holds the old slug and a pre-rename updatedAt: it needs the
+    // reload offer ('conflict'), not a slug prompt it has no way to answer.
+    const stale = await put({ ...sample(), de: { ...sample().de, bodyMarkdown: '## tab B' }, updatedAt: '2000-01-01T00:00:00.000Z' });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().code).toBe('conflict');
+  });
+
   it('duplicate-slug 409 carries its own code, distinguishable from a conflict', async () => {
     const b = build(); const { cookie } = await authed(b);
     await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });

@@ -24,7 +24,7 @@ import {
   setSessionCookie, clearSessionCookie, isSecureRequest, SESSION_COOKIE,
 } from './authn.js';
 import { SettingsError, type SettingsStore } from './settings.js';
-import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow } from './posts.js';
+import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale } from './posts.js';
 import { renderPreviewHtml } from './preview.js';
 import { type PageStore, type PagePair, type PageContent, type ImageDims, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
@@ -891,6 +891,15 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       // a 404, not resurrect it (issue #106). POST passes tk='' and skips this.
       const existing = tk ? await posts.get(tk) : null;
       if (tk && !existing) return reply.code(404).send({ error: 'post not found' });
+      let baseUpdatedAt: Date | undefined;
+      if (updatedAt !== undefined && updatedAt !== null) {
+        baseUpdatedAt = new Date(String(updatedAt));
+        if (Number.isNaN(baseUpdatedAt.getTime())) return reply.code(400).send({ error: 'invalid updatedAt' });
+      }
+      // Staleness first: a second tab saving after another tab's confirmed
+      // rename must get 'conflict' (which the editor can recover from), not a
+      // consent error for a slug change it never made.
+      if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
       // @ai-warning Golden Rule 2. A draft's slug may be the live WordPress URL
       // (the importer creates drafts under the real slugs), so renaming one is
       // never implicit: an existing non-empty slug only changes when the client
@@ -907,11 +916,6 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
             });
           }
         }
-      }
-      let baseUpdatedAt: Date | undefined;
-      if (updatedAt !== undefined && updatedAt !== null) {
-        baseUpdatedAt = new Date(String(updatedAt));
-        if (Number.isNaN(baseUpdatedAt.getTime())) return reply.code(400).send({ error: 'invalid updatedAt' });
       }
       return reply.send(await posts.upsertDraft(pair, baseUpdatedAt));
     } catch (e) {
