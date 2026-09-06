@@ -7,3 +7,9 @@ uploader/data
 map-assets
 docs
 *.md
+# Bootstrap secrets (DATABASE_URL / POSTGRES_PASSWORD). `COPY uploader/ .` and
+# `COPY site/ .` run from this root context, so uploader/.dockerignore is inert
+# here — mirror .gitignore's .env rules at every depth. (#111)
+**/.env
+**/.env.*
+!**/.env.example
