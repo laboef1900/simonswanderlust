@@ -364,6 +364,30 @@ maybe('pgPostStore (integration)', () => {
     expect((await pool.query(indexSql)).rowCount).toBe(1);
     await pool.end();
   });
+
+  // Issue #120: the documented minimum draft (a DE title alone) used to die on
+  // `date NOT NULL` / `country_code CHECK` / `region CHECK` in Postgres only —
+  // the memory store accepted the same payload, so the unit suite stayed green.
+  it('a title-only draft saves on Postgres with the import placeholders and round-trips', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    // Exactly what POST /posts hands to upsertDraft after validateDraft for the
+    // editor's "type a title, Save draft" payload (blank shared fields omitted).
+    const titleOnly = {
+      translationKey: '', status: 'draft' as const, shared: {},
+      de: { locale: 'de' as const, slug: '', title: 'Nur ein Titel', excerpt: '', country: '', bodyMarkdown: '', images: {} },
+      en: { locale: 'en' as const, slug: '', title: '', excerpt: '', country: '', bodyMarkdown: '', images: {} },
+    } as unknown as Parameters<typeof store.upsertDraft>[0];
+    const created = await store.upsertDraft(titleOnly);
+    const got = await store.get(created.translationKey);
+    expect(got?.shared).toMatchObject({ countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } });
+    expect(got?.shared.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(got?.de.title).toBe('Nur ein Titel');
+    expect(got?.en).toMatchObject({ slug: '', title: '', heroImage: { src: '' } });
+    await pool.end();
+  });
 });
 
 maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
