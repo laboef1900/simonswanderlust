@@ -7,10 +7,12 @@ import sharp from 'sharp';
 import { importWxr, prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, DEFAULT_MAX_IMAGES, type ImportDeps } from '../src/wp-import.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { createRehostResume, rehostImage, type RehostResult } from '../src/wp-images.js';
-import { FetchError } from '../src/safe-fetch.js';
+import { FetchError, type LookupFn } from '../src/safe-fetch.js';
 
 const xml = readFileSync(join(process.cwd(), 'test/fixtures/wxr-sample.xml'), 'utf8');
 const stubRehost = async (_url: string, _key: string, _alt: string) => ({ src: 'https://img/x', width: 100, height: 80 });
+/** safeFetch resolves every hostname (#93); the stub hosts here have no DNS. */
+const publicLookup: LookupFn = async () => [{ address: '93.184.216.34', family: 4 }];
 
 // ---- WXR builders for the hardening suites (issue #85) -------------------
 // Deliberately WITHOUT a `_thumbnail_id`, so every fetch in these tests is a
@@ -1040,7 +1042,7 @@ describe('importWxr layering', () => {
     const sleeps: number[] = [];
     const s = await importWxr(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg')), {
       postStore: memoryPostStore(), storageDir, baseUrl,
-      rehost: (url, key, alt) => rehostImage(url, key, alt, { storageDir, baseUrl, fetchImpl }),
+      rehost: (url, key, alt) => rehostImage(url, key, alt, { storageDir, baseUrl, fetchImpl, lookup: publicLookup }),
       delayMs: 0, retries: 2, sleep: async (ms) => { sleeps.push(ms); }, log: () => {},
     });
     expect(seen).toHaveLength(3);
@@ -1269,7 +1271,7 @@ describe('importWxr resumability', () => {
     const store = memoryPostStore();
     const deps = async (): Promise<ImportDeps> => ({
       postStore: store, storageDir, baseUrl,
-      rehost: (url, key, alt) => rehostImage(url, key, alt, { storageDir, baseUrl, fetchImpl }),
+      rehost: (url, key, alt) => rehostImage(url, key, alt, { storageDir, baseUrl, fetchImpl, lookup: publicLookup }),
       resume: await createRehostResume({ storageDir, baseUrl }),
       delayMs: 0, retries: 0, log: () => {},
     });
@@ -1303,7 +1305,7 @@ describe('importWxr resumability', () => {
     const store = memoryPostStore();
     const deps = async (): Promise<ImportDeps> => ({
       postStore: store, storageDir, baseUrl,
-      rehost: (url, key, alt) => rehostImage(url, key, alt, { storageDir, baseUrl, fetchImpl }),
+      rehost: (url, key, alt) => rehostImage(url, key, alt, { storageDir, baseUrl, fetchImpl, lookup: publicLookup }),
       resume: await createRehostResume({ storageDir, baseUrl }),
       delayMs: 0, retries: 0, log: () => {},
     });

@@ -1989,7 +1989,7 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
     const jpg = await sharp({ create: { width: 900, height: 600, channels: 3, background: '#345' } }).jpeg().toBuffer();
     const fetchImpl = (async () => new Response(new Uint8Array(jpg))) as unknown as typeof fetch;
     await rehostImage('https://seed/p0.jpg', 'trips/imp-de/p0', 'a',
-      { storageDir: dir, baseUrl: 'https://img.simonswanderlust.com', fetchImpl });
+      { storageDir: dir, baseUrl: 'https://img.simonswanderlust.com', fetchImpl, lookup: async () => [{ address: '93.184.216.34', family: 4 }] });
 
     const summary = await importAndWait(b, cookie, wxrWith('http://127.0.0.1/p0.jpg'));
     expect(summary).toMatchObject({ images: { total: 1, hosted: 1, failed: 0 } });

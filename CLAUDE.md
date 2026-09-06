@@ -814,6 +814,21 @@ blog/
   confirm on the page) for "I changed it in WordPress and re-exported". Skip-by-default was
   rejected because it would have made the safe action useless and the useful one destructive. See
   `docs/superpowers/specs/2026-09-05-wxr-import-merge-existing-drafts-design.md`.
+- **Done:** #93 `safeFetch` re-validates redirect hops and resolves hostnames (2026-09-05) — the
+  SSRF chokepoint no longer lets undici follow a redirect blind. `redirect: 'manual'` plus a
+  hand-rolled hop loop (cap 5): every `Location` is resolved against the current hop and put
+  through the same scheme/credential/literal check as the first URL, then the hostname is resolved
+  (`dns.lookup`, all records) and refused if *any* answer is internal — one `net.BlockList` covers
+  loopback, RFC1918 (which the old literal check did **not** block), CGNAT, link-local, multicast,
+  the IPv6 equivalents and IPv4-mapped forms. One `AbortController` spans every lookup and hop;
+  redirect bodies are cancelled so the byte cap applies where the bytes are. No new `FetchError`
+  kind: a refused hop is `blocked`, the hop cap is `http` with the 3xx status, a resolver failure
+  is `network` with its code, so #85's retry classifier is untouched. The #90 decision to decline
+  this ("WP media URLs legitimately redirect") holds in spirit — hops are followed, just judged
+  first — and was verified against a live redirecting `node:http` server. Residual: DNS rebinding
+  proper (zero-TTL flip between the check and undici's connect-time lookup) is narrowed, not
+  closed; pinning needs `undici` as a dependency and was declined. See
+  `docs/superpowers/specs/2026-09-05-safe-fetch-redirects-design.md` and `SECURITY.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**
@@ -828,8 +843,8 @@ blog/
   - **#92 move the import off the request path** onto `encode-queue.ts`/`work-lock.ts` with a progress
     endpoint (#85's "Better" option). Progress state that survives a restart likely means a new table,
     so it is a schema change and high-risk in its own right.
-  - **#93 `safeFetch` re-asserts on redirect hops** (`redirect: 'manual'`). Declined in #90 because WP
-    media URLs legitimately redirect. See `SECURITY.md` — retry widened this per-URL window.
+  - **#93 `safeFetch` re-asserts on redirect hops** — **done 2026-09-05** (see the Done bullet
+    above); the #90 decline is recorded in the spec's "Why this exists".
   - **#94 `/data` free-space precondition on `/import`** (`/upload` has one; an import writes ~11 GB).
   - **#95 import encodes take `work-lock`**, so sharp cannot run beside `astro build`.
   - **#97 `/import` → `requireAdmin`** (every comparable surface already is).
