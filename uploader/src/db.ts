@@ -69,7 +69,10 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       images jsonb NOT NULL DEFAULT '{}', status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
       created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())
   `);
-  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS posts_locale_slug_idx ON posts (locale, slug)`);
+  // @ai-note Partial: '' means "no slug yet" (a DE-first draft without an EN
+  // title), and any number of such drafts may coexist (issue #119). Existing
+  // databases carry the older non-partial form and are migrated below.
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS posts_locale_slug_idx ON posts (locale, slug) WHERE slug <> ''`);
   await pool.query(`CREATE INDEX IF NOT EXISTS posts_translation_key_idx ON posts (translation_key)`);
   // @ai-note published_snapshot separates the LIVE content from the working
   // copy: publish() copies the row's working columns into it, and the site
@@ -224,5 +227,23 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
     );
   } else {
     await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS posts_tk_locale_idx ON posts (translation_key, locale)`);
+  }
+
+  // @ai-note Empty slug = unset (issue #119). posts_locale_slug_idx predates
+  // the WHERE clause on databases created before #119; the non-partial form
+  // treats '' as a real slug and rejects the second DE-first draft. Swap it in
+  // one transaction so a crash between DROP and CREATE cannot leave the slug
+  // backstop missing. Idempotent: a partial index is left alone. Nothing to
+  // reconcile — the old index already guaranteed at most one '' row per locale.
+  const slugIdx = await pool.query<{ indexdef: string }>(
+    `SELECT indexdef FROM pg_indexes WHERE tablename = 'posts' AND indexname = 'posts_locale_slug_idx'`,
+  );
+  if (slugIdx.rows[0] && !/\bWHERE\b/i.test(slugIdx.rows[0].indexdef)) {
+    await pool.query(
+      `BEGIN;
+       DROP INDEX posts_locale_slug_idx;
+       CREATE UNIQUE INDEX posts_locale_slug_idx ON posts (locale, slug) WHERE slug <> '';
+       COMMIT`,
+    );
   }
 }

@@ -682,6 +682,14 @@ blog/
   when the export yields no groups at all: an all-published re-run is a 200 with
   `skippedPublished`, and `import.html` shows each bucket by name with a dedicated callout for
   `rejected` — the same treatment #85 gave un-hosted photos.
+- **Done:** #119 empty slug = unset (2026-09-05) — the write-DE-first workflow broke at the
+  second post: the editor sends `en.slug: ''` while the EN title is blank, and both stores plus
+  `posts_locale_slug_idx` treated `''` as a taken slug (`duplicate_slug`). `''` is now the
+  per-locale "no slug yet" sentinel: exempt from `validateDraft`'s format check and from the
+  duplicate pre-check, and the unique index is partial (`WHERE slug <> ''`), migrated on boot by
+  a DROP+CREATE in one transaction when the pre-#119 non-partial form is found. Real slugs stay
+  unique, `validateForPublish` still refuses `''`, and `exportPost` no longer writes
+  `trips/en/.mdx`. See `docs/superpowers/specs/2026-09-05-empty-slug-unset-design.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**
