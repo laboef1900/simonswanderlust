@@ -130,6 +130,21 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
      ON CONFLICT (key, locale) DO NOTHING`,
     [ABOUT_SEED.de.title, ABOUT_SEED.de.body, ABOUT_SEED.en.title, ABOUT_SEED.en.body],
   );
+  // @ai-note page_revisions mirrors post_revisions for pages (issue #141):
+  // whole-pair {de, en} snapshots taken just before a save overwrites the
+  // stored page, capped at REVISION_CAP per key by pgPageStore.save, and
+  // likewise excluded from the scheduled dumps (backup.ts keeps its fixed table
+  // list). Pages are never deleted, so no orphan sweep is needed. Additive,
+  // idempotent migration.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS page_revisions (
+      id       uuid PRIMARY KEY,
+      key      text NOT NULL,
+      snapshot jsonb NOT NULL,
+      saved_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS page_revisions_key_saved_idx ON page_revisions (key, saved_at DESC)`);
 
   // @ai-note The media library (issue #64). A `media` row is metadata ABOUT a
   // file under STORAGE_DIR — the filesystem stays the source of truth for a
