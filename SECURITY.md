@@ -436,12 +436,15 @@ preview even though the live site would load it.
 ## Transport, headers & proxy
 
 - Every response carries `X-Content-Type-Options: nosniff`. `X-Frame-Options: DENY` and
-  `Referrer-Policy: no-referrer` are added only on the admin/API surface (`/admin`, `/login`,
-  `/logout`, `/auth`, `/setup`, `/settings`, `/users`, `/posts`, `/upload`, `/import`,
-  `/export`, `/backups`, `/rebuild`, `/health`); public blog pages carry only `nosniff`, at parity
-  with the old nginx config. (CSP is intentionally omitted on the admin pages because they use
-  inline scripts; a strict policy would need nonces. The one exception is `GET /posts/:tk/preview`,
-  which renders author markup and has no scripts — see *Output sanitization*.)
+  `Referrer-Policy: no-referrer` are added on every matched route that is not one of the public
+  static mounts (the blog and image-host `/*` wildcards and the `/map/*` basemap), and withheld
+  from the not-found handler (the blog's 404 page, legacy 301s, the 503 "building" page); public
+  blog pages therefore carry only `nosniff`, at parity with the old nginx config. The rule is
+  derived from the matched route, not from a prefix list — the old list had drifted in both
+  directions (#130), so `/api/*` shipped without the headers. (CSP is
+  intentionally omitted on the admin pages because they use inline scripts; a strict policy would
+  need nonces. The one exception is `GET /posts/:tk/preview`, which renders author markup and has
+  no scripts — see *Output sanitization*.)
 - The app sets `trustProxy: 1` (exactly one trusted hop), so it reads `X-Forwarded-*` as set by
   that one reverse proxy for the client IP (rate limiting) and the cookie `Secure` flag. **It must
   run behind a TLS-terminating reverse proxy that sets `X-Forwarded-Proto`**; the compose file

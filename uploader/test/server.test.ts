@@ -698,16 +698,6 @@ describe('media library', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ scanned: 1, recovered: 1 });
   });
-
-  it('the whole /media surface carries the admin security headers', async () => {
-    // '/media' must be in ADMIN_PREFIXES or the new API silently loses
-    // X-Frame-Options and Referrer-Policy.
-    const b = build();
-    const { cookie } = await authed(b);
-    const res = await b.app.inject({ method: 'GET', url: '/media', cookies: cookie });
-    expect(res.headers['x-frame-options']).toBe('DENY');
-    expect(res.headers['referrer-policy']).toBe('no-referrer');
-  });
 });
 
 describe('buildServer config', () => {
@@ -1121,10 +1111,54 @@ describe('auth endpoints', () => {
 });
 
 describe('security headers', () => {
-  it('sets nosniff + frame protection on responses', async () => {
-    const res = await build().app.inject({ method: 'GET', url: '/auth/status' });
+  // The admin headers are derived from the matched route (#130): every route
+  // that is not one of the public static mounts gets them, so a new admin or
+  // API route can no longer ship without them because a prefix list was not
+  // updated. Before #130, /api/* was exactly that gap.
+  const ADMIN_URLS = ['/auth/status', '/api/cms/stats', '/api/categories', '/admin/', '/login', '/health', '/media', '/posts/no-such-post'];
+  it.each(ADMIN_URLS)('%s carries nosniff + frame + referrer protection', async (url) => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({ method: 'GET', url, cookies: cookie });
     expect(res.headers['x-content-type-options']).toBe('nosniff');
     expect(res.headers['x-frame-options']).toBe('DENY');
+    expect(res.headers['referrer-policy']).toBe('no-referrer');
+  });
+
+  it('the public blog, its 404 page, legacy redirects and the image host get nosniff only', async () => {
+    await mkdir(join(dir, 'site', 'current', 'de'), { recursive: true });
+    await writeFile(join(dir, 'site', 'current', 'de', 'index.html'), '<h1>de</h1>');
+    await mkdir(join(dir, 'map'), { recursive: true });
+    await writeFile(join(dir, 'map', 'tiles.pmtiles'), 'x');
+    const b = build({ mapDir: join(dir, 'map') });
+    const publicRequests = [
+      { url: '/de/', expected: 200 },                                          // served release page
+      { url: '/nope/', expected: 404 },                                        // blog 404 page (setNotFoundHandler)
+      { url: '/feed/', expected: 301 },                                        // legacy WordPress redirect
+      { url: '/map/tiles.pmtiles', expected: 200 },                            // basemap mount
+      { url: '/x-640.avif', expected: 404, host: 'img.simonswanderlust.com' }, // image host miss
+    ];
+    for (const { url, expected, host } of publicRequests) {
+      const res = await b.app.inject({ method: 'GET', url, ...(host ? { headers: { host } } : {}) });
+      expect(res.statusCode, url).toBe(expected);
+      expect(res.headers['x-content-type-options'], url).toBe('nosniff');
+      expect(res.headers['x-frame-options'], url).toBeUndefined();
+      expect(res.headers['referrer-policy'], url).toBeUndefined();
+    }
+  });
+});
+
+describe('GET /api/cms/stats', () => {
+  it('mediaCount is the whole library, not the first page (#130)', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const exif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+    for (let i = 0; i < 61; i++) {
+      await b.media.upsert({ key: `library/p${i}`, status: 'ready', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null });
+    }
+    const res = await b.app.inject({ method: 'GET', url: '/api/cms/stats', cookies: cookie });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ mediaCount: 61, totalPosts: 0 });
   });
 });
 

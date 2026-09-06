@@ -142,20 +142,24 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   const app = Fastify({ logger: false, trustProxy: 1, requestTimeout: 120_000 });
   const { users, sessions } = cfg;
 
-  // nosniff everywhere; clickjacking/referrer policies only on the admin/API
-  // surface (blog pages keep parity with the old nginx: no admin headers).
-  const ADMIN_PREFIXES = [
-    '/admin', '/login', '/logout', '/auth', '/setup', '/settings', '/users',
-    '/posts', '/upload', '/import', '/export', '/backups', '/rebuild', '/health', '/pages', '/images',
-    // Without '/media' here the whole media API would lose X-Frame-Options and
-    // Referrer-Policy — it is admin surface, not public.
-    '/media', '/ai-config',
-  ];
+  // nosniff everywhere; clickjacking/referrer policies on every route that is
+  // not the public blog / image / basemap surface (blog pages keep parity with
+  // the old nginx: no admin headers). The rule is derived from the MATCHED
+  // ROUTE, not from a hand-kept prefix list: that list had drifted in both
+  // directions (#130 — it still named a `/images` that no longer existed and
+  // omitted `/api`, so `/api/cms/stats` shipped without the headers), and the
+  // next admin route under a new prefix would have done the same. The public
+  // surface is exactly the wildcard routes the three static mounts below
+  // register; everything else Fastify matches is admin or API. A request no
+  // route matches (`routeOptions.url` undefined) falls to setNotFoundHandler,
+  // which is public surface too: the blog's 404 page, legacy 301s, the 503
+  // "building" page and, in the one-hostname dev setup, the blog itself.
+  const PUBLIC_ROUTES: Record<string, true> = { '/*': true, '/map/*': true };
   app.addHook('onSend', async (req, reply) => {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
-    const admin = ADMIN_PREFIXES.some((p) => url === p || url.startsWith(`${p}/`) || url.startsWith(`${p}?`));
-    if (admin) {
+    const route = req.routeOptions.url;
+    if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
       reply.header('Referrer-Policy', 'no-referrer');
     }
@@ -1045,11 +1049,10 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   app.get('/api/cms/stats', { preHandler: requireAuth }, async () => {
     const postStats = posts.getCmsStats ? await posts.getCmsStats() : { totalPosts: 0, draftPosts: 0, publishedPosts: 0, totalCategories: 0, totalTags: 0 };
-    const mediaRes = await cfg.media.list({});
-    return {
-      ...postStats,
-      mediaCount: mediaRes.items.length,
-    };
+    // `total` is the store's count over the whole library; `items.length` was
+    // the page size (#130 — the dashboard read "50" for 665 photos).
+    const { total } = await cfg.media.list({ pageSize: 1 });
+    return { ...postStats, mediaCount: total };
   });
 
   // @ai-warning: publishing pushes content to the PUBLIC static site, so it is
