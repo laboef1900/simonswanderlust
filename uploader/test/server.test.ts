@@ -87,7 +87,7 @@ function stubQueue(opts: { full?: boolean } = {}) {
 
 interface Built {
   app: ReturnType<typeof buildServer>; users: UserStore; sessions: SessionStore;
-  posts: PostStore; media: MediaStore; enqueued: string[]; importJobs: ImportRunner;
+  posts: PostStore; pages: PageStore; media: MediaStore; enqueued: string[]; importJobs: ImportRunner;
 }
 function build(extra: Partial<ServerConfig> = {}): Built {
   const users = (extra.users as UserStore) ?? memoryUserStore();
@@ -97,19 +97,19 @@ function build(extra: Partial<ServerConfig> = {}): Built {
   const q = stubQueue();
   const encodeQueue = (extra.encodeQueue as EncodeQueue) ?? q.queue;
   const importJobs = (extra.importJobs as ImportRunner) ?? createImportRunner({ store: memoryImportJobStore(), log: () => {} });
+  const pages = (extra.pages as PageStore) ?? memoryPageStore();
   const built = buildServer({
     storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
     users, sessions, settings: fakeStore(),
-    posts, media, encodeQueue, importJobs,
+    posts, media, encodeQueue, importJobs, pages,
     imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'),
     builder: (extra.builder as SiteBuilder) ?? stubBuilder().builder,
     backupDir: dir + '/backup',
     dbBackup: (extra.dbBackup as DbBackup) ?? stubBackup().backup,
-    pages: (extra.pages as PageStore) ?? memoryPageStore(),
     dbCheck: async () => {},
     ...extra,
   });
-  return { app: built, users, sessions, posts, media, enqueued: q.enqueued, importJobs };
+  return { app: built, users, sessions, posts, pages, media, enqueued: q.enqueued, importJobs };
 }
 
 // Seed a user and return a Cookie header value for an authenticated session.
@@ -2339,6 +2339,59 @@ describe('pages routes', () => {
     const { cookie } = await authed(b);
     const res = await b.app.inject({ method: 'PUT', url: '/pages/Bad_Key', cookies: cookie, payload: { de: { locale: 'de', title: '', bodyMarkdown: '', images: {} }, en: { locale: 'en', title: '', bodyMarkdown: '', images: {} } } });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('PUT /pages/:key with a stale updatedAt echo is a 409 conflict that rebuilds nothing (#141)', async () => {
+    const s = stubBuilder({ ok: true, release: 'r8' });
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const body = (title: string) => ({
+      de: { locale: 'de', title, bodyMarkdown: 'Hallo', images: {} },
+      en: { locale: 'en', title: 'About me', bodyMarkdown: 'Hi', images: {} },
+    });
+    const first = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: cookie, payload: body('v1') });
+    expect(first.statusCode).toBe(200);
+    const loaded = first.json().saved.updatedAt;
+    expect(typeof loaded).toBe('string');
+    // Tab A saves with the echo it loaded — accepted and the echo advances.
+    const second = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: cookie, payload: { ...body('v2'), updatedAt: loaded } });
+    expect(second.statusCode).toBe(200);
+    expect(new Date(second.json().saved.updatedAt).getTime()).toBeGreaterThan(new Date(loaded).getTime());
+    // Tab B still holds the old echo — refused, nothing written, no rebuild.
+    const stale = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: cookie, payload: { ...body('v3'), updatedAt: loaded } });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ code: 'conflict' });
+    expect((await b.pages.get('about')).de.title).toBe('v2');
+    expect(s.calls.length).toBe(2);
+    // Garbage echo → 400, not a silent skip of the check.
+    const bad = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: cookie, payload: { ...body('v4'), updatedAt: 'yesterday' } });
+    expect(bad.statusCode).toBe(400);
+    // GET carries the echo the page needs.
+    expect((await b.app.inject({ method: 'GET', url: '/pages/about', cookies: cookie })).json().updatedAt).toBe(second.json().saved.updatedAt);
+  });
+
+  it('page revisions: every overwrite is listed newest-first and restorable; unknown ids 404 (#141)', async () => {
+    const b = build();
+    const admin = await authed(b);
+    const body = (title: string) => ({
+      de: { locale: 'de', title, bodyMarkdown: 'Hallo ' + title, images: {} },
+      en: { locale: 'en', title: 'About me', bodyMarkdown: 'Hi', images: {} },
+    });
+    for (const t of ['v1', 'v2', 'v3']) {
+      expect((await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: admin.cookie, payload: body(t) })).statusCode).toBe(200);
+    }
+    expect((await b.app.inject({ method: 'GET', url: '/pages/about/revisions' })).statusCode).toBe(401);
+    // Read-only history is author-visible, like GET /pages/:key.
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+    const list = await b.app.inject({ method: 'GET', url: '/pages/about/revisions', cookies: author.cookie });
+    expect(list.statusCode).toBe(200);
+    // The first save of a key produces no revision; v1 and v2 were overwritten.
+    expect(list.json().map((r: { titleDe: string }) => r.titleDe)).toEqual(['v2', 'v1']);
+    const rev = await b.app.inject({ method: 'GET', url: `/pages/about/revisions/${list.json()[1].id}`, cookies: author.cookie });
+    expect(rev.statusCode).toBe(200);
+    expect(rev.json().snapshot.de.bodyMarkdown).toBe('Hallo v1');
+    expect((await b.app.inject({ method: 'GET', url: '/pages/about/revisions/not-a-uuid', cookies: author.cookie })).statusCode).toBe(404);
+    expect((await b.app.inject({ method: 'GET', url: '/pages/other/revisions', cookies: author.cookie })).json()).toEqual([]);
   });
 });
 

@@ -55,6 +55,13 @@
         <p id="actionStatus" class="muted" role="status"></p>
         <p id="actionError" class="err" role="alert" style="display:none"></p>
       </div>
+
+      <section class="card" id="revisionsCard" hidden aria-labelledby="revisionsHeading">
+        <h2 class="card-heading" id="revisionsHeading">Revisions</h2>
+        <p class="muted">The page as it was before each save (last 20 kept). Restoring fills the editor; nothing changes on the site until you save.</p>
+        <ul id="revisionsList" class="revisions-list"></ul>
+        <p id="revisionsEmpty" class="muted" hidden>No revisions yet.</p>
+      </section>
     </main>
 
     <script src="/admin/auth.js"></script>
@@ -67,6 +74,9 @@
       const $ = (id) => document.getElementById(id);
       const KEY = 'about';
       const deImages = {}, enImages = {};
+      // updatedAt of the page as loaded/last saved in THIS tab. Echoed back on
+      // every save so the server can 409 when another tab saved meanwhile (#141).
+      let loadedUpdatedAt = null;
 
       // EasyMDE's built-in autosave stays disabled — DraftGuard below stashes the
       // full form (both locales) instead.
@@ -134,22 +144,95 @@
         // The synchronous astro rebuild makes this request slow (tens of
         // seconds); snapshot first so text typed mid-save survives markClean.
         const snap = guard.snapshot();
-        const payload = { de: localeObj('de'), en: localeObj('en') };
+        // Concurrency echo — JSON.stringify drops it when undefined (never-saved key).
+        const payload = { updatedAt: loadedUpdatedAt || undefined, de: localeObj('de'), en: localeObj('en') };
         try {
           const res = await fetch('/pages/' + KEY, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
           if (res.status === 401) { guard.redirectToLogin(); return; }
           if (res.status === 403) { showErr('Only admins can save the About page.'); setStatus(''); return; }
           const body = await res.json().catch(() => ({}));
+          if (res.status === 409 && body.code === 'conflict') {
+            setStatus('');
+            showErr(body.error || 'The About page was modified since you opened it — nothing was saved.');
+            const reload = confirm(
+              'The About page was changed elsewhere (another tab or user) since you opened it, '
+              + 'so saving would overwrite those changes. Nothing was saved and the site was not rebuilt.\n\n'
+              + 'OK — reload the latest version into the editor (your edits in this tab are lost).\n'
+              + 'Cancel — keep your edits on screen so you can copy them out first.'
+            );
+            // Reloaded from the server: settle the guard on what is now on screen.
+            if (reload) { await loadPage(); guard.markClean(guard.snapshot()); showErr(''); }
+            return;
+          }
           if (!res.ok) { showErr(body.error || ('Save failed: ' + res.status)); setStatus(''); return; }
           if (body.build && !body.build.ok) { showErr('Build error: ' + (body.build.error || 'unknown')); setStatus(''); return; }
           const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
           guard.markClean(snap); // saved server-side — no-op if edits landed mid-save
+          // Re-sync the echo with what this save wrote, and refresh the list
+          // (this save snapshotted the previous state).
+          if (body.saved && body.saved.updatedAt) loadedUpdatedAt = body.saved.updatedAt;
+          loadRevisions().catch(() => {});
           setStatus('Saved & rebuilt ✓' + release);
         } catch (e) {
           showErr('Save failed: ' + e);
           setStatus('');
         }
       });
+
+      // ---- revisions (#141): same shape as the post editor's card ----
+      async function loadRevisions() {
+        const res = await fetch('/pages/' + KEY + '/revisions');
+        if (!res.ok) return; // non-fatal: the card just stays as-is
+        const revs = await res.json();
+        $('revisionsCard').hidden = false;
+        $('revisionsEmpty').hidden = revs.length > 0;
+        const ul = $('revisionsList');
+        ul.textContent = '';
+        revs.forEach((rev) => {
+          const li = document.createElement('li');
+          li.className = 'revision-row';
+          const label = document.createElement('span');
+          const when = new Date(rev.savedAt).toLocaleString();
+          label.textContent = when + ' — ' + (rev.titleDe || '(untitled)');
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn-secondary';
+          btn.textContent = 'Restore into editor';
+          btn.setAttribute('aria-label', 'Restore the revision from ' + when + ' into the editor');
+          btn.addEventListener('click', () => { restoreRevision(rev.id); });
+          li.appendChild(label);
+          li.appendChild(btn);
+          ul.appendChild(li);
+        });
+      }
+
+      // Fills the form from a snapshot; persisting still goes through the
+      // normal Save (validation applies, and the overwritten state gets its
+      // own revision) — there is no direct server-side restore.
+      async function restoreRevision(id) {
+        showErr('');
+        const res = await fetch('/pages/' + KEY + '/revisions/' + encodeURIComponent(id));
+        if (res.status === 401) { guard.redirectToLogin(); return; }
+        if (!res.ok) { showErr('Could not load revision: ' + res.status); return; }
+        const rev = await res.json();
+        fill('de', rev.snapshot.de); fill('en', rev.snapshot.en);
+        enMDE.codemirror.refresh();
+        guard.markDirty();
+        setStatus('Restored the revision from ' + new Date(rev.savedAt).toLocaleString()
+          + ' into the editor — review it, then Save & rebuild to keep it.');
+      }
+
+      async function loadPage() {
+        const res = await fetch('/pages/' + KEY);
+        if (res.status === 401) { guard.redirectToLogin(); return; }
+        if (!res.ok) { setStatus('Could not load: ' + res.status); return; }
+        const p = await res.json();
+        fill('de', p.de); fill('en', p.en);
+        loadedUpdatedAt = p.updatedAt || null;
+        enMDE.codemirror.refresh();
+        setStatus('Loaded.');
+        loadRevisions().catch(() => {});
+      }
 
       function fill(loc, data) {
         if (!data) return;
@@ -164,10 +247,7 @@
         Auth.renderHeader(s);
         if (!s.isAdmin) { showErr('You are signed in as an author; only admins can edit the About page.'); $('saveBtn').disabled = true; }
         try {
-          const res = await fetch('/pages/' + KEY);
-          if (res.status === 401) { guard.redirectToLogin(); return; }
-          if (res.ok) { const p = await res.json(); fill('de', p.de); fill('en', p.en); enMDE.codemirror.refresh(); setStatus('Loaded.'); }
-          else setStatus('Could not load: ' + res.status);
+          await loadPage();
         } catch (e) {
           setStatus('Could not load: ' + e);
         }

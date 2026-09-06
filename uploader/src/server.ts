@@ -1231,7 +1231,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // Admin-only: writing a page rebuilds the public site (like publishing a post).
   app.put('/pages/:key', { preHandler: requireAdmin }, async (req, reply) => {
     const key = (req.params as { key: string }).key;
-    const b = (req.body ?? {}) as Partial<Record<'de' | 'en', Partial<PageContent>>>;
+    const b = (req.body ?? {}) as Partial<Record<'de' | 'en', Partial<PageContent>>> & { updatedAt?: unknown };
     const mkLocale = (loc: 'de' | 'en'): PageContent => {
       const src = b[loc] ?? {};
       return {
@@ -1246,14 +1246,40 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       };
     };
     const pair: PagePair = { key, de: mkLocale('de'), en: mkLocale('en') };
+    // `updatedAt` is the optimistic-concurrency echo (issue #141), same
+    // contract as posts: optional, and only ever able to make a save fail.
+    let baseUpdatedAt: Date | undefined;
+    if (b.updatedAt !== undefined && b.updatedAt !== null) {
+      baseUpdatedAt = new Date(String(b.updatedAt));
+      if (Number.isNaN(baseUpdatedAt.getTime())) return reply.code(400).send({ error: 'invalid updatedAt' });
+    }
     try {
-      const saved = await cfg.pages.save(pair);
+      const saved = await cfg.pages.save(pair, baseUpdatedAt);
       const build = await cfg.builder.build();
       return reply.send({ saved, build });
     } catch (e) {
-      if (e instanceof PageError) return reply.code(400).send({ error: e.message });
+      if (e instanceof PageError) {
+        // A stale-tab 409 carries `code` so the page can offer a reload; a
+        // conflict rebuilds nothing.
+        return reply.code(e.code === 'conflict' ? 409 : 400).send({ error: e.message, ...(e.code ? { code: e.code } : {}) });
+      }
       throw e;
     }
+  });
+
+  // Revision history — read-only for any authed user (same trust boundary as
+  // GET /pages/:key); restoring goes through the normal PUT save, so validation
+  // applies and the clobbered state is itself snapshotted.
+  app.get('/pages/:key/revisions', { preHandler: requireAuth }, async (req, reply) => {
+    const key = (req.params as { key: string }).key;
+    return reply.send(await cfg.pages.listRevisions(key));
+  });
+
+  app.get('/pages/:key/revisions/:id', { preHandler: requireAuth }, async (req, reply) => {
+    const { key, id } = req.params as { key: string; id: string };
+    const rev = await cfg.pages.getRevision(key, id);
+    if (!rev) return reply.code(404).send({ error: 'revision not found' });
+    return reply.send(rev);
   });
 
   app.get('/backups', { preHandler: requireAdmin }, async () => ({
