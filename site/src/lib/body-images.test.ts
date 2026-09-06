@@ -17,6 +17,23 @@ describe('transformBodyImages — sanitization', () => {
     expect(out).not.toContain('onerror');
     expect(out.toLowerCase()).not.toContain('javascript:');
   });
+
+  // Issue #124: an author-typed style could overlay every reader page and
+  // fire a third-party request per view. No element gets to keep one.
+  it('strips inline style from every element, including the ones Shiki used to need it on', () => {
+    const out = transformBodyImages(
+      '<p style="position:fixed;inset:0;background:url(https://evil.example/px.png)">x</p>' +
+        '<img src="https://img/x" style="width:100vw">' +
+        '<span style="color:#abc">y</span>' +
+        '<pre style="color:red"><code style="font-weight:bold">z</code></pre>',
+      {},
+      ORIGIN,
+    );
+    expect(out).not.toContain('style=');
+    expect(out).not.toContain('evil.example');
+    expect(out).toContain('<p>x</p>');
+    expect(out).toContain('<span>y</span>');
+  });
 });
 
 describe('transformBodyImages — responsive images', () => {
@@ -39,10 +56,14 @@ describe('transformBodyImages — responsive images', () => {
     expect(out).not.toContain('user-content-');
   });
 
-  it('keeps Shiki inline styles/classes on code spans', () => {
-    const out = transformBodyImages('<pre class="astro-code"><span style="color:#abc">x</span></pre>', {}, ORIGIN);
-    expect(out).toContain('class="astro-code"');
-    expect(out).toContain('style="color:#abc"');
+  it('keeps the classes a Shiki block carries in place of inline styles', () => {
+    const out = transformBodyImages(
+      '<pre class="astro-code github-dark sh-bg-24292e sh-c-e1e4e8"><code><span class="line"><span class="sh-c-f97583">const</span></span></code></pre>',
+      {},
+      ORIGIN,
+    );
+    expect(out).toContain('class="astro-code github-dark sh-bg-24292e sh-c-e1e4e8"');
+    expect(out).toContain('<span class="sh-c-f97583">const</span>');
   });
 });
 

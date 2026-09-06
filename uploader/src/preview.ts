@@ -11,6 +11,7 @@
 // so typecheck/tests here need `npm ci` in site/ too (CI does this).
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
 import { transformBodyImages } from '../../site/src/lib/body-images.js';
+import { SHIKI_CSS } from '../../site/src/lib/shiki-classes.js';
 import { srcset, fallbackSrc } from '../../site/src/lib/images.js';
 import { coordsLabel, dateLabel } from '../../site/src/lib/format.js';
 import type { HeroImage, Locale, PostPair } from './posts.js';
@@ -120,7 +121,34 @@ const STYLE = `
   @media (prefers-reduced-motion: reduce) {
     .jgal__track { scroll-behavior: auto; }
   }
+  /* Code-block palette, generated from the Shiki theme (#124): the sanitizer
+     allows no inline style, so highlighting arrives as classes. */
+  ${SHIKI_CSS}
 `;
+
+/**
+ * Content-Security-Policy for the preview reply. The page is static markup
+ * with one inline <style> and inline `style` attributes on gallery items (the
+ * `--r` ratios body-images.ts computes) — nothing else is needed, so
+ * everything else is denied: a future sanitizer regression that lets a
+ * `<script>` through lands on the author's admin origin as a no-op instead of
+ * as session XSS. Images come from the app's own image base (plus 'self',
+ * which is the same origin in production).
+ *
+ * @ai-note The preview therefore refuses images from any OTHER origin, where
+ * the live site would still load them — a foreign hero shows as a broken image
+ * here. That is the intended trade: the admin session is what a CSP protects.
+ */
+export function previewCsp(imageOrigin: string): string {
+  return [
+    "default-src 'none'",
+    `img-src 'self' ${new URL(imageOrigin).origin}`,
+    "style-src 'unsafe-inline'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join('; ');
+}
 
 /**
  * Full standalone HTML page for one locale of a post pair. All frontmatter
