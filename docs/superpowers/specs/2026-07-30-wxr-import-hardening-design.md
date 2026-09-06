@@ -57,7 +57,7 @@ than missed:
 | A progress-polling endpoint | Same. Belongs with the async move. |
 | Publish-time refusal on leftover `wp-content` URLs | Real gap (§Accepted residual risk). Touches the publish gate — its own named-sensitive surface. Separate issue. |
 | `/import` → `requireAdmin` | An auth-model change. Filed separately as #97 — **landed 2026-09-06**: the route, `import.html` and the nav entry are admin-only. |
-| A `/data` free-space precondition on `/import` | Adjacent gap (`/upload` has one at `server.ts:269`). `insufficientSpace` needs a known incoming size, which an import does not have; needs its own design. |
+| A `/data` free-space precondition on `/import` | Adjacent gap (`/upload` has one at `server.ts:269`). `insufficientSpace` needs a known incoming size, which an import does not have; needs its own design. Filed as #94 — **landed 2026-09-06**: sized from the photos the run will fetch (resume misses × the measured per-photo cost) plus the same floor; 507 before any fetch. |
 | `redirect: 'manual'` in `safeFetch` | Would harden the redirect hop, but WP media URLs legitimately redirect; changing it risks the importer. Residual risk recorded in `SECURITY.md`. |
 | `nameFromUrl` non-injectivity | Pre-existing: `foo.jpg` and `foo.png` both normalise to `foo`. Filed separately. |
 | `bySlug` cross-locale slug collision | Pre-existing: `wp-import.ts:113-129` flattens DE and EN slugs into one namespace, so a group can bind to the wrong `translationKey`. Filed separately. |
