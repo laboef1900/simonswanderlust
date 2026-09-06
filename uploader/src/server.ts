@@ -1157,20 +1157,23 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // current release), so a down Postgres flips the container unhealthy without
   // taking the blog offline.
   app.get('/health', async (_req, reply) => {
-    // @ai-warning: free space is REPORTED, never a health verdict (#73). A low
-    // -space warning that flipped the container unhealthy would trigger a
-    // restart loop, which makes a full disk strictly worse. The probe is
-    // best-effort for the same reason: an unreadable statfs must not 503.
+    // @ai-warning: free space and `release` are REPORTED, never a health
+    // verdict (#73, #110). A low-space warning that flipped the container
+    // unhealthy would trigger a restart loop, which makes a full disk strictly
+    // worse; a missing release is normal on a fresh volume and is healed by a
+    // publish, not a restart. The probe is best-effort for the same reason: an
+    // unreadable statfs must not 503.
     let disk: { free: number; total: number; freeLabel: string } | undefined;
     try {
       const space = await diskSpace(storageDir);
       disk = { ...space, freeLabel: formatBytes(space.free) };
     } catch { /* reported as absent */ }
+    const release = cfg.builder.hasRelease();
     try {
       await cfg.dbCheck();
-      return { ok: true, db: true, ...(disk ? { disk } : {}) };
+      return { ok: true, db: true, release, ...(disk ? { disk } : {}) };
     } catch {
-      return reply.code(503).send({ ok: false, db: false, ...(disk ? { disk } : {}) });
+      return reply.code(503).send({ ok: false, db: false, release, ...(disk ? { disk } : {}) });
     }
   });
 

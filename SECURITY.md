@@ -356,6 +356,22 @@ deliberate trade-off, not an oversight:
   keeps the merged image minimal); `db` still has no published port; a TLS-terminating reverse
   proxy is still required in front; every app-level control on this page (auth, rate limiting,
   sanitization, SSRF/traversal guards) is unchanged.
+- **Bounded build (#110):** the spawned `astro build` runs under the exclusive build/encode lock,
+  so a child that never exits would wedge every publish, rebuild and encode until a manual
+  restart. `uploader/src/build.ts` therefore SIGKILLs the child after `BUILD_TIMEOUT_MS`
+  (15 min) and reports `timed out`, and both Content Layer loaders read through
+  `site/src/lib/loader-pool.ts`, whose connection and query timeouts turn a silently hung
+  Postgres into a build error within about a minute. The deadline is not request-controlled, and
+  every route that starts a build is admin-only, so an author cannot hold the lock by crafting
+  content. The last 4 KiB of the child's **stderr** (ANSI-stripped) is appended to the build error
+  returned to the authenticated caller so the admin learns which post failed the schema; it is
+  build diagnostics (entry ids, schema paths, library file paths), never `DATABASE_URL` — the
+  child reads that from the environment and neither astro nor pg echoes it on a query error.
+- **`/health` reports `release`** (whether a built site exists) beside free space, and like free
+  space it is **information, never a verdict**: a fresh volume legitimately has no release for
+  the first minutes, a persistent build failure is healed by a publish rather than a container
+  restart, and a 503 there would mask a real DB outage. The public blog already answers 503
+  "site is building" in that state, so the flag discloses nothing new.
 
 ### Backups
 

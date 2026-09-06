@@ -756,6 +756,17 @@ blog/
   rename without the flag (409 `slug_change_unconfirmed`), so no client can rename a draft by
   accident. Filling an unset (`''`) slug never asks. See
   `docs/superpowers/specs/2026-09-05-slug-derive-guard-design.md`.
+- **Done: #110 bounded site build (2026-09-05)** — `astro build` was spawned with no deadline
+  under the exclusive build/encode lock, so a child hung on a silently unresponsive Postgres held
+  every later publish, rebuild and encode until a manual restart while `/health` stayed green.
+  `build.ts` now SIGKILLs the child after `BUILD_TIMEOUT_MS` (15 min) and reports a distinct
+  `BuildTimeoutError`; both Content Layer loaders read through `site/src/lib/loader-pool.ts` with
+  connection/query timeouts so the hung-DB case fails in about a minute; the child's stderr is
+  tee'd and its last 4 KiB rides on the build error so the admin sees which post failed the
+  schema; the release copy stages into `releases/.<stamp>.partial` and renames into place (a
+  release dir is complete or absent), with leftovers swept at the next run; the boot-time build
+  retries with backoff (`bootstrapRelease`) and `/health` reports `release` as information, never
+  a verdict. See `docs/superpowers/specs/2026-09-05-build-timeout-and-recovery-design.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

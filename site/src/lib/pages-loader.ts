@@ -1,5 +1,5 @@
 import type { Loader } from 'astro/loaders';
-import pg from 'pg';
+import { loaderPool } from './loader-pool.js';
 import { transformBodyImages, type ImageDims } from './body-images.js';
 import { imageOrigin, retargetImageOrigins } from './images.js';
 
@@ -34,7 +34,7 @@ export function postgresPagesLoader(): Loader {
       if (!url) throw new Error('DATABASE_URL is required to build content from Postgres');
       // See postgres-loader.ts: the one origin a ```gallery fence may reference.
       const galleryOrigin = imageOrigin(process.env.PUBLIC_BASE_URL);
-      const pool = new pg.Pool({ connectionString: url });
+      const pool = loaderPool(url);
       try {
         store.clear();
         const { rows } = await pool.query<PageRow>(

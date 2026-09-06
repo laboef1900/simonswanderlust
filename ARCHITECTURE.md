@@ -86,8 +86,19 @@ Plus the **`pgdata`** volume — Postgres data.
    exporter so a backup round-trips.
 5. **Release** — the build lands in a fresh `releases/<timestamp>` dir under `/data/site` (built
    into a CWD-local tmp dir first to dodge an `EXDEV` rename across the volume boundary, then
-   `cp`'d), then the `current` symlink is **atomically** swapped to it (old releases pruned, keeping
-   the last 3). The app serves `current` directly via `@fastify/static` — no separate web server.
+   `cp`'d into a dot-prefixed staging dir and renamed into place, so a release dir is either
+   complete or absent), then the `current` symlink is **atomically** swapped to it (old releases
+   pruned, keeping the last 3; staging dirs never count). Every run first sweeps `.build-tmp/`
+   and any `releases/.*` leftover from a killed predecessor. The app serves `current` directly via
+   `@fastify/static` — no separate web server.
+
+The child is bounded (#110): it is SIGKILLed after `BUILD_TIMEOUT_MS` (15 min) and the build
+reports `timed out`, releasing the shared build/encode lock instead of holding every later
+publish, rebuild and encode until a manual restart. Its stderr is streamed to the container log
+**and** its last 4 KiB is appended to the build error the admin sees, so a schema failure names
+the post. The loaders' pool (`site/src/lib/loader-pool.ts`) carries connection and query
+timeouts, so a silently hung Postgres fails the build within about a minute rather than running
+into the deadline.
 
 The Astro entry `id`s (`de/<slug>` / `en/<slug>`) and the Zod schema are unchanged from the original
 MDX era, so the SEO slug contract (`site/src/lib/paths.ts`, `trips.ts`) holds: **DE at root, EN under
@@ -95,8 +106,12 @@ MDX era, so the SEO slug contract (`site/src/lib/paths.ts`, `trips.ts`) holds: *
 
 **Build-on-boot:** on startup, if `/data/site/current` doesn't exist yet (fresh volume), the app
 kicks off an initial build in the background without blocking Fastify from listening; blog routes
-serve a 503 "site is building" page until it lands. Restarts against an existing `/data` volume
-skip this and serve immediately — no rebuild on every boot.
+serve a 503 "site is building" page until it lands. A failed initial build is retried with
+exponential backoff (30 s → 8 min, six attempts; `bootstrapRelease` in `build.ts`), stopping as
+soon as any release exists — an admin's publish counts — and giving up, logged, after the last
+attempt. `GET /health` reports `release: false` meanwhile (information, not a verdict — see
+`SECURITY.md`). Restarts against an existing `/data` volume skip all of this and serve
+immediately — no rebuild on every boot.
 
 ## Image pipeline
 
