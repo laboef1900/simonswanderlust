@@ -388,11 +388,17 @@ deliberate trade-off, not an oversight:
   strict pattern (`^db-\d{8}-\d{6}\.json\.gz$` or `^images-\d{8}-\d{6}\.tar$`) before touching the
   filesystem — no path traversal.
 - Restore is **CLI-only**
-  (`docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/<file>` — the
-  shell-less runtime image requires invoking `node` directly), never a web route, because it's
-  destructive: it deletes and re-inserts `users`, `posts`, and `pages` in one transaction
-  (`pages` only when present in the dump — v1 dumps predate them and leave existing pages
-  untouched). Deleting `users` cascades to `sessions`, so a restore invalidates every login.
+  (`docker compose exec app node --import tsx src/cli.ts restore [--yes] /data/backup/db/<file>`
+  — the shell-less runtime image requires invoking `node` directly), never a web route, because
+  it's destructive: it deletes and re-inserts `users`, `posts`, media, and `pages` in one
+  transaction (`pages` only when present in the dump — v1 dumps predate them and leave existing
+  pages untouched). Deleting `users` cascades to `sessions`, so a restore invalidates every login.
+  The CLI is guarded against operator mistakes, not attackers (#114): the file name must match
+  the dump pattern, the operator confirms against a summary of the dump and of the live rows
+  (`--yes` for scripts; the printed target is `host:port/dbname` — the `DATABASE_URL` password is
+  never echoed), and a **pre-restore dump** of the current state is written into the backup
+  directory first — the restore aborts if that dump fails, so a restore that cannot be undone is
+  never run.
 - In-app backups live on the **same disk** as the live data; disaster recovery requires an
   offsite host-level backup of `./uploader/data` — see
   [ARCHITECTURE.md](ARCHITECTURE.md#backups--disaster-recovery).

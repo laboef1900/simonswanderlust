@@ -266,7 +266,12 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   the suite instead of silently vanishing from every backup. The five table reads run on one
   client inside a single `REPEATABLE READ` snapshot, so a bulk delete during a backup can never
   produce a dump whose `posts` reference `media` rows that aren't in it. `sessions` are
-  **never** dumped — they're disposable, and token hashes don't belong in a backup file.
+  **never** dumped — they're disposable, and token hashes don't belong in a backup file. A dump
+  **never overwrites an existing file**: names have one-second resolution and every writer
+  (scheduler, **Back up now**, the restore CLI's pre-restore dump — a separate process) shares
+  the directory, so the finished temp file is published with `link(2)` (fails with `EEXIST`
+  where `rename` would clobber) and a taken name advances to the next free second while
+  `createdAt` keeps the real time (#114).
   `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 4), so
   every bump must widen it or newly written dumps become unrestorable. v1 predates `pages`, v2
   predates the media tables, v3 predates `posts.categories`/`tags`/`scheduled_at`; all still
@@ -304,14 +309,23 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   `GET /backups/:name` (download; filename validated against `^db-\d{8}-\d{6}\.json\.gz$` or
   `^images-\d{8}-\d{6}\.tar$` — no traversal).
 - **Restore is CLI-only** (destructive, so no web button):
-  `docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/<file>`.
+  `docker compose exec app node --import tsx src/cli.ts restore [--yes] /data/backup/db/<file>`.
   The DHI runtime image has no shell, so `exec` must invoke `node` directly (a bare
   `tsx src/cli.ts ...` cannot run there); outside Docker use `npx tsx src/cli.ts restore <file>`.
-  Restore validates
-  the dump `version`, then in **one transaction** deletes and re-inserts `users`, `posts`, and —
-  for v2 dumps — `pages` (v1 dumps leave existing pages untouched). Deleting users **cascades to
-  `sessions`**, so every login is invalidated — the CLI prints a reminder to trigger a rebuild
-  afterwards (`POST /rebuild`).
+  Before anything touches the database, restore (#114, spec
+  `docs/superpowers/specs/2026-09-05-restore-cli-confirmation-design.md`): refuses a file name
+  outside `db-YYYYMMDD-HHmmss.json.gz` (the same pattern the download route enforces); rejects
+  an unsupported dump `version`; prints the target database (`host:port/dbname`, never the
+  credentials), the dump's `createdAt` and per-table counts, and the **live** per-table counts
+  about to be replaced; then asks for the literal line `yes` — `--yes` skips the prompt for
+  scripted use, and EOF/anything else aborts with nothing changed. It then writes a
+  **pre-restore dump** of the current state into `${BACKUP_DIR:-/data/backup}/db/` (an ordinary
+  `db-<stamp>.json.gz`: listed and downloadable in the admin UI, subject to retention pruning,
+  and restorable with this same command — the CLI prints it as the undo path) and **aborts if
+  that dump cannot be written**. Only then does it, in **one transaction**, delete and re-insert
+  `users`, `posts`, media, and — for v2+ dumps — `pages` (v1 dumps leave existing pages
+  untouched). Deleting users **cascades to `sessions`**, so every login is invalidated — the CLI
+  prints a reminder to trigger a rebuild afterwards (`POST /rebuild`).
 - **Admin password recovery** — a forgotten password is reset from the host via the CLI (the
   runtime image has no shell, so use the exec form):
   `docker compose exec app node --import tsx src/cli.ts set-password <username>` — prompts for

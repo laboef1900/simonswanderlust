@@ -103,3 +103,29 @@ describe('set-password CLI wiring (spawned process)', () => {
     expect(r.stderr).toContain('the new password must not be empty');
   }, 30_000);
 });
+
+// Wiring tests for restoreMain's pre-connection guards (issue #114). Every one
+// fires before a pool is created, so no DATABASE_URL is needed — and the
+// filename check is asserted to fire even WITHOUT one, i.e. before the env guard.
+describe('restore CLI wiring (spawned process)', () => {
+  it('prints usage (with --yes) and exits 1 when the file is missing', async () => {
+    const r = await runCli(['restore'], envWithoutDatabaseUrl());
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz');
+  }, 30_000);
+
+  it('refuses a file name outside BACKUP_FILE_RE before touching env or database', async () => {
+    for (const bad of ['/data/backup/db/state.json', 'images-20260101-000000.tar', 'db-20260101-000000.json.gz.bak']) {
+      const r = await runCli(['restore', '--yes', bad], envWithoutDatabaseUrl());
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('the file name must match db-YYYYMMDD-HHmmss.json.gz');
+      expect(r.stderr).not.toContain('DATABASE_URL');
+    }
+  }, 30_000);
+
+  it('accepts --yes after the path too, then stops at the missing DATABASE_URL', async () => {
+    const r = await runCli(['restore', 'db-20260101-000000.json.gz', '--yes'], envWithoutDatabaseUrl());
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('DATABASE_URL is required for restore');
+  }, 30_000);
+});

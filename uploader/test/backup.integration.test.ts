@@ -2,7 +2,7 @@ process.env.TZ = 'Europe/Berlin';
 
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,8 +11,9 @@ import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgUserStore } from '../src/users.js';
 import { pgPostStore } from '../src/posts.js';
 import { pgSessionStore } from '../src/sessions.js';
-import { dumpDatabase, restoreDatabase } from '../src/backup.js';
+import { dumpDatabase, readDump, restoreDatabase, BACKUP_FILE_RE } from '../src/backup.js';
 import { pgMediaStore } from '../src/media-store.js';
+import { runCli } from './run-cli.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -288,5 +289,112 @@ maybe('backup round-trip (Postgres)', () => {
     )).rows.map((r) => r.column_name as string).sort();
     expect(dump.tables.posts).toHaveLength(2);
     expect(Object.keys(dump.tables.posts[0] ?? {}).sort()).toEqual(schemaCols);
+  });
+
+  // The restore CLI (issue #114): spawned exactly as production runs it. Each
+  // case seeds `alice`, dumps, adds `bob`, then restores that dump — so "the
+  // rows about to be replaced" (alice + bob) differ from the dump (alice) and
+  // both the refusal and the pre-restore dump are observable in the database.
+  describe('restore CLI', () => {
+    const usernames = async () =>
+      (await pool.query('SELECT username FROM users ORDER BY username')).rows.map((r) => r.username);
+    const preDumps = (backupDir: string) => {
+      try { return readdirSync(join(backupDir, 'db')).filter((n) => BACKUP_FILE_RE.test(n)); } catch { return []; }
+    };
+    const usersIn = (dumpPath: string) => readDump(dumpPath).tables.users.map((u) => String(u.username)).sort();
+    async function seed(): Promise<{ dumpFile: string; backupDir: string; env: NodeJS.ProcessEnv }> {
+      await pool.query('DELETE FROM posts');
+      await pool.query('DELETE FROM users');
+      const users = pgUserStore(pool);
+      await users.create({ username: 'alice', password: 'pw-alice', isAdmin: true });
+      const dumpDir = await mkdtemp(join(tmpdir(), 'bk-cli-src-'));
+      const dumpFile = join(dumpDir, await dumpDatabase(pool, dumpDir));
+      await users.create({ username: 'bob', password: 'pw-bob', isAdmin: false });
+      const backupDir = await mkdtemp(join(tmpdir(), 'bk-cli-dst-'));
+      return { dumpFile, backupDir, env: { ...process.env, DATABASE_URL: url!, BACKUP_DIR: backupDir } };
+    }
+
+    it('without --yes and no confirmation line (stdin EOF) it aborts: no rows touched, no pre-dump written', async () => {
+      const { dumpFile, backupDir, env } = await seed();
+      const r = await runCli(['restore', dumpFile], env);
+      expect(r.code).toBe(1);
+      // The summary names the target and both row sets before asking.
+      expect(r.stdout).toContain('target database: ');
+      expect(r.stdout).not.toContain('sw:sw@'); // never echo credentials
+      expect(r.stdout).toMatch(/dump: .*users 1, posts 0/);
+      expect(r.stdout).toMatch(/about to REPLACE the live rows: users 2, posts 0/);
+      expect(r.stderr).toContain('aborted; nothing was changed');
+      expect(await usernames()).toEqual(['alice', 'bob']);
+      expect(preDumps(backupDir)).toEqual([]);
+    }, 30_000);
+
+    it('with --yes it writes a pre-restore dump of the replaced rows into BACKUP_DIR/db, then restores', async () => {
+      const { dumpFile, backupDir, env } = await seed();
+      const r = await runCli(['restore', '--yes', dumpFile], env);
+      expect(r.code).toBe(0);
+      const written = preDumps(backupDir);
+      expect(written).toHaveLength(1);
+      const preDumpPath = join(backupDir, 'db', written[0]!);
+      expect(r.stdout).toContain(`pre-restore dump written: ${preDumpPath}`);
+      // The pre-dump captures the state BEFORE the wipe (alice + bob) …
+      expect(usersIn(preDumpPath)).toEqual(['alice', 'bob']);
+      // … and the database now matches the restored dump (alice only).
+      expect(await usernames()).toEqual(['alice']);
+      // The undo path: the pre-dump is itself a restorable dump. Run
+      // back-to-back — usually within the same UTC second — so this also pins
+      // that the undo's OWN pre-dump never overwrites the file being restored
+      // (dump names have one-second resolution; the CLI steers past the clash).
+      const undo = await runCli(['restore', '--yes', preDumpPath], env);
+      expect(undo.code).toBe(0);
+      expect(await usernames()).toEqual(['alice', 'bob']);
+      expect(preDumps(backupDir)).toHaveLength(2);
+      expect(usersIn(preDumpPath)).toEqual(['alice', 'bob']);
+    }, 60_000);
+
+    it('a "yes" line on stdin confirms; anything else aborts', async () => {
+      const { dumpFile, env } = await seed();
+      const no = await runCli(['restore', dumpFile], env, 'no\n');
+      expect(no.code).toBe(1);
+      expect(await usernames()).toEqual(['alice', 'bob']);
+      const yes = await runCli(['restore', dumpFile], env, 'yes\n');
+      expect(yes.code).toBe(0);
+      expect(await usernames()).toEqual(['alice']);
+    }, 60_000);
+
+    it('two --yes restores in quick succession keep BOTH pre-dumps (a name is never reused)', async () => {
+      // Same external source, back to back — usually within one UTC second.
+      // The second run's pre-dump (state: alice) must not land on the first
+      // run's name and overwrite its content (state: alice + bob).
+      const { dumpFile, backupDir, env } = await seed();
+      const first = await runCli(['restore', '--yes', dumpFile], env);
+      const second = await runCli(['restore', '--yes', dumpFile], env);
+      expect(first.code).toBe(0);
+      expect(second.code).toBe(0);
+      const written = preDumps(backupDir).sort();
+      expect(written).toHaveLength(2);
+      expect(usersIn(join(backupDir, 'db', written[0]!))).toEqual(['alice', 'bob']);
+      expect(usersIn(join(backupDir, 'db', written[1]!))).toEqual(['alice']);
+    }, 60_000);
+
+    it('aborts before the transaction when the pre-restore dump cannot be written', async () => {
+      const { dumpFile, env } = await seed();
+      // BACKUP_DIR under a regular file: mkdir of `<file>/db` fails with ENOTDIR.
+      const r = await runCli(['restore', '--yes', dumpFile], { ...env, BACKUP_DIR: dumpFile });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('pre-restore dump into');
+      expect(r.stderr).toContain('restore aborted, nothing was changed');
+      expect(await usernames()).toEqual(['alice', 'bob']);
+    }, 30_000);
+
+    it('refuses an unsupported dump version before writing a pre-dump', async () => {
+      const { backupDir, env } = await seed();
+      const bad = join(dir, 'db-20260102-000000.json.gz');
+      writeFileSync(bad, gzipSync(JSON.stringify({ version: 5, tables: { users: [], posts: [] } })));
+      const r = await runCli(['restore', '--yes', bad], env);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('unsupported dump version 5');
+      expect(await usernames()).toEqual(['alice', 'bob']);
+      expect(preDumps(backupDir)).toEqual([]);
+    }, 30_000);
   });
 });
