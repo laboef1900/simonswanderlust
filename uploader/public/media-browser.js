@@ -305,6 +305,32 @@
     if (state.me && state.me.isAdmin) {
       var del = el('button', 'btn-remove', 'Delete photo');
       del.type = 'button';
+      if (item.status === 'processing') {
+        // The server refuses (409) while the encoder may still write under
+        // this key (#116); say so up front instead of after the confirm.
+        // `state.items` only changes on reload(), so offer a one-item
+        // re-check that flips the button in place — a full re-render would
+        // throw away whatever the admin has typed into the details form.
+        var note = el('p', 'muted', 'Still encoding — delete becomes available once it finishes or fails. ');
+        note.id = 'deleteNote';
+        var recheck = el('button', 'btn-link', 'Check again');
+        recheck.type = 'button';
+        recheck.addEventListener('click', async function () {
+          try {
+            var fresh = await client.get(item.key);
+            item.status = fresh.status; item.error = fresh.error;
+            if (fresh.status === 'processing') { say('Still encoding.'); return; }
+            del.disabled = false;
+            del.removeAttribute('aria-describedby');
+            note.remove();
+            say(fresh.status === 'ready' ? 'Encoding finished.' : 'Encoding ' + fresh.status + '.');
+          } catch (e) { fail(e); }
+        });
+        note.appendChild(recheck);
+        del.disabled = true;
+        del.setAttribute('aria-describedby', 'deleteNote');
+        panel.appendChild(note);
+      }
       del.addEventListener('click', function () { deleteOne(item); });
       panel.appendChild(del);
     }

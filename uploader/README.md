@@ -160,11 +160,15 @@ Three consequences worth knowing:
 
 - **Publishing is gated on encode state.** A post referencing a photo that is not yet `ready` is
   refused rather than published with a broken image.
-- **Deleting is gated on usage in both copies.** `DELETE /media/items/*` refuses (409) while any
-  post's working copy **or published snapshot** — what the blog is actually built from — still
-  references the photo, or any page does. A draft that swapped a photo out does not make the old
-  one deletable until the post is republished (or unpublished); the response's `usedIn` entries
-  carry `published`/`working` flags so the library can say "(published version)".
+- **Deleting is gated on usage in both copies, and on the encoder.** `DELETE /media/items/*`
+  refuses (409) while any post's working copy **or published snapshot** — what the blog is
+  actually built from — still references the photo, or any page does. A draft that swapped a
+  photo out does not make the old one deletable until the post is republished (or unpublished);
+  the response's `usedIn` entries carry `published`/`working` flags so the library can say
+  "(published version)". It also refuses while the photo is `processing` or its key is queued /
+  in flight: the running job would write variants under the deleted key and the next rescan would
+  resurrect it as a `ready` row with no original. Should a row still vanish mid-encode, the queue
+  discards the result and unlinks what it wrote instead of writing `ready` into thin air.
 - **`GET /media` redacts for non-admins** — GPS (`lat`/`lng`) and uploader identity are stripped.
   Never return a raw row.
 

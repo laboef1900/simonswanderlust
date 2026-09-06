@@ -623,10 +623,19 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         : 'image is referenced by existing content — remove those references first';
       return reply.code(409).send({ error, usedIn });
     }
+    // Refuse while the encoder may still write under this key (#116): the
+    // running job holds the original in memory, `storeVariantFiles` recreates
+    // the directory, and the next rescan would backfill the orphaned variants
+    // as a zombie `ready` row with no original. Both signals are needed —
+    // the row says `processing` from upload until the encoder's final write,
+    // and the queue knows about a key the row no longer describes.
+    const item = await cfg.media.get(key);
+    if (item?.status === 'processing' || cfg.encodeQueue.isActive(key)) {
+      return reply.code(409).send({ error: 'photo is still being encoded — wait for it to finish (or fail), then delete it' });
+    }
     const deleted = await deleteMedia(storageDir, key);
-    const hadRow = (await cfg.media.get(key)) !== null;
     await cfg.media.remove(key);
-    if (deleted === 0 && !hadRow) return reply.code(404).send({ error: 'image not found' });
+    if (deleted === 0 && item === null) return reply.code(404).send({ error: 'image not found' });
     return reply.send({ ok: true, deleted });
   });
 

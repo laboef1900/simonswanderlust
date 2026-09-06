@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtemp, mkdir, writeFile, readdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { BacklogFullError, createEncodeQueue } from '../src/encode-queue.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
 import { createWorkLock } from '../src/work-lock.js';
@@ -67,6 +70,51 @@ describe('createEncodeQueue', () => {
     gates.forEach((g) => g.resolve());
     await queue.drain();
     expect(started).toEqual(['a', 'b', 'c']);
+  });
+
+  it('reports a key as active from enqueue until its job finishes', async () => {
+    const { store, queue, hold } = setup({ concurrency: 1 });
+    await seed(store, ['a', 'b']);
+    const gate = hold('a');
+    queue.enqueue('a'); queue.enqueue('b');
+    await tick();
+    expect(queue.isActive('a')).toBe(true);   // in flight
+    expect(queue.isActive('b')).toBe(true);   // pending
+    expect(queue.isActive('zzz')).toBe(false);
+    gate.resolve();
+    await queue.drain();
+    expect(queue.isActive('a')).toBe(false);
+    expect(queue.isActive('b')).toBe(false);
+  });
+
+  // #116: a key deleted mid-encode must not come back. The encoder writes its
+  // variants under the deleted key, and media-sync backfills any key with a
+  // variant as `ready` — the delete would silently undo itself on rescan.
+  it('discards an encode whose row was deleted mid-flight and unlinks what it wrote', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'encq-'));
+    const store = memoryMediaStore({ baseUrl: BASE });
+    const logs: string[] = [];
+    let release!: () => void;
+    const queue = createEncodeQueue({
+      store, storageDir: dir, lock: createWorkLock(),
+      encodeOne: async (key) => {
+        // Simulate storeVariantFiles landing after the row vanished.
+        await new Promise<void>((r) => { release = r; });
+        await mkdir(join(dir, 'trips/x'), { recursive: true });
+        await writeFile(join(dir, `${key}-640.webp`), 'x');
+        return { bytes: 1 };
+      },
+      log: (m) => logs.push(m), error: () => {},
+    });
+    await seed(store, ['trips/x/gone']);
+    queue.enqueue('trips/x/gone');
+    await tick();
+    await store.remove('trips/x/gone');
+    release();
+    await queue.drain();
+    expect(await readdir(join(dir, 'trips/x'))).toEqual([]);
+    expect(await store.get('trips/x/gone')).toBeNull();   // no zombie row written back
+    expect(logs.join('\n')).toMatch(/discarded.*row deleted mid-encode/);
   });
 
   // @ai-warning: the OOM mitigation. astro build and sharp both peak around
