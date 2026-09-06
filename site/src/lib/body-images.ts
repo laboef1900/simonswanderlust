@@ -357,3 +357,47 @@ export function transformBodyImages(
   });
   return unified().use(rehypeStringify, { allowDangerousHtml: true }).stringify(tree);
 }
+
+/** Candidate URLs of a `srcset` (hast gives a comma-list as an array or a string). */
+function srcsetUrls(value: unknown): string[] {
+  const parts = Array.isArray(value) ? value.map(String) : typeof value === 'string' ? value.split(',') : [];
+  return parts.map((c) => c.trim().split(/\s+/, 1)[0] ?? '').filter((u) => u !== '');
+}
+
+/**
+ * Every image source the SANITIZED body would load, read from the same hast
+ * tree `transformBodyImages` starts from, BEFORE any `images` resolution:
+ * the `src`/`srcset` of every `<img>` and `<source>` (a raw `<picture>` is
+ * allowed through by the schema), plus the raw photo lines of every gallery
+ * fence exactly as `galleryPhotos` would read them.
+ *
+ * @ai-context The uploader's publish gate (#91, `uploader/src/publish-gate.ts`)
+ * refuses a foreign origin in either list: the renderer would hot-link the
+ * first kind and silently drop the second. It reads from THIS tree so that the
+ * gate and the renderer cannot disagree about what an image is — a regex over
+ * the serialized HTML did (attribute values keep a raw `>`, `<pre>` may carry
+ * `id`/whitespace) and a Markdown text scanner did worse.
+ */
+export function bodyImageSources(html: string): { sources: string[]; galleryLines: string[] } {
+  const parser = unified().use(rehypeParse, { fragment: true }).use(rehypeSanitize, BODY_SCHEMA);
+  const tree = parser.runSync(parser.parse(html));
+  const sources: string[] = [];
+  const galleryLines: string[] = [];
+  visit(tree, 'element', (node) => {
+    if (node.tagName === 'pre') {
+      const code = galleryCode(node);
+      if (!code) return;
+      for (const line of textOf(code).split('\n')) {
+        const raw = (line.split('|', 1)[0] ?? '').trim();
+        if (raw !== '' && !raw.startsWith('#')) galleryLines.push(raw);
+      }
+      return SKIP;
+    }
+    if (node.tagName === 'img' || node.tagName === 'source') {
+      const src = node.properties?.src;
+      if (typeof src === 'string' && src !== '') sources.push(src);
+      sources.push(...srcsetUrls(node.properties?.srcSet));
+    }
+  });
+  return { sources, galleryLines };
+}

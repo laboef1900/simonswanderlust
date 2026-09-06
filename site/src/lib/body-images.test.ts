@@ -295,3 +295,21 @@ describe('transformBodyImages — gallery value coercion', () => {
     }
   });
 });
+
+describe('bodyImageSources — what the sanitized body would load (#91 publish gate)', () => {
+  it('reads img/source src+srcset and gallery lines from the sanitized tree, in every shape galleryCode accepts', async () => {
+    const { bodyImageSources } = await import('./body-images.js');
+    const html = [
+      '<img alt="x > y" src="https://old.example/a.jpg">',
+      '<picture><source srcset="https://old.example/b.jpg 1x, https://old.example/c.jpg 2x"><img src="https://img.example.com/own"></picture>',
+      '<img src="javascript:alert(1)">',
+      '<pre id="g">\n<code class="language-gallery" id="c">#layout: grid\n\nhttps://img.example.com/one | 10x10\nhttps://old.example/g.jpg | alt="x"</code>\n</pre>',
+      '<pre><code class="language-js">https://old.example/not-a-gallery</code></pre>',
+      '<p>src="https://old.example/text-not-attr"</p>',
+    ].join('\n');
+    expect(bodyImageSources(html)).toEqual({
+      sources: ['https://old.example/a.jpg', 'https://old.example/b.jpg', 'https://old.example/c.jpg', 'https://img.example.com/own'],
+      galleryLines: ['https://img.example.com/one', 'https://old.example/g.jpg'],
+    });
+  });
+});

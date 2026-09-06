@@ -1460,6 +1460,53 @@ describe('publish gate (encode status)', () => {
   });
 });
 
+describe('publish gate (foreign images, #91)', () => {
+  const IMG = 'https://img.simonswanderlust.com';
+  const pairWithBody = (deBody: string, enBody = '## b') => ({
+    translationKey: '', status: 'draft',
+    shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de', slug: 'fgn-de', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: `${IMG}/trips/g/hero`, width: 9, height: 9, alt: 'a' }, bodyMarkdown: deBody, images: {} },
+    en: { locale: 'en', slug: 'fgn-en', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: `${IMG}/trips/g/hero`, width: 9, height: 9, alt: 'a' }, bodyMarkdown: enBody, images: {} },
+  });
+  const create = async (b: Built, cookie: { sid: string }, payload: Record<string, unknown>) =>
+    (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload })).json().translationKey;
+
+  it('409s with the count and examples while a body still hot-links another host, and publishes nothing', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const urls = Array.from({ length: 7 }, (_, i) => `https://old.example/wp-content/uploads/${i}.jpg`);
+    const de = urls.map((u) => `![p](${u} "${u.split('/').pop()}")`).join('\n\n');
+    const tk = await create(b, cookie, pairWithBody(de, '```gallery\nhttps://old.example/wp-content/uploads/g.jpg\n```'));
+    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/8 image\(s\) in the body still point at another host/);
+    expect(res.json().foreignImageCount).toBe(8);
+    expect(res.json().foreignImages).toEqual(urls.slice(0, 5));
+    expect(s.calls.length).toBe(0);
+    expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('draft');
+  });
+
+  it('publishes once every body image is on the image host', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const tk = await create(b, cookie, pairWithBody(`![p](${IMG}/trips/g/a)\n\n\`\`\`gallery\n${IMG}/trips/g/b | 30x20\n\`\`\``));
+    expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie })).statusCode).toBe(200);
+  });
+
+  it('applies to the bulk path as a per-post failure', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const tk = await create(b, cookie, pairWithBody('![p](https://old.example/a.jpg)'));
+    const res = await b.app.inject({
+      method: 'POST', url: '/posts/bulk', headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { action: 'publish', keys: [tk] },
+    });
+    expect(res.json()).toMatchObject({ succeeded: 0, failed: 1 });
+    expect(res.json().results[0].error).toMatch(/1 image\(s\) in the body still point at another host/);
+  });
+});
+
 describe('posts editor', () => {
   const sample = () => ({
     translationKey: '', status: 'draft',

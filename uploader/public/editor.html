@@ -900,7 +900,10 @@
           if (res.status === 401) { guard.redirectToLogin(); return; }
           const body = await res.json().catch(() => ({}));
           if (!res.ok) {
-            showErr(body.error || ('Publish failed: ' + res.status));
+            // #91: the gate names up to five of the offending URLs so the author can find them.
+            const examples = Array.isArray(body.foreignImages) && body.foreignImages.length
+              ? ' Examples: ' + body.foreignImages.join(', ') : '';
+            showErr((body.error || ('Publish failed: ' + res.status)) + examples);
             setStatus('');
             return;
           }
