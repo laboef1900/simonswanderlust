@@ -37,7 +37,7 @@ describe('admin form fields have accessible names', () => {
 describe('admin outcome messages are announced (SC 4.1.3)', () => {
   const liveRoles = /role="(status|alert)"/;
   const cases: [typeof PAGES[number], string[]][] = [
-    ['posts', ['out']], ['media', ['out']], ['import', ['out']], ['login', ['out']],
+    ['posts', ['out']], ['media', ['out']], ['import', ['out']], ['login', ['out', 'err']],
     ['users', ['out', 'pwout']], ['settings', ['out', 'backupStatus']],
     ['editor', ['actionStatus', 'actionError', 'deHeroStatus', 'enHeroStatus', 'deBodyImgStatus', 'enBodyImgStatus']],
     ['about', ['actionStatus', 'actionError', 'deBodyImgStatus', 'enBodyImgStatus']],
@@ -51,9 +51,12 @@ describe('admin outcome messages are announced (SC 4.1.3)', () => {
       }
     });
   }
-  it('the editor error line interrupts, the status line does not', () => {
-    expect(html.editor).toMatch(/id="actionError"[^>]*role="alert"|role="alert"[^>]*id="actionError"/);
-    expect(html.editor).toMatch(/id="actionStatus"[^>]*role="status"|role="status"[^>]*id="actionStatus"/);
+  it('error lines interrupt, status lines do not (editor and login)', () => {
+    const roleOf = (page: string, id: string) => new RegExp(`<(pre|p)\\b[^>]*\\bid="${id}"[^>]*>`).exec(page)?.[0];
+    expect(roleOf(html.editor, 'actionError')).toMatch(/role="alert"/);
+    expect(roleOf(html.editor, 'actionStatus')).toMatch(/role="status"/);
+    expect(roleOf(html.login, 'err')).toMatch(/role="alert"/);
+    expect(roleOf(html.login, 'out')).toMatch(/role="status"/);
   });
 });
 

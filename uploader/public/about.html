@@ -73,6 +73,10 @@
         toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'] });
       const enMDE = new EasyMDE({ element: $('enBody'), spellChecker: false, autosave: { enabled: false },
         toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'] });
+      // EasyMDE hides the labelled <textarea> and types into CodeMirror's own
+      // input, which starts nameless — a screen reader would hear "edit text".
+      deMDE.codemirror.getInputField().setAttribute('aria-label', 'Body (Markdown, DE)');
+      enMDE.codemirror.getInputField().setAttribute('aria-label', 'Body (Markdown, EN)');
 
       // ---- draft guard: dirty tracking, beforeunload warning, local autosave ----
       const guard = DraftGuard.createDraftGuard({
