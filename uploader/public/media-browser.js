@@ -490,7 +490,8 @@
       try {
         var r = await client.rescan();
         await reload('Rescan: scanned ' + r.scanned + ', added ' + r.inserted
-          + ', alt harvested ' + r.altHarvested + ', marked missing ' + r.markedMissing + '.');
+          + ', alt harvested ' + r.altHarvested + ', marked missing ' + r.markedMissing
+          + ', re-queued ' + r.recovered + ' for encoding.');
       } catch (e) { fail(e); }
     });
   }

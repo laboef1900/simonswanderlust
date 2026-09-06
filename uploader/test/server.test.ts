@@ -551,14 +551,14 @@ describe('media library', () => {
     expect(clash.statusCode).toBe(409);
   });
 
-  it('POST /media/rescan is admin-only', async () => {
-    const b = build({ mediaSync: { run: async () => ({ scanned: 1, inserted: 0, altHarvested: 0, markedMissing: 0 }) } });
+  it('POST /media/rescan is admin-only and returns the reconcile report', async () => {
+    const b = build({ reconciler: { run: async () => ({ scanned: 1, inserted: 0, altHarvested: 0, markedMissing: 0, recovered: 1 }) } });
     const author = await authed(b, { isAdmin: false, username: 'author' });
     expect((await b.app.inject({ method: 'POST', url: '/media/rescan', cookies: author.cookie })).statusCode).toBe(403);
     const admin = await authed(b, { username: 'boss' });
     const res = await b.app.inject({ method: 'POST', url: '/media/rescan', cookies: admin.cookie });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ scanned: 1 });
+    expect(res.json()).toMatchObject({ scanned: 1, recovered: 1 });
   });
 
   it('the whole /media surface carries the admin security headers', async () => {

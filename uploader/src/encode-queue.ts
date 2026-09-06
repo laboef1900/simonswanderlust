@@ -36,7 +36,11 @@ export const MAX_BACKLOG = 200;
 export interface EncodeQueue {
   /** Enqueue a stored key for encoding. Throws when the backlog is full. */
   enqueue(key: string): void;
-  /** Re-seed from `media WHERE status = 'processing'` (boot recovery). */
+  /**
+   * Re-seed from `media WHERE status = 'processing'`. Only `createReconciler`
+   * (media-sync.ts) calls this — boot and POST /media/rescan — and it MUST run
+   * after the disk sync, which is what inserts the rows it looks for.
+   */
   recover(): Promise<number>;
   /** Resolves when nothing is queued or in flight — the shutdown drain hook. */
   drain(): Promise<void>;
@@ -179,7 +183,8 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
       }
       if (n > 0) log(`encode queue: recovered ${n} unfinished upload(s)`);
       // No silent truncation: say so when the cap left work behind. The rest
-      // is picked up by the next recover() (POST /media/retry or a restart).
+      // is picked up by the next reconcile pass (POST /media/rescan or a
+      // restart) — NOT by POST /media/retry, which skips `processing` rows.
       if (total > n) log(`encode queue: ${total - n} more still pending — re-run recovery after this batch`);
       pump();
       return n;

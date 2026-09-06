@@ -204,7 +204,10 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 > (`POST /media/rescan`): it backfills rows for keys already on disk, harvests existing alt text
 > by **exact URL match only**, and marks a row whose files vanished as `missing` rather than
 > deleting it. Its walk matches originals as well as variants, so a crashed upload — which has
-> written only `{key}-orig.<ext>` — is discovered and re-queued.
+> written only `{key}-orig.<ext>` — is discovered as `processing`. Both callers go through
+> `createReconciler`, which runs the sync and **then** `encodeQueue.recover()`, so the row is
+> actually re-queued (#117: the rescan route used to run the sync alone and strand it until the
+> next restart). The report carries a `recovered` count alongside the sync counters.
 
 Schema evolution is additive and idempotent — no migration framework, no `schema_version` table.
 `ensureSchema` runs on every boot before the server starts serving, so a new column is added in

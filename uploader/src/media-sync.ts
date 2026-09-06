@@ -4,9 +4,10 @@
  * The filesystem is the source of truth for a file's existence (see
  * media-store.ts), so the database can drift: photos uploaded before the
  * library existed have no row, a crashed upload leaves a row nobody finished,
- * and a file deleted out of band leaves a row pointing at nothing. This runs
- * after `listen()` (never blocking boot) and on demand via
- * `POST /media/rescan`, logs what it did, and degrades gracefully.
+ * and a file deleted out of band leaves a row pointing at nothing. The sync
+ * runs inside `createReconciler` — after `listen()` (never blocking boot) and
+ * on demand via `POST /media/rescan` — logs what it did, and degrades
+ * gracefully.
  *
  * @ai-context docs/superpowers/specs/2026-07-26-media-library-and-galleries-design.md
  *   §Reconciliation — issue #64.
@@ -24,6 +25,12 @@ export interface SyncReport {
   inserted: number;
   altHarvested: number;
   markedMissing: number;
+}
+
+/** What `POST /media/rescan` and the boot pass return: the sync plus the encode re-seed. */
+export interface ReconcileReport extends SyncReport {
+  /** Rows left `processing` that the pass handed to the encode queue. */
+  recovered: number;
 }
 
 export interface MediaSyncOptions {
@@ -189,6 +196,44 @@ export function createMediaSync(opts: MediaSyncOptions) {
       log(`media-sync: scanned ${report.scanned} key(s), inserted ${report.inserted}, `
         + `harvested alt for ${report.altHarvested}, marked ${report.markedMissing} missing`);
       return report;
+    },
+  };
+}
+
+/**
+ * Reconcile disk ↔ database, THEN resume anything left half-encoded — the
+ * one entry point for both boot and `POST /media/rescan`.
+ *
+ * @ai-warning The order is load-bearing, and the two steps must never run
+ * separately. The sync inserts a backfilled crashed upload (an `-orig.*` on
+ * disk with no variants) as `processing`, and `recover()` re-seeds the queue
+ * from `status = 'processing'`. Nothing else un-sticks such a row: `POST
+ * /media/retry` skips `processing` and the UI offers Retry only for
+ * `failed`, while the publish gate blocks every post referencing it. Before
+ * this existed the rescan route ran the sync alone (#117), so an admin's
+ * Rescan stranded exactly the rows it discovered until the next restart.
+ * Fired in parallel the bug returns: `recover()` is a single query and
+ * finishes before the sync's disk walk, so it never sees those rows.
+ */
+export function createReconciler(opts: {
+  sync: { run(): Promise<SyncReport> };
+  queue: { recover(): Promise<number> };
+}) {
+  return {
+    async run(): Promise<ReconcileReport> {
+      // A failed sync (unreadable storage dir, DB hiccup) still gets the
+      // recovery pass: the `processing` rows a crash left behind predate this
+      // run and heal independently of it. The sync error is re-thrown after.
+      let report: SyncReport | undefined;
+      let syncError: unknown;
+      try {
+        report = await opts.sync.run();
+      } catch (e) {
+        syncError = e;
+      }
+      const recovered = await opts.queue.recover();
+      if (report === undefined) throw syncError;
+      return { ...report, recovered };
     },
   };
 }

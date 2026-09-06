@@ -3,7 +3,9 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { createMediaSync, harvestAlt, walkStorageKeys } from '../src/media-sync.js';
+import { createMediaSync, createReconciler, harvestAlt, walkStorageKeys } from '../src/media-sync.js';
+import { createEncodeQueue } from '../src/encode-queue.js';
+import { createWorkLock } from '../src/work-lock.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
 import type { PostUsageRow } from '../src/posts.js';
 
@@ -187,5 +189,38 @@ describe('createMediaSync', () => {
       log: () => {},
     });
     await expect(s.run()).resolves.toMatchObject({ inserted: 1, altHarvested: 0 });
+  });
+});
+
+describe('createReconciler', () => {
+  // The #117 scenario: an upload crashed after storeOriginal and before the
+  // row was written (or the DB was restored from an older dump). A rescan
+  // that only backfills the row as `processing` strands it — nothing
+  // enqueues it, /media/retry skips `processing`, and the publish gate blocks
+  // every post referencing it until the next restart.
+  it('enqueues an originals-only key discovered by the rescan', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await writeOriginal('library/2025/crashed');
+    const encoded: string[] = [];
+    const queue = createEncodeQueue({
+      store, storageDir: dir, lock: createWorkLock(),
+      encodeOne: async (key) => { encoded.push(key); return { bytes: 1 }; },
+      log: () => {}, error: () => {},
+    });
+    const report = await createReconciler({ sync: sync(store), queue }).run();
+    expect(report).toMatchObject({ scanned: 1, inserted: 1, recovered: 1 });
+    await queue.drain();
+    expect(encoded).toEqual(['library/2025/crashed']);
+    expect(await store.get('library/2025/crashed')).toMatchObject({ status: 'ready' });
+  });
+
+  it('still runs recovery when the sync fails, then re-throws the sync error', async () => {
+    let recovered = 0;
+    const r = createReconciler({
+      sync: { run: async () => { throw new Error('storage unreadable'); } },
+      queue: { recover: async () => { recovered++; return 3; } },
+    });
+    await expect(r.run()).rejects.toThrow('storage unreadable');
+    expect(recovered).toBe(1);
   });
 });
