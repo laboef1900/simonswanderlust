@@ -60,6 +60,17 @@ describe('assertFetchableUrl', () => {
       expect(() => assertFetchableUrl(`http://${host}/x`), host).toThrow(/internal/i);
     }
   });
+  // Issue #144: the forms BlockList does not unpack — IPv4-compatible, 6to4 —
+  // plus site-local, documentation and discard space; and the mapped form of a
+  // PUBLIC address must still pass, or every dual-stack resolution would fail.
+  it('rejects the remaining IPv4-embedding, site-local, documentation and discard IPv6 literals', () => {
+    for (const host of ['[::7f00:1]', '[::a9fe:a9fe]', '[2002:7f00:1::]', '[2002:a9fe:a9fe::1]', '[fec0::1]', '[2001:db8::1]', '[100::1]']) {
+      expect(() => assertFetchableUrl(`http://${host}/x`), host).toThrow(/internal/i);
+    }
+    for (const host of ['[2606:4700::1111]', '[::ffff:93.184.216.34]', '[2001:db7::1]']) {
+      expect(() => assertFetchableUrl(`http://${host}/x`), host).not.toThrow();
+    }
+  });
   it('sees through the alternate IPv4 spellings the URL parser canonicalises', () => {
     expect(() => assertFetchableUrl('http://2130706433/x')).toThrow(/internal/i);     // decimal 127.0.0.1
     expect(() => assertFetchableUrl('http://0x7f.1/x')).toThrow(/internal/i);         // hex + short form
@@ -77,6 +88,22 @@ describe('safeFetch', () => {
   it('throws on a non-2xx response', async () => {
     const fetchImpl = (async () => new Response('nope', { status: 404 })) as unknown as typeof fetch;
     await expect(safeFetch('https://example.com/a.jpg', { fetchImpl, lookup: publicLookup })).rejects.toThrow(/404/);
+  });
+  // Issue #144: a body the caller never reads must be released, or an export
+  // whose photos mostly 404 holds one socket per failed attempt for the whole run.
+  it('cancels the body of a non-2xx response before rejecting, keeping the http kind and status', async () => {
+    let cancelled = 0;
+    const stream = new ReadableStream({ cancel() { cancelled++; } });
+    const fetchImpl = (async () => new Response(stream, { status: 404 })) as unknown as typeof fetch;
+    const err = await caught(() => safeFetch('https://example.com/a.jpg', { fetchImpl, lookup: publicLookup }));
+    expect(err).toMatchObject({ kind: 'http', status: 404 });
+    expect(cancelled).toBe(1);
+  });
+  it('still reports the HTTP status when cancelling the body itself fails', async () => {
+    const stream = new ReadableStream({ cancel() { throw new Error('socket already gone'); } });
+    const fetchImpl = (async () => new Response(stream, { status: 500 })) as unknown as typeof fetch;
+    const err = await caught(() => safeFetch('https://example.com/a.jpg', { fetchImpl, lookup: publicLookup }));
+    expect(err).toMatchObject({ kind: 'http', status: 500 });
   });
   it('enforces the byte cap by aborting mid-stream', async () => {
     const big = new Uint8Array(1000);
