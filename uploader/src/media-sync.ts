@@ -16,6 +16,7 @@ import { readdir, stat } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import sharp from 'sharp';
 import { ORIGINAL_FILE_RE, VARIANT_FILE_RE } from './media-files.js';
+import { FORMATS, variantWidths } from './variants.js';
 import { MAX_PAGE_SIZE, type MediaStore } from './media-store.js';
 import type { PagePair } from './pages.js';
 import type { PostUsageRow } from './posts.js';
@@ -25,6 +26,8 @@ export interface SyncReport {
   inserted: number;
   altHarvested: number;
   markedMissing: number;
+  /** `ready` rows whose variant set on disk turned out incomplete (#118): now `processing` or `missing`. */
+  demoted: number;
 }
 
 /** What `POST /media/rescan` and the boot pass return: the sync plus the encode re-seed. */
@@ -42,7 +45,16 @@ export interface MediaSyncOptions {
   log?: (msg: string) => void;
 }
 
-interface DiskKey { key: string; hasVariants: boolean; largestVariant: string | null; origBytes: number }
+export interface DiskKey {
+  key: string;
+  /** Variant files present, as `${width}.${format}` — the shape `isCompleteSet` checks. */
+  variants: Set<string>;
+  /** storageDir-relative path of the widest variant (webp preferred), for probing a key with no original. */
+  largestVariant: string | null;
+  /** storageDir-relative path of the retained `-orig.<ext>`; null for legacy WP-era files. */
+  original: string | null;
+  origBytes: number;
+}
 
 /**
  * Walk storageDir grouping BOTH variants and originals by key.
@@ -62,24 +74,27 @@ export async function walkStorageKeys(storageDir: string): Promise<Map<string, D
     throw e;
   }
   const byKey = new Map<string, DiskKey>();
-  const widths = new Map<string, number>();
+  const largest = new Map<string, { width: number; webp: boolean }>();
   for (const d of entries) {
     if (!d.isFile()) continue;
     const rel = relative(root, join(d.parentPath, d.name)).split(sep).join('/');
     const isVariant = VARIANT_FILE_RE.test(d.name);
     const isOriginal = !isVariant && ORIGINAL_FILE_RE.test(d.name);
-    if (!isVariant && !isOriginal) continue;
+    if (!isVariant && !isOriginal) continue; // includes storage.ts's `.part-*` temps
     const key = rel.replace(isVariant ? VARIANT_FILE_RE : ORIGINAL_FILE_RE, '');
-    const entry = byKey.get(key) ?? { key, hasVariants: false, largestVariant: null, origBytes: 0 };
+    const entry = byKey.get(key) ?? { key, variants: new Set<string>(), largestVariant: null, original: null, origBytes: 0 };
     if (isVariant) {
-      entry.hasVariants = true;
       const m = VARIANT_FILE_RE.exec(d.name);
-      const w = Number(m?.[1] ?? 0);
-      if (String(m?.[2]) === 'webp' && w >= (widths.get(key) ?? 0)) {
-        widths.set(key, w);
+      const width = Number(m?.[1] ?? 0);
+      const webp = m?.[2] === 'webp';
+      entry.variants.add(`${width}.${m?.[2]}`);
+      const best = largest.get(key);
+      if (!best || width > best.width || (width === best.width && webp && !best.webp)) {
+        largest.set(key, { width, webp });
         entry.largestVariant = rel;
       }
     } else {
+      entry.original = rel;
       // Best-effort: a stat failure just leaves origBytes at 0 ("unknown").
       try { entry.origBytes = (await stat(join(root, rel))).size; } catch { /* keep 0 */ }
     }
@@ -88,14 +103,57 @@ export async function walkStorageKeys(storageDir: string): Promise<Map<string, D
   return byKey;
 }
 
-/** Probe a variant's intrinsic size; 0/0 when unreadable (never aborts the pass). */
+/**
+ * The variant contract on disk: every width `variantWidths(intrinsicWidth)`
+ * prescribes, in every format (variants.ts, mirrored by the site's images.ts —
+ * the srcset asks for exactly these files). One stray variant is not a photo.
+ */
+export function isCompleteSet(variants: ReadonlySet<string>, intrinsicWidth: number): boolean {
+  if (!Number.isInteger(intrinsicWidth) || intrinsicWidth <= 0) return false;
+  return variantWidths(intrinsicWidth).every((w) => FORMATS.every((f) => variants.has(`${w}.${f}`)));
+}
+
+/**
+ * Probe a file's intrinsic size; 0/0 when unreadable (never aborts the pass).
+ * Orientation-corrected, like `probeImage` — an original carrying EXIF
+ * rotation was resized against its corrected width, and that is the width
+ * the variant set was derived from.
+ */
 async function probeDims(file: string): Promise<{ width: number; height: number }> {
   try {
     const meta = await sharp(file).metadata();
-    return { width: meta.width ?? 0, height: meta.height ?? 0 };
+    return { width: meta.autoOrient?.width ?? meta.width ?? 0, height: meta.autoOrient?.height ?? meta.height ?? 0 };
   } catch {
     return { width: 0, height: 0 };
   }
+}
+
+type DiskVerdict = { status: 'ready' | 'processing' | 'missing'; width: number; height: number };
+
+/**
+ * What the files say a key's status and dimensions should be.
+ *
+ * @ai-warning The expected set MUST be derived from the retained original
+ * when there is one, never from the largest surviving variant. Variants are
+ * written in ascending width, so a crash truncates the TOP widths — and a
+ * top-truncated set is byte-for-byte a complete set for a smaller photo.
+ * `createRehostResume` (wp-images.ts) fails closed for the same reason. Only
+ * a legacy key with no original falls back to the widest variant: there is
+ * no ground truth to compare against, and the recorded width is then at
+ * least self-consistent with the files that exist.
+ */
+async function assess(root: string, entry: DiskKey): Promise<DiskVerdict> {
+  if (entry.original) {
+    const dims = await probeDims(join(root, entry.original));
+    if (dims.width > 0 && isCompleteSet(entry.variants, dims.width)) return { status: 'ready', ...dims };
+    // A crashed upload (no variants), a partial set or an unreadable original:
+    // re-encoding is idempotent and either heals it or fails honestly.
+    return { status: 'processing', ...dims };
+  }
+  const dims = entry.largestVariant ? await probeDims(join(root, entry.largestVariant)) : { width: 0, height: 0 };
+  if (dims.width > 0 && isCompleteSet(entry.variants, dims.width)) return { status: 'ready', ...dims };
+  // Nothing can re-encode it: flag it so the library shows it and the publish gate blocks it.
+  return { status: 'missing', ...dims };
 }
 
 /**
@@ -129,10 +187,11 @@ export function harvestAlt(src: string, posts: PostUsageRow[]): { de: string; en
 export function createMediaSync(opts: MediaSyncOptions) {
   const log = opts.log ?? ((m: string) => console.log(m));
   const baseUrl = opts.baseUrl.replace(/\/+$/, '');
+  const root = resolve(opts.storageDir);
 
   return {
     async run(): Promise<SyncReport> {
-      const report: SyncReport = { scanned: 0, inserted: 0, altHarvested: 0, markedMissing: 0 };
+      const report: SyncReport = { scanned: 0, inserted: 0, altHarvested: 0, markedMissing: 0, demoted: 0 };
       const disk = await walkStorageKeys(opts.storageDir);
       report.scanned = disk.size;
       const known = new Set(await opts.store.allKeys());
@@ -145,18 +204,18 @@ export function createMediaSync(opts: MediaSyncOptions) {
       }
       for (const entry of disk.values()) {
         if (known.has(entry.key)) continue;
-        const dims = entry.largestVariant
-          ? await probeDims(join(resolve(opts.storageDir), entry.largestVariant))
-          : { width: 0, height: 0 };
+        const verdict = await assess(root, entry);
         const alt = harvestAlt(`${baseUrl}/${entry.key}`, corpus.posts);
         if (alt.de || alt.en) report.altHarvested++;
         try {
           await opts.store.upsert({
             key: entry.key,
-            // A key with an original but no variants is a crashed upload: put
-            // it back in the queue rather than declaring it ready.
-            status: entry.hasVariants ? 'ready' : 'processing',
-            width: dims.width, height: dims.height, origBytes: entry.origBytes,
+            // Only a COMPLETE variant set is `ready` (#118). A key with an
+            // original but a partial set — a crashed upload — goes back in the
+            // queue; one without an original cannot be re-encoded and is
+            // flagged `missing` rather than declared whole.
+            status: verdict.status,
+            width: verdict.width, height: verdict.height, origBytes: entry.origBytes,
             alt, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null },
             uploadedBy: null,
           });
@@ -167,7 +226,9 @@ export function createMediaSync(opts: MediaSyncOptions) {
       }
 
       // Prune: a row whose files have all vanished is MARKED, never deleted —
-      // the metadata is the only thing left worth keeping.
+      // the metadata is the only thing left worth keeping. A row whose set
+      // merely lost files (a partial restore of /data/images, #118) is
+      // demoted the same way the backfill would classify it.
       // @ai-warning Skips rows that are not `ready`: an upload in flight has a
       // row but not yet a full file set, and a concurrent pass would otherwise
       // mark a perfectly healthy in-progress upload as missing.
@@ -179,22 +240,33 @@ export function createMediaSync(opts: MediaSyncOptions) {
       // drops it out of the `status = 'ready'` filter, so every mutation
       // shifts the rows underneath the next OFFSET and skips one. Collect the
       // whole ready set first (no writes, so paging is stable), then mutate.
-      const readyKeys: string[] = [];
+      const ready: { key: string; width: number }[] = [];
       for (let page = 1; ; page++) {
         const { items, total } = await opts.store.list({
           status: 'ready', sort: 'key', order: 'asc', page, pageSize: MAX_PAGE_SIZE,
         });
-        readyKeys.push(...items.map((i) => i.key));
-        if (items.length < MAX_PAGE_SIZE || readyKeys.length >= total) break;
+        ready.push(...items.map((i) => ({ key: i.key, width: i.width })));
+        if (items.length < MAX_PAGE_SIZE || ready.length >= total) break;
       }
-      for (const key of readyKeys) {
-        if (disk.has(key)) continue;
-        await opts.store.setStatus(key, 'missing');
-        report.markedMissing++;
+      for (const row of ready) {
+        const entry = disk.get(row.key);
+        if (!entry) {
+          await opts.store.setStatus(row.key, 'missing');
+          report.markedMissing++;
+          continue;
+        }
+        // Fast path, no image read: the srcset is built from the recorded
+        // width, so if every file it can ask for exists nothing can 404.
+        if (isCompleteSet(entry.variants, row.width)) continue;
+        const verdict = await assess(root, entry);
+        if (verdict.status === 'ready') continue; // complete for its real width; the recorded one is merely stale
+        await opts.store.setStatus(row.key, verdict.status);
+        report.demoted++;
+        log(`media-sync: ${row.key} has an incomplete variant set on disk — now ${verdict.status}`);
       }
 
       log(`media-sync: scanned ${report.scanned} key(s), inserted ${report.inserted}, `
-        + `harvested alt for ${report.altHarvested}, marked ${report.markedMissing} missing`);
+        + `harvested alt for ${report.altHarvested}, marked ${report.markedMissing} missing, demoted ${report.demoted}`);
       return report;
     },
   };

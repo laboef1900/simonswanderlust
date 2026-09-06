@@ -78,6 +78,33 @@ describe('storeVariants', () => {
   });
 });
 
+// #118: a file carrying a final variant/original name must be complete. The
+// old plain writeFile left a truncated file under the final name on
+// SIGKILL / ENOSPC, which every "present and non-empty" check then trusted.
+describe('atomic writes', () => {
+  it('leaves no file under the final name (and no temp) when a variant write fails', async () => {
+    const broken = [{ width: 640, format: 'webp' as const, data: null as unknown as Buffer }];
+    await expect(storeVariantFiles('trips/x/hero', broken, { storageDir: dir })).rejects.toThrow();
+    expect(await readdir(join(dir, 'trips', 'x'))).toEqual([]);
+  });
+
+  it('keeps the previous complete file when a re-encode of the same name fails', async () => {
+    await storeVariantFiles('trips/x/hero', [{ width: 640, format: 'webp', data: Buffer.from('good') }], { storageDir: dir });
+    const broken = [{ width: 640, format: 'webp' as const, data: null as unknown as Buffer }];
+    await expect(storeVariantFiles('trips/x/hero', broken, { storageDir: dir })).rejects.toThrow();
+    expect(await readdir(join(dir, 'trips', 'x'))).toEqual(['hero-640.webp']);
+    expect((await readFile(join(dir, 'trips', 'x', 'hero-640.webp'))).toString()).toBe('good');
+  });
+
+  it('never leaves a temp behind on success — only final names exist afterwards', async () => {
+    await storeOriginal('trips/x/hero', Buffer.from('o'), 'jpg', { storageDir: dir });
+    await storeVariantFiles('trips/x/hero', result.variants, { storageDir: dir });
+    const files = await readdir(join(dir, 'trips', 'x'));
+    expect(files.some((f) => f.includes('.part-'))).toBe(false);
+    expect(files).toHaveLength(5);
+  });
+});
+
 describe('isOriginalFile', () => {
   it('matches original filenames but not variants or the base key', () => {
     expect(isOriginalFile('trips/x/hero-orig.jpg')).toBe(true);

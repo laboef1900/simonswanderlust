@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { ProcessResult, Variant } from './pipeline.js';
 
@@ -63,6 +63,28 @@ export function contentHashKey(key: string, data: Buffer): string {
 }
 
 /**
+ * Write `data` to `abs` atomically: a sibling `<abs>.part-<hex>` is written in
+ * full and then renamed into place, so a file carrying a final variant or
+ * original name is always complete (#118). A SIGKILL / ENOSPC mid-write used
+ * to leave a non-empty truncated file under the final name — indistinguishable
+ * from a good one for every "is it present and non-empty" check (media-sync's
+ * backfill, the WXR resume lookup). The temp suffix ends in neither
+ * `.avif`/`.webp` nor `-orig.<ext>`, so a leftover from a crash is invisible to
+ * `VARIANT_FILE_RE` / `ORIGINAL_FILE_RE` and every walk built on them.
+ */
+async function writeAtomic(abs: string, data: Buffer): Promise<void> {
+  await mkdir(dirname(abs), { recursive: true });
+  const tmp = `${abs}.part-${randomBytes(4).toString('hex')}`;
+  try {
+    await writeFile(tmp, data);
+    await rename(tmp, abs);
+  } catch (err) {
+    await unlink(tmp).catch(() => { /* best-effort; nothing else to do with it */ });
+    throw err;
+  }
+}
+
+/**
  * Persist the untouched upload as `${key}-orig.${ext}`.
  *
  * @ai-warning This is the central write chokepoint: `assertSafeKey` and
@@ -86,9 +108,7 @@ export async function storeOriginal(
   assertSafeKey(key);
   if (!SAFE_EXT_RE.test(ext)) throw new Error(`unsafe original extension "${ext}"`);
   const rel = `${key}-orig.${ext}`;
-  const abs = join(storageDir, rel);
-  await mkdir(dirname(abs), { recursive: true });
-  await writeFile(abs, data);
+  await writeAtomic(join(storageDir, rel), data);
   return rel;
 }
 
@@ -98,6 +118,8 @@ export async function storeOriginal(
  *
  * Re-running this for the same key overwrites the same deterministic
  * filenames, which is what makes a crashed mid-encode self-heal on retry.
+ * Each file lands atomically (see writeAtomic), so a crash leaves at most one
+ * `.part-*` temp and never a truncated variant.
  */
 export async function storeVariantFiles(
   key: string,
@@ -109,9 +131,7 @@ export async function storeVariantFiles(
   let bytes = 0;
   for (const v of variants) {
     const rel = `${key}-${v.width}.${v.format}`;
-    const abs = join(storageDir, rel);
-    await mkdir(dirname(abs), { recursive: true });
-    await writeFile(abs, v.data);
+    await writeAtomic(join(storageDir, rel), v.data);
     files.push(rel);
     bytes += v.data.length;
   }
