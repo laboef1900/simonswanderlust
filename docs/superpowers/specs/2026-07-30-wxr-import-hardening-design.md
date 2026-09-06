@@ -56,7 +56,7 @@ than missed:
 | Moving the import onto `encode-queue.ts` / `work-lock.ts` | Issue #85's "Better" option. A large architecture change; must not ride along with a hardening fix. |
 | A progress-polling endpoint | Same. Belongs with the async move. |
 | Publish-time refusal on leftover `wp-content` URLs | Real gap (§Accepted residual risk). Touches the publish gate — its own named-sensitive surface. Separate issue. |
-| `/import` → `requireAdmin` | An auth-model change. Filed separately. |
+| `/import` → `requireAdmin` | An auth-model change. Filed separately as #97 — **landed 2026-09-06**: the route, `import.html` and the nav entry are admin-only. |
 | A `/data` free-space precondition on `/import` | Adjacent gap (`/upload` has one at `server.ts:269`). `insufficientSpace` needs a known incoming size, which an import does not have; needs its own design. |
 | `redirect: 'manual'` in `safeFetch` | Would harden the redirect hop, but WP media URLs legitimately redirect; changing it risks the importer. Residual risk recorded in `SECURITY.md`. |
 | `nameFromUrl` non-injectivity | Pre-existing: `foo.jpg` and `foo.png` both normalise to `foo`. Filed separately. |
@@ -314,7 +314,8 @@ the undici message, so an author can already probe the internal network:
 image http://10.0.0.5:8080/x for slug: request failed for …: connect ECONNREFUSED 10.0.0.5:8080
 ```
 
-`/import` is `requireAuth`, not `requireAdmin`, so that is available to any non-admin author.
+`/import` was `requireAuth`, not `requireAdmin`, so that was available to any non-admin author
+(closed by #97 on 2026-09-06; the vague reasons below stay as defense in depth).
 Adding `kind` and `status` to the response would sharpen it into a clean discriminator, and retry
 timing would add a second channel. CLAUDE.md is explicit: never return raw infrastructure errors.
 
@@ -514,9 +515,9 @@ no new entry in `ARCHITECTURE.md`'s env table. The complete file list is: `safe-
 `public/import.html`, `public/admin.css` (one `.notice-warn` rule for the partial-import
 callout), plus tests and docs.
 
-**Coherence note, accepted:** `POST /settings` is `requireAdmin` while `POST /import` is
-`requireAuth`, so a non-admin author runs an import governed by knobs they cannot read or change.
-That is a symptom of `/import`'s auth level, which is out of scope here and filed separately.
+**Coherence note, accepted at the time, resolved by #97 (2026-09-06):** `POST /settings` was
+`requireAdmin` while `POST /import` was `requireAuth`, so a non-admin author ran an import governed
+by knobs they could not read or change. `/import` is now `requireAdmin` too.
 
 ## The testability seam
 

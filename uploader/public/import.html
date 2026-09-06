@@ -146,7 +146,7 @@
       });
 
       (async () => {
-        const s = await Auth.ensureAuthed();
+        const s = await Auth.ensureAuthed({ admin: true });
         if (!s) return;
         Auth.renderHeader(s);
       })();
