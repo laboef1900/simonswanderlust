@@ -1847,6 +1847,18 @@ describe('WordPress import', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  // issue #143: a truncated download passes the `<rss` / `wordpress.org/export`
+  // sniff and used to reach the global handler as a 500 with a stack trace.
+  it('400 on a WXR-looking file that is not well-formed XML', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const truncated = `<?xml version="1.0"?><rss version="2.0" xmlns:wp="http://wordpress.org/export/1.2/"><channel><item><title><![CDATA[cut off`;
+    const form = new FormData();
+    form.append('file', truncated, { filename: 'export.xml', contentType: 'text/xml' });
+    const res = await b.app.inject({ method: 'POST', url: '/import', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('export is not well-formed XML');
+  });
+
   it('400 when WXR-looking file has no importable post items', async () => {
     const b = build(); const { cookie } = await authed(b);
     const emptyWxr = `<?xml version="1.0" encoding="UTF-8"?>

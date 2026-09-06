@@ -323,6 +323,12 @@ address", "download failed", …) plus the URL the author supplied themselves; t
 HTTP status and error code go to **stdout only**. `failureReason` in `uploader/src/wp-import.ts`
 carries an `@ai-warning` against widening it, and the warning list is capped so a dead CDN cannot
 return >1,300 URL-bearing strings in one response.
+The same split holds one tier up (issue #143, 2026-09-06): a group whose `upsertDraft` throws
+reports the `PostError` message (a validation verdict worded for the author) but maps any other
+throw — a pg `invalid byte sequence` or `connect ECONNREFUSED db:5432`, a missing relation — to a
+fixed "could not be saved (see server logs)", the detail going to stdout. A malformed upload is a
+400 (`WxrParseError`, fixed message; the parser's offset-and-context detail is logged only), never
+a 500 with a stack.
 
 ## Output sanitization (stored XSS)
 

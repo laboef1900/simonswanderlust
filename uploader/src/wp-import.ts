@@ -1,7 +1,7 @@
 import { parseWxr, type ParsedPost } from './wxr-parse.js';
 import { htmlToMarkdown, markdownImages } from './wp-content.js';
 import { rehostImage, type RehostResult, type RehostResume } from './wp-images.js';
-import { isSafeSlug, type ImageDims, type PostLocale, type PostPair, type PostStatus, type PostStore, type PostSummary, type StoredPostPair } from './posts.js';
+import { isSafeSlug, PostError, type ImageDims, type PostLocale, type PostPair, type PostStatus, type PostStore, type PostSummary, type StoredPostPair } from './posts.js';
 import { rewriteFences } from './body-content.js';
 import { FetchError } from './safe-fetch.js';
 import { insufficientSpaceForImport, type DiskSpace } from './disk.js';
@@ -773,7 +773,16 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
           };
         await deps.postStore.upsertDraft(pair);
         if (prior) summary.updated++; else summary.imported++;
-      } catch (e) { summary.failed++; warnings.push(`${de.slug}/${en.slug}: ${(e as Error).message}`); }
+      } catch (e) {
+        summary.failed++;
+        // The client sees a PostError as-is (a validation verdict, worded for
+        // the author) but never a pg/infrastructure message — `invalid byte
+        // sequence`, `ECONNREFUSED db:5432` — which goes to stdout instead, the
+        // same split `failureReason` makes for photos (issue #143).
+        const reason = e instanceof PostError ? e.message : 'could not be saved (see server logs)';
+        warnings.push(`${de.slug}/${en.slug}: ${reason}`);
+        log(`import: ${de.slug}/${en.slug} failed: ${(e as Error).message}`);
+      }
       progress.groups.done++;
       tick();
     }

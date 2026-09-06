@@ -14,9 +14,27 @@ const cd = (v: unknown): string => {
 };
 const arr = <T>(v: T | T[] | undefined | null): T[] => (v == null ? [] : Array.isArray(v) ? v : [v]);
 
+/**
+ * The upload is not well-formed XML — an unclosed tag or CDATA (a truncated
+ * download of a real export passes the route's `<rss` sniff), a bad DOCTYPE,
+ * or fast-xml-parser's entity caps. The parser's own message names the byte
+ * offset and quotes the surrounding text, so it stays in `cause` for the log;
+ * the route answers 400 with this message (issue #143).
+ */
+export class WxrParseError extends Error {
+  /** The parser's own message, for the log — never for the client. */
+  readonly detail: string;
+  constructor(cause: unknown) {
+    super('export is not well-formed XML', { cause });
+    this.name = 'WxrParseError';
+    this.detail = cause instanceof Error ? cause.message : String(cause);
+  }
+}
+
 export function parseWxr(xml: string): ParsedWxr {
   const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', parseTagValue: false, cdataPropName: '__cdata', trimValues: true });
-  const doc = parser.parse(xml) as { rss?: { channel?: { item?: unknown } } };
+  let doc: { rss?: { channel?: { item?: unknown } } };
+  try { doc = parser.parse(xml) as typeof doc; } catch (e) { throw new WxrParseError(e); }
   const items = arr(doc.rss?.channel?.item) as Node[];
   const attachments = new Map<string, string>();
   const posts: ParsedPost[] = [];

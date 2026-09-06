@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { importWxr, prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, DEFAULT_MAX_IMAGES, type ImportDeps } from '../src/wp-import.js';
-import { memoryPostStore, type PostStore } from '../src/posts.js';
+import { memoryPostStore, PostError, type PostStore } from '../src/posts.js';
 import { createRehostResume, rehostImage, type RehostResult } from '../src/wp-images.js';
 import { FetchError, type LookupFn } from '../src/safe-fetch.js';
 
@@ -985,13 +985,26 @@ describe('importWxr reporting', () => {
     const refusing: PostStore = {
       ...ok,
       upsertDraft: (pair, baseUpdatedAt) =>
-        (pair.de.slug === 'de-4' ? Promise.reject(new Error('disk full')) : ok.upsertDraft(pair, baseUpdatedAt)),
+        (pair.de.slug === 'de-4' ? Promise.reject(new Error('invalid byte sequence for encoding "UTF8": 0x00')) : ok.upsertDraft(pair, baseUpdatedAt)),
     };
-    const s = await run(body, h, {}, refusing);
+    const logged: string[] = [];
+    const s = await run(body, h, { log: (m) => logged.push(m) }, refusing);
     expect(s).toMatchObject({ imported: 1, updated: 0, skippedPublished: 0, rejected: 2, failed: 1 });
     expect(s.imported + s.updated + s.skippedPublished + s.rejected + s.failed).toBe(4);
     // the buckets are honest: the store holds only the imported group.
     expect((await refusing.list()).map((x) => x.slugDe)).toEqual(['de-1']);
+    // issue #143: a pg/infrastructure message goes to the log, never to the client.
+    expect(s.warnings.find((w) => w.startsWith('de-4/en-4'))).toBe('de-4/en-4: could not be saved (see server logs)');
+    expect(s.warnings.join(' ')).not.toContain('byte sequence');
+    expect(logged.join('\n')).toContain('de-4/en-4 failed: invalid byte sequence');
+  });
+
+  it('passes a PostError through to the client — it is a verdict worded for the author', async () => {
+    const h = harness();
+    const refusing: PostStore = { ...memoryPostStore(), upsertDraft: () => Promise.reject(new PostError('invalid images map: bad dims', 'invalid_images')) };
+    const s = await run(pairOf('g', 'de-1', 'en-1', '<p>a</p>'), h, {}, refusing);
+    expect(s.failed).toBe(1);
+    expect(s.warnings).toContain('de-1/en-1: invalid images map: bad dims');
   });
 
   it('logs the summary, because on a real export nobody receives the response', async () => {
