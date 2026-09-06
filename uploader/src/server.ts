@@ -1191,7 +1191,11 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send({ ok: true, count: files.length });
   });
 
-  app.post('/import', { preHandler: requireAuth }, async (req, reply) => {
+  // Admin-only (issue #97): an import creates/overwrites drafts, writes gigabytes
+  // under /data and makes hundreds of outbound fetches to a host chosen by the
+  // export — the same trust boundary as /rebuild, /settings and /backups, whose
+  // importDelayMs/importRetries knobs govern this run.
+  app.post('/import', { preHandler: requireAdmin }, async (req, reply) => {
     // @ai-warning ONE import at a time. Resumability (issue #85) makes "run the
     // import again" the documented recovery path when the browser or the reverse
     // proxy gives up on a multi-minute request, so concurrent runs stopped being

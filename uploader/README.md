@@ -136,8 +136,10 @@ Full details in [`../SECURITY.md`](../SECURITY.md); the essentials:
   current-password guesses count against login attempts from that IP.
 - **Publishing is admin-only.** Non-admin accounts can create and edit drafts but cannot publish
   to the public site or change a published slug; only admins can publish.
-- **WordPress import is SSRF-guarded.** Remote image fetches reject internal/loopback addresses,
-  time out, and cap the download size; imported slugs are validated before anything is written.
+- **WordPress import is admin-only and SSRF-guarded.** Only admins can run `/admin/import.html`
+  (it creates drafts, writes under `/data`, and fetches from the host named in the export);
+  remote image fetches reject internal/loopback addresses, time out, and cap the download size;
+  imported slugs are validated before anything is written.
 
 ## Media library
 

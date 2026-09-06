@@ -708,6 +708,13 @@ blog/
   `trips/<slug>/…` with no locale segment (#85's disk-derived resume depends on them), so a new
   pair would write its photos over the existing post's variant files. See
   `docs/superpowers/specs/2026-09-05-wxr-import-pair-identity-design.md`.
+- **Done:** #97 `POST /import` is admin-only (2026-09-06) — the last session-level surface that
+  wrote gigabytes under `/data` and made outbound fetches the server does not choose. The
+  preHandler flipped to `requireAdmin`, `import.html` gates on `ensureAuthed({ admin: true })`,
+  and the "Import WXR" nav entry is admin-only so an author never sees a link that bounces them.
+  It also resolves the #90 coherence gap: the `importDelayMs`/`importRetries` knobs in `/settings`
+  were admin-only while the import they governed was not. See
+  `docs/superpowers/specs/2026-09-05-import-require-admin-design.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

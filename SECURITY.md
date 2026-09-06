@@ -39,9 +39,12 @@ change about the security posture.
 
 ## Authorization
 
-- `requireAuth` gates all CMS/editor/upload/import endpoints.
+- `requireAuth` gates all CMS/editor/upload endpoints.
 - `requireAdmin` gates **user management**, **settings** (`/settings` — backup schedule and
-  retention), **backups**, **rebuild**, **page edits**, and, importantly, everything that
+  retention), **backups**, **rebuild**, **page edits**, the **WordPress import** (`POST /import`,
+  since #97 — it creates/overwrites drafts, writes gigabytes under `/data`, and makes hundreds of
+  outbound fetches to a host chosen by the export, governed by admin-only settings knobs), and,
+  importantly, everything that
   changes what the public site serves: **publishing** (`POST /posts/:tk/publish`),
   **unpublishing** (`POST /posts/:tk/unpublish`), **post deletion** (`DELETE /posts/:tk`),
   and their batch form **`POST /posts/bulk`** (`{action, keys[]}` — the `action` is checked
@@ -242,8 +245,10 @@ that answers.
 
 ### Import failure reasons are deliberately vague
 
-`isBlockedHost` blocks loopback and link-local literals but **not RFC1918**, and `POST /import` is
-`requireAuth` rather than `requireAdmin`. Before #85 a failed image returned the raw undici text to
+`isBlockedHost` blocks loopback and link-local literals but **not RFC1918**. `POST /import` has been
+`requireAdmin` since #97, so the residual oracle below is reachable only by an admin — who already
+has `/settings` and `/backups` — but the response stays vague regardless (defense in depth).
+Before #85 a failed image returned the raw undici text to
 the author — `connect ECONNREFUSED 10.0.0.5:8080` — a working internal-network mapping and
 service-fingerprinting oracle. Import warnings now carry a stable reason ("network error", "blocked
 address", "download failed", …) plus the URL the author supplied themselves; the underlying message,
