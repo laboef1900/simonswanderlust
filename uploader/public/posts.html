@@ -135,21 +135,29 @@
         return PostsFilter.apply(allPosts, currentFilters());
       }
 
+      // Every action below disables its trigger while the request is in flight
+      // and re-enables it in `finally`: a dropped connection used to reject the
+      // await, leaving "Deleting…" on screen and the buttons dead until reload.
       async function unpublishPost(p, btn) {
         const title = p.titleDe || '(untitled)';
         if (!confirm('Unpublish "' + title + '"' + slugSuffix(p) + '?\n\nThe post will be removed from the live site on the next build and revert to a draft.')) return;
         btn.disabled = true; // no double-fire while the request is in flight
         $('out').textContent = 'Unpublishing…';
-        const res = await fetch('/posts/' + encodeURIComponent(p.translationKey) + '/unpublish', { method: 'POST' });
-        if (res.status === 401) { location.href = '/login'; return; }
-        const body = await res.json().catch(() => ({}));
-        const msg = res.ok
-          ? 'Unpublished "' + title + '".' + describeBuild(body.build)
-          : 'Unpublish failed: ' + (body.error || res.status);
-        $('out').textContent = msg;
-        // Pass the outcome so load() does not clobber it with "N post(s) loaded."
-        // — a failed rebuild (body.build.ok === false) must stay visible to the admin.
-        if (res.ok) await load(msg); else btn.disabled = false;
+        try {
+          const res = await fetch('/posts/' + encodeURIComponent(p.translationKey) + '/unpublish', { method: 'POST' });
+          if (res.status === 401) { location.href = '/login'; return; }
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) { $('out').textContent = 'Unpublish failed: ' + (body.error || res.status); return; }
+          const msg = 'Unpublished "' + title + '".' + describeBuild(body.build);
+          $('out').textContent = msg;
+          // Pass the outcome so load() does not clobber it with "N post(s) loaded."
+          // — a failed rebuild (body.build.ok === false) must stay visible to the admin.
+          await load(msg);
+        } catch (e) {
+          $('out').textContent = 'Unpublish failed: ' + e;
+        } finally {
+          btn.disabled = false;
+        }
       }
 
       async function deletePost(p, btn) {
@@ -160,16 +168,21 @@
         if (!confirm('Delete "' + title + '"' + slugSuffix(p) + '?' + warning + '\n\nThis cannot be undone.')) return;
         btn.disabled = true; // no double-fire while the request is in flight
         $('out').textContent = 'Deleting…';
-        const res = await fetch('/posts/' + encodeURIComponent(p.translationKey), { method: 'DELETE' });
-        if (res.status === 401) { location.href = '/login'; return; }
-        const body = await res.json().catch(() => ({}));
-        const msg = res.ok
-          ? 'Deleted "' + title + '".' + describeBuild(body.build)
-          : 'Delete failed: ' + (body.error || res.status);
-        $('out').textContent = msg;
-        // Pass the outcome so load() does not clobber it with "N post(s) loaded."
-        // — a failed rebuild (body.build.ok === false) must stay visible to the admin.
-        if (res.ok) await load(msg); else btn.disabled = false;
+        try {
+          const res = await fetch('/posts/' + encodeURIComponent(p.translationKey), { method: 'DELETE' });
+          if (res.status === 401) { location.href = '/login'; return; }
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) { $('out').textContent = 'Delete failed: ' + (body.error || res.status); return; }
+          const msg = 'Deleted "' + title + '".' + describeBuild(body.build);
+          $('out').textContent = msg;
+          // Pass the outcome so load() does not clobber it with "N post(s) loaded."
+          // — a failed rebuild (body.build.ok === false) must stay visible to the admin.
+          await load(msg);
+        } catch (e) {
+          $('out').textContent = 'Delete failed: ' + e;
+        } finally {
+          btn.disabled = false;
+        }
       }
 
       // ---- duplicate ("New from this one") -------------------------------
@@ -262,24 +275,25 @@
         const buttons = [$('bulkPublish'), $('bulkUnpublish'), $('bulkDelete')];
         buttons.forEach((b) => { b.disabled = true; });
         $('out').textContent = 'Running ' + action + ' on ' + keys.length + ' post(s)…';
-        const res = await fetch('/posts/bulk', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ action, keys }),
-        });
-        if (res.status === 401) { location.href = '/login'; return; }
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          $('out').textContent = 'Bulk ' + action + ' failed: ' + (body.error || res.status);
+        try {
+          const res = await fetch('/posts/bulk', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ action, keys }),
+          });
+          if (res.status === 401) { location.href = '/login'; return; }
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) { $('out').textContent = 'Bulk ' + action + ' failed: ' + (body.error || res.status); return; }
+          const msg = summarizeBulk(action, body);
+          selected.clear();
+          // load() re-renders and hides the bar; pass the summary so it survives
+          // the reload (partial failures must stay on screen).
+          await load(msg);
+        } catch (e) {
+          $('out').textContent = 'Bulk ' + action + ' failed: ' + e;
+        } finally {
           buttons.forEach((b) => { b.disabled = false; });
-          return;
         }
-        const msg = summarizeBulk(action, body);
-        selected.clear();
-        // load() re-renders and hides the bar; pass the summary so it survives
-        // the reload (partial failures must stay on screen).
-        await load(msg);
-        buttons.forEach((b) => { b.disabled = false; });
       }
 
       // ---- rendering ----------------------------------------------------
@@ -460,10 +474,20 @@
       }
 
       async function load(statusMsg) {
-        const res = await fetch('/posts');
-        if (res.status === 401) { location.href = '/login'; return; }
-        if (!res.ok) { $('out').textContent = 'Could not load posts: ' + res.status; return; }
-        allPosts = await res.json();
+        // A refresh failure must not hide the outcome the caller already
+        // reported (e.g. "Unpublished … Rebuild failed: …") — append to it.
+        const loadFailed = (why) => {
+          $('out').textContent = (statusMsg != null ? statusMsg + '\n' : '') + 'Could not load posts: ' + why;
+        };
+        try {
+          const res = await fetch('/posts');
+          if (res.status === 401) { location.href = '/login'; return; }
+          if (!res.ok) { loadFailed(res.status); return; }
+          allPosts = await res.json();
+        } catch (e) {
+          loadFailed(e);
+          return;
+        }
         // Drop selections for posts that no longer exist (e.g. after a bulk delete).
         for (const k of [...selected]) {
           if (!allPosts.some((p) => p.translationKey === k)) selected.delete(k);
@@ -502,13 +526,21 @@
       $('bulkDelete').addEventListener('click', () => runBulk('delete'));
 
       $('exportAll').addEventListener('click', async () => {
+        const btn = $('exportAll');
+        btn.disabled = true;
         $('out').textContent = 'Exporting…';
-        const res = await fetch('/export', { method: 'POST' });
-        if (res.status === 401) { location.href = '/login'; return; }
-        const body = await res.json().catch(() => ({}));
-        $('out').textContent = res.ok
-          ? 'Export done: ' + body.count + ' files'
-          : 'Export failed: ' + (body.error || res.status);
+        try {
+          const res = await fetch('/export', { method: 'POST' });
+          if (res.status === 401) { location.href = '/login'; return; }
+          const body = await res.json().catch(() => ({}));
+          $('out').textContent = res.ok
+            ? 'Export done: ' + body.count + ' files'
+            : 'Export failed: ' + (body.error || res.status);
+        } catch (e) {
+          $('out').textContent = 'Export failed: ' + e;
+        } finally {
+          btn.disabled = false;
+        }
       });
 
       (async () => {
