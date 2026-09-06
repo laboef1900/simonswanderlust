@@ -26,6 +26,7 @@ import {
 } from './authn.js';
 import { SettingsError, type SettingsStore } from './settings.js';
 import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale } from './posts.js';
+import { foreignImageUrls } from './publish-gate.js';
 import { renderPreviewHtml, previewCsp } from './preview.js';
 import { type PageStore, type PagePair, type PageContent, type ImageDims, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
@@ -908,6 +909,25 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return [...notReady];
   }
 
+  /**
+   * The publish gate's second check (#91): every image URL the rendered body
+   * of either locale would put on the page whose origin is not the image
+   * host. Store-free, so it runs BEFORE `notReadyPhotos` — a foreign URL has
+   * no media row to look up, and it is the more fundamental problem to report.
+   */
+  async function foreignBodyImages(pair: StoredPostPair): Promise<string[]> {
+    const out = new Set<string>();
+    for (const locale of ['de', 'en'] as const) {
+      for (const url of await foreignImageUrls(pair[locale].bodyMarkdown, imageBase)) out.add(url);
+    }
+    return [...out];
+  }
+
+  const FOREIGN_EXAMPLES = 5;
+  function foreignImagesMessage(n: number): string {
+    return `${n} image(s) in the body still point at another host — re-run the WordPress import to re-host them, or replace them with library photos, then publish again`;
+  }
+
   app.get('/posts', { preHandler: requireAuth }, async () => posts.list());
 
   app.get('/posts/:tk', { preHandler: requireAuth }, async (req, reply) => {
@@ -1039,6 +1059,14 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       if (e instanceof PostError) return reply.code(400).send({ error: e.message });
       throw e;
     }
+    const foreign = await foreignBodyImages(pair);
+    if (foreign.length > 0) {
+      return reply.code(409).send({
+        error: foreignImagesMessage(foreign.length),
+        foreignImages: foreign.slice(0, FOREIGN_EXAMPLES),
+        foreignImageCount: foreign.length,
+      });
+    }
     const notReady = await notReadyPhotos(pair);
     if (notReady.length > 0) {
       return reply.code(409).send({
@@ -1111,6 +1139,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         if (!pair) throw new PostError('post not found');
         if (action === 'publish') {
           validateForPublish(pair);
+          const foreign = await foreignBodyImages(pair);
+          if (foreign.length > 0) throw new PostError(foreignImagesMessage(foreign.length));
           const notReady = await notReadyPhotos(pair);
           if (notReady.length > 0) {
             throw new PostError(`${notReady.length} photo(s) are still processing or failed to encode`);

@@ -140,7 +140,13 @@ reverse proxy whose default read timeout is 60 s. The trade-off is that `{src}-6
 until the encode lands, so **`POST /posts/:tk/publish` refuses (409) while any photo the post
 references is not `ready`** — that gate is the only thing standing between a lost encode job and
 a published page full of broken images. A key with no `media` row never blocks (WordPress-imported
-and legacy files predate the library).
+and legacy files predate the library). The same gate also refuses (409, with a count and up to
+five example URLs) while the **rendered** body of either locale would emit an `<img>`, or holds a
+` ```gallery ` line, whose **origin is not the image host** (#91, `foreignImageUrls` in
+`uploader/src/publish-gate.ts`): that is what a failed WXR re-host leaves behind, and the render
+path would hot-link the old domain or drop the photo silently. The body is judged from the
+renderer's own sanitized tree (`renderMarkdown` + `bodyImageSources`), so code fences, code spans
+and every other Markdown/HTML subtlety are decided by the renderer itself, not a second parser.
 
 The queue runs at concurrency **2** (the measured throughput plateau) and shares a lock with the
 site builder (`uploader/src/work-lock.ts`) so a build and image encoding are **mutually

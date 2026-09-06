@@ -342,6 +342,27 @@ fixed "could not be saved (see server logs)", the detail going to stdout. A malf
 400 (`WxrParseError`, fixed message; the parser's offset-and-context detail is logged only), never
 a 500 with a stack.
 
+### A partial import cannot be published (issue #91, 2026-09-06)
+
+A failed re-host leaves the source URL in the draft body. Rendering would then hot-link the old
+domain (an inline image with no `images` entry passes through unchanged) or drop the photo (a
+gallery line fails the origin allow-list), and after the DNS cutover both 404. `POST
+/posts/:tk/publish` and the bulk `publish` action therefore refuse while the **rendered** body of
+either locale would emit an `<img>` — or contains a gallery line — whose **origin is not the image
+host** (`foreignImageUrls`, `uploader/src/publish-gate.ts` — origin equality, never a prefix, the
+gallery allow-list's rule). The gate renders the body with the build's own `renderMarkdown` and
+reads `img`/`source` sources and gallery lines from the sanitized hast tree itself
+(`bodyImageSources` in `site/src/lib/body-images.ts`, before any `images` resolution), so every Markdown/HTML subtlety — escapes,
+`<…>` destinations, character references, code spans, backticks inside attributes — is decided
+by the one parser that decides it for readers; a text scanner cannot be kept in agreement with
+the renderer, and three review rounds proved it. No fetch, no DNS, no file access; the rendered
+HTML is discarded. The 409 echoes up to five of the offending URLs — which the admin wrote or
+imported themselves — so nothing new is disclosed. Cost is one render per locale, the work the
+author-level preview route already does per request, so the gate (admin-only) adds no new
+surface; the renderer's superlinear worst case on adversarial backtick bodies is pre-existing and
+bounded by the 1 MiB request limit. See
+`docs/superpowers/specs/2026-09-06-publish-gate-foreign-images-design.md`.
+
 ## Output sanitization (stored XSS)
 
 Post bodies are DB-stored Markdown rendered to HTML at build time. Before that HTML reaches the

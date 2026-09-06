@@ -861,17 +861,29 @@ blog/
   `trips/<slug>/<name>`, #98) must fit inside; and `renameFolder`/`deleteFolder` run their check
   and both rewrites in one transaction, so media rows can never point at a folder the tree does
   not list. See `docs/superpowers/specs/2026-09-06-media-store-input-hardening-design.md`.
+- **Done:** #91 publish gate refuses un-hosted body images (2026-09-06) — a failed WXR re-host
+  left the WordPress URL in the body, and nothing stopped publishing it: `validateForPublish`
+  looks only at the hero and `notReadyPhotos` filtered a foreign origin out (`srcToKey` → null),
+  so the live page hot-linked the old domain (inline image) or silently lost the photo (gallery
+  line) — and after the DNS cutover both 404. `foreignImageUrls(body, imageOrigin)` in
+  `publish-gate.ts` **renders** the body with the build's own `renderMarkdown` and reads every
+  `img`/`source` URL and gallery line from the sanitized hast tree (`bodyImageSources` in
+  `site/src/lib/body-images.ts`, before `images` resolution) whose origin is not the image host, by **origin equality**;
+  `POST /posts/:tk/publish` and the bulk action refuse (409, count + up to five examples) before
+  the media-store check. Rendering instead of scanning is the lesson of the review: three rounds
+  of a text scanner each found a fresh divergence from the renderer (code spans across blocks,
+  backticks inside attributes, `&colon;`, …), and every one was a silent bypass or a false refusal
+  on a named-sensitive surface — two parsers of one grammar cannot be kept in agreement by tests.
+  The `images` map is deliberately not consulted (never pruned, no UI to fix a stale key). See
+  `docs/superpowers/specs/2026-09-06-publish-gate-foreign-images-design.md` and `SECURITY.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**
   2026-07-29. See `docs/superpowers/plans/IMPLEMENTATION-PROMPT.md` for why each is excluded.
 - **Filed out of #85 and deliberately excluded from it** (each with its reason in the §Scope table of
   `docs/superpowers/specs/2026-07-30-wxr-import-hardening-design.md`):
-  - **#91 publish gate rejects leftover `wp-content` URLs** — *the one that matters most.* A partial
-    import is now **visible** but still **publishable**: `validateForPublish` checks only the hero
-    `src`, and `notReadyPhotos` reports clean because `srcToKey` returns `null` for a foreign origin.
-    Body images hot-link the old WordPress domain and gallery photos vanish at render — and after
-    Phase 4's DNS cutover both 404.
+  - **#91 publish gate rejects leftover `wp-content` URLs** — **done 2026-09-06** (see the Done
+    bullet above).
   - **#92 move the import off the request path** onto `encode-queue.ts`/`work-lock.ts` with a progress
     endpoint (#85's "Better" option). Progress state that survives a restart likely means a new table,
     so it is a schema change and high-risk in its own right.
