@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { hashPassword, verifyPassword, memoryUserStore, UserExistsError, DUMMY_STORED_HASH, PasswordPolicyError } from '../src/users.js';
+import { hashPassword, verifyPassword, memoryUserStore, UserExistsError, DUMMY_STORED_HASH, PasswordPolicyError, usernamePolicyViolation } from '../src/users.js';
+
+describe('username policy (#131)', () => {
+  it('accepts plain ASCII identifiers up to 64 characters', () => {
+    for (const ok of ['simon', 'S.imon-1_', 'a', 'x'.repeat(64)]) expect(usernamePolicyViolation(ok)).toBeNull();
+  });
+  it('rejects empty, over-long, whitespace, markup, and non-ASCII names', () => {
+    expect(usernamePolicyViolation('')).toMatch(/between 1 and 64/);
+    expect(usernamePolicyViolation('x'.repeat(65))).toMatch(/between 1 and 64/);
+    for (const bad of ['si mon', '<img src=x onerror=alert(1)>', 'simon@example.com', 'аdmin', 'simon\n']) {
+      expect(usernamePolicyViolation(bad)).toMatch(/may only contain/);
+    }
+  });
+});
 
 describe('password hashing', () => {
   it('produces a scrypt string that is not the plaintext', () => {

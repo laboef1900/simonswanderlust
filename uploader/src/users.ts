@@ -13,6 +13,12 @@ export const MIN_PASSWORD_LENGTH = 12;
  * capping them bounds both (#109). 64 is generous for a login name.
  */
 export const MAX_USERNAME_LENGTH = 64;
+/**
+ * Plain ASCII identifiers only (#131): no markup, no whitespace, no homoglyphs
+ * that `lower()` would fold onto another account. Length is checked
+ * separately so the message can name the cap.
+ */
+const USERNAME_RE = /^[a-z0-9._-]+$/i;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -26,6 +32,22 @@ export class PasswordPolicyError extends Error {}
 export function passwordPolicyViolation(password: string): string | null {
   if (password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
     return `password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} characters`;
+  }
+  return null;
+}
+
+/**
+ * The one username rule for NEW accounts (`/setup`, `POST /users`). Returns
+ * the user-facing violation, or null. Deliberately not enforced by the stores
+ * or `/login`: an account created before the rule may carry a longer or
+ * stranger name and must keep signing in (#109).
+ */
+export function usernamePolicyViolation(username: string): string | null {
+  if (username.length === 0 || username.length > MAX_USERNAME_LENGTH) {
+    return `username must be between 1 and ${MAX_USERNAME_LENGTH} characters`;
+  }
+  if (!USERNAME_RE.test(username)) {
+    return 'username may only contain letters, digits, ".", "_" and "-"';
   }
   return null;
 }

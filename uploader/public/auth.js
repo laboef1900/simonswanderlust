@@ -142,9 +142,9 @@ window.Auth = (function () {
 
         <div class="cms-sidebar-footer">
           <div class="cms-user-badge">
-            <div class="cms-avatar">${s.username[0].toUpperCase()}</div>
+            <div class="cms-avatar"></div>
             <div class="cms-user-info">
-              <span class="cms-user-name">${s.username}</span>
+              <span class="cms-user-name"></span>
               <span class="cms-user-role">${s.isAdmin ? 'Administrator' : 'Author'}</span>
             </div>
           </div>
@@ -178,6 +178,11 @@ window.Auth = (function () {
         <div class="cms-content"></div>
       </div>
     `;
+
+    // The username is the one user-controlled string in this shell; it is set
+    // as text AFTER the parse so it can never be markup (#131).
+    shell.querySelector('.cms-avatar').textContent = (s.username[0] || '?').toUpperCase();
+    shell.querySelector('.cms-user-name').textContent = s.username;
 
     // Move main element into .cms-content
     const contentArea = shell.querySelector('.cms-content');

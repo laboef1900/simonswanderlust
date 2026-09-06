@@ -21,7 +21,8 @@
       <form class="card" id="addForm">
         <h2>Add a user</h2>
         <label for="username">Username</label>
-        <input id="username" type="text" autocomplete="off" />
+        <input id="username" type="text" autocomplete="off" maxlength="64" pattern="[A-Za-z0-9._\-]+" aria-describedby="usernameHint" />
+        <p class="muted" id="usernameHint">1–64 characters: letters, digits, ".", "_" and "-".</p>
         <label for="password">Password</label>
         <input id="password" type="password" autocomplete="new-password" />
         <label><input id="isAdmin" type="checkbox" /> Administrator</label>

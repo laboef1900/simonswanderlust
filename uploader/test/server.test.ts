@@ -935,16 +935,23 @@ describe('auth endpoints', () => {
     expect((await loginFrom(b, '203.0.113.4', { username, password: 'password123456' })).statusCode).toBe(429);
   });
 
-  it('POST /setup and POST /users reject a username longer than 64 characters (400)', async () => {
+  it('POST /setup and POST /users reject a username outside the allow-list or longer than 64 characters (400)', async () => {
     const b = build();
     const setup = await b.app.inject({ method: 'POST', url: '/setup', headers: { 'content-type': 'application/json' }, payload: { username: 'u'.repeat(65), password: 'password123456' } });
     expect(setup.statusCode).toBe(400);
-    expect(setup.json().error).toMatch(/at most 64 characters/);
+    expect(setup.json().error).toMatch(/between 1 and 64 characters/);
+    const markup = await b.app.inject({ method: 'POST', url: '/setup', headers: { 'content-type': 'application/json' }, payload: { username: '<img src=x onerror=alert(1)>', password: 'password123456' } });
+    expect(markup.statusCode).toBe(400);
+    expect(markup.json().error).toMatch(/may only contain/);
     expect(await b.users.count()).toBe(0);
     const { cookie } = await authed(b, { isAdmin: true, username: 'admin' });
-    const add = await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'u'.repeat(65), password: 'password123456' } });
-    expect(add.statusCode).toBe(400);
+    for (const username of ['u'.repeat(65), 'si mon', 'simon@example.com']) {
+      const add = await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username, password: 'password123456' } });
+      expect(add.statusCode).toBe(400);
+    }
     expect(await b.users.count()).toBe(1);
+    const ok = await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'co.author-2', password: 'password123456' } });
+    expect(ok.statusCode).toBe(200);
   });
 
   it('GET /login serves a real form so Enter submits (keyboard-only sign-in)', async () => {
