@@ -58,9 +58,12 @@ export function renderPostToMdx(pair: PostPair, locale: Locale): string {
 export async function exportPost(pair: PostPair, baseDir: string): Promise<string[]> {
   const out: string[] = [];
   for (const locale of ['de', 'en'] as Locale[]) {
+    const slug = pair[locale].slug;
+    // An unset slug (DE-first draft without an EN title, issue #119) has no
+    // filename — writing `trips/en/.mdx` would just be a hidden file.
+    if (slug === '') continue;
     const dir = join(baseDir, 'trips', locale);
     await mkdir(dir, { recursive: true });
-    const slug = locale === 'de' ? pair.de.slug : pair.en.slug;
     const path = join(dir, `${slug}.mdx`);
     await writeFile(path, renderPostToMdx(pair, locale), 'utf8');
     out.push(path);

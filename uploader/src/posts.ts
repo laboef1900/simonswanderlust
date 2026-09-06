@@ -189,8 +189,10 @@ function optStringArray(o: Record<string, unknown>, field: string, path: string)
  * checked — completeness (excerpt, hero, body, real slugs…) is
  * validateForPublish's job, so a title-only draft passes.
  *
- * An empty slug is left alone here (the write-DE-first workflow saves a draft
- * with no EN title and therefore no EN slug); validateForPublish still
+ * @ai-note An empty slug means "not set yet" — the write-DE-first workflow
+ * saves a draft with no EN title and therefore no EN slug (issue #119). It is
+ * exempt from the format check here AND from the duplicate check in both
+ * stores (plus the partial unique index in db.ts); validateForPublish still
  * demands a real slug per locale.
  */
 export function validateDraft(pair: unknown): asserts pair is PostPair {
@@ -398,7 +400,7 @@ export function memoryPostStore(): PostStore {
   // pg store's post_revisions table so server tests exercise the same semantics.
   const revisionsByKey = new Map<string, PostRevision[]>();
   const slugTaken = (locale: Locale, slug: string, exceptKey: string) =>
-    [...byKey.values()].some((p) => p.translationKey !== exceptKey && p[locale].slug === slug);
+    slug !== '' && [...byKey.values()].some((p) => p.translationKey !== exceptKey && p[locale].slug === slug);
 
   return {
     async list() {
@@ -698,9 +700,12 @@ export function pgPostStore(pool: DbPool): PostStore {
       try {
         await client.query('BEGIN');
         for (const locale of ['de', 'en'] as Locale[]) {
-          const { rows } = await client.query<{ translation_key: string }>(`SELECT translation_key FROM posts WHERE locale=$1 AND slug=$2`, [locale, pair[locale].slug]);
-          if (rows[0] && rows[0].translation_key !== tk) throw new PostError(`slug "${pair[locale].slug}" already in use for ${locale}`, 'duplicate_slug');
-          if (existing && existing.status === 'published' && existing[locale].slug !== pair[locale].slug) throw new PostError('cannot change the slug of a published post', 'slug_locked');
+          const slug = pair[locale].slug;
+          if (slug !== '') {
+            const { rows } = await client.query<{ translation_key: string }>(`SELECT translation_key FROM posts WHERE locale=$1 AND slug=$2`, [locale, slug]);
+            if (rows[0] && rows[0].translation_key !== tk) throw new PostError(`slug "${slug}" already in use for ${locale}`, 'duplicate_slug');
+          }
+          if (existing && existing.status === 'published' && existing[locale].slug !== slug) throw new PostError('cannot change the slug of a published post', 'slug_locked');
         }
         if (existing) {
           // Snapshot the pre-save working copy so the overwrite is recoverable,

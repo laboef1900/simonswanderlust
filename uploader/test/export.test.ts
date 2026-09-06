@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { renderPostToMdx } from '../src/export.js';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
+import { exportPost, renderPostToMdx } from '../src/export.js';
 import { normalizeBodyImages, type PostPair } from '../src/posts.js';
 
 const pair: PostPair = {
@@ -105,5 +108,21 @@ describe('renderPostToMdx', () => {
     // The exact inverse: pasting the exported body back reproduces the map.
     const body = mdx.slice(mdx.indexOf('Intro'));
     expect(normalizeBodyImages(body, {}).images).toEqual(images);
+  });
+});
+
+describe('exportPost', () => {
+  const dirs: string[] = [];
+  afterAll(async () => { for (const d of dirs) await rm(d, { recursive: true, force: true }); });
+
+  // Issue #119: a DE-first draft has en.slug '' — that is "no EN yet", not a
+  // file called `.mdx`.
+  it('skips the locale whose slug is unset instead of writing trips/en/.mdx', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sw-export-'));
+    dirs.push(dir);
+    const deOnly: PostPair = { ...pair, en: { ...pair.en, slug: '', title: '', bodyMarkdown: '' } };
+    const written = await exportPost(deOnly, dir);
+    expect(written).toEqual([join(dir, 'trips', 'de', 'bukarest.mdx')]);
+    expect(await readdir(join(dir, 'trips'))).toEqual(['de']);
   });
 });
