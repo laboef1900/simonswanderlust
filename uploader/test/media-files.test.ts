@@ -102,10 +102,12 @@ const SRC = 'https://img.example/trips/x/hero';
 // Both locale rows of one post, as PostStore.usageRows() would report them.
 function post(over: {
   tk?: string; title?: string; heroSrc?: string; body?: string; images?: Record<string, { width: number; height: number }>;
+  source?: PostUsageRow['source'];
 }): PostUsageRow[] {
   return (['de', 'en'] as const).map((locale) => ({
     translationKey: over.tk ?? 'p1',
     locale,
+    source: over.source ?? 'working',
     title: over.title ?? 'Titel',
     heroImage: { src: over.heroSrc ?? 'https://img.example/other/hero', width: 9, height: 9, alt: 'a' },
     bodyMarkdown: over.body ?? '## body',
@@ -126,7 +128,22 @@ function page(over: { key?: string; title?: string; body?: string; images?: Reco
 describe('imageUsage', () => {
   it('finds heroImage.src usage by exact match', () => {
     const refs = imageUsage(SRC, post({ tk: 'p1', title: 'Trip', heroSrc: SRC }), []);
-    expect(refs).toEqual([{ kind: 'post', key: 'p1', title: 'Trip' }]);
+    expect(refs).toEqual([{ kind: 'post', key: 'p1', title: 'Trip', published: false, working: true }]);
+  });
+
+  // #115: the snapshot rows are what the blog serves. A photo only the
+  // published version still renders is reported as `published` and not
+  // `working`, so the caller can say "republish first" instead of "remove
+  // the reference" (the draft already did that).
+  it('flags usage that survives only in the published snapshot', () => {
+    const rows = [
+      ...post({ tk: 'p1', title: 'Trip', heroSrc: 'https://img.example/other/new' }),
+      ...post({ tk: 'p1', title: 'Trip', heroSrc: SRC, source: 'published' }),
+    ];
+    expect(imageUsage(SRC, rows, [])).toEqual([{ kind: 'post', key: 'p1', title: 'Trip', published: true, working: false }]);
+    // Both copies referencing it: one ref, both flags — still one post.
+    const both = [...post({ tk: 'p1', heroSrc: SRC }), ...post({ tk: 'p1', heroSrc: SRC, source: 'published' })];
+    expect(imageUsage(SRC, both, [])).toEqual([expect.objectContaining({ key: 'p1', published: true, working: true })]);
   });
 
   it('counts a direct variant URL pasted as heroImage.src (copy-image-address)', () => {
@@ -156,7 +173,7 @@ describe('imageUsage', () => {
 
   it('finds page usage too', () => {
     const refs = imageUsage(SRC, [], [page({ key: 'about', title: 'Über mich', body: `![x](${SRC})` })]);
-    expect(refs).toEqual([{ kind: 'page', key: 'about', title: 'Über mich' }]);
+    expect(refs).toEqual([{ kind: 'page', key: 'about', title: 'Über mich', published: true, working: true }]);
   });
 
   it('reports each post once even when both locales use the image', () => {
@@ -167,7 +184,7 @@ describe('imageUsage', () => {
     // A crash between upsertDraft's two locale INSERTs leaves one row; the
     // row-based corpus must still report it (get() would return null).
     const deOnly = post({ tk: 'half', title: 'Halb', heroSrc: SRC }).slice(0, 1);
-    expect(imageUsage(SRC, deOnly, [])).toEqual([{ kind: 'post', key: 'half', title: 'Halb' }]);
+    expect(imageUsage(SRC, deOnly, [])).toEqual([{ kind: 'post', key: 'half', title: 'Halb', published: false, working: true }]);
   });
 
   it('returns [] when nothing references the src', () => {

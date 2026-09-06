@@ -54,7 +54,7 @@ describe('walkStorageKeys', () => {
 
 describe('harvestAlt', () => {
   const row = (over: Partial<PostUsageRow>): PostUsageRow => ({
-    translationKey: 'p1', locale: 'de', title: 'T',
+    translationKey: 'p1', locale: 'de', source: 'working', title: 'T',
     heroImage: { src: 'https://img.example.com/other', width: 1, height: 1, alt: '' },
     bodyMarkdown: '', images: {}, ...over,
   });
@@ -120,7 +120,7 @@ describe('createMediaSync', () => {
     await writeVariant('trips/a/hero', 640);
     const src = `${BASE}/trips/a/hero`;
     const report = await sync(store, [{
-      translationKey: 'p1', locale: 'de', title: 'T',
+      translationKey: 'p1', locale: 'de', source: 'working', title: 'T',
       heroImage: { src, width: 1, height: 1, alt: 'Altstadt' }, bodyMarkdown: '', images: {},
     }]).run();
     expect(report.altHarvested).toBe(1);

@@ -418,7 +418,7 @@ describe('media library', () => {
     expect(created.statusCode).toBe(200);
     const res = await b.app.inject({ method: 'GET', url: '/media', cookies: cookie });
     expect(res.json().items[0].usedIn).toEqual([
-      { kind: 'post', key: created.json().translationKey, title: 'Mediennutzer' },
+      { kind: 'post', key: created.json().translationKey, title: 'Mediennutzer', published: false, working: true },
     ]);
   });
 
@@ -491,8 +491,38 @@ describe('media library', () => {
     const res = await b.app.inject({ method: 'DELETE', url: `/media/items/${storedKey}`, cookies: cookie });
     expect(res.statusCode).toBe(409);
     expect(res.json().usedIn).toEqual([
-      { kind: 'post', key: created.json().translationKey, title: 'Mediennutzer' },
+      { kind: 'post', key: created.json().translationKey, title: 'Mediennutzer', published: false, working: true },
     ]);
+  });
+
+  // #115: the blog is built from published_snapshot, not the working copy. A
+  // draft save that swaps the photo out leaves the live site (and every
+  // rebuild until a republish) still rendering it — and deleteMedia removes
+  // the original too, so nothing could ever re-encode it.
+  it('DELETE /media/items/* 409s while the PUBLISHED version still renders the image after a draft swapped it out', async () => {
+    const b = buildEncoding();
+    const { cookie } = await authed(b);
+    const { src, storedKey } = await put(b, cookie, 'trips/live/hero');
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
+    const tk = created.json().translationKey;
+    await b.posts.publish(tk);
+    // The working copy now points at a different photo; the snapshot still has `src`.
+    const swapped = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { ...draftUsing('https://i/replacement'), status: 'published' },
+    });
+    expect(swapped.statusCode).toBe(200);
+    expect((await b.posts.get(tk))?.de.heroImage.src).toBe('https://i/replacement');
+
+    const res = await b.app.inject({ method: 'DELETE', url: `/media/items/${storedKey}`, cookies: cookie });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/republish/);
+    expect(res.json().usedIn).toEqual([{ kind: 'post', key: tk, title: 'Mediennutzer', published: true, working: false }]);
+    expect(existsSync(join(dir, `${storedKey}-640.webp`))).toBe(true);
+
+    // Republishing promotes the swap into the snapshot — now nothing serves it.
+    await b.posts.publish(tk);
+    expect((await b.app.inject({ method: 'DELETE', url: `/media/items/${storedKey}`, cookies: cookie })).statusCode).toBe(200);
   });
 
   it('DELETE /media/items/* unlinks all variants of exactly that key and drops the row', async () => {

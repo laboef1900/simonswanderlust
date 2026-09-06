@@ -133,8 +133,12 @@
 
       cell.appendChild(el('span', 'media-cell__title', item.title || item.key.split('/').pop()));
       if (item.usedIn && item.usedIn.length) {
+        // "(published version)": the live post still renders it although the
+        // draft dropped it — the admin has to republish before it can go.
         cell.appendChild(el('span', 'media-cell__used', 'used in: '
-          + item.usedIn.map(function (u) { return u.title; }).join(', ')));
+          + item.usedIn.map(function (u) {
+            return u.title + (u.published && !u.working ? ' (published version)' : '');
+          }).join(', ')));
       }
 
       cell.addEventListener('click', function (ev) { onCellActivate(item.key, ev); });

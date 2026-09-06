@@ -195,11 +195,32 @@ describe('memoryPostStore', () => {
     expect(rows).toHaveLength(2);
     expect(rows.map((r) => r.translationKey)).toEqual([created.translationKey, created.translationKey]);
     expect(rows[0]).toMatchObject({
+      source: 'working',
       title: 'Bukarest',
       heroImage: { src: 'https://img/h' },
       bodyMarkdown: '## Hi',
       images: {},
     });
+  });
+
+  // #115: the published snapshot is what the blog serves, so it must count as
+  // usage even after a draft save replaced the photo in the working copy.
+  it('usageRows adds published-snapshot rows that keep referencing a swapped-out photo', async () => {
+    const s = memoryPostStore();
+    const created = await s.upsertDraft(pair());
+    expect((await s.usageRows()).filter((r) => r.source === 'published')).toHaveLength(0);
+    await s.publish(created.translationKey);
+    await s.upsertDraft({
+      ...pair(), translationKey: created.translationKey, status: 'published',
+      de: { ...pair().de, heroImage: { src: 'https://img/new', width: 1, height: 1, alt: 'n' } },
+    });
+    const rows = await s.usageRows();
+    expect(rows).toHaveLength(4);
+    const de = rows.filter((r) => r.locale === 'de').map((r) => [r.source, r.heroImage.src]);
+    expect(de).toEqual([['working', 'https://img/new'], ['published', 'https://img/h']]);
+    // Unpublishing drops the snapshot rows: nothing serves the post any more.
+    await s.unpublish(created.translationKey);
+    expect((await s.usageRows()).filter((r) => r.source === 'published')).toHaveLength(0);
   });
 });
 

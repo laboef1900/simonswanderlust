@@ -291,6 +291,44 @@ maybe('pgPostStore (integration)', () => {
     await pool.end();
   });
 
+  // #115: the site loader builds from `published_snapshot` (status = 'published'
+  // AND snapshot IS NOT NULL), so usageRows must report the snapshot's image
+  // references alongside the working copy's — the same filter, in SQL.
+  it('usageRows adds published-snapshot rows that keep referencing a swapped-out photo', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    const loc = (l: 'de' | 'en', src: string) => ({
+      locale: l, slug: `${l}-snap`, title: 'T', excerpt: 'e', country: 'X',
+      heroImage: { src, width: 10, height: 10, alt: 'a' }, bodyMarkdown: `![b](${src})`, images: { [src]: { width: 10, height: 10 } },
+    });
+    const base = {
+      translationKey: '', status: 'draft' as const,
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: loc('de', 'https://i/old'), en: loc('en', 'https://i/old'),
+    };
+    const created = await store.upsertDraft(base);
+    expect((await store.usageRows()).map((r) => r.source)).toEqual(['working', 'working']);
+
+    await store.publish(created.translationKey);
+    await store.upsertDraft({
+      ...base, translationKey: created.translationKey, status: 'published',
+      de: loc('de', 'https://i/new'), en: loc('en', 'https://i/new'),
+    });
+    const rows = await store.usageRows();
+    expect(rows.map((r) => [r.locale, r.source, r.heroImage.src])).toEqual([
+      ['de', 'working', 'https://i/new'], ['de', 'published', 'https://i/old'],
+      ['en', 'working', 'https://i/new'], ['en', 'published', 'https://i/old'],
+    ]);
+    // The snapshot's jsonb columns round-trip as the same shapes as the working columns.
+    expect(rows[1]).toMatchObject({ title: 'T', bodyMarkdown: '![b](https://i/old)', images: { 'https://i/old': { width: 10, height: 10 } } });
+
+    await store.unpublish(created.translationKey);
+    expect((await store.usageRows()).map((r) => r.source)).toEqual(['working', 'working']);
+    await pool.end();
+  });
+
   it('renaming a draft slug updates the row in place and frees the old slug (#106)', async () => {
     const pool = createPool(url!);
     await ensureSchema(pool);
