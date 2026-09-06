@@ -474,13 +474,18 @@
       }
 
       async function load(statusMsg) {
+        // A refresh failure must not hide the outcome the caller already
+        // reported (e.g. "Unpublished … Rebuild failed: …") — append to it.
+        const loadFailed = (why) => {
+          $('out').textContent = (statusMsg != null ? statusMsg + '\n' : '') + 'Could not load posts: ' + why;
+        };
         try {
           const res = await fetch('/posts');
           if (res.status === 401) { location.href = '/login'; return; }
-          if (!res.ok) { $('out').textContent = 'Could not load posts: ' + res.status; return; }
+          if (!res.ok) { loadFailed(res.status); return; }
           allPosts = await res.json();
         } catch (e) {
-          $('out').textContent = 'Could not load posts: ' + e;
+          loadFailed(e);
           return;
         }
         // Drop selections for posts that no longer exist (e.g. after a bulk delete).

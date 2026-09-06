@@ -117,9 +117,18 @@ describe('posts.html actions survive a dropped connection', () => {
 
   it('load() reports a dropped connection instead of rejecting', async () => {
     const { ctx, el } = loadPosts();
-    const load = vm.runInContext('load', ctx) as () => Promise<void>;
+    const load = vm.runInContext('load', ctx) as (statusMsg?: string) => Promise<void>;
     await expect(load()).resolves.toBeUndefined();
     expect(el('out').textContent).toBe('Could not load posts: TypeError: Failed to fetch');
+  });
+
+  it('a failed refresh keeps the action outcome the caller already reported', async () => {
+    // Unpublish succeeded but its rebuild failed (200 with build.ok=false), then
+    // the list refresh dies: the admin must still see that the old release is live.
+    const { ctx, el } = loadPosts();
+    const load = vm.runInContext('load', ctx) as (statusMsg?: string) => Promise<void>;
+    await load('Unpublished "Bukarest". Rebuild failed: astro exited 1');
+    expect(el('out').textContent).toBe('Unpublished "Bukarest". Rebuild failed: astro exited 1\nCould not load posts: TypeError: Failed to fetch');
   });
 });
 
