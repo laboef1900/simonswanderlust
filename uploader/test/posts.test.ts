@@ -353,6 +353,24 @@ describe('post validation', () => {
     expect(() => validateDraft(pair({ de: { ...pair().de, slug: 'Bad Slug' } }))).toThrow(PostError);
     expect(() => validateDraft(pair())).not.toThrow();
   });
+  // Issue #120: validateDraft is the HTTP boundary; shape errors must be
+  // PostErrors naming the field, not TypeErrors from dereferencing the body.
+  it('draft validation rejects malformed shapes by field and accepts a title-only draft', () => {
+    const bad: [unknown, RegExp][] = [
+      [null, /must be an object/],
+      [{ shared: {}, en: {} }, /^de must be an object/],
+      [{ shared: {}, de: { title: ['x'] }, en: {} }, /de\.title must be a string/],
+      [{ shared: {}, de: { title: 'T', keyFacts: { a: 1 } }, en: {} }, /de\.keyFacts/],
+      [{ shared: {}, de: { title: 'T' }, en: { images: [] } }, /en\.images must be an object/],
+      [{ shared: { tags: [1] }, de: { title: 'T' }, en: {} }, /shared\.tags/],
+      [{ shared: { date: '2024-13-45' }, de: { title: 'T' }, en: {} }, /shared\.date/],
+      [{ shared: { scheduledAt: 5 }, de: { title: 'T' }, en: {} }, /shared\.scheduledAt/],
+    ];
+    for (const [payload, msg] of bad) expect(() => validateDraft(payload), JSON.stringify(payload)).toThrow(msg);
+    expect(() => validateDraft({ shared: {}, de: { title: 'T' }, en: {} })).not.toThrow();
+    // blank shared fields (the editor omits or sends '') and a null scheduledAt are fine
+    expect(() => validateDraft({ shared: { date: '', countryCode: '', region: '', scheduledAt: null }, de: { title: 'T' }, en: {} })).not.toThrow();
+  });
   it('publish requires both locales complete and schema-valid', () => {
     expect(() => validateForPublish(pair())).not.toThrow();
     expect(() => validateForPublish(pair({ shared: { ...pair().shared, countryCode: 'ROU' } }))).toThrow(PostError);

@@ -1493,6 +1493,40 @@ describe('posts editor', () => {
     expect(dup.json().code).toBe('duplicate_slug');
   });
 
+  // Issue #120: malformed payloads used to throw a TypeError (or a pg 22P02)
+  // inside the handler and surface as a sanitized 500; the field is now named.
+  it('malformed post payloads are 400s naming the field, never 500s', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const post = (payload: unknown) => b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: payload as Record<string, unknown> });
+    const cases: [unknown, RegExp][] = [
+      [[], /must be an object/],
+      [{ shared: {}, en: {} }, /^de must be an object/],
+      [{ shared: {}, de: { title: 42 }, en: {} }, /de\.title must be a string/],
+      [{ shared: {}, de: { title: '' }, en: {} }, /German title/],
+      [{ shared: { categories: 'a,b' }, de: { title: 'T' }, en: {} }, /shared\.categories must be an array of strings/],
+      [{ shared: { scheduledAt: 'junk' }, de: { title: 'T' }, en: {} }, /shared\.scheduledAt/],
+      [{ shared: { countryCode: 'R' }, de: { title: 'T' }, en: {} }, /shared\.countryCode must be 2 letters/],
+      [{ shared: { region: 'mars' }, de: { title: 'T' }, en: {} }, /shared\.region must be one of/],
+      [{ shared: { date: '3.10.2024' }, de: { title: 'T' }, en: {} }, /shared\.date must be YYYY-MM-DD/],
+      [{ shared: { coordinates: { lat: 'x', lng: 1 } }, de: { title: 'T' }, en: {} }, /shared\.coordinates/],
+    ];
+    for (const [payload, msg] of cases) {
+      const res = await post(payload);
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+      expect(res.json().error, JSON.stringify(payload)).toMatch(msg);
+    }
+  });
+
+  it('a title-only draft (the documented minimum) saves and reloads with visible placeholders', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const res = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { shared: {}, de: { locale: 'de', title: 'Nur ein Titel' }, en: { locale: 'en' } } });
+    expect(res.statusCode).toBe(200);
+    const got = (await b.app.inject({ method: 'GET', url: `/posts/${res.json().translationKey}`, cookies: cookie })).json();
+    expect(got.shared).toMatchObject({ countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } });
+    expect(got.shared.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(got.en).toMatchObject({ locale: 'en', slug: '', title: '', excerpt: '', bodyMarkdown: '', images: {} });
+  });
+
   it('publish response includes the fresh updatedAt so the editor can re-sync', async () => {
     const b = build(); const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });

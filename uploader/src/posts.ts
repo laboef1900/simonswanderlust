@@ -162,10 +162,75 @@ function checkSlug(slug: string): void {
   if (!isSafeSlug(slug)) throw new PostError(`invalid slug "${slug}" (lowercase a-z, 0-9, hyphen)`);
 }
 
-export function validateDraft(pair: PostPair): void {
-  if (!pair.de.title.trim()) throw new PostError('a German title is required to start a draft');
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const COUNTRY_CODE_RE = /^[A-Za-z]{2}$/;
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Optional string field: absent is fine, anything else must be a string. */
+function optString(o: Record<string, unknown>, field: string, path: string): void {
+  if (o[field] !== undefined && typeof o[field] !== 'string') throw new PostError(`${path}.${field} must be a string`);
+}
+
+function optStringArray(o: Record<string, unknown>, field: string, path: string): void {
+  const v = o[field];
+  if (v === undefined) return;
+  if (!Array.isArray(v) || v.some((s) => typeof s !== 'string')) throw new PostError(`${path}.${field} must be an array of strings`);
+}
+
+/**
+ * Payload-shape validation at the HTTP boundary (issue #120). `req.body` is
+ * untrusted JSON: a missing `de`, a non-string title, an array body, a string
+ * where `text[]` is bound or `scheduledAt: 'junk'` all used to surface as a
+ * TypeError or a pg 22P02/22007 → sanitized 500. Every rejection here is a
+ * PostError naming the field, which the route maps to 400. Only SHAPE is
+ * checked — completeness (excerpt, hero, body, real slugs…) is
+ * validateForPublish's job, so a title-only draft passes.
+ *
+ * An empty slug is left alone here (the write-DE-first workflow saves a draft
+ * with no EN title and therefore no EN slug); validateForPublish still
+ * demands a real slug per locale.
+ */
+export function validateDraft(pair: unknown): asserts pair is PostPair {
+  if (!isPlainObject(pair)) throw new PostError('post payload must be an object');
+  const shared = pair.shared;
+  if (!isPlainObject(shared)) throw new PostError('shared must be an object');
+  if (shared.date !== undefined && shared.date !== '') {
+    if (typeof shared.date !== 'string' || !DATE_RE.test(shared.date) || Number.isNaN(Date.parse(shared.date))) {
+      throw new PostError('shared.date must be YYYY-MM-DD');
+    }
+  }
+  if (shared.countryCode !== undefined && shared.countryCode !== '') {
+    if (typeof shared.countryCode !== 'string' || !COUNTRY_CODE_RE.test(shared.countryCode)) throw new PostError('shared.countryCode must be 2 letters');
+  }
+  if (shared.region !== undefined && shared.region !== '') {
+    if (typeof shared.region !== 'string' || !REGIONS.includes(shared.region)) throw new PostError(`shared.region must be one of ${REGIONS.join(', ')}`);
+  }
+  if (shared.coordinates !== undefined) {
+    const c = shared.coordinates;
+    if (!isPlainObject(c) || !Number.isFinite(c.lat) || !Number.isFinite(c.lng)) throw new PostError('shared.coordinates must be { lat, lng } numbers');
+  }
+  if (shared.stops !== undefined && !Array.isArray(shared.stops)) throw new PostError('shared.stops must be an array');
+  optString(shared, 'route', 'shared');
+  optStringArray(shared, 'categories', 'shared');
+  optStringArray(shared, 'tags', 'shared');
+  if (shared.scheduledAt !== undefined && shared.scheduledAt !== null && shared.scheduledAt !== '') {
+    if (typeof shared.scheduledAt !== 'string' || Number.isNaN(Date.parse(shared.scheduledAt))) throw new PostError('shared.scheduledAt must be an ISO date-time or null');
+  }
   for (const locale of ['de', 'en'] as Locale[]) {
-    if (pair[locale].slug) checkSlug(pair[locale].slug);
+    const l = pair[locale];
+    if (!isPlainObject(l)) throw new PostError(`${locale} must be an object`);
+    for (const f of ['slug', 'title', 'excerpt', 'country', 'bodyMarkdown']) optString(l, f, locale);
+    if (l.heroImage !== undefined && !isPlainObject(l.heroImage)) throw new PostError(`${locale}.heroImage must be an object`);
+    if (l.images !== undefined && !isPlainObject(l.images)) throw new PostError(`${locale}.images must be an object`);
+    if (l.keyFacts !== undefined && (!isPlainObject(l.keyFacts) || Object.values(l.keyFacts).some((v) => typeof v !== 'string'))) {
+      throw new PostError(`${locale}.keyFacts must be an object of strings`);
+    }
+    const slug = l.slug ?? '';
+    if (slug !== '') checkSlug(slug as string);
+    if (locale === 'de' && !(typeof l.title === 'string' && l.title.trim())) throw new PostError('a German title is required to start a draft');
   }
 }
 
@@ -220,6 +285,9 @@ export function validateForPublish(pair: PostPair): void {
 }
 
 const PLACEHOLDER_HERO: HeroImage = { src: '', width: 0, height: 0, alt: '' };
+// The same placeholders wp-import.ts writes for an imported draft (issue #120).
+const PLACEHOLDER_COUNTRY_CODE = 'XX';
+const PLACEHOLDER_REGION = 'europe';
 
 /**
  * Save-time normalization: convert pasted `<BodyImage src="…" width={…} height={…} alt="…" />`
@@ -273,10 +341,15 @@ export function normalizeBodyImages(
 }
 
 /**
- * Fill the NOT-NULL columns the editor can omit on a partial draft save
- * (`coordinates`, `heroImage`) so a draft can never write NULL (Postgres 23502).
- * The placeholders match the WordPress-import defaults and still fail
- * `validateForPublish` until the author completes them.
+ * Fill the NOT-NULL / CHECKed columns a partial draft save can omit
+ * (`date`, `countryCode`, `region`, `coordinates`, `heroImage`, the locale
+ * strings) so a draft can never hit Postgres 23502/23514 (issue #120: the
+ * documented minimum draft is a DE title alone, and the editor omits the
+ * shared fields while blank). The placeholders match the WordPress-import
+ * defaults (`wp-import.ts`) and show up in the editor on reload, where the
+ * author replaces them; `validateForPublish` only rejects the post for what
+ * it still lacks (excerpt, hero, body, EN slug …), not for `XX`/`europe`
+ * themselves — same as an imported draft.
  * Also normalizes pasted `<BodyImage …/>` tags and ```gallery fences, and
  * validates the `images` map — this is the single chokepoint shared by
  * memoryPostStore and pgPostStore (and the WP importer via upsertDraft).
@@ -295,18 +368,25 @@ function draftWithDefaults(pair: PostPair): PostPair {
     if (err) throw new PostError(`${locale}: ${err}`);
     const filled: PostLocale = {
       ...l,
+      locale,
+      slug: l.slug ?? '', title: l.title ?? '', excerpt: l.excerpt ?? '', country: l.country ?? '',
       heroImage: l.heroImage ?? PLACEHOLDER_HERO,
+      bodyMarkdown: l.bodyMarkdown ?? '',
       images: l.images ?? {},
-      country: l.country ?? '',
     };
-    // Partial draft payloads can omit bodyMarkdown at runtime despite the TS type.
-    if (typeof filled.bodyMarkdown !== 'string') return filled;
     const n = normalizeBodyImages(filled.bodyMarkdown, filled.images);
     return { ...filled, bodyMarkdown: n.bodyMarkdown, images: n.images };
   };
+  const s = pair.shared;
   return {
     ...pair,
-    shared: { ...pair.shared, coordinates: pair.shared.coordinates ?? { lat: 0, lng: 0 } },
+    shared: {
+      ...s,
+      date: s.date || new Date().toISOString().slice(0, 10),
+      countryCode: s.countryCode || PLACEHOLDER_COUNTRY_CODE,
+      region: s.region || PLACEHOLDER_REGION,
+      coordinates: s.coordinates ?? { lat: 0, lng: 0 },
+    },
     de: fillLocale(pair.de, 'de'),
     en: fillLocale(pair.en, 'en'),
   };

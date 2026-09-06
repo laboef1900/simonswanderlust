@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
@@ -873,22 +873,26 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       .send(await renderPreviewHtml(pair, locale, imageBase));
   });
 
-  const upsert = async (req: { body: unknown }, reply: import('fastify').FastifyReply, tk: string) => {
-    // `updatedAt` is the optimistic-concurrency echo (the value the editor
-    // loaded), not part of the pair itself — strip it before storing. It is
-    // optional: callers without it (new posts, WP importer) skip the check.
-    const { updatedAt, ...body } = (req.body ?? {}) as PostPair & { updatedAt?: unknown };
-    const pair: PostPair = { ...body, translationKey: tk };
-    // PUT must never create: a stale tab saving a post an admin deleted must get
-    // a 404, not resurrect it (issue #106). POST passes tk='' and skips this.
-    if (tk && !(await posts.get(tk))) return reply.code(404).send({ error: 'post not found' });
-    let baseUpdatedAt: Date | undefined;
-    if (updatedAt !== undefined && updatedAt !== null) {
-      baseUpdatedAt = new Date(String(updatedAt));
-      if (Number.isNaN(baseUpdatedAt.getTime())) return reply.code(400).send({ error: 'invalid updatedAt' });
-    }
+  const upsert = async (req: { body: unknown }, reply: FastifyReply, tk: string) => {
     try {
-      validateDraft(pair);
+      // Shape first (issue #120): a non-object body, a missing `de`, a
+      // non-string title etc. are 400s naming the field, never a TypeError or
+      // a Postgres 22P02/23502 surfacing as a sanitized 500.
+      const raw = req.body ?? {};
+      validateDraft(raw);
+      // `updatedAt` is the optimistic-concurrency echo (the value the editor
+      // loaded), not part of the pair itself — strip it before storing. It is
+      // optional: callers without it (new posts, WP importer) skip the check.
+      const { updatedAt, ...body } = raw as PostPair & { updatedAt?: unknown };
+      const pair: PostPair = { ...body, translationKey: tk };
+      // PUT must never create: a stale tab saving a post an admin deleted must get
+      // a 404, not resurrect it (issue #106). POST passes tk='' and skips this.
+      if (tk && !(await posts.get(tk))) return reply.code(404).send({ error: 'post not found' });
+      let baseUpdatedAt: Date | undefined;
+      if (updatedAt !== undefined && updatedAt !== null) {
+        baseUpdatedAt = new Date(String(updatedAt));
+        if (Number.isNaN(baseUpdatedAt.getTime())) return reply.code(400).send({ error: 'invalid updatedAt' });
+      }
       return reply.send(await posts.upsertDraft(pair, baseUpdatedAt));
     } catch (e) {
       if (e instanceof PostError) {
