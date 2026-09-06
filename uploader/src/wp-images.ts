@@ -47,13 +47,15 @@ export async function rehostImage(url: string, key: string, alt: string, opts: R
  *   §Resumability — issue #85.
  *
  * @ai-note There is deliberately NO state file. The importer's keys are
- * deterministic and un-hashed — every other write path (`POST /upload`, the
- * editor, the bulk library, the CLI) appends `-<hash8>` via `contentHashKey`,
- * see the @ai-warning there — so the un-hashed `trips/<slug>/<name>` namespace
- * belongs to this importer alone and /data/images IS the record. That removes a
- * whole trust boundary (no parser, no validation, no growth cap, no symlink
- * vector, no `images['__proto__']` path) and cannot disagree with the bytes
- * that will actually be served.
+ * deterministic — `trips/<slug>/<name>-<8 hex of the URL>` since #98, a pure
+ * function of (slug, URL), never of bytes, so a re-import resolves the same
+ * key and /data/images IS the record. That removes a whole trust boundary (no
+ * parser, no validation, no growth cap, no symlink vector, no
+ * `images['__proto__']` path) and cannot disagree with the bytes that will
+ * actually be served. The suffix has the shape `contentHashKey` gives every
+ * other write path; a same-name, same-slug, same-8-hex clash is 2⁻³² and would
+ * cost one wrong resume hit, which the completeness check below does not
+ * protect against — accepted (spec §Trust boundaries).
  */
 export interface RehostResume {
   /** The stored result for `key`, or null when it must be (re-)fetched. */
@@ -87,9 +89,9 @@ export async function createRehostResume(
 
   // One directory listing per directory for the whole run, cached and
   // deliberately never refreshed. Two pairs live under different
-  // `trips/<slug>/` prefixes, so neither can read the other's in-run writes, and
-  // a `nameFromUrl` collision within a pair still fetches twice and lets the
-  // second overwrite the first, exactly as it did before this feature existed.
+  // `trips/<slug>/` prefixes, so neither can read the other's in-run writes;
+  // within a pair every distinct URL has its own key (#98), so nothing written
+  // during the run is a key the run will ask about.
   const listings = new Map<string, Set<string>>();
   const entriesOf = async (dir: string): Promise<Set<string>> => {
     const hit = listings.get(dir);

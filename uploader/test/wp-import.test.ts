@@ -4,7 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { importWxr, prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, DEFAULT_MAX_IMAGES, type ImportDeps } from '../src/wp-import.js';
+import { importWxr, prepareImport, rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, DEFAULT_MAX_IMAGES, type ImportDeps } from '../src/wp-import.js';
 import { memoryPostStore, PostError, type PostStore } from '../src/posts.js';
 import { createRehostResume, rehostImage, type RehostResult } from '../src/wp-images.js';
 import { FetchError, type LookupFn } from '../src/safe-fetch.js';
@@ -94,6 +94,9 @@ function harness(opts: { fail?: (url: string, attempt: number) => unknown; costM
     },
   };
 }
+
+/** The URL a re-hosted photo of the post at `slug` is served from (issue #98 key shape). */
+const SRC = (slug: string, url: string): string => `https://img/${rehostKey(slug, url)}`;
 
 const run = (
   body: string, h: ReturnType<typeof harness>, extra: Partial<ImportDeps> = {}, store: PostStore = memoryPostStore(),
@@ -246,7 +249,7 @@ ${['de', 'en']
       postStore: store, storageDir: '/tmp', baseUrl: 'https://img',
       rehost: async (_u, key) => { keys.push(key); return { src: 'https://img/s', width: 1, height: 1 }; },
     });
-    expect(keys).toEqual(['trips/key-de/shared']);
+    expect(keys).toEqual([rehostKey('key-de', 'https://wp/shared.jpg')]);
   });
 
   it('rejects a group whose slug is unsafe (path-traversal defense) without storing it', async () => {
@@ -425,7 +428,7 @@ describe('importWxr re-run merge', () => {
         heroImage: { src: 'https://img/authors-pick', width: 10, height: 20, alt: 'Mein Held' },
         bodyMarkdown: p.de.bodyMarkdown
           .replace('Intro', 'Eine bessere Einleitung')
-          .replace('![a](https://img/trips/de-1/a)', '') // author removed photo a
+          .replace(`![a](${SRC('de-1', 'https://wp/a.jpg')})`, '') // author removed photo a
           .replace('![a](https://wp/b.jpg)', '![Strand bei Nacht](https://wp/b.jpg)'), // author wrote alt on the hot-link
       },
     });
@@ -445,12 +448,12 @@ describe('importWxr re-run merge', () => {
     expect(p.de.heroImage).toEqual({ src: 'https://img/authors-pick', width: 10, height: 20, alt: 'Mein Held' });
     const body = p.de.bodyMarkdown;
     expect(body).toContain('Eine bessere Einleitung');
-    expect(body).not.toContain('trips/de-1/a');                            // removed photo stays removed
-    expect(body).toContain('![Strand bei Nacht](https://img/trips/de-1/b)'); // hot-link healed, author's alt kept
+    expect(body).not.toContain(rehostKey('de-1', 'https://wp/a.jpg'));       // removed photo stays removed
+    expect(body).toContain(`![Strand bei Nacht](${SRC('de-1', 'https://wp/b.jpg')})`); // hot-link healed, author's alt kept
     expect(body).not.toContain('https://wp/');
     expect(p.de.images).toMatchObject({
-      'https://img/trips/de-1/b': { width: 100, height: 80 },
-      'https://img/trips/de-1/g1': { width: 100, height: 80 }, // pre-existing entry kept
+      [SRC('de-1', 'https://wp/b.jpg')]: { width: 100, height: 80 },
+      [SRC('de-1', 'https://wp/g1.jpg')]: { width: 100, height: 80 }, // pre-existing entry kept
     });
   });
 
@@ -479,7 +482,7 @@ describe('importWxr re-run merge', () => {
     expect(p.de.country).toBe('');
     expect(p.de.heroImage.src).toBe('');
     expect(p.de.bodyMarkdown).toContain('Intro');
-    expect(p.de.bodyMarkdown).toContain('![a](https://img/trips/de-1/a)');
+    expect(p.de.bodyMarkdown).toContain(`![a](${SRC('de-1', 'https://wp/a.jpg')})`);
   });
 
   it('still fetches exactly the export\'s photo set on a merge run (the #96 count is unchanged)', async () => {
@@ -507,7 +510,7 @@ describe('importWxr re-run merge', () => {
     await run(export1, h, {}, store);
     const healed = (await store.get(tk))!.de;
     expect(healed.bodyMarkdown).not.toContain('https://wp/');
-    expect(healed.images['https://img/trips/de-1/g2']).toEqual({ width: 100, height: 80, alt: 'Abend', caption: 'Am Hafen' });
+    expect(healed.images[SRC('de-1', 'https://wp/g2.jpg')]).toEqual({ width: 100, height: 80, alt: 'Abend', caption: 'Am Hafen' });
     expect(healed.images['https://wp/g2.jpg']).toBeUndefined();
   });
 
@@ -524,7 +527,7 @@ describe('importWxr re-run merge', () => {
     expect((await store.get(tk))!.de.images['https://wp/g2.jpg']).toMatchObject({ alt: 'Abend' });
     nextRun();
     await run(export1, h, {}, store);
-    expect((await store.get(tk))!.de.images['https://img/trips/de-1/g2']).toEqual({ width: 100, height: 80, alt: 'Abend' });
+    expect((await store.get(tk))!.de.images[SRC('de-1', 'https://wp/g2.jpg')]).toEqual({ width: 100, height: 80, alt: 'Abend' });
   });
 
   it('does not refetch the featured image while EITHER locale keeps a hero (both share one storage key)', async () => {
@@ -875,8 +878,8 @@ describe('importWxr Turndown image destinations', () => {
     expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
     expect(s.warnings).toEqual([]);
     const pair = (await store.get((await store.list())[0]!.translationKey))!;
-    expect(pair.de.bodyMarkdown).toBe('![Beach](https://img/trips/de-1/a)');
-    expect(pair.de.images['https://img/trips/de-1/a']).toEqual({ width: 100, height: 80 });
+    expect(pair.de.bodyMarkdown).toBe(`![Beach](${SRC('de-1', 'https://wp/uploads/a.jpg')})`);
+    expect(pair.de.images[SRC('de-1', 'https://wp/uploads/a.jpg')]).toEqual({ width: 100, height: 80 });
   });
 
   it('decodes escaped parens and a <…>-wrapped destination, and the pre-flight count agrees', async () => {
@@ -909,8 +912,8 @@ describe('importWxr Turndown image destinations', () => {
     expect(h.calls).toEqual(['https://wp/u/one.jpg']);
     expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
     const pair = (await store.get((await store.list())[0]!.translationKey))!;
-    expect(pair.de.bodyMarkdown).toContain('```gallery\nhttps://img/trips/de-1/one\n```'); // WxH lifted into `images` by the store
-    expect(pair.de.images['https://img/trips/de-1/one']).toEqual({ width: 100, height: 80 });
+    expect(pair.de.bodyMarkdown).toContain(`\`\`\`gallery\n${SRC('de-1', 'https://wp/u/one.jpg')}\n\`\`\``); // WxH lifted into `images` by the store
+    expect(pair.de.images[SRC('de-1', 'https://wp/u/one.jpg')]).toEqual({ width: 100, height: 80 });
     expect(pair.de.bodyMarkdown).not.toContain('gallery ids');
   });
 });
@@ -935,7 +938,7 @@ describe('importWxr reporting', () => {
     const s = await run(body, h);
     expect(s.images).toEqual({ total: 2, hosted: 2, failed: 0 });
     expect(h.calls).toEqual(['https://wp/shared.jpg', 'https://wp/shared.jpg']);
-    expect(h.keys).toEqual(['trips/de-1/shared', 'trips/de-2/shared']);
+    expect(h.keys).toEqual([rehostKey('de-1', 'https://wp/shared.jpg'), rehostKey('de-2', 'https://wp/shared.jpg')]);
   });
 
   // CLAUDE.md: never return raw infrastructure errors. isBlockedHost does not
@@ -1105,7 +1108,7 @@ describe('importWxr free-space precondition', () => {
   // that could finish the import would refuse it forever.
   it('charges only the photos the resume index does NOT hold', async () => {
     const h = harness();
-    const resume = { lookup: async (key: string) => (key.endsWith('/c') ? null : { src: 'https://img/kept', width: 12, height: 34 }) };
+    const resume = { lookup: async (key: string) => (/\/c(-[0-9a-f]{8})?$/.test(key) ? null : { src: 'https://img/kept', width: 12, height: 34 }) };
     // Room for 1 photo (floor + 20 MiB), not for 3.
     const diskSpace = async () => ({ free: 2 * GiB + 20 * MiB, total: 100 * GiB });
     const s = await run(three(), h, { diskSpace, resume });
@@ -1126,7 +1129,7 @@ describe('importWxr free-space precondition', () => {
     const err = await run(pairWithHero('https://wp/hero.jpg', ['https://wp/a.jpg']), h, { diskSpace, resume }).catch((e: unknown) => e) as ImportInsufficientSpaceError;
     expect(err).toBeInstanceOf(ImportInsufficientSpaceError);
     expect(err.photos).toBe(1);
-    expect(looked.sort()).toEqual(['trips/de-1/a', 'trips/de-1/hero']);
+    expect(looked.sort()).toEqual([rehostKey('de-1', 'https://wp/a.jpg'), 'trips/de-1/hero']);
   });
 
   it('memoises resume lookups so the run does not probe disk twice per key', async () => {
@@ -1135,7 +1138,10 @@ describe('importWxr free-space precondition', () => {
     const resume = { lookup: async (key: string) => { looked.push(key); return null; } };
     await run(three(), h, { diskSpace: async () => ({ free: 50 * GiB, total: 100 * GiB }), resume });
     expect(h.calls).toHaveLength(3);
-    expect(looked.sort()).toEqual(['trips/de-1/a', 'trips/de-1/b', 'trips/de-1/c']);
+    // Each key once under its own name and once under the pre-#98 legacy name
+    // it may still be stored under (a miss on both) — six probes, never twelve.
+    const abc = ['https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/c.jpg'];
+    expect(looked.sort()).toEqual([...abc.map((u) => rehostKey('de-1', u)), 'trips/de-1/a', 'trips/de-1/b', 'trips/de-1/c'].sort());
   });
 
   it('treats a throwing resume lookup as "will fetch" in the estimate, and re-fetches in the run', async () => {
@@ -1254,10 +1260,75 @@ describe('prepareImport', () => {
   });
 });
 
+/**
+ * Issue #98: the key segment used to be the filename slug alone, so two photos
+ * whose names collapse to one slug (`foo.jpg`/`foo.png`, `a_b`/`a-b`, two
+ * years' `beach.jpg`) were written under one key — the second overwrote the
+ * first and both references pointed at one photo. The segment is now
+ * `<name>-<8 hex of the URL>`: a pure function of the URL, distinct per URL.
+ */
+describe('importWxr key derivation (issue #98)', () => {
+  const collide = ['https://wp/2019/07/beach.jpg', 'https://wp/2021/09/beach.jpeg', 'https://wp/beach.png?v=2', 'https://wp/BEACH.JPG'];
+
+  it('is a pure function of (slug, url) with a bounded, slug-safe segment', () => {
+    expect(rehostKey('de-1', 'https://wp/a.jpg')).toBe(rehostKey('de-1', 'https://wp/a.jpg'));
+    expect(rehostKey('de-1', 'https://wp/a.jpg')).not.toBe(rehostKey('de-2', 'https://wp/a.jpg'));
+    expect(rehostKey('de-1', 'https://wp/a.jpg')).toMatch(/^trips\/de-1\/a-[0-9a-f]{8}$/);
+    const long = rehostKey('de-1', `https://wp/${'x'.repeat(300)}.jpg`);
+    expect(long.split('/')).toHaveLength(3);
+    expect(long.split('/')[2]!.length).toBeLessThanOrEqual(57);
+    expect(long).toMatch(/^[a-z0-9][a-z0-9/_-]*$/); // storage.ts SAFE_KEY_RE
+    expect(rehostKey('de-1', 'https://wp/---.jpg')).toMatch(/^trips\/de-1\/image-[0-9a-f]{8}$/);
+  });
+
+  it('gives colliding filenames distinct keys, hosts every photo and rewrites each reference to its own', async () => {
+    const h = harness();
+    const store = memoryPostStore();
+    const s = await run(pairOf('g', 'de-1', 'en-1', imgs(...collide)), h, {}, store);
+    expect(s.images).toEqual({ total: 4, hosted: 4, failed: 0 });
+    expect(new Set(h.keys).size).toBe(4);
+    const body = (await store.get((await store.list())[0]!.translationKey))!.de.bodyMarkdown;
+    for (const url of collide) expect(body).toContain(`](${SRC('de-1', url)})`);
+  });
+
+  // Migration: the 2026-07-29 corpus sits on disk under the legacy keys and the
+  // stored bodies point there. A re-run must resume it, not fetch 665 photos
+  // again — but only where the legacy name is unambiguous within the pair.
+  it('resumes a photo stored under its pre-#98 key when its name is unique in the pair', async () => {
+    const h = harness();
+    const resume = { lookup: async (key: string) => (key === 'trips/de-1/a' ? { src: 'https://img/trips/de-1/a', width: 12, height: 34 } : null) };
+    const store = memoryPostStore();
+    const s = await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg')), h, { resume }, store);
+    expect(h.calls).toEqual(['https://wp/b.jpg']);
+    expect(s.images).toEqual({ total: 2, hosted: 2, failed: 0 });
+    const body = (await store.get((await store.list())[0]!.translationKey))!.de.bodyMarkdown;
+    expect(body).toContain('](https://img/trips/de-1/a)'); // the file the stored body already references
+  });
+
+  it('does not consult the legacy key when two URLs of the pair share that name', async () => {
+    const h = harness();
+    const looked: string[] = [];
+    const resume = { lookup: async (key: string) => { looked.push(key); return key === 'trips/de-1/beach' ? { src: 'https://img/trips/de-1/beach', width: 12, height: 34 } : null; } };
+    const s = await run(pairOf('g', 'de-1', 'en-1', imgs(collide[0]!, collide[1]!, 'https://wp/c.jpg')), h, { resume });
+    expect(looked).not.toContain('trips/de-1/beach');
+    expect(looked).toContain('trips/de-1/c');
+    expect(h.calls.sort()).toEqual([collide[0], collide[1], 'https://wp/c.jpg'].sort());
+    expect(s.images).toEqual({ total: 3, hosted: 3, failed: 0 });
+  });
+
+  it('never resumes the hero from a legacy key', async () => {
+    const h = harness();
+    const looked: string[] = [];
+    const resume = { lookup: async (key: string) => { looked.push(key); return null; } };
+    await run(pairWithHero('https://wp/hero.jpg', []), h, { resume });
+    expect(looked).toEqual(['trips/de-1/hero']);
+  });
+});
+
 describe('importWxr resumability', () => {
   it('skips a photo the resume index already has, without fetching or pacing', async () => {
     const h = harness();
-    const resume = { lookup: async (key: string) => (key.endsWith('/a') ? { src: 'https://img/kept', width: 12, height: 34 } : null) };
+    const resume = { lookup: async (key: string) => (key === rehostKey('de-1', 'https://wp/a.jpg') ? { src: 'https://img/kept', width: 12, height: 34 } : null) };
     const s = await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg')), h, { resume, delayMs: 1200 });
     expect(h.calls).toEqual(['https://wp/b.jpg']);
     expect(h.order).toEqual(['fetch:https://wp/b.jpg']); // no sleep for the resumed one
@@ -1338,7 +1409,7 @@ describe('importWxr resumability', () => {
 
     const pair = (await store.get((await store.list())[0]!.translationKey))!;
     for (const name of ['a', 'b', 'c']) {
-      expect(pair.de.images[`${baseUrl}/trips/de-1/${name}`], name).toMatchObject({ width: 900, height: 600 });
+      expect(pair.de.images[`${baseUrl}/${rehostKey('de-1', `https://wp/${name}.jpg`)}`], name).toMatchObject({ width: 900, height: 600 });
     }
     expect(pair.de.bodyMarkdown).not.toContain('https://wp/');
   });

@@ -8,7 +8,7 @@ import sharp from 'sharp';
 import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
 import { rehostImage } from '../src/wp-images.js';
-import { ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type ImportProgress, type ImportSummary, type PreparedImport } from '../src/wp-import.js';
+import { rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type ImportProgress, type ImportSummary, type PreparedImport } from '../src/wp-import.js';
 import { createImportRunner, memoryImportJobStore, type ImportRunner } from '../src/import-jobs.js';
 import { defaultSettings, validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
@@ -2147,7 +2147,7 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
     const b = build(); const { cookie } = await authed(b);
     const jpg = await sharp({ create: { width: 900, height: 600, channels: 3, background: '#345' } }).jpeg().toBuffer();
     const fetchImpl = (async () => new Response(new Uint8Array(jpg))) as unknown as typeof fetch;
-    await rehostImage('https://seed/p0.jpg', 'trips/imp-de/p0', 'a',
+    await rehostImage('https://seed/p0.jpg', rehostKey('imp-de', 'http://127.0.0.1/p0.jpg'), 'a',
       { storageDir: dir, baseUrl: 'https://img.simonswanderlust.com', fetchImpl, lookup: async () => [{ address: '93.184.216.34', family: 4 }] });
 
     const summary = await importAndWait(b, cookie, wxrWith('http://127.0.0.1/p0.jpg'));
