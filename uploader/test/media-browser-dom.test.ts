@@ -78,6 +78,7 @@ function loadPage(): {
   el(id: string): FakeNode;
   timers: { fn: () => void; cleared: boolean }[];
   listRequests: Deferred[];
+  patches: { url: string; body: Record<string, unknown> }[];
   confirms: string[];
   confirmAnswer: { value: boolean };
   flush(): Promise<void>;
@@ -95,10 +96,15 @@ function loadPage(): {
   };
   const timers: { fn: () => void; cleared: boolean }[] = [];
   const listRequests: Deferred[] = [];
+  const patches: { url: string; body: Record<string, unknown> }[] = [];
   const confirms: string[] = [];
   const confirmAnswer = { value: false };
-  const fetch = (url: string): Promise<unknown> => {
+  const fetch = (url: string, init?: { method?: string; body?: string }): Promise<unknown> => {
     if (url.startsWith('/media/folders')) return Promise.resolve({ status: 200, ok: true, json: async () => [] });
+    if (init?.method === 'PATCH') {
+      patches.push({ url, body: JSON.parse(init.body ?? '{}') as Record<string, unknown> });
+      return Promise.resolve({ status: 200, ok: true, json: async () => ({}) });
+    }
     // Executor form: the uploader's tsconfig lib predates Promise.withResolvers.
     return new Promise((resolve) => {
       listRequests.push({ url, resolve: (body) => resolve({ status: 200, ok: true, json: async () => body }) });
@@ -125,7 +131,7 @@ function loadPage(): {
   vm.runInContext(apiSrc, ctx);
   vm.runInContext(browserSrc, ctx);
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await setImmediate(); };
-  return { el, timers, listRequests, confirms, confirmAnswer, flush };
+  return { el, timers, listRequests, patches, confirms, confirmAnswer, flush };
 }
 
 function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
@@ -184,6 +190,47 @@ describe('media-browser detail panel', () => {
     page.el('detail').dispatch('input');
     cellA!.dispatch('click');
     expect(page.confirms).toHaveLength(0);
+  });
+
+  it('arrow-browsing while dirty moves focus but not the panel, so the next click still asks', async () => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('a'), item('b')], total: 2 });
+    await page.flush();
+    const cells = page.el('grid').querySelectorAll('.media-cell');
+    cells[0]!.dispatch('click');
+    page.el('dAltDe').value = 'edited';
+    page.el('detail').dispatch('input');
+    cells[0]!.dispatch('keydown', { key: 'ArrowRight' });
+    expect(page.confirms).toHaveLength(0);
+    expect(page.el('detail').dataset.key).toBe('a');
+    expect(page.el('dAltDe').value).toBe('edited');
+    // The selection moved on to B; committing to it must still go through the guard.
+    page.el('grid').querySelectorAll('.media-cell')[1]!.dispatch('click');
+    expect(page.confirms).toHaveLength(1);
+    expect(page.el('detail').dataset.key).toBe('a');
+  });
+
+  it('saves only the fields the author changed, so a stale folder does not undo a bulk move', async () => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('a', 'alt-a')], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    page.el('dAltDe').value = 'Fjord';
+    page.el('detail').dispatch('input');
+    // Meanwhile the photo was moved (e.g. bulk Move) and the list reloaded
+    // with its new folder; the untouched panel still shows the old one.
+    page.el('fStatus').dispatch('change');
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [{ ...item('a', 'alt-a'), folder: 'Island' }], total: 1 });
+    await page.flush();
+    expect(page.el('dFolder').value).toBe('');
+    page.el('detail').querySelectorAll('.btn-secondary')[0]!.dispatch('click');
+    await page.flush();
+    expect(page.patches).toHaveLength(1);
+    expect(page.patches[0]!.url).toBe('/media/items/a');
+    expect(page.patches[0]!.body).toEqual({ alt: { de: 'Fjord', en: '' } });
   });
 });
 

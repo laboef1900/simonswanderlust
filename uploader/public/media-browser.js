@@ -33,6 +33,7 @@
     anchor: null,        // for shift-range selection
     detailKey: null,
     detailDirty: false,  // unsaved edits in the detail panel; render() leaves it alone while set
+    detailItem: null,    // the row the panel was built from (diff base for saveDetail)
     queue: null,
   };
 
@@ -220,6 +221,7 @@
       return;
     }
     panel.dataset.key = item.key;
+    state.detailItem = item;
     panel.appendChild(el('p', 'section-label', 'Photo'));
     panel.appendChild(el('p', 'media-key', item.key));
 
@@ -397,7 +399,12 @@
       state.anchor = keys[next];
       state.selected = [keys[next]];
     }
-    state.detailKey = keys[next];
+    // Arrow-browsing moves focus and selection; it only follows with the
+    // detail panel when nothing is unsaved there, so a keyboard user can look
+    // around without being asked to discard on every keystroke — and
+    // detailKey stays what the panel shows, which is what the switch guard
+    // in detailReplaceable compares against.
+    if (!state.detailDirty) state.detailKey = keys[next];
     render();
     focusCell(next);
   }
@@ -413,15 +420,34 @@
 
   // ---- actions ------------------------------------------------------------
 
+  /**
+   * PATCHes only the fields the author changed, diffed against the row the
+   * panel was built from. A dirty panel is deliberately NOT rebuilt (see
+   * renderDetail), so a field they never touched can be stale by the time
+   * they save: after a bulk move of the same photo, sending the panel's old
+   * folder back would silently undo the move. Untouched means "still what
+   * the panel showed", which is why the diff base is the render snapshot and
+   * not the freshest row.
+   */
+  function detailPatch() {
+    var base = state.detailItem;
+    var patch = {};
+    var title = $('dTitle').value;
+    if (title !== (base.title || '')) patch.title = title;
+    var alt = { de: $('dAltDe').value, en: $('dAltEn').value };
+    if (alt.de !== (base.alt.de || '') || alt.en !== (base.alt.en || '')) patch.alt = alt;
+    var caption = { de: $('dCapDe').value, en: $('dCapEn').value };
+    if (caption.de !== (base.caption.de || '') || caption.en !== (base.caption.en || '')) patch.caption = caption;
+    var tags = $('dTags').value.split(',').map(function (t) { return t.trim(); }).filter(Boolean);
+    if (tags.join('\n') !== (base.tags || []).join('\n')) patch.tags = tags;
+    var folder = $('dFolder').value;
+    if (folder !== (base.folder || '')) patch.folder = folder;
+    return patch;
+  }
+
   async function saveDetail(key) {
     try {
-      await client.patch(key, {
-        title: $('dTitle').value,
-        alt: { de: $('dAltDe').value, en: $('dAltEn').value },
-        caption: { de: $('dCapDe').value, en: $('dCapEn').value },
-        tags: $('dTags').value.split(',').map(function (t) { return t.trim(); }).filter(Boolean),
-        folder: $('dFolder').value,
-      });
+      await client.patch(key, detailPatch());
       state.detailDirty = false;
       await reload('Saved.');
     } catch (e) { fail(e); }
