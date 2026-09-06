@@ -218,12 +218,14 @@ function redirectTarget(location: string, from: URL, raw: string, hop: number): 
  * Release a response `safeFetch` will not read — a redirect hop or a non-2xx
  * answer. Without this undici holds the socket until the Response is
  * collected, and an export whose photos mostly 404 leaks one connection per
- * failed attempt for the length of the import (issue #144). A failing cancel
- * is swallowed: the socket is closing either way, and the caller's error must
- * stay the HTTP status, not a `network` failure the retry policy would misread.
+ * failed attempt for the length of the import (issue #144). Not awaited: the
+ * caller's outcome is already decided, the timeout must keep bounding the
+ * call rather than a cancel that stalls, and a failing cancel is swallowed —
+ * the socket is closing either way, and the caller's error must stay the HTTP
+ * status, not a `network` failure the retry policy would misread.
  */
-async function discard(res: Response): Promise<void> {
-  try { await res.body?.cancel(); } catch { /* already closed */ }
+function discard(res: Response): void {
+  try { res.body?.cancel().catch(() => { /* already closed */ }); } catch { /* already closed */ }
 }
 
 /**
@@ -255,14 +257,14 @@ export async function safeFetch(raw: string, opts: SafeFetchOptions = {}): Promi
       res = await doFetch(url, { signal: controller.signal, redirect: 'manual' });
       const location = REDIRECT_STATUSES.has(res.status) ? res.headers.get('location') : null;
       if (location === null) break;
-      await discard(res);
+      discard(res);
       if (hop === maxRedirects) {
         throw new FetchError(`too many redirects (more than ${maxRedirects}) for ${raw}`, 'http', { status: res.status });
       }
       url = redirectTarget(location, url, raw, hop + 1);
     }
     if (!res.ok) {
-      await discard(res);
+      discard(res);
       throw new FetchError(`download failed (HTTP ${res.status}) for ${raw}`, 'http', { status: res.status });
     }
 
