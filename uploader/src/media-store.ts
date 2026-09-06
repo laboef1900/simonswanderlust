@@ -327,7 +327,9 @@ export function memoryMediaStore(opts: MediaStoreOptions): MediaStore {
         status: item.status, error: null,
         exif: { ...item.exif },
         uploadedAt: existing?.uploadedAt ?? new Date(),
-        uploadedBy: item.uploadedBy ?? existing?.uploadedBy ?? null,
+        // pg's ON CONFLICT clause never touches uploaded_by: the first
+        // uploader stays, even once the FK has nulled it (#135).
+        uploadedBy: existing ? existing.uploadedBy : item.uploadedBy ?? null,
       };
       rows.set(item.key, row);
       addFolders(row.folder);

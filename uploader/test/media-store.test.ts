@@ -199,6 +199,17 @@ describe('memoryMediaStore', () => {
     expect(again).toMatchObject({ title: 'New', tags: ['b'], status: 'failed', width: 10, height: 20 });
   });
 
+  // pg's ON CONFLICT clause never lists uploaded_by, so the first uploader
+  // stays — even after the users FK has nulled it. The memory store used to
+  // let a re-upload claim the row (#135).
+  it('upsert keeps the first uploader, matching the pg ON CONFLICT rule', async () => {
+    const s = store();
+    await add(s, 'k', { uploadedBy: 'first' });
+    expect((await add(s, 'k', { uploadedBy: 'second' })).uploadedBy).toBe('first');
+    await add(s, 'nulled', { uploadedBy: null });
+    expect((await add(s, 'nulled', { uploadedBy: 'later' })).uploadedBy).toBeNull();
+  });
+
   it('patch edits metadata and 404s for an unknown key', async () => {
     const s = store();
     await add(s, 'k');

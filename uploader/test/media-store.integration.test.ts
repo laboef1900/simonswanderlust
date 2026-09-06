@@ -226,4 +226,20 @@ maybe('pgMediaStore (integration)', () => {
     await pool.query('DELETE FROM users WHERE id = $1', [userId]);
     expect((await store.get('k'))?.uploadedBy).toBeNull();
   });
+
+  // The rule the memory store mirrors (#135): ON CONFLICT never lists
+  // uploaded_by, so a re-upload by another account does not claim the row.
+  it('re-upserting keeps the first uploader', async () => {
+    const mk = async (name: string) => (await pool.query<{ id: string }>(
+      `INSERT INTO users (id, username, password_hash) VALUES (gen_random_uuid(), $1, 'x') RETURNING id`, [name],
+    )).rows[0]!.id;
+    const first = await mk(`first-${Date.now()}`);
+    const second = await mk(`second-${Date.now()}`);
+    try {
+      await add('k', { uploadedBy: first });
+      expect((await add('k', { uploadedBy: second })).uploadedBy).toBe(first);
+    } finally {
+      await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [[first, second]]);
+    }
+  });
 });
