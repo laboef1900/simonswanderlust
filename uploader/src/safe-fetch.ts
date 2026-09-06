@@ -87,8 +87,11 @@ const defaultLookup: LookupFn = (hostname) => dnsLookup(hostname, { all: true })
  * compose network `db` lives on is 172.16/12), CGNAT, link-local (which holds
  * the cloud-metadata endpoint 169.254.169.254), multicast and reserved space,
  * and their IPv6 counterparts. `BlockList` checks IPv4-mapped IPv6 addresses
- * (`::ffff:127.0.0.1`) against the IPv4 rules itself; the NAT64 well-known
- * prefix is blocked wholesale because the embedded IPv4 is not unpacked.
+ * (`::ffff:127.0.0.1`) against the IPv4 rules itself; every OTHER IPv6 form
+ * that embeds an IPv4 address — NAT64, the deprecated IPv4-compatible `::/96`,
+ * 6to4 `2002::/16` — is blocked wholesale because the embedded address is not
+ * unpacked (issue #144). Site-local, documentation and discard space are not
+ * public unicast either.
  *
  * @ai-warning This is the single source of truth for "internal address" —
  * both the literal-host check in `assertFetchableUrl` and the post-resolution
@@ -106,9 +109,13 @@ BLOCKED.addSubnet('192.168.0.0', 16, 'ipv4');  // RFC1918
 BLOCKED.addSubnet('198.18.0.0', 15, 'ipv4');   // benchmarking
 BLOCKED.addSubnet('224.0.0.0', 4, 'ipv4');     // multicast
 BLOCKED.addSubnet('240.0.0.0', 4, 'ipv4');     // reserved, incl. broadcast
-BLOCKED.addAddress('::', 'ipv6');              // unspecified
+BLOCKED.addSubnet('::', 96, 'ipv6');           // unspecified + deprecated IPv4-compatible (::a.b.c.d)
 BLOCKED.addAddress('::1', 'ipv6');             // loopback
+BLOCKED.addSubnet('100::', 64, 'ipv6');        // discard-only (RFC6666)
+BLOCKED.addSubnet('2001:db8::', 32, 'ipv6');   // documentation (RFC3849)
+BLOCKED.addSubnet('2002::', 16, 'ipv6');       // 6to4, embeds an IPv4 address (RFC3056)
 BLOCKED.addSubnet('fe80::', 10, 'ipv6');       // link-local
+BLOCKED.addSubnet('fec0::', 10, 'ipv6');       // site-local (deprecated, RFC3879)
 BLOCKED.addSubnet('fc00::', 7, 'ipv6');        // unique-local
 BLOCKED.addSubnet('ff00::', 8, 'ipv6');        // multicast
 BLOCKED.addSubnet('64:ff9b::', 96, 'ipv6');    // NAT64 well-known prefix
@@ -208,6 +215,20 @@ function redirectTarget(location: string, from: URL, raw: string, hop: number): 
 }
 
 /**
+ * Release a response `safeFetch` will not read — a redirect hop or a non-2xx
+ * answer. Without this undici holds the socket until the Response is
+ * collected, and an export whose photos mostly 404 leaks one connection per
+ * failed attempt for the length of the import (issue #144). Not awaited: the
+ * caller's outcome is already decided, the timeout must keep bounding the
+ * call rather than a cancel that stalls, and a failing cancel is swallowed —
+ * the socket is closing either way, and the caller's error must stay the HTTP
+ * status, not a `network` failure the retry policy would misread.
+ */
+function discard(res: Response): void {
+  try { res.body?.cancel().catch(() => { /* already closed */ }); } catch { /* already closed */ }
+}
+
+/**
  * Fetch a remote resource with an SSRF guard, a hard timeout, and a streamed
  * byte cap (so a malicious/huge response can never be buffered fully into
  * memory). Used by the WordPress re-host path, where the URL is attacker-influenced.
@@ -236,13 +257,16 @@ export async function safeFetch(raw: string, opts: SafeFetchOptions = {}): Promi
       res = await doFetch(url, { signal: controller.signal, redirect: 'manual' });
       const location = REDIRECT_STATUSES.has(res.status) ? res.headers.get('location') : null;
       if (location === null) break;
-      await res.body?.cancel();
+      discard(res);
       if (hop === maxRedirects) {
         throw new FetchError(`too many redirects (more than ${maxRedirects}) for ${raw}`, 'http', { status: res.status });
       }
       url = redirectTarget(location, url, raw, hop + 1);
     }
-    if (!res.ok) throw new FetchError(`download failed (HTTP ${res.status}) for ${raw}`, 'http', { status: res.status });
+    if (!res.ok) {
+      discard(res);
+      throw new FetchError(`download failed (HTTP ${res.status}) for ${raw}`, 'http', { status: res.status });
+    }
 
     const contentType = res.headers.get('content-type') ?? '';
     const reader = res.body?.getReader();

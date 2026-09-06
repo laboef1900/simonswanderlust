@@ -247,9 +247,12 @@ fetches go through `safeFetch` (`uploader/src/safe-fetch.ts`), which:
 - allows only `http`/`https` and rejects URLs with embedded credentials;
 - rejects **internal address literals** — loopback, RFC1918, CGNAT, link-local (including the
   cloud-metadata endpoint `169.254.169.254`), multicast/reserved, and the IPv6 equivalents
-  (`::1`, `fe80::/10`, `fc00::/7`, NAT64, IPv4-mapped forms like `::ffff:127.0.0.1`) — one
-  `net.BlockList` is the single source of truth; the WHATWG `URL` parser canonicalises
-  decimal/hex/octal IPv4 spellings before the check sees them;
+  (`::1`, `fe80::/10`, `fc00::/7`, IPv4-mapped forms like `::ffff:127.0.0.1`) plus every other
+  IPv6 form that embeds or stands in for an IPv4 address and is blocked wholesale because the
+  embedded address is not unpacked — NAT64, the IPv4-compatible `::/96`, 6to4 `2002::/16` — and
+  site-local, documentation and discard space (issue #144) — one `net.BlockList` is the single
+  source of truth; the WHATWG `URL` parser canonicalises decimal/hex/octal IPv4 spellings before
+  the check sees them;
 - **resolves every hostname before connecting** (`dns.lookup`, all records) and refuses if *any*
   address it resolves to is internal — so `localhost`, the compose-internal `db`, or an attacker's
   hostname with a private A record are refused, and a split public+private record does not let the
@@ -263,9 +266,12 @@ fetches go through `safeFetch` (`uploader/src/safe-fetch.ts`), which:
 - enforces a hard **timeout** (AbortController) that spans every lookup and every hop of a chain,
   so a slow chain cannot exceed it by splitting time across hops; and
 - **caps the download size while streaming**, so a huge or never-ending response cannot be buffered
-  fully into memory. Redirect bodies are cancelled unread; the cap applies to the final body.
+  fully into memory. Redirect bodies and non-2xx bodies are cancelled unread (issue #144: an
+  export whose photos mostly 404 used to hold one socket per failed attempt for the length of the
+  import); the cap applies to the final body.
 
-Design and misuse cases: `docs/superpowers/specs/2026-09-05-safe-fetch-redirects-design.md`.
+Design and misuse cases: `docs/superpowers/specs/2026-09-05-safe-fetch-redirects-design.md` and
+`docs/superpowers/specs/2026-09-06-safe-fetch-literals-and-body-cancel-design.md`.
 
 (The former LM Studio caption feature — the app's only other outbound-fetch surface — was removed
 in July 2026; the WordPress importer is now the sole remote-fetch path.)
