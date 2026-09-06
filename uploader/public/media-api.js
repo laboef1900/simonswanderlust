@@ -103,6 +103,34 @@ window.MediaApi = (function () {
     return parts.length ? '?' + parts.join('&') : '';
   }
 
+  /**
+   * Trailing-edge debounce: `fn` runs once, `ms` after the LAST call in a
+   * burst. Used for search-as-you-type so a word costs one request, not one
+   * per keystroke.
+   */
+  function debounce(fn, ms) {
+    var timer = null;
+    return function () {
+      var args = arguments;
+      clearTimeout(timer);
+      timer = setTimeout(function () { timer = null; fn.apply(null, args); }, ms);
+    };
+  }
+
+  /**
+   * Monotonic tickets for in-flight loads. Responses arrive in any order —
+   * "no" can answer after "norw" — so a loader takes a ticket before it
+   * fetches and applies the response only while that ticket is still the
+   * newest. Superseded responses are dropped, never merged.
+   */
+  function makeSequence() {
+    var current = 0;
+    return {
+      next: function () { return ++current; },
+      isCurrent: function (ticket) { return ticket === current; },
+    };
+  }
+
   // ---- transport ----------------------------------------------------------
 
   function makeClient(opts) {
@@ -266,6 +294,8 @@ window.MediaApi = (function () {
     parentOf: parentOf,
     statusLabel: statusLabel,
     listQuery: listQuery,
+    debounce: debounce,
+    makeSequence: makeSequence,
     makeClient: makeClient,
     createUploadQueue: createUploadQueue,
   };

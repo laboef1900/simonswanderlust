@@ -32,8 +32,8 @@
     selected: [],        // keys, in display order
     anchor: null,        // for shift-range selection
     detailKey: null,
+    detailDirty: false,  // unsaved edits in the detail panel; render() leaves it alone while set
     queue: null,
-    busy: false,
   };
 
   var client = api.makeClient({ onUnauthed: function () { location.href = '/login'; } });
@@ -49,26 +49,31 @@
 
   // ---- data ---------------------------------------------------------------
 
+  // Loads race: a filter change fired before the previous response landed must
+  // win, or the grid, the total in say() and the pruned selection all describe
+  // a query the author has already typed past. See makeSequence.
+  var loads = api.makeSequence();
+
   async function reload(msg) {
-    state.busy = true;
+    var ticket = loads.next();
     try {
       var res = await client.list({
         folder: state.folder, recursive: state.recursive, q: state.q, tag: state.tag,
         status: state.status, sort: state.sort, order: state.order,
         page: state.page, pageSize: state.pageSize,
       });
+      var folders = await client.folders();
+      if (!loads.isCurrent(ticket)) return;
       state.items = res.items;
       state.total = res.total;
-      state.folders = await client.folders();
+      state.folders = folders;
       // Drop selections for photos no longer in view.
       var visible = state.items.map(function (i) { return i.key; });
       state.selected = state.selected.filter(function (k) { return visible.indexOf(k) !== -1; });
       render();
       say(msg != null ? msg : state.total + ' photo(s)');
     } catch (e) {
-      fail(e);
-    } finally {
-      state.busy = false;
+      if (loads.isCurrent(ticket)) fail(e);
     }
   }
 
@@ -199,14 +204,22 @@
     }
   }
 
+  // The detail panel is the one place on this page the author types. Rebuilding
+  // it mid-edit throws that text away, so while `detailDirty` is set the panel
+  // is left untouched — whatever reload() or a selection change did to the rest
+  // of the page — until the edits are saved or explicitly discarded
+  // (see detailReplaceable).
   function renderDetail() {
+    if (state.detailDirty) return;
     var panel = $('detail');
     panel.innerHTML = '';
     var item = state.items.filter(function (i) { return i.key === state.detailKey; })[0];
     if (!item) {
+      delete panel.dataset.key;
       panel.appendChild(el('p', 'muted', 'Select a photo to edit its details.'));
       return;
     }
+    panel.dataset.key = item.key;
     panel.appendChild(el('p', 'section-label', 'Photo'));
     panel.appendChild(el('p', 'media-key', item.key));
 
@@ -249,6 +262,11 @@
     save.type = 'button';
     save.addEventListener('click', function () { saveDetail(item.key); });
     panel.appendChild(save);
+    var unsaved = el('p', 'muted', 'Unsaved changes — Save details to keep them.');
+    unsaved.id = 'dUnsaved';
+    unsaved.setAttribute('role', 'status');
+    unsaved.hidden = true;
+    panel.appendChild(unsaved);
 
     // EXIF is read-only. lat/lng are absent entirely for non-admins.
     panel.appendChild(el('p', 'section-label', 'Camera'));
@@ -305,7 +323,26 @@
     if (at === -1) state.selected.push(key); else state.selected.splice(at, 1);
   }
 
+  /**
+   * True when the detail panel may be replaced. Asks first if it holds unsaved
+   * edits, so a mis-click on a neighbouring photo cannot silently eat them.
+   */
+  function detailReplaceable(nextKey) {
+    if (!state.detailDirty || nextKey === state.detailKey) return true;
+    var key = $('detail').dataset.key || state.detailKey;
+    if (!confirm('Discard the unsaved changes to "' + key + '"?')) return false;
+    state.detailDirty = false;
+    return true;
+  }
+
+  function markDetailDirty() {
+    state.detailDirty = true;
+    var hint = $('dUnsaved');
+    if (hint) hint.hidden = false;
+  }
+
   function onCellActivate(key, ev) {
+    if (!detailReplaceable(key)) return;
     if (ev && ev.shiftKey && state.anchor) {
       state.selected = api.rangeBetween(visibleKeys(), state.anchor, key);
     } else if (ev && (ev.ctrlKey || ev.metaKey)) {
@@ -336,6 +373,7 @@
     else if (ev.key === 'End') next = keys.length - 1;
     else if (ev.key === ' ' || ev.key === 'Spacebar') {
       ev.preventDefault();
+      if (!detailReplaceable(keys[index])) return;
       toggle(keys[index]);
       state.anchor = keys[index];
       state.detailKey = keys[index];
@@ -384,6 +422,7 @@
         tags: $('dTags').value.split(',').map(function (t) { return t.trim(); }).filter(Boolean),
         folder: $('dFolder').value,
       });
+      state.detailDirty = false;
       await reload('Saved.');
     } catch (e) { fail(e); }
   }
@@ -393,6 +432,7 @@
     try {
       await client.remove(item.key);
       state.detailKey = null;
+      state.detailDirty = false;
       await reload('Deleted.');
     } catch (e) { fail(e); }
   }
@@ -400,11 +440,13 @@
   // ---- wiring -------------------------------------------------------------
 
   function bindFilters() {
-    $('fSearch').addEventListener('input', function () {
+    // One request per pause in typing, not per keystroke; reload() itself
+    // drops any response a later keystroke has already superseded.
+    $('fSearch').addEventListener('input', api.debounce(function () {
       state.q = $('fSearch').value;
       state.page = 1;
       reload();
-    });
+    }, 200));
     $('fStatus').addEventListener('change', function () {
       state.status = $('fStatus').value;
       state.page = 1;
@@ -508,6 +550,9 @@
     bindUpload();
     bindFolderActions();
     bindBulk();
+    // Delegated: the panel's inputs are rebuilt by renderDetail; the panel is not.
+    $('detail').addEventListener('input', markDetailDirty);
+    $('detail').addEventListener('change', markDetailDirty);
     await reload();
   })();
 })();
