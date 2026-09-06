@@ -5,18 +5,36 @@ import { processImage } from './pipeline.js';
 import { assertSafeKey, storeVariants } from './storage.js';
 import { safeFetch } from './safe-fetch.js';
 import { FORMATS, variantWidths } from './variants.js';
+import type { WorkLock } from './work-lock.js';
 
 export interface RehostResult { src: string; width: number; height: number }
 
-export async function rehostImage(
-  url: string, key: string, alt: string,
-  opts: { storageDir: string; baseUrl: string; fetchImpl?: typeof fetch; timeoutMs?: number; maxBytes?: number },
-): Promise<RehostResult> {
+export interface RehostOptions {
+  storageDir: string;
+  baseUrl: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  maxBytes?: number;
+  /**
+   * The shared build/encode mutex (issue #95). When present, the sharp encode
+   * runs under `runShared` so it can never overlap `astro build` — the same
+   * rule the encode queue follows. Omit to encode unguarded (CLI, unit tests).
+   */
+  lock?: WorkLock;
+}
+
+export async function rehostImage(url: string, key: string, alt: string, opts: RehostOptions): Promise<RehostResult> {
   // @ai-warning: `url` is taken from an uploaded WordPress export, so it is
   // attacker-influenced. safeFetch applies the SSRF guard + timeout + byte cap.
   const { buffer } = await safeFetch(url, { fetchImpl: opts.fetchImpl, timeoutMs: opts.timeoutMs, maxBytes: opts.maxBytes });
-  const result = await processImage(buffer);
-  const stored = await storeVariants(key, alt, result, { storageDir: opts.storageDir, baseUrl: opts.baseUrl });
+  // The fetch stays OUTSIDE the lock: network I/O guards no memory, and holding
+  // the mutex across a stalling source host would delay a Publish for nothing.
+  // Only the sharp pipeline + variant writes are what a build must never overlap.
+  const encode = async () => {
+    const result = await processImage(buffer);
+    return storeVariants(key, alt, result, { storageDir: opts.storageDir, baseUrl: opts.baseUrl });
+  };
+  const stored = opts.lock ? await opts.lock.runShared(encode) : await encode();
   return { src: stored.src, width: stored.width, height: stored.height };
 }
 

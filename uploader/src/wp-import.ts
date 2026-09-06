@@ -5,6 +5,7 @@ import { isSafeSlug, type ImageDims, type PostLocale, type PostPair, type PostSt
 import { rewriteFences } from './body-content.js';
 import { FetchError } from './safe-fetch.js';
 import { insufficientSpaceForImport, type DiskSpace } from './disk.js';
+import type { WorkLock } from './work-lock.js';
 
 /** Per-image accounting, so a partial import cannot masquerade as a clean one. */
 export interface ImportImageCounts {
@@ -62,6 +63,12 @@ export interface ImportDeps {
    * too, mirroring `/upload` — an unreadable statfs must not block an import.
    */
   diskSpace?: () => Promise<DiskSpace>;
+  /**
+   * The shared build/encode mutex (issue #95). Passed through to the default
+   * `rehostImage`, whose encode then runs under `runShared`; ignored when a
+   * custom `rehost` is injected (that seam decides for itself).
+   */
+  lock?: WorkLock;
   log?: (msg: string) => void;
 }
 
@@ -446,7 +453,7 @@ async function buildLocale(
 
 export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSummary> {
   const { attachments, posts } = parseWxr(xml);
-  const baseRehost = deps.rehost ?? ((url, key, alt) => rehostImage(url, key, alt, { storageDir: deps.storageDir, baseUrl: deps.baseUrl }));
+  const baseRehost = deps.rehost ?? ((url, key, alt) => rehostImage(url, key, alt, { storageDir: deps.storageDir, baseUrl: deps.baseUrl, lock: deps.lock }));
   const log = deps.log ?? ((msg: string) => console.log(msg));
   const images: ImportImageCounts = { total: 0, hosted: 0, failed: 0 };
   const warnings = warningSink();

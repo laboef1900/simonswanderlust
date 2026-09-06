@@ -715,6 +715,14 @@ blog/
   It also resolves the #90 coherence gap: the `importDelayMs`/`importRetries` knobs in `/settings`
   were admin-only while the import they governed was not. See
   `docs/superpowers/specs/2026-09-05-import-require-admin-design.md`.
+- **Done:** #95 import encodes take the work-lock (2026-09-06) — `rehostImage` now runs its
+  sharp encode + variant writes under `workLock.runShared()`, so a multi-minute WXR import can no
+  longer run `sharp` beside `astro build` in one `mem_limit`'d container; a waiting Publish preempts
+  the import at the next photo boundary, exactly as it does the encode queue. The **fetch stays
+  outside** the lock — a stalling source host must not delay a Publish. The single process-wide
+  lock is threaded `main.ts` → `buildServer({ workLock })` → `importWxr({ lock })`; a route test
+  pins that it is the SAME instance the builder and queue hold. See
+  `docs/superpowers/specs/2026-09-05-import-work-lock-design.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

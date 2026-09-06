@@ -98,6 +98,7 @@ const app = buildServer({
   pages,
   media,
   encodeQueue,
+  workLock,
   reconciler,
   builder,
   dbBackup,

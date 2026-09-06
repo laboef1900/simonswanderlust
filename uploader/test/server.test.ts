@@ -1713,11 +1713,13 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
 
   const OK: ImportSummary = { imported: 1, updated: 0, skippedPublished: 0, rejected: 0, failed: 0, images: { total: 0, hosted: 0, failed: 0 }, warnings: [] };
 
-  it('threads the configured pacing and the resume index into the importer', async () => {
+  it('threads the configured pacing, the resume index and the work-lock into the importer', async () => {
     let seen: Parameters<NonNullable<ServerConfig['importRunner']>>[1] | null = null;
+    const workLock = createWorkLock();
     const b = build({
       settings: fakeStore({ ...SETTINGS, importDelayMs: 900, importRetries: 4 }),
       importRunner: async (_xml, deps) => { seen = deps; return OK; },
+      workLock,
     });
     const { cookie } = await authed(b);
     await postImport(b, cookie, wxrWith(...blocked(1)));
@@ -1731,6 +1733,8 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
     expect(seen!.diskSpace).toBeDefined();
     const space = await seen!.diskSpace!();
     expect(space.total).toBeGreaterThan(0);
+    // issue #95: the SAME lock instance the builder and encode queue hold, never a new one.
+    expect(seen!.lock).toBe(workLock);
   });
 
   // issue #94: same status /upload uses for the same condition; the sanitized
