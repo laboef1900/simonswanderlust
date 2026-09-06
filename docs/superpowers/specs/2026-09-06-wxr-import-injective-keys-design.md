@@ -45,17 +45,23 @@ both body references point at one photo. One photo is silently lost, with no war
 
 ## Decision
 
-**The last key segment is `<name>-<h8>`, where `h8` is the first 8 hex characters of SHA-256 over
+**The last key segment is `<name>_<h8>`, where `h8` is the first 8 hex characters of SHA-256 over
 the URL string the importer re-hosts, and `<name>` is the pre-#98 filename slug truncated to 48
 characters.**
 
 ```
-trips/<slug>/<name≤48>-<h8>        # body and gallery photos (#98)
+trips/<slug>/<name≤48>_<h8>        # body and gallery photos (#98)
 trips/<slug>/hero                  # featured image — unchanged, never resumed (HERO_KEY_RE)
 ```
 
 - Two distinct URLs get two distinct keys (up to a 2⁻³² hash collision on *equal* names, which is
   the same order as the content-hash namespace every other write path already accepts).
+- **The separator is `_`, and that is load-bearing.** `legacyNameFromUrl` collapses every
+  non-`[a-z0-9]` run to `-`, so no pre-#98 segment contains `_`; `contentHashKey` joins with `-`,
+  so no `/upload`/editor/library key looks like an importer key either. The three namespaces are
+  disjoint by construction. With `-` (the first draft of this PR) a WordPress filename spelling
+  `a-<h8 of a.jpg>` would have had a legacy key equal to `a.jpg`'s new key, and the migration
+  fallback below could have resumed one URL's photo for the other (review finding on PR #188).
 - The hash is over the URL **after** `markdownImages` decodes Turndown's escaping, i.e. the exact
   string `safeFetch` is given — so DE and EN, which reference one URL, still share one key via the
   pair cache, and `x.jpg?v=1` vs `x.jpg` are two photos (they may be).

@@ -1108,7 +1108,7 @@ describe('importWxr free-space precondition', () => {
   // that could finish the import would refuse it forever.
   it('charges only the photos the resume index does NOT hold', async () => {
     const h = harness();
-    const resume = { lookup: async (key: string) => (/\/c(-[0-9a-f]{8})?$/.test(key) ? null : { src: 'https://img/kept', width: 12, height: 34 }) };
+    const resume = { lookup: async (key: string) => (/\/c(_[0-9a-f]{8})?$/.test(key) ? null : { src: 'https://img/kept', width: 12, height: 34 }) };
     // Room for 1 photo (floor + 20 MiB), not for 3.
     const diskSpace = async () => ({ free: 2 * GiB + 20 * MiB, total: 100 * GiB });
     const s = await run(three(), h, { diskSpace, resume });
@@ -1265,7 +1265,8 @@ describe('prepareImport', () => {
  * whose names collapse to one slug (`foo.jpg`/`foo.png`, `a_b`/`a-b`, two
  * years' `beach.jpg`) were written under one key — the second overwrote the
  * first and both references pointed at one photo. The segment is now
- * `<name>-<8 hex of the URL>`: a pure function of the URL, distinct per URL.
+ * `<name>_<8 hex of the URL>`: a pure function of the URL, distinct per URL,
+ * and — via the `_` no legacy segment can contain — in a namespace of its own.
  */
 describe('importWxr key derivation (issue #98)', () => {
   const collide = ['https://wp/2019/07/beach.jpg', 'https://wp/2021/09/beach.jpeg', 'https://wp/beach.png?v=2', 'https://wp/BEACH.JPG'];
@@ -1273,12 +1274,27 @@ describe('importWxr key derivation (issue #98)', () => {
   it('is a pure function of (slug, url) with a bounded, slug-safe segment', () => {
     expect(rehostKey('de-1', 'https://wp/a.jpg')).toBe(rehostKey('de-1', 'https://wp/a.jpg'));
     expect(rehostKey('de-1', 'https://wp/a.jpg')).not.toBe(rehostKey('de-2', 'https://wp/a.jpg'));
-    expect(rehostKey('de-1', 'https://wp/a.jpg')).toMatch(/^trips\/de-1\/a-[0-9a-f]{8}$/);
+    expect(rehostKey('de-1', 'https://wp/a.jpg')).toMatch(/^trips\/de-1\/a_[0-9a-f]{8}$/);
     const long = rehostKey('de-1', `https://wp/${'x'.repeat(300)}.jpg`);
     expect(long.split('/')).toHaveLength(3);
     expect(long.split('/')[2]!.length).toBeLessThanOrEqual(57);
     expect(long).toMatch(/^[a-z0-9][a-z0-9/_-]*$/); // storage.ts SAFE_KEY_RE
-    expect(rehostKey('de-1', 'https://wp/---.jpg')).toMatch(/^trips\/de-1\/image-[0-9a-f]{8}$/);
+    expect(rehostKey('de-1', 'https://wp/---.jpg')).toMatch(/^trips\/de-1\/image_[0-9a-f]{8}$/);
+  });
+
+  // Review finding on PR #188: with a `-` separator, a legacy file for the
+  // filename `a-<h8 of a.jpg>` would have been a resume hit for `a.jpg`'s new
+  // key. A legacy segment can never contain `_`, so the two cannot meet.
+  it('keeps the new keys in a namespace no pre-#98 key can occupy', async () => {
+    const newKey = rehostKey('de-1', 'https://wp/a.jpg');
+    const forged = `https://wp/${newKey.split('/')[2]!}.jpg`; // a filename spelling the new segment
+    const h = harness();
+    const looked: string[] = [];
+    const resume = { lookup: async (key: string) => { looked.push(key); return null; } };
+    await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', forged)), h, { resume });
+    const legacyProbes = looked.filter((k) => !k.includes('_') && !k.endsWith('/hero'));
+    expect(legacyProbes).not.toContain(newKey);
+    expect(new Set(h.keys).size).toBe(2);
   });
 
   it('gives colliding filenames distinct keys, hosts every photo and rewrites each reference to its own', async () => {

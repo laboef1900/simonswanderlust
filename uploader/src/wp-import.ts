@@ -125,12 +125,17 @@ const NAME_MAX = 48;
  * inside `assertSafeKey`'s cap; the hash is over the URL string exactly as
  * `safeFetch` receives it, so `x.jpg` and `x.jpg?v=1` are two photos.
  *
- * @ai-warning Deterministic over the URL alone — never over bytes, fetch order
- * or the other URLs in the export. `/data/images` IS the resume record (#85).
+ * @ai-warning The separator is `_` ON PURPOSE: a legacy segment can never
+ * contain one (`legacyNameFromUrl` collapses every non-[a-z0-9] run to `-`)
+ * and `contentHashKey` joins with `-`, so the pre-#98, post-#98 and upload
+ * namespaces are disjoint by construction — a legacy file can never be a
+ * resume hit for a new key, or vice versa. Deterministic over the URL alone —
+ * never over bytes, fetch order or the other URLs in the export.
+ * `/data/images` IS the resume record (#85).
  */
 function nameFromUrl(url: string): string {
   const name = legacyNameFromUrl(url).slice(0, NAME_MAX).replace(/-+$/, '');
-  return `${name}-${createHash('sha256').update(url).digest('hex').slice(0, 8)}`;
+  return `${name}_${createHash('sha256').update(url).digest('hex').slice(0, 8)}`;
 }
 
 /** Storage key for a body or gallery image of the post at `slug`. Exported for tests only. */

@@ -47,15 +47,14 @@ export async function rehostImage(url: string, key: string, alt: string, opts: R
  *   §Resumability — issue #85.
  *
  * @ai-note There is deliberately NO state file. The importer's keys are
- * deterministic — `trips/<slug>/<name>-<8 hex of the URL>` since #98, a pure
+ * deterministic — `trips/<slug>/<name>_<8 hex of the URL>` since #98, a pure
  * function of (slug, URL), never of bytes, so a re-import resolves the same
  * key and /data/images IS the record. That removes a whole trust boundary (no
  * parser, no validation, no growth cap, no symlink vector, no
  * `images['__proto__']` path) and cannot disagree with the bytes that will
- * actually be served. The suffix has the shape `contentHashKey` gives every
- * other write path; a same-name, same-slug, same-8-hex clash is 2⁻³² and would
- * cost one wrong resume hit, which the completeness check below does not
- * protect against — accepted (spec §Trust boundaries).
+ * actually be served. The `_` separator keeps the namespace the importer's
+ * alone: every other write path joins its content hash with `-`
+ * (`contentHashKey`), and the pre-#98 importer never wrote a `_`.
  */
 export interface RehostResume {
   /** The stored result for `key`, or null when it must be (re-)fetched. */
