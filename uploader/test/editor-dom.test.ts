@@ -98,6 +98,7 @@ function loadEditor(): { api: EditorApi; el: (id: string) => Element } {
     MediaPicker: { open() {} },
     GalleryFence: {},
     AltSuggest: { wire() {} },
+    Tabs: { wire: () => ({ active: () => 'de' }) },
   };
   ctx.window = ctx;
   vm.createContext(ctx);

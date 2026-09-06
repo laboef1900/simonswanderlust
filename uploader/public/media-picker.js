@@ -61,7 +61,10 @@ window.MediaPicker = (function () {
     dialog.className = 'admin-modal';
 
     var head = el('div', 'admin-modal__head');
-    head.appendChild(el('h2', null, multiple ? 'Choose photos' : 'Choose a photo'));
+    var heading = el('h2', null, multiple ? 'Choose photos' : 'Choose a photo');
+    heading.id = 'mediaPickerTitle';
+    head.appendChild(heading);
+    dialog.setAttribute('aria-labelledby', heading.id);
     var count = el('span', 'muted');
     head.appendChild(count);
     dialog.appendChild(head);

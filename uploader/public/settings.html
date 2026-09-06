@@ -34,7 +34,7 @@
 
         <label for="model">Model</label>
         <select id="model"></select>
-        <input id="modelManual" type="text" placeholder="…or type a model id" />
+        <input id="modelManual" type="text" placeholder="…or type a model id" aria-label="Model id (typed manually)" />
 
         <label for="timeout">Caption timeout (ms)</label>
         <input id="timeout" type="number" min="1000" max="600000" />
@@ -81,7 +81,7 @@
         <button id="rebuild">Rebuild site now</button>
 
         <p class="section-label">Last backup</p>
-        <pre id="backupStatus">—</pre>
+        <pre id="backupStatus" role="status">—</pre>
         <p class="section-label">Backup files</p>
         <ul id="backupFiles"></ul>
         <p class="section-label">Image archives</p>
@@ -103,7 +103,7 @@
       </div>
 
       <p class="section-label">Status</p>
-      <pre id="out">—</pre>
+      <pre id="out" role="status">—</pre>
     </main>
 
     <script src="/admin/auth.js"></script>

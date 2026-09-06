@@ -725,8 +725,11 @@ dialog.admin-modal .media-grid { max-height: 55vh; overflow-y: auto; }
   color: var(--red);
 }
 
-.locale-tab { border-top-left-radius: 0; margin-top: 0; }
-.locale-tab { margin-top: 0 !important; }
+.locale-tab { border-top-left-radius: 0; margin-top: 0 !important; }
+/* Tab panels are toggled with the `hidden` attribute (see tabs.js). Pinned for
+   the same reason as .bulk-bar[hidden]: an author `display` on .card or
+   .locale-tab added later would silently show both locales at once. */
+.locale-tab[hidden] { display: none; }
 
 .hero-picker { display: grid; gap: 0.5rem; margin-top: 0.5rem; }
 .hero-picker input[type='text'] { margin-top: 0; }
@@ -1400,8 +1403,12 @@ a:hover { color: var(--red-light); }
   transition: border-color 0.15s ease;
 }
 
+/* The title field is borderless by design, so the global input focus ring
+   (2px red outline) is kept and drawn inside the field's own padding rather
+   than around it — the colour change on the bottom rule alone fails SC 2.4.7. */
 .editor-title-input:focus {
-  outline: none;
+  outline: 2px solid var(--red);
+  outline-offset: -2px;
   border-bottom-color: var(--red);
 }
 

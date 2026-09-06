@@ -23,12 +23,12 @@
         <a href="/admin/posts.html" class="action-link" style="display:inline-flex; align-items:center; gap:0.4rem;">
           ← Back to Posts
         </a>
-        <div class="lang-switch-bar">
-          <button type="button" class="tab-btn active" data-tab="de">
-            <span>🇩🇪</span> Deutsch <span class="lang-code">DE</span>
+        <div class="lang-switch-bar" role="tablist" aria-label="Post language">
+          <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">
+            <span aria-hidden="true">🇩🇪</span> Deutsch <span class="lang-code" aria-hidden="true">DE</span>
           </button>
-          <button type="button" class="tab-btn" data-tab="en">
-            <span>🇬🇧</span> English <span class="lang-code">EN</span>
+          <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">
+            <span aria-hidden="true">🇬🇧</span> English <span class="lang-code" aria-hidden="true">EN</span>
           </button>
         </div>
       </div>
@@ -38,7 +38,7 @@
         <div class="editor-canvas">
           
           <!-- DE Locale Section -->
-          <section id="tab-de" class="locale-tab">
+          <section id="tab-de" class="locale-tab" role="tabpanel" aria-labelledby="tabbtn-de">
             <!-- Title & Hero Box -->
             <div class="editor-card">
               <label for="deTitle">Article Title (Deutsch)</label>
@@ -55,7 +55,7 @@
 
               <!-- Hero Image Zone -->
               <div style="margin-top: 1.25rem;">
-                <label>Hero Image (DE)</label>
+                <label for="deHeroFile">Hero Image (DE)</label>
                 <div class="hero-picker hero-banner-zone">
                   <div class="hero-actions-row">
                     <input id="deHeroFile" type="file" accept="image/*" />
@@ -63,8 +63,8 @@
                     <button type="button" id="deHeroLibrary" class="btn-secondary">Choose from Library</button>
                     <button type="button" id="deHeroSuggest" class="btn-secondary">✨ Suggest Alt-Text</button>
                   </div>
-                  <input id="deHeroAlt" type="text" placeholder="Alt text for hero image (DE)" />
-                  <p id="deHeroStatus" class="muted"></p>
+                  <input id="deHeroAlt" type="text" placeholder="Alt text for hero image (DE)" aria-label="Alt text for hero image (DE)" />
+                  <p id="deHeroStatus" class="muted" role="status"></p>
                   <input id="deHeroSrc" type="hidden" />
                   <input id="deHeroWidth" type="hidden" />
                   <input id="deHeroHeight" type="hidden" />
@@ -96,18 +96,18 @@
               <textarea id="deBody"></textarea>
 
               <div class="body-img-row editor-media-toolbar">
-                <input id="deBodyImgFile" type="file" accept="image/*" />
-                <input id="deBodyImgAlt" type="text" placeholder="Alt text for body image (DE)" />
+                <input id="deBodyImgFile" type="file" accept="image/*" aria-label="Body image file (DE)" />
+                <input id="deBodyImgAlt" type="text" placeholder="Alt text for body image (DE)" aria-label="Alt text for body image (DE)" />
                 <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert Image</button>
                 <button type="button" id="deBodyImgSuggest" class="btn-secondary">✨ Suggest Alt-Text</button>
                 <button type="button" id="deGallery" class="btn-secondary">🖼️ Insert / Edit Gallery</button>
-                <p id="deBodyImgStatus" class="muted"></p>
+                <p id="deBodyImgStatus" class="muted" role="status"></p>
               </div>
             </div>
           </section>
 
           <!-- EN Locale Section -->
-          <section id="tab-en" class="locale-tab" style="display:none">
+          <section id="tab-en" class="locale-tab" role="tabpanel" aria-labelledby="tabbtn-en" hidden>
             <!-- Title & Hero Box -->
             <div class="editor-card">
               <label for="enTitle">Article Title (English)</label>
@@ -124,7 +124,7 @@
 
               <!-- Hero Image Zone -->
               <div style="margin-top: 1.25rem;">
-                <label>Hero Image (EN)</label>
+                <label for="enHeroFile">Hero Image (EN)</label>
                 <div class="hero-picker hero-banner-zone">
                   <div class="hero-actions-row">
                     <input id="enHeroFile" type="file" accept="image/*" />
@@ -132,8 +132,8 @@
                     <button type="button" id="enHeroLibrary" class="btn-secondary">Choose from Library</button>
                     <button type="button" id="enHeroSuggest" class="btn-secondary">✨ Suggest Alt-Text</button>
                   </div>
-                  <input id="enHeroAlt" type="text" placeholder="Alt text for hero image (EN)" />
-                  <p id="enHeroStatus" class="muted"></p>
+                  <input id="enHeroAlt" type="text" placeholder="Alt text for hero image (EN)" aria-label="Alt text for hero image (EN)" />
+                  <p id="enHeroStatus" class="muted" role="status"></p>
                   <input id="enHeroSrc" type="hidden" />
                   <input id="enHeroWidth" type="hidden" />
                   <input id="enHeroHeight" type="hidden" />
@@ -165,12 +165,12 @@
               <textarea id="enBody"></textarea>
 
               <div class="body-img-row editor-media-toolbar">
-                <input id="enBodyImgFile" type="file" accept="image/*" />
-                <input id="enBodyImgAlt" type="text" placeholder="Alt text for body image (EN)" />
+                <input id="enBodyImgFile" type="file" accept="image/*" aria-label="Body image file (EN)" />
+                <input id="enBodyImgAlt" type="text" placeholder="Alt text for body image (EN)" aria-label="Alt text for body image (EN)" />
                 <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert Image</button>
                 <button type="button" id="enBodyImgSuggest" class="btn-secondary">✨ Suggest Alt-Text</button>
                 <button type="button" id="enGallery" class="btn-secondary">🖼️ Insert / Edit Gallery</button>
-                <p id="enBodyImgStatus" class="muted"></p>
+                <p id="enBodyImgStatus" class="muted" role="status"></p>
               </div>
             </div>
           </section>
@@ -264,8 +264,8 @@
       <!-- Sticky Master Action Bar -->
       <div class="editor-sticky-bar">
         <div class="bar-left">
-          <p id="actionStatus" class="muted" style="color:#ffffff; margin:0; font-size:0.85rem;"></p>
-          <p id="actionError" class="err" style="display:none; color:#fca5a5; margin:0; font-size:0.85rem;"></p>
+          <p id="actionStatus" class="muted" role="status" style="color:#ffffff; margin:0; font-size:0.85rem;"></p>
+          <p id="actionError" class="err" role="alert" style="display:none; color:#fca5a5; margin:0; font-size:0.85rem;"></p>
         </div>
         <div class="bar-actions">
           <button id="saveDraft" type="button" class="btn-secondary">Save Draft</button>
@@ -284,6 +284,7 @@
     <script src="/admin/picker-selection.js"></script>
     <script src="/admin/media-picker.js"></script>
     <script src="/admin/gallery-fence.js"></script>
+    <script src="/admin/tabs.js"></script>
     <script>
       'use strict';
       const $ = (id) => document.getElementById(id);
@@ -342,18 +343,12 @@
 
       // ---- tabs ----
       let activeTab = 'de'; // which locale "Open preview" shows
-      document.querySelectorAll('.tab-btn').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
-          btn.classList.add('active');
-          const tab = btn.dataset.tab;
+      Tabs.wire(document.querySelector('[role="tablist"]'), {
+        onChange: (tab) => {
           activeTab = tab;
-          $('tab-de').style.display = tab === 'de' ? '' : 'none';
-          $('tab-en').style.display = tab === 'en' ? '' : 'none';
           // CodeMirror can't measure width when the panel is hidden; refresh on reveal
-          if (tab === 'en') enMDE.codemirror.refresh();
-          if (tab === 'de') deMDE.codemirror.refresh();
-        });
+          (tab === 'en' ? enMDE : deMDE).codemirror.refresh();
+        },
       });
 
       // ---- slug derivation from locale titles ----
@@ -374,12 +369,14 @@
         const lInput = document.createElement('input');
         lInput.type = 'text';
         lInput.placeholder = 'Label';
+        lInput.setAttribute('aria-label', 'Key fact label (' + locale.toUpperCase() + ')');
         lInput.className = 'keyfact-label';
         lInput.value = label;
 
         const vInput = document.createElement('input');
         vInput.type = 'text';
         vInput.placeholder = 'Value';
+        vInput.setAttribute('aria-label', 'Key fact value (' + locale.toUpperCase() + ')');
         vInput.className = 'keyfact-value';
         vInput.value = value;
 
@@ -387,6 +384,7 @@
         remove.type = 'button';
         remove.className = 'btn-remove';
         remove.textContent = '×';
+        remove.setAttribute('aria-label', 'Remove key fact');
         remove.addEventListener('click', () => row.remove());
 
         row.appendChild(lInput);
@@ -418,6 +416,7 @@
         const nameInput = document.createElement('input');
         nameInput.type = 'text';
         nameInput.placeholder = 'Name';
+        nameInput.setAttribute('aria-label', 'Stop name');
         nameInput.className = 'stop-name';
         nameInput.value = name;
 
@@ -427,6 +426,7 @@
         latInput.min = '-90';
         latInput.max = '90';
         latInput.placeholder = 'Lat';
+        latInput.setAttribute('aria-label', 'Stop latitude');
         latInput.className = 'stop-lat';
         latInput.value = lat;
 
@@ -436,6 +436,7 @@
         lngInput.min = '-180';
         lngInput.max = '180';
         lngInput.placeholder = 'Lng';
+        lngInput.setAttribute('aria-label', 'Stop longitude');
         lngInput.className = 'stop-lng';
         lngInput.value = lng;
 
@@ -443,6 +444,7 @@
         remove.type = 'button';
         remove.className = 'btn-remove';
         remove.textContent = '×';
+        remove.setAttribute('aria-label', 'Remove stop');
         remove.addEventListener('click', () => row.remove());
 
         row.appendChild(nameInput);

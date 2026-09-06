@@ -17,49 +17,50 @@
       </div>
     </header>
     <main>
-      <div class="tabs-bar">
-        <button type="button" class="tab-btn active" data-tab="de">Deutsch (DE)</button>
-        <button type="button" class="tab-btn" data-tab="en">English (EN)</button>
+      <div class="tabs-bar" role="tablist" aria-label="Page language">
+        <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">Deutsch (DE)</button>
+        <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">English (EN)</button>
       </div>
 
-      <section id="tab-de" class="card locale-tab">
+      <section id="tab-de" class="card locale-tab" role="tabpanel" aria-labelledby="tabbtn-de">
         <h2 class="card-heading">Deutsch</h2>
         <label for="deTitle">Heading</label>
         <input id="deTitle" type="text" placeholder="Über mich" />
-        <label>Body (Markdown)</label>
+        <label for="deBody">Body (Markdown)</label>
         <textarea id="deBody"></textarea>
         <div class="body-img-row">
-          <input id="deBodyImgFile" type="file" accept="image/*" />
-          <input id="deBodyImgAlt" type="text" placeholder="Alt text (DE)" />
+          <input id="deBodyImgFile" type="file" accept="image/*" aria-label="Body image file (DE)" />
+          <input id="deBodyImgAlt" type="text" placeholder="Alt text (DE)" aria-label="Alt text for body image (DE)" />
           <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert body image</button>
-          <p id="deBodyImgStatus" class="muted"></p>
+          <p id="deBodyImgStatus" class="muted" role="status"></p>
         </div>
       </section>
 
-      <section id="tab-en" class="card locale-tab" style="display:none">
+      <section id="tab-en" class="card locale-tab" role="tabpanel" aria-labelledby="tabbtn-en" hidden>
         <h2 class="card-heading">English</h2>
         <label for="enTitle">Heading</label>
         <input id="enTitle" type="text" placeholder="About me" />
-        <label>Body (Markdown)</label>
+        <label for="enBody">Body (Markdown)</label>
         <textarea id="enBody"></textarea>
         <div class="body-img-row">
-          <input id="enBodyImgFile" type="file" accept="image/*" />
-          <input id="enBodyImgAlt" type="text" placeholder="Alt text (EN)" />
+          <input id="enBodyImgFile" type="file" accept="image/*" aria-label="Body image file (EN)" />
+          <input id="enBodyImgAlt" type="text" placeholder="Alt text (EN)" aria-label="Alt text for body image (EN)" />
           <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert body image</button>
-          <p id="enBodyImgStatus" class="muted"></p>
+          <p id="enBodyImgStatus" class="muted" role="status"></p>
         </div>
       </section>
 
       <div class="editor-actions card">
         <button id="saveBtn" class="btn-publish">Save &amp; rebuild</button>
-        <p id="actionStatus" class="muted"></p>
-        <p id="actionError" class="err" style="display:none"></p>
+        <p id="actionStatus" class="muted" role="status"></p>
+        <p id="actionError" class="err" role="alert" style="display:none"></p>
       </div>
     </main>
 
     <script src="/admin/auth.js"></script>
     <script src="/admin/draft-guard.js"></script>
     <script src="/admin/vendor/easymde.min.js"></script>
+    <script src="/admin/tabs.js"></script>
     <script>
       'use strict';
       const $ = (id) => document.getElementById(id);
@@ -84,14 +85,9 @@
       deMDE.codemirror.on('change', () => guard.markDirty());
       enMDE.codemirror.on('change', () => guard.markDirty());
 
-      document.querySelectorAll('.tab-btn').forEach((btn) => btn.addEventListener('click', () => {
-        document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
-        btn.classList.add('active');
-        const tab = btn.dataset.tab;
-        $('tab-de').style.display = tab === 'de' ? '' : 'none';
-        $('tab-en').style.display = tab === 'en' ? '' : 'none';
-        (tab === 'en' ? enMDE : deMDE).codemirror.refresh();
-      }));
+      Tabs.wire(document.querySelector('[role="tablist"]'), {
+        onChange: (tab) => { (tab === 'en' ? enMDE : deMDE).codemirror.refresh(); },
+      });
 
       function showErr(msg) { const el = $('actionError'); el.textContent = msg; el.style.display = msg ? '' : 'none'; }
       function setStatus(msg) { $('actionStatus').textContent = msg; }
