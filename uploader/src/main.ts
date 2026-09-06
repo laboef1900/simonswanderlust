@@ -13,7 +13,7 @@ import { makeDbCheck } from './health.js';
 import { createWorkLock } from './work-lock.js';
 import { pgMediaStore } from './media-store.js';
 import { createEncodeQueue } from './encode-queue.js';
-import { createMediaSync } from './media-sync.js';
+import { createMediaSync, createReconciler } from './media-sync.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -56,14 +56,17 @@ const builder = createSiteBuilder({
 });
 const media = pgMediaStore(pool, { baseUrl });
 const encodeQueue = createEncodeQueue({ store: media, storageDir, lock: workLock });
-const mediaSync = createMediaSync({
-  store: media,
-  storageDir,
-  baseUrl,
-  corpus: async () => {
-    const [postRows, pageKeys] = await Promise.all([posts.usageRows(), pages.keys()]);
-    return { posts: postRows, pages: await Promise.all(pageKeys.map((k) => pages.get(k))) };
-  },
+const reconciler = createReconciler({
+  sync: createMediaSync({
+    store: media,
+    storageDir,
+    baseUrl,
+    corpus: async () => {
+      const [postRows, pageKeys] = await Promise.all([posts.usageRows(), pages.keys()]);
+      return { posts: postRows, pages: await Promise.all(pageKeys.map((k) => pages.get(k))) };
+    },
+  }),
+  queue: encodeQueue,
 });
 const backupDir = process.env.BACKUP_DIR ?? '/data/backup';
 const dbBackup = createDbBackup({
@@ -95,7 +98,7 @@ const app = buildServer({
   pages,
   media,
   encodeQueue,
-  mediaSync,
+  reconciler,
   builder,
   dbBackup,
   backupDir,
@@ -132,20 +135,9 @@ app
     housekeeping();
     // Reconcile disk ↔ database, THEN resume anything left half-encoded. Runs
     // AFTER listen() and never blocks boot; a failure is logged, not fatal.
-    //
-    // @ai-warning The order is load-bearing — these must not run concurrently.
-    // mediaSync inserts a backfilled crashed upload (an `-orig.*` on disk with
-    // no variants) as `processing`, and recover() re-seeds the queue from
-    // `status = 'processing'`. Fired in parallel, recover() — a single query —
-    // always finishes before the sync's disk walk, so it never sees those rows;
-    // POST /media/retry skips `processing` and the UI only offers Retry for
-    // `failed`, so nothing could un-stick them until the next restart, while
-    // the publish gate blocked every post referencing them.
-    void mediaSync
-      .run()
-      .catch((e) => console.error('media reconciliation failed:', e))
-      .then(() => encodeQueue.recover())
-      .catch((e) => console.error('encode queue recovery failed:', e));
+    // The sync/recover ordering lives in createReconciler — the same pass
+    // POST /media/rescan runs (#117).
+    void reconciler.run().catch((e) => console.error('media reconciliation failed:', e));
   })
   .catch((err) => {
     console.error(err);
