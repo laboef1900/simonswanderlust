@@ -94,8 +94,12 @@ leave a partial variant set with no complete record. The incremental images arch
 largest single writer on the volume — applies the same reserve on its way in (#113): it refuses
 when its estimated size would not leave that room, and its temp file never survives a failed or
 interrupted run, so the backup feature cannot fill the disk it shares with the site. Free space
-is also reported on `/health`, but **never as a health verdict**: a low-space 503 would trigger
-a restart loop, which makes a full disk strictly worse.
+is also reported on `/health` — **only to an admin session** (#132): the route itself is public
+because the compose healthcheck polls it without a cookie, but `free`/`total` for `/data` would
+let anyone on the internet watch the volume fill up and time a disk-exhaustion attempt against
+`/upload` with a stolen session. Anonymous and author callers get `ok`/`db`/`release` only. And
+**never as a health verdict**: a low-space 503 would trigger a restart loop, which makes a full
+disk strictly worse.
 
 `POST /import` has the same precondition (issue #94), with the same 507 and the same reserve, but
 sized from a **count** rather than a byte total — a WXR declares URLs, not sizes — using the

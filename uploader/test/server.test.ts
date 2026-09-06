@@ -2089,11 +2089,19 @@ describe('POST /rebuild and GET /health', () => {
     en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
 
-  it('health is public and reports the DB as up, plus free disk space', async () => {
-    const res = await build().app.inject({ method: 'GET', url: '/health' });
+  it('health is public and reports the DB as up — free disk space only to an admin session (#132)', async () => {
+    const b = build();
+    const anon = await b.app.inject({ method: 'GET', url: '/health' });
+    expect(anon.statusCode).toBe(200);
+    expect(anon.json()).toMatchObject({ ok: true, db: true });
+    // Watching /data fill up is reconnaissance for a disk-exhaustion attempt.
+    expect(anon.json()).not.toHaveProperty('disk');
+    const author = await authed(b, { isAdmin: false, username: 'writer' });
+    expect((await b.app.inject({ method: 'GET', url: '/health', cookies: author.cookie })).json()).not.toHaveProperty('disk');
+    const admin = await authed(b, { isAdmin: true, username: 'admin' });
+    const res = await b.app.inject({ method: 'GET', url: '/health', cookies: admin.cookie });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, db: true });
-    // #73: the volume's headroom is visible before it becomes an outage.
+    // #73: the volume's headroom is visible to the operator before it becomes an outage.
     expect(res.json().disk.free).toBeGreaterThan(0);
     expect(res.json().disk.freeLabel).toMatch(/^\d+(\.\d)? [kMGT]?B$/);
   });
