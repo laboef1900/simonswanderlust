@@ -802,6 +802,18 @@ blog/
   NOT on `encode-queue.ts`: the whole import under `runShared` would hold every Publish off for
   its duration, the opposite of #95. See
   `docs/superpowers/specs/2026-09-05-async-import-job-design.md`.
+- **Done:** #126 re-runs merge into existing drafts (2026-09-05) — `importWxr` rebuilt every
+  matched draft pair from the export (placeholders and all) and `upsertDraft` overwrote every
+  column, while `import.html` promised that re-running was safe and #85 made re-running the
+  documented recovery path for un-hosted photos. A re-run over an existing draft is now a **URL
+  substitution over the author's stored pair**: `shared`, per-locale fields, body text, alt edits,
+  removed photos and a hand-picked hero survive; only the WordPress URLs this run re-hosted are
+  swapped in (via the same `applyRehosts` pass `buildLocale` uses on a fresh body), and an empty
+  hero slot takes the recovered featured image. The wholesale rebuild is opt-in
+  (`overwriteDrafts` multipart field → `ImportDeps.overwriteDrafts`; a checkbox with a scope-naming
+  confirm on the page) for "I changed it in WordPress and re-exported". Skip-by-default was
+  rejected because it would have made the safe action useless and the useful one destructive. See
+  `docs/superpowers/specs/2026-09-05-wxr-import-merge-existing-drafts-design.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

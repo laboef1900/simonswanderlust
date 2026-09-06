@@ -1,7 +1,7 @@
 import { parseWxr, type ParsedPost } from './wxr-parse.js';
 import { htmlToMarkdown, markdownImages } from './wp-content.js';
 import { rehostImage, type RehostResult, type RehostResume } from './wp-images.js';
-import { isSafeSlug, type ImageDims, type PostLocale, type PostPair, type PostStatus, type PostStore, type PostSummary } from './posts.js';
+import { isSafeSlug, type ImageDims, type PostLocale, type PostPair, type PostStatus, type PostStore, type PostSummary, type StoredPostPair } from './posts.js';
 import { rewriteFences } from './body-content.js';
 import { FetchError } from './safe-fetch.js';
 import { insufficientSpaceForImport, type DiskSpace } from './disk.js';
@@ -69,6 +69,12 @@ export interface ImportDeps {
    * custom `rehost` is injected (that seam decides for itself).
    */
   lock?: WorkLock;
+  /**
+   * Rebuild an existing DRAFT pair wholesale from the export (issue #126). Default
+   * false: a re-run keeps the stored pair — the author's work — and only swaps in
+   * the photos it re-hosted this time. Published pairs are skipped either way.
+   */
+  overwriteDrafts?: boolean;
   log?: (msg: string) => void;
 }
 
@@ -346,9 +352,9 @@ function resilientRehost(rehost: RehostFn, cfg: {
  * URLs it fetches, this must change with it, or the cap would count a different
  * set than the import performs. `test/wp-import.test.ts` pins them to agree.
  */
-function rehostUrlSet(p: ParsedPost, attachments: Map<string, string>): Set<string> {
+function rehostUrlSet(p: ParsedPost, attachments: Map<string, string>, includeHero: boolean): Set<string> {
   const urls = new Set<string>();
-  const heroUrl = p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
+  const heroUrl = includeHero && p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
   if (heroUrl) urls.add(heroUrl);
   const body = htmlToMarkdown(p.contentHtml, attachments);
   for (const { url } of markdownImages(body)) {
@@ -375,25 +381,78 @@ const imageKey = (p: ParsedPost, url: string): string => `trips/${p.slug}/${name
  * by URL and memoises the FIRST caller's key, and `buildLocale` runs de before
  * en and the hero before the body, so a URL both locales reference lands under
  * the DE slug and a hero URL that also appears in the body lands in the hero
- * slot. `rehostUrlSet` preserves that order (hero, body, gallery). The size of
+ * slot. `rehostUrlSet` preserves that order (hero, body, gallery), and
+ * `includeHero` is the same per-pair flag `buildLocale` gets (issue #126), so
+ * a skipped hero neither counts nor claims the hero key. The size of
  * this map is the #96 cap's quantity; its keys feed the #94 resume-aware
  * free-space estimate. `test/wp-import.test.ts` pins both against the run.
  */
-function rehostPlan(de: ParsedPost, en: ParsedPost, attachments: Map<string, string>): Map<string, string> {
+function rehostPlan(de: ParsedPost, en: ParsedPost, attachments: Map<string, string>, includeHero: boolean): Map<string, string> {
   const plan = new Map<string, string>();
   for (const p of [de, en]) {
-    const hero = p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
-    for (const url of rehostUrlSet(p, attachments)) {
+    const hero = includeHero && p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
+    for (const url of rehostUrlSet(p, attachments, includeHero)) {
       if (!plan.has(url)) plan.set(url, url === hero ? heroKey(p) : imageKey(p, url));
     }
   }
   return plan;
 }
 
+/**
+ * Substitute every re-hosted WordPress URL in `body` — Markdown image references
+ * and gallery-fence lines — recording the dimensions of each substituted photo
+ * in `images`. URLs absent from `rehosted` (a failed fetch, or a photo that is
+ * already ours) are left exactly as they are, so nothing is lost.
+ *
+ * One pass for two callers: `buildLocale` runs it over the export's fresh
+ * Markdown, and `mergeLocale` over the AUTHOR's stored body on a re-run (issue
+ * #126) — which is what makes a re-run a URL substitution rather than a body
+ * replacement.
+ *
+ * @ai-note `markdownImages` decodes Turndown's destination encoding (escaped
+ * parens, `<…>` around a space, a trailing " title") — issue #125. The rewrite
+ * drops the title: Elementor fills it with the attachment filename, which is
+ * noise, and the re-hosted URL needs no escaping.
+ * @ai-warning: reuse `rewriteFences` rather than matching fences here. #75
+ * already had to pin a second scanner (public/gallery-fence.js) against it
+ * with gallery-fence-parity.test.ts; a third copy would silently disagree
+ * about where a fence ends and drop or corrupt an author's photos.
+ */
+function applyRehosts(body: string, rehosted: ReadonlyMap<string, RehostResult>, images: Record<string, ImageDims>): string {
+  // The store lifts a gallery line's `| alt= | caption=` into `images[url]` on
+  // save — for a hot-link that failed last run, under the WordPress URL. Healing
+  // the URL must carry that entry over, or the author's alt/caption is stranded
+  // under a key nothing references (review finding on PR #164).
+  // Merge, never replace: the same WordPress URL can occur twice (two gallery
+  // lines, or a body image AND a gallery line), and the first substitution
+  // already moved the metadata to the hosted key.
+  const record = (from: string, r: RehostResult): void => {
+    images[r.src] = { ...images[r.src], ...images[from], width: r.width, height: r.height };
+    if (from !== r.src) delete images[from];
+  };
+  for (const { full, alt, url } of markdownImages(body)) {
+    const r = rehosted.get(url);
+    if (!r) continue;
+    body = body.replaceAll(full, `![${alt}](${r.src})`);
+    record(url, r);
+  }
+  return rewriteFences(body, (line) => {
+    const fields = line.split('|').map((f) => f.trim());
+    const url = fields[0] ?? '';
+    const r = rehosted.get(url);
+    if (!r) return line; // fetch failed — keep the original so nothing is lost
+    record(url, r);
+    return [r.src, `${r.width}x${r.height}`, ...fields.slice(1)].join(' | ');
+  });
+}
+
+/** The export's view of one locale, plus the URL → hosted-photo map the run produced for it. */
+interface BuiltLocale { locale: PostLocale; rehosted: Map<string, RehostResult> }
 async function buildLocale(
   p: ParsedPost, attachments: Map<string, string>,
   rehost: (url: string, key: string, alt: string) => Promise<RehostResult>,
-): Promise<PostLocale> {
+  includeHero: boolean,
+): Promise<BuiltLocale> {
   // hero from the featured image
   //
   // @ai-note These three catches are SILENT on purpose (issue #85). The tally
@@ -402,56 +461,72 @@ async function buildLocale(
   // url) — reporting here instead would log the same memoised failure twice for
   // a photo both locales reference. They still catch, so the loop continues and
   // the original URL is left in place rather than lost.
+  //
+  // @ai-warning The hero key `trips/<slug>/hero` encodes no URL identity, so the
+  // resume index never skips it: every run REWRITES those bytes. On a merge run
+  // whose stored hero has a `src` (issue #126) the caller passes
+  // `includeHero: false`, so the author's photo is neither refetched nor
+  // overwritten under the same key with stale dimensions (review finding on PR
+  // #164). `rehostUrlSet` takes the same flag so the #96 count stays exact.
   let heroImage = { ...PLACEHOLDER_HERO };
-  const heroUrl = p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
+  const heroUrl = includeHero && p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
   if (heroUrl) {
     try { const r = await rehost(heroUrl, heroKey(p), p.title); heroImage = { src: r.src, width: r.width, height: r.height, alt: p.title }; }
     catch { /* reported by the tally wrapper; hero stays a placeholder */ }
   }
-  // body: convert, then re-host each markdown image and rewrite the ref.
-  // @ai-note `markdownImages` decodes Turndown's destination encoding (escaped
-  // parens, `<…>` around a space, a trailing " title") — issue #125. The rewrite
-  // drops the title: Elementor fills it with the attachment filename, which is
-  // noise, and the re-hosted URL needs no escaping.
-  let body = htmlToMarkdown(p.contentHtml, attachments);
-  const images: Record<string, ImageDims> = {};
-  for (const { full, alt, url } of markdownImages(body)) {
-    if (!/^https?:\/\//.test(url)) continue;
-    try {
-      const r = await rehost(url, imageKey(p, url), alt);
-      body = body.replaceAll(full, `![${alt}](${r.src})`);
-      images[r.src] = { width: r.width, height: r.height };
-    } catch { /* reported by the tally wrapper; the WordPress URL is left in place */ }
-  }
-
-  // Gallery fences (from Elementor slideshows). Two passes over the SAME
-  // scanner `normalizeGalleryFences` uses, because re-hosting is async and
-  // rewriteFences is not: pass 1 collects the URLs, pass 2 substitutes.
-  // @ai-warning: reuse `rewriteFences` rather than matching fences here. #75
-  // already had to pin a second scanner (public/gallery-fence.js) against it
-  // with gallery-fence-parity.test.ts; a third copy would silently disagree
-  // about where a fence ends and drop or corrupt an author's photos.
-  const galleryUrls: string[] = [];
-  rewriteFences(body, (line) => {
-    const url = (line.split('|')[0] ?? '').trim();
-    if (/^https?:\/\//.test(url) && !galleryUrls.includes(url)) galleryUrls.push(url);
-    return line;
-  });
+  // body: convert, re-host each distinct photo (body images first, then gallery
+  // lines — the order the pre-#126 loops used), then substitute in one pass.
+  const body = htmlToMarkdown(p.contentHtml, attachments);
   const rehosted = new Map<string, RehostResult>();
-  for (const url of galleryUrls) {
-    try {
-      rehosted.set(url, await rehost(url, imageKey(p, url), ''));
-    } catch { /* reported by the tally wrapper */ }
-  }
-  body = rewriteFences(body, (line) => {
-    const fields = line.split('|').map((f) => f.trim());
-    const url = fields[0] ?? '';
-    const r = rehosted.get(url);
-    if (!r) return line; // fetch failed — keep the original so nothing is lost
-    images[r.src] = { width: r.width, height: r.height };
-    return [r.src, `${r.width}x${r.height}`, ...fields.slice(1)].join(' | ');
-  });
-  return { locale: p.locale, slug: p.slug, title: p.title, excerpt: p.excerpt, country: '', heroImage, bodyMarkdown: body, images };
+  const rehostOnce = async (url: string, alt: string): Promise<void> => {
+    if (!/^https?:\/\//.test(url) || rehosted.has(url)) return;
+    try { rehosted.set(url, await rehost(url, imageKey(p, url), alt)); }
+    catch { /* reported by the tally wrapper; the WordPress URL is left in place */ }
+  };
+  for (const { alt, url } of markdownImages(body)) await rehostOnce(url, alt);
+  const galleryUrls: string[] = [];
+  rewriteFences(body, (line) => { galleryUrls.push((line.split('|')[0] ?? '').trim()); return line; });
+  for (const url of galleryUrls) await rehostOnce(url, '');
+  const images: Record<string, ImageDims> = {};
+  const bodyMarkdown = applyRehosts(body, rehosted, images);
+  return {
+    locale: { locale: p.locale, slug: p.slug, title: p.title, excerpt: p.excerpt, country: '', heroImage, bodyMarkdown, images },
+    rehosted,
+  };
+}
+
+/**
+ * Fetch the export's featured image for this pair? Only when the pair has NO
+ * stored hero at all. The decision is per PAIR, not per locale: both locales
+ * usually share one featured URL, `sharedRehost` memoises by URL, so both
+ * stored heroes point at ONE key (`trips/<de slug>/hero`) — refetching for an
+ * emptied DE slot would overwrite the bytes the kept EN hero still references
+ * (review finding on PR #164). An author who cleared one locale's hero sets it
+ * again in the editor; `overwriteDrafts` refetches regardless.
+ */
+function includeHero(stored: StoredPostPair | null): boolean {
+  return !stored || (!stored.de.heroImage.src && !stored.en.heroImage.src);
+}
+
+/**
+ * A re-run over an existing draft (issue #126): keep the author's locale fields
+ * and body, and change only what a re-run exists to change — swap in the photos
+ * this run re-hosted, and fill an empty hero slot.
+ *
+ * @ai-note Hero: the author's pick wins whenever it has a `src` (they may have
+ * chosen a different photo in the editor); an EMPTY slot — the featured image
+ * failed last time — takes the export's now-recovered hero (fetched only under
+ * `includeHero`), keeping the author's alt if they wrote one. Body: URL
+ * substitution over the STORED text,
+ * so prose edits, alt edits, removed photos and reordered galleries survive.
+ */
+function mergeLocale(stored: PostLocale, fresh: BuiltLocale): PostLocale {
+  const images: Record<string, ImageDims> = { ...stored.images };
+  const bodyMarkdown = applyRehosts(stored.bodyMarkdown, fresh.rehosted, images);
+  const heroImage = stored.heroImage.src
+    ? { ...stored.heroImage }
+    : { ...fresh.locale.heroImage, alt: stored.heroImage.alt || fresh.locale.heroImage.alt };
+  return { ...stored, heroImage, bodyMarkdown, images };
 }
 
 /** Live counters for a running import (issue #92). `planned` is fixed at pre-flight. */
@@ -591,7 +666,9 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
 
   // Validate every group up front, so the pre-flight image count (issue #96)
   // counts EXACTLY the groups that will be imported — no more, no less.
-  const pending: { de: ParsedPost; en: ParsedPost; prior: { translationKey: string; status: PostStatus } | undefined }[] = [];
+  // `stored` is the pair a MERGE run will write into (issue #126): resolved here,
+  // before the count, because whether the hero is fetched depends on it.
+  const pending: { de: ParsedPost; en: ParsedPost; prior: { translationKey: string; status: PostStatus } | undefined; stored: StoredPostPair | null }[] = [];
   for (const [group, members] of groups) {
     const de = members.find((m) => m.locale === 'de');
     const en = members.find((m) => m.locale === 'en');
@@ -624,14 +701,20 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
     claimed.set(de.slug, `${de.slug}/${en.slug}`);
     claimed.set(en.slug, `${de.slug}/${en.slug}`);
     if (prior?.status === 'published') { summary.skippedPublished++; warnings.push(`${de.slug}/${en.slug}: already published — not overwritten`); continue; }
-    pending.push({ de, en, prior });
+    // A re-run over an existing draft MERGES by default: the stored pair is the
+    // author's work, and the export only contributes the photos it re-hosts.
+    // `overwriteDrafts` restores the wholesale rebuild for "I changed it in
+    // WordPress and re-exported". A prior whose pair cannot be read (a stranded
+    // single-locale row) has nothing to merge with and is rebuilt.
+    const stored = prior && !deps.overwriteDrafts ? await deps.postStore.get(prior.translationKey) : null;
+    pending.push({ de, en, prior, stored });
   }
 
   // issue #96: bound the TOTAL number of first attempts BEFORE fetching anything.
   // Count distinct (pair, url) — the same quantity `images.total` tallies per
   // fetch — and reject before any of it happens.
   const cap = deps.maxImages ?? DEFAULT_MAX_IMAGES;
-  const plans = pending.map((g) => rehostPlan(g.de, g.en, attachments));
+  const plans = pending.map((g) => rehostPlan(g.de, g.en, attachments, includeHero(g.stored)));
   let distinct = 0;
   for (const plan of plans) distinct += plan.size;
   if (distinct > cap) {
@@ -673,17 +756,21 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
       progress.images.failed = images.failed;
       onProgress?.(progress);
     };
-    for (const { de, en, prior } of pending) {
+    for (const { de, en, prior, stored } of pending) {
       try {
         // One cache per pair: de and en describe the same trip and share photos.
         const pairRehost = sharedRehost(runRehost);
-        const pair: PostPair = {
-          translationKey: prior?.translationKey ?? '',
-          status: 'draft',
-          shared: { date: de.date, countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } },
-          de: await buildLocale(de, attachments, pairRehost),
-          en: await buildLocale(en, attachments, pairRehost),
-        };
+        const freshDe = await buildLocale(de, attachments, pairRehost, includeHero(stored));
+        const freshEn = await buildLocale(en, attachments, pairRehost, includeHero(stored));
+        const pair: PostPair = stored
+          ? { translationKey: stored.translationKey, status: 'draft', shared: stored.shared, de: mergeLocale(stored.de, freshDe), en: mergeLocale(stored.en, freshEn) }
+          : {
+            translationKey: prior?.translationKey ?? '',
+            status: 'draft',
+            shared: { date: de.date, countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } },
+            de: freshDe.locale,
+            en: freshEn.locale,
+          };
         await deps.postStore.upsertDraft(pair);
         if (prior) summary.updated++; else summary.imported++;
       } catch (e) { summary.failed++; warnings.push(`${de.slug}/${en.slug}: ${(e as Error).message}`); }

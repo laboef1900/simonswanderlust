@@ -12,7 +12,7 @@
         <nav id="mainnav" aria-label="Admin"></nav>
         <p class="eyebrow">Expedition Log · Image Station</p>
         <h1>WordPress Import</h1>
-        <p class="lede">Upload a WordPress export (.xml) file to import posts as drafts. Already-published posts are skipped; existing drafts are updated. The import runs on the server — you can close this page and come back to it.</p>
+        <p class="lede">Upload a WordPress export (.xml) file to import posts as drafts. Published posts are never touched; drafts you already have keep your edits and only pick up photos that are still missing. The import runs on the server — you can close this page and come back to it.</p>
         <p class="muted" id="whoami"></p>
       </div>
     </header>
@@ -21,13 +21,25 @@
       <section class="card">
         <label for="wxr">WordPress export file (.xml)</label>
         <input type="file" id="wxr" accept=".xml" />
+        <label class="check-field" for="overwriteDrafts">
+          <input type="checkbox" id="overwriteDrafts" aria-describedby="overwriteHint" />
+          Replace existing drafts with the export
+        </label>
+        <p class="muted" id="overwriteHint">
+          Off (default): drafts from an earlier import are kept as you left them — only photos that
+          are still missing are downloaded and swapped in. On: those drafts are rebuilt from the
+          export and <strong>your edits to them are discarded</strong> (country, region,
+          coordinates, key facts, alt text, body changes). Use it after changing a post in
+          WordPress and exporting again. Published posts are never touched either way.
+        </p>
         <button id="importBtn">Import</button>
         <p class="muted">
           A large export takes a while — photos are downloaded one at a time, deliberately
           paced so the old site does not cut us off. The import <strong>runs on the server</strong>:
           closing this page does not stop it, and reopening it shows where it is. Running it again
-          later is safe and resumes where it left off, re-downloading only the photos that are still
-          missing. Only one import can run at a time.
+          later is safe: it resumes where it left off, re-downloading only the photos that are still
+          missing, and keeps the edits you made to the drafts in between. Only one import can run at
+          a time.
         </p>
       </section>
 
@@ -58,10 +70,14 @@
       const $ = (id) => document.getElementById(id);
       const POLL_MS = 2000;
       let pollTimer = null;
+      // Whether the job THIS page started asked for a rebuild (issue #126);
+      // null until the author submits — a job found on page load is unknown.
+      let overwrite = null;
 
       function setBusy(busy) {
         $('importBtn').disabled = busy;
         $('wxr').disabled = busy;
+        $('overwriteDrafts').disabled = busy;
       }
 
       function hideResults() {
@@ -99,8 +115,14 @@
         const skippedPublished = data.skippedPublished || 0;
         const rejected = data.rejected || 0;
         const failed = data.failed || 0;
+        // "Updated" means two different things depending on the box (issue
+        // #126). Only the page that submitted the job knows which one it asked
+        // for; after a reload the flag is unknown and the note is left out.
+        const updatedNote = data.updated > 0 && overwrite !== null
+          ? (overwrite ? ' (rebuilt from the export — edits discarded)' : ' (your edits were kept)')
+          : '';
         $('counts').textContent =
-          'Imported: ' + data.imported + '  |  Updated: ' + data.updated
+          'Imported: ' + data.imported + '  |  Updated: ' + data.updated + updatedNote
           + '  |  Skipped (published): ' + skippedPublished
           + '  |  Rejected: ' + rejected
           + '  |  Failed: ' + failed
@@ -121,8 +143,9 @@
         if (rejected > 0) {
           rej.textContent =
             rejected + ' post group(s) were rejected at the import boundary — a missing '
-            + 'translation, or a slug the importer will not accept (it would escape the '
-            + 'image storage directory). Nothing here was fetched or written; fix the '
+            + 'translation, a slug the importer will not accept (it would escape the '
+            + 'image storage directory), or a slug that already belongs to a different post '
+            + '(see the list below). Nothing here was fetched or written; fix the '
             + 'export and run the import again.';
           rej.style.display = '';
         }
@@ -205,6 +228,17 @@
         const file = $('wxr').files[0];
         if (!file) { $('out').textContent = 'Please select a .xml file first.'; return; }
 
+        // Destructive and opt-in (issue #126): name the scope before sending,
+        // the same confirm() the posts list and media library use.
+        const overwriteRequested = $('overwriteDrafts').checked;
+        if (overwriteRequested && !confirm(
+          'Replace every existing draft that this export matches?\n\n'
+          + 'Those drafts are rebuilt from the export: country, region, coordinates, key facts, '
+          + 'alt text and body edits you made to them are discarded. Published posts are never touched.\n\n'
+          + 'Each replaced draft keeps a revision you can restore from the editor.',
+        )) return;
+        overwrite = overwriteRequested;
+
         setBusy(true);
         $('out').textContent = 'Uploading and checking the export…';
         hideResults();
@@ -212,6 +246,7 @@
 
         const form = new FormData();
         form.append('file', file);
+        if (overwrite) form.append('overwriteDrafts', 'true');
 
         let res;
         try {

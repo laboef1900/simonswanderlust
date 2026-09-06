@@ -31,13 +31,17 @@ into Postgres without manually re-authoring each one:
    missing details, and hit **Publish** when ready.
 
 **Note:** The import is **idempotent by slug pair** — a group is matched to an existing post only
-when *both* its DE and EN slugs belong to that same post. Re-importing the same WXR will not
-overwrite published posts or duplicate existing drafts; only draft posts from this import are
-refreshed. A group whose slugs overlap an existing post without matching it as a pair — one slug
-matches, the two slugs belong to two different posts, or a slug equals another post's slug in the
-*other* language (re-hosted photos are filed by slug, without a language) — is **rejected** with a
-warning naming the owner, and nothing is written. Resolve the slug in the editor and run the import
-again.
+when *both* its DE and EN slugs belong to that same post. Re-importing the same WXR never touches
+a published post. A draft from an earlier import is **merged, not rebuilt**: everything you edited
+(country, region, coordinates, key facts, stops, alt text, body changes, a hero you picked) is
+kept, and only the photos that were still missing are downloaded and swapped in — so re-running to
+recover photos is safe. Tick **Replace existing drafts with the export** only when you changed a
+post in WordPress and exported again; it rebuilds the matched drafts from the export and discards
+your edits to them (each keeps a revision you can restore from the editor). A group whose slugs
+overlap an existing post without matching it as a pair — one slug matches, the two slugs belong to
+two different posts, or a slug equals another post's slug in the *other* language (re-hosted photos
+are filed by slug, without a language) — is **rejected** with a warning naming the owner, and
+nothing is written. Resolve the slug in the editor and run the import again.
 
 ---
 
