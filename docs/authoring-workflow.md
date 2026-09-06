@@ -76,11 +76,11 @@ needed. Content is stored in **Postgres**; MDX files are generated automatically
 
 1. Sign in and open **Posts** (`/admin/posts.html`).
 2. Click **New post** — the editor opens at `/admin/editor.html`.
-3. Fill in the **German** tab first (the slug is set here and locked once saved):
+3. Fill in the **German** tab first (the slug is set here and locked once published):
 
    | Field | Notes |
    |-------|-------|
-   | **Slug** | Must match the live WordPress slug exactly — it becomes the URL (`/<slug>/`). Locked after first save. |
+   | **Slug** | Must match the live WordPress slug exactly — it becomes the URL (`/<slug>/`). It is derived from the title only while you have not typed into it (clear the field to re-derive); a slug loaded from the server — including an imported draft's — is never re-derived. Changing a saved draft's slug asks for confirmation naming both URLs; locked after publish. |
    | **Title** | DE page title |
    | **Date** | Publication / travel date (YYYY-MM-DD) |
    | **Country** | Localized country name |

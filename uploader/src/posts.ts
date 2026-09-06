@@ -197,6 +197,7 @@ function optStringArray(o: Record<string, unknown>, field: string, path: string)
  */
 export function validateDraft(pair: unknown): asserts pair is PostPair {
   if (!isPlainObject(pair)) throw new PostError('post payload must be an object');
+  if (pair.confirmSlugChange !== undefined && typeof pair.confirmSlugChange !== 'boolean') throw new PostError('confirmSlugChange must be a boolean');
   const shared = pair.shared;
   if (!isPlainObject(shared)) throw new PostError('shared must be an object');
   if (shared.date !== undefined && shared.date !== '') {

@@ -883,11 +883,31 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       // `updatedAt` is the optimistic-concurrency echo (the value the editor
       // loaded), not part of the pair itself — strip it before storing. It is
       // optional: callers without it (new posts, WP importer) skip the check.
-      const { updatedAt, ...body } = raw as PostPair & { updatedAt?: unknown };
+      // `confirmSlugChange` is the author's explicit consent to rename a draft
+      // slug (issue #122) — likewise stripped.
+      const { updatedAt, confirmSlugChange, ...body } = raw as PostPair & { updatedAt?: unknown; confirmSlugChange?: boolean };
       const pair: PostPair = { ...body, translationKey: tk };
       // PUT must never create: a stale tab saving a post an admin deleted must get
       // a 404, not resurrect it (issue #106). POST passes tk='' and skips this.
-      if (tk && !(await posts.get(tk))) return reply.code(404).send({ error: 'post not found' });
+      const existing = tk ? await posts.get(tk) : null;
+      if (tk && !existing) return reply.code(404).send({ error: 'post not found' });
+      // @ai-warning Golden Rule 2. A draft's slug may be the live WordPress URL
+      // (the importer creates drafts under the real slugs), so renaming one is
+      // never implicit: an existing non-empty slug only changes when the client
+      // says it meant to. Filling an unset ('') slug needs no consent; published
+      // posts are still refused outright by the store (slug_locked).
+      if (existing && existing.status !== 'published' && !confirmSlugChange) {
+        for (const locale of ['de', 'en'] as const) {
+          const from = existing[locale].slug;
+          const to = pair[locale].slug ?? '';
+          if (from !== '' && to !== from) {
+            return reply.code(409).send({
+              error: `changing the ${locale.toUpperCase()} slug from "${from}" to "${to}" changes the post's URL — confirm the change to save`,
+              code: 'slug_change_unconfirmed',
+            });
+          }
+        }
+      }
       let baseUpdatedAt: Date | undefined;
       if (updatedAt !== undefined && updatedAt !== null) {
         baseUpdatedAt = new Date(String(updatedAt));

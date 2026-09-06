@@ -357,14 +357,28 @@
       });
 
       // ---- slug derivation from locale titles ----
-      $('deTitle').addEventListener('input', () => {
-        if (isPublished) return;
-        $('slugFieldDe').value = slugify($('deTitle').value);
-      });
-      $('enTitle').addEventListener('input', () => {
-        if (isPublished) return;
-        $('slugFieldEn').value = slugify($('enTitle').value);
-      });
+      // @ai-warning Golden Rule 2 (SEO slug contract). A slug is derived from
+      // the title ONLY while it is still automatic: a new post starts
+      // automatic, typing into the slug field makes it manual, clearing the
+      // field makes it automatic again — and populateForm() marks any loaded
+      // slug (server post, revision, local stash) manual. Before #122 every
+      // title keystroke overwrote the slug of an unpublished post, so fixing a
+      // typo in an imported draft's title silently replaced its live
+      // WordPress slug.
+      const slugAuto = { de: true, en: true };
+      // Slugs as loaded from the server for the current post ('' = none yet);
+      // a save that changes one of these asks for confirmation (see doSaveDraft).
+      const loadedSlugs = { de: '', en: '' };
+      const slugFieldFor = (locale) => $(locale === 'de' ? 'slugFieldDe' : 'slugFieldEn');
+      for (const locale of ['de', 'en']) {
+        $(locale + 'Title').addEventListener('input', () => {
+          if (isPublished || !slugAuto[locale]) return;
+          slugFieldFor(locale).value = slugify($(locale + 'Title').value);
+        });
+        slugFieldFor(locale).addEventListener('input', () => {
+          slugAuto[locale] = slugFieldFor(locale).value.trim() === '';
+        });
+      }
 
       // ---- key facts (optional rows, per locale) ----
       function addKeyFactRow(locale, label = '', value = '') {
@@ -798,6 +812,20 @@
         const payload = buildPayload();
         const url = currentTk ? '/posts/' + encodeURIComponent(currentTk) : '/posts';
         const method = currentTk ? 'PUT' : 'POST';
+        // A slug change on an existing draft is deliberate or it does not happen
+        // (#122): name the locale and both slugs, and only send the consent flag
+        // the server requires (409 slug_change_unconfirmed otherwise) after OK.
+        const renamed = ['de', 'en'].filter((l) => currentTk && !isPublished && loadedSlugs[l] && payload[l].slug !== loadedSlugs[l]);
+        if (renamed.length) {
+          const lines = renamed.map((l) => '  ' + l.toUpperCase() + ': /' + (l === 'en' ? 'en/' : '') + loadedSlugs[l] + '/  →  /' + (l === 'en' ? 'en/' : '') + payload[l].slug + '/');
+          if (!confirm('This save changes the post\'s URL:\n\n' + lines.join('\n') + '\n\n'
+            + 'If the old slug is a live WordPress URL, links and search rankings break. Continue?')) {
+            setStatus('');
+            showErr('Not saved — the slug change was cancelled. Set the slug back to keep the URL.');
+            return false;
+          }
+          payload.confirmSlugChange = true;
+        }
         let body;
         try {
           const res = await fetch(url, {
@@ -841,6 +869,8 @@
         // Re-sync the concurrency echo with what this save just wrote, and
         // refresh the revisions list (this save snapshotted the previous state).
         if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
+        loadedSlugs.de = (body.de && body.de.slug) || '';
+        loadedSlugs.en = (body.en && body.en.slug) || '';
         loadRevisions().catch(() => {});
         const skipped = partialStopCount();
         // A draft save never touches the live site — published posts keep
@@ -970,9 +1000,13 @@
         // EN tab is hidden on load; refresh its CodeMirror so it renders at full width when shown
         enMDE.codemirror.refresh();
 
-        // Populate each locale's slug from the loaded data (never re-derive over a stored value)
-        if (post.de && post.de.slug) $('slugFieldDe').value = post.de.slug;
-        if (post.en && post.en.slug) $('slugFieldEn').value = post.en.slug;
+        // Populate each locale's slug from the loaded data (never re-derive over
+        // a stored value): a loaded slug turns derivation off for that locale
+        // until the author clears the field (#122).
+        for (const locale of ['de', 'en']) {
+          const slug = post[locale] && post[locale].slug;
+          if (slug) { slugFieldFor(locale).value = slug; slugAuto[locale] = false; }
+        }
 
         if (isPublished) {
           $('slugFieldDe').disabled = true;
@@ -1002,6 +1036,8 @@
         currentTk = post.translationKey || tk;
         isPublished = post.status === 'published';
         loadedUpdatedAt = post.updatedAt || null;
+        loadedSlugs.de = (post.de && post.de.slug) || '';
+        loadedSlugs.en = (post.en && post.en.slug) || '';
 
         $('pageTitle').textContent = 'Edit post';
         populateForm(post);
