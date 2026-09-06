@@ -30,6 +30,12 @@ maybe('postgres stores (integration)', () => {
     await expect(users.create({ username: 'simon', password: 'x', isAdmin: false })).rejects.toBeInstanceOf(UserExistsError);
   });
 
+  it('findById returns null for malformed (no 22P02) and unknown ids', async () => {
+    const users = pgUserStore(pool);
+    await expect(users.findById('not-a-uuid')).resolves.toBeNull();
+    await expect(users.findById(randomUUID())).resolves.toBeNull();
+  });
+
   it('creates and finds a session, and expires it', async () => {
     const users = pgUserStore(pool);
     const sessions = pgSessionStore(pool);
