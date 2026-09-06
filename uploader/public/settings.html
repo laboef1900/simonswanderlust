@@ -208,9 +208,11 @@
 
       function renderBackups(data) {
         const st = data.state || {};
-        $('backupStatus').textContent = st.lastError
-          ? 'FAILED at ' + st.lastAttemptAt + ': ' + st.lastError
-          : st.lastSuccessAt ? 'OK at ' + st.lastSuccessAt : 'No backup yet.';
+        $('backupStatus').textContent = data.running
+          ? 'Running… (started ' + st.lastAttemptAt + ')'
+          : st.lastError
+            ? 'FAILED at ' + st.lastAttemptAt + ': ' + st.lastError
+            : st.lastSuccessAt ? 'OK at ' + st.lastSuccessAt : 'No backup yet.';
         renderFileList($('backupFiles'), data.files || []);
         renderFileList($('imageArchives'), data.imageArchives || []);
       }
@@ -235,7 +237,11 @@
       $('backupNow').addEventListener('click', async () => {
         $('backupStatus').textContent = 'Backing up…';
         const res = await fetch('/backups', { method: 'POST' });
-        if (!res.ok) { $('backupStatus').textContent = 'Backup failed: HTTP ' + res.status; return; }
+        if (!res.ok) {
+          const r = await res.json().catch(() => ({}));
+          $('backupStatus').textContent = 'Backup failed: ' + (r.error || 'HTTP ' + res.status);
+          return;
+        }
         await loadBackups();
       });
 

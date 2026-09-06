@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { create as createTar } from 'tar';
 import type { BackupSchedule } from './settings.js';
 import { POST_SNAPSHOT_SQL, type DbPool } from './db.js';
+import { diskSpace, formatBytes, UPLOAD_HEADROOM_BYTES, type DiskSpace } from './disk.js';
 
 /**
  * v4 added `posts.categories`, `posts.tags` and `posts.scheduled_at` (issue #107);
@@ -17,6 +18,12 @@ import { POST_SNAPSHOT_SQL, type DbPool } from './db.js';
 export const DUMP_VERSION = 4;
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
 export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
+/**
+ * In-flight write of a dump, an archive or state.json (`<final>.<pid>.tmp`,
+ * see `atomicWrite`). Matches neither regex above, so a leftover is never
+ * listed, served or pruned — which is exactly why `sweepTempFiles` exists.
+ */
+const TEMP_FILE_RE = /^(?:db-\d{8}-\d{6}\.json\.gz|images-\d{8}-\d{6}\.tar|state\.json)\.\d+\.tmp$/;
 
 export class BackupError extends Error {}
 
@@ -103,6 +110,15 @@ export async function dumpDatabase(db: Connectable, dir: string, now: Date = new
   return name;
 }
 
+/** Refused before writing: the archive would not fit on the backup volume. */
+export class ArchiveSpaceError extends BackupError {}
+
+/**
+ * Tar output ≈ payload + one 512-byte header per entry, padding, and the odd
+ * pax extension for a long path; 2 KiB per entry is a comfortable ceiling.
+ */
+const TAR_PER_ENTRY_OVERHEAD = 2048;
+
 /**
  * Incremental images archive: tars every file under `storageDir` whose mtime is
  * >= `sinceMs` into `images-<stamp>.tar` in `dir` (next to the db dumps).
@@ -110,12 +126,20 @@ export async function dumpDatabase(db: Connectable, dir: string, now: Date = new
  * Consecutive archives form a chain; restore by untarring them oldest-first
  * into an empty images dir (duplicate entries across tars are benign in that
  * order). Archives are deliberately never pruned: each holds a unique slice.
+ *
+ * Refuses with `ArchiveSpaceError` — before creating any file — when the
+ * estimated tar plus the upload reserve would not fit on `dir`'s volume
+ * (#113): the archive is the largest single writer on `/data`, and filling
+ * the volume takes uploads AND publishing down with it. `space` is injectable
+ * for tests; a failing statfs is logged and the archive proceeds, the same
+ * fail-open convention as `/upload`.
  */
 export async function archiveImages(
   storageDir: string,
   dir: string,
   sinceMs: number,
   now: Date = new Date(),
+  space: (path: string) => Promise<DiskSpace> = diskSpace,
 ): Promise<string | null> {
   let names: string[];
   try {
@@ -129,12 +153,30 @@ export async function archiveImages(
     if (code === 'ENOENT' || code === 'ENOTDIR') return null;
     throw e;
   }
-  const fresh = names.filter((rel) => {
+  const fresh: string[] = [];
+  let payloadBytes = 0;
+  for (const rel of names) {
     const st = statSync(join(storageDir, rel), { throwIfNoEntry: false });
-    return st !== undefined && st.isFile() && st.mtimeMs >= sinceMs;
-  });
+    if (st !== undefined && st.isFile() && st.mtimeMs >= sinceMs) {
+      fresh.push(rel);
+      payloadBytes += st.size;
+    }
+  }
   if (fresh.length === 0) return null;
   mkdirSync(dir, { recursive: true });
+  const needed = payloadBytes + fresh.length * TAR_PER_ENTRY_OVERHEAD + UPLOAD_HEADROOM_BYTES;
+  let free: number | undefined;
+  try {
+    ({ free } = await space(dir));
+  } catch (e) {
+    console.error('could not read free disk space; archiving anyway:', e);
+  }
+  if (free !== undefined && free < needed) {
+    throw new ArchiveSpaceError(
+      `not enough free disk space for the images archive (${formatBytes(free)} available, ` +
+      `about ${formatBytes(needed)} required for ${fresh.length} files)`,
+    );
+  }
   // Stamps have second granularity; an existing archive must NEVER be
   // overwritten (each tar holds a unique slice of the chain — clobbering one
   // loses its files for good, because they never re-qualify against a later
@@ -147,10 +189,74 @@ export async function archiveImages(
   }
   // Same atomic pattern as the dumps: the .tmp name never matches either
   // filename regex, so a crashed run can't leave a listable/served artifact.
+  // The temp is unlinked on ANY failure — a rejected tar, or the process
+  // exiting mid-stream (`docker stop`'s SIGTERM ends in process.exit() without
+  // waiting for an archive). A multi-GB leftover is otherwise invisible to
+  // prune and the UI, and one per attempt fills /data (#113). SIGKILL is the
+  // one path this cannot cover; `sweepTempFiles` reclaims those.
   const tmp = join(dir, `${name}.${process.pid}.tmp`);
-  await createTar({ file: tmp, cwd: storageDir, portable: true }, fresh);
-  renameSync(tmp, join(dir, name));
+  const discard = () => rmSync(tmp, { force: true });
+  process.on('exit', discard);
+  try {
+    await createTar({ file: tmp, cwd: storageDir, portable: true }, fresh);
+    renameSync(tmp, join(dir, name));
+  } catch (e) {
+    discard();
+    throw e;
+  } finally {
+    process.off('exit', discard);
+  }
   return name;
+}
+
+/**
+ * Remove in-flight temp files a killed process left behind; returns the names
+ * actually removed. Only call when no write is in progress in THIS process
+ * (`createDbBackup` guards it with its `running` flag); one app process owns
+ * a backup directory. Never throws: a leftover that cannot be unlinked (a
+ * read-only backup dir) is logged and left for the next sweep — housekeeping
+ * must not take down boot or a scheduled run.
+ */
+export function sweepTempFiles(dir: string): string[] {
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return []; }
+  const swept: string[] = [];
+  for (const name of names) {
+    if (!TEMP_FILE_RE.test(name)) continue;
+    try {
+      rmSync(join(dir, name), { force: true });
+      swept.push(name);
+    } catch (e) {
+      console.error(`could not remove stale backup temp file ${name}:`, e);
+    }
+  }
+  return swept;
+}
+
+/** `images-YYYYMMDD-HHmmss.tar` → epoch ms of its (UTC) stamp. */
+function archiveStampMs(name: string): number {
+  const s = name.slice('images-'.length, -'.tar'.length);
+  return Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(9, 11), +s.slice(11, 13), +s.slice(13, 15));
+}
+
+/**
+ * The mtime cutoff the archives on disk can vouch for: the stamp of the
+ * newest `images-*.tar`, or 0 when there is none. Lets a lost or corrupt
+ * `state.json` degrade to an incremental run instead of re-tarring the whole
+ * corpus, and makes a hand-emptied archive dir start a fresh full chain (#113).
+ *
+ * @ai-note A same-second collision bumps a name FORWARD of its walk-start, so
+ * the newest stamp alone could sit after the real cutoff — a gap. Every
+ * archive in a run of consecutive-second stamps started at or after the
+ * earliest of them, so that one is the safe answer (a few seconds of benign
+ * duplicates at worst).
+ */
+export function archiveChainCutoff(dir: string): number {
+  const stamps = listImageArchives(dir).map((f) => archiveStampMs(f.name)); // newest first
+  if (stamps.length === 0) return 0;
+  let cutoff = stamps[0]!;
+  for (let i = 1; i < stamps.length && stamps[i] === cutoff - 1000; i++) cutoff = stamps[i]!;
+  return cutoff;
 }
 
 function listByPattern(dir: string, re: RegExp): BackupFileInfo[] {
@@ -179,8 +285,34 @@ export function pruneBackups(dir: string, keep: number): string[] {
 
 const STATE_FILE = 'state.json';
 
+const isTimestamp = (v: unknown): v is string => typeof v === 'string' && Number.isFinite(Date.parse(v));
+
+/**
+ * Reads and validates `state.json`; a missing, unparsable or malformed file
+ * degrades to `{}` (logged unless simply absent), and any field that is not
+ * what it claims to be is dropped. A garbage timestamp must never reach a
+ * comparison as NaN: `mtimeMs >= NaN` archives nothing while the cutoff still
+ * advances — a silent gap in the chain (#113).
+ */
 export function readState(dir: string): BackupState {
-  try { return JSON.parse(readFileSync(join(dir, STATE_FILE), 'utf8')) as BackupState; } catch { return {}; }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(join(dir, STATE_FILE), 'utf8'));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') console.error('backup state.json unreadable, treating as empty:', e);
+    return {};
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    console.error('backup state.json is not an object, treating as empty');
+    return {};
+  }
+  const r = raw as Record<string, unknown>;
+  const state: BackupState = {};
+  if (isTimestamp(r.lastAttemptAt)) state.lastAttemptAt = r.lastAttemptAt;
+  if (isTimestamp(r.lastSuccessAt)) state.lastSuccessAt = r.lastSuccessAt;
+  if (isTimestamp(r.lastImagesArchiveAt)) state.lastImagesArchiveAt = r.lastImagesArchiveAt;
+  if (typeof r.lastError === 'string') state.lastError = r.lastError;
+  return state;
 }
 
 export function writeState(dir: string, state: BackupState): void {
@@ -188,20 +320,37 @@ export function writeState(dir: string, state: BackupState): void {
   atomicWrite(join(dir, STATE_FILE), JSON.stringify(state, null, 2));
 }
 
-const INTERVALS: Record<Exclude<BackupSchedule, 'off'>, number> = {
-  daily: 24 * 3600_000,
-  weekly: 7 * 24 * 3600_000,
-};
+const DAY_MS = 24 * 3600_000;
+const WEEK_MS = 7 * DAY_MS;
+/** 1970-01-01 was a Thursday; shift so weekly windows open on Monday 00:00 UTC. */
+const MONDAY_OFFSET_MS = 3 * DAY_MS;
 
+/** Index of the calendar window (UTC day / Monday-anchored UTC week) containing `ms`. */
+function scheduleWindow(schedule: Exclude<BackupSchedule, 'off'>, ms: number): number {
+  return schedule === 'daily' ? Math.floor(ms / DAY_MS) : Math.floor((ms + MONDAY_OFFSET_MS) / WEEK_MS);
+}
+
+/**
+ * Due once per calendar window: the first tick of a new UTC day (daily) or
+ * Monday-anchored UTC week (weekly) after the last success. An elapsed-time
+ * rule (`now - lastSuccessAt >= 24 h`) drifts with an hourly tick: the stamp
+ * lands after the dump, so the effective period was 25 h and the run walked
+ * around the clock (#113). A window missed while the app was down is caught
+ * up on the next tick or boot.
+ */
 export function isBackupDue(state: BackupState, schedule: BackupSchedule, nowMs: number): boolean {
   if (schedule === 'off') return false;
   if (!state.lastSuccessAt) return true;
-  return nowMs - Date.parse(state.lastSuccessAt) >= INTERVALS[schedule];
+  return scheduleWindow(schedule, nowMs) > scheduleWindow(schedule, Date.parse(state.lastSuccessAt));
 }
 
 export interface DbBackup {
   dir: string;
   runNow(): Promise<BackupState>;
+  /** True while a run is in flight — `POST /backups` answers 409 instead of a stale state. */
+  running(): boolean;
+  /** Reclaim temp files a killed process left behind; a no-op while running. */
+  sweepTempFiles(): string[];
   list(): BackupFileInfo[];
   listImageArchives(): BackupFileInfo[];
   state(): BackupState;
@@ -211,16 +360,31 @@ export function createDbBackup(
   opts: { db: Connectable; dir: string; retention: () => number; storageDir?: string },
 ): DbBackup {
   let running = false;
+  const sweep = (): string[] => {
+    if (running) return [];
+    const swept = sweepTempFiles(opts.dir);
+    if (swept.length) console.error(`removed ${swept.length} stale backup temp file(s): ${swept.join(', ')}`);
+    return swept;
+  };
   return {
     dir: opts.dir,
+    running: () => running,
+    sweepTempFiles: sweep,
     list: () => listBackups(opts.dir),
     listImageArchives: () => listImageArchives(opts.dir),
     state: () => readState(opts.dir),
     async runNow() {
       if (running) return readState(opts.dir);
+      // Reclaim a crashed run's leftover BEFORE writing, so a repeat attempt
+      // never stacks a second multi-GB temp on top of the first.
+      sweep();
       running = true;
       const state = readState(opts.dir);
       state.lastAttemptAt = new Date().toISOString();
+      // Persist the attempt up front so `state()` reports THIS run's start
+      // while it is in flight (the UI shows it next to "Running…"), and a
+      // SIGKILLed run leaves an attempt newer than its last success behind.
+      try { writeState(opts.dir, state); } catch { /* recorded again at the end */ }
       try {
         await dumpDatabase(opts.db, opts.dir);
         state.lastSuccessAt = new Date().toISOString();
@@ -232,7 +396,13 @@ export function createDbBackup(
         if (opts.storageDir) {
           try {
             const walkStart = new Date();
-            const since = state.lastImagesArchiveAt ? Date.parse(state.lastImagesArchiveAt) : 0;
+            // Lost or corrupt state → resume from the newest tar's stamp; no
+            // tar on disk at all (hand-emptied dir) → a fresh full chain. An
+            // intact state next to an existing chain is trusted as-is: the
+            // stamp is only a truncation or a collision bump away from it.
+            const chain = archiveChainCutoff(opts.dir);
+            const stored = state.lastImagesArchiveAt ? Date.parse(state.lastImagesArchiveAt) : undefined;
+            const since = stored === undefined || chain === 0 ? chain : stored;
             await archiveImages(opts.storageDir, opts.dir, since, walkStart);
             state.lastImagesArchiveAt = walkStart.toISOString();
           } catch (e) {

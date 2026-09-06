@@ -75,6 +75,9 @@ const dbBackup = createDbBackup({
   retention: () => settings.get().backupRetention,
   storageDir, // scheduled/on-demand runs also write the incremental images tar
 });
+// A SIGKILLed archive leaves its multi-GB .tmp behind; reclaim it before the
+// first run can stack another on top (#113).
+dbBackup.sweepTempFiles();
 
 // Hourly housekeeping: sweep expired sessions and run a due scheduled backup.
 const housekeeping = () => {

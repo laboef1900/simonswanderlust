@@ -48,11 +48,13 @@ function stubBuilder(outcome: BuildOutcome = { ok: true, release: 'r1' }) {
   };
 }
 
-function stubBackup(dir = '/tmp/none') {
+function stubBackup(dir = '/tmp/none', running = false) {
   let state: BackupState = {};
   const backup: DbBackup = {
     dir,
     runNow: async () => { state = { lastAttemptAt: 'a', lastSuccessAt: 's' }; return { ...state }; },
+    running: () => running,
+    sweepTempFiles: () => [],
     list: () => [{ name: 'db-20260703-120000.json.gz', size: 3 }],
     listImageArchives: () => [{ name: 'images-20260703-120000.tar', size: 7 }],
     state: () => ({ ...state }),
@@ -2030,6 +2032,16 @@ describe('backup routes', () => {
     const list = await b.app.inject({ method: 'GET', url: '/backups', cookies: cookie });
     expect(list.json().files[0].name).toBe('db-20260703-120000.json.gz');
     expect(list.json().imageArchives[0].name).toBe('images-20260703-120000.tar');
+  });
+
+  it('answers 409 to a second run while one is in flight, and reports running', async () => {
+    const b = build({ dbBackup: stubBackup('/tmp/none', true).backup });
+    const { cookie } = await authed(b);
+    const run = await b.app.inject({ method: 'POST', url: '/backups', cookies: cookie });
+    expect(run.statusCode).toBe(409);
+    expect(run.json().error).toMatch(/already running/);
+    const list = await b.app.inject({ method: 'GET', url: '/backups', cookies: cookie });
+    expect(list.json().running).toBe(true);
   });
 
   it('downloads only well-formed backup filenames from the backup dir', async () => {

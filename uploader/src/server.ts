@@ -1215,11 +1215,17 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   app.get('/backups', { preHandler: requireAdmin }, async () => ({
     state: cfg.dbBackup.state(),
+    running: cfg.dbBackup.running(),
     files: cfg.dbBackup.list(),
     imageArchives: cfg.dbBackup.listImageArchives(),
   }));
 
-  app.post('/backups', { preHandler: requireAdmin }, async () => cfg.dbBackup.runNow());
+  // One run at a time (#113): while a backup is in flight, `runNow()` would
+  // hand back the PREVIOUS run's state as if this click had done nothing.
+  app.post('/backups', { preHandler: requireAdmin }, async (_req, reply) => {
+    if (cfg.dbBackup.running()) return reply.code(409).send({ error: 'a backup is already running' });
+    return cfg.dbBackup.runNow();
+  });
 
   // Filename is validated against the strict backup patterns (db dump OR images
   // archive) — nothing else in the directory (state.json!) and no traversal can

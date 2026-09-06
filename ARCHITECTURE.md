@@ -279,15 +279,30 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   `JSON.stringify` path every other non-scalar column uses — it needs a `$n::text[]` bind.
 - **Schedule** — admin-configurable in settings: `backupSchedule` (`off` / `daily` / `weekly`,
   default `off`) and `backupRetention` (1–100 files, default 14). An hourly in-process tick (same
-  pattern as the session sweep) runs a backup when due, tracked in
-  `/data/backup/db/state.json` (`lastAttemptAt`/`lastSuccessAt`/`lastError`/`lastImagesArchiveAt`);
-  missed windows catch up on next boot. After a successful run, dump files beyond the retention
-  count are pruned. Failures are recorded and logged, never crash the app.
+  pattern as the session sweep) runs a backup in the first tick of each new calendar window —
+  UTC day, or Monday-anchored UTC week — after the last success (an elapsed-time rule drifted an
+  hour per day, #113), tracked in `/data/backup/db/state.json`
+  (`lastAttemptAt`/`lastSuccessAt`/`lastError`/`lastImagesArchiveAt`); missed windows catch up on
+  next boot. After a successful run, dump files beyond the retention count are pruned. Failures
+  are recorded and logged, never crash the app.
+- **Images archive safety (#113,
+  [spec](docs/superpowers/specs/2026-09-05-images-archive-safety-design.md))** — the incremental
+  `images-*.tar` is streamed to a `.<pid>.tmp` that is unlinked on any failure, including the
+  process exiting mid-stream; stale temps from a SIGKILL are swept at boot and before each run.
+  The archive refuses (recorded as `lastError`, cutoff unchanged) when its estimated size plus the
+  same 2 GiB reserve `/upload` keeps would not fit. `state.json` is validated field by field, and
+  the mtime cutoff is derived from the archives on disk when the state is unusable — a corrupt
+  file resumes incrementally from the newest tar's stamp, and a hand-emptied archive dir starts
+  a fresh full chain — rather than re-tarring the ~11 GB corpus. Not detected: deleting only
+  *some* archives of a chain, and files whose mtime moved backwards (a host-level restore that
+  preserves old mtimes) — an mtime incremental never picks those up.
 - **Admin UI** (settings page) — schedule select, retention input, **Back up now** button, last-run
-  status, and lists of existing dumps and image archives with download links.
-- **Routes** (all admin-only): `GET /backups` (state + dump list + image-archive list),
-  `POST /backups` (run now), `GET /backups/:name` (download; filename validated against
-  `^db-\d{8}-\d{6}\.json\.gz$` or `^images-\d{8}-\d{6}\.tar$` — no traversal).
+  status (shows *Running…* while a run is in flight), and lists of existing dumps and image
+  archives with download links.
+- **Routes** (all admin-only): `GET /backups` (state + `running` + dump list + image-archive
+  list), `POST /backups` (run now; **409** while a run is already in flight),
+  `GET /backups/:name` (download; filename validated against `^db-\d{8}-\d{6}\.json\.gz$` or
+  `^images-\d{8}-\d{6}\.tar$` — no traversal).
 - **Restore is CLI-only** (destructive, so no web button):
   `docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/<file>`.
   The DHI runtime image has no shell, so `exec` must invoke `node` directly (a bare
