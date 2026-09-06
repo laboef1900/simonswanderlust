@@ -4,16 +4,16 @@
 
 ## Decision
 
-1. **One username rule, defined in `users.ts`.** `usernamePolicyViolation(username)` returns the
-   user-facing violation (or `null`) for a *new* username: 1–64 characters, drawn from
-   `[A-Za-z0-9._-]`. `POST /setup` and `POST /users` call it and answer 400 — the same shape as
-   `passwordPolicyViolation` (#109), so the two rules sit side by side and any future creation
-   path (a CLI `add-user`, say) has exactly one function to call.
-2. **The rule applies to creation only.** `/login`, `findByUsername`, `set-password` and the
-   stores' `create` are untouched: an account created before the rule may carry a name that
-   violates it and must keep signing in and stay lockable (the #109 review invariant, tested).
-   That is also why the rule is not pushed into the stores' `create` the way the password rule is
-   pushed into `hashPassword`: the memory store is how the test suite seeds such a legacy account.
+1. **One username rule, defined and enforced in `users.ts`.** `usernamePolicyViolation(username)`
+   returns the user-facing violation (or `null`) for a *new* username: 1–64 characters, drawn
+   from `[A-Za-z0-9._-]`. Both stores' `create` call `assertUsernamePolicy` (throws
+   `UsernamePolicyError`), so any creation path — the two routes today, a CLI `add-user` tomorrow —
+   inherits it, exactly as `hashPassword` carries the password rule (#109). `POST /setup` and
+   `POST /users` also check it up front to answer a clean 400.
+2. **The rule applies to creation only.** `/login`, `findByUsername` and `set-password` are
+   untouched: an account created before the rule may carry a name that violates it and must keep
+   signing in and stay lockable (the #109 review invariant). The test for that invariant seeds
+   the legacy row through a store whose *lookup* answers with it, not through `create`.
 3. **The sidebar badge is built with `textContent`.** `auth.js` renders the CMS shell from one
    template literal into `shell.innerHTML`; the username and its initial were interpolated into
    that string. The template now leaves both slots empty and fills them with `textContent` after
@@ -47,11 +47,13 @@ decision on the same knob; the allow-list is the part of #131 that carries the r
 ## Invariants (tested)
 
 - `users.test.ts`: the rule accepts `simon`, `s.imon-1_`, 64 chars; rejects empty, 65 chars,
-  whitespace inside, `<`, `@`, non-ASCII.
+  whitespace inside, `<`, `@`, non-ASCII; `memoryUserStore.create` throws `UsernamePolicyError`
+  and stores nothing. `pg.integration.test.ts`: `pgUserStore.create` does the same.
 - `server.test.ts`: `/setup` and `/users` reject a disallowed name with 400 and create nothing;
-  the pre-existing "legacy 96-char account still signs in" test stays green.
+  the "legacy 96-char account still signs in and is lockable" invariant stays green.
+- `admin-pages.test.ts`: the shell template never interpolates `s.username`.
 
 ## Rollback
 
-Revert the commit: one exported function, two route checks, one client render change, a hint in
-`users.html`, docs. No data or schema change.
+Revert the commit: one rule and one assertion in `users.ts` (two `create` call sites), two
+route checks, one client render change, a hint in `users.html`, docs. No data or schema change.

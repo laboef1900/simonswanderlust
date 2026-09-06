@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hashPassword, verifyPassword, memoryUserStore, UserExistsError, DUMMY_STORED_HASH, PasswordPolicyError, usernamePolicyViolation } from '../src/users.js';
+import { hashPassword, verifyPassword, memoryUserStore, UserExistsError, DUMMY_STORED_HASH, PasswordPolicyError, UsernamePolicyError, usernamePolicyViolation } from '../src/users.js';
 
 describe('username policy (#131)', () => {
   it('accepts plain ASCII identifiers up to 64 characters', () => {
@@ -64,6 +64,11 @@ describe('memoryUserStore', () => {
     const s = memoryUserStore();
     await s.create({ username: 'Simon', password: 'password123456', isAdmin: false });
     await expect(s.create({ username: 'simon', password: 'password-x-1234', isAdmin: false })).rejects.toBeInstanceOf(UserExistsError);
+  });
+  it('create refuses a policy-violating username, so any creation path inherits the rule (#131)', async () => {
+    const s = memoryUserStore();
+    await expect(s.create({ username: '<img src=x>', password: 'password123456', isAdmin: false })).rejects.toBeInstanceOf(UsernamePolicyError);
+    expect(await s.count()).toBe(0);
   });
   it('removes a user', async () => {
     const s = memoryUserStore();

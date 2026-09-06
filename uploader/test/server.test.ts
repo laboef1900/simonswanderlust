@@ -12,7 +12,8 @@ import { ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, typ
 import { createImportRunner, memoryImportJobStore, type ImportRunner } from '../src/import-jobs.js';
 import { defaultSettings, validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
-import { memoryUserStore, type UserStore } from '../src/users.js';
+import { memoryUserStore, hashPassword, type User, type UserStore } from '../src/users.js';
+import { randomUUID } from 'node:crypto';
 import { memorySessionStore, type SessionStore } from '../src/sessions.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { memoryPageStore, type PageStore } from '../src/pages.js';
@@ -924,11 +925,15 @@ describe('auth endpoints', () => {
   });
 
   it('an account created before the 64-char cap still signs in and is still lockable (#109 review)', async () => {
-    // The cap applies to NEW usernames only; the store never had one, so a
-    // long name may exist in an older database. It must not become unreachable.
-    const b = build({ accountLimiter: accountLockoutLimiter({ max: 2 }) });
+    // The cap applies to NEW usernames only (#131 makes both stores' `create`
+    // refuse one), so a long name can only exist as a row in an older
+    // database. Model exactly that: a store whose lookup answers with the
+    // legacy row. It must not become unreachable.
     const username = 'veteran-'.repeat(12); // 96 chars
-    await b.users.create({ username, password: 'password123456', isAdmin: true });
+    const legacy: User = { id: randomUUID(), username, passwordHash: hashPassword('password123456'), isAdmin: true, createdAt: new Date() };
+    const inner = memoryUserStore();
+    const users: UserStore = { ...inner, findByUsername: async (name) => (name.toLowerCase() === username ? legacy : inner.findByUsername(name)), findById: async (id) => (id === legacy.id ? legacy : inner.findById(id)) };
+    const b = build({ users, accountLimiter: accountLockoutLimiter({ max: 2 }) });
     expect((await loginFrom(b, '203.0.113.1', { username, password: 'password123456' })).statusCode).toBe(200);
     expect((await loginFrom(b, '203.0.113.2', { username, password: 'wrongpassword' })).statusCode).toBe(401);
     expect((await loginFrom(b, '203.0.113.3', { username, password: 'wrongpassword' })).statusCode).toBe(401);
