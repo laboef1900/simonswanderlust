@@ -737,6 +737,16 @@ blog/
   `storage.ts` writes originals and variants to a `.part-<hex>` temp and renames into place, so
   a truncated file can never carry a final name — which also closes the WXR resume gap #85 left.
   See `docs/superpowers/specs/2026-09-05-variant-set-completeness-design.md`.
+- **Done:** #125 CommonMark image destinations in the WXR importer (2026-09-05) — Turndown writes
+  `![alt](src "title")` (Elementor titles every image with its filename), escapes `(`/`)`, wraps a
+  spaced destination in `<…>` and escapes `]` in alt; the importer's naive regex captured
+  `src "title"` as the URL, so `safeFetch` requested a bogus address and the common single-image
+  case was "download failed" and left hot-linked. `markdownImages` in `wp-content.ts` now parses
+  the Turndown-producible subset of CommonMark and decodes the destination; both extraction sites
+  (`buildLocale` and #96's `rehostUrlSet`) use it, keeping the pre-flight count honest. Classic
+  `[gallery ids]` and `[caption]` shortcodes expand before Turndown through the existing Elementor
+  gallery pipeline instead of surfacing as escaped junk. See
+  `docs/superpowers/specs/2026-09-05-wxr-import-image-destinations-design.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

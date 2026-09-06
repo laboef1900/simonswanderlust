@@ -66,12 +66,86 @@ function foldGalleries(md: string): string {
   return out.join('\n');
 }
 
+/**
+ * Classic (pre-Elementor) WordPress shortcodes that would otherwise reach
+ * Turndown as literal text and come out as escaped junk (`\[gallery ids="1,2"\]`)
+ * — a post importing "clean" with its galleries silently gone.
+ *
+ * - `[gallery ids="1,2,3"]` becomes the same anchor shape Elementor's lightbox
+ *   emits, so ONE gallery pipeline (`elementorLightboxGallery` + `foldGalleries`)
+ *   handles both eras; ids with no attachment in the export are dropped, and a
+ *   gallery that resolves to nothing (or has no `ids`, i.e. "all attached media",
+ *   which the export cannot express) is left untouched rather than emitted empty.
+ * - `[caption …]<img …> text[/caption]` becomes `<figure><img …><figcaption>text
+ *   </figcaption></figure>`, which Turndown renders as the image followed by the
+ *   caption as its own paragraph — nothing lost, no shortcode markup shown.
+ */
+export function expandShortcodes(html: string, attachments: ReadonlyMap<string, string>): string {
+  let n = 0;
+  return html
+    .replace(/\[gallery\b([^\]]*)\]/g, (whole, attrs: string) => {
+      const ids = /\bids\s*=\s*["']([^"']*)["']/.exec(attrs)?.[1];
+      if (!ids) return whole;
+      const anchors = ids.split(',').map((id) => attachments.get(id.trim())).filter((u): u is string => Boolean(u));
+      if (anchors.length === 0) return whole;
+      const group = `wp-gallery-${++n}`;
+      return anchors.map((href) => `<a data-elementor-lightbox-slideshow="${group}" href="${href}"></a>`).join('');
+    })
+    .replace(/\[caption\b[^\]]*\]([\s\S]*?)\[\/caption\]/g, (_whole, inner: string) => {
+      // The image subtree is the <img> plus an enclosing <a>…</a> when WordPress
+      // linked it to the full-size file — that link is the reader's click-through
+      // and must survive (review finding on PR #157).
+      const img = /(?:<a\b[^>]*>\s*)?<img\b[^>]*>(?:\s*<\/a>)?/i.exec(inner);
+      if (!img) return inner;
+      const text = inner.slice(img.index + img[0].length).trim();
+      return `<figure>${img[0]}${text ? `<figcaption>${text}</figcaption>` : ''}</figure>`;
+    });
+}
+
+/** One inline image as Turndown wrote it, with the destination decoded back to the URL it encoded. */
+export interface MarkdownImage {
+  /** The exact source text, for `replaceAll`. */
+  full: string;
+  /** Alt text as written (still Markdown-escaped, so it can be re-emitted verbatim). */
+  alt: string;
+  /** The destination URL with CommonMark escapes and `<…>` removed. */
+  url: string;
+}
+
+/**
+ * Turndown escapes `(` `)` `<` `>` in a destination, wraps it in `<…>` when it
+ * contains a space, appends ` "title"` when the `<img>` had one, and escapes
+ * `]` (among others) in alt. Elementor sets `title` from the attachment title
+ * — by default the filename — so a titled image is the COMMON single-image case.
+ * A naive `!\[([^\]]*)\]\(([^)]+)\)` captured `src "title"` as the URL and the
+ * re-host then fetched `…/x.jpg%20%22title%22` (issue #125).
+ *
+ * Grammar (CommonMark §6.4, restricted to what Turndown can produce):
+ *   alt   = ( "\" any | [^\]\\] )*
+ *   dest  = "<" [^<>\n]* ">"  |  ( "\" punct | [^\s()\\] | "(" … ")" )*   — one level of balanced parens
+ *   title = optional, after whitespace: "…" | '…' | (…), with backslash escapes
+ */
+const IMAGE_RE = /!\[((?:\\.|[^\]\\])*)\]\(\s*(?:<([^<>\n]*)>|((?:\\.|[^\s()\\]|\((?:\\.|[^\s()\\])*\))*))(?:\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?\s*\)/g;
+
+export function markdownImages(md: string): MarkdownImage[] {
+  const out: MarkdownImage[] = [];
+  for (const m of md.matchAll(IMAGE_RE)) {
+    // Backslash escapes apply to ASCII punctuation only (CommonMark §2.4); a
+    // backslash before anything else is literal.
+    const raw = m[2] ?? m[3] ?? '';
+    const url = raw.replace(/\\([!-/:-@[-`{-~])/g, '$1');
+    if (url) out.push({ full: m[0], alt: m[1] ?? '', url });
+  }
+  return out;
+}
+
 /** Convert post HTML to clean Markdown — turndown keeps the content tags
- *  (headings/paragraphs/lists/links/images) and drops wrapper divs/styles. */
-export function htmlToMarkdown(html: string): string {
+ *  (headings/paragraphs/lists/links/images) and drops wrapper divs/styles.
+ *  `attachments` (WXR attachment id → URL) enables classic-shortcode expansion. */
+export function htmlToMarkdown(html: string, attachments?: ReadonlyMap<string, string>): string {
   return foldGalleries(
     td
-      .turndown(html)
+      .turndown(attachments ? expandShortcodes(html, attachments) : html)
       .replace(/^(-|\*|\+)\s{2,}/gm, '$1 ')  // normalise bullet indent: "- ·· item" → "- item"
       .replace(/\n{3,}/g, '\n\n'),
   ).trim();
