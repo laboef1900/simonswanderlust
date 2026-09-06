@@ -21,6 +21,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { processImage } from './pipeline.js';
 import { assertSafeKey, storeVariantFiles } from './storage.js';
+import { deleteMedia } from './media-files.js';
 import type { MediaError, MediaStore } from './media-store.js';
 import type { WorkLock } from './work-lock.js';
 
@@ -36,6 +37,13 @@ export const MAX_BACKLOG = 200;
 export interface EncodeQueue {
   /** Enqueue a stored key for encoding. Throws when the backlog is full. */
   enqueue(key: string): void;
+  /**
+   * True while `key` is queued or encoding. `DELETE /media/items/*` refuses
+   * such a key: the job holds the original in memory and would write its
+   * variants under the just-deleted key, which the next rescan then backfills
+   * as a zombie `ready` row with no retained original (#116).
+   */
+  isActive(key: string): boolean;
   /**
    * Re-seed from `media WHERE status = 'processing'`. Only `createReconciler`
    * (media-sync.ts) calls this — boot and POST /media/rescan — and it MUST run
@@ -133,6 +141,17 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
     try {
       // Shared: several encodes may run together, but never during a build.
       const { bytes } = await opts.lock.runShared(() => encodeOne(key));
+      // The row can vanish during the ~19 s encode — a delete that slipped
+      // past the `processing` gate, or a rescan-inserted row removed out of
+      // band. Anything written for a deleted key is a time bomb: media-sync
+      // backfills every key with a variant as `ready` on the next pass, so
+      // the delete would silently undo itself (#116). Unlink and walk away;
+      // the bare UPDATEs below would affect 0 rows and hide that.
+      if (!(await opts.store.get(key))) {
+        const removed = await deleteMedia(opts.storageDir, key);
+        log(`encode discarded for ${key}: row deleted mid-encode (${removed} file(s) removed)`);
+        return;
+      }
       await opts.store.setVariantBytes(key, bytes);
       await opts.store.setStatus(key, 'ready');
     } catch (err) {
@@ -194,5 +213,6 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
       await new Promise<void>((resolve) => { idleWaiters.push(resolve); });
     },
     stats: () => ({ pending: pending.length, running: inFlight.size }),
+    isActive: (key) => inFlight.has(key) || pending.includes(key),
   };
 }

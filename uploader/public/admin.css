@@ -685,6 +685,24 @@ dialog.admin-modal .media-grid { max-height: 55vh; overflow-y: auto; }
   border: 1px solid var(--line-control);
 }
 .btn-remove:hover { background: #fee2e2; color: var(--red); }
+/* Disabled while the encoder may still write under the key (#116): the note
+   beside it says why, so this only has to read as inert, not explain. */
+.btn-remove:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-remove:disabled:hover { background: transparent; }
+/* Inline text button — "Check again" beside the still-encoding note (#116).
+   Reads as a link but stays a real button: keyboard, focus ring, and the
+   click lands on the same element a screen reader announces. */
+.btn-link {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--navy);
+  font-size: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.btn-link:hover { background: transparent; color: var(--red); }
 
 .btn-secondary {
   margin-top: 0.6rem;

@@ -16,7 +16,7 @@ import type { EncodeQueue } from '../src/encode-queue.js';
 
 /** This suite only exercises host routing, so the queue never needs to run. */
 const noopQueue = (): EncodeQueue => ({
-  enqueue: () => {}, recover: async () => 0, drain: async () => {},
+  enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {},
   stats: () => ({ pending: 0, running: 0 }),
 });
 

@@ -72,6 +72,7 @@ function stubQueue(opts: { full?: boolean } = {}) {
       if (opts.full) throw new BacklogFullError();
       enqueued.push(key);
     },
+    isActive: (key) => enqueued.includes(key),
     recover: async () => 0,
     drain: async () => {},
     stats: () => ({ pending: enqueued.length, running: 0 }),
@@ -523,6 +524,37 @@ describe('media library', () => {
     // Republishing promotes the swap into the snapshot — now nothing serves it.
     await b.posts.publish(tk);
     expect((await b.app.inject({ method: 'DELETE', url: `/media/items/${storedKey}`, cookies: cookie })).statusCode).toBe(200);
+  });
+
+  // #116: a running job holds the original in memory and writes its variants
+  // under the key afterwards; the next rescan would resurrect the deleted
+  // photo as a zombie `ready` row with no original.
+  it('DELETE /media/items/* 409s while the photo is still encoding, then succeeds once it is ready', async () => {
+    const b = buildEncoding();
+    const { cookie } = await authed(b);
+    const res = await upload(b, cookie, { key: 'trips/race/hero', alt: 'a' });
+    expect(res.statusCode).toBe(200);
+    const storedKey = res.json().key as string;
+    expect((await b.media.get(storedKey))?.status).toBe('processing');
+    const early = await b.app.inject({ method: 'DELETE', url: `/media/items/${storedKey}`, cookies: cookie });
+    expect(early.statusCode).toBe(409);
+    expect(early.json().error).toMatch(/still being encoded/);
+    await b.settle();
+    expect((await b.media.get(storedKey))?.status).toBe('ready');
+    expect(existsSync(join(dir, `${storedKey}-640.webp`))).toBe(true);
+    expect((await b.app.inject({ method: 'DELETE', url: `/media/items/${storedKey}`, cookies: cookie })).statusCode).toBe(200);
+    expect(existsSync(join(dir, `${storedKey}-640.webp`))).toBe(false);
+  });
+
+  it('DELETE /media/items/* also 409s on the queue signal alone (row no longer says processing)', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await upload(b, cookie, { key: 'trips/queued/hero', alt: 'a' });
+    const storedKey = res.json().key as string;
+    expect(b.enqueued).toContain(storedKey);
+    // A status write that lands while the key is still queued must not open the window.
+    await b.media.setStatus(storedKey, 'failed', 'encode_failed');
+    expect((await b.app.inject({ method: 'DELETE', url: `/media/items/${storedKey}`, cookies: cookie })).statusCode).toBe(409);
   });
 
   it('DELETE /media/items/* unlinks all variants of exactly that key and drops the row', async () => {
