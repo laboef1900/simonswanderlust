@@ -1707,6 +1707,28 @@ describe('posts editor', () => {
     });
     expect(put.statusCode).toBe(200);
   });
+
+  it('a failed MDX backup leaves the publish live and is logged, not swallowed (#145)', async () => {
+    // BACKUP_DIR under a regular file: exportPost's mkdir fails with ENOTDIR,
+    // which is what a bare-dev default of /data/backup used to do silently.
+    const blocker = join(dir, 'not-a-dir');
+    await writeFile(blocker, 'x');
+    const b = build({ backupDir: join(blocker, 'backup') });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+      expect(pub.statusCode).toBe(200);
+      expect(pub.json().published).toBe(true);
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining(tk), expect.objectContaining({ code: 'ENOTDIR' }));
+    } finally {
+      spy.mockRestore();
+    }
+    const list = (await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json();
+    expect(list[0].status).toBe('published');
+  });
 });
 
 describe('post revisions endpoints', () => {

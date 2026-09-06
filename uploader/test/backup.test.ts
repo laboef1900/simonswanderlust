@@ -7,7 +7,7 @@ import { list as listTar } from 'tar';
 import {
   dumpDatabase, listBackups, listImageArchives, pruneBackups, readState, writeState, isBackupDue,
   createDbBackup, archiveImages, archiveChainCutoff, sweepTempFiles, ArchiveSpaceError,
-  BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type Connectable,
+  BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, resolveBackupDir, type Connectable,
 } from '../src/backup.js';
 
 let dir: string;
@@ -30,6 +30,19 @@ const fakeDb = (
   });
   return { query, connect: async () => ({ query, release() {} }) };
 };
+
+describe('resolveBackupDir', () => {
+  it('is the container default with nothing set, and an explicit BACKUP_DIR wins', () => {
+    expect(resolveBackupDir({})).toBe('/data/backup');
+    expect(resolveBackupDir({ STORAGE_DIR: './data/images', BACKUP_DIR: '/mnt/bk' })).toBe('/mnt/bk');
+  });
+
+  it('follows a bare-dev STORAGE_DIR instead of reaching for /data (#145)', () => {
+    // The .env.example bare-dev block sets only STORAGE_DIR; the export must
+    // land beside it, not fail with EACCES on the developer's root filesystem.
+    expect(resolveBackupDir({ STORAGE_DIR: './data/images' })).toBe('data/backup');
+  });
+});
 
 describe('dumpDatabase', () => {
   it('writes a versioned gzipped JSON dump named after the timestamp', async () => {
