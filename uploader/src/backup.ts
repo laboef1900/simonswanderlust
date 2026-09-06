@@ -2,7 +2,7 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 import {
   existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { create as createTar } from 'tar';
 import type { BackupSchedule } from './settings.js';
 import { POST_SNAPSHOT_SQL, type DbPool } from './db.js';
@@ -26,6 +26,17 @@ export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 const TEMP_FILE_RE = /^(?:db-\d{8}-\d{6}\.json\.gz|images-\d{8}-\d{6}\.tar|state\.json)\.\d+\.tmp$/;
 
 export class BackupError extends Error {}
+
+/**
+ * Where MDX exports and (under `db/`) dumps land. Without `BACKUP_DIR` it is a
+ * sibling of the image store — `/data/backup` in the container, `./data/backup`
+ * beside `STORAGE_DIR=./data/images` in bare dev — the same derivation
+ * `SETTINGS_PATH` uses, so a developer's publish never tries to write `/data`
+ * (#145). Shared by the app and the restore CLI so both name one directory.
+ */
+export function resolveBackupDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env.BACKUP_DIR ?? join(dirname(env.STORAGE_DIR ?? '/data/images'), 'backup');
+}
 
 export interface Queryable {
   query(sql: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;

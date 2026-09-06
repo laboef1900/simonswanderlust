@@ -1034,7 +1034,10 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     await posts.publish(tk);
     const published = await posts.get(tk);
     const build = await cfg.builder.build();
-    if (published) await exportPost(published, cfg.backupDir).catch(() => { /* best-effort backup */ });
+    // Best-effort: a failed MDX backup must not undo a publish that is already
+    // live, but it must not be silent either (#145) — a bare-dev BACKUP_DIR
+    // pointing at /data used to fail every publish's export without a trace.
+    if (published) await exportPost(published, cfg.backupDir).catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
     // updatedAt: publish bumps the stored timestamp, so the editor must re-sync
     // its concurrency echo or its very next Save would falsely 409.
     return reply.send({ published: true, build, updatedAt: published?.updatedAt });
@@ -1099,7 +1102,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
           }
           await posts.publish(tk);
           const published = await posts.get(tk);
-          if (published) await exportPost(published, cfg.backupDir).catch(() => { /* best-effort backup */ });
+          if (published) await exportPost(published, cfg.backupDir).catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
           liveChanged = true;
         } else if (action === 'unpublish') {
           if (pair.status !== 'published') throw new PostError('post is not published');

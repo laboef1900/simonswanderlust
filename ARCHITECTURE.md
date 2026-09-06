@@ -327,7 +327,8 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   credentials), the dump's `createdAt` and per-table counts, and the **live** per-table counts
   about to be replaced; then asks for the literal line `yes` — `--yes` skips the prompt for
   scripted use, and EOF/anything else aborts with nothing changed. It then writes a
-  **pre-restore dump** of the current state into `${BACKUP_DIR:-/data/backup}/db/` (an ordinary
+  **pre-restore dump** of the current state into `BACKUP_DIR/db/` — the scheduler's own
+  directory, resolved the same way (`/data/backup` by default) — (an ordinary
   `db-<stamp>.json.gz`: listed and downloadable in the admin UI, subject to retention pruning,
   and restorable with this same command — the CLI prints it as the undo path) and **aborts if
   that dump cannot be written**. Only then does it, in **one transaction**, delete and re-insert
@@ -447,8 +448,9 @@ the `IMAGE_TAG` defaults (`docker-compose.yml`, `uploader/.env.example`), commit
 | `SITE_APP_DIR` | app | Path to the Astro project the builder spawns (`/app/site`) |
 | `SITE_DIR` | app | Release root for the built blog (`/data/site`) — `current` is served from here |
 | `MAP_DIR` | app | PMTiles/glyph assets root for `/map/` (`/map-assets`) |
-| `STORAGE_DIR` | app | On-disk image variants |
-| `BACKUP_DIR` | app | Root for MDX export backups and (in `db/`) database dumps |
+| `STORAGE_DIR` | app | On-disk image originals + variants (`/data/images`) |
+| `SETTINGS_PATH` | app | JSON settings store; defaults to `settings.json` beside `STORAGE_DIR` (`/data/settings.json`) |
+| `BACKUP_DIR` | app | Root for MDX export backups and (in `db/`) database dumps; defaults to `backup/` beside `STORAGE_DIR` (`/data/backup`), for the app and the restore CLI alike |
 | `PORT` | app | Listen port (default `3000`) |
 | `PROTOMAPS_BUILD` / `MAP_MAXZOOM` / `PMTILES_VERSION` | Dockerfile (build args) | Pin the map basemap fetched + baked into the image at build (see `docs/map-assets.md`) |
 | `IMAGE_TAG` | compose | Released GHCR image version to run |

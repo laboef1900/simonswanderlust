@@ -80,7 +80,7 @@ async function restoreMain(args: string[]): Promise<void> {
   }
   // Lazy like every subcommand here: `uploadFile` is imported by tests and by
   // the upload path, neither of which should load pg.
-  const { BACKUP_FILE_RE, BackupError, dumpDatabase, readDump, restoreDatabase } = await import('./backup.js');
+  const { BACKUP_FILE_RE, BackupError, dumpDatabase, readDump, resolveBackupDir, restoreDatabase } = await import('./backup.js');
   if (!BACKUP_FILE_RE.test(basename(file))) {
     console.error(`refusing to restore ${file}: the file name must match db-YYYYMMDD-HHmmss.json.gz. nothing was changed.`);
     process.exit(1);
@@ -126,7 +126,7 @@ async function restoreMain(args: string[]): Promise<void> {
     // undone is not run. `dumpDatabase` never reuses an existing name, so
     // neither the file being restored (a back-to-back undo) nor an earlier
     // pre-dump can be overwritten by this one.
-    const backupDir = join(process.env.BACKUP_DIR ?? '/data/backup', 'db');
+    const backupDir = join(resolveBackupDir(), 'db');
     let preDump: string;
     try {
       preDump = resolve(backupDir, await dumpDatabase(pool, backupDir));

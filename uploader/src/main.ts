@@ -7,7 +7,7 @@ import { pgSessionStore } from './sessions.js';
 import { pgPostStore } from './posts.js';
 import { pgPageStore } from './pages.js';
 import { bootstrapRelease, createSiteBuilder } from './build.js';
-import { createDbBackup, isBackupDue } from './backup.js';
+import { createDbBackup, isBackupDue, resolveBackupDir } from './backup.js';
 import { createImportRunner, pgImportJobStore } from './import-jobs.js';
 import { createShutdown } from './shutdown.js';
 import { makeDbCheck } from './health.js';
@@ -73,7 +73,7 @@ const reconciler = createReconciler({
   }),
   queue: encodeQueue,
 });
-const backupDir = process.env.BACKUP_DIR ?? '/data/backup';
+const backupDir = resolveBackupDir();
 const dbBackup = createDbBackup({
   db: pool,
   dir: join(backupDir, 'db'),
