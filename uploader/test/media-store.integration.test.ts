@@ -147,6 +147,41 @@ maybe('pgMediaStore (integration)', () => {
     await expect(store.renameFolder('a', 'a/child')).rejects.toMatchObject({ code: 'invalid' });
   });
 
+  // Before #133 the rename was four pool queries: a folder created between the
+  // `media` rewrite and the `media_folders` rewrite left every moved row in a
+  // folder the tree never listed. Inject exactly that race on a wrapped
+  // client and assert the media rows roll back with the failed tree rewrite.
+  it('rename is one transaction: a tree rewrite that fails undoes the media rewrite', async () => {
+    await add('k1', { folder: 'a' });
+    let injected = false;
+    const racing = {
+      query: pool.query.bind(pool),
+      async connect() {
+        const client = await pool.connect();
+        return Object.assign(Object.create(client), {
+          async query(text: string, values?: unknown[]) {
+            if (!injected && text.includes('UPDATE media_folders')) {
+              injected = true;
+              await pool.query(`INSERT INTO media_folders (path) VALUES ('b')`); // another connection, autocommitted
+            }
+            return client.query(text, values);
+          },
+        });
+      },
+    } as unknown as DbPool;
+    const raced = pgMediaStore(racing, { baseUrl: BASE });
+    await expect(raced.renameFolder('a', 'b')).rejects.toMatchObject({ code: '23505' });
+    expect(injected).toBe(true);
+    expect((await store.get('k1'))?.folder).toBe('a');
+    expect(await store.folders()).toEqual(['a', 'b']);
+  });
+
+  it('strips a NUL that Postgres text would otherwise reject with a 500', async () => {
+    const saved = await add('k', { title: 'a\u0000b', alt: { de: 'x\u0000', en: '' } });
+    expect(saved).toMatchObject({ title: 'ab', alt: { de: 'x', en: '' } });
+    expect((await store.patch('k', { caption: { en: '\u0000c' } })).caption.en).toBe('c');
+  });
+
   it('refuses to delete a non-empty folder', async () => {
     await add('k1', { folder: 'Full' });
     await expect(store.deleteFolder('Full')).rejects.toMatchObject({ code: 'not_empty' });

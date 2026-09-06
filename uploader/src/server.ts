@@ -10,7 +10,7 @@ import { probeImage } from './pipeline.js';
 import { contentHashKey, storeOriginal, heroSnippet, assertSafeKey } from './storage.js';
 import { deleteMedia, imageUsage, VARIANT_FILE_RE } from './media-files.js';
 import {
-  libraryKey, redactForNonAdmin, MediaStoreError,
+  libraryKey, redactForNonAdmin, MediaStoreError, assertSafeFolder,
   type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
 } from './media-store.js';
 import { BacklogFullError, type EncodeQueue } from './encode-queue.js';
@@ -321,6 +321,22 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (!KEY_RE.test(key)) {
       return reply.code(400).send({ error: 'invalid key (use lowercase a-z, 0-9, / _ -)' });
     }
+    // Version the key by content hash (issue #26): a re-upload mints a fresh
+    // URL instead of overwriting variants cached as immutable; old URLs keep
+    // serving because nothing on disk is touched. Clients use the returned
+    // src/snippet, never the key they sent.
+    const versionedKey = contentHashKey(key, buf);
+    const src = `${imageBase}/${versionedKey}`;
+    // #133: every input check precedes every write. The store validates the
+    // folder again in upsert(), but that ran AFTER storeOriginal, so a bad
+    // folder left an orphan original for the reconcile to adopt; and KEY_RE
+    // alone admits a key too long or too deep for the filesystem.
+    try {
+      assertSafeFolder(folder);
+      assertSafeKey(versionedKey);
+    } catch (e) {
+      return reply.code(400).send({ error: (e as Error).message });
+    }
 
     // #73: refuse before writing rather than failing mid-pipeline. A full
     // /data takes out uploads, publishing AND backups at once, and a partial
@@ -336,13 +352,6 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       // An unreadable statfs must not block uploads — log and continue.
       console.error('could not read free disk space; accepting the upload anyway:', e);
     }
-
-    // Version the key by content hash (issue #26): a re-upload mints a fresh
-    // URL instead of overwriting variants cached as immutable; old URLs keep
-    // serving because nothing on disk is touched. Clients use the returned
-    // src/snippet, never the key they sent.
-    const versionedKey = contentHashKey(key, buf);
-    const src = `${imageBase}/${versionedKey}`;
 
     let probe;
     try {

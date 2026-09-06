@@ -304,6 +304,33 @@ describe('POST /upload', () => {
     expect(item?.exif).toMatchObject({ lat: null, lng: null });
   });
 
+  // #133: the store validated the folder in upsert(), AFTER storeOriginal, so
+  // a bad folder was a 500 plus an orphan original that the next reconcile
+  // adopted as an anonymous processing row.
+  it('400s a bad folder BEFORE writing the original', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    for (const folder of ['trip/', 'a/../b', 'A\u0301lesund']) {
+      const res = await upload(b, cookie, { key: 'trips/f/hero', folder });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/folder/);
+    }
+    expect(existsSync(join(dir, 'trips', 'f'))).toBe(false);
+    expect(b.enqueued).toEqual([]);
+  });
+
+  it('400s a key too deep or too long for the filesystem instead of mkdir -p-ing it', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const deep = await upload(b, cookie, { key: Array.from({ length: 12 }, () => 'a').join('/') });
+    expect(deep.statusCode).toBe(400);
+    expect(deep.json().error).toMatch(/path segments/);
+    expect(existsSync(join(dir, 'a'))).toBe(false);
+    const long = await upload(b, cookie, { key: 'a'.repeat(300) });
+    expect(long.statusCode).toBe(400);
+    expect(long.json().error).not.toContain('aaaaaaaaaa');
+  });
+
   it('rejects a multi-file upload instead of silently keeping only the last', async () => {
     // @ai-context: the handler reassigns `buf` on every file part, so N files
     // meant N-1 were fully buffered into memory and then dropped, with the last

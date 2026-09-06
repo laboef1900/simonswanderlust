@@ -10,7 +10,7 @@
  *   — issue #64.
  */
 import { randomUUID } from 'node:crypto';
-import type { DbPool } from './db.js';
+import type { DbClient, DbPool } from './db.js';
 import type { MediaExif } from './exif.js';
 
 export type MediaStatus = 'processing' | 'ready' | 'failed' | 'missing';
@@ -127,8 +127,15 @@ export function assertSafeFolder(path: string): void {
   }
 }
 
+/**
+ * Title/alt/caption text. Strips `\p{C}` (NUL, C0/C1 controls, DEL, format
+ * characters) exactly as `normalizeTags` does: Postgres `text` rejects a NUL
+ * byte outright, which surfaced as a generic 500 from `PATCH /media/items/*`
+ * (#133). These are single-line inputs that also land in gallery
+ * `alt="…"`/`caption="…"` attributes, so no control character is legitimate.
+ */
 function cleanText(v: unknown): string {
-  return typeof v === 'string' ? v.slice(0, MAX_TEXT) : '';
+  return typeof v === 'string' ? v.replace(/[\p{C}]/gu, '').slice(0, MAX_TEXT) : '';
 }
 
 export function normalizeTags(tags: unknown): string[] {
@@ -483,9 +490,32 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
     return rows[0] ?? null;
   }
 
-  async function ensureFolders(path: string): Promise<void> {
+  async function ensureFolders(path: string, q: Pick<DbClient, 'query'> = pool): Promise<void> {
     for (const p of folderAncestry(path)) {
-      await pool.query(`INSERT INTO media_folders (path) VALUES ($1) ON CONFLICT (path) DO NOTHING`, [p]);
+      await q.query(`INSERT INTO media_folders (path) VALUES ($1) ON CONFLICT (path) DO NOTHING`, [p]);
+    }
+  }
+
+  /**
+   * One transaction on a checked-out client. `media_folders` is the single
+   * source of truth for the tree (db.ts), so the check + `media` rewrite +
+   * `media_folders` rewrite of a rename, and the emptiness check + DELETE of a
+   * delete, must land or vanish together — a dropped connection or a
+   * concurrent folder create between two pool queries otherwise strands media
+   * rows in a folder the tree no longer lists (#133).
+   */
+  async function transaction<T>(fn: (client: DbClient) => Promise<T>): Promise<T> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const out = await fn(client);
+      await client.query('COMMIT');
+      return out;
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
     }
   }
 
@@ -606,39 +636,43 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
       if (from === '' || to === '') throw new MediaStoreError('cannot rename the root folder');
       if (from === to) return 0;
       if (to.startsWith(`${from}/`)) throw new MediaStoreError('cannot move a folder into itself', 'invalid');
-      const exists = await pool.query(`SELECT 1 FROM media_folders WHERE path = $1`, [to]);
-      if ((exists.rowCount ?? 0) > 0) throw new MediaStoreError('target folder already exists', 'exists');
-      // Exact match plus prefix rewrite, via starts_with() rather than LIKE —
-      // see the @ai-warning in where(). `Iceland` moves `Iceland/*` but never
-      // `Iceland 2024`.
-      const res = await pool.query(
-        `UPDATE media SET folder = $2 || substr(folder, length($1) + 1)
-          WHERE folder = $1 OR starts_with(folder, $1 || '/')`, [from, to],
-      );
-      await pool.query(
-        `UPDATE media_folders SET path = $2 || substr(path, length($1) + 1)
-          WHERE path = $1 OR starts_with(path, $1 || '/')`, [from, to],
-      );
-      // AFTER the rewrite, never before: inserting `to` first would make the
-      // UPDATE above collide with the row it just created (media_folders.path
-      // is the primary key). This only fills in ancestors when `to` is nested
-      // deeper than `from` — e.g. renaming `a` to `x/y` needs `x`.
-      await ensureFolders(to);
-      return res.rowCount ?? 0;
+      return transaction(async (client) => {
+        const exists = await client.query(`SELECT 1 FROM media_folders WHERE path = $1`, [to]);
+        if ((exists.rowCount ?? 0) > 0) throw new MediaStoreError('target folder already exists', 'exists');
+        // Exact match plus prefix rewrite, via starts_with() rather than LIKE —
+        // see the @ai-warning in where(). `Iceland` moves `Iceland/*` but never
+        // `Iceland 2024`.
+        const res = await client.query(
+          `UPDATE media SET folder = $2 || substr(folder, length($1) + 1)
+            WHERE folder = $1 OR starts_with(folder, $1 || '/')`, [from, to],
+        );
+        await client.query(
+          `UPDATE media_folders SET path = $2 || substr(path, length($1) + 1)
+            WHERE path = $1 OR starts_with(path, $1 || '/')`, [from, to],
+        );
+        // AFTER the rewrite, never before: inserting `to` first would make the
+        // UPDATE above collide with the row it just created (media_folders.path
+        // is the primary key). This only fills in ancestors when `to` is nested
+        // deeper than `from` — e.g. renaming `a` to `x/y` needs `x`.
+        await ensureFolders(to, client);
+        return res.rowCount ?? 0;
+      });
     },
     async deleteFolder(path) {
       assertSafeFolder(path);
       if (path === '') throw new MediaStoreError('cannot delete the root folder');
-      const used = await pool.query(
-        `SELECT 1 FROM media WHERE folder = $1 OR starts_with(folder, $1 || '/') LIMIT 1`, [path],
-      );
-      const child = await pool.query(
-        `SELECT 1 FROM media_folders WHERE starts_with(path, $1 || '/') LIMIT 1`, [path],
-      );
-      if ((used.rowCount ?? 0) > 0 || (child.rowCount ?? 0) > 0) {
-        throw new MediaStoreError('folder is not empty', 'not_empty');
-      }
-      await pool.query(`DELETE FROM media_folders WHERE path = $1`, [path]);
+      await transaction(async (client) => {
+        const used = await client.query(
+          `SELECT 1 FROM media WHERE folder = $1 OR starts_with(folder, $1 || '/') LIMIT 1`, [path],
+        );
+        const child = await client.query(
+          `SELECT 1 FROM media_folders WHERE starts_with(path, $1 || '/') LIMIT 1`, [path],
+        );
+        if ((used.rowCount ?? 0) > 0 || (child.rowCount ?? 0) > 0) {
+          throw new MediaStoreError('folder is not empty', 'not_empty');
+        }
+        await client.query(`DELETE FROM media_folders WHERE path = $1`, [path]);
+      });
     },
     async allKeys() {
       const { rows } = await pool.query<{ key: string }>(`SELECT key FROM media ORDER BY key`);
