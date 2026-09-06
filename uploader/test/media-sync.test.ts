@@ -324,7 +324,7 @@ describe('createReconciler', () => {
     });
     const report = await createReconciler({ sync: sync(store), queue }).run();
     expect(report).toMatchObject({ scanned: 1, inserted: 1, recovered: 1 });
-    await queue.drain();
+    await queue.idle();
     expect(encoded).toEqual(['library/2025/crashed']);
     expect(await store.get('library/2025/crashed')).toMatchObject({ status: 'ready' });
   });

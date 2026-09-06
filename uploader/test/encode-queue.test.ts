@@ -55,7 +55,7 @@ describe('createEncodeQueue', () => {
     const { store, queue } = setup();
     await seed(store, ['a']);
     queue.enqueue('a');
-    await queue.drain();
+    await queue.idle();
     expect(await store.get('a')).toMatchObject({ status: 'ready', variantBytes: 123 });
   });
 
@@ -68,7 +68,7 @@ describe('createEncodeQueue', () => {
     expect(started).toEqual(['a', 'b']);       // 'c' waits
     expect(queue.stats()).toMatchObject({ running: 2, pending: 1 });
     gates.forEach((g) => g.resolve());
-    await queue.drain();
+    await queue.idle();
     expect(started).toEqual(['a', 'b', 'c']);
   });
 
@@ -82,7 +82,7 @@ describe('createEncodeQueue', () => {
     expect(queue.isActive('b')).toBe(true);   // pending
     expect(queue.isActive('zzz')).toBe(false);
     gate.resolve();
-    await queue.drain();
+    await queue.idle();
     expect(queue.isActive('a')).toBe(false);
     expect(queue.isActive('b')).toBe(false);
   });
@@ -111,7 +111,7 @@ describe('createEncodeQueue', () => {
     await tick();
     await store.remove('trips/x/gone');
     release();
-    await queue.drain();
+    await queue.idle();
     expect(await readdir(join(dir, 'trips/x'))).toEqual([]);
     expect(await store.get('trips/x/gone')).toBeNull();   // no zombie row written back
     expect(logs.join('\n')).toMatch(/discarded.*row deleted mid-encode/);
@@ -130,7 +130,7 @@ describe('createEncodeQueue', () => {
     expect(started).toEqual([]);               // held off by the build
     build.resolve();
     await running;
-    await queue.drain();
+    await queue.idle();
     expect(started).toEqual(['a']);
   });
 
@@ -143,7 +143,7 @@ describe('createEncodeQueue', () => {
     });
     await seed(store, ['bad']);
     queue.enqueue('bad');
-    await queue.drain();
+    await queue.idle();
     const item = await store.get('bad');
     expect(item).toMatchObject({ status: 'failed', error: 'decode_failed' });
     // libvips embeds filesystem paths and the library UI displays this field.
@@ -159,7 +159,7 @@ describe('createEncodeQueue', () => {
     });
     await seed(store, ['full']);
     queue.enqueue('full');
-    await queue.drain();
+    await queue.idle();
     expect(await store.get('full')).toMatchObject({ status: 'failed', error: 'no_space' });
   });
 
@@ -173,7 +173,7 @@ describe('createEncodeQueue', () => {
     await seed(store, ['bad', 'good']);
     queue.enqueue('bad');
     queue.enqueue('good');
-    await queue.drain();
+    await queue.idle();
     expect(await store.get('good')).toMatchObject({ status: 'ready' });
     expect(await store.get('bad')).toMatchObject({ status: 'failed' });
   });
@@ -186,7 +186,7 @@ describe('createEncodeQueue', () => {
     queue.enqueue('b'); queue.enqueue('c'); // fill the backlog
     expect(() => queue.enqueue('d')).toThrow(BacklogFullError);
     gate.resolve();
-    await queue.drain();
+    await queue.idle();
   });
 
   it('is idempotent — enqueueing the same key twice runs it once', async () => {
@@ -194,7 +194,7 @@ describe('createEncodeQueue', () => {
     await seed(store, ['a']);
     queue.enqueue('a');
     queue.enqueue('a');
-    await queue.drain();
+    await queue.idle();
     expect(started).toEqual(['a']);
   });
 
@@ -205,7 +205,7 @@ describe('createEncodeQueue', () => {
     await seed(store, ['x', 'y']);
     await store.upsert({ key: 'done', status: 'ready', width: 8, height: 6, origBytes: 1, exif: noExif, uploadedBy: null });
     expect(await queue.recover()).toBe(2);
-    await queue.drain();
+    await queue.idle();
     expect(started.sort()).toEqual(['x', 'y']);   // the ready one is untouched
     expect(await store.get('done')).toMatchObject({ status: 'ready' });
   });
@@ -215,11 +215,50 @@ describe('createEncodeQueue', () => {
     await seed(store, ['a', 'b', 'c', 'd']);
     await queue.recover();
     expect(logs.join('\n')).toMatch(/more still pending/);
-    await queue.drain();
+    await queue.idle();
   });
 
   it('drain resolves immediately when nothing is queued', async () => {
     const { queue } = setup();
     await expect(queue.drain()).resolves.toBeUndefined();
+  });
+
+  // #134: `docker stop` with a 100-photo backlog. The drain used to keep
+  // dequeuing ~19 s jobs until Docker SIGKILLed it mid-write — the very
+  // partial-variant case it exists to avoid. Only in-flight work may finish.
+  it('drain finishes the in-flight job but starts nothing from the backlog', async () => {
+    const { store, queue, started, hold } = setup({ concurrency: 1 });
+    await seed(store, ['a', 'b', 'c']);
+    const gate = hold('a');
+    ['a', 'b', 'c'].forEach((k) => queue.enqueue(k));
+    await tick();
+    expect(started).toEqual(['a']);
+    const drained = queue.drain();
+    gate.resolve();
+    await drained;
+    expect(started).toEqual(['a']);
+    expect(queue.stats()).toEqual({ pending: 2, running: 0 });
+    // The finished job was persisted; the backlog stays `processing` for recover().
+    expect(await store.get('a')).toMatchObject({ status: 'ready' });
+    expect(await store.get('b')).toMatchObject({ status: 'processing' });
+    // One-way: a late enqueue after the drain never runs either.
+    queue.enqueue('d');
+    await tick();
+    expect(started).toEqual(['a']);
+  });
+
+  it('drain with an empty backlog still waits for the in-flight job', async () => {
+    const { store, queue, hold } = setup({ concurrency: 1 });
+    await seed(store, ['a']);
+    const gate = hold('a');
+    queue.enqueue('a');
+    await tick();
+    let settled = false;
+    const drained = queue.drain().then(() => { settled = true; });
+    await tick();
+    expect(settled).toBe(false);
+    gate.resolve();
+    await drained;
+    expect(await store.get('a')).toMatchObject({ status: 'ready' });
   });
 });

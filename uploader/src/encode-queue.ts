@@ -50,8 +50,16 @@ export interface EncodeQueue {
    * after the disk sync, which is what inserts the rows it looks for.
    */
   recover(): Promise<number>;
-  /** Resolves when nothing is queued or in flight — the shutdown drain hook. */
+  /**
+   * The shutdown hook: stop dequeuing and resolve once the in-flight jobs have
+   * finished. The backlog is left for `recover()` on the next boot — starting
+   * more ~19 s jobs while Docker's grace period runs out would only manufacture
+   * the partial writes the drain exists to avoid. One-way: the queue never
+   * pumps again afterwards.
+   */
   drain(): Promise<void>;
+  /** Resolves when nothing is queued or in flight. Test seam — production only drains. */
+  idle(): Promise<void>;
   stats(): { pending: number; running: number };
 }
 
@@ -106,6 +114,8 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
   const pending: string[] = [];
   const inFlight = new Set<string>();
   let idleWaiters: (() => void)[] = [];
+  /** Set by drain(): pump() stops dequeuing; only in-flight jobs finish. */
+  let draining = false;
 
   const encodeOne = opts.encodeOne ?? (async (key: string) => {
     const buf = await readOriginal(opts.storageDir, key);
@@ -114,8 +124,12 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
     return { bytes };
   });
 
+  // Once draining, the backlog is not going to shrink — it is `recover()`'s
+  // on the next boot — so "idle" means only that nothing is in flight.
+  const isIdle = () => inFlight.size === 0 && (draining || pending.length === 0);
+
   function settleIfIdle(): void {
-    if (pending.length === 0 && inFlight.size === 0 && idleWaiters.length > 0) {
+    if (isIdle() && idleWaiters.length > 0) {
       const waiters = idleWaiters;
       idleWaiters = [];
       waiters.forEach((w) => w());
@@ -168,7 +182,7 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
   }
 
   function pump(): void {
-    while (inFlight.size < concurrency && pending.length > 0) {
+    while (!draining && inFlight.size < concurrency && pending.length > 0) {
       const key = pending.shift();
       if (key === undefined) break;
       if (inFlight.has(key)) continue; // already encoding — drop the duplicate
@@ -209,7 +223,16 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
       return n;
     },
     async drain() {
-      if (pending.length === 0 && inFlight.size === 0) return;
+      // Stop pulling from the backlog: every job started DURING the drain is
+      // exactly the mid-write case the drain exists to avoid (#134). What is
+      // still pending stays `processing` in the database and recover()
+      // re-seeds it on the next boot.
+      draining = true;
+      if (isIdle()) return;
+      await new Promise<void>((resolve) => { idleWaiters.push(resolve); });
+    },
+    async idle() {
+      if (isIdle()) return;
       await new Promise<void>((resolve) => { idleWaiters.push(resolve); });
     },
     stats: () => ({ pending: pending.length, running: inFlight.size }),

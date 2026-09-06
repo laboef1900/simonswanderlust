@@ -79,6 +79,7 @@ function stubQueue(opts: { full?: boolean } = {}) {
     isActive: (key) => enqueued.includes(key),
     recover: async () => 0,
     drain: async () => {},
+    idle: async () => {},
     stats: () => ({ pending: enqueued.length, running: 0 }),
   };
   return { enqueued, queue };
@@ -132,7 +133,7 @@ function buildEncoding(extra: Partial<ServerConfig> = {}) {
   const media = memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
   const queue = createEncodeQueue({ store: media, storageDir: dir, lock: createWorkLock(), concurrency: 1 });
   const b = build({ media, encodeQueue: queue, ...extra });
-  return { ...b, media, settle: () => queue.drain() };
+  return { ...b, media, settle: () => queue.idle() };
 }
 
 /** Upload one image and return the parsed body. */
