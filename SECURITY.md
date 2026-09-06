@@ -245,7 +245,11 @@ already accepted for this deployment is the wrong trade. Compensating controls, 
   naming the count. This is what closes the ~40,000-fetch exposure when the target returns 200.
 - **Single-flight** — `POST /import` returns 409 while an import is running. The pacing gate is
   per-run state, so without mutual exclusion K concurrent imports give the victim K× the configured
-  request rate and the throttle provides no aggregate guarantee at all.
+  request rate and the throttle provides no aggregate guarantee at all. Since #92 the rule is
+  owned by the import job runner (`import-jobs.ts`): the pre-flight (parse, cap, free space) stays
+  on the request path with its status codes, the run is a background job, and the admin-only
+  `GET /import/status` returns its counters plus the same capped, vague summary the old 200
+  carried — no new disclosure.
 - **Only transient fetch failures are retried.** The SSRF refusal (`kind: 'blocked'`), an unusable
   URL, an oversized response, a 4xx other than 429, a permanently unresolvable host
   (`ENOTFOUND`), and *anything that is not a `FetchError`* are never retried. In particular a

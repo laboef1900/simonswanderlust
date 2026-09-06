@@ -53,8 +53,8 @@ than missed:
 
 | Excluded | Why |
 | --- | --- |
-| Moving the import onto `encode-queue.ts` / `work-lock.ts` | Issue #85's "Better" option. A large architecture change; must not ride along with a hardening fix. |
-| A progress-polling endpoint | Same. Belongs with the async move. |
+| Moving the import onto `encode-queue.ts` / `work-lock.ts` | Issue #85's "Better" option. A large architecture change; must not ride along with a hardening fix. Filed as #92 — **landed 2026-09-06** as its own runner (`import-jobs.ts`, not the encode queue): pre-flight on the request path, run as a background job, `import_jobs` table. See `2026-09-05-async-import-job-design.md`. |
+| A progress-polling endpoint | Same. Belongs with the async move — **landed with #92**: `GET /import/status`, polled by `import.html`. |
 | Publish-time refusal on leftover `wp-content` URLs | Real gap (§Accepted residual risk). Touches the publish gate — its own named-sensitive surface. Separate issue. |
 | `/import` → `requireAdmin` | An auth-model change. Filed separately as #97 — **landed 2026-09-06**: the route, `import.html` and the nav entry are admin-only. |
 | A `/data` free-space precondition on `/import` | Adjacent gap (`/upload` has one at `server.ts:269`). `insufficientSpace` needs a known incoming size, which an import does not have; needs its own design. Filed as #94 — **landed 2026-09-06**: sized from the photos the run will fetch (resume misses × the measured per-photo cost) plus the same floor; 507 before any fetch. |

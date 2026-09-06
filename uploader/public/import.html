@@ -12,7 +12,7 @@
         <nav id="mainnav" aria-label="Admin"></nav>
         <p class="eyebrow">Expedition Log · Image Station</p>
         <h1>WordPress Import</h1>
-        <p class="lede">Upload a WordPress export (.xml) file to import posts as drafts. Already-published posts are skipped; existing drafts are updated.</p>
+        <p class="lede">Upload a WordPress export (.xml) file to import posts as drafts. Already-published posts are skipped; existing drafts are updated. The import runs on the server — you can close this page and come back to it.</p>
         <p class="muted" id="whoami"></p>
       </div>
     </header>
@@ -24,10 +24,10 @@
         <button id="importBtn">Import</button>
         <p class="muted">
           A large export takes a while — photos are downloaded one at a time, deliberately
-          paced so the old site does not cut us off. If this page gives up waiting, the
-          import <strong>continues on the server</strong>; the summary is written to the
-          server log. Running it again is safe and resumes where it left off, re-downloading
-          only the photos that are still missing. Only one import can run at a time.
+          paced so the old site does not cut us off. The import <strong>runs on the server</strong>:
+          closing this page does not stop it, and reopening it shows where it is. Running it again
+          later is safe and resumes where it left off, re-downloading only the photos that are still
+          missing. Only one import can run at a time.
         </p>
       </section>
 
@@ -39,8 +39,13 @@
 
       <p class="section-label">Status</p>
       <pre id="out" role="status">—</pre>
+      <div id="progress" class="progress" hidden>
+        <progress id="progressBar" max="1" value="0" aria-labelledby="progressText"></progress>
+        <p id="progressText" role="status" aria-live="polite"></p>
+      </div>
       <div id="results" style="display:none">
         <p id="counts"></p>
+        <p id="importInterrupted" class="notice-warn" role="status" style="display:none"></p>
         <p id="importPartial" class="notice-warn" role="status" style="display:none"></p>
         <p id="importRejected" class="notice-warn" role="alert" style="display:none"></p>
         <ul id="warnings"></ul>
@@ -51,40 +56,38 @@
     <script src="/admin/auth.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
+      const POLL_MS = 2000;
+      let pollTimer = null;
 
-      $('importBtn').addEventListener('click', async () => {
-        const file = $('wxr').files[0];
-        if (!file) { $('out').textContent = 'Please select a .xml file first.'; return; }
+      function setBusy(busy) {
+        $('importBtn').disabled = busy;
+        $('wxr').disabled = busy;
+      }
 
-        $('importBtn').disabled = true;
-        $('out').textContent = 'Importing…';
+      function hideResults() {
         $('results').style.display = 'none';
-
-        const form = new FormData();
-        form.append('file', file);
-
-        let res;
-        try {
-          res = await fetch('/import', { method: 'POST', body: form });
-        } catch (e) {
-          $('out').textContent = 'Request failed: ' + e;
-          $('importBtn').disabled = false;
-          return;
+        for (const id of ['importInterrupted', 'importPartial', 'importRejected']) {
+          $(id).textContent = '';
+          $(id).style.display = 'none';
         }
+      }
 
-        if (res.status === 401) { location.href = '/login'; return; }
+      // Live counters while the job runs. `planned` is fixed at pre-flight, so the
+      // bar has a real denominator from the first poll.
+      function renderProgress(job) {
+        const p = job.progress || { groups: { total: 0, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 } };
+        const done = p.images.hosted + p.images.failed;
+        const bar = $('progressBar');
+        bar.max = Math.max(1, p.images.planned);
+        bar.value = Math.min(done, bar.max);
+        $('progressText').textContent =
+          'Photos ' + done + ' of ' + p.images.planned
+          + (p.images.failed ? ' (' + p.images.failed + ' failed)' : '')
+          + '  ·  Posts ' + p.groups.done + ' of ' + p.groups.total;
+        $('progress').hidden = false;
+      }
 
-        $('importBtn').disabled = false;
-
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          $('out').textContent = 'Import failed (' + res.status + '): ' + (body.error || 'unknown error');
-          return;
-        }
-
-        const data = await res.json();
-        $('out').textContent = 'Done.';
-
+      function renderSummary(data) {
         // The photo tally stays alongside the post counts: the failure this page
         // exists to make visible is a photo that silently kept its original
         // WordPress URL, which the post counts alone report as a clean success.
@@ -109,10 +112,6 @@
             img.failed + ' photo(s) could not be downloaded and still point at the old site. '
             + 'Run the import again to retry just those — nothing already downloaded is fetched twice.';
           partial.style.display = '';
-          $('out').textContent = 'Finished with missing photos.';
-        } else {
-          partial.textContent = '';
-          partial.style.display = 'none';
         }
 
         // Rejected groups are the security signal — an unsafe slug is the
@@ -126,9 +125,6 @@
             + 'image storage directory). Nothing here was fetched or written; fix the '
             + 'export and run the import again.';
           rej.style.display = '';
-        } else {
-          rej.textContent = '';
-          rej.style.display = 'none';
         }
 
         // render warnings (XSS-safe: createElement + textContent only)
@@ -141,14 +137,115 @@
             ul.appendChild(li);
           }
         }
+        return img.failed > 0;
+      }
 
-        $('results').style.display = '';
+      // A finished job: done (summary), failed (fixed message), or interrupted
+      // (the server restarted mid-run — issue #92). Interrupted keeps its last
+      // counters so the author sees how far it got, and the recovery is the
+      // same "run it again" that resumability (#85) already guarantees.
+      function renderFinished(job) {
+        $('progress').hidden = true;
+        hideResults();
+        if (job.status === 'done' && job.summary) {
+          const missing = renderSummary(job.summary);
+          $('out').textContent = missing ? 'Finished with missing photos.' : 'Done.';
+          $('results').style.display = '';
+          return;
+        }
+        if (job.status === 'interrupted') {
+          const p = job.progress || { groups: { total: 0, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 } };
+          $('out').textContent = 'Interrupted.';
+          const note = $('importInterrupted');
+          note.textContent =
+            'The server restarted while this import was running — it got to '
+            + (p.images.hosted + p.images.failed) + ' of ' + p.images.planned + ' photos and '
+            + p.groups.done + ' of ' + p.groups.total + ' posts. Run the import again to resume; '
+            + 'nothing already downloaded is fetched twice.';
+          note.style.display = '';
+          $('results').style.display = '';
+          return;
+        }
+        $('out').textContent = 'Import failed: ' + (job.error || 'unknown error');
+      }
+
+      async function fetchStatus() {
+        const res = await fetch('/import/status');
+        if (res.status === 401) { location.href = '/login'; return null; }
+        if (!res.ok) throw new Error('status ' + res.status);
+        return (await res.json()).job;
+      }
+
+      // Poll until the job is no longer running. One timer at a time: a second
+      // watch() (page load racing a click) replaces the first.
+      function watch() {
+        clearTimeout(pollTimer);
+        const tick = async () => {
+          let job;
+          try { job = await fetchStatus(); } catch (e) {
+            $('out').textContent = 'Lost contact with the server (' + e.message + ') — retrying…';
+            pollTimer = setTimeout(tick, POLL_MS);
+            return;
+          }
+          if (!job) return;
+          if (job.status === 'running') {
+            setBusy(true);
+            $('out').textContent = 'Running… started ' + new Date(job.startedAt).toLocaleTimeString();
+            renderProgress(job);
+            pollTimer = setTimeout(tick, POLL_MS);
+            return;
+          }
+          setBusy(false);
+          renderFinished(job);
+        };
+        void tick();
+      }
+
+      $('importBtn').addEventListener('click', async () => {
+        const file = $('wxr').files[0];
+        if (!file) { $('out').textContent = 'Please select a .xml file first.'; return; }
+
+        setBusy(true);
+        $('out').textContent = 'Uploading and checking the export…';
+        hideResults();
+        $('progress').hidden = true;
+
+        const form = new FormData();
+        form.append('file', file);
+
+        let res;
+        try {
+          res = await fetch('/import', { method: 'POST', body: form });
+        } catch (e) {
+          $('out').textContent = 'Request failed: ' + e;
+          setBusy(false);
+          return;
+        }
+
+        if (res.status === 401) { location.href = '/login'; return; }
+
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          $('out').textContent = 'Import failed (' + res.status + '): ' + (body.error || 'unknown error');
+          // 409: someone else's import is running — show it instead of a dead end.
+          if (res.status === 409) { watch(); return; }
+          setBusy(false);
+          return;
+        }
+
+        // 202: the job is running on the server; follow it.
+        const started = await res.json();
+        renderProgress({ progress: started.planned });
+        watch();
       });
 
       (async () => {
         const s = await Auth.ensureAuthed({ admin: true });
         if (!s) return;
         Auth.renderHeader(s);
+        // A job may already be running (the tab was closed), or the last one
+        // may have finished or been interrupted while nobody was looking.
+        watch();
       })();
     </script>
   </body>

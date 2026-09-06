@@ -8,7 +8,8 @@ import sharp from 'sharp';
 import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
 import { rehostImage } from '../src/wp-images.js';
-import { ImportTooLargeError, ImportInsufficientSpaceError, type ImportSummary } from '../src/wp-import.js';
+import { ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type ImportProgress, type ImportSummary, type PreparedImport } from '../src/wp-import.js';
+import { createImportRunner, memoryImportJobStore, type ImportRunner } from '../src/import-jobs.js';
 import { defaultSettings, validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
 import { memoryUserStore, type UserStore } from '../src/users.js';
@@ -84,7 +85,7 @@ function stubQueue(opts: { full?: boolean } = {}) {
 
 interface Built {
   app: ReturnType<typeof buildServer>; users: UserStore; sessions: SessionStore;
-  posts: PostStore; media: MediaStore; enqueued: string[];
+  posts: PostStore; media: MediaStore; enqueued: string[]; importJobs: ImportRunner;
 }
 function build(extra: Partial<ServerConfig> = {}): Built {
   const users = (extra.users as UserStore) ?? memoryUserStore();
@@ -93,10 +94,11 @@ function build(extra: Partial<ServerConfig> = {}): Built {
   const media = (extra.media as MediaStore) ?? memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
   const q = stubQueue();
   const encodeQueue = (extra.encodeQueue as EncodeQueue) ?? q.queue;
+  const importJobs = (extra.importJobs as ImportRunner) ?? createImportRunner({ store: memoryImportJobStore(), log: () => {} });
   const built = buildServer({
     storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
     users, sessions, settings: fakeStore(),
-    posts, media, encodeQueue,
+    posts, media, encodeQueue, importJobs,
     imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'),
     builder: (extra.builder as SiteBuilder) ?? stubBuilder().builder,
     backupDir: dir + '/backup',
@@ -105,7 +107,7 @@ function build(extra: Partial<ServerConfig> = {}): Built {
     dbCheck: async () => {},
     ...extra,
   });
-  return { app: built, users, sessions, posts, media, enqueued: q.enqueued };
+  return { app: built, users, sessions, posts, media, enqueued: q.enqueued, importJobs };
 }
 
 // Seed a user and return a Cookie header value for an authenticated session.
@@ -1724,15 +1726,34 @@ describe('WordPress import', () => {
     expect((await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json()).toHaveLength(0);
   });
 
-  it('imports the fixture export as drafts', async () => {
+  // issue #92: the multi-minute part is a job. A 202 names it, GET /import/status
+  // carries the live counters and then the same summary the old 200 did.
+  it('imports the fixture export as drafts: 202, then the summary on /import/status', async () => {
     const b = build(); const { cookie } = await authed(b);
     const xml = readFileSync('test/fixtures/wxr-sample.xml', 'utf8');
     const form = new FormData();
     form.append('file', xml, { filename: 'export.xml', contentType: 'text/xml' });
     const res = await b.app.inject({ method: 'POST', url: '/import', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ imported: 1, updated: 0, skippedPublished: 0, rejected: 0, failed: 0 });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ status: 'running', planned: { groups: { total: 1, done: 0 }, images: { planned: 2, hosted: 0, failed: 0 } } });
+    const id = res.json().id as string;
+    await b.importJobs.settle();
+    const status = await b.app.inject({ method: 'GET', url: '/import/status', cookies: cookie });
+    expect(status.statusCode).toBe(200);
+    const job = status.json().job;
+    expect(job).toMatchObject({ id, status: 'done', startedBy: 'simon', progress: { groups: { total: 1, done: 1 } } });
+    expect(job.summary).toMatchObject({ imported: 1, updated: 0, skippedPublished: 0, rejected: 0, failed: 0 });
+    expect(job.finishedAt).toBeTruthy();
     expect((await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json()).toHaveLength(1);
+  });
+
+  it('GET /import/status is admin-only and null before any import', async () => {
+    const b = build();
+    expect((await b.app.inject({ method: 'GET', url: '/import/status' })).statusCode).toBe(401);
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+    expect((await b.app.inject({ method: 'GET', url: '/import/status', cookies: author.cookie })).statusCode).toBe(403);
+    const admin = await authed(b);
+    expect((await b.app.inject({ method: 'GET', url: '/import/status', cookies: admin.cookie })).json()).toEqual({ job: null });
   });
 
   it('400 on a non-WXR upload', async () => {
@@ -1759,10 +1780,10 @@ describe('WordPress import', () => {
   });
 
   // issue #100: a re-run of an export whose posts are all already published is
-  // a 200 with `skippedPublished` — "nothing to do" is a success the author can
+  // a job with `skippedPublished` — "nothing to do" is a success the author can
   // read, not the 400 the old `skipped === 0` check returned (a 400 cannot say
   // which posts were untouched and why).
-  it('reports an all-published re-run as 200 with skippedPublished, not a 400', async () => {
+  it('reports an all-published re-run as a job with skippedPublished, not a 400', async () => {
     const b = build(); const { cookie } = await authed(b);
     // Seed a published pair under the slugs `wxrWith` exports.
     const seed = {
@@ -1774,9 +1795,8 @@ describe('WordPress import', () => {
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: seed });
     const tk = created.json().translationKey;
     await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
-    const res = await postImport(b, cookie, wxrWith());
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ imported: 0, updated: 0, skippedPublished: 1, rejected: 0, failed: 0 });
+    const summary = await importAndWait(b, cookie, wxrWith());
+    expect(summary).toMatchObject({ imported: 0, updated: 0, skippedPublished: 1, rejected: 0, failed: 0 });
   });
 
   // ---- issue #85 ----------------------------------------------------------
@@ -1807,33 +1827,45 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
     return b.app.inject({ method: 'POST', url: '/import', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
   };
 
+  /** Start an import, wait for the job, and return its summary from /import/status. */
+  const importAndWait = async (b: Built, cookie: Record<string, string>, xmlBody: string): Promise<ImportSummary> => {
+    const res = await postImport(b, cookie, xmlBody);
+    expect(res.statusCode).toBe(202);
+    await b.importJobs.settle();
+    const job = (await b.app.inject({ method: 'GET', url: '/import/status', cookies: cookie })).json().job;
+    expect(job.status).toBe('done');
+    return job.summary as ImportSummary;
+  };
+
   // Every URL here is refused by safeFetch's SSRF guard, so it fails instantly
   // and non-retryably — no network, no backoff, just the pacing gate.
   const blocked = (n: number) => Array.from({ length: n }, (_, i) => `http://127.0.0.1/p${i}.jpg`);
 
   it('reports how many images were actually hosted, so a partial import cannot look clean', async () => {
     const b = build(); const { cookie } = await authed(b);
-    const res = await postImport(b, cookie, wxrWith(...blocked(3)));
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ imported: 1, images: { total: 3, hosted: 0, failed: 3 } });
+    const summary = await importAndWait(b, cookie, wxrWith(...blocked(3)));
+    expect(summary).toMatchObject({ imported: 1, images: { total: 3, hosted: 0, failed: 3 } });
   });
 
   it('does not leak the transport error behind a failed image', async () => {
     const b = build(); const { cookie } = await authed(b);
-    const res = await postImport(b, cookie, wxrWith(...blocked(1)));
-    const warnings = (res.json().warnings as string[]).join(' ');
+    const summary = await importAndWait(b, cookie, wxrWith(...blocked(1)));
+    const warnings = summary.warnings.join(' ');
     expect(warnings).toMatch(/blocked address/);
     expect(warnings).not.toMatch(/ECONNREFUSED|refusing to fetch/);
   });
 
   const OK: ImportSummary = { imported: 1, updated: 0, skippedPublished: 0, rejected: 0, failed: 0, images: { total: 0, hosted: 0, failed: 0 }, warnings: [] };
+  const PLANNED: ImportProgress = { groups: { total: 1, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 } };
+  /** A pre-flight stub: one group, whose run() is `run` (default: instant OK). */
+  const prepared = (run: PreparedImport['run'] = async () => OK, groups = 1): PreparedImport => ({ groups, planned: PLANNED, run });
 
   it('threads the configured pacing, the resume index and the work-lock into the importer', async () => {
-    let seen: Parameters<NonNullable<ServerConfig['importRunner']>>[1] | null = null;
+    let seen: ImportDeps | null = null;
     const workLock = createWorkLock();
     const b = build({
       settings: fakeStore({ ...SETTINGS, importDelayMs: 900, importRetries: 4 }),
-      importRunner: async (_xml, deps) => { seen = deps; return OK; },
+      prepareImport: async (_xml, deps) => { seen = deps; return prepared(); },
       workLock,
     });
     const { cookie } = await authed(b);
@@ -1853,14 +1885,16 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
   });
 
   // issue #94: same status /upload uses for the same condition; the sanitized
-  // message reaches the client, the numbers stay on stdout.
-  it('maps a refused-for-space import to a 507 carrying the sanitized message, not a 500', async () => {
-    const b = build({ importRunner: async () => { throw new ImportInsufficientSpaceError('not enough free disk space for this import (1.0 GB available, about 13 GB required for 640 photos)', 640, 1024 ** 3); } });
+  // message reaches the client, the numbers stay on stdout. Pre-flight refusals
+  // happen BEFORE a job exists (issue #92), so /import/status stays empty.
+  it('maps a refused-for-space import to a 507 carrying the sanitized message, with no job started', async () => {
+    const b = build({ prepareImport: async () => { throw new ImportInsufficientSpaceError('not enough free disk space for this import (1.0 GB available, about 13 GB required for 640 photos)', 640, 1024 ** 3); } });
     const { cookie } = await authed(b);
     const res = await postImport(b, cookie, wxrWith(...blocked(1)));
     expect(res.statusCode).toBe(507);
     expect(res.json().error).toMatch(/not enough free disk space for this import/);
-    // and the single-flight flag was released
+    expect((await b.app.inject({ method: 'GET', url: '/import/status', cookies: cookie })).json()).toEqual({ job: null });
+    // and the route is not wedged
     expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(507);
   });
 
@@ -1868,49 +1902,70 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
   // recovery path, so concurrency stops being hypothetical. Two runs would both
   // see a mostly-empty resume index and both fetch everything, hit the source
   // host at 2x the configured rate, and race storeVariantFiles' non-atomic
-  // writes into a mixed variant set. Not work-lock — one flag and a 409.
-  it('refuses a second import while one is still running', async () => {
+  // writes into a mixed variant set. The runner owns the rule (issue #92).
+  it('refuses a second import while one is still running, and shows it running on /import/status', async () => {
     let release = (): void => {};
     let entered = (): void => {};
     const gate = new Promise<void>((r) => { release = r; });
     const reached = new Promise<void>((r) => { entered = r; });
-    const b = build({ importRunner: async () => { entered(); await gate; return OK; } });
+    const b = build({ prepareImport: async () => prepared(async () => { entered(); await gate; return OK; }) });
     const { cookie } = await authed(b);
-    const first = postImport(b, cookie, wxrWith(...blocked(1)));
-    await reached; // the first import is provably mid-flight — no sleeps, no flake
+    const first = await postImport(b, cookie, wxrWith(...blocked(1)));
+    expect(first.statusCode).toBe(202);
+    await reached; // the job is provably mid-flight — no sleeps, no flake
     const second = await postImport(b, cookie, wxrWith(...blocked(1)));
     expect(second.statusCode).toBe(409);
     expect(second.json().error).toMatch(/already running/i);
+    const live = (await b.app.inject({ method: 'GET', url: '/import/status', cookies: cookie })).json().job;
+    expect(live).toMatchObject({ id: first.json().id, status: 'running', summary: null });
     release();
-    expect((await first).statusCode).toBe(200);
+    await b.importJobs.settle();
+    const done = (await b.app.inject({ method: 'GET', url: '/import/status', cookies: cookie })).json().job;
+    expect(done).toMatchObject({ id: first.json().id, status: 'done', summary: OK });
   });
 
   it('accepts another import once the first has finished', async () => {
     const b = build(); const { cookie } = await authed(b);
-    expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(200);
-    expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(200);
+    await importAndWait(b, cookie, wxrWith(...blocked(1)));
+    await importAndWait(b, cookie, wxrWith(...blocked(1)));
   });
 
-  // The finally block: without it one unhandled failure wedges the endpoint
-  // until the process restarts.
-  it('releases the single-flight flag even when the import throws', async () => {
+  // A throwing run() is unexpected (per-group and per-image failures are
+  // already caught into the summary), so the job records `failed` with a fixed
+  // message — never the raw error — and the slot is freed for the next import.
+  it('records an unexpected run failure as a failed job with a sanitized message, and frees the slot', async () => {
     let calls = 0;
-    const b = build({ importRunner: async () => { calls++; throw new Error('boom'); } });
+    const b = build({ prepareImport: async () => prepared(async () => { calls++; throw new Error('boom: connect ECONNREFUSED 10.0.0.5:5432'); }) });
     const { cookie } = await authed(b);
-    expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(500);
-    expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(500);
-    expect(calls).toBe(2); // the second request got through, i.e. the flag was released
+    expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(202);
+    await b.importJobs.settle();
+    const job = (await b.app.inject({ method: 'GET', url: '/import/status', cookies: cookie })).json().job;
+    expect(job.status).toBe('failed');
+    expect(job.error).toMatch(/failed unexpectedly/);
+    expect(job.error).not.toMatch(/ECONNREFUSED|10\.0\.0\.5/);
+    expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(202);
+    await b.importJobs.settle();
+    expect(calls).toBe(2); // the second request got through, i.e. the slot was released
   });
 
   // issue #96: an export whose distinct-image count exceeds the cap is rejected
   // BEFORE any fetch. The route must map that to a 400 naming the count, not a
   // 500 — the author needs to see that the export is too large, not a crash.
   it('rejects an over-cap import with a 400 naming the count, not a 500', async () => {
-    const b = build({ importRunner: async () => { throw new ImportTooLargeError(40400, 20000); } });
+    const b = build({ prepareImport: async () => { throw new ImportTooLargeError(40400, 20000); } });
     const { cookie } = await authed(b);
     const res = await postImport(b, cookie, wxrWith(...blocked(1)));
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toMatch(/would re-host 40400 distinct images, which exceeds the cap of 20000/);
+  });
+
+  it('400s an export with no groups from the pre-flight, before any job exists', async () => {
+    const b = build({ prepareImport: async () => prepared(async () => OK, 0) });
+    const { cookie } = await authed(b);
+    const res = await postImport(b, cookie, wxrWith(...blocked(1)));
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('no importable posts found in export');
+    expect((await b.app.inject({ method: 'GET', url: '/import/status', cookies: cookie })).json()).toEqual({ job: null });
   });
 
   // The route-level resume wiring, end to end: pre-host the photo the export
@@ -1923,8 +1978,8 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
     await rehostImage('https://seed/p0.jpg', 'trips/imp-de/p0', 'a',
       { storageDir: dir, baseUrl: 'https://img.simonswanderlust.com', fetchImpl });
 
-    const res = await postImport(b, cookie, wxrWith('http://127.0.0.1/p0.jpg'));
-    expect(res.json()).toMatchObject({ images: { total: 1, hosted: 1, failed: 0 } });
+    const summary = await importAndWait(b, cookie, wxrWith('http://127.0.0.1/p0.jpg'));
+    expect(summary).toMatchObject({ images: { total: 1, hosted: 1, failed: 0 } });
   });
 });
 

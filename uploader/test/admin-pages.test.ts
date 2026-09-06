@@ -443,10 +443,11 @@ describe('settings.html import pacing fields', () => {
 describe('import.html recovery copy', () => {
   const html = readFileSync('public/import.html', 'utf8');
 
-  // After #85 this IS the user-facing recovery story: the request usually
-  // outlives the browser's patience, and re-running resumes from disk.
-  it('tells the author the import survives a browser timeout and that re-running resumes', () => {
-    expect(html).toMatch(/continues on the server/i);
+  // After #92 the recovery story is: the import runs on the server, the page
+  // polls its progress, and re-running resumes from disk (#85).
+  it('tells the author the import runs on the server, is polled, and that re-running resumes', () => {
+    expect(html).toMatch(/runs on the server/i);
+    expect(html).toMatch(/\/import\/status/);
     expect(html).toMatch(/again/i);
     expect(html).toMatch(/resum/i);
   });
