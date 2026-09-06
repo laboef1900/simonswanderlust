@@ -697,6 +697,17 @@ blog/
   a DROP+CREATE in one transaction when the pre-#119 non-partial form is found. Real slugs stay
   unique, `validateForPublish` still refuses `''`, and `exportPost` no longer writes
   `trips/en/.mdx`. See `docs/superpowers/specs/2026-09-05-empty-slug-unset-design.md`.
+- **Done:** #99 pair identity in the WXR importer (2026-09-05) — `importWxr` matched an incoming
+  group to a stored post through one flat map of *both* slugs of every post, so a group whose EN
+  slug equalled an unrelated post's DE slug bound to that post's `translationKey` and `upsertDraft`
+  overwrote it (Golden Rule 2). Pair identity is now the (DE slug, EN slug) tuple matched as a
+  unit: both slugs owned by one pair → `updated`; no overlap → new pair; **any** other overlap —
+  one slug matches, the two slugs belong to two different posts, or a cross-locale namesake — is
+  `rejected` before any fetch with a warning naming the owner, and the same rule holds between
+  groups of one export. The namesake is rejected rather than admitted because the re-host keys are
+  `trips/<slug>/…` with no locale segment (#85's disk-derived resume depends on them), so a new
+  pair would write its photos over the existing post's variant files. See
+  `docs/superpowers/specs/2026-09-05-wxr-import-pair-identity-design.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**
@@ -718,7 +729,5 @@ blog/
   - **#97 `/import` → `requireAdmin`** (every comparable surface already is).
   - **#98 `nameFromUrl` non-injectivity** — `foo.jpg`/`foo.png` collide on one key. Any fix must keep
     keys deterministic; #85's disk-derived resume depends on that.
-  - **#99 `bySlug` flattens DE and EN slugs** — a group can bind to the wrong `translationKey` and
-    `upsertDraft` then overwrites the wrong post. Touches Golden Rule 2.
 
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.

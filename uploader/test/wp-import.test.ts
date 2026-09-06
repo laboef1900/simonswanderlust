@@ -303,6 +303,95 @@ ${['de', 'en']
 });
 
 /**
+ * Issue #99: pair identity is the (DE slug, EN slug) tuple matched as a unit.
+ * A single slug matched across locales is never a binding — and because the
+ * image storage keys (`trips/<slug>/…`) carry no locale, a cross-locale
+ * namesake is not admitted as a new pair either: it would write its photos over
+ * the existing post's variant files.
+ */
+describe('importWxr pair identity', () => {
+  const seed = async (store: PostStore, deSlug: string, enSlug: string) => importWxr(
+    pairOf('seed', deSlug, enSlug, '<p>original de</p>', '<p>original en</p>'),
+    { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost },
+  );
+  const rehostSpy = async () => { throw new Error('rehost must not be called for a conflicting group'); };
+
+  it('rejects a group whose EN slug equals an unrelated post\'s DE slug, fetching and writing nothing', async () => {
+    const store = memoryPostStore();
+    await seed(store, 'rhodos', 'rhodes-adventure');       // existing DE slug "rhodos"
+    const s = await importWxr(pairOf('g2', 'rhodos-2', 'rhodos', imgs('https://wp/hero.jpg'), '<p>new en</p>'), // incoming EN slug "rhodos"
+      { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: rehostSpy });
+    expect(s).toMatchObject({ imported: 0, updated: 0, skippedPublished: 0, rejected: 1, failed: 0 });
+    expect(s.warnings.join(' ')).toMatch(/slug conflict with an existing post \(rhodos\/rhodes-adventure\)/);
+    const posts = await store.list();
+    expect(posts).toHaveLength(1);
+    const original = (await store.get(posts[0]!.translationKey))!;
+    expect(original.en.slug).toBe('rhodes-adventure');
+    expect(original.de.bodyMarkdown).toContain('original de');
+  });
+
+  it('never binds a published post\'s protection to a cross-locale namesake (rejected, not skippedPublished)', async () => {
+    const store = memoryPostStore();
+    await seed(store, 'rhodos', 'rhodes-adventure');
+    await store.publish((await store.list())[0]!.translationKey);
+    const s = await importWxr(pairOf('g2', 'rhodos-2', 'rhodos', '<p>new de</p>'),
+      { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: rehostSpy });
+    expect(s).toMatchObject({ imported: 0, rejected: 1, skippedPublished: 0 });
+  });
+
+  it('rejects a group whose slug is already claimed by an earlier group in the same export', async () => {
+    const store = memoryPostStore();
+    const s = await importWxr(wxr([
+      item('de', 'rhodos', 'g1', '<p>a</p>'), item('en', 'rhodes', 'g1', '<p>a</p>'),
+      item('de', 'kreta', 'g2', '<p>b</p>'), item('en', 'rhodos', 'g2', '<p>b</p>'), // EN "rhodos" = g1's DE slug
+    ].join('\n')), { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
+    expect(s).toMatchObject({ imported: 1, rejected: 1 });
+    expect(s.warnings.join(' ')).toMatch(/kreta\/rhodos: slug conflict within this export \(also used by rhodos\/rhodes\)/);
+    expect((await store.list()).map((p) => `${p.slugDe}/${p.slugEn}`)).toEqual(['rhodos/rhodes']);
+  });
+
+  it('accepts a pair whose DE and EN slugs are the same word (one trip, one namespace)', async () => {
+    const store = memoryPostStore();
+    const s = await seed(store, 'rhodos', 'rhodos');
+    expect(s).toMatchObject({ imported: 1, rejected: 0 });
+    expect(await seed(store, 'rhodos', 'rhodos')).toMatchObject({ updated: 1, rejected: 0 });
+  });
+
+  it('re-binds only when BOTH slugs match one existing pair', async () => {
+    const store = memoryPostStore();
+    await seed(store, 'rhodos', 'rhodes-adventure');
+    const tk = (await store.list())[0]!.translationKey;
+    const s = await seed(store, 'rhodos', 'rhodes-adventure');
+    expect(s).toMatchObject({ imported: 0, updated: 1, rejected: 0 });
+    expect((await store.list()).map((p) => p.translationKey)).toEqual([tk]);
+  });
+
+  it('rejects a group whose two slugs belong to two different existing pairs, writing nothing', async () => {
+    const store = memoryPostStore();
+    await seed(store, 'rhodos', 'rhodes-adventure');
+    await importWxr(pairOf('seed2', 'kreta', 'crete', '<p>original de</p>'), { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
+    const rehostSpy = async () => { throw new Error('rehost must not be called for a conflicting group'); };
+    const s = await importWxr(pairOf('g3', 'rhodos', 'crete', imgs('https://wp/a.jpg')),
+      { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: rehostSpy });
+    expect(s).toMatchObject({ imported: 0, updated: 0, skippedPublished: 0, rejected: 1, failed: 0 });
+    expect(s.warnings.join(' ')).toMatch(/slug conflict/);
+    const posts = await store.list();
+    expect(posts.map((p) => `${p.slugDe}/${p.slugEn}`).sort()).toEqual(['kreta/crete', 'rhodos/rhodes-adventure']);
+    for (const p of posts) expect((await store.get(p.translationKey))!.de.bodyMarkdown).toContain('original de');
+  });
+
+  it('rejects a partial match rather than renaming the other locale\'s live slug', async () => {
+    const store = memoryPostStore();
+    await seed(store, 'rhodos', 'rhodes-adventure');
+    const s = await importWxr(pairOf('g4', 'rhodos', 'rhodes', '<p>new de</p>'), { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
+    expect(s).toMatchObject({ imported: 0, updated: 0, rejected: 1, failed: 0 });
+    const only = (await store.list());
+    expect(only).toHaveLength(1);
+    expect(only[0]).toMatchObject({ slugDe: 'rhodos', slugEn: 'rhodes-adventure' });
+  });
+});
+
+/**
  * Issue #85: throttle, bounded retry, honest accounting, resumability.
  *
  * @ai-context docs/superpowers/specs/2026-07-30-wxr-import-hardening-design.md
