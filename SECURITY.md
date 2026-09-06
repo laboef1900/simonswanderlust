@@ -204,31 +204,45 @@ The importer fetches image URLs taken from an uploaded export — attacker-influ
 fetches go through `safeFetch` (`uploader/src/safe-fetch.ts`), which:
 
 - allows only `http`/`https` and rejects URLs with embedded credentials;
-- rejects literal **loopback** and **link-local** addresses, including the cloud-metadata endpoint
-  `169.254.169.254`;
-- enforces a hard **timeout** (AbortController); and
+- rejects **internal address literals** — loopback, RFC1918, CGNAT, link-local (including the
+  cloud-metadata endpoint `169.254.169.254`), multicast/reserved, and the IPv6 equivalents
+  (`::1`, `fe80::/10`, `fc00::/7`, NAT64, IPv4-mapped forms like `::ffff:127.0.0.1`) — one
+  `net.BlockList` is the single source of truth; the WHATWG `URL` parser canonicalises
+  decimal/hex/octal IPv4 spellings before the check sees them;
+- **resolves every hostname before connecting** (`dns.lookup`, all records) and refuses if *any*
+  address it resolves to is internal — so `localhost`, the compose-internal `db`, or an attacker's
+  hostname with a private A record are refused, and a split public+private record does not let the
+  attacker pick the connect target;
+- **follows redirects by hand** (`redirect: 'manual'`, issue #93) — each `Location` is resolved
+  against the current hop and put through the same scheme/credential/literal/resolution checks
+  *before* it is fetched, with a hop cap (`maxRedirects`, default 5); a redirect into internal
+  space is refused with the internal host never contacted, and a redirect to `ftp:`/`file:`/`data:`
+  is refused as an unusable URL. WordPress media URLs legitimately redirect (CDN, HTTPS upgrade,
+  resized-variant handlers), which is why hops are followed at all — judged first, then fetched;
+- enforces a hard **timeout** (AbortController) that spans every lookup and every hop of a chain,
+  so a slow chain cannot exceed it by splitting time across hops; and
 - **caps the download size while streaming**, so a huge or never-ending response cannot be buffered
-  fully into memory.
+  fully into memory. Redirect bodies are cancelled unread; the cap applies to the final body.
+
+Design and misuse cases: `docs/superpowers/specs/2026-09-05-safe-fetch-redirects-design.md`.
 
 (The former LM Studio caption feature — the app's only other outbound-fetch surface — was removed
 in July 2026; the WordPress importer is now the sole remote-fetch path.)
 
-### Retry changes the shape of two accepted gaps (issue #85, 2026-07-30)
+### Retry widened the per-URL window (issue #85, 2026-07-30; narrowed by #93, 2026-09-05)
 
-`POST /import` now retries a failed image download up to `importRetries` times. `safeFetch` is
-unchanged and is re-entered from scratch on every attempt, so `assertFetchableUrl` re-validates each
-time — a test counts validations per attempt to keep it that way. But two **previously single-shot**
-accepted weaknesses become multi-shot, which is a change to the security model rather than a bug:
-
-- `assertFetchableUrl` is a pre-resolution **string** check, so a hostname that resolves to a
-  private address is not caught (documented above as out of scope for a single-tenant deployment).
-- `safeFetch` uses `redirect: 'follow'`, so redirect hops are never re-inspected.
-
-A DNS-rebinding or redirecting attacker therefore gets up to `importRetries + 1` attempts per URL
-instead of one. `redirect: 'manual'` with a per-hop re-assert was considered and **declined for
-now**: WordPress media URLs legitimately redirect, and breaking the importer to narrow a gap that is
-already accepted for this deployment is the wrong trade. Compensating controls, all in
-`uploader/src/wp-import.ts`:
+`POST /import` retries a failed image download up to `importRetries` times. `safeFetch` is
+re-entered from scratch on every attempt, so every check above re-runs each time — a test counts
+validations per attempt to keep it that way. When #85 landed, two **single-shot** accepted
+weaknesses became multi-shot: `assertFetchableUrl` was a pre-resolution string check, and
+`safeFetch` used `redirect: 'follow'`, so neither a private DNS answer nor a redirect hop was ever
+inspected. `redirect: 'manual'` was considered then and **declined** — WordPress media URLs
+legitimately redirect, and breaking the importer inside a larger change was the wrong trade
+(PR #90). #93 implemented it on its own, with real redirect shapes tested: hops are now
+re-validated and hostnames resolved before every connect (see above). What retry still multiplies
+is the **DNS-rebinding residual** in *Known limitations* — a zero-TTL flip between the check and
+undici's own connect-time lookup — and that window now gets `importRetries + 1` attempts per URL
+instead of one. Compensating controls, all in `uploader/src/wp-import.ts`:
 
 - **`retryBudget`** (default 200) caps *retry* attempts across an entire import, so the extra load
   this feature can generate is bounded at +200 fetches per import regardless of export size — not
@@ -264,7 +278,7 @@ that answers.
 
 ### Import failure reasons are deliberately vague
 
-`isBlockedHost` blocks loopback and link-local literals but **not RFC1918**. `POST /import` has been
+`safeFetch` refuses internal addresses, and a refusal is itself a signal. `POST /import` has been
 `requireAdmin` since #97, so the residual oracle below is reachable only by an admin — who already
 has `/settings` and `/backups` — but the response stays vague regardless (defense in depth).
 Before #85 a failed image returned the raw undici text to
@@ -409,9 +423,11 @@ deliberate trade-off, not an oversight:
 
 ## Known limitations
 
-- SSRF filtering blocks literal internal IPs but does not resolve DNS, so a hostname that resolves
-  to a private address is not caught (DNS-rebind-proof filtering is out of scope for the trusted,
-  single-tenant deployment).
+- SSRF filtering resolves every hostname and refuses internal answers, but it cannot pin that
+  answer into the connection: undici resolves the name again when it connects, so a zero-TTL DNS
+  rebinding flip between the check and the connect still lands one request. Closing it needs a
+  custom `undici` `Agent` with `connect.lookup` — a new dependency, declined for the trusted,
+  single-tenant deployment (`docs/superpowers/specs/2026-09-05-safe-fetch-redirects-design.md`).
 - The rate limiter and (non-pg) session/user fallbacks are per-process/in-memory.
 - No Content-Security-Policy on the admin app (inline scripts).
 

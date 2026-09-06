@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 import { processImage } from './pipeline.js';
 import { assertSafeKey, storeVariants } from './storage.js';
-import { safeFetch } from './safe-fetch.js';
+import { safeFetch, type LookupFn } from './safe-fetch.js';
 import { FORMATS, variantWidths } from './variants.js';
 import type { WorkLock } from './work-lock.js';
 
@@ -13,6 +13,8 @@ export interface RehostOptions {
   storageDir: string;
   baseUrl: string;
   fetchImpl?: typeof fetch;
+  /** DNS resolver handed to `safeFetch` (issue #93); tests inject one, production uses the default. */
+  lookup?: LookupFn;
   timeoutMs?: number;
   maxBytes?: number;
   /**
@@ -26,7 +28,7 @@ export interface RehostOptions {
 export async function rehostImage(url: string, key: string, alt: string, opts: RehostOptions): Promise<RehostResult> {
   // @ai-warning: `url` is taken from an uploaded WordPress export, so it is
   // attacker-influenced. safeFetch applies the SSRF guard + timeout + byte cap.
-  const { buffer } = await safeFetch(url, { fetchImpl: opts.fetchImpl, timeoutMs: opts.timeoutMs, maxBytes: opts.maxBytes });
+  const { buffer } = await safeFetch(url, { fetchImpl: opts.fetchImpl, lookup: opts.lookup, timeoutMs: opts.timeoutMs, maxBytes: opts.maxBytes });
   // The fetch stays OUTSIDE the lock: network I/O guards no memory, and holding
   // the mutex across a stalling source host would delay a Publish for nothing.
   // Only the sharp pipeline + variant writes are what a build must never overlap.

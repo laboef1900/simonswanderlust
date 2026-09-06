@@ -5,6 +5,10 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 import { createRehostResume, rehostImage } from '../src/wp-images.js';
 import { createWorkLock } from '../src/work-lock.js';
+import type { LookupFn } from '../src/safe-fetch.js';
+
+/** safeFetch resolves every hostname (#93); the stub hosts here have no DNS. */
+const publicLookup: LookupFn = async () => [{ address: '93.184.216.34', family: 4 }];
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'wpimg-')); });
@@ -13,14 +17,14 @@ beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'wpimg-')); });
 async function seed(key: string, width = 800, height = 600): Promise<void> {
   const jpeg = await sharp({ create: { width, height, channels: 3, background: '#345' } }).jpeg().toBuffer();
   const fetchImpl = (async () => new Response(new Uint8Array(jpeg))) as unknown as typeof fetch;
-  await rehostImage('https://wp/seed.jpg', key, 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl });
+  await rehostImage('https://wp/seed.jpg', key, 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lookup: publicLookup });
 }
 
 describe('rehostImage', () => {
   it('downloads, processes via the pipeline, and returns src + dimensions', async () => {
     const jpeg = await sharp({ create: { width: 800, height: 600, channels: 3, background: '#345' } }).jpeg().toBuffer();
     const fetchImpl = (async () => new Response(new Uint8Array(jpeg))) as unknown as typeof fetch;
-    const r = await rehostImage('https://wp/x.jpg', 'trips/t/body', 'Alt', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl });
+    const r = await rehostImage('https://wp/x.jpg', 'trips/t/body', 'Alt', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lookup: publicLookup });
     expect(r.src).toBe('https://img.example/trips/t/body');
     expect(r.width).toBe(800);
     expect(r.height).toBe(600);
@@ -38,7 +42,7 @@ describe('rehostImage', () => {
   });
   it('throws on a non-200 download', async () => {
     const fetchImpl = (async () => new Response('missing', { status: 404 })) as unknown as typeof fetch;
-    await expect(rehostImage('https://wp/missing.jpg', 'trips/t/x', 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl })).rejects.toThrow(/404/);
+    await expect(rehostImage('https://wp/missing.jpg', 'trips/t/x', 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lookup: publicLookup })).rejects.toThrow(/404/);
   });
   it('refuses to fetch internal addresses (SSRF guard)', async () => {
     const fetchImpl = (async () => new Response(new Uint8Array(1))) as unknown as typeof fetch;
@@ -90,7 +94,7 @@ describe('rehostImage under the work-lock', () => {
     const jpeg = await jpegOf();
     let fetched = false;
     const fetchImpl = (async () => { fetched = true; return new Response(new Uint8Array(jpeg)); }) as unknown as typeof fetch;
-    const rehost = rehostImage('https://wp/x.jpg', 'trips/t/locked', 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lock });
+    const rehost = rehostImage('https://wp/x.jpg', 'trips/t/locked', 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lookup: publicLookup, lock });
 
     await asked; // the download completed and the encode is now queued behind the build
     expect(fetched).toBe(true); // network I/O is not gated …
@@ -111,7 +115,7 @@ describe('rehostImage under the work-lock', () => {
     const fetching = gate();
     const finish = gate();
     const fetchImpl = (async () => { fetching.open(); await finish.opened; return new Response(new Uint8Array(jpeg)); }) as unknown as typeof fetch;
-    const rehost = rehostImage('https://wp/slow.jpg', 'trips/t/slow', 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lock });
+    const rehost = rehostImage('https://wp/slow.jpg', 'trips/t/slow', 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lookup: publicLookup, lock });
     await fetching.opened; // mid-download
 
     let buildRan = false;
@@ -126,11 +130,11 @@ describe('rehostImage under the work-lock', () => {
     const { lock, asked, order } = observedLock();
     const jpeg = await jpegOf();
     const fetchImpl = (async () => new Response(new Uint8Array(jpeg))) as unknown as typeof fetch;
-    const first = rehostImage('https://wp/1.jpg', 'trips/t/one', 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lock });
+    const first = rehostImage('https://wp/1.jpg', 'trips/t/one', 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lookup: publicLookup, lock });
     await asked; // the first encode holds the lock (nothing else contends for it)
     expect(lock.stats().sharedRunning).toBe(1);
     const build = lock.runExclusive(async () => { order.push('build'); });
-    const second = rehostImage('https://wp/2.jpg', 'trips/t/two', 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lock });
+    const second = rehostImage('https://wp/2.jpg', 'trips/t/two', 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lookup: publicLookup, lock });
     await Promise.all([first, build, second]);
     expect(order).toEqual(['encode:start', 'encode:end', 'build', 'encode:start', 'encode:end']);
   });
