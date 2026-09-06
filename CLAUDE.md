@@ -682,6 +682,13 @@ blog/
   when the export yields no groups at all: an all-published re-run is a 200 with
   `skippedPublished`, and `import.html` shows each bucket by name with a dedicated callout for
   `rejected` — the same treatment #85 gave un-hosted photos.
+- **Done:** #117 rescan re-queues what it finds (2026-09-05) — `POST /media/rescan` ran only the
+  disk sync, which inserts a crashed upload (original on disk, no variants) as `processing`; only
+  `encodeQueue.recover()` re-seeds the queue from that status, and it was called from the boot
+  chain alone, so an admin's Rescan stranded exactly the rows it discovered until the next restart
+  (`/media/retry` skips `processing`). `createReconciler` in `media-sync.ts` is now the single
+  entry point — sync **then** recover — for both boot and the route, and the report carries a
+  `recovered` count. See `docs/superpowers/specs/2026-09-05-rescan-reconcile-design.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

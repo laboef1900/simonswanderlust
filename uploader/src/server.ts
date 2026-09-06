@@ -16,7 +16,7 @@ import {
 import { BacklogFullError, type EncodeQueue } from './encode-queue.js';
 import { parseExif } from './exif.js';
 import { diskSpace, insufficientSpace, formatBytes } from './disk.js';
-import type { SyncReport } from './media-sync.js';
+import type { ReconcileReport } from './media-sync.js';
 import { verifyPassword, type UserStore, UserExistsError, DUMMY_STORED_HASH, MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from './users.js';
 import type { SessionStore } from './sessions.js';
 import {
@@ -56,11 +56,15 @@ export interface ServerConfig {
   passwordLimiter?: AccountLimiter;
   media: MediaStore;
   encodeQueue: EncodeQueue;
-  /** Disk↔database reconciliation, triggered by POST /media/rescan. */
-  mediaSync?: { run: () => Promise<SyncReport> };
+  /**
+   * Disk↔database reconciliation + encode re-seed (`createReconciler`),
+   * triggered by POST /media/rescan. The route MUST NOT call the sync alone —
+   * see the @ai-warning on `createReconciler` (#117).
+   */
+  reconciler?: { run: () => Promise<ReconcileReport> };
   /**
    * The WXR importer. Injectable for the same reason as `loginLimiter` and
-   * `mediaSync`: the real one's pacing and retry behaviour cannot be observed
+   * `reconciler`: the real one's pacing and retry behaviour cannot be observed
    * from a route test, because every failure mode reachable without a network
    * (the SSRF guard, an unresolvable host) is classified NON-retryable by
    * design, and the retryable ones cost 15 s each.
@@ -509,8 +513,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // `processing` and then hitting a full backlog strands the key: the row says
   // `processing` with nothing queued, and nothing recovers it — this route
   // skips `processing` (below), the UI only offers Retry for `failed`, and the
-  // publish gate blocks every post referencing it until the next restart runs
-  // encodeQueue.recover().
+  // publish gate blocks every post referencing it until the next reconcile
+  // pass (a restart or POST /media/rescan) runs encodeQueue.recover().
   // The flip has to come FIRST despite that, not after a successful enqueue:
   // the queue can start the job immediately, and a fast encode would then
   // write `ready` before our write landed, leaving the row stuck at
@@ -539,8 +543,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   app.post('/media/rescan', { preHandler: requireAdmin }, async (_req, reply) => {
-    if (!cfg.mediaSync) return reply.code(503).send({ error: 'reconciliation is not configured' });
-    return reply.send(await cfg.mediaSync.run());
+    if (!cfg.reconciler) return reply.code(503).send({ error: 'reconciliation is not configured' });
+    return reply.send(await cfg.reconciler.run());
   });
 
   app.get('/media/queue', { preHandler: requireAuth }, async (_req, reply) =>
