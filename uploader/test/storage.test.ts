@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assertSafeKey, contentHashKey, storeVariants, storeOriginal, storeVariantFiles, isOriginalFile } from '../src/storage.js';
+import { assertSafeKey, contentHashKey, storeVariants, storeOriginal, storeVariantFiles, isOriginalFile, MAX_KEY_LEN, MAX_KEY_DEPTH } from '../src/storage.js';
 import type { ProcessResult } from '../src/pipeline.js';
 
 const result: ProcessResult = {
@@ -117,6 +117,35 @@ describe('isOriginalFile', () => {
     // A key ending in "-orig" still only excludes its actual original file.
     expect(isOriginalFile('trips/foo-orig-1280.webp')).toBe(false);
     expect(isOriginalFile('trips/foo-orig-orig.jpg')).toBe(true);
+  });
+});
+
+describe('assertSafeKey bounds (#133)', () => {
+  it('accepts a key at the length and depth caps', () => {
+    expect(() => assertSafeKey('a'.repeat(MAX_KEY_LEN))).not.toThrow();
+    expect(() => assertSafeKey(Array.from({ length: MAX_KEY_DEPTH }, () => 'a').join('/'))).not.toThrow();
+  });
+
+  it('rejects one over the length cap without echoing the key', () => {
+    const key = 'a'.repeat(MAX_KEY_LEN + 1);
+    let message = '';
+    try { assertSafeKey(key); } catch (e) { message = (e as Error).message; }
+    expect(message).toMatch(/longer than/);
+    expect(message).not.toContain(key);
+  });
+
+  it('rejects one over the depth cap — storeOriginal would mkdir -p the whole tree', async () => {
+    const key = Array.from({ length: MAX_KEY_DEPTH + 1 }, () => 'a').join('/');
+    expect(() => assertSafeKey(key)).toThrow(/path segments/);
+    await expect(storeOriginal(key, Buffer.from('x'), 'jpg', { storageDir: dir })).rejects.toThrow(/unsafe storage key/);
+    await expect(readdir(join(dir, 'a'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // The producers every real key comes from must sit inside the cap.
+  it('a versioned library key fits with room to spare', () => {
+    const key = contentHashKey(`library/2026/${'x'.repeat(60)}`, Buffer.from('img'));
+    expect(key.length).toBeLessThan(MAX_KEY_LEN);
+    expect(() => assertSafeKey(key)).not.toThrow();
   });
 });
 

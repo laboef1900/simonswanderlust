@@ -22,9 +22,31 @@ export interface StoredImage {
 // @ai-warning: do not loosen this to allow '.' — it is what blocks `../` traversal.
 const SAFE_KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
 
+/**
+ * Bounds on a FINAL key (after `contentHashKey` appended `-<hash8>`, for
+ * uploads). `storeOriginal` does `mkdir -p` on the key's directories, so an
+ * unbounded key is a 1000-deep tree per upload or an `ENAMETOOLONG` 500 that
+ * the regex alone lets through (#133).
+ *
+ * @ai-warning Cross-lane contract: every producer of keys must fit inside
+ * these — the WordPress importer's un-hashed `trips/<slug>/<name>` (whose
+ * resume-from-disk depends on the key being a pure function of the URL) and a
+ * client key on `/upload` (at most `MAX_KEY_LEN - 9`). See
+ * docs/superpowers/specs/2026-09-06-media-store-input-hardening-design.md.
+ */
+export const MAX_KEY_LEN = 200;
+export const MAX_KEY_DEPTH = 8;
+
 export function assertSafeKey(key: string): void {
+  // Checked first so the messages below never echo an attacker-sized key.
+  if (typeof key !== 'string' || key.length > MAX_KEY_LEN) {
+    throw new Error(`unsafe storage key (longer than ${MAX_KEY_LEN} characters)`);
+  }
   if (!SAFE_KEY_RE.test(key) || key.includes('..') || key.includes('//')) {
     throw new Error(`unsafe storage key "${key}" (lowercase a-z, 0-9, / _ - only; no traversal)`);
+  }
+  if (key.split('/').length > MAX_KEY_DEPTH) {
+    throw new Error(`unsafe storage key "${key}" (more than ${MAX_KEY_DEPTH} path segments)`);
   }
 }
 

@@ -207,6 +207,16 @@ describe('memoryMediaStore', () => {
     await expect(s.patch('ghost', { title: 'x' })).rejects.toThrow(MediaStoreError);
   });
 
+  // Postgres `text` rejects a NUL byte; before #133 this was a 500 only the
+  // pg store could produce, so the unit suite never saw it.
+  it('strips NUL and other control/format characters from title, alt and caption', async () => {
+    const s = store();
+    await add(s, 'k', { title: 'a\u0000b', alt: { de: 'x\u202Ey', en: 'p\u200Dq' }, caption: { de: 'c\u001Fd', en: 'ok' } });
+    expect(await s.get('k')).toMatchObject({ title: 'ab', alt: { de: 'xy', en: 'pq' }, caption: { de: 'cd', en: 'ok' } });
+    const patched = await s.patch('k', { title: 'n\u0000\u007Fu' });
+    expect(patched.title).toBe('nu');
+  });
+
   it('notReadyKeys returns only non-ready keys and ignores unknown ones', async () => {
     // Unknown keys must NOT block publishing — WordPress-imported and legacy
     // files predate the library and exist on disk perfectly well.
