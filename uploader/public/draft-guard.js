@@ -17,15 +17,36 @@ window.DraftGuard = (function () {
     return raw;
   }
 
-  // opts: { storageKey, collect, debounceMs? } — collect() returns the full
-  // form payload to stash; debounceMs is the idle time before an auto-stash.
+  // A key unique to THIS page load, so two "new post" tabs never share a stash
+  // (#138): before, both auto-stashed under `swl:draft:new`, the first save
+  // re-keyed and then deleted whatever was there, and the other tab's work was
+  // gone. Deliberately NOT persisted in sessionStorage: a tab opened from the
+  // admin (ctrl/middle-click, target=_blank, duplicate) gets a COPY of its
+  // opener's sessionStorage, which is exactly the two-tab case this must
+  // separate. A reload or a restored tab instead finds its previous stash
+  // through the orphan scan in tryRestore(), as the newest `new:*` entry.
+  function tabScopedKey(prefix) {
+    const nonce = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    return prefix + ':' + nonce;
+  }
+
+  // opts: { storageKey, collect, debounceMs?, orphanPrefix? } — collect() returns
+  // the full form payload to stash; debounceMs is the idle time before an
+  // auto-stash. With orphanPrefix, tryRestore() falls back to the newest stash
+  // under that prefix (another tab's — closed, crashed, or still open) when this
+  // tab has none of its own, so a stash keyed to a tab that no longer exists is
+  // still offered somewhere.
   function createDraftGuard(opts) {
     let key = opts.storageKey;
     const collect = opts.collect;
     const debounceMs = opts.debounceMs || 5000;
+    const orphanPrefix = opts.orphanPrefix || '';
     let dirty = false;
     let timer = null;
     let generation = 0; // bumped on every edit; lets markClean detect mid-save edits
+    let adoptedFrom = null; // another tab's stash key this tab restored from
 
     // All localStorage access is best-effort: quota errors / private mode
     // degrade to warning-only behavior (the beforeunload prompt still works).
@@ -58,23 +79,59 @@ window.DraftGuard = (function () {
       if (token !== undefined && token !== generation) return;
       dirty = false;
       cancelTimer();
-      try { localStorage.removeItem(key); } catch (e) { /* best-effort */ }
+      try {
+        localStorage.removeItem(key);
+        // The restored orphan is now saved server-side: drop it so it is not
+        // offered again. Deferred until here so a still-open source tab keeps
+        // its stash until its content has actually been persisted.
+        if (adoptedFrom !== null) { localStorage.removeItem(adoptedFrom); adoptedFrom = null; }
+      } catch (e) { /* best-effort */ }
     }
 
-    // Returns { savedAt, payload } if a plausible stash exists, else null
-    // (absent, corrupt JSON, or an unexpected shape all degrade to null).
+    function parseStash(raw) {
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return null;
+      if (typeof parsed.savedAt !== 'string') return null;
+      if (!parsed.payload || typeof parsed.payload !== 'object') return null;
+      return parsed;
+    }
+
+    // Returns { savedAt, payload, key } if a plausible stash exists, else null
+    // (absent, corrupt JSON, or an unexpected shape all degrade to null). This
+    // tab's own key wins; otherwise the newest orphan under orphanPrefix. The
+    // returned `key` names where it came from — pass the stash to adopt() on
+    // restore, or to dismissRestore() on decline.
     function tryRestore() {
       try {
-        const raw = localStorage.getItem(key);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
-        if (!parsed || typeof parsed !== 'object') return null;
-        if (typeof parsed.savedAt !== 'string') return null;
-        if (!parsed.payload || typeof parsed.payload !== 'object') return null;
-        return parsed;
+        const own = parseStash(localStorage.getItem(key));
+        if (own) return { ...own, key };
+        if (!orphanPrefix) return null;
+        let best = null;
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (!k || k.indexOf(orphanPrefix) !== 0) continue;
+          let s;
+          try { s = parseStash(localStorage.getItem(k)); } catch (e) { continue; }
+          if (s && (best === null || s.savedAt > best.savedAt)) best = { ...s, key: k };
+        }
+        return best;
       } catch (e) {
         return null;
       }
+    }
+
+    // The author chose to restore `stash`: copy it under THIS tab's key, so
+    // this tab's later stash/markClean touch its own entry. The source is left
+    // in place until markClean — if it belongs to a tab that is still open,
+    // deleting it now would lose that tab's work should it crash before its
+    // next edit. Only on acceptance: a declined stash is never touched.
+    function adopt(stash) {
+      if (!stash || typeof stash.key !== 'string' || stash.key === key) return;
+      try {
+        const v = localStorage.getItem(stash.key);
+        if (v !== null) { localStorage.setItem(key, v); adoptedFrom = stash.key; }
+      } catch (e) { /* best-effort */ }
     }
 
     // Decline restoring a stash WITHOUT destroying it: disarm dirty tracking so
@@ -88,7 +145,7 @@ window.DraftGuard = (function () {
       cancelTimer();
       try {
         const at = stash && typeof stash.savedAt === 'string' ? stash.savedAt : '';
-        if (at) sessionStorage.setItem(key + ':dismissed', at);
+        if (at) sessionStorage.setItem((stash.key || key) + ':dismissed', at);
       } catch (e) { /* best-effort: sessionStorage may be unavailable */ }
     }
 
@@ -97,7 +154,7 @@ window.DraftGuard = (function () {
     function wasDismissed(stash) {
       try {
         return !!stash && typeof stash.savedAt === 'string'
-          && sessionStorage.getItem(key + ':dismissed') === stash.savedAt;
+          && sessionStorage.getItem((stash.key || key) + ':dismissed') === stash.savedAt;
       } catch (e) {
         return false;
       }
@@ -130,8 +187,8 @@ window.DraftGuard = (function () {
       e.returnValue = ''; // legacy Chrome needs returnValue set to show the dialog
     });
 
-    return { markDirty, markClean, snapshot, stashNow, tryRestore, dismissRestore, wasDismissed, setKey, redirectToLogin };
+    return { markDirty, markClean, snapshot, stashNow, tryRestore, adopt, dismissRestore, wasDismissed, setKey, redirectToLogin };
   }
 
-  return { safeNextPath, createDraftGuard };
+  return { safeNextPath, tabScopedKey, createDraftGuard };
 })();

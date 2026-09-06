@@ -334,8 +334,12 @@
       enMDE.codemirror.getInputField().setAttribute('aria-label', 'Body (Markdown, EN)');
 
       // ---- draft guard: dirty tracking, beforeunload warning, local autosave ----
+      const initialTk = new URLSearchParams(location.search).get('tk');
       const guard = DraftGuard.createDraftGuard({
-        storageKey: 'swl:draft:' + (new URLSearchParams(location.search).get('tk') || 'new'),
+        // A new post stashes under a per-tab key; otherwise two new-post tabs
+        // share one and the first save deletes the other's work (#138).
+        storageKey: initialTk ? 'swl:draft:' + initialTk : DraftGuard.tabScopedKey('swl:draft:new'),
+        ...(initialTk ? {} : { orphanPrefix: 'swl:draft:new' }),
         collect: () => buildPayload(),
       });
       // Delegated listeners cover every static field plus dynamic key-fact rows;
@@ -404,7 +408,9 @@
         remove.className = 'btn-remove';
         remove.textContent = '×';
         remove.setAttribute('aria-label', 'Remove key fact');
-        remove.addEventListener('click', () => row.remove());
+        // A click fires neither input nor change, so the delegated listeners
+        // on <main> never see a removal (#138).
+        remove.addEventListener('click', () => { row.remove(); guard.markDirty(); });
 
         row.appendChild(lInput);
         row.appendChild(vInput);
@@ -464,7 +470,7 @@
         remove.className = 'btn-remove';
         remove.textContent = '×';
         remove.setAttribute('aria-label', 'Remove stop');
-        remove.addEventListener('click', () => row.remove());
+        remove.addEventListener('click', () => { row.remove(); guard.markDirty(); });
 
         row.appendChild(nameInput);
         row.appendChild(latInput);
@@ -1136,6 +1142,7 @@
         const stash = guard.tryRestore();
         if (stash && !guard.wasDismissed(stash)
             && confirm('Found an unsaved local draft from ' + new Date(stash.savedAt).toLocaleString() + '. Restore it into the editor?')) {
+          guard.adopt(stash); // copied under this tab's key (a no-op for its own)
           currentTk = stash.payload.translationKey || currentTk;
           populateForm(stash.payload);
           guard.markDirty();
