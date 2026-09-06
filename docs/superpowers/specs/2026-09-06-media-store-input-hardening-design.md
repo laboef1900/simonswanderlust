@@ -78,12 +78,14 @@ filesystem and whose total is bounded by `PATH_MAX` (4096) — 200 leaves ample 
   crash a reconcile.
 - The folder-validation order in `/upload` is now: auth → multipart → image mime → `KEY_RE` →
   `assertSafeFolder` → `assertSafeKey(versionedKey)` → disk space → probe → duplicate check →
-  `storeOriginal` → `upsert` → enqueue. Every 4xx precedes every write.
+  `storeOriginal` → `upsert` → enqueue. Every input-validation 4xx precedes every write (the
+  pre-existing backlog-full 429 still follows persistence; `encodeQueue.recover()` re-seeds it).
 - Transactions use the same shape as `pgPostStore.upsertDraft`: `pool.connect()`, `BEGIN`, work,
-  `COMMIT`; `ROLLBACK` in `catch`; `release()` in `finally`. Postgres' default READ COMMITTED is
-  sufficient: the folder primary key makes a concurrent insert of `to` collide with the `UPDATE`
-  (unique violation → the transaction rolls back, surfaced as a 500 that left nothing behind) or
-  be seen by the pre-check (409).
+  `COMMIT`; `ROLLBACK` in `catch`; `release()` in `finally`. Postgres' default READ COMMITTED gives
+  atomic rollback, not serialization against every concurrent folder/media mutation — which is
+  all this needs: the folder primary key makes a concurrent insert of `to` collide with the
+  `UPDATE` (unique violation → the transaction rolls back, surfaced as a 500 that left nothing
+  behind) or be seen by the pre-check (409).
 
 ## Misuse cases considered
 
