@@ -747,6 +747,15 @@ blog/
   `[gallery ids]` and `[caption]` shortcodes expand before Turndown through the existing Elementor
   gallery pipeline instead of surfacing as escaped junk. See
   `docs/superpowers/specs/2026-09-05-wxr-import-image-destinations-design.md`.
+- **Done:** #122 slug auto-derivation guard (2026-09-05) — the editor re-derived the slug from
+  the title on every keystroke of an unpublished post, so fixing a title typo in a WXR-imported
+  draft silently replaced its live WordPress slug (Golden Rule 2). Derivation now only fills an
+  *automatic* slug (new post; turned off by typing into the field or by any loaded slug, back on
+  when the field is cleared), and a save that changes an existing draft's non-empty slug asks the
+  author with both URLs named, sending `confirmSlugChange: true`; `POST/PUT /posts` refuse such a
+  rename without the flag (409 `slug_change_unconfirmed`), so no client can rename a draft by
+  accident. Filling an unset (`''`) slug never asks. See
+  `docs/superpowers/specs/2026-09-05-slug-derive-guard-design.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

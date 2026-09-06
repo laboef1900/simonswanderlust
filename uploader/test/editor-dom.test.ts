@@ -25,7 +25,8 @@ interface Element {
   dataset: Record<string, string>;
   style: Record<string, string>;
   classList: { add(): void; remove(): void; toggle(): void; contains(): boolean };
-  addEventListener(): void;
+  addEventListener(type: string, fn: () => void): void;
+  fire(type: string): void;
   querySelector(): null;
   querySelectorAll(): never[];
   appendChild(): void;
@@ -40,11 +41,14 @@ interface EditorApi {
 }
 
 function element(): Element {
+  const listeners: Record<string, (() => void)[]> = {};
   return {
     value: '', checked: false, textContent: '', innerHTML: '', hidden: false, disabled: false,
     dataset: {}, style: {},
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-    addEventListener() {}, querySelector() { return null; }, querySelectorAll() { return []; },
+    addEventListener(type, fn) { (listeners[type] ??= []).push(fn); },
+    fire(type) { for (const fn of listeners[type] ?? []) fn(); },
+    querySelector() { return null; }, querySelectorAll() { return []; },
     appendChild() {}, remove() {}, focus() {}, setAttribute() {}, getAttribute() { return null; },
   };
 }
@@ -187,5 +191,44 @@ describe('editor.html inline script against its own markup', () => {
       'deCountry', 'enCountry', 'deHeroSrc', 'enHeroSrc', 'deHeroAlt', 'enHeroAlt']) {
       expect(el(id).value, id).toBe('');
     }
+  });
+
+  // Issue #122 (Golden Rule 2): the slug follows the title only while it is
+  // still automatic. Before, every title keystroke on an unpublished post
+  // overwrote the slug — including an imported draft's live WordPress slug.
+  describe('slug auto-derivation', () => {
+    const type = (el: (id: string) => Element, id: string, value: string) => { el(id).value = value; el(id).fire('input'); };
+
+    it('derives from the title on a new post, stops once the slug is hand-edited, resumes when cleared', () => {
+      const { el } = loadEditor();
+      type(el, 'deTitle', 'Vier Tage in Bukarest');
+      expect(el('slugFieldDe').value).toBe('vier-tage-in-bukarest');
+      type(el, 'slugFieldDe', 'bukarest');
+      type(el, 'deTitle', 'Vier Tage in Bukarest!');
+      expect(el('slugFieldDe').value).toBe('bukarest');
+      type(el, 'slugFieldDe', '');
+      type(el, 'deTitle', 'Bukarest im Herbst');
+      expect(el('slugFieldDe').value).toBe('bukarest-im-herbst');
+    });
+
+    it('never re-derives a slug loaded from the server, even when the title is edited', () => {
+      const { api, el } = loadEditor();
+      const imported = fullPair();
+      imported.de.slug = '4-tage-in-bukarest'; imported.de.title = 'Vier Tage in Bukaresd';
+      api.populateForm(imported);
+      type(el, 'deTitle', 'Vier Tage in Bukarest');
+      expect(el('slugFieldDe').value).toBe('4-tage-in-bukarest');
+      expect(el('slugFieldEn').value).toBe('bucharest');
+    });
+
+    it('still derives the EN slug of a loaded DE-first draft whose EN slug is unset', () => {
+      const { api, el } = loadEditor();
+      const deFirst = fullPair();
+      deFirst.en.slug = ''; deFirst.en.title = '';
+      api.populateForm(deFirst);
+      type(el, 'enTitle', 'Four days in Bucharest');
+      expect(el('slugFieldEn').value).toBe('four-days-in-bucharest');
+      expect(el('slugFieldDe').value).toBe('bukarest');
+    });
   });
 });
