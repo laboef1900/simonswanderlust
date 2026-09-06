@@ -98,25 +98,29 @@ export async function processImage(
   // Parsed once: the source EXIF is the same for every variant.
   const keepExif = allowedExif(exif);
 
-  // One base pipeline, cloned per variant: the clones share the input and the
-  // decode/rotate/ICC steps are declared once. Each awaited encode still runs
-  // its own libvips pipeline, so only one variant's pixels are live at a time.
-  let base = sharp(input, { failOn: 'none' })
-    .rotate()             // applies EXIF orientation to the PIXELS
-    .keepIccProfile();    // colour accuracy; an ICC profile carries no location
-  // withExif() REPLACES the EXIF block wholesale, which is exactly the
-  // point: anything not in the allow-list cannot survive. Skipped entirely
-  // when the source had nothing worth keeping, leaving the variant clean.
-  if (keepExif) base = base.withExif(keepExif);
-
+  // @ai-warning Deliberately a fresh `sharp(input)` per variant, NOT a base
+  // pipeline `.clone()`d per variant as #136 first suggested: sharp 0.35's
+  // clone() runs `structuredClone(options)`, which deep-copies the input
+  // Buffer — eight extra copies of a 25 MiB upload — while a fresh instance
+  // holds the same Buffer by reference. Each awaited encode runs its own
+  // libvips pipeline either way, so only one variant's pixels are live at a
+  // time; the decode is not shared and cannot be without materialising the
+  // full-resolution raw image across all encodes (a larger peak, not a smaller one).
   const variants: Variant[] = [];
   for (const w of variantWidths(width)) {
     for (const format of FORMATS) {
-      const resized = base.clone().resize({ width: w, withoutEnlargement: true });
+      let base = sharp(input, { failOn: 'none' })
+        .rotate()             // applies EXIF orientation to the PIXELS
+        .keepIccProfile()     // colour accuracy; an ICC profile carries no location
+        .resize({ width: w, withoutEnlargement: true });
+      // withExif() REPLACES the EXIF block wholesale, which is exactly the
+      // point: anything not in the allow-list cannot survive. Skipped entirely
+      // when the source had nothing worth keeping, leaving the variant clean.
+      if (keepExif) base = base.withExif(keepExif);
       const data =
         format === 'avif'
-          ? await resized.avif({ quality: avifQuality }).toBuffer()
-          : await resized.webp({ quality: webpQuality }).toBuffer();
+          ? await base.avif({ quality: avifQuality }).toBuffer()
+          : await base.webp({ quality: webpQuality }).toBuffer();
       variants.push({ width: w, format, data });
     }
   }
