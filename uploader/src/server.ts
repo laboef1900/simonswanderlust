@@ -1025,6 +1025,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   app.get('/posts/:tk/revisions/:id', { preHandler: requireAuth }, async (req, reply) => {
     const { tk, id } = req.params as { tk: string; id: string };
+    // Same rule as the list route (#137): a deleted post's snapshots are not
+    // readable even if a store still holds them.
+    if (!(await posts.get(tk))) return reply.code(404).send({ error: 'post not found' });
     const rev = await posts.getRevision(tk, id);
     if (!rev) return reply.code(404).send({ error: 'revision not found' });
     return reply.send(rev);

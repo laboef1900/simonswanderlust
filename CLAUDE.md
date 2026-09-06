@@ -878,6 +878,15 @@ blog/
   on a named-sensitive surface — two parsers of one grammar cannot be kept in agreement by tests.
   The `images` map is deliberately not consulted (never pruned, no UI to fix a stale key). See
   `docs/superpowers/specs/2026-09-06-publish-gate-foreign-images-design.md` and `SECURITY.md`.
+- **Done:** #137 revisions die with their post (2026-09-06) — `post_revisions` has no foreign
+  key (`posts` is keyed `(translation_key, locale)`) and `remove()` deleted only `posts`, so up
+  to 20 full-body snapshots of a deleted post stayed readable by any author holding a revision
+  URL, and — being excluded from backups by design — were never pruned either.
+  `pgPostStore.remove` now deletes post and revisions in one transaction — two statements, not a
+  data-modifying CTE, whose shared snapshot would miss a revision committed by a save the delete
+  had to wait for — `ensureSchema` sweeps orphans left by earlier deletes once per
+  boot, and `GET /posts/:tk/revisions/:id` 404s when the post is gone, like the list route. See
+  `docs/superpowers/specs/2026-09-06-delete-post-revisions-design.md` and `SECURITY.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

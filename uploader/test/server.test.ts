@@ -1899,6 +1899,32 @@ describe('post revisions endpoints', () => {
     const missing = await b.app.inject({ method: 'GET', url: `/posts/${tk}/revisions/00000000-0000-4000-8000-000000000000`, cookies: cookie });
     expect(missing.statusCode).toBe(404);
   });
+
+  // #137: a deleted post's full-body snapshots must not stay readable by a
+  // kept revision URL — the item route 404s like the list route, and the store
+  // no longer holds them (asserted through the store, bypassing the route).
+  it('a revision URL stops working once its post is deleted, on both the single and the bulk path', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const revOf = async (slug: string) => {
+      const payload = { ...sample(), de: { ...sample().de, slug: `de-${slug}` }, en: { ...sample().en, slug: `en-${slug}` } };
+      const tk = (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload })).json().translationKey;
+      await b.app.inject({ method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { ...payload, de: { ...payload.de, title: 'T2' } } });
+      const [rev] = (await b.app.inject({ method: 'GET', url: `/posts/${tk}/revisions`, cookies: cookie })).json();
+      return { tk, id: rev.id as string };
+    };
+    const single = await revOf('single');
+    const bulk = await revOf('bulk');
+    expect((await b.app.inject({ method: 'GET', url: `/posts/${single.tk}/revisions/${single.id}`, cookies: cookie })).statusCode).toBe(200);
+
+    expect((await b.app.inject({ method: 'DELETE', url: `/posts/${single.tk}`, cookies: cookie })).statusCode).toBe(200);
+    expect((await b.app.inject({ method: 'GET', url: `/posts/${single.tk}/revisions/${single.id}`, cookies: cookie })).statusCode).toBe(404);
+    expect(await b.posts.getRevision(single.tk, single.id)).toBeNull();
+
+    const res = await b.app.inject({ method: 'POST', url: '/posts/bulk', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { action: 'delete', keys: [bulk.tk] } });
+    expect(res.json()).toMatchObject({ succeeded: 1 });
+    expect((await b.app.inject({ method: 'GET', url: `/posts/${bulk.tk}/revisions/${bulk.id}`, cookies: cookie })).statusCode).toBe(404);
+    expect(await b.posts.getRevision(bulk.tk, bulk.id)).toBeNull();
+  });
 });
 
 describe('WordPress import', () => {

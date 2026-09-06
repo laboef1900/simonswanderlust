@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { scheduler } from 'node:timers/promises';
 import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgUserStore, verifyPassword, UserExistsError, UsernamePolicyError } from '../src/users.js';
@@ -631,5 +632,90 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     expect(revs.some((r) => r.titleDe === 'v5')).toBe(false); // oldest pruned
     const count = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key=$1`, [tk]);
     expect(count.rows[0].n).toBe(REVISION_CAP);
+  });
+
+  // #137: post_revisions has no FK, so nothing cascades on its own.
+  it('remove() deletes the post\'s revisions with it and leaves other posts\' revisions alone', async () => {
+    const store = pgPostStore(pool);
+    const doomed = await store.upsertDraft(base('doomed'));
+    await store.upsertDraft({ ...doomed, de: { ...doomed.de, title: 'edited' } });
+    const kept = await store.upsertDraft(base('kept'));
+    await store.upsertDraft({ ...kept, de: { ...kept.de, title: 'edited' } });
+    const [doomedRev] = await store.listRevisions(doomed.translationKey);
+    expect(doomedRev).toBeDefined();
+
+    await store.remove(doomed.translationKey);
+    expect(await store.listRevisions(doomed.translationKey)).toEqual([]);
+    expect(await store.getRevision(doomed.translationKey, doomedRev!.id)).toBeNull();
+    const { rows } = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key=$1`, [doomed.translationKey]);
+    expect(rows[0].n).toBe(0);
+    expect(await store.listRevisions(kept.translationKey)).toHaveLength(1);
+
+    // An unknown key still reports not found and deletes nothing — not even
+    // orphans under that key (a restored dump before the next boot sweep).
+    await pool.query(
+      `INSERT INTO post_revisions (id, translation_key, snapshot) VALUES ($1, 'no-such-post', '{"status":"draft","de":{"title":"orphan"}}')`,
+      [randomUUID()],
+    );
+    await expect(store.remove('no-such-post')).rejects.toThrow('post not found');
+    const orphans = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key='no-such-post'`);
+    expect(orphans.rows[0].n).toBe(1);
+    expect(await store.listRevisions(kept.translationKey)).toHaveLength(1);
+  });
+
+  it('remove() also deletes a revision committed by a save it had to wait for', async () => {
+    // A save holds the posts row locks with its revision inserted but not yet
+    // committed; remove() blocks on those locks. One data-modifying CTE would
+    // delete the posts after the commit yet miss the revision (a CTE's
+    // sub-statements share one snapshot, taken before the wait). Two
+    // statements in READ COMMITTED see it.
+    const store = pgPostStore(pool);
+    const post = await store.upsertDraft(base('racy'));
+    const tk = post.translationKey;
+    const saver = await pool.connect();
+    try {
+      await saver.query('BEGIN');
+      await saver.query(
+        `INSERT INTO post_revisions (id, translation_key, snapshot) VALUES ($1, $2, '{"status":"draft","de":{"title":"late"}}')`,
+        [randomUUID(), tk],
+      );
+      await saver.query(`UPDATE posts SET updated_at = now() WHERE translation_key = $1`, [tk]);
+      const removal = store.remove(tk);
+      // Wait for remove() to actually block on the row locks (observable only
+      // server-side — another connection's lock wait has no in-process
+      // signal), so the save's COMMIT is guaranteed to land after remove()'s
+      // first statement started. Polled through the pool, NOT the saver: inside
+      // a transaction pg_stat_activity is a snapshot frozen at first access and
+      // would never show a backend that connected afterwards.
+      for (;;) {
+        const { rowCount } = await pool.query(
+          `SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'DELETE FROM posts%'`,
+        );
+        if (rowCount) break;
+        await scheduler.wait(10);
+      }
+      await saver.query('COMMIT');
+      await removal;
+    } finally {
+      saver.release();
+    }
+    expect(await store.get(tk)).toBeNull();
+    const { rows } = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key=$1`, [tk]);
+    expect(rows[0].n).toBe(0);
+  });
+
+  it('ensureSchema sweeps revisions orphaned before #137 and keeps live posts\' revisions', async () => {
+    const store = pgPostStore(pool);
+    const live = await store.upsertDraft(base('live'));
+    await store.upsertDraft({ ...live, de: { ...live.de, title: 'edited' } });
+    // A revision whose post is gone — what a pre-#137 delete left behind.
+    await pool.query(
+      `INSERT INTO post_revisions (id, translation_key, snapshot) VALUES ($1, 'ghost-post', '{"status":"draft","de":{"title":"secret"}}')`,
+      [randomUUID()],
+    );
+    await ensureSchema(pool);
+    const ghosts = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key='ghost-post'`);
+    expect(ghosts.rows[0].n).toBe(0);
+    expect(await store.listRevisions(live.translationKey)).toHaveLength(1);
   });
 });

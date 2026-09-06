@@ -72,6 +72,14 @@ change about the security posture.
   one statement and a delete is unrecoverable, which is why those two sit on the other side.
   `POST /media/retry` is session-level for the same reason: it re-encodes from the retained
   original, and the encode queue's `MAX_BACKLOG`/concurrency caps bound what it can cost.
+- **Post revisions die with the post** (#137). `post_revisions` (up to 20 full-body snapshots per
+  post, readable by any authenticated author via `GET /posts/:tk/revisions/:id`) has no foreign
+  key — `posts` is keyed `(translation_key, locale)` — so a delete used to leave the snapshots of a
+  post an admin removed for being wrong or sensitive readable forever by anyone holding the URL.
+  `pgPostStore.remove` now deletes post and revisions in one statement, `ensureSchema` sweeps
+  revisions orphaned before that change on every boot, and the item route 404s whenever the post
+  is gone, exactly like the list route. See
+  `docs/superpowers/specs/2026-09-06-delete-post-revisions-design.md`.
 
 ### Media metadata redaction
 
