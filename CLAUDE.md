@@ -767,6 +767,17 @@ blog/
   release dir is complete or absent), with leftovers swept at the next run; the boot-time build
   retries with backoff (`bootstrapRelease`) and `/health` reports `release` as information, never
   a verdict. See `docs/superpowers/specs/2026-09-05-build-timeout-and-recovery-design.md`.
+- **Done:** #113 images archive safety (2026-09-06) — the incremental `images-*.tar` no longer
+  leaks its multi-GB `.tmp` on a failed or interrupted run (unlinked in `catch` and from a
+  synchronous `process.on('exit')` hook, so `docker stop`'s SIGTERM is covered; a SIGKILL
+  leftover is swept at boot and before each run), refuses with a recorded `lastError` when the
+  estimated tar plus the `/upload` reserve would not fit `/data`, and derives its mtime cutoff
+  from the archives on disk when `state.json` is corrupt, missing, or hand-emptied of tars —
+  incremental from the newest stamp, or a fresh full chain — instead of re-tarring ~11 GB.
+  `readState` validates every field (a garbage timestamp used to become `NaN` and silently drop
+  files from the chain). `POST /backups` answers 409 while a run is in flight, and the schedule
+  is anchored to UTC-day / Monday-week windows instead of drifting an hour per day. See
+  `docs/superpowers/specs/2026-09-05-images-archive-safety-design.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

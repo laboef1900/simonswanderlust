@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { list as listTar } from 'tar';
 import {
   dumpDatabase, listBackups, listImageArchives, pruneBackups, readState, writeState, isBackupDue,
-  createDbBackup, archiveImages, BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type Connectable,
+  createDbBackup, archiveImages, archiveChainCutoff, sweepTempFiles, ArchiveSpaceError,
+  BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type Connectable,
 } from '../src/backup.js';
 
 let dir: string;
@@ -92,9 +93,65 @@ describe('list + prune + state', () => {
   it('returns empty for a missing dir and round-trips state', () => {
     expect(listBackups(join(dir, 'missing'))).toEqual([]);
     expect(readState(dir)).toEqual({});
-    writeState(dir, { lastSuccessAt: 't', lastAttemptAt: 't', lastImagesArchiveAt: 'i' });
-    expect(readState(dir).lastSuccessAt).toBe('t');
-    expect(readState(dir).lastImagesArchiveAt).toBe('i');
+    const t = '2026-07-03T12:00:00.000Z';
+    writeState(dir, { lastSuccessAt: t, lastAttemptAt: t, lastImagesArchiveAt: t, lastError: 'x' });
+    expect(readState(dir)).toEqual({ lastSuccessAt: t, lastAttemptAt: t, lastImagesArchiveAt: t, lastError: 'x' });
+  });
+
+  it('treats a corrupt or malformed state.json as empty', async () => {
+    await writeFile(join(dir, 'state.json'), '{"lastSuccessAt":"2026-07-03T12:00:00Z","lastIm');
+    expect(readState(dir)).toEqual({});
+    await writeFile(join(dir, 'state.json'), '[1,2]');
+    expect(readState(dir)).toEqual({});
+  });
+
+  it('drops fields that are not what they claim to be instead of letting NaN through', async () => {
+    await writeFile(join(dir, 'state.json'), JSON.stringify({
+      lastSuccessAt: 'yesterday-ish', lastImagesArchiveAt: 12345, lastAttemptAt: '2026-07-03T12:00:00Z', lastError: { nested: true },
+    }));
+    expect(readState(dir)).toEqual({ lastAttemptAt: '2026-07-03T12:00:00Z' });
+  });
+
+  it('sweeps only in-flight temp names, leaving real backups alone', async () => {
+    for (const n of [
+      'images-20260703-120000.tar.4242.tmp', 'db-20260703-120000.json.gz.4242.tmp', 'state.json.4242.tmp',
+      'images-20260703-120000.tar', 'db-20260703-120000.json.gz', 'state.json', 'notes.tmp',
+    ]) await writeFile(join(dir, n), 'x');
+    expect(sweepTempFiles(dir).sort()).toEqual([
+      'db-20260703-120000.json.gz.4242.tmp', 'images-20260703-120000.tar.4242.tmp', 'state.json.4242.tmp',
+    ]);
+    expect((await readdir(dir)).sort()).toEqual(['db-20260703-120000.json.gz', 'images-20260703-120000.tar', 'notes.tmp', 'state.json']);
+    expect(sweepTempFiles(join(dir, 'missing'))).toEqual([]);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'a leftover it cannot unlink is logged and skipped, never thrown — boot and runNow must survive it',
+    async () => {
+      await writeFile(join(dir, 'images-20260703-120000.tar.4242.tmp'), 'x');
+      await chmod(dir, 0o555);
+      try {
+        expect(sweepTempFiles(dir)).toEqual([]);
+        const b = createDbBackup({ db: fakeDb(), dir, retention: () => 5 });
+        expect(b.sweepTempFiles()).toEqual([]);
+        const s = await b.runNow(); // the dump's own write fails, recorded, not thrown
+        expect(s.lastError).toMatch(/EACCES|EPERM/);
+      } finally {
+        await chmod(dir, 0o755);
+      }
+      expect(await readdir(dir)).toEqual(['images-20260703-120000.tar.4242.tmp']);
+    },
+  );
+
+  it('derives the archive cutoff from the newest tar, stepping back over a same-second run', async () => {
+    expect(archiveChainCutoff(dir)).toBe(0);
+    for (const n of ['images-20260701-000000.tar', 'images-20260704-102030.tar']) await writeFile(join(dir, n), 'x');
+    expect(archiveChainCutoff(dir)).toBe(Date.parse('2026-07-04T10:20:30Z'));
+    // 102031/102032 were bumped off a collision with 102030 — their walks
+    // started at or after 10:20:30, so that is the cutoff the chain can vouch for
+    for (const n of ['images-20260704-102031.tar', 'images-20260704-102032.tar']) await writeFile(join(dir, n), 'x');
+    expect(archiveChainCutoff(dir)).toBe(Date.parse('2026-07-04T10:20:30Z'));
+    await writeFile(join(dir, 'images-20260704-102040.tar'), 'x');
+    expect(archiveChainCutoff(dir)).toBe(Date.parse('2026-07-04T10:20:40Z'));
   });
 });
 
@@ -168,24 +225,58 @@ describe('archiveImages', () => {
     ]);
     expect(await tarEntries(join(dir, second!))).toContain('trips/x/new-orig.jpg');
   });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'a failed tar rejects and leaves no .tmp behind',
+    async () => {
+      const locked = join(storage, 'trips', 'x', 'hero-orig.jpg');
+      const exitListeners = process.listenerCount('exit');
+      await chmod(locked, 0o000); // tar opens it mid-stream -> EACCES after the temp exists
+      try {
+        await expect(archiveImages(storage, dir, 0)).rejects.toThrow(/EACCES/);
+      } finally {
+        await chmod(locked, 0o644);
+      }
+      expect(await readdir(dir)).toEqual([]);
+      expect(process.listenerCount('exit')).toBe(exitListeners); // the exit hook was deregistered
+    },
+  );
+
+  it('refuses before creating anything when the estimate plus reserve would not fit', async () => {
+    const tight = async () => ({ free: 2 * 1024 * 1024 * 1024 + 10, total: 0 }); // reserve + 10 B
+    await expect(archiveImages(storage, dir, 0, new Date(), tight)).rejects.toThrow(ArchiveSpaceError);
+    await expect(archiveImages(storage, dir, 0, new Date(), tight)).rejects.toThrow(/2 files/);
+    expect(await readdir(dir)).toEqual([]);
+    const roomy = async () => ({ free: 2 * 1024 * 1024 * 1024 + 2 * 2048 + 2, total: 0 });
+    expect(await archiveImages(storage, dir, 0, new Date(), roomy)).toMatch(IMAGES_ARCHIVE_RE);
+  });
+
+  it('archives anyway when free space cannot be read', async () => {
+    const broken = async (): Promise<never> => { throw new Error('statfs ENOSYS'); };
+    expect(await archiveImages(storage, dir, 0, new Date(), broken)).toMatch(IMAGES_ARCHIVE_RE);
+  });
 });
 
 describe('isBackupDue', () => {
-  const now = Date.parse('2026-07-03T12:00:00Z');
+  const now = Date.parse('2026-07-03T12:00:00Z'); // a Friday
   it('is never due when off', () => {
     expect(isBackupDue({}, 'off', now)).toBe(false);
   });
   it('is due immediately when never succeeded', () => {
     expect(isBackupDue({}, 'daily', now)).toBe(true);
   });
-  it('respects the daily and weekly windows', () => {
-    const h23 = { lastSuccessAt: new Date(now - 23 * 3600_000).toISOString() };
-    const h25 = { lastSuccessAt: new Date(now - 25 * 3600_000).toISOString() };
-    expect(isBackupDue(h23, 'daily', now)).toBe(false);
-    expect(isBackupDue(h25, 'daily', now)).toBe(true);
-    expect(isBackupDue(h25, 'weekly', now)).toBe(false);
-    const d8 = { lastSuccessAt: new Date(now - 8 * 24 * 3600_000).toISOString() };
-    expect(isBackupDue(d8, 'weekly', now)).toBe(true);
+  it('daily: due once the UTC day changes, however few hours have passed', () => {
+    expect(isBackupDue({ lastSuccessAt: '2026-07-03T00:10:00Z' }, 'daily', now)).toBe(false);
+    expect(isBackupDue({ lastSuccessAt: '2026-07-02T23:50:00Z' }, 'daily', now)).toBe(true);
+    // an hourly tick after a 00:10 success stays in the same day all day long: no drift
+    expect(isBackupDue({ lastSuccessAt: '2026-07-03T00:10:00Z' }, 'daily', Date.parse('2026-07-03T23:59:00Z'))).toBe(false);
+    expect(isBackupDue({ lastSuccessAt: '2026-07-03T00:10:00Z' }, 'daily', Date.parse('2026-07-04T00:00:00Z'))).toBe(true);
+  });
+  it('weekly: windows open on Monday 00:00 UTC', () => {
+    expect(isBackupDue({ lastSuccessAt: '2026-06-29T00:30:00Z' }, 'weekly', now)).toBe(false); // Monday of this week
+    expect(isBackupDue({ lastSuccessAt: '2026-06-28T23:30:00Z' }, 'weekly', now)).toBe(true);  // Sunday before
+    expect(isBackupDue({ lastSuccessAt: '2026-07-03T12:00:00Z' }, 'weekly', Date.parse('2026-07-05T23:59:59Z'))).toBe(false);
+    expect(isBackupDue({ lastSuccessAt: '2026-07-03T12:00:00Z' }, 'weekly', Date.parse('2026-07-06T00:00:00Z'))).toBe(true);
   });
 });
 
@@ -255,6 +346,56 @@ describe('createDbBackup.runNow', () => {
     expect(s.lastError).toBeUndefined();
     expect(b.list().length).toBe(1);
     expect(b.listImageArchives().length).toBe(0);
+  });
+
+  it('sweeps a crashed run\'s temp before writing, and reports running only mid-run', async () => {
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'images-20260101-000000.tar.999.tmp'), 'leftover');
+    const b = createDbBackup({ db: fakeDb(), dir, retention: () => 5 });
+    expect(b.running()).toBe(false);
+    const p = b.runNow();
+    expect(b.running()).toBe(true);
+    expect(b.state().lastAttemptAt).toBeTruthy(); // this run's start is visible while it runs
+    expect(b.state().lastSuccessAt).toBeUndefined();
+    expect(b.sweepTempFiles()).toEqual([]); // never unlinks under a run in flight
+    await p;
+    expect(b.running()).toBe(false);
+    expect((await readdir(dir)).some((n) => n.endsWith('.tmp'))).toBe(false);
+  });
+
+  it('recovers the archive cutoff from the newest tar when state.json is corrupt', async () => {
+    const storage = await mkdtemp(join(tmpdir(), 'imgarch-'));
+    const old = new Date('2026-01-01T00:00:00Z');
+    await writeFile(join(storage, 'old-orig.jpg'), 'o');
+    await utimes(join(storage, 'old-orig.jpg'), old, old);
+    await writeFile(join(storage, 'new-orig.jpg'), 'n');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'images-20260601-000000.tar'), 'previous slice');
+    await writeFile(join(dir, 'state.json'), '{"lastImagesArchiveAt":"2026-06-');
+    const b = createDbBackup({ db: fakeDb(), dir, retention: () => 5, storageDir: storage });
+    const s = await b.runNow();
+    expect(s.lastError).toBeUndefined();
+    const archives = b.listImageArchives();
+    expect(archives.length).toBe(2);
+    const entries: string[] = [];
+    await listTar({ file: join(dir, archives[0]!.name), onReadEntry: (e) => { entries.push(e.path); } });
+    expect(entries).toEqual(['new-orig.jpg']); // not a full re-archive
+    expect(readState(dir).lastImagesArchiveAt).toBe(s.lastImagesArchiveAt);
+  });
+
+  it('starts a fresh full chain when the archives were deleted but state.json survived', async () => {
+    const storage = await mkdtemp(join(tmpdir(), 'imgarch-'));
+    const old = new Date('2026-01-01T00:00:00Z');
+    await writeFile(join(storage, 'old-orig.jpg'), 'o');
+    await utimes(join(storage, 'old-orig.jpg'), old, old);
+    writeState(dir, { lastImagesArchiveAt: '2026-06-01T00:00:00.000Z' });
+    const b = createDbBackup({ db: fakeDb(), dir, retention: () => 5, storageDir: storage });
+    await b.runNow();
+    const archives = b.listImageArchives();
+    expect(archives.length).toBe(1);
+    const entries: string[] = [];
+    await listTar({ file: join(dir, archives[0]!.name), onReadEntry: (e) => { entries.push(e.path); } });
+    expect(entries).toEqual(['old-orig.jpg']);
   });
 
   it.skipIf(process.getuid?.() === 0)(

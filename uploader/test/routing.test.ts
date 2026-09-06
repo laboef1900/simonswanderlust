@@ -55,6 +55,8 @@ function stubBackup(backupDir: string): DbBackup {
   return {
     dir: backupDir,
     runNow: async () => { state = { lastAttemptAt: 'a', lastSuccessAt: 's' }; return { ...state }; },
+    running: () => false,
+    sweepTempFiles: () => [],
     list: () => [{ name: 'db-20260703-120000.json.gz', size: 3 }],
     listImageArchives: () => [],
     state: () => ({ ...state }),

@@ -81,9 +81,12 @@ time are kept — they are useful and carry no location.
 `POST /upload` refuses with **507** when `/data` lacks headroom for the whole cost of the photo
 (the retained original plus its variant set) plus a reserve that keeps a site build and a backup
 able to run — see `uploader/src/disk.ts`. A full `/data` otherwise fails mid-pipeline and can
-leave a partial variant set with no complete record. Free space is also reported on `/health`,
-but **never as a health verdict**: a low-space 503 would trigger a restart loop, which makes a
-full disk strictly worse.
+leave a partial variant set with no complete record. The incremental images archive — the
+largest single writer on the volume — applies the same reserve on its way in (#113): it refuses
+when its estimated size would not leave that room, and its temp file never survives a failed or
+interrupted run, so the backup feature cannot fill the disk it shares with the site. Free space
+is also reported on `/health`, but **never as a health verdict**: a low-space 503 would trigger
+a restart loop, which makes a full disk strictly worse.
 
 `POST /import` has the same precondition (issue #94), with the same 507 and the same reserve, but
 sized from a **count** rather than a byte total — a WXR declares URLs, not sizes — using the
