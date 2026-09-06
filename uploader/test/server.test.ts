@@ -1821,8 +1821,9 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
 </channel>
 </rss>`;
 
-  const postImport = (b: Built, cookie: Record<string, string>, xmlBody: string) => {
+  const postImport = (b: Built, cookie: Record<string, string>, xmlBody: string, fields: Record<string, string> = {}) => {
     const form = new FormData();
+    for (const [k, v] of Object.entries(fields)) form.append(k, v);
     form.append('file', xmlBody, { filename: 'export.xml', contentType: 'text/xml' });
     return b.app.inject({ method: 'POST', url: '/import', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
   };
@@ -1896,6 +1897,18 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
     expect((await b.app.inject({ method: 'GET', url: '/import/status', cookies: cookie })).json()).toEqual({ job: null });
     // and the route is not wedged
     expect((await postImport(b, cookie, wxrWith(...blocked(1)))).statusCode).toBe(507);
+  });
+
+  // Issue #126: a re-run merges by default; the destructive rebuild is opt-in.
+  it('passes overwriteDrafts to the importer only when the form says so', async () => {
+    const seen: boolean[] = [];
+    const b = build({ prepareImport: async (_xml, deps) => { seen.push(deps.overwriteDrafts === true); return prepared(); } });
+    const { cookie } = await authed(b);
+    for (const fields of [undefined, { overwriteDrafts: 'true' }, { overwriteDrafts: 'on' }]) { // anything but the literal 'true' is off
+      expect((await postImport(b, cookie, wxrWith(...blocked(1)), fields)).statusCode).toBe(202);
+      await b.importJobs.settle();
+    }
+    expect(seen).toEqual([false, true, false]);
   });
 
   // @ai-warning Resumability makes "just run the import again" the documented

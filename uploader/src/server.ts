@@ -1278,8 +1278,12 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       return reply.code(409).send({ error: 'an import is already running; wait for it to finish' });
     }
     let xml = '';
+    let overwriteDrafts = false;
     for await (const part of req.parts()) {
       if (part.type === 'file') xml = (await part.toBuffer()).toString('utf8');
+      // Opt-in rebuild of existing drafts from the export (issue #126); the
+      // default re-run merges and keeps the author's edits.
+      else if (part.fieldname === 'overwriteDrafts') overwriteDrafts = String(part.value) === 'true';
     }
     if (!xml.includes('<rss') || !xml.includes('wordpress.org/export')) {
       return reply.code(400).send({ error: 'not a WordPress export (.xml) file' });
@@ -1300,6 +1304,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         // issue #95: encodes under the shared mutex, so they never overlap a build.
         lock: cfg.workLock,
         log: (msg) => console.log(msg),
+        overwriteDrafts,
       });
     } catch (e) {
       // issue #96: an export whose distinct-image count exceeds the cap is

@@ -392,6 +392,173 @@ describe('importWxr pair identity', () => {
 });
 
 /**
+ * Issue #126: a re-run over an existing draft is a URL substitution over the
+ * author's stored pair, not a rebuild from the export — unless `overwriteDrafts`.
+ *
+ * @ai-context docs/superpowers/specs/2026-09-05-wxr-import-merge-existing-drafts-design.md
+ */
+describe('importWxr re-run merge', () => {
+  // First run: b.jpg fails (hot-link left behind); second run: everything succeeds.
+  const flaky = (failFirst: string) => {
+    let run = 0;
+    const h = harness({ fail: (u) => (run === 0 && u.includes(failFirst) ? new FetchError('x', 'network') : null) });
+    return { h, nextRun: () => { run++; } };
+  };
+  const html = '<p>Intro</p>' + imgs('https://wp/a.jpg', 'https://wp/b.jpg')
+    + '<a href="https://wp/g1.jpg" data-elementor-lightbox-slideshow="s" data-elementor-lightbox-title="G1"></a>'
+    + '<a href="https://wp/g2.jpg" data-elementor-lightbox-slideshow="s"></a>';
+  const export1 = pairOf('g', 'de-1', 'en-1', html, '<p>en</p>');
+
+  /** Import once, then edit the draft the way an author would. */
+  async function seeded(store: PostStore, h: ReturnType<typeof harness>) {
+    await run(export1, h, {}, store);
+    const tk = (await store.list())[0]!.translationKey;
+    const p = (await store.get(tk))!;
+    expect(p.de.bodyMarkdown).toContain('![a](https://wp/b.jpg)'); // still hot-linked after run 1
+    await store.upsertDraft({
+      ...p,
+      shared: { ...p.shared, countryCode: 'GR', region: 'europe', coordinates: { lat: 36.4, lng: 28.2 }, stops: [{ name: 'Lindos', lat: 36.09, lng: 28.08 }] },
+      de: {
+        ...p.de, country: 'Griechenland', title: 'Rhodos, endlich', excerpt: 'Neu', keyFacts: { Dauer: '4 Tage' },
+        heroImage: { src: 'https://img/authors-pick', width: 10, height: 20, alt: 'Mein Held' },
+        bodyMarkdown: p.de.bodyMarkdown
+          .replace('Intro', 'Eine bessere Einleitung')
+          .replace('![a](https://img/trips/de-1/a)', '') // author removed photo a
+          .replace('![a](https://wp/b.jpg)', '![Strand bei Nacht](https://wp/b.jpg)'), // author wrote alt on the hot-link
+      },
+    });
+    return tk;
+  }
+
+  it('keeps the author\'s shared and locale fields, body edits and hero; swaps in only the recovered photo', async () => {
+    const store = memoryPostStore();
+    const { h, nextRun } = flaky('b.jpg');
+    const tk = await seeded(store, h);
+    nextRun();
+    const s = await run(export1, h, {}, store);
+    expect(s).toMatchObject({ imported: 0, updated: 1, rejected: 0, failed: 0 });
+    const p = (await store.get(tk))!;
+    expect(p.shared).toMatchObject({ countryCode: 'GR', coordinates: { lat: 36.4, lng: 28.2 }, stops: [{ name: 'Lindos' }] });
+    expect(p.de).toMatchObject({ country: 'Griechenland', title: 'Rhodos, endlich', excerpt: 'Neu', keyFacts: { Dauer: '4 Tage' } });
+    expect(p.de.heroImage).toEqual({ src: 'https://img/authors-pick', width: 10, height: 20, alt: 'Mein Held' });
+    const body = p.de.bodyMarkdown;
+    expect(body).toContain('Eine bessere Einleitung');
+    expect(body).not.toContain('trips/de-1/a');                            // removed photo stays removed
+    expect(body).toContain('![Strand bei Nacht](https://img/trips/de-1/b)'); // hot-link healed, author's alt kept
+    expect(body).not.toContain('https://wp/');
+    expect(p.de.images).toMatchObject({
+      'https://img/trips/de-1/b': { width: 100, height: 80 },
+      'https://img/trips/de-1/g1': { width: 100, height: 80 }, // pre-existing entry kept
+    });
+  });
+
+  it('fills an empty hero slot from the export on re-run, keeping the author\'s alt', async () => {
+    const store = memoryPostStore();
+    const { h, nextRun } = flaky('hero.jpg');
+    await run(pairWithHero('https://wp/hero.jpg', ['https://wp/body.jpg']), h, {}, store);
+    const tk = (await store.list())[0]!.translationKey;
+    const p = (await store.get(tk))!;
+    expect(p.de.heroImage.src).toBe('');
+    await store.upsertDraft({ ...p, de: { ...p.de, heroImage: { ...p.de.heroImage, alt: 'Alt vom Autor' } } });
+    nextRun();
+    await run(pairWithHero('https://wp/hero.jpg', ['https://wp/body.jpg']), h, {}, store);
+    expect((await store.get(tk))!.de.heroImage).toEqual({ src: 'https://img/trips/de-1/hero', width: 100, height: 80, alt: 'Alt vom Autor' });
+  });
+
+  it('rebuilds the pair from the export when overwriteDrafts is set', async () => {
+    const store = memoryPostStore();
+    const { h, nextRun } = flaky('b.jpg');
+    const tk = await seeded(store, h);
+    nextRun();
+    const s = await run(export1, h, { overwriteDrafts: true }, store);
+    expect(s).toMatchObject({ updated: 1 });
+    const p = (await store.get(tk))!;
+    expect(p.shared).toMatchObject({ countryCode: 'XX', coordinates: { lat: 0, lng: 0 } });
+    expect(p.de.country).toBe('');
+    expect(p.de.heroImage.src).toBe('');
+    expect(p.de.bodyMarkdown).toContain('Intro');
+    expect(p.de.bodyMarkdown).toContain('![a](https://img/trips/de-1/a)');
+  });
+
+  it('still fetches exactly the export\'s photo set on a merge run (the #96 count is unchanged)', async () => {
+    const store = memoryPostStore();
+    const { h, nextRun } = flaky('b.jpg');
+    await seeded(store, h);
+    nextRun();
+    h.calls.length = 0;
+    const s = await run(export1, h, { maxImages: 4 }, store);
+    expect(h.calls.sort()).toEqual(['https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/g1.jpg', 'https://wp/g2.jpg']);
+    expect(s.images).toEqual({ total: 4, hosted: 4, failed: 0 });
+  });
+
+  it('carries the author\'s gallery alt/caption from the hot-linked key to the healed URL', async () => {
+    const store = memoryPostStore();
+    const { h, nextRun } = flaky('g2.jpg');
+    await run(export1, h, {}, store);
+    const tk = (await store.list())[0]!.translationKey;
+    const p = (await store.get(tk))!;
+    // The author annotates the still-hot-linked gallery line; the store lifts
+    // the metadata into images[<wp url>] and leaves a bare URL on the line.
+    await store.upsertDraft({ ...p, de: { ...p.de, bodyMarkdown: p.de.bodyMarkdown.replace('https://wp/g2.jpg', 'https://wp/g2.jpg | 640x400 | alt="Abend" | caption="Am Hafen"') } });
+    expect((await store.get(tk))!.de.images['https://wp/g2.jpg']).toMatchObject({ alt: 'Abend', caption: 'Am Hafen' });
+    nextRun();
+    await run(export1, h, {}, store);
+    const healed = (await store.get(tk))!.de;
+    expect(healed.bodyMarkdown).not.toContain('https://wp/');
+    expect(healed.images['https://img/trips/de-1/g2']).toEqual({ width: 100, height: 80, alt: 'Abend', caption: 'Am Hafen' });
+    expect(healed.images['https://wp/g2.jpg']).toBeUndefined();
+  });
+
+  it('keeps gallery metadata when the same hot-link occurs twice (second substitution must not clobber the first)', async () => {
+    const store = memoryPostStore();
+    const { h, nextRun } = flaky('g2.jpg');
+    await run(export1, h, {}, store);
+    const tk = (await store.list())[0]!.translationKey;
+    const p = (await store.get(tk))!;
+    // A second gallery block referencing the same failed photo, annotated once
+    // WITH dimensions — that is what makes the store lift the alt into
+    // images[<wp url>] (without them it stays on the line).
+    await store.upsertDraft({ ...p, de: { ...p.de, bodyMarkdown: p.de.bodyMarkdown.replace('https://wp/g2.jpg', 'https://wp/g2.jpg | 640x400 | alt="Abend"') + '\n\n```gallery\nhttps://wp/g2.jpg\n```' } });
+    expect((await store.get(tk))!.de.images['https://wp/g2.jpg']).toMatchObject({ alt: 'Abend' });
+    nextRun();
+    await run(export1, h, {}, store);
+    expect((await store.get(tk))!.de.images['https://img/trips/de-1/g2']).toEqual({ width: 100, height: 80, alt: 'Abend' });
+  });
+
+  it('does not refetch the featured image while EITHER locale keeps a hero (both share one storage key)', async () => {
+    const store = memoryPostStore();
+    const h = harness();
+    // Same featured image on both sides: the EN hero resolves (via the pair cache) to DE's key.
+    const both = pairWithHero('https://wp/hero.jpg', ['https://wp/body.jpg']);
+    await run(both, h, {}, store);
+    const tk = (await store.list())[0]!.translationKey;
+    const p = (await store.get(tk))!;
+    // Author clears the DE hero but keeps EN's, which points at trips/de-1/hero.
+    await store.upsertDraft({ ...p, de: { ...p.de, heroImage: { src: '', width: 0, height: 0, alt: '' } }, en: { ...p.en, heroImage: { src: 'https://img/trips/de-1/hero', width: 100, height: 80, alt: 'kept' } } });
+    h.calls.length = 0;
+    await run(both, h, { maxImages: 1 }, store);
+    expect(h.calls).toEqual(['https://wp/body.jpg']); // no hero fetch → trips/de-1/hero untouched
+    const after = (await store.get(tk))!;
+    expect(after.de.heroImage.src).toBe('');
+    expect(after.en.heroImage.src).toBe('https://img/trips/de-1/hero');
+  });
+
+  it('does not refetch (and so never overwrites) a stored hero on a merge run; the count agrees', async () => {
+    const store = memoryPostStore();
+    const h = harness();
+    const body = pairWithHero('https://wp/hero.jpg', ['https://wp/body.jpg']);
+    await run(body, h, {}, store);
+    expect(h.calls.sort()).toEqual(['https://wp/body.jpg', 'https://wp/hero.jpg']);
+    h.calls.length = 0;
+    // maxImages: 1 — the hero must not be counted either, or this would throw.
+    const s = await run(body, h, { maxImages: 1 }, store);
+    expect(h.calls).toEqual(['https://wp/body.jpg']);
+    expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+    expect((await store.get((await store.list())[0]!.translationKey))!.de.heroImage.src).toBe('https://img/trips/de-1/hero');
+  });
+});
+
+/**
  * Issue #85: throttle, bounded retry, honest accounting, resumability.
  *
  * @ai-context docs/superpowers/specs/2026-07-30-wxr-import-hardening-design.md
@@ -1086,7 +1253,9 @@ describe('importWxr resumability', () => {
    * @ai-warning This is the ONLY thing tying `trips/<slug>/hero` (wp-import.ts)
    * to `HERO_KEY_RE` (wp-images.ts). The two modules must agree or the hero
    * silently becomes resumable, and changing a post's featured image in
-   * WordPress would then keep the old photo forever.
+   * WordPress would then keep the old photo forever even on an `overwriteDrafts`
+   * run. (A default merge run does not fetch a stored hero at all — issue #126,
+   * covered in 'importWxr re-run merge' — so the re-run here overwrites.)
    */
   it('always re-fetches the hero, whose key encodes no url identity', async () => {
     const storageDir = await mkdtemp(join(tmpdir(), 'wphero-'));
@@ -1110,7 +1279,7 @@ describe('importWxr resumability', () => {
     expect([...calls].sort()).toEqual(['https://wp/a.jpg', 'https://wp/hero.jpg']);
 
     calls.length = 0;
-    await importWxr(body, await deps());
+    await importWxr(body, { ...(await deps()), overwriteDrafts: true });
     // The body image resumes from disk; the hero does not.
     expect(calls).toEqual(['https://wp/hero.jpg']);
   });

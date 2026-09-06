@@ -578,6 +578,13 @@ small {
 .filter-field--check { flex-direction: row; align-items: center; gap: 0.4rem; }
 .filter-field--check input { width: auto; }
 
+/* A single checkbox option outside the filter bar (import.html's "replace
+   existing drafts", #126): the label keeps the admin's mono voice but sits
+   beside its box, and the base 100%-width control rule is undone. */
+.check-field { display: flex; align-items: center; gap: 0.5rem; margin: 1rem 0 0.25rem; }
+.check-field input { width: auto; margin: 0; }
+.check-field + .muted { margin-top: 0; }
+
 /* First native <dialog> in the admin — same choice as the blog lightbox, for
    the same reasons: focus trap, Esc, inert background and ::backdrop for free. */
 dialog.admin-modal {
