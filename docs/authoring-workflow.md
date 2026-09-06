@@ -33,9 +33,11 @@ into Postgres without manually re-authoring each one:
 **Note:** The import is **idempotent by slug pair** — a group is matched to an existing post only
 when *both* its DE and EN slugs belong to that same post. Re-importing the same WXR will not
 overwrite published posts or duplicate existing drafts; only draft posts from this import are
-refreshed. A group whose slugs overlap an existing post without matching it as a pair (one slug
-matches, or the two slugs belong to two different posts) is **rejected** with a warning naming the
-owner, and nothing is written — resolve the slug in the editor and run the import again.
+refreshed. A group whose slugs overlap an existing post without matching it as a pair — one slug
+matches, the two slugs belong to two different posts, or a slug equals another post's slug in the
+*other* language (re-hosted photos are filed by slug, without a language) — is **rejected** with a
+warning naming the owner, and nothing is written. Resolve the slug in the editor and run the import
+again.
 
 ---
 

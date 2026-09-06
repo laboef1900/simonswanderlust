@@ -37,13 +37,17 @@ This is plausible for this blog: DE and EN slugs are often near-identical or ide
 
 ## Decision
 
-**Pair identity is the (DE slug, EN slug) tuple, matched as a unit.** The lookup is keyed per locale
-(`de:<slug>` / `en:<slug>`), and a group is bound to an existing pair only when **both** of its
-slugs resolve to **the same** `translationKey`. Every other overlap is a **conflict**: the group is
-counted as `rejected`, a warning names the existing post(s) each slug belongs to, and nothing is
-fetched or written for it.
+**Pair identity is the (DE slug, EN slug) tuple, matched as a unit, and a slug is one namespace
+across locales.** `importWxr` indexes every stored post under each of its slugs (any locale). A
+group is bound to an existing pair only when **exactly one** stored post touches either of its
+slugs **and that post owns both**. Every other overlap — one slug matches, the two slugs belong to
+two different posts, or a slug matches an unrelated post's *other-locale* slug — is a **conflict**:
+the group is counted as `rejected`, a warning names the existing post(s), and nothing is fetched or
+written for it. The same rule applies *within* one export: a group whose slug was already claimed
+by an earlier group of the same export is rejected too.
 
-Why "reject" rather than "bind on whichever slug matches":
+Why "reject" rather than "bind on whichever slug matches", and why a cross-locale namesake is not
+simply admitted as a new pair:
 
 - **Partial match (one slug matches, the other does not).** Binding would make `upsertDraft` rename
   the *other* locale's stored slug to the export's value. That is exactly the slug change Golden
@@ -52,10 +56,15 @@ Why "reject" rather than "bind on whichever slug matches":
   `duplicate_slug` instead — after the images were fetched. Either way, wrong.
 - **Split match (the two slugs belong to two different pairs).** No binding is correct; whichever
   pair we picked, the other one's slug would be stolen or the write would fail.
-- **Cross-locale namesake only** (the issue's case: incoming EN slug equals an unrelated post's DE
-  slug, no same-locale match). With locale-keyed lookup this is simply *no prior*: the group
-  imports as a **new** pair, which the store permits because the uniqueness index is per locale.
-  Nothing existing is touched.
+- **Cross-locale namesake** (the issue's case: incoming EN slug equals an unrelated post's DE slug,
+  no same-locale match). The database would accept it as a new pair — `posts_locale_slug_idx` is
+  per `(locale, slug)` — but the importer's **image storage keys are `trips/<slug>/…` with no
+  locale segment** (#85 depends on them staying deterministic and un-hashed for its disk-derived
+  resume). Admitting the group would write its hero and body photos over the existing post's
+  variant files — `storeVariants` overwrites in place, and the hero slot is never resumed — so the
+  existing row would stay intact while its live photographs changed. Until the key scheme carries
+  the locale (a #98-class change, out of scope here), the namesake is a conflict. (Review finding
+  on PR #152.)
 
 The `rejected` bucket already means "refused at the import boundary; nothing was fetched or
 written", and the buckets still sum to the group count (#100's invariant), so no new bucket is
@@ -66,31 +75,36 @@ line by line, carries the reason.
 
 | Case | Before | After |
 | --- | --- | --- |
-| Export group `(rhodos-2, rhodos)`; stored pair `(rhodos, rhodes-adventure)` | Binds to the stored pair via `bySlug.get('rhodos')`; overwrites its content and changes its slugs | No prior; imports as a new pair. Stored pair untouched. |
-| Same, but the stored pair is **published** | `skippedPublished` for the wrong reason — the group silently never imports | Imports as a new pair; the published post is never consulted. |
+| Export group `(rhodos-2, rhodos)`; stored pair `(rhodos, rhodes-adventure)` | Binds to the stored pair via `bySlug.get('rhodos')`; overwrites its content and changes its slugs | `rejected` before any fetch; warning names `rhodos/rhodes-adventure`. Stored pair and its photos untouched. |
+| Same, but the stored pair is **published** | `skippedPublished` for the wrong reason — the group silently never imports | `rejected` with the same warning; the published post is never consulted, and its `trips/rhodos/…` photos are never written. |
 | Export group `(rhodos, crete)`; stored `(rhodos, rhodes-adventure)` and `(kreta, crete)` | Binds to the first; `upsertDraft` throws `duplicate_slug` on `crete` after fetching every image → `failed` | `rejected` before any fetch; warning names both owners. |
 | Export group `(rhodos, rhodes)`; stored `(rhodos, rhodes-adventure)` | Binds via DE and **renames the live EN slug** to `rhodes` | `rejected`; warning names the owner. Author resolves in the editor. |
+| Two groups in one export, `(rhodos, rhodes)` then `(kreta, rhodos)` | Both import; the second's EN photos land under `trips/rhodos/…` over the first's DE photos | Second `rejected` ("slug conflict within this export"). |
 | Export group identical to a stored pair | `updated` | `updated` — unchanged behaviour, pinned by a test. |
+| A pair whose DE and EN slugs are the same word | imports | imports — one trip, one namespace; pinned by a test. |
 | A stranded single-locale row (empty `slugDe`/`slugEn` from `pgPostStore.list()`) | `bySlug.set('', row)` — inert only because `isSafeSlug('')` is false | Empty slugs are not indexed at all. |
 
 ## Invariants (each has a test in `test/wp-import.test.ts`, `describe('importWxr pair identity')`)
 
-1. A group whose EN slug equals an unrelated post's DE slug imports as a **new** pair; the existing
-   post's slugs and body are unchanged.
-2. The published-skip is judged against the pair the group actually matches, never a cross-locale
-   namesake.
-3. A group whose two slugs both match one existing pair is an **update** of that pair (no
+1. A group whose EN slug equals an unrelated post's DE slug is `rejected`, makes **zero** re-host
+   calls, and leaves the existing post's slugs and body unchanged.
+2. The same holds when that existing post is published: `rejected`, not `skippedPublished` — the
+   published post's protection is never bound to a namesake.
+3. A group whose slug was already claimed by an earlier group in the same export is `rejected`,
+   naming the earlier group.
+4. A pair whose DE and EN slugs are the same word imports, and re-imports as an update.
+5. A group whose two slugs both match one existing pair is an **update** of that pair (no
    duplicate, same `translationKey`).
-4. A group whose two slugs belong to two different existing pairs is `rejected`, makes **zero**
+6. A group whose two slugs belong to two different existing pairs is `rejected`, makes **zero**
    re-host calls, and leaves both pairs unchanged.
-5. A partial match (one slug matches, the other differs) is `rejected`; the stored pair keeps both
+7. A partial match (one slug matches, the other differs) is `rejected`; the stored pair keeps both
    of its slugs.
 
 ## Definition of done
 
 - `npx tsc --noEmit` and `npm test` green in `uploader/` with `TEST_DATABASE_URL` set; CI green.
-- Every invariant above has a test that fails on the pre-#99 code (verified: 4 of the 5 fail
-  against the flat map; the 5th pins the preserved update path).
+- Every invariant above has a test; the conflict cases fail on the pre-#99 flat map, and the update
+  path is pinned so the fix cannot regress idempotency.
 - `docs/authoring-workflow.md`'s "idempotent by slug" note says *by slug pair* and names the
   conflict outcome.
 - Explicit human approval before merge, per CLAUDE.md's High-risk row.
@@ -102,5 +116,8 @@ flat-map binding — the pre-#99, documented state, with its overwrite risk.
 
 ## Not included here
 
+- **Locale-carrying storage keys** (`trips/<locale>/<slug>/…`), which would let a cross-locale
+  namesake import as its own pair. It changes the deterministic-key contract #85's resume relies on
+  and belongs with #98.
 - **#126 (re-import wipes author edits on existing drafts)** — what happens *after* a correct
   binding is a separate decision (merge vs. skip vs. overwrite flag) and follows in its own PR.
