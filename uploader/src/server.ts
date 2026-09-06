@@ -1175,18 +1175,25 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // per-poll logging. Blog serving stays DB-independent (static files from the
   // current release), so a down Postgres flips the container unhealthy without
   // taking the blog offline.
-  app.get('/health', async (_req, reply) => {
+  app.get('/health', async (req, reply) => {
     // @ai-warning: free space and `release` are REPORTED, never a health
     // verdict (#73, #110). A low-space warning that flipped the container
     // unhealthy would trigger a restart loop, which makes a full disk strictly
     // worse; a missing release is normal on a fresh volume and is healed by a
     // publish, not a restart. The probe is best-effort for the same reason: an
     // unreadable statfs must not 503.
+    //
+    // `disk` is admin-only (#132): the route itself is public because the
+    // compose healthcheck polls it without a session, but watching `/data`
+    // fill up is reconnaissance for timing a disk-exhaustion attempt on
+    // `/upload`, so anonymous and author callers get the verdict only.
     let disk: { free: number; total: number; freeLabel: string } | undefined;
-    try {
-      const space = await diskSpace(storageDir);
-      disk = { ...space, freeLabel: formatBytes(space.free) };
-    } catch { /* reported as absent */ }
+    if (req.authUser?.isAdmin) {
+      try {
+        const space = await diskSpace(storageDir);
+        disk = { ...space, freeLabel: formatBytes(space.free) };
+      } catch { /* reported as absent */ }
+    }
     const release = cfg.builder.hasRelease();
     try {
       await cfg.dbCheck();
