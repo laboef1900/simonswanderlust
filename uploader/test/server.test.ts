@@ -895,6 +895,46 @@ describe('error handler', () => {
   });
 });
 
+describe('blog serving is DB-independent (#129)', () => {
+  it('a cookie-bearing public request is served without a session lookup while Postgres is down', async () => {
+    // The owner's admin cookie rides on every blog request of the same host.
+    // Before #129 a global onRequest hook resolved it against Postgres, so a
+    // DB outage 500'd the whole public site for exactly that browser.
+    const down = memorySessionStore();
+    down.find = async () => { throw new Error('pg: connection to db:5432 refused'); };
+    await mkdir(join(dir, 'site', 'current', 'de'), { recursive: true });
+    await writeFile(join(dir, 'site', 'current', 'de', 'index.html'), '<h1>de</h1>');
+    const b = build({ sessions: down });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const publicRequests = [
+        { url: '/de/', expected: 200 },
+        { url: '/nope/', expected: 404 },                                        // blog 404 page
+        { url: '/feed/', expected: 301 },                                        // legacy redirect
+        { url: '/admin/index.html', expected: 200 },                             // admin shell, static
+        { url: '/x-640.avif', expected: 404, host: 'img.simonswanderlust.com' }, // image host
+      ];
+      for (const { url, expected, host } of publicRequests) {
+        const res = await b.app.inject({ method: 'GET', url, cookies: { sid: 'admin-cookie' }, ...(host ? { headers: { host } } : {}) });
+        expect(res.statusCode, url).toBe(expected);
+      }
+      expect(spy).not.toHaveBeenCalled();
+      // The CMS on the same server is honestly down: the session cannot be
+      // checked, so these fail (sanitized), rather than pretending "logged out".
+      for (const url of ['/auth/status', '/posts']) {
+        const res = await b.app.inject({ method: 'GET', url, cookies: { sid: 'admin-cookie' } });
+        expect(res.statusCode, url).toBe(500);
+        expect(res.json()).toEqual({ error: 'internal server error' });
+      }
+      // Anonymous callers of the CMS surface never needed the store.
+      expect((await b.app.inject({ method: 'GET', url: '/auth/status' })).json()).toMatchObject({ authenticated: false });
+      expect((await b.app.inject({ method: 'GET', url: '/posts' })).statusCode).toBe(401);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('auth endpoints', () => {
   it('GET /auth/status reports needsSetup on an empty store', async () => {
     const b = build();
