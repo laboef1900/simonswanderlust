@@ -1,6 +1,6 @@
 import { gzipSync, gunzipSync } from 'node:zlib';
 import {
-  existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
+  existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { create as createTar } from 'tar';
@@ -100,14 +100,36 @@ export async function dumpDatabase(db: Connectable, dir: string, now: Date = new
   } finally {
     client.release();
   }
-  const name = `db-${fileStamp(now)}.json.gz`;
   mkdirSync(dir, { recursive: true });
-  const payload = JSON.stringify({
+  const payload = gzipSync(JSON.stringify({
     version: DUMP_VERSION, createdAt: now.toISOString(),
     tables: { users, posts, pages, media, media_folders: mediaFolders },
-  });
-  atomicWrite(join(dir, name), gzipSync(payload));
-  return name;
+  }));
+  // @ai-warning Names have one-second resolution and every writer — the
+  // scheduler in the app, "Back up now", and the restore CLI running in a
+  // SEPARATE process via `docker compose exec` — shares this directory. A dump
+  // that reused a name would silently destroy the state the earlier file held
+  // (issue #114: the pre-restore dump is the operator's only undo copy), and
+  // an exists-check before `rename` is a cross-process race. So the name is
+  // claimed atomically: the payload is written to a private temp file and
+  // published with link(2), which fails with EEXIST if the name is taken
+  // (rename(2) would overwrite). On EEXIST the stamp advances one second and
+  // the link is retried; `createdAt` stays the real time either way.
+  const tmp = join(dir, `.db-${process.pid}-${now.getTime()}.tmp`);
+  writeFileSync(tmp, payload);
+  try {
+    for (let stamp = now; ; stamp = new Date(stamp.getTime() + 1000)) {
+      const name = `db-${fileStamp(stamp)}.json.gz`;
+      try {
+        linkSync(tmp, join(dir, name));
+        return name;
+      } catch (e) {
+        if (!(e instanceof Error && 'code' in e && e.code === 'EEXIST')) throw e;
+      }
+    }
+  } finally {
+    rmSync(tmp, { force: true });
+  }
 }
 
 /** Refused before writing: the archive would not fit on the backup volume. */
@@ -431,7 +453,7 @@ export function createDbBackup(
   };
 }
 
-interface Dump {
+export interface Dump {
   version: number;
   createdAt: string;
   tables: {
@@ -441,6 +463,17 @@ interface Dump {
     media?: Record<string, unknown>[];
     media_folders?: Record<string, unknown>[];
   };
+}
+
+/** Parse a dump file and reject versions this code cannot restore. Shared by
+ * `restoreDatabase` and the CLI's pre-restore summary, so an unrestorable file
+ * is refused before anything (a pre-restore dump, a transaction) happens.
+ * @ai-warning An ALLOW-LIST, not a minimum. Every DUMP_VERSION bump must be
+ * added here or dumps written by the new code are unrestorable. */
+export function readDump(filePath: string): Dump {
+  const dump = JSON.parse(gunzipSync(readFileSync(filePath)).toString('utf8')) as Dump;
+  if (![1, 2, 3, 4].includes(dump.version)) throw new BackupError(`unsupported dump version ${dump.version}`);
+  return dump;
 }
 
 const asJsonb = (v: unknown): string | null => (v == null ? null : JSON.stringify(v));
@@ -460,10 +493,7 @@ export async function restoreDatabase(
   pool: DbPool,
   filePath: string,
 ): Promise<{ users: number; posts: number; pages: number; media: number }> {
-  const dump = JSON.parse(gunzipSync(readFileSync(filePath)).toString('utf8')) as Dump;
-  // @ai-warning An ALLOW-LIST, not a minimum. Every DUMP_VERSION bump must be
-  // added here or dumps written by the new code are unrestorable.
-  if (![1, 2, 3, 4].includes(dump.version)) throw new BackupError(`unsupported dump version ${dump.version}`);
+  const dump = readDump(filePath);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');

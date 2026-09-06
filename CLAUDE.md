@@ -778,6 +778,19 @@ blog/
   files from the chain). `POST /backups` answers 409 while a run is in flight, and the schedule
   is anchored to UTC-day / Monday-week windows instead of drifting an hour per day. See
   `docs/superpowers/specs/2026-09-05-images-archive-safety-design.md`.
+- **Done:** #114 `restore` CLI safeguards (2026-09-06) — the CLI went from argv straight to the
+  `DELETE`s. It now refuses file names outside `BACKUP_FILE_RE`, rejects unrestorable versions
+  (`readDump`, shared with `restoreDatabase`) before doing anything, prints the target database
+  (never the credentials) plus the dump's and the live per-table counts, requires the literal
+  `yes` or `--yes`, and writes a pre-restore dump via `dumpDatabase` into
+  `${BACKUP_DIR:-/data/backup}/db` **before** the transaction — aborting if that dump fails
+  (Golden Rule 3). One trap worth knowing: dump names have one-second resolution and
+  `atomicWrite` renames over an existing file, so a back-to-back undo, two scripted `--yes` runs,
+  or a scheduled backup landing in the same second would have overwritten the pre-dump (or the
+  file being restored). The no-clobber rule therefore lives in `dumpDatabase` itself, shared by
+  every writer, and it is atomic across processes — the finished temp file is published with
+  `link(2)`, which fails with `EEXIST` where `rename` would clobber, and a taken name advances
+  to the next free second (`createdAt` keeps the real time). See `docs/superpowers/specs/2026-09-05-restore-cli-confirmation-design.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

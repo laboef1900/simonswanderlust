@@ -58,6 +58,53 @@ describe('dumpDatabase', () => {
     expect(dump.tables.media_folders).toEqual([{ path: 'Island' }]);
     expect(dump.tables.sessions).toBeUndefined();
   });
+
+  it('never overwrites an existing dump: a taken name advances to the next free stamp', async () => {
+    // One-second name resolution + every writer (scheduler, "Back up now",
+    // the restore CLI's pre-restore dump) sharing this directory: a reused
+    // name would silently destroy the state the earlier file held.
+    const now = new Date('2026-07-03T14:30:05Z');
+    const first = await dumpDatabase(fakeDb([{ id: 'u1', username: 'before' }]), dir, now);
+    const second = await dumpDatabase(fakeDb([{ id: 'u1', username: 'after' }]), dir, now);
+    const third = await dumpDatabase(fakeDb([{ id: 'u1', username: 'later' }]), dir, now);
+    expect([first, second, third]).toEqual([
+      'db-20260703-143005.json.gz', 'db-20260703-143006.json.gz', 'db-20260703-143007.json.gz',
+    ]);
+    const usersIn = async (name: string) => JSON.parse(gunzipSync(await readFile(join(dir, name))).toString('utf8')).tables.users[0].username;
+    expect(await usersIn(first)).toBe('before');
+    expect(await usersIn(second)).toBe('after');
+    // createdAt records when the dump was actually taken, not the steered name.
+    expect(JSON.parse(gunzipSync(await readFile(join(dir, second))).toString('utf8')).createdAt).toBe(now.toISOString());
+  });
+
+  it('two processes publishing dumps concurrently under one stamp never lose a dump', async () => {
+    // The scheduler (app process) and the restore CLI (`docker compose exec`,
+    // a separate process) share BACKUP_DIR/db. An exists-check-then-rename
+    // is a cross-process race: both pick the same free name and the second
+    // rename silently replaces the first dump. Publication must claim the
+    // name atomically (link(2) → EEXIST → next stamp). 2 × 40 dumps with
+    // ONE `now` forces every pair onto contested names.
+    const { spawn } = await import('node:child_process');
+    const run = (tag: string) => new Promise<string[]>((resolve, reject) => {
+      const child = spawn(process.execPath, ['--import', 'tsx', 'test/dump-race-worker.ts', dir, tag, '40', String(now.getTime())], {
+        cwd: join(import.meta.dirname, '..'), stdio: ['ignore', 'pipe', 'inherit'],
+      });
+      let out = '';
+      child.stdout.on('data', (d: Buffer) => { out += d.toString(); });
+      child.on('error', reject);
+      child.on('close', (code) => (code === 0 ? resolve(JSON.parse(out) as string[]) : reject(new Error(`worker ${tag} exited ${code}`))));
+    });
+    const now = new Date('2026-07-03T14:30:05Z');
+    const [a, b] = await Promise.all([run('a'), run('b')]);
+    const names = [...a, ...b];
+    expect(new Set(names).size).toBe(80);
+    expect((await readdir(dir)).filter((n) => BACKUP_FILE_RE.test(n)).sort()).toEqual([...names].sort());
+    // Every file still holds the row of the writer that claimed its name.
+    const tagsOnDisk = await Promise.all(names.map(async (n) =>
+      JSON.parse(gunzipSync(await readFile(join(dir, n))).toString('utf8')).tables.users[0].username as string));
+    expect(new Set(tagsOnDisk).size).toBe(80);
+    expect((await readdir(dir)).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+  }, 60_000);
 });
 
 describe('list + prune + state', () => {
