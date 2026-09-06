@@ -1556,11 +1556,23 @@ describe('post revisions endpoints', () => {
 });
 
 describe('WordPress import', () => {
-  it('401 without auth', async () => {
-    const form = new FormData();
-    form.append('file', '<rss></rss>', { filename: 'x.xml', contentType: 'text/xml' });
-    const res = await build().app.inject({ method: 'POST', url: '/import', headers: form.getHeaders(), payload: form });
-    expect(res.statusCode).toBe(401);
+  // issue #97: admin-only, like every other surface that writes gigabytes under
+  // /data or makes outbound fetches the server does not choose.
+  it('401 without auth, 403 for a non-admin author', async () => {
+    const b = build();
+    const wxr = () => {
+      const form = new FormData();
+      form.append('file', readFileSync('test/fixtures/wxr-sample.xml', 'utf8'), { filename: 'export.xml', contentType: 'text/xml' });
+      return form;
+    };
+    const anon = wxr();
+    expect((await b.app.inject({ method: 'POST', url: '/import', headers: anon.getHeaders(), payload: anon })).statusCode).toBe(401);
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    const asAuthor = wxr();
+    const res = await b.app.inject({ method: 'POST', url: '/import', headers: asAuthor.getHeaders(), cookies: cookie, payload: asAuthor });
+    expect(res.statusCode).toBe(403);
+    // Rejected at the preHandler: nothing was imported for the author.
+    expect((await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json()).toHaveLength(0);
   });
 
   it('imports the fixture export as drafts', async () => {
