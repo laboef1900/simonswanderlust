@@ -335,11 +335,16 @@ window.MediaPicker = (function () {
       renderStrip();
     }
 
+    // Same race as the library page: a slow response for an earlier query
+    // must not overwrite the grid for the one the author typed next.
+    var loads = api.makeSequence();
     async function load() {
+      var ticket = loads.next();
       try {
         // Only `ready` photos are offered: one still encoding has no variants,
         // and picking it would put a URL that 404s into a post.
         var res = await client.list({ q: state.q, status: 'ready', page: state.page, pageSize: state.pageSize });
+        if (!loads.isCurrent(ticket)) return;
         state.items = res.items;
         state.total = res.total;
         // The caller knows the URLs of the current gallery but not the rows, so
@@ -349,6 +354,7 @@ window.MediaPicker = (function () {
         picked.adopt(res.items);
         render();
       } catch (e) {
+        if (!loads.isCurrent(ticket)) return;
         grid.innerHTML = '';
         grid.appendChild(el('p', 'muted', 'Could not load the library: ' + (e && e.message ? e.message : e)));
       }
@@ -370,11 +376,7 @@ window.MediaPicker = (function () {
       if (o.onPick) o.onPick(multiple ? items : items[0], { layout: layout });
     }
 
-    var debounce = null;
-    search.addEventListener('input', function () {
-      clearTimeout(debounce);
-      debounce = setTimeout(function () { state.q = search.value; state.page = 1; load(); }, 200);
-    });
+    search.addEventListener('input', api.debounce(function () { state.q = search.value; state.page = 1; load(); }, 200));
     prev.addEventListener('click', function () { state.page = Math.max(1, state.page - 1); load(); });
     next.addEventListener('click', function () { state.page += 1; load(); });
     cancel.addEventListener('click', close);
