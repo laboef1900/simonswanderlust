@@ -140,9 +140,10 @@ export async function createRehostResume(
       if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) return null;
 
       // Fail closed on a partial set, measured against the original's width.
-      // `storeVariantFiles` writes with plain `writeFile` and has no cleanup on
-      // failure, so a crashed encode leaves files and no record — trusting that
-      // would publish a srcset pointing at variants nobody ever wrote.
+      // A crashed encode leaves files and no record — trusting that would
+      // publish a srcset pointing at variants nobody ever wrote. Each file that
+      // does exist is complete: storage.ts writes to a `.part-*` temp and
+      // renames (#118), so a truncated variant can never carry the final name.
       for (const w of variantWidths(width)) {
         for (const format of FORMATS) {
           const file = `${name}-${w}.${format}`;

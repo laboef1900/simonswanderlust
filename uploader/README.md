@@ -153,8 +153,10 @@ works the backlog at concurrency 2. A build preempts the queue — both take the
 `work-lock.ts`, so a publish never competes with an encode. Rows survive restarts: the boot pass
 and `POST /media/rescan` both run `createReconciler` (`media-sync` reconciles disk against the
 database — backfilling rows for keys already on disk, harvesting alt text by exact URL match,
-and flagging rows whose file has vanished — and then `encodeQueue.recover()` re-seeds the queue
-from `status = 'processing'`).
+flagging rows whose files have vanished, and demoting a `ready` row whose variant set is no
+longer complete for its original's width — and then `encodeQueue.recover()` re-seeds the queue
+from `status = 'processing'`). Variant and original files are written atomically (temp +
+rename), so a crash never leaves a truncated file under a final name.
 
 Three consequences worth knowing:
 

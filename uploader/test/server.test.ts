@@ -252,6 +252,12 @@ describe('POST /upload', () => {
     expect((await b.app.inject({ method: 'GET', url: `/${key}-640.webp`, headers: img })).statusCode).toBe(200);
     // ...but the full-resolution original is not downloadable.
     expect((await b.app.inject({ method: 'GET', url: `/${key}-orig.jpg`, headers: img })).statusCode).toBe(404);
+    // ...and neither is a crash-leftover temp of it (#118: storage.ts writes
+    // `<final>.part-<hex>` then renames — the deny-list on `-orig.*` alone would serve it).
+    await writeFile(join(dir, `${key}-orig.jpg.part-0a1b2c3d`), 'half an original with GPS');
+    await writeFile(join(dir, `${key}-1280.webp.part-0a1b2c3d`), 'half a variant');
+    expect((await b.app.inject({ method: 'GET', url: `/${key}-orig.jpg.part-0a1b2c3d`, headers: img })).statusCode).toBe(404);
+    expect((await b.app.inject({ method: 'GET', url: `/${key}-1280.webp.part-0a1b2c3d`, headers: img })).statusCode).toBe(404);
   });
 
   it('returns immediately with status "processing" and enqueues the encode', async () => {
@@ -614,7 +620,7 @@ describe('media library', () => {
   });
 
   it('POST /media/rescan is admin-only and returns the reconcile report', async () => {
-    const b = build({ reconciler: { run: async () => ({ scanned: 1, inserted: 0, altHarvested: 0, markedMissing: 0, recovered: 1 }) } });
+    const b = build({ reconciler: { run: async () => ({ scanned: 1, inserted: 0, altHarvested: 0, markedMissing: 0, demoted: 0, recovered: 1 }) } });
     const author = await authed(b, { isAdmin: false, username: 'author' });
     expect((await b.app.inject({ method: 'POST', url: '/media/rescan', cookies: author.cookie })).statusCode).toBe(403);
     const admin = await authed(b, { username: 'boss' });

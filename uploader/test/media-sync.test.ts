@@ -1,9 +1,10 @@
 import { describe, expect, it, beforeEach } from 'vitest';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { createMediaSync, createReconciler, harvestAlt, walkStorageKeys } from '../src/media-sync.js';
+import { createMediaSync, createReconciler, harvestAlt, isCompleteSet, walkStorageKeys } from '../src/media-sync.js';
+import { FORMATS, variantWidths } from '../src/variants.js';
 import { createEncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock } from '../src/work-lock.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
@@ -21,10 +22,25 @@ async function writeVariant(key: string, width: number, format: 'webp' | 'avif' 
   const img = sharp({ create: { width, height: Math.round(width * 0.75), channels: 3, background: '#123' } });
   await writeFile(abs, format === 'webp' ? await img.webp().toBuffer() : await img.avif().toBuffer());
 }
+/** The complete contract for an intrinsic width — every `variantWidths` width in every format. */
+async function writeSet(key: string, intrinsicWidth: number, opts: { skip?: string[] } = {}) {
+  for (const w of variantWidths(intrinsicWidth)) {
+    for (const f of FORMATS) {
+      if (opts.skip?.includes(`${w}.${f}`)) continue;
+      await writeVariant(key, w, f);
+    }
+  }
+}
+/** An UNREADABLE original — what a crashed upload's truncated file looks like to sharp. */
 async function writeOriginal(key: string, bytes = 'x'.repeat(50)) {
   const abs = join(dir, `${key}-orig.jpg`);
   await mkdir(join(abs, '..'), { recursive: true });
   await writeFile(abs, bytes);
+}
+async function writeJpegOriginal(key: string, width: number) {
+  const abs = join(dir, `${key}-orig.jpg`);
+  await mkdir(join(abs, '..'), { recursive: true });
+  await writeFile(abs, await sharp({ create: { width, height: Math.round(width * 0.75), channels: 3, background: '#321' } }).jpeg().toBuffer());
 }
 
 const sync = (store: MediaStore, posts: PostUsageRow[] = []) => createMediaSync({
@@ -39,16 +55,48 @@ describe('walkStorageKeys', () => {
   // the case the backfill most needs to find.
   it('discovers an originals-only key (a crashed upload) as well as variant keys', async () => {
     await writeVariant('trips/a/hero', 640);
+    await writeVariant('trips/a/hero', 640, 'avif');
     await writeOriginal('trips/a/hero');
     await writeOriginal('library/2025/crashed');
     const keys = await walkStorageKeys(dir);
     expect([...keys.keys()].sort()).toEqual(['library/2025/crashed', 'trips/a/hero']);
-    expect(keys.get('trips/a/hero')).toMatchObject({ hasVariants: true });
-    expect(keys.get('library/2025/crashed')).toMatchObject({ hasVariants: false, origBytes: 50 });
+    const hero = keys.get('trips/a/hero');
+    expect([...hero!.variants].sort()).toEqual(['640.avif', '640.webp']);
+    expect(hero).toMatchObject({ largestVariant: 'trips/a/hero-640.webp', original: 'trips/a/hero-orig.jpg' });
+    expect(keys.get('library/2025/crashed')).toMatchObject({ variants: new Set(), largestVariant: null, origBytes: 50 });
+  });
+
+  it('ignores storage.ts temp files, so a crashed write never becomes a key', async () => {
+    await mkdir(join(dir, 'trips/a'), { recursive: true });
+    await writeFile(join(dir, 'trips/a/hero-1280.webp.part-0a1b2c3d'), 'partial');
+    await writeFile(join(dir, 'trips/a/hero-orig.jpg.part-0a1b2c3d'), 'partial');
+    expect((await walkStorageKeys(dir)).size).toBe(0);
+  });
+
+  it('picks the widest variant (webp on a tie) to probe a key with no original', async () => {
+    await writeVariant('wp/legacy', 640, 'avif');
+    await writeVariant('wp/legacy', 1280, 'avif');
+    await writeVariant('wp/legacy', 1280, 'webp');
+    expect((await walkStorageKeys(dir)).get('wp/legacy')?.largestVariant).toBe('wp/legacy-1280.webp');
   });
 
   it('returns empty for a missing storage dir instead of throwing', async () => {
     expect((await walkStorageKeys(join(dir, 'nope'))).size).toBe(0);
+  });
+});
+
+describe('isCompleteSet', () => {
+  const full = (w: number) => new Set(variantWidths(w).flatMap((x) => FORMATS.map((f) => `${x}.${f}`)));
+  it('requires every prescribed width in every format', () => {
+    expect(isCompleteSet(full(1920), 1920)).toBe(true);
+    expect(isCompleteSet(full(800), 800)).toBe(true);   // [640, 800] — the intrinsic width itself is a variant
+    const short = full(1920); short.delete('1920.avif');
+    expect(isCompleteSet(short, 1920)).toBe(false);
+    expect(isCompleteSet(full(1280), 1920)).toBe(false); // top-truncated
+  });
+  it('never accepts an unknown width', () => {
+    expect(isCompleteSet(full(640), 0)).toBe(false);
+    expect(isCompleteSet(full(640), NaN)).toBe(false);
   });
 });
 
@@ -97,27 +145,94 @@ describe('harvestAlt', () => {
 });
 
 describe('createMediaSync', () => {
-  it('backfills a row for every key on disk, probing real dimensions', async () => {
+  it('backfills a row for every key on disk, probing real dimensions from the original', async () => {
     const store = memoryMediaStore({ baseUrl: BASE });
-    await writeVariant('trips/a/hero', 640);
-    await writeOriginal('trips/a/hero');
+    await writeSet('trips/a/hero', 800);
+    await writeJpegOriginal('trips/a/hero', 800);
     const report = await sync(store).run();
-    expect(report).toMatchObject({ scanned: 1, inserted: 1 });
-    expect(await store.get('trips/a/hero')).toMatchObject({ status: 'ready', width: 640, height: 480 });
+    expect(report).toMatchObject({ scanned: 1, inserted: 1, demoted: 0 });
+    expect(await store.get('trips/a/hero')).toMatchObject({ status: 'ready', width: 800, height: 600 });
   });
 
-  it('marks an originals-only key as processing, not ready', async () => {
+  it('marks an originals-only key as processing, not ready — with the original\'s real dimensions', async () => {
     // It has no variants — declaring it ready would let it be published with
     // broken <img> elements, which is exactly what the publish gate prevents.
+    // Dims come from the original (the encode path never writes them), so a
+    // recovered crashed upload no longer ends up `ready` at 0×0.
     const store = memoryMediaStore({ baseUrl: BASE });
-    await writeOriginal('library/2025/crashed');
+    await writeJpegOriginal('library/2025/crashed', 800);
+    await writeOriginal('library/2025/truncated'); // unreadable: still processing, dims unknown
     await sync(store).run();
-    expect(await store.get('library/2025/crashed')).toMatchObject({ status: 'processing', width: 0, height: 0 });
+    expect(await store.get('library/2025/crashed')).toMatchObject({ status: 'processing', width: 800, height: 600 });
+    expect(await store.get('library/2025/truncated')).toMatchObject({ status: 'processing', width: 0, height: 0 });
+  });
+
+  // #118: one stray variant is not a photo. The srcset asks for every width
+  // in variantWidths(intrinsic) × FORMATS; anything less 404s on the live blog.
+  it('inserts a partial set as processing when the original exists (re-encode heals it)', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await writeJpegOriginal('trips/a/hero', 800);
+    await writeVariant('trips/a/hero', 640, 'avif'); // crash after the first file
+    await sync(store).run();
+    expect(await store.get('trips/a/hero')).toMatchObject({ status: 'processing', width: 800 });
+  });
+
+  // @ai-warning: variants are written in ascending width, so a crash truncates
+  // the TOP widths — and {640, 1280} is byte-for-byte a complete set for a
+  // 1280-wide photo. Only the original knows the set should reach 1920.
+  it('derives the expected set from the original, not the largest surviving variant', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await writeJpegOriginal('trips/a/hero', 1920);
+    await writeSet('trips/a/hero', 1280); // looks complete for 1280
+    await sync(store).run();
+    expect(await store.get('trips/a/hero')).toMatchObject({ status: 'processing', width: 1920 });
+  });
+
+  it('inserts a partial set with no original as missing (nothing can re-encode it)', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await writeSet('wp/legacy', 1280, { skip: ['1280.avif'] });
+    await sync(store).run();
+    expect(await store.get('wp/legacy')).toMatchObject({ status: 'missing', width: 1280 });
+  });
+
+  it('accepts a legacy key with no original when the set is complete for its widest variant', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await writeSet('wp/legacy', 1280);
+    await sync(store).run();
+    expect(await store.get('wp/legacy')).toMatchObject({ status: 'ready', width: 1280, height: 960 });
+  });
+
+  it('demotes a ready row whose set lost files, and leaves a complete one alone', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await writeSet('trips/a/hero', 800); await writeJpegOriginal('trips/a/hero', 800);
+    await writeSet('trips/b/hero', 800); await writeJpegOriginal('trips/b/hero', 800);
+    await writeSet('wp/legacy', 640);
+    for (const key of ['trips/a/hero', 'trips/b/hero', 'wp/legacy']) {
+      await store.upsert({ key, status: 'ready', width: key === 'wp/legacy' ? 640 : 800, height: 6, origBytes: 0, exif: noExif, uploadedBy: null, title: 'Keep' });
+    }
+    await rm(join(dir, 'trips/b/hero-800.avif'));   // partial restore lost one file
+    await rm(join(dir, 'wp/legacy-640.webp'));
+    const report = await sync(store).run();
+    expect(report).toMatchObject({ inserted: 0, markedMissing: 0, demoted: 2 });
+    expect(await store.get('trips/a/hero')).toMatchObject({ status: 'ready' });
+    expect(await store.get('trips/b/hero')).toMatchObject({ status: 'processing', title: 'Keep' }); // has an original
+    expect(await store.get('wp/legacy')).toMatchObject({ status: 'missing', title: 'Keep' });       // has none
+  });
+
+  it('keeps a ready row whose recorded width is stale but whose set is complete for its real width', async () => {
+    // A pre-#118 backfill of a crashed upload recorded 0×0; the encode then
+    // wrote the full set. The srcset never asks for `-0.webp`, so nothing 404s.
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await writeSet('trips/a/hero', 800); await writeJpegOriginal('trips/a/hero', 800);
+    await store.upsert({ key: 'trips/a/hero', status: 'ready', width: 0, height: 0, origBytes: 0, exif: noExif, uploadedBy: null });
+    const report = await sync(store).run();
+    expect(report.demoted).toBe(0);
+    expect(await store.get('trips/a/hero')).toMatchObject({ status: 'ready' });
   });
 
   it('harvests alt text for a backfilled key', async () => {
     const store = memoryMediaStore({ baseUrl: BASE });
-    await writeVariant('trips/a/hero', 640);
+    await writeSet('trips/a/hero', 640);
     const src = `${BASE}/trips/a/hero`;
     const report = await sync(store, [{
       translationKey: 'p1', locale: 'de', source: 'working', title: 'T',
@@ -129,7 +244,7 @@ describe('createMediaSync', () => {
 
   it('leaves an existing row alone (never clobbers author-entered metadata)', async () => {
     const store = memoryMediaStore({ baseUrl: BASE });
-    await writeVariant('trips/a/hero', 640);
+    await writeSet('trips/a/hero', 640);
     await store.upsert({ key: 'trips/a/hero', status: 'ready', width: 640, height: 480, origBytes: 0, exif: noExif, uploadedBy: null, title: 'Mine' });
     const report = await sync(store).run();
     expect(report.inserted).toBe(0);
@@ -160,7 +275,7 @@ describe('createMediaSync', () => {
       await store.upsert({ key, status: 'ready', width: 8, height: 6, origBytes: 0, exif: noExif, uploadedBy: null });
     }
     // One survivor with real files on disk; everything else has vanished.
-    await writeVariant('library/2025/photo-123', 640);
+    await writeSet('library/2025/photo-123', 640);
 
     const report = await sync(store).run();
     expect(report.markedMissing).toBe(total - 1);
@@ -182,7 +297,7 @@ describe('createMediaSync', () => {
 
   it('degrades gracefully when the content corpus cannot be loaded', async () => {
     const store = memoryMediaStore({ baseUrl: BASE });
-    await writeVariant('trips/a/hero', 640);
+    await writeSet('trips/a/hero', 640);
     const s = createMediaSync({
       store, storageDir: dir, baseUrl: BASE,
       corpus: async () => { throw new Error('db down'); },

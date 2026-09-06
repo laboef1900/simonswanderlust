@@ -209,7 +209,14 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 > written only `{key}-orig.<ext>` — is discovered as `processing`. Both callers go through
 > `createReconciler`, which runs the sync and **then** `encodeQueue.recover()`, so the row is
 > actually re-queued (#117: the rescan route used to run the sync alone and strand it until the
-> next restart). The report carries a `recovered` count alongside the sync counters.
+> next restart). "Present" means **complete** (#118): a key is `ready` only when every file in
+> `variantWidths(intrinsic) × FORMATS` exists, with the intrinsic width probed from the retained
+> original (a crash truncates the *top* widths, so the largest surviving variant cannot be
+> trusted to define the set); a partial set is `processing` when the original exists and
+> `missing` when it does not, and a `ready` row that lost files is demoted the same way on the
+> next pass. `storage.ts` writes every original and variant to a `.part-*` temp and renames it
+> into place, so a file carrying a final name is never truncated. The report carries
+> `recovered` and `demoted` counts alongside the sync counters.
 
 Schema evolution is additive and idempotent — no migration framework, no `schema_version` table.
 `ensureSchema` runs on every boot before the server starts serving, so a new column is added in

@@ -7,8 +7,8 @@ import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
 import { probeImage } from './pipeline.js';
-import { contentHashKey, storeOriginal, heroSnippet, isOriginalFile, assertSafeKey } from './storage.js';
-import { deleteMedia, imageUsage } from './media-files.js';
+import { contentHashKey, storeOriginal, heroSnippet, assertSafeKey } from './storage.js';
+import { deleteMedia, imageUsage, VARIANT_FILE_RE } from './media-files.js';
 import {
   libraryKey, redactForNonAdmin, MediaStoreError,
   type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
@@ -220,12 +220,14 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     maxAge: '365d',
     immutable: true,
     constraints: { host: cfg.imgHost },
+    // Only finished variants (`<key>-<width>.<avif|webp>`) are web assets.
     // Untouched full-resolution originals (`<key>-orig.<ext>`) live in
     // storageDir so the incremental backup tar captures them, but they are a
-    // private DR archive — never a web asset. Keep them off the public image
-    // host (404) so a visitor can't guess `.../hero-orig.jpg` next to the
-    // published `.../hero-640.avif`.
-    allowedPath: (pathName) => !isOriginalFile(pathName),
+    // private DR archive; storage.ts's `.part-<hex>` temps (#118) are
+    // half-written files that may be an original — GPS included. An
+    // allow-list keeps both off the public host (404), where the old
+    // originals-only deny-list would have served a crash leftover.
+    allowedPath: (pathName) => VARIANT_FILE_RE.test(pathName),
   });
 
   // The public blog: static output of the last release. `current` is a symlink

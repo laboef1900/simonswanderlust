@@ -723,6 +723,20 @@ blog/
   lock is threaded `main.ts` → `buildServer({ workLock })` → `importWxr({ lock })`; a route test
   pins that it is the SAME instance the builder and queue hold. See
   `docs/superpowers/specs/2026-09-05-import-work-lock-design.md`.
+- **Done:** #118 variant-set completeness + atomic writes (2026-09-05) — media-sync called a key
+  "present" on its **first** variant file, so a crash after `-640.avif` alone was backfilled as
+  `ready`, the publish gate passed it, and the live `<picture>` 404'd on `-1280.webp`; a partial
+  restore of `/data/images` likewise left `ready` rows `ready` because the `-orig` counted. The
+  walk now records the full `(width, format)` set per key and `isCompleteSet` checks it against
+  `variantWidths(intrinsic) × FORMATS`, with the intrinsic width **probed from the retained
+  original** — never the largest surviving variant, because variants are written in ascending
+  width and a top-truncated set is indistinguishable from a complete set for a smaller photo.
+  Backfill: complete → `ready`; partial with original → `processing` (re-queued by the same
+  reconcile pass); partial without → `missing`. The prune demotes a `ready` row the same way
+  (`demoted` in the report), with a no-probe fast path against the row's own recorded width.
+  `storage.ts` writes originals and variants to a `.part-<hex>` temp and renames into place, so
+  a truncated file can never carry a final name — which also closes the WXR resume gap #85 left.
+  See `docs/superpowers/specs/2026-09-05-variant-set-completeness-design.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**
