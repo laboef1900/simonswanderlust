@@ -246,22 +246,43 @@
         if (res.ok) renderBackups(await res.json());
       }
 
+      // Both long-running actions disable their button while the request is in
+      // flight and re-enable it in `finally`: a dropped connection used to reject
+      // the await and leave "Backing up…" / "Rebuilding…" on screen for good.
       $('backupNow').addEventListener('click', async () => {
+        const btn = $('backupNow');
+        btn.disabled = true;
         $('backupStatus').textContent = 'Backing up…';
-        const res = await fetch('/backups', { method: 'POST' });
-        if (!res.ok) {
-          const r = await res.json().catch(() => ({}));
-          $('backupStatus').textContent = 'Backup failed: ' + (r.error || 'HTTP ' + res.status);
-          return;
+        try {
+          const res = await fetch('/backups', { method: 'POST' });
+          if (res.status === 401) { location.href = '/login'; return; }
+          if (!res.ok) {
+            const r = await res.json().catch(() => ({}));
+            $('backupStatus').textContent = 'Backup failed: ' + (r.error || 'HTTP ' + res.status);
+            return;
+          }
+          await loadBackups();
+        } catch (e) {
+          $('backupStatus').textContent = 'Backup failed: ' + e;
+        } finally {
+          btn.disabled = false;
         }
-        await loadBackups();
       });
 
       $('rebuild').addEventListener('click', async () => {
+        const btn = $('rebuild');
+        btn.disabled = true;
         $('out').textContent = 'Rebuilding the site — this takes a minute…';
-        const res = await fetch('/rebuild', { method: 'POST' });
-        const r = await res.json().catch(() => ({}));
-        $('out').textContent = r.ok ? 'Rebuilt: release ' + r.release : 'Rebuild failed: ' + (r.error || res.status);
+        try {
+          const res = await fetch('/rebuild', { method: 'POST' });
+          if (res.status === 401) { location.href = '/login'; return; }
+          const r = await res.json().catch(() => ({}));
+          $('out').textContent = r.ok ? 'Rebuilt: release ' + r.release : 'Rebuild failed: ' + (r.error || res.status);
+        } catch (e) {
+          $('out').textContent = 'Rebuild failed: ' + e;
+        } finally {
+          btn.disabled = false;
+        }
       });
 
       (async () => {
