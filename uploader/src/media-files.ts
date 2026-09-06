@@ -99,7 +99,20 @@ export async function listMedia(storageDir: string): Promise<MediaFiles[]> {
   return items;
 }
 
-export interface UsageRef { kind: 'post' | 'page'; key: string; title: string }
+export interface UsageRef {
+  kind: 'post' | 'page';
+  key: string;
+  title: string;
+  /**
+   * `published`: the version the blog serves references the image — a post's
+   * `published_snapshot`, or a page (pages have no snapshot; the working copy
+   * is what gets built). `working`: the editable copy references it. A post
+   * that is `published` but not `working` has had the photo swapped out in a
+   * draft save and needs a republish (or unpublish) before the photo can go.
+   */
+  published: boolean;
+  working: boolean;
+}
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -136,7 +149,8 @@ function localeUses(src: string, l: UsageLocale): boolean {
  * Which posts/pages reference the image `src` (hero, images map, or body
  * markdown). Posts arrive as flat per-locale rows (PostStore.usageRows) so a
  * stranded single-locale row — invisible to PostStore.get() — still guards
- * its images against deletion.
+ * its images against deletion, and a published post's snapshot rows guard
+ * what the live site still renders after a draft swapped the photo out (#115).
  */
 export function imageUsage(src: string, posts: PostUsageRow[], pages: PagePair[]): UsageRef[] {
   const refs: UsageRef[] = [];
@@ -147,13 +161,18 @@ export function imageUsage(src: string, posts: PostUsageRow[], pages: PagePair[]
     byKey.set(r.translationKey, rows);
   }
   for (const [key, rows] of byKey) {
-    if (rows.some((r) => localeUses(src, r))) {
-      refs.push({ kind: 'post', key, title: rows.map((r) => r.title).find((t) => t) || key });
+    const using = rows.filter((r) => localeUses(src, r));
+    if (using.length > 0) {
+      refs.push({
+        kind: 'post', key, title: rows.map((r) => r.title).find((t) => t) || key,
+        published: using.some((r) => r.source === 'published'),
+        working: using.some((r) => r.source === 'working'),
+      });
     }
   }
   for (const pg of pages) {
     if (localeUses(src, pg.de) || localeUses(src, pg.en)) {
-      refs.push({ kind: 'page', key: pg.key, title: pg.de.title || pg.en.title || pg.key });
+      refs.push({ kind: 'page', key: pg.key, title: pg.de.title || pg.en.title || pg.key, published: true, working: true });
     }
   }
   return refs;

@@ -602,7 +602,10 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   // Deletion stays ADMIN-only and still refuses when a post or page references
-  // the photo.
+  // the photo — in its working copy OR in the published snapshot the blog is
+  // built from (#115: a draft save that swapped the photo out must not make it
+  // deletable while the live site, and every rebuild until a republish, still
+  // renders it; deleteMedia also removes the original, so nothing re-encodes).
   // @ai-note: usage only sees Postgres content — the last built release may
   // still reference a deleted image until the next rebuild.
   app.delete('/media/items/*', { preHandler: requireAdmin }, async (req, reply) => {
@@ -615,7 +618,10 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const corpus = await usageCorpus();
     const usedIn = imageUsage(`${imageBase}/${key}`, corpus.posts, corpus.pages);
     if (usedIn.length > 0) {
-      return reply.code(409).send({ error: 'image is referenced by existing content — remove those references first', usedIn });
+      const error = usedIn.some((u) => u.published && !u.working)
+        ? 'image is still part of a published version — republish (or unpublish) that post first'
+        : 'image is referenced by existing content — remove those references first';
+      return reply.code(409).send({ error, usedIn });
     }
     const deleted = await deleteMedia(storageDir, key);
     const hadRow = (await cfg.media.get(key)) !== null;

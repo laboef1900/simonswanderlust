@@ -150,15 +150,21 @@ that the gallery picker reuses.
 
 Encoding is **asynchronous**: an upload lands, its row goes `processing`, and `encode-queue.ts`
 works the backlog at concurrency 2. A build preempts the queue — both take the same mutex in
-`work-lock.ts`, so a publish never competes with an encode. Rows survive restarts:
-`encodeQueue.recover()` re-seeds from `status = 'processing'` on boot, and `media-sync` reconciles
-disk against the database (backfilling rows for keys already on disk, harvesting alt text by exact
-URL match, and flagging rows whose file has vanished).
+`work-lock.ts`, so a publish never competes with an encode. Rows survive restarts: the boot pass
+and `POST /media/rescan` both run `createReconciler` (`media-sync` reconciles disk against the
+database — backfilling rows for keys already on disk, harvesting alt text by exact URL match,
+and flagging rows whose file has vanished — and then `encodeQueue.recover()` re-seeds the queue
+from `status = 'processing'`).
 
-Two consequences worth knowing:
+Three consequences worth knowing:
 
 - **Publishing is gated on encode state.** A post referencing a photo that is not yet `ready` is
   refused rather than published with a broken image.
+- **Deleting is gated on usage in both copies.** `DELETE /media/items/*` refuses (409) while any
+  post's working copy **or published snapshot** — what the blog is actually built from — still
+  references the photo, or any page does. A draft that swapped a photo out does not make the old
+  one deletable until the post is republished (or unpublished); the response's `usedIn` entries
+  carry `published`/`working` flags so the library can say "(published version)".
 - **`GET /media` redacts for non-admins** — GPS (`lat`/`lng`) and uploader identity are stripped.
   Never return a raw row.
 

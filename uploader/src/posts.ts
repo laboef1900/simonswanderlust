@@ -67,7 +67,11 @@ export interface PostSummary {
   tags: string[];
   scheduledAt: string | null;
 }
-/** One stored locale row's image-referencing fields — the corpus for media usage scans. */
+/**
+ * One stored locale row's image-referencing fields — the corpus for media
+ * usage scans. A published post contributes TWO rows per locale: its working
+ * copy and its `published_snapshot`, which is what the blog is built from.
+ */
 export interface PostUsageRow {
   translationKey: string;
   /** Which locale's row this is. Carried explicitly so the media library's
@@ -75,6 +79,13 @@ export interface PostUsageRow {
    *  row — inferring it from row order or title would collide whenever both
    *  locales share a title. */
   locale: Locale;
+  /**
+   * `working`: the editable columns. `published`: derived from the published
+   * snapshot of a `status = 'published'` row — exactly the set the site loader
+   * builds from, so a reference here is one the live site serves (or would
+   * serve on the next rebuild) even after the working copy dropped it (#115).
+   */
+  source: 'working' | 'published';
   title: string;
   heroImage: HeroImage; bodyMarkdown: string; images: Record<string, ImageDims>;
 }
@@ -100,12 +111,15 @@ export interface PostStore {
   /** Hard-delete both locale rows, freeing their slugs for reuse. */
   remove(translationKey: string): Promise<void>;
   /**
-   * Every stored locale row, regardless of locale pairing. Image-usage scans
-   * must use this instead of list()+get(): pgPostStore.get() returns null for
-   * a key with only one locale row. Legacy pre-#106 data or manual database
-   * repair can still contain such a stranded row even though current
-   * upsertDraft writes both locales atomically, and its image references must
-   * still count as usage.
+   * Every stored locale row, regardless of locale pairing, plus a
+   * `source: 'published'` row per locale for each published snapshot.
+   * Image-usage scans must use this instead of list()+get(): pgPostStore.get()
+   * returns null for a key with only one locale row. Legacy pre-#106 data or
+   * manual database repair can still contain such a stranded row even though
+   * current upsertDraft writes both locales atomically, and its image
+   * references must still count as usage. The snapshot rows guard what the
+   * blog serves: a draft save that swaps a photo out must not make the old one
+   * deletable while the published version still renders it (#115).
    */
   usageRows(): Promise<PostUsageRow[]>;
   /** Revision summaries for a post, newest first (at most REVISION_CAP). */
@@ -429,10 +443,14 @@ export function memoryPostStore(): PostStore {
       return p ? structuredClone({ translationKey: p.translationKey, status: p.status, shared: p.shared, de: p.de, en: p.en, hasUnpublishedChanges: p.hasUnpublishedChanges, updatedAt: p.updatedAt }) : null;
     },
     async usageRows() {
-      return [...byKey.values()].flatMap((p) => (['de', 'en'] as const).map((loc) => structuredClone({
-        translationKey: p.translationKey, locale: loc, title: p[loc].title,
-        heroImage: p[loc].heroImage, bodyMarkdown: p[loc].bodyMarkdown, images: p[loc].images,
-      })));
+      return [...byKey.values()].flatMap((p) => {
+        const sources: { source: PostUsageRow['source']; from: Pick<PostPair, 'de' | 'en'> }[] = [{ source: 'working', from: p }];
+        if (p.status === 'published' && p.publishedSnapshot) sources.push({ source: 'published', from: p.publishedSnapshot });
+        return sources.flatMap(({ source, from }) => (['de', 'en'] as const).map((loc) => structuredClone({
+          translationKey: p.translationKey, locale: loc, source, title: from[loc].title,
+          heroImage: from[loc].heroImage, bodyMarkdown: from[loc].bodyMarkdown, images: from[loc].images,
+        })));
+      });
     },
     async upsertDraft(pair, baseUpdatedAt) {
       pair = draftWithDefaults(pair);
@@ -672,12 +690,21 @@ export function pgPostStore(pool: DbPool): PostStore {
       };
     },
     async usageRows() {
-      const { rows } = await pool.query<Pick<PostRow, 'translation_key' | 'locale' | 'title' | 'hero_image' | 'body_markdown' | 'images'>>(
-        `SELECT translation_key, locale, title, hero_image, body_markdown, images FROM posts ORDER BY translation_key, locale`,
+      // The second SELECT mirrors the site loader's filter (postgres-loader.ts:
+      // `status = 'published' AND published_snapshot IS NOT NULL`) so the
+      // snapshot rows are exactly what the blog serves. Working rows sort
+      // first per locale so the alt harvest prefers the editable copy.
+      const { rows } = await pool.query<Pick<PostRow, 'translation_key' | 'locale' | 'title' | 'hero_image' | 'body_markdown' | 'images'> & { source: PostUsageRow['source'] }>(
+        `SELECT translation_key, locale, title, hero_image, body_markdown, images, 'working' AS source FROM posts
+         UNION ALL
+         SELECT translation_key, locale, published_snapshot->>'title', published_snapshot->'hero_image',
+                published_snapshot->>'body_markdown', published_snapshot->'images', 'published'
+           FROM posts WHERE status = 'published' AND published_snapshot IS NOT NULL
+         ORDER BY translation_key, locale, source DESC`,
       );
       return rows.map((r) => ({
-        translationKey: r.translation_key, locale: r.locale, title: r.title,
-        heroImage: r.hero_image, bodyMarkdown: r.body_markdown, images: r.images ?? {},
+        translationKey: r.translation_key, locale: r.locale, source: r.source, title: r.title ?? '',
+        heroImage: r.hero_image, bodyMarkdown: r.body_markdown ?? '', images: r.images ?? {},
       }));
     },
     async upsertDraft(pair, baseUpdatedAt) {
