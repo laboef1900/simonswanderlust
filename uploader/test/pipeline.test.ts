@@ -33,6 +33,23 @@ describe('processImage', () => {
     expect(result.height).toBe(1000);
   });
 
+  // #136: dimensions now come from the metadata probe instead of a decoded,
+  // rotated re-encode. A portrait shot stored landscape with Orientation=6 is
+  // where the two could disagree: the reported size and the variant pixels
+  // must both be the orientation-corrected ones.
+  it('reports orientation-corrected dimensions that match the encoded pixels', async () => {
+    const stored = await sharp({ create: { width: 1200, height: 800, channels: 3, background: '#357' } })
+      .withMetadata({ orientation: 6 })
+      .jpeg()
+      .toBuffer();
+    const result = await processImage(stored);
+    expect({ width: result.width, height: result.height }).toEqual({ width: 800, height: 1200 });
+    const full = result.variants.find((v) => v.format === 'webp' && v.width === 800)!;
+    const meta = await sharp(full.data).metadata();
+    expect({ width: meta.width, height: meta.height }).toEqual({ width: 800, height: 1200 });
+    expect(result.variants.map((v) => v.width).every((w) => w === 640 || w === 800)).toBe(true);
+  });
+
   it('produces avif+webp at each contract width, no upscaling', async () => {
     const result = await processImage(await fixture(2000, 1000));
     const widths = [...new Set(result.variants.map((v) => v.width))].sort((a, b) => a - b);
