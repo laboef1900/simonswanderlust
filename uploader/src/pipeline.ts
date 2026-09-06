@@ -83,29 +83,29 @@ export async function processImage(
 ): Promise<ProcessResult> {
   const { avifQuality = 55, webpQuality = 75 } = opts;
 
-  // Read orientation-corrected intrinsic size from a probe.
-  const probe = await sharp(input, { failOn: 'none' })
-    .rotate()
-    .toBuffer({ resolveWithObject: true });
-  const width = probe.info.width;
-  const height = probe.info.height;
-  // With no output format forced, sharp keeps the input format for the probe,
-  // so info.format identifies what was uploaded. The original bytes are passed
-  // through untouched so /data/images doubles as a lossless media archive
-  // (enables future re-encodes at new widths/formats/quality).
-  // @ai-warning: vector input is the deliberate exception — sharp rasterizes
-  // SVG and the probe reports 'png', so untouched SVG bytes land as
-  // `-orig.png` (mislabeled but preserved, and served as image/png). Do NOT
-  // "fix" this via sharp(input).metadata().format: a publicly served
-  // `-orig.svg` would be a stored-XSS vector on the image host.
-  const original: OriginalImage = {
-    data: input,
-    ext: EXT_BY_FORMAT[probe.info.format] ?? probe.info.format,
-  };
+  // One metadata-only probe supplies the orientation-corrected size, the
+  // original's extension and the EXIF block. The full decode + rotate +
+  // full-resolution re-encode in the input format this replaced existed only
+  // to read `info.width/height/format`, and was the largest avoidable spike
+  // in the measured ~1.94 GB peak RSS (#136) — a 268 MP PNG under the byte
+  // cap allocated ~1 GB of pixels plus a PNG encode buffer before any variant.
+  // @ai-warning: `probeImage` maps SVG to `png` on purpose — see its doc. The
+  // original bytes are passed through untouched so /data/images doubles as a
+  // lossless media archive (enables future re-encodes at new widths/formats).
+  const { width, height, ext, exif } = await probeImage(input);
+  const original: OriginalImage = { data: input, ext };
 
   // Parsed once: the source EXIF is the same for every variant.
-  const keepExif = allowedExif((await sharp(input, { failOn: 'none' }).metadata()).exif);
+  const keepExif = allowedExif(exif);
 
+  // @ai-warning Deliberately a fresh `sharp(input)` per variant, NOT a base
+  // pipeline `.clone()`d per variant as #136 first suggested: sharp 0.35's
+  // clone() runs `structuredClone(options)`, which deep-copies the input
+  // Buffer — eight extra copies of a 25 MiB upload — while a fresh instance
+  // holds the same Buffer by reference. Each awaited encode runs its own
+  // libvips pipeline either way, so only one variant's pixels are live at a
+  // time; the decode is not shared and cannot be without materialising the
+  // full-resolution raw image across all encodes (a larger peak, not a smaller one).
   const variants: Variant[] = [];
   for (const w of variantWidths(width)) {
     for (const format of FORMATS) {

@@ -59,10 +59,11 @@ export interface DiskKey {
 /**
  * Walk storageDir grouping BOTH variants and originals by key.
  *
- * @ai-warning This deliberately does not reuse `listMedia`, which matches
- * variants only: a `processing` row has written just `${key}-orig.<ext>` and
- * has no variant files yet, so a variants-only walk would never discover a
- * crashed upload — the exact case the backfill most needs to heal.
+ * @ai-warning This is the ONLY disk walk (a variants-only `listMedia` was
+ * deleted in #136 as dead code): a `processing` row has written just
+ * `${key}-orig.<ext>` and has no variant files yet, so a walk that ignored
+ * originals would never discover a crashed upload — the exact case the
+ * backfill most needs to heal. Keep originals in the walk.
  */
 export async function walkStorageKeys(storageDir: string): Promise<Map<string, DiskKey>> {
   const root = resolve(storageDir);

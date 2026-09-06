@@ -1,6 +1,5 @@
 import { readdir, unlink } from 'node:fs/promises';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import sharp from 'sharp';
+import { basename, dirname, join, resolve } from 'node:path';
 import { assertSafeKey } from './storage.js';
 import type { PostUsageRow } from './posts.js';
 import type { PagePair } from './pages.js';
@@ -14,90 +13,10 @@ import type { PagePair } from './pages.js';
 export const VARIANT_FILE_RE = /-(\d+)\.(avif|webp)$/;
 
 // The untouched-original sibling written next to the variants (`${key}-orig.<ext>`,
-// issue #21). listMedia deliberately ignores it (it is a private DR asset, not a
-// gallery item), but deleteMedia must remove it alongside the variants so
-// deleting an image doesn't orphan its full-resolution original on disk.
+// issue #21). It is a private DR asset, not a gallery item, but deleteMedia must
+// remove it alongside the variants so deleting an image doesn't orphan its
+// full-resolution original on disk.
 export const ORIGINAL_FILE_RE = /-orig\.[a-z0-9]+$/i;
-
-/**
- * What the DISK says about one storage key.
- *
- * @ai-warning Not to be confused with `media-store.ts`'s `MediaItem`, which is
- * the DATABASE row (title, alt, tags, folder, EXIF, status). This module walks
- * the filesystem and knows nothing about metadata; the module split — and this
- * type's name — exist precisely so "disk" and "database" are unambiguous now
- * that both exist. `media-sync.ts` reconciles the two.
- */
-export interface MediaFiles {
-  key: string;
-  /** All variant files for this key, storageDir-relative POSIX paths, sorted by width then format. */
-  files: string[];
-  /** Distinct variant widths, ascending. */
-  widths: number[];
-  /** Smallest webp variant (rel path) — the cheapest preview; null if no webp exists. */
-  thumbFile: string | null;
-  /** Intrinsic dimensions, probed from the largest webp; null when unreadable. */
-  width: number | null;
-  height: number | null;
-}
-
-interface VariantFile { rel: string; width: number; format: string }
-
-/**
- * Walk storageDir and group variant files by their storage key
- * (relative path with the `-{width}.{fmt}` suffix stripped).
- */
-export async function listMedia(storageDir: string): Promise<MediaFiles[]> {
-  const root = resolve(storageDir);
-  let entries;
-  try {
-    entries = await readdir(root, { recursive: true, withFileTypes: true });
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return []; // nothing uploaded yet
-    throw e;
-  }
-  const byKey = new Map<string, VariantFile[]>();
-  for (const d of entries) {
-    if (!d.isFile()) continue;
-    const m = VARIANT_FILE_RE.exec(d.name);
-    if (!m) continue;
-    const rel = relative(root, join(d.parentPath, d.name)).split(sep).join('/');
-    const key = rel.replace(VARIANT_FILE_RE, '');
-    const list = byKey.get(key) ?? [];
-    list.push({ rel, width: Number(m[1]), format: String(m[2]) });
-    byKey.set(key, list);
-  }
-
-  const items: MediaFiles[] = [];
-  for (const [key, files] of [...byKey.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    files.sort((a, b) => a.width - b.width || a.format.localeCompare(b.format));
-    const webps = files.filter((f) => f.format === 'webp');
-    const thumb = webps[0] ?? null;
-    const largest = webps[webps.length - 1] ?? null;
-    let width: number | null = null;
-    let height: number | null = null;
-    if (largest) {
-      // Metadata-only probe (no decode). The largest variant is the intrinsic
-      // size — variantWidths() never upscales.
-      try {
-        const meta = await sharp(join(root, largest.rel)).metadata();
-        width = meta.width ?? null;
-        height = meta.height ?? null;
-      } catch {
-        // unreadable/corrupt file — dims stay unknown
-      }
-    }
-    items.push({
-      key,
-      files: files.map((f) => f.rel),
-      widths: [...new Set(files.map((f) => f.width))].sort((a, b) => a - b),
-      thumbFile: thumb?.rel ?? null,
-      width,
-      height,
-    });
-  }
-  return items;
-}
 
 export interface UsageRef {
   kind: 'post' | 'page';

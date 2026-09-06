@@ -2,8 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import sharp from 'sharp';
-import { listMedia, deleteMedia, imageUsage, VARIANT_FILE_RE } from '../src/media-files.js';
+import { deleteMedia, imageUsage, VARIANT_FILE_RE } from '../src/media-files.js';
 import type { PostUsageRow } from '../src/posts.js';
 import type { PagePair } from '../src/pages.js';
 
@@ -18,10 +17,6 @@ async function put(rel: string, data: Buffer | string = 'x'): Promise<void> {
   await writeFile(abs, data);
 }
 
-async function webp(width: number, height: number): Promise<Buffer> {
-  return sharp({ create: { width, height, channels: 3, background: '#345' } }).webp().toBuffer();
-}
-
 describe('VARIANT_FILE_RE', () => {
   it('matches the {key}-{width}.{fmt} contract only', () => {
     expect(VARIANT_FILE_RE.test('hero-640.webp')).toBe(true);
@@ -29,71 +24,6 @@ describe('VARIANT_FILE_RE', () => {
     expect(VARIANT_FILE_RE.test('hero.webp')).toBe(false);
     expect(VARIANT_FILE_RE.test('hero-640.jpg')).toBe(false);
     expect(VARIANT_FILE_RE.test('notes.txt')).toBe(false);
-  });
-});
-
-describe('listMedia', () => {
-  it('groups variant files by key, including nested keys, ignoring non-variant files', async () => {
-    await put('trips/x/hero-640.webp');
-    await put('trips/x/hero-640.avif');
-    await put('trips/x/hero-1280.webp');
-    await put('trips/x/hero-1280.avif');
-    await put('standalone-800.webp');
-    await put('trips/x/notes.txt');
-    await put('trips/x/plain.webp'); // no width suffix — not a variant
-    const items = await listMedia(dir);
-    expect(items.map((i) => i.key)).toEqual(['standalone', 'trips/x/hero']);
-    const hero = items.find((i) => i.key === 'trips/x/hero')!;
-    expect(hero.files).toEqual([
-      'trips/x/hero-640.avif',
-      'trips/x/hero-640.webp',
-      'trips/x/hero-1280.avif',
-      'trips/x/hero-1280.webp',
-    ]);
-    expect(hero.widths).toEqual([640, 1280]);
-  });
-
-  it('keeps sibling keys sharing a prefix separate (hero vs hero-2)', async () => {
-    await put('trips/x/hero-640.webp');
-    await put('trips/x/hero-2-640.webp');
-    const items = await listMedia(dir);
-    expect(items.map((i) => i.key).sort()).toEqual(['trips/x/hero', 'trips/x/hero-2']);
-  });
-
-  it('uses the smallest webp as thumbnail and probes dims from the largest webp', async () => {
-    // Small image (no 640 variant exists — variantWidths never upscales).
-    await put('pic-300.webp', await webp(300, 200));
-    const items = await listMedia(dir);
-    expect(items).toHaveLength(1);
-    expect(items[0]!.thumbFile).toBe('pic-300.webp');
-    expect(items[0]!.width).toBe(300);
-    expect(items[0]!.height).toBe(200);
-  });
-
-  it('picks the smallest webp among several and reads dims from the largest', async () => {
-    await put('pic-640.webp', await webp(640, 480));
-    await put('pic-1000.webp', await webp(1000, 750));
-    await put('pic-640.avif');
-    const items = await listMedia(dir);
-    expect(items[0]!.thumbFile).toBe('pic-640.webp');
-    expect(items[0]!.width).toBe(1000);
-    expect(items[0]!.height).toBe(750);
-  });
-
-  it('reports null dims when the file is unreadable and null thumb without a webp', async () => {
-    await put('junk-640.webp', 'not a real webp');
-    await put('avifonly-640.avif');
-    const items = await listMedia(dir);
-    const junk = items.find((i) => i.key === 'junk')!;
-    expect(junk.width).toBeNull();
-    expect(junk.height).toBeNull();
-    const avifonly = items.find((i) => i.key === 'avifonly')!;
-    expect(avifonly.thumbFile).toBeNull();
-    expect(avifonly.width).toBeNull();
-  });
-
-  it('returns [] for a storage dir that does not exist yet', async () => {
-    expect(await listMedia(join(dir, 'nope'))).toEqual([]);
   });
 });
 
