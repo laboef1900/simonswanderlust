@@ -303,6 +303,72 @@ ${['de', 'en']
 });
 
 /**
+ * Issue #99: DE and EN slugs are separate namespaces, so pair identity is the
+ * (DE slug, EN slug) tuple — never a single slug matched across locales.
+ */
+describe('importWxr pair identity', () => {
+  const seed = async (store: PostStore, deSlug: string, enSlug: string) => importWxr(
+    pairOf('seed', deSlug, enSlug, '<p>original de</p>', '<p>original en</p>'),
+    { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost },
+  );
+
+  it('does not bind a group to an unrelated post whose DE slug equals its EN slug', async () => {
+    const store = memoryPostStore();
+    await seed(store, 'rhodos', 'rhodes-adventure');       // existing DE slug "rhodos"
+    const s = await importWxr(pairOf('g2', 'rhodos-2', 'rhodos', '<p>new de</p>', '<p>new en</p>'), // incoming EN slug "rhodos"
+      { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
+    expect(s).toMatchObject({ imported: 1, updated: 0, skippedPublished: 0, rejected: 0, failed: 0 });
+    const posts = await store.list();
+    expect(posts).toHaveLength(2);
+    const original = (await store.get(posts.find((p) => p.slugDe === 'rhodos')!.translationKey))!;
+    expect(original.en.slug).toBe('rhodes-adventure');
+    expect(original.de.bodyMarkdown).toContain('original de');
+  });
+
+  it('judges the published-skip against the RIGHT post, not a cross-locale namesake', async () => {
+    const store = memoryPostStore();
+    await seed(store, 'rhodos', 'rhodes-adventure');
+    await store.publish((await store.list())[0]!.translationKey);
+    const s = await importWxr(pairOf('g2', 'rhodos-2', 'rhodos', '<p>new de</p>'),
+      { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
+    expect(s).toMatchObject({ imported: 1, skippedPublished: 0 });
+  });
+
+  it('re-binds only when BOTH slugs match one existing pair', async () => {
+    const store = memoryPostStore();
+    await seed(store, 'rhodos', 'rhodes-adventure');
+    const tk = (await store.list())[0]!.translationKey;
+    const s = await seed(store, 'rhodos', 'rhodes-adventure');
+    expect(s).toMatchObject({ imported: 0, updated: 1, rejected: 0 });
+    expect((await store.list()).map((p) => p.translationKey)).toEqual([tk]);
+  });
+
+  it('rejects a group whose two slugs belong to two different existing pairs, writing nothing', async () => {
+    const store = memoryPostStore();
+    await seed(store, 'rhodos', 'rhodes-adventure');
+    await importWxr(pairOf('seed2', 'kreta', 'crete', '<p>original de</p>'), { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
+    const rehostSpy = async () => { throw new Error('rehost must not be called for a conflicting group'); };
+    const s = await importWxr(pairOf('g3', 'rhodos', 'crete', imgs('https://wp/a.jpg')),
+      { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: rehostSpy });
+    expect(s).toMatchObject({ imported: 0, updated: 0, skippedPublished: 0, rejected: 1, failed: 0 });
+    expect(s.warnings.join(' ')).toMatch(/slug conflict/);
+    const posts = await store.list();
+    expect(posts.map((p) => `${p.slugDe}/${p.slugEn}`).sort()).toEqual(['kreta/crete', 'rhodos/rhodes-adventure']);
+    for (const p of posts) expect((await store.get(p.translationKey))!.de.bodyMarkdown).toContain('original de');
+  });
+
+  it('rejects a partial match rather than renaming the other locale\'s live slug', async () => {
+    const store = memoryPostStore();
+    await seed(store, 'rhodos', 'rhodes-adventure');
+    const s = await importWxr(pairOf('g4', 'rhodos', 'rhodes', '<p>new de</p>'), { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
+    expect(s).toMatchObject({ imported: 0, updated: 0, rejected: 1, failed: 0 });
+    const only = (await store.list());
+    expect(only).toHaveLength(1);
+    expect(only[0]).toMatchObject({ slugDe: 'rhodos', slugEn: 'rhodes-adventure' });
+  });
+});
+
+/**
  * Issue #85: throttle, bounded retry, honest accounting, resumability.
  *
  * @ai-context docs/superpowers/specs/2026-07-30-wxr-import-hardening-design.md

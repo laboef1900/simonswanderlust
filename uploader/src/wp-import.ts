@@ -1,7 +1,7 @@
 import { parseWxr, type ParsedPost } from './wxr-parse.js';
 import { htmlToMarkdown } from './wp-content.js';
 import { rehostImage, type RehostResult, type RehostResume } from './wp-images.js';
-import { isSafeSlug, type ImageDims, type PostLocale, type PostPair, type PostStatus, type PostStore } from './posts.js';
+import { isSafeSlug, type ImageDims, type PostLocale, type PostPair, type PostStatus, type PostStore, type PostSummary } from './posts.js';
 import { rewriteFences } from './body-content.js';
 import { FetchError } from './safe-fetch.js';
 
@@ -20,7 +20,11 @@ export interface ImportSummary {
   updated: number;
   /** Already published before this run; deliberately not overwritten. A success, not a problem. */
   skippedPublished: number;
-  /** Rejected at the import boundary: a missing translation, or a slug the importer refuses (path-traversal defence). Nothing was fetched or written for it. */
+  /**
+   * Rejected at the import boundary: a missing translation, a slug the importer refuses
+   * (path-traversal defence), or a slug conflict with an existing post whose (DE, EN) slug
+   * pair does not match as a unit (issue #99). Nothing was fetched or written for it.
+   */
   rejected: number;
   /** `upsertDraft` threw a genuine failure. */
   failed: number;
@@ -450,10 +454,19 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
   // imported + updated + skippedPublished + rejected + failed === group count.
   const summary = { imported: 0, updated: 0, skippedPublished: 0, rejected: 0, failed: 0 };
 
-  // existing posts by slug → status/key (for idempotency + published-skip)
+  // Existing posts by (locale, slug) → status/key, for idempotency + published-skip.
+  //
+  // @ai-warning DE and EN slugs are SEPARATE namespaces (posts_locale_slug_idx is
+  // on (locale, slug); the same word may legitimately be one trip's DE slug and
+  // an unrelated trip's EN slug). The lookup MUST be keyed per locale — a flat
+  // map bound a group to whichever unrelated pair shared a slug across locales,
+  // and `upsertDraft` then overwrote that post (issue #99, Golden Rule 2).
   const existing = await deps.postStore.list();
-  const bySlug = new Map<string, { translationKey: string; status: PostStatus }>();
-  for (const s of existing) { bySlug.set(s.slugDe, s); bySlug.set(s.slugEn, s); }
+  const byLocaleSlug = new Map<string, PostSummary>();
+  for (const s of existing) {
+    if (s.slugDe) byLocaleSlug.set(`de:${s.slugDe}`, s);
+    if (s.slugEn) byLocaleSlug.set(`en:${s.slugEn}`, s);
+  }
 
   const groups = new Map<string, ParsedPost[]>();
   for (const p of posts) { const g = groups.get(p.group) ?? []; g.push(p); groups.set(p.group, g); }
@@ -471,7 +484,20 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
     if (!isSafeSlug(de.slug) || !isSafeSlug(en.slug)) {
       summary.rejected++; warnings.push(`group ${group}: unsafe slug (${de.slug} / ${en.slug}) — rejected`); continue;
     }
-    const prior = bySlug.get(de.slug) ?? bySlug.get(en.slug);
+    // Pair identity is the (DE slug, EN slug) tuple as a UNIT. Binding on a
+    // single matching slug would either rename the other locale's live slug
+    // (SEO contract) or write into a post the author never meant to touch —
+    // so anything short of "both slugs match one pair" or "neither matches"
+    // is a conflict the author has to resolve in the editor, not here.
+    const priorDe = byLocaleSlug.get(`de:${de.slug}`);
+    const priorEn = byLocaleSlug.get(`en:${en.slug}`);
+    if (priorDe?.translationKey !== priorEn?.translationKey) {
+      summary.rejected++;
+      const named = [priorDe && `DE "${de.slug}" belongs to ${priorDe.slugDe}/${priorDe.slugEn}`, priorEn && `EN "${en.slug}" belongs to ${priorEn.slugDe}/${priorEn.slugEn}`].filter(Boolean).join('; ');
+      warnings.push(`${de.slug}/${en.slug}: slug conflict with an existing post (${named}) — rejected, nothing overwritten`);
+      continue;
+    }
+    const prior = priorDe;
     if (prior?.status === 'published') { summary.skippedPublished++; warnings.push(`${de.slug}/${en.slug}: already published — not overwritten`); continue; }
     pending.push({ de, en, prior });
   }
