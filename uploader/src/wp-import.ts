@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { parseWxr, type ParsedPost } from './wxr-parse.js';
 import { htmlToMarkdown, markdownImages } from './wp-content.js';
 import { rehostImage, type RehostResult, type RehostResume } from './wp-images.js';
@@ -101,13 +102,44 @@ export const WARNING_CAP = 200;
  */
 export const DEFAULT_MAX_IMAGES = 20_000;
 
-/** A short, slug-safe key segment from an image URL's filename. */
-function nameFromUrl(url: string): string {
+/**
+ * The pre-#98 key segment: the URL's filename, query and extension stripped,
+ * slugified. NOT injective — `foo.jpg`/`foo.png`, `a_b`/`a-b`, two years'
+ * `beach.jpg` all collapse onto one segment — which is why it now only names
+ * the LEGACY key a pre-#98 import wrote, for the resume fallback below.
+ */
+function legacyNameFromUrl(url: string): string {
   const withoutQuery = url.split('?')[0] ?? url;
   const segment = withoutQuery.split('/').pop() ?? 'image';
   const base = segment.replace(/\.[a-z0-9]+$/i, '');
   return base.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'image';
 }
+
+/** Longest filename slug kept in a key segment; the hash carries the identity. */
+const NAME_MAX = 48;
+
+/**
+ * A slug-safe key segment that is a pure function of the URL and distinct for
+ * distinct URLs: the legacy filename slug, truncated, plus 8 hex characters of
+ * SHA-256 over the URL (issue #98). Bounded at 57 characters so the key stays
+ * inside `assertSafeKey`'s cap; the hash is over the URL string exactly as
+ * `safeFetch` receives it, so `x.jpg` and `x.jpg?v=1` are two photos.
+ *
+ * @ai-warning The separator is `_` ON PURPOSE: a legacy segment can never
+ * contain one (`legacyNameFromUrl` collapses every non-[a-z0-9] run to `-`)
+ * and `contentHashKey` joins with `-`, so the pre-#98, post-#98 and upload
+ * namespaces are disjoint by construction — a legacy file can never be a
+ * resume hit for a new key, or vice versa. Deterministic over the URL alone —
+ * never over bytes, fetch order or the other URLs in the export.
+ * `/data/images` IS the resume record (#85).
+ */
+function nameFromUrl(url: string): string {
+  const name = legacyNameFromUrl(url).slice(0, NAME_MAX).replace(/-+$/, '');
+  return `${name}_${createHash('sha256').update(url).digest('hex').slice(0, 8)}`;
+}
+
+/** Storage key for a body or gallery image of the post at `slug`. Exported for tests only. */
+export const rehostKey = (slug: string, url: string): string => `trips/${slug}/${nameFromUrl(url)}`;
 
 /**
  * Re-host `url` once per translation pair.
@@ -370,8 +402,22 @@ function rehostUrlSet(p: ParsedPost, attachments: Map<string, string>, includeHe
 
 /** Storage key for a post's featured image. Never resumed from disk (see `HERO_KEY_RE`). */
 const heroKey = (p: ParsedPost): string => `trips/${p.slug}/hero`;
-/** Storage key for a body or gallery image. Deterministic and un-hashed — `/data/images` is the resume record. */
-const imageKey = (p: ParsedPost, url: string): string => `trips/${p.slug}/${nameFromUrl(url)}`;
+/** Storage key for a body or gallery image. Deterministic — `/data/images` is the resume record. */
+const imageKey = (p: ParsedPost, url: string): string => rehostKey(p.slug, url);
+/** The key a pre-#98 import wrote the same photo under. */
+const legacyImageKey = (p: ParsedPost, url: string): string => `trips/${p.slug}/${legacyNameFromUrl(url)}`;
+
+/** One re-host operation of a pair's plan. */
+interface PlannedRehost {
+  key: string;
+  /**
+   * The pre-#98 key to resume from when `key` is not on disk, or null when
+   * this is the hero or when another URL of the same pair shares the legacy
+   * name — then the legacy file could be either photo, and both are fetched
+   * under their new keys instead (issue #98, spec §Migration).
+   */
+  legacy: string | null;
+}
 
 /**
  * The distinct (pair, url) re-host operations one pair performs, each with the
@@ -387,13 +433,21 @@ const imageKey = (p: ParsedPost, url: string): string => `trips/${p.slug}/${name
  * this map is the #96 cap's quantity; its keys feed the #94 resume-aware
  * free-space estimate. `test/wp-import.test.ts` pins both against the run.
  */
-function rehostPlan(de: ParsedPost, en: ParsedPost, attachments: Map<string, string>, includeHero: boolean): Map<string, string> {
-  const plan = new Map<string, string>();
+function rehostPlan(de: ParsedPost, en: ParsedPost, attachments: Map<string, string>, includeHero: boolean): Map<string, PlannedRehost> {
+  const plan = new Map<string, PlannedRehost>();
+  const legacyOwners = new Map<string, number>();
   for (const p of [de, en]) {
     const hero = includeHero && p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
     for (const url of rehostUrlSet(p, attachments, includeHero)) {
-      if (!plan.has(url)) plan.set(url, url === hero ? heroKey(p) : imageKey(p, url));
+      if (plan.has(url)) continue;
+      if (url === hero) { plan.set(url, { key: heroKey(p), legacy: null }); continue; }
+      const legacy = legacyImageKey(p, url);
+      plan.set(url, { key: imageKey(p, url), legacy });
+      legacyOwners.set(legacy, (legacyOwners.get(legacy) ?? 0) + 1);
     }
+  }
+  for (const planned of plan.values()) {
+    if (planned.legacy !== null && legacyOwners.get(planned.legacy)! > 1) planned.legacy = null;
   }
   return plan;
 }
@@ -595,14 +649,24 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
    * hosted + failed !== total.
    */
   const resumed = new Map<string, Promise<RehostResult | null>>();
+  /** New key → the pre-#98 key to fall back to; filled from the plans below. */
+  const legacyByKey = new Map<string, string>();
   const lookupResume = (key: string): Promise<RehostResult | null> => {
-    if (!deps.resume) return Promise.resolve(null);
+    const index = deps.resume;
+    if (!index) return Promise.resolve(null);
     let hit = resumed.get(key);
     if (!hit) {
-      hit = deps.resume.lookup(key).then((r) => r ?? null, (e: unknown) => {
-        log(`import: resume lookup failed for ${key}, re-fetching: ${(e as Error).message}`);
-        return null;
-      });
+      // issue #98: a photo imported before the key change is on disk under its
+      // legacy key; resume it (the stored body already points there) rather
+      // than fetch the whole corpus again. Only when the plan says the legacy
+      // name is unambiguous within the pair — see `PlannedRehost.legacy`.
+      const legacy = legacyByKey.get(key);
+      hit = index.lookup(key)
+        .then((r) => r ?? (legacy === undefined ? null : index.lookup(legacy)))
+        .then((r) => r ?? null, (e: unknown) => {
+          log(`import: resume lookup failed for ${key}, re-fetching: ${(e as Error).message}`);
+          return null;
+        });
       resumed.set(key, hit);
     }
     return hit;
@@ -716,7 +780,10 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   const cap = deps.maxImages ?? DEFAULT_MAX_IMAGES;
   const plans = pending.map((g) => rehostPlan(g.de, g.en, attachments, includeHero(g.stored)));
   let distinct = 0;
-  for (const plan of plans) distinct += plan.size;
+  for (const plan of plans) {
+    distinct += plan.size;
+    for (const { key, legacy } of plan.values()) if (legacy !== null) legacyByKey.set(key, legacy);
+  }
   if (distinct > cap) {
     log(`import: ${distinct} distinct images exceeds the cap of ${cap}; rejecting without fetching`);
     throw new ImportTooLargeError(distinct, cap);
@@ -728,7 +795,7 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   // is judged on the remainder, not on the whole export again.
   if (deps.diskSpace) {
     let toFetch = 0;
-    for (const plan of plans) for (const key of plan.values()) if (!(await lookupResume(key))) toFetch++;
+    for (const plan of plans) for (const { key } of plan.values()) if (!(await lookupResume(key))) toFetch++;
     let space: DiskSpace | null = null;
     try {
       space = await deps.diskSpace();

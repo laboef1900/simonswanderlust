@@ -362,6 +362,14 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   captures them, but the app's image-host static mount excludes `-orig.*` (404), so a
   full-resolution original is never publicly downloadable — only the derived variants the site
   links to are served.
+- **Importer keys** — the WordPress importer writes a body/gallery photo under
+  `trips/<slug>/<name>_<h8>`, where `<name>` is the source filename slugified and cut to 48
+  characters and `<h8>` is the first 8 hex of SHA-256 over the source URL (#98; the `_` keeps the
+  namespace disjoint from pre-#98 keys and from `contentHashKey`'s `-<hash>`); the featured image
+  is `trips/<slug>/hero`. The key is a pure function of (slug, URL) — never of bytes or fetch order
+  — because `/data/images` is the importer's resume record (#85): a re-run resolves the same key
+  and skips what is complete on disk. Photos imported before #98 sit under the plain
+  `trips/<slug>/<name>` and stay resumable while that name is unique within the pair.
 - **Image archives** — after each successful scheduled/on-demand dump, files under `/data/images`
   modified since the previous archive are tarred into
   `/data/backup/db/images-<YYYYMMDD-HHmmss>.tar` (mtime-incremental; when nothing changed, no
