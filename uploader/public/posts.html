@@ -35,8 +35,6 @@
               <option value="">All Statuses</option>
               <option value="draft">Draft</option>
               <option value="published">Published</option>
-              <option value="scheduled">Scheduled</option>
-              <option value="archived">Archived</option>
             </select>
           </label>
           <label class="filter-field">
@@ -379,7 +377,7 @@
 
           const tdStatus = document.createElement('td');
           const badge = document.createElement('span');
-          const safeStatus = ['draft', 'published', 'scheduled', 'archived'].includes(p.status) ? p.status : 'draft';
+          const safeStatus = p.status === 'published' ? 'published' : 'draft';
           badge.className = 'status-pill ' + safeStatus;
           badge.textContent = p.status;
           tdStatus.appendChild(badge);

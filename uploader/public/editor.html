@@ -180,23 +180,7 @@
 
         <!-- Sidebar Inspector (Right Column) -->
         <aside class="editor-sidebar">
-          
-          <!-- Card 1: Status & Publishing -->
-          <div class="editor-card">
-            <h3 class="editor-card-title">Status & Schedule</h3>
-            <label for="fmStatus">Post Status</label>
-            <select id="fmStatus">
-              <option value="draft">Draft</option>
-              <option value="published">Published</option>
-              <option value="scheduled">Scheduled</option>
-              <option value="archived">Archived</option>
-            </select>
-
-            <label for="fmScheduledAt" style="margin-top:0.75rem">Scheduled Publish</label>
-            <input id="fmScheduledAt" type="datetime-local" />
-          </div>
-
-          <!-- Card 2: Expedition & Location Details -->
+          <!-- Card 1: Expedition & Location Details -->
           <div class="editor-card">
             <h3 class="editor-card-title">Expedition Details</h3>
 
@@ -240,7 +224,7 @@
             </div>
           </div>
 
-          <!-- Card 3: Taxonomy -->
+          <!-- Card 2: Taxonomy -->
           <div class="editor-card">
             <h3 class="editor-card-title">Taxonomy</h3>
             <label for="fmCategories">Categories</label>
@@ -250,7 +234,7 @@
             <input id="fmTags" type="text" placeholder="Leica Q2, Greece" />
           </div>
 
-          <!-- Card 4: Revisions -->
+          <!-- Card 3: Revisions -->
           <div class="editor-card" id="revisionsCard" style="display:none">
             <h3 class="editor-card-title">Revisions History</h3>
             <p class="muted" style="font-size:0.78rem">Snapshots overwrote on save (last 20 kept).</p>
@@ -742,10 +726,13 @@
       AltSuggest.wire({ button: $('enBodyImgSuggest'), fileInput: $('enBodyImgFile'), altInput: $('enBodyImgAlt'), statusEl: $('enBodyImgStatus'), lang: 'en', on401: suggestOn401 });
 
       // ---- assemble PostPair payload ----
+      // Deliberately no `status` or `scheduledAt`: the store decides status
+      // (existing?.status ?? 'draft' — Publish is a separate admin-only route)
+      // and nothing consumes scheduled_at, so a control for either would be
+      // inert (#121).
       function buildPayload() {
         const categoriesRaw = $('fmCategories') ? $('fmCategories').value.trim() : '';
         const tagsRaw = $('fmTags') ? $('fmTags').value.trim() : '';
-        const scheduledAtVal = $('fmScheduledAt') ? $('fmScheduledAt').value : '';
         const categories = categoriesRaw ? categoriesRaw.split(',').map((s) => s.trim()).filter(Boolean) : [];
         const tags = tagsRaw ? tagsRaw.split(',').map((s) => s.trim()).filter(Boolean) : [];
 
@@ -760,7 +747,6 @@
           route: $('fmRoute').value.trim() || undefined,
           categories,
           tags,
-          scheduledAt: scheduledAtVal || undefined,
         };
 
         // Remove undefined keys for a clean payload
@@ -793,11 +779,8 @@
         Object.keys(de).forEach((k) => de[k] === undefined && delete de[k]);
         Object.keys(en).forEach((k) => en[k] === undefined && delete en[k]);
 
-        const selectedStatus = $('fmStatus') ? $('fmStatus').value : (isPublished ? 'published' : 'draft');
-
         return {
           translationKey: currentTk || undefined,
-          status: selectedStatus,
           // Concurrency echo — JSON.stringify drops it when undefined (new post).
           updatedAt: loadedUpdatedAt || undefined,
           shared,
@@ -992,12 +975,8 @@
         // user had deliberately deleted (e.g. a cleared Route surviving a 401
         // round-trip because the stash simply omits the key).
         const shared = post.shared || {};
-        if ($('fmStatus')) $('fmStatus').value = post.status || 'draft';
         if ($('fmCategories')) $('fmCategories').value = Array.isArray(shared.categories) ? shared.categories.join(', ') : '';
         if ($('fmTags')) $('fmTags').value = Array.isArray(shared.tags) ? shared.tags.join(', ') : '';
-        if ($('fmScheduledAt')) {
-          $('fmScheduledAt').value = shared.scheduledAt ? new Date(shared.scheduledAt).toISOString().slice(0, 16) : '';
-        }
 
         $('fmDate').value = shared.date || '';
         $('fmCountryCode').value = shared.countryCode || '';

@@ -9,7 +9,12 @@ export interface HeroImage { src: string; width: number; height: number; alt: st
  * alias because `ImageDims` is the name the rest of the uploader already uses.
  */
 export type ImageDims = ImageMeta;
-export type PostStatus = 'draft' | 'published' | 'scheduled' | 'archived';
+// Only these two exist: the `posts.status` CHECK admits nothing else, and
+// `upsertDraft` ignores the payload's status (Publish is a separate admin-only
+// route). Scheduling/archiving was never built — see #121 for what building it
+// would take. `shared.scheduledAt` below is a stored-but-unconsumed column kept
+// for dump compatibility (backup.ts v4); no UI writes it.
+export type PostStatus = 'draft' | 'published';
 export interface PostLocale {
   locale: Locale; slug: string; title: string; excerpt: string; country: string;
   heroImage: HeroImage; bodyMarkdown: string; images: Record<string, ImageDims>;
@@ -132,7 +137,6 @@ export interface PostStore {
     totalPosts: number;
     draftPosts: number;
     publishedPosts: number;
-    scheduledPosts: number;
     totalCategories: number;
     totalTags: number;
   }>;
@@ -530,14 +534,11 @@ export function memoryPostStore(): PostStore {
       return [...counts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
     },
     async getCmsStats() {
-      let draft = 0, published = 0, scheduled = 0, archived = 0;
+      let draft = 0, published = 0;
       const cats = new Set<string>();
       const tags = new Set<string>();
       for (const p of byKey.values()) {
-        if (p.status === 'draft') draft++;
-        else if (p.status === 'published') published++;
-        else if (p.status === 'scheduled') scheduled++;
-        else if (p.status === 'archived') archived++;
+        if (p.status === 'published') published++; else draft++;
         (p.shared.categories ?? []).forEach((c) => cats.add(c));
         (p.shared.tags ?? []).forEach((t) => tags.add(t));
       }
@@ -545,8 +546,6 @@ export function memoryPostStore(): PostStore {
         totalPosts: byKey.size,
         draftPosts: draft,
         publishedPosts: published,
-        scheduledPosts: scheduled,
-        archivedPosts: archived,
         totalCategories: cats.size,
         totalTags: tags.size,
       };
@@ -831,14 +830,11 @@ export function pgPostStore(pool: DbPool): PostStore {
       const { rows: postStats } = await pool.query<{ status: string; count: string }>(
         `SELECT status, COUNT(DISTINCT translation_key) AS count FROM posts GROUP BY status`,
       );
-      let total = 0, draft = 0, published = 0, scheduled = 0, archived = 0;
+      let total = 0, draft = 0, published = 0;
       for (const r of postStats) {
         const cnt = parseInt(r.count, 10);
         total += cnt;
-        if (r.status === 'draft') draft += cnt;
-        else if (r.status === 'published') published += cnt;
-        else if (r.status === 'scheduled') scheduled += cnt;
-        else if (r.status === 'archived') archived += cnt;
+        if (r.status === 'published') published += cnt; else draft += cnt;
       }
       const { rows: catCount } = await pool.query<{ count: string }>(
         `SELECT COUNT(DISTINCT cat) FROM (SELECT unnest(categories) AS cat FROM posts) sub`,
@@ -850,8 +846,6 @@ export function pgPostStore(pool: DbPool): PostStore {
         totalPosts: total,
         draftPosts: draft,
         publishedPosts: published,
-        scheduledPosts: scheduled,
-        archivedPosts: archived,
         totalCategories: parseInt(catCount[0]?.count ?? '0', 10),
         totalTags: parseInt(tagCount[0]?.count ?? '0', 10),
       };

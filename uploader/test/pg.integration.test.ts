@@ -600,6 +600,24 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     await pool.end();
   });
 
+  it('getCmsStats counts pairs as draft or published and nothing else (#121)', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    const mk = (n: string, extra: { categories?: string[]; tags?: string[] } = {}) => store.upsertDraft({
+      translationKey: '', status: 'draft',
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 }, ...extra },
+      de: { locale: 'de', slug: `st-${n}-de`, title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en', slug: `st-${n}-en`, title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    });
+    const a = await mk('a');
+    await store.publish(a.translationKey);
+    await mk('b', { categories: ['City'], tags: ['x', 'y'] });
+    expect(await store.getCmsStats!()).toEqual({ totalPosts: 2, draftPosts: 1, publishedPosts: 1, totalCategories: 1, totalTags: 2 });
+    await pool.end();
+  });
+
   it('prunes the history to the newest REVISION_CAP snapshots', async () => {
     const store = pgPostStore(pool);
     let cur = await store.upsertDraft(base('cap', 'v1'));
