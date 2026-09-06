@@ -46,8 +46,9 @@ window.AltSuggest = (function () {
         if (hintEl) hintEl.textContent = lang === 'de' ? 'EN: ' + c.altEn : 'DE: ' + c.altDe;
         say('Suggested — review and edit as needed.');
       } catch (e) {
+        const why = LLM.mixedContentWarning(cfg.lmBaseUrl, location.protocol);
         say('Couldn\'t reach LM Studio at ' + cfg.lmBaseUrl + ' (' + e.message +
-          '). Is it running? Fill in the alt text manually.');
+          '). ' + (why || 'Is it running?') + ' Fill in the alt text manually.');
       }
     });
   }

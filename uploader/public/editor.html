@@ -63,7 +63,7 @@
                     <button type="button" id="deHeroLibrary" class="btn-secondary">Choose from Library</button>
                     <button type="button" id="deHeroSuggest" class="btn-secondary">✨ Suggest Alt-Text</button>
                   </div>
-                  <input id="deHeroAlt" type="text" placeholder="Alt text for hero image (DE)" aria-label="Alt text for hero image (DE)" />
+                  <input id="deHeroAlt" type="text" maxlength="1000" placeholder="Alt text for hero image (DE)" aria-label="Alt text for hero image (DE)" />
                   <p id="deHeroStatus" class="muted" role="status"></p>
                   <input id="deHeroSrc" type="hidden" />
                   <input id="deHeroWidth" type="hidden" />
@@ -132,7 +132,7 @@
                     <button type="button" id="enHeroLibrary" class="btn-secondary">Choose from Library</button>
                     <button type="button" id="enHeroSuggest" class="btn-secondary">✨ Suggest Alt-Text</button>
                   </div>
-                  <input id="enHeroAlt" type="text" placeholder="Alt text for hero image (EN)" aria-label="Alt text for hero image (EN)" />
+                  <input id="enHeroAlt" type="text" maxlength="1000" placeholder="Alt text for hero image (EN)" aria-label="Alt text for hero image (EN)" />
                   <p id="enHeroStatus" class="muted" role="status"></p>
                   <input id="enHeroSrc" type="hidden" />
                   <input id="enHeroWidth" type="hidden" />
@@ -284,6 +284,7 @@
     <script src="/admin/picker-selection.js"></script>
     <script src="/admin/media-picker.js"></script>
     <script src="/admin/gallery-fence.js"></script>
+    <script src="/admin/image-markdown.js"></script>
     <script src="/admin/tabs.js"></script>
     <script>
       'use strict';
@@ -710,7 +711,7 @@
           // Insert markdown at cursor in the matching EasyMDE instance
           // (replaceSelection fires a CodeMirror change → marks the guard dirty)
           const mde = locale === 'de' ? deMDE : enMDE;
-          const md = '![' + (altInput.value || '') + '](' + body.src + ')';
+          const md = ImageMarkdown.image(altInput.value, body.src);
           mde.codemirror.replaceSelection(md);
 
           statusEl.textContent = 'Inserted: ' + body.src

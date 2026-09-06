@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseCaption, CaptionError, DEFAULT_PROMPT } from '../src/caption.js';
+import { parseCaption, CaptionError, DEFAULT_PROMPT, MAX_ALT } from '../src/caption.js';
 
 describe('parseCaption', () => {
   it('parses a clean JSON object', () => {
@@ -53,6 +53,25 @@ describe('parseCaption', () => {
   it('skips a valid non-caption object and uses the real one', () => {
     expect(parseCaption('{"status":"ok"} {"altEn":"A","altDe":"B"}'))
       .toEqual({ altEn: 'A', altDe: 'B' });
+  });
+
+  // Model output is untrusted input (CLAUDE.md §AI): it lands in an alt field
+  // and then in every reader's markup, so it is bounded here, not trusted (#140).
+  it('collapses whitespace to one line and caps a runaway answer at MAX_ALT', () => {
+    const long = 'word '.repeat(500);
+    const out = parseCaption(JSON.stringify({ altEn: long, altDe: 'Ein\n\n  Strand\tam   Abend' }));
+    expect(out.altDe).toBe('Ein Strand am Abend');
+    expect(out.altEn).toHaveLength(MAX_ALT);
+    expect(out.altEn).toBe(long.slice(0, MAX_ALT));
+  });
+
+  it('treats a whitespace-only field as missing', () => {
+    expect(() => parseCaption('{"altEn":" \\n ","altDe":"B"}')).toThrow(CaptionError);
+  });
+
+  it('never cuts a surrogate pair in half at the cap', () => {
+    const alt = 'x'.repeat(MAX_ALT - 1) + '😀';
+    expect(parseCaption(JSON.stringify({ altEn: alt, altDe: 'B' })).altEn).toBe('x'.repeat(MAX_ALT - 1));
   });
 });
 

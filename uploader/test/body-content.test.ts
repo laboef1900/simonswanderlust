@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   escapeMeta, unescapeMeta, galleryFencesToMdx, imagesMapError, normalizeGalleryFences,
+  heroImageError, escapeAltText, unescapeAltText, imageMarkdown,
   type ImageMeta,
 } from '../src/body-content.js';
 import type { ImageDims } from '../../site/src/lib/body-images.js';
@@ -83,6 +84,45 @@ describe('imagesMapError', () => {
 
   it('rejects oversize text', () => {
     expect(imagesMapError({ [A]: { width: 8, height: 6, alt: 'x'.repeat(1001) } })).toMatch(/at most/);
+  });
+});
+
+describe('heroImageError', () => {
+  it('accepts an absent hero, the importer placeholder and a complete hero', () => {
+    expect(heroImageError(undefined)).toBeNull();
+    expect(heroImageError({ src: '', width: 0, height: 0, alt: '' })).toBeNull();
+    expect(heroImageError({ src: A, width: 3000, height: 2000, alt: 'Sunrise' })).toBeNull();
+  });
+
+  it('rejects a non-object or a non-string src/alt', () => {
+    expect(heroImageError(null)).toMatch(/must be an object/);
+    expect(heroImageError([A])).toMatch(/must be an object/);
+    expect(heroImageError({ src: A, width: 1, height: 1, alt: { type: 'raw', value: '<script>' } })).toMatch(/alt must be a string/);
+    expect(heroImageError({ src: 7, width: 1, height: 1, alt: '' })).toMatch(/src must be a string/);
+  });
+
+  it('caps alt like gallery text — a runaway suggestion is refused, not saved', () => {
+    expect(heroImageError({ src: A, width: 1, height: 1, alt: 'x'.repeat(1000) })).toBeNull();
+    expect(heroImageError({ src: A, width: 1, height: 1, alt: 'x'.repeat(1001) })).toMatch(/at most 1000/);
+  });
+
+  it('rejects dimensions that are not non-negative integers', () => {
+    for (const dims of [{ width: -1, height: 1 }, { width: 1.5, height: 1 }, { width: '3000', height: 1 }, { width: 1, height: NaN }]) {
+      expect(heroImageError({ src: A, alt: '', ...dims })).toMatch(/non-negative integer/);
+    }
+  });
+});
+
+describe('escapeAltText / imageMarkdown', () => {
+  it('escapes the three characters that can end or alter a label, and inverts exactly', () => {
+    const raw = 'Blick vom Gipfel [Norwegen] \\ back';
+    expect(escapeAltText(raw)).toBe('Blick vom Gipfel \\[Norwegen\\] \\\\ back');
+    expect(unescapeAltText(escapeAltText(raw))).toBe(raw);
+    expect(imageMarkdown(raw, A)).toBe(`![Blick vom Gipfel \\[Norwegen\\] \\\\ back](${A})`);
+  });
+
+  it('leaves an alt without brackets byte-identical', () => {
+    expect(imageMarkdown('Old town at dusk', A)).toBe(`![Old town at dusk](${A})`);
   });
 });
 

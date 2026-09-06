@@ -122,6 +122,12 @@ describe('harvestAlt', () => {
       .toEqual({ de: '', en: 'A gate' });
   });
 
+  it('harvests the text the author typed, not its Markdown-escaped label (#140)', () => {
+    const src = `${BASE}/trips/a/pic`;
+    expect(harvestAlt(src, [row({ locale: 'de', bodyMarkdown: `![Blick \\[Norwegen\\]](${src})` })]))
+      .toEqual({ de: 'Blick [Norwegen]', en: '' });
+  });
+
   // @ai-warning: exact URL matches only. A mis-attribution would silently
   // poison the library and then denormalize into every future post.
   it('is exact-match only — a prefix or variant URL does not count', () => {

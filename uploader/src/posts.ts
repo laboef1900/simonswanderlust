@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { imagesMapError, normalizeGalleryFences, type ImageMeta } from './body-content.js';
+import { heroImageError, imageMarkdown, imagesMapError, normalizeGalleryFences, type ImageMeta } from './body-content.js';
 
 export type Locale = 'de' | 'en';
 export interface HeroImage { src: string; width: number; height: number; alt: string }
@@ -352,7 +352,7 @@ export function normalizeBodyImages(
     if (Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0) {
       merged[src] = { width, height };
     }
-    return `![${alt}](${src})`;
+    return imageMarkdown(alt, src);
   });
   return { bodyMarkdown: normalized, images: merged };
 }
@@ -381,7 +381,7 @@ function draftWithDefaults(pair: PostPair): PostPair {
   // can omit `locale` at runtime despite the TS type, and the error message
   // must still name which side failed.
   const fillLocale = (l: PostLocale, locale: Locale): PostLocale => {
-    const err = imagesMapError(l.images);
+    const err = imagesMapError(l.images) ?? heroImageError(l.heroImage);
     if (err) throw new PostError(`${locale}: ${err}`);
     const filled: PostLocale = {
       ...l,

@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { galleryFencesToMdx } from './body-content.js';
+import { galleryFencesToMdx, unescapeAltText } from './body-content.js';
+import { markdownImages } from './wp-content.js';
 import type { Locale, PostLocale, PostPair } from './posts.js';
 
 // YAML single-quoted scalar: a literal quote is escaped by doubling it ('' ),
@@ -15,15 +16,20 @@ const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
  * renderer skips entirely. Exact inverse of posts.ts `normalizeBodyImages`.
  */
 function bodyToMdx(p: PostLocale): string {
-  return galleryFencesToMdx(p.bodyMarkdown, p.images).replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt: string, src: string) => {
-    const dims = p.images[src];
-    if (!dims) return `![${alt}](${src})`;
+  let out = galleryFencesToMdx(p.bodyMarkdown, p.images);
+  // `markdownImages` reads the label with its backslash escapes (posts.ts
+  // writes `\[`/`\]` via `imageMarkdown`); a naive `[^\]]*` stopped at the
+  // first escaped bracket and exported the photo without its dimensions.
+  for (const img of markdownImages(out)) {
+    const dims = p.images[img.url];
+    if (!dims) continue;
     // Escape &, ", <, > (& first) so posts.ts normalizeBodyImages can decode the exact
     // inverse — a raw '>' in alt would otherwise defeat its tag regex on paste-back.
-    const escapedAlt = alt
+    const escapedAlt = unescapeAltText(img.alt)
       .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return `<BodyImage src="${src}" width={${dims.width}} height={${dims.height}} alt="${escapedAlt}" />`;
-  });
+    out = out.replaceAll(img.full, `<BodyImage src="${img.url}" width={${dims.width}} height={${dims.height}} alt="${escapedAlt}" />`);
+  }
+  return out;
 }
 
 export function renderPostToMdx(pair: PostPair, locale: Locale): string {

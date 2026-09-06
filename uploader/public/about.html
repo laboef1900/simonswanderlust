@@ -61,6 +61,7 @@
     <script src="/admin/draft-guard.js"></script>
     <script src="/admin/vendor/easymde.min.js"></script>
     <script src="/admin/tabs.js"></script>
+    <script src="/admin/image-markdown.js"></script>
     <script>
       'use strict';
       const $ = (id) => document.getElementById(id);
@@ -113,7 +114,7 @@
           if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
           (locale === 'de' ? deImages : enImages)[body.src] = { width: body.width, height: body.height };
           // replaceSelection fires a CodeMirror change → marks the guard dirty
-          (locale === 'de' ? deMDE : enMDE).codemirror.replaceSelection('![' + (altInput.value || '') + '](' + body.src + ')');
+          (locale === 'de' ? deMDE : enMDE).codemirror.replaceSelection(ImageMarkdown.image(altInput.value, body.src));
           statusEl.textContent = 'Inserted: ' + body.src;
           fileInput.value = ''; altInput.value = '';
         } catch (e) {

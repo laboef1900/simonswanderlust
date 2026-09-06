@@ -70,6 +70,49 @@ export function imagesMapError(images: unknown): string | null {
 }
 
 /**
+ * Validate an untyped `heroImage` from a request body. Same posture as
+ * `imagesMapError`: the hero's `alt` reaches every reader page's markup, and
+ * a draft save (`validateDraft` only checks "is an object") was the one text
+ * field with no length cap at all — an AI suggestion that ran away to 2 kB
+ * was saved verbatim (#140). Draft-tolerant: `src` may be empty and the
+ * dimensions zero (the importer's placeholder); `validateLocale` tightens
+ * both at publish time.
+ */
+export function heroImageError(hero: unknown): string | null {
+  if (hero === undefined) return null;
+  if (typeof hero !== 'object' || hero === null || Array.isArray(hero)) return 'heroImage must be an object';
+  const h = hero as Record<string, unknown>;
+  for (const text of ['src', 'alt'] as const) {
+    if (typeof h[text] !== 'string') return `heroImage.${text} must be a string`;
+  }
+  if ((h.alt as string).length > MAX_TEXT) return `heroImage.alt must be at most ${MAX_TEXT} characters`;
+  for (const dim of ['width', 'height'] as const) {
+    if (!Number.isInteger(h[dim]) || (h[dim] as number) < 0) return `heroImage.${dim} must be a non-negative integer`;
+  }
+  return null;
+}
+
+/**
+ * Alt text as a CommonMark image label: `\`, `[` and `]` escaped so the label
+ * ends where the author's text does. Composing `![${alt}](${src})` from raw
+ * text turned `Blick vom Gipfel [Norwegen]` into a broken image that rendered
+ * literally (#140). Mirrored by `public/image-markdown.js` for the editor —
+ * `test/image-markdown-mirror.test.ts` keeps the two honest.
+ */
+export function escapeAltText(alt: string): string {
+  return alt.replace(/[\\[\]]/g, '\\$&');
+}
+
+/** Inverse of `escapeAltText` — CommonMark §2.4: a backslash escapes ASCII punctuation only. */
+export function unescapeAltText(alt: string): string {
+  return alt.replace(/\\([!-/:-@[-`{-~])/g, '$1');
+}
+
+export function imageMarkdown(alt: string, src: string): string {
+  return `![${escapeAltText(alt)}](${src})`;
+}
+
+/**
  * Escape a gallery-line alt/caption value. Extends export.ts's existing
  * `& " < >` rule with the two characters this one-line-per-photo format adds:
  * `|` is the field separator and a newline would end the line. `unescapeMeta`

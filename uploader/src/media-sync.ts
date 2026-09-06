@@ -20,6 +20,8 @@ import { FORMATS, variantWidths } from './variants.js';
 import { MAX_PAGE_SIZE, type MediaStore } from './media-store.js';
 import type { PagePair } from './pages.js';
 import type { PostUsageRow } from './posts.js';
+import { unescapeAltText } from './body-content.js';
+import { markdownImages } from './wp-content.js';
 
 export interface SyncReport {
   scanned: number;
@@ -167,7 +169,6 @@ async function assess(root: string, entry: DiskKey): Promise<DiskVerdict> {
  */
 export function harvestAlt(src: string, posts: PostUsageRow[]): { de: string; en: string } {
   const out = { de: '', en: '' };
-  const imgRe = /!\[([^\]]*)\]\(([^)\s]+)\)/g;
   for (const row of posts) {
     const locale = row.locale;
     if (locale !== 'de' && locale !== 'en') continue;
@@ -176,11 +177,9 @@ export function harvestAlt(src: string, posts: PostUsageRow[]): { de: string; en
       out[locale] = row.heroImage.alt;
       continue;
     }
-    imgRe.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = imgRe.exec(row.bodyMarkdown ?? '')) !== null) {
-      if (m[2] === src && m[1]) { out[locale] = m[1]; break; }
-    }
+    // Labels carry backslash escapes (`imageMarkdown`); the library stores the text the author typed.
+    const hit = markdownImages(row.bodyMarkdown ?? '').find((img) => img.url === src && img.alt);
+    if (hit) out[locale] = unescapeAltText(hit.alt);
   }
   return out;
 }
