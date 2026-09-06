@@ -190,9 +190,7 @@
     snap.items.forEach(function (i) {
       var row = el('div', 'upload-row');
       row.appendChild(el('span', 'upload-row__name', i.name));
-      row.appendChild(el('span', 'upload-row__state',
-        i.state === 'uploading' ? Math.round(i.progress * 100) + '%'
-          : i.state === 'failed' ? (i.error || 'failed') : i.state));
+      row.appendChild(el('span', 'upload-row__state', api.queueState(i)));
       box.appendChild(row);
     });
     if (snap.failed) {

@@ -79,6 +79,20 @@ window.MediaApi = (function () {
     return 'failed: ' + (item.error || 'unknown');
   }
 
+  /**
+   * State label for one upload-queue row. A duplicate names the folder the
+   * photo already lives in: the server keeps a curated folder on re-upload
+   * (#135), so "done" alone would suggest it landed where the author dropped it.
+   */
+  function queueState(item) {
+    if (item.state === 'uploading') return Math.round(item.progress * 100) + '%';
+    if (item.state === 'failed') return item.error || 'failed';
+    if (item.state === 'done' && item.result && item.result.duplicate) {
+      return 'already in ' + (item.result.folder || 'root');
+    }
+    return item.state;
+  }
+
   /** Query string for GET /media from a filter state object. */
   function listQuery(state) {
     var s = state || {};
@@ -293,6 +307,7 @@ window.MediaApi = (function () {
     folderTree: folderTree,
     parentOf: parentOf,
     statusLabel: statusLabel,
+    queueState: queueState,
     listQuery: listQuery,
     debounce: debounce,
     makeSequence: makeSequence,

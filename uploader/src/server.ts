@@ -369,16 +369,20 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const existing = await cfg.media.get(versionedKey);
     if (existing && existing.status === 'ready') {
       // Metadata the caller supplied still applies — it is not silently
-      // discarded — but the STORED values win for the returned snippet.
-      if (alt || title || folder) {
+      // discarded — but the STORED values win: alt fills only a blank slot,
+      // and the folder only if the photo is still in the root (#135). The
+      // browser always sends the folder that is currently open, so a second
+      // drop of the same camera export must not relocate a curated photo.
+      const folder2 = existing.folder === '' ? folder : existing.folder;
+      if (alt || title || (folder && existing.folder === '')) {
         await cfg.media.patch(versionedKey, {
-          ...(title ? { title } : {}), ...(folder ? { folder } : {}),
+          ...(title ? { title } : {}), ...(folder && existing.folder === '' ? { folder } : {}),
           ...(alt ? { alt: { de: existing.alt.de || alt, en: existing.alt.en || alt } } : {}),
         }).catch(() => { /* metadata update is best-effort on a duplicate */ });
       }
       return reply.send({
         src, key: versionedKey, width: existing.width, height: existing.height,
-        status: existing.status, duplicate: true,
+        status: existing.status, duplicate: true, folder: folder2,
         snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt),
       });
     }
@@ -386,7 +390,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       // Do NOT re-enqueue: the job is already in the queue.
       return reply.send({
         src, key: versionedKey, width: existing.width, height: existing.height,
-        status: 'processing', duplicate: true,
+        status: 'processing', duplicate: true, folder: existing.folder,
         snippet: heroSnippet(src, existing.width, existing.height, alt),
       });
     }

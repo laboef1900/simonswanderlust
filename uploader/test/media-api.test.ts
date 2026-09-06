@@ -21,6 +21,7 @@ interface Api {
   folderTree(paths: string[]): { path: string; name: string; depth: number }[];
   parentOf(path: string): string;
   statusLabel(item: unknown): string;
+  queueState(item: Record<string, unknown>): string;
   listQuery(state: Record<string, unknown>): string;
   debounce(fn: (...args: unknown[]) => void, ms: number): (...args: unknown[]) => void;
   makeSequence(): { next(): number; isCurrent(ticket: number): boolean };
@@ -96,6 +97,14 @@ describe('MediaApi pure helpers', () => {
     expect(api.statusLabel({ status: 'missing' })).toBe('file missing');
     // `error` is a fixed server-side enum, never a libvips message.
     expect(api.statusLabel({ status: 'failed', error: 'decode_failed' })).toBe('failed: decode_failed');
+  });
+
+  it('names the folder a duplicate already lives in instead of a bare "done"', () => {
+    expect(api.queueState({ state: 'uploading', progress: 0.5 })).toBe('50%');
+    expect(api.queueState({ state: 'failed', error: 'too large' })).toBe('too large');
+    expect(api.queueState({ state: 'done', result: { duplicate: false } })).toBe('done');
+    expect(api.queueState({ state: 'done', result: { duplicate: true, folder: 'Iceland/South' } })).toBe('already in Iceland/South');
+    expect(api.queueState({ state: 'done', result: { duplicate: true, folder: '' } })).toBe('already in root');
   });
 
   it('builds a list query, omitting empty values but keeping an explicit root folder', () => {

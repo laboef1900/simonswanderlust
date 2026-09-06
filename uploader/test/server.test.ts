@@ -231,6 +231,30 @@ describe('POST /upload', () => {
     expect(second.json()).toMatchObject({ duplicate: true, status: 'ready' });
   });
 
+  // #135: the browser always sends the folder that is currently open, so a
+  // second drop of the same camera export relocated a curated photo while
+  // reporting `duplicate: true`.
+  it('a duplicate upload never moves a curated photo, only fills an empty folder, and names where it lives', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const img = await jpeg();
+    const first = await upload(b, cookie, { key: 'trips/dup/hero' }, img);
+    const key = first.json().key as string;
+    await b.media.setStatus(key, 'ready');
+    // Still in the root: the drop target applies.
+    const filled = await upload(b, cookie, { key: 'trips/dup/hero', folder: 'Iceland/South' }, img);
+    expect(filled.json()).toMatchObject({ duplicate: true, folder: 'Iceland/South' });
+    expect((await b.media.get(key))?.folder).toBe('Iceland/South');
+    // Curated: the drop target is ignored and the stored folder reported.
+    const kept = await upload(b, cookie, { key: 'trips/dup/hero', folder: 'Norway' }, img);
+    expect(kept.json()).toMatchObject({ duplicate: true, folder: 'Iceland/South' });
+    expect((await b.media.get(key))?.folder).toBe('Iceland/South');
+    // Same while the first upload is still encoding.
+    await b.media.setStatus(key, 'processing');
+    const busy = await upload(b, cookie, { key: 'trips/dup/hero', folder: 'Norway' }, img);
+    expect(busy.json()).toMatchObject({ duplicate: true, status: 'processing', folder: 'Iceland/South' });
+  });
+
   it('serves stored variants with a long immutable cache header', async () => {
     const b = buildEncoding();
     const { cookie } = await authed(b);
