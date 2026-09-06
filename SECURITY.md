@@ -171,7 +171,13 @@ multiple replicas, limits would be counted per replica.)
 
 - **Storage keys** pass `assertSafeKey` in `storeOriginal` — the central chokepoint for every write
   path (direct upload *and* the WordPress re-host path). Keys must match `^[a-z0-9][a-z0-9/_-]*$`
-  with no `..` or `//`, so a write can never escape `STORAGE_DIR` (path-traversal defense).
+  with no `..` or `//`, so a write can never escape `STORAGE_DIR` (path-traversal defense), and
+  are capped at **200 characters / 8 path segments** (`MAX_KEY_LEN`, `MAX_KEY_DEPTH`, #133) so a
+  client-chosen key can neither `mkdir -p` an arbitrarily deep tree nor fail with `ENAMETOOLONG`
+  after passing the regex. `POST /upload` validates the folder and the versioned key before any
+  write, so a refused upload leaves no orphan original for the reconcile to adopt.
+- **Media text fields** (`title`, `alt`, `caption`) strip `\p{C}` before the length cap, like tags
+  and EXIF strings, so a NUL can never reach Postgres `text` (which rejects it with a 500).
 - **Imported slugs** are validated at the WordPress-import boundary; a group with an unsafe slug is
   skipped with a warning and never reaches the database, the storage path, or the MDX export.
 - **Coordinates** are bounded on publish (`lat ∈ [-90,90]`, `lng ∈ [-180,180]`, finite).

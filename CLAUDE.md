@@ -851,6 +851,16 @@ blog/
   element. `GET /posts/:tk/preview` carries a deny-by-default CSP (`default-src 'none'`,
   images from the app's own origin, inline styles only, no scripts). See
   `docs/superpowers/specs/2026-09-05-sanitize-style-csp-design.md` and `SECURITY.md`.
+- **Done:** #133 media store input hardening (2026-09-06) — four defects with one shape: the
+  memory store accepted input Postgres or the filesystem rejected, so the unit suite never saw
+  the 500. `POST /upload` now validates the folder and the versioned key **before**
+  `storeOriginal` (a bad folder used to leave an orphan original the reconcile adopted as an
+  anonymous `processing` row); `cleanText` strips `\p{C}` like `normalizeTags` (a NUL in a title
+  was a pg-only 500); `assertSafeKey` caps keys at `MAX_KEY_LEN` = 200 chars and
+  `MAX_KEY_DEPTH` = 8 segments — a cross-lane contract every key producer (the un-hashed WXR
+  `trips/<slug>/<name>`, #98) must fit inside; and `renameFolder`/`deleteFolder` run their check
+  and both rewrites in one transaction, so media rows can never point at a folder the tree does
+  not list. See `docs/superpowers/specs/2026-09-06-media-store-input-hardening-design.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**
