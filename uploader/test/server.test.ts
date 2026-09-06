@@ -19,7 +19,7 @@ import { memoryPageStore, type PageStore } from '../src/pages.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
 import { BacklogFullError, createEncodeQueue, type EncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock } from '../src/work-lock.js';
-import { fixedWindowLimiter } from '../src/rate-limit.js';
+import { fixedWindowLimiter, accountLockoutLimiter } from '../src/rate-limit.js';
 import type { SiteBuilder, BuildOutcome } from '../src/build.js';
 
 let dir: string;
@@ -112,7 +112,7 @@ function build(extra: Partial<ServerConfig> = {}): Built {
 
 // Seed a user and return a Cookie header value for an authenticated session.
 async function authed(b: Built, opts: { isAdmin?: boolean; username?: string } = {}) {
-  const u = await b.users.create({ username: opts.username ?? 'simon', password: 'pw', isAdmin: opts.isAdmin ?? true });
+  const u = await b.users.create({ username: opts.username ?? 'simon', password: 'password123456', isAdmin: opts.isAdmin ?? true });
   const token = await b.sessions.create(u.id, 60_000);
   return { user: u, cookie: { sid: token } };
 }
@@ -877,28 +877,74 @@ describe('auth endpoints', () => {
 
   it('POST /login succeeds with correct creds, generic 401 otherwise', async () => {
     const b = build();
-    await b.users.create({ username: 'simon', password: 'pw', isAdmin: false });
-    const ok = await b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'Simon', password: 'pw' } });
+    await b.users.create({ username: 'simon', password: 'password123456', isAdmin: false });
+    const ok = await b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'Simon', password: 'password123456' } });
     expect(ok.statusCode).toBe(200);
     expect(ok.headers['set-cookie']).toMatch(/sid=/);
     const wrong = await b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'simon', password: 'bad' } });
     expect(wrong.statusCode).toBe(401);
-    const unknown = await b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'ghost', password: 'pw' } });
+    const unknown = await b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'ghost', password: 'password123456' } });
     expect(unknown.statusCode).toBe(401);
     const oversized = await b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'simon', password: 'a'.repeat(1025) } });
     expect(oversized.statusCode).toBe(401);
   });
 
-  it('locks account after 5 failed login attempts (429)', async () => {
+  // Login attempts with a proxy-appended client address, so one test can play
+  // several sources (trustProxy: 1 keys on the RIGHTMOST X-Forwarded-For entry).
+  const loginFrom = (b: Built, ip: string, payload: Record<string, unknown>) => b.app.inject({
+    method: 'POST', url: '/login',
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
+    payload,
+  });
+
+  it('one address cannot lock an account out: 9 failures from A, then the owner logs in from B (#109)', async () => {
+    // Production limits: 10 requests / IP and 100 failures / account. The old
+    // 5-failure account lock let any unauthenticated client lock the admin
+    // out every 15 minutes with 5 requests — this fails on that design.
     const b = build();
-    await b.users.create({ username: 'simon', password: 'password123456', isAdmin: false });
-    for (let i = 0; i < 5; i++) {
-      const res = await b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'simon', password: 'wrongpassword' } });
-      expect(res.statusCode).toBe(401);
+    await b.users.create({ username: 'simon', password: 'password123456', isAdmin: true });
+    for (let i = 0; i < 9; i++) {
+      expect((await loginFrom(b, '198.51.100.7', { username: 'simon', password: 'wrongpassword' })).statusCode).toBe(401);
     }
-    const locked = await b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'simon', password: 'password123456' } });
+    const owner = await loginFrom(b, '203.0.113.9', { username: 'simon', password: 'password123456' });
+    expect(owner.statusCode).toBe(200);
+    expect(owner.headers['set-cookie']).toMatch(/sid=/);
+  }, 30_000);
+
+  it('failures spread over many addresses still exhaust the account budget (429, even with the right password)', async () => {
+    // The per-IP limiter never sees a distributed guess; the account budget must.
+    const b = build({ accountLimiter: accountLockoutLimiter({ max: 3 }) });
+    await b.users.create({ username: 'simon', password: 'password123456', isAdmin: false });
+    for (let i = 0; i < 3; i++) {
+      expect((await loginFrom(b, `203.0.113.${i + 1}`, { username: 'simon', password: 'wrongpassword' })).statusCode).toBe(401);
+    }
+    const locked = await loginFrom(b, '203.0.113.99', { username: 'simon', password: 'password123456' });
     expect(locked.statusCode).toBe(429);
     expect(locked.json().error).toMatch(/account is temporarily locked/);
+  });
+
+  it('an account created before the 64-char cap still signs in and is still lockable (#109 review)', async () => {
+    // The cap applies to NEW usernames only; the store never had one, so a
+    // long name may exist in an older database. It must not become unreachable.
+    const b = build({ accountLimiter: accountLockoutLimiter({ max: 2 }) });
+    const username = 'veteran-'.repeat(12); // 96 chars
+    await b.users.create({ username, password: 'password123456', isAdmin: true });
+    expect((await loginFrom(b, '203.0.113.1', { username, password: 'password123456' })).statusCode).toBe(200);
+    expect((await loginFrom(b, '203.0.113.2', { username, password: 'wrongpassword' })).statusCode).toBe(401);
+    expect((await loginFrom(b, '203.0.113.3', { username, password: 'wrongpassword' })).statusCode).toBe(401);
+    expect((await loginFrom(b, '203.0.113.4', { username, password: 'password123456' })).statusCode).toBe(429);
+  });
+
+  it('POST /setup and POST /users reject a username longer than 64 characters (400)', async () => {
+    const b = build();
+    const setup = await b.app.inject({ method: 'POST', url: '/setup', headers: { 'content-type': 'application/json' }, payload: { username: 'u'.repeat(65), password: 'password123456' } });
+    expect(setup.statusCode).toBe(400);
+    expect(setup.json().error).toMatch(/at most 64 characters/);
+    expect(await b.users.count()).toBe(0);
+    const { cookie } = await authed(b, { isAdmin: true, username: 'admin' });
+    const add = await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'u'.repeat(65), password: 'password123456' } });
+    expect(add.statusCode).toBe(400);
+    expect(await b.users.count()).toBe(1);
   });
 
   it('GET /login serves a real form so Enter submits (keyboard-only sign-in)', async () => {
@@ -934,7 +980,7 @@ describe('auth endpoints', () => {
 
   it('rate-limits repeated login attempts from the same client (429)', async () => {
     const b = build({ loginLimiter: fixedWindowLimiter({ max: 2, windowMs: 60_000 }) });
-    await b.users.create({ username: 'simon', password: 'pw', isAdmin: false });
+    await b.users.create({ username: 'simon', password: 'password123456', isAdmin: false });
     const login = () => b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'simon', password: 'bad' } });
     expect((await login()).statusCode).toBe(401);
     expect((await login()).statusCode).toBe(401);
@@ -947,7 +993,7 @@ describe('auth endpoints', () => {
     // `true` (#108) req.ip was the LEFTMOST, client-supplied entry, and rotating
     // it opened a fresh bucket per request. This test fails on that regression.
     const b = build({ loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
-    await b.users.create({ username: 'simon', password: 'pw', isAdmin: false });
+    await b.users.create({ username: 'simon', password: 'password123456', isAdmin: false });
     const login = (xff: string) => b.app.inject({
       method: 'POST', url: '/login',
       headers: { 'content-type': 'application/json', 'x-forwarded-for': xff },
@@ -965,7 +1011,7 @@ describe('auth endpoints', () => {
     // only run if the handler read it, so zero reads on the locked attempt proves
     // the 429 fired before any scrypt work (#108).
     const inner = memoryUserStore();
-    await inner.create({ username: 'simon', password: 'pw', isAdmin: false });
+    await inner.create({ username: 'simon', password: 'password123456', isAdmin: false });
     let hashReads = 0;
     const users: UserStore = {
       ...inner,
@@ -975,7 +1021,7 @@ describe('auth endpoints', () => {
         return { ...u, get passwordHash() { hashReads++; return u.passwordHash; } };
       },
     };
-    const b = build({ users });
+    const b = build({ users, accountLimiter: accountLockoutLimiter({ max: 5 }) });
     const login = () => b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: 'simon', password: 'bad' } });
     for (let i = 0; i < 5; i++) expect((await login()).statusCode).toBe(401);
     expect(hashReads).toBe(5);
@@ -1025,7 +1071,7 @@ describe('user management', () => {
 
   it('rejects deleting yourself and the last admin', async () => {
     const b = build();
-    const me = await b.users.create({ username: 'admin', password: 'pw', isAdmin: true });
+    const me = await b.users.create({ username: 'admin', password: 'password123456', isAdmin: true });
     const token = await b.sessions.create(me.id, 60_000);
     const res = await b.app.inject({ method: 'DELETE', url: `/users/${me.id}`, cookies: { sid: token } });
     expect(res.statusCode).toBe(409);
@@ -1045,7 +1091,7 @@ describe('POST /users/me/password (change password)', () => {
     b.app.inject({ method: 'POST', url: '/users/me/password', headers: { 'content-type': 'application/json' }, ...(cookie ? { cookies: cookie } : {}), payload });
 
   it('401 unauthenticated', async () => {
-    const res = await change(build(), undefined, { currentPassword: 'pw', newPassword: 'new-password-123' });
+    const res = await change(build(), undefined, { currentPassword: 'password123456', newPassword: 'new-password-123' });
     expect(res.statusCode).toBe(401);
   });
 
@@ -1053,7 +1099,10 @@ describe('POST /users/me/password (change password)', () => {
     const b = build();
     const { cookie } = await authed(b);
     expect((await change(b, cookie, { newPassword: 'new-password-123' })).statusCode).toBe(400);
-    expect((await change(b, cookie, { currentPassword: 'pw', newPassword: '' })).statusCode).toBe(400);
+    expect((await change(b, cookie, { currentPassword: 'password123456', newPassword: '' })).statusCode).toBe(400);
+    const short = await change(b, cookie, { currentPassword: 'password123456', newPassword: 'short' });
+    expect(short.statusCode).toBe(400);
+    expect(short.json().error).toMatch(/new password must be between 12 and 1024 characters/);
   });
 
   it('400 (not 401 — admin JS redirects on 401) on a wrong current password', async () => {
@@ -1066,15 +1115,15 @@ describe('POST /users/me/password (change password)', () => {
 
   it('changes the password, invalidates other sessions, keeps the caller logged in', async () => {
     const b = build();
-    const { user, cookie } = await authed(b); // password 'pw'
+    const { user, cookie } = await authed(b); // password 'password123456'
     const otherToken = await b.sessions.create(user.id, 60_000);
-    const res = await change(b, cookie, { currentPassword: 'pw', newPassword: 'brand-new-password123' });
+    const res = await change(b, cookie, { currentPassword: 'password123456', newPassword: 'brand-new-password123' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     // Old password no longer logs in; the new one does.
     const login = (password: string) =>
       b.app.inject({ method: 'POST', url: '/login', headers: { 'content-type': 'application/json' }, payload: { username: user.username, password } });
-    expect((await login('pw')).statusCode).toBe(401);
+    expect((await login('password123456')).statusCode).toBe(401);
     expect((await login('brand-new-password123')).statusCode).toBe(200);
     // The pre-existing other session and the caller's old session are dead…
     expect((await b.app.inject({ method: 'GET', url: '/settings', cookies: { sid: otherToken } })).statusCode).toBe(401);
@@ -1114,10 +1163,10 @@ describe('POST /users/me/password (change password)', () => {
     expect(sixth.statusCode).toBe(429);
     expect(sixth.json().error).toBe('too many failed attempts, please wait and try again');
     // Still locked for the CORRECT password while the lock holds.
-    expect((await change(b, cookie, { currentPassword: 'pw', newPassword: 'new-password-123' })).statusCode).toBe(429);
+    expect((await change(b, cookie, { currentPassword: 'password123456', newPassword: 'new-password-123' })).statusCode).toBe(429);
     // A second user is unaffected.
     const other = await authed(b, { username: 'bob' });
-    expect((await change(b, other.cookie, { currentPassword: 'pw', newPassword: 'new-password-123' })).statusCode).toBe(200);
+    expect((await change(b, other.cookie, { currentPassword: 'password123456', newPassword: 'new-password-123' })).statusCode).toBe(200);
   });
 });
 

@@ -25,9 +25,9 @@ maybe('postgres stores (integration)', () => {
 
   it('round-trips a user and enforces unique username', async () => {
     const users = pgUserStore(pool);
-    const u = await users.create({ username: 'Simon', password: 'pw', isAdmin: true });
+    const u = await users.create({ username: 'Simon', password: 'password123456', isAdmin: true });
     expect((await users.findByUsername('simon'))?.id).toBe(u.id);
-    await expect(users.create({ username: 'simon', password: 'x', isAdmin: false })).rejects.toBeInstanceOf(UserExistsError);
+    await expect(users.create({ username: 'simon', password: 'password-x-1234', isAdmin: false })).rejects.toBeInstanceOf(UserExistsError);
   });
 
   it('findById returns null for malformed (no 22P02) and unknown ids', async () => {
@@ -39,7 +39,7 @@ maybe('postgres stores (integration)', () => {
   it('creates and finds a session, and expires it', async () => {
     const users = pgUserStore(pool);
     const sessions = pgSessionStore(pool);
-    const u = await users.create({ username: `u${Date.now()}`, password: 'pw', isAdmin: false });
+    const u = await users.create({ username: `u${Date.now()}`, password: 'password123456', isAdmin: false });
     const token = await sessions.create(u.id, 60_000);
     expect((await sessions.find(token))?.userId).toBe(u.id);
     const expired = await sessions.create(u.id, -1);
@@ -48,27 +48,27 @@ maybe('postgres stores (integration)', () => {
 
   it('setPassword round-trips (new verifies, old does not) and throws for an unknown id', async () => {
     const users = pgUserStore(pool);
-    const u = await users.create({ username: `pw${Date.now()}`, password: 'old-pw', isAdmin: false });
-    await users.setPassword(u.id, 'new-pw');
+    const u = await users.create({ username: `pw${Date.now()}`, password: 'old-password-1', isAdmin: false });
+    await users.setPassword(u.id, 'new-password-1');
     const after = await users.findByUsername(u.username);
-    expect(verifyPassword('new-pw', after!.passwordHash)).toBe(true);
-    expect(verifyPassword('old-pw', after!.passwordHash)).toBe(false);
-    await expect(users.setPassword(randomUUID(), 'x')).rejects.toThrow('user not found');
+    expect(verifyPassword('new-password-1', after!.passwordHash)).toBe(true);
+    expect(verifyPassword('old-password-1', after!.passwordHash)).toBe(false);
+    await expect(users.setPassword(randomUUID(), 'password-x-1234')).rejects.toThrow('user not found');
   });
 
   it('set-password CLI end-to-end: argv path updates the hash; unknown user exits 1 with a clean one-liner', async () => {
     const { runCli } = await import('./run-cli.js');
     const users = pgUserStore(pool);
     const name = `cli${Date.now()}`;
-    await users.create({ username: name, password: 'old-pw', isAdmin: false });
-    const ok = await runCli(['set-password', name, 'cli-new-pw'], { ...process.env, DATABASE_URL: url! });
+    await users.create({ username: name, password: 'old-password-1', isAdmin: false });
+    const ok = await runCli(['set-password', name, 'cli-new-password'], { ...process.env, DATABASE_URL: url! });
     expect(ok.code).toBe(0);
     expect(ok.stdout).toContain(`password updated for ${name}`);
     const after = await users.findByUsername(name);
-    expect(verifyPassword('cli-new-pw', after!.passwordHash)).toBe(true);
-    expect(verifyPassword('old-pw', after!.passwordHash)).toBe(false);
+    expect(verifyPassword('cli-new-password', after!.passwordHash)).toBe(true);
+    expect(verifyPassword('old-password-1', after!.passwordHash)).toBe(false);
     const ghost = `ghost-${Date.now()}`;
-    const bad = await runCli(['set-password', ghost, 'x'], { ...process.env, DATABASE_URL: url! });
+    const bad = await runCli(['set-password', ghost, 'ghost-password-1'], { ...process.env, DATABASE_URL: url! });
     expect(bad.code).toBe(1);
     expect(bad.stderr.trim()).toBe(`user not found: ${ghost}`); // clean message, no stack trace
   }, 30_000);
@@ -76,8 +76,8 @@ maybe('postgres stores (integration)', () => {
   it('destroyAllForUser removes only that user\'s sessions', async () => {
     const users = pgUserStore(pool);
     const sessions = pgSessionStore(pool);
-    const u1 = await users.create({ username: `da1-${Date.now()}`, password: 'pw', isAdmin: false });
-    const u2 = await users.create({ username: `da2-${Date.now()}`, password: 'pw', isAdmin: false });
+    const u1 = await users.create({ username: `da1-${Date.now()}`, password: 'password123456', isAdmin: false });
+    const u2 = await users.create({ username: `da2-${Date.now()}`, password: 'password123456', isAdmin: false });
     const t1a = await sessions.create(u1.id, 60_000);
     const t1b = await sessions.create(u1.id, 60_000);
     const t2 = await sessions.create(u2.id, 60_000);
@@ -102,7 +102,7 @@ maybe('postgres stores (integration)', () => {
   // contract the column-migrations section in db.ts relies on.
   it('ensureSchema is re-runnable against a populated database', async () => {
     const users = pgUserStore(pool);
-    const u = await users.create({ username: `rerun-${Date.now()}`, password: 'pw', isAdmin: false });
+    const u = await users.create({ username: `rerun-${Date.now()}`, password: 'password123456', isAdmin: false });
     await pool.query(`UPDATE pages SET title='Edited by author' WHERE key='about' AND locale='de'`);
     // Populate posts too: future appended ALTERs (e.g. a NOT NULL column
     // missing its DEFAULT) only fail on tables that HAVE rows, and posts is

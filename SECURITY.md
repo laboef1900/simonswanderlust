@@ -22,6 +22,10 @@ change about the security posture.
 
 - **Passwords** are hashed with **scrypt** (`N=16384, r=8, p=1`, 64-byte key, per-user random salt)
   and verified in constant time (`timingSafeEqual`). Hashes are stored, never the password.
+  The **password policy** is length-only (12–1024 characters — no composition rules, per ASVS 5.0
+  §6.2.5) and is enforced inside `hashPassword` itself, so `/setup`, `POST /users`,
+  `POST /users/me/password`, both user stores and the CLI `set-password` recovery path all share
+  one rule with no way around it (#109). Usernames are capped at 64 characters at creation.
   (`uploader/src/users.ts`)
 - **Sessions** use a 256-bit random token sent as an **HttpOnly, `SameSite=Strict`** cookie; only
   the **SHA-256 hash** of the token is stored in Postgres, so a database read cannot reproduce a
@@ -121,16 +125,38 @@ keep their sanitized messages. (`uploader/src/server.ts`)
 
 A per-client-IP fixed-window limiter throttles the password-verifying endpoints — the
 unauthenticated `/login` and `/setup`, plus the authenticated `POST /users/me/password` — to slow
-brute-force attempts. All three share the same per-IP bucket, so failed current-password guesses
-also count against login attempts from that IP. The per-IP key is `req.ip` derived under
-`trustProxy: 1`: the address the single trusted reverse proxy appended to `X-Forwarded-For`;
-client-supplied (leftmost) entries are ignored, so rotating the header does not open a fresh
-bucket. `/login` additionally locks an account after repeated failures and checks that lock
-*before* running scrypt, so a locked account costs no hashing work. `POST /users/me/password` has
-its own per-account failure limiter keyed on the session's user id, so a hijacked session cannot
-brute-force the current password across many addresses. All of it is in-memory and
-dependency-free (`uploader/src/rate-limit.ts`); with a single container that is sufficient. (If
-ever scaled to multiple replicas, limits would be counted per replica.)
+brute-force attempts: **10 requests per address per 15 minutes**. All three share the same per-IP
+bucket, so failed current-password guesses also count against login attempts from that IP. The
+per-IP key is `req.ip` derived under `trustProxy: 1`: the address the single trusted reverse
+proxy appended to `X-Forwarded-For`; client-supplied (leftmost) entries are ignored, so rotating
+the header does not open a fresh bucket.
+
+`/login` additionally keeps a **per-account failure budget across all sources** — the defence
+against a guess spread over many addresses, which the per-IP bucket cannot see — and checks it
+*before* running scrypt, so a locked account costs no hashing work. The budget is **100 failures
+per 15 minutes**, deliberately ten times the per-IP budget: one address is cut off at 10 requests
+long before it can lock anyone, so locking the admin out requires a sustained attack from ten or
+more addresses, while 100 guesses per 15 minutes against a 12+ character password is no threat
+(NIST SP 800-63B §5.2.2 allows up to 100). A successful login clears the counter. Before #109 the
+budget was 5, which let any unauthenticated client lock the admin out indefinitely with five
+requests every 15 minutes. The residual — a distributed attacker keeping the account locked — is
+accepted for a single-admin L1 deployment; the lock lives in process memory, expires 15 minutes
+after the last failure, and `docker compose restart app` clears it. Design and alternatives:
+`docs/superpowers/specs/2026-09-05-login-lockout-design.md`.
+
+`POST /users/me/password` has its own per-account failure limiter (5 per 15 minutes) keyed on the
+session's user id, so a hijacked session cannot brute-force the current password across many
+addresses — and only the caller can ever fill that bucket.
+
+Every limiter map is **bounded**: at most 10 000 tracked keys, with expired windows swept first and
+the earliest-expiring live window evicted at the cap (amortised O(1) — there is no full sweep an
+attacker can trigger per request). Eviction can only forget a counter, never refuse a request, so
+a flood of distinct usernames cannot lock anyone out. Key length is bounded too: new usernames are
+capped at 64 characters, and the account limiter stores anything longer under its SHA-256 hex, so
+a 1 MiB submitted name costs the map 64 characters — while an account that predates the cap keeps
+signing in and keeps its own budget. All of it is in-memory and dependency-free
+(`uploader/src/rate-limit.ts`); with a single container that is sufficient. (If ever scaled to
+multiple replicas, limits would be counted per replica.)
 
 ## Input validation
 

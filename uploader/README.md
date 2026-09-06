@@ -132,8 +132,12 @@ Full details in [`../SECURITY.md`](../SECURITY.md); the essentials:
   (so per-IP login throttling and the cookie `secure` flag work); your proxy MUST set
   `X-Forwarded-Proto`. Do not expose port 3000 directly to the internet.
 - **Password-verifying endpoints are rate-limited** per client IP (`/login`, `/setup`, and the
-  authenticated `POST /users/me/password`) to slow brute-force; they share one bucket, so failed
-  current-password guesses count against login attempts from that IP.
+  authenticated `POST /users/me/password`: 10 requests per 15 minutes) to slow brute-force; they
+  share one bucket, so failed current-password guesses count against login attempts from that IP.
+  `/login` also locks an account after 100 failed attempts within 15 minutes from any addresses —
+  ten times the per-IP budget, so one client cannot lock the admin out (#109); the lock is
+  in-memory and `docker compose restart app` clears it. Passwords are 12–1024 characters
+  everywhere, including the CLI reset; usernames at most 64.
 - **Publishing is admin-only.** Non-admin accounts can create and edit drafts but cannot publish
   to the public site or change a published slug; only admins can publish.
 - **WordPress import is admin-only and SSRF-guarded.** Only admins can run `/admin/import.html`
@@ -226,8 +230,9 @@ Forgot a password? Reset it from the host — the runtime image has no shell, so
 docker compose exec app node --import tsx src/cli.ts set-password <username>
 ```
 
-Prompts for the new password when it is omitted (input is echoed) and invalidates that user's
-sessions. Routine rotation while logged in uses the "Change my password" card on
+Prompts for the new password when it is omitted (input is echoed), enforces the same 12–1024
+character policy as the web forms, and invalidates that user's sessions. Routine rotation while
+logged in uses the "Change my password" card on
 `/admin/users.html`. Full recovery notes (including the last-resort `DELETE FROM users;` →
 `/setup` fallback) are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
 

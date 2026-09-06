@@ -35,7 +35,7 @@ maybe('backup round-trip (Postgres)', () => {
     const users = pgUserStore(pool);
     const posts = pgPostStore(pool);
     const sessions = pgSessionStore(pool);
-    const u = await users.create({ username: 'simon', password: 'pw', isAdmin: true });
+    const u = await users.create({ username: 'simon', password: 'password123456', isAdmin: true });
     await sessions.create(u.id, 60_000);
     // Minimal valid draft pair — same fixture shape as the `base` fixture in
     // pg.integration.test.ts (PostPair requires both locales).
@@ -189,7 +189,7 @@ maybe('backup round-trip (Postgres)', () => {
     await pool.query('DELETE FROM media');
     await pool.query('DELETE FROM media_folders');
     await pool.query('DELETE FROM users');
-    const u = await users.create({ username: `mediauser-${Date.now()}`, password: 'pw', isAdmin: true });
+    const u = await users.create({ username: `mediauser-${Date.now()}`, password: 'password123456', isAdmin: true });
     await media.upsert({
       key: 'library/2025/a', folder: 'Island/Sued', title: 'Sonnenaufgang',
       alt: { de: 'DE alt', en: 'EN alt' }, caption: { de: 'Tag 3', en: 'Day 3' },
@@ -306,10 +306,10 @@ maybe('backup round-trip (Postgres)', () => {
       await pool.query('DELETE FROM posts');
       await pool.query('DELETE FROM users');
       const users = pgUserStore(pool);
-      await users.create({ username: 'alice', password: 'pw-alice', isAdmin: true });
+      await users.create({ username: 'alice', password: 'password-alice', isAdmin: true });
       const dumpDir = await mkdtemp(join(tmpdir(), 'bk-cli-src-'));
       const dumpFile = join(dumpDir, await dumpDatabase(pool, dumpDir));
-      await users.create({ username: 'bob', password: 'pw-bob', isAdmin: false });
+      await users.create({ username: 'bob', password: 'password-bob-1', isAdmin: false });
       const backupDir = await mkdtemp(join(tmpdir(), 'bk-cli-dst-'));
       return { dumpFile, backupDir, env: { ...process.env, DATABASE_URL: url!, BACKUP_DIR: backupDir } };
     }

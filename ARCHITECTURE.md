@@ -338,11 +338,15 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   runtime image has no shell, so use the exec form):
   `docker compose exec app node --import tsx src/cli.ts set-password <username>` — prompts for
   the new password when omitted (input is echoed; passing it as an argument would expose it in
-  the container's process list) and invalidates that user's sessions. Routine rotation while
-  logged in: the "Change my password" card on `/admin/users.html`. Last-resort lockout fallback:
-  `docker compose exec db psql -U images -d images -c 'DELETE FROM users;'` re-opens `/setup`
-  (zero-users check) on the next visit to `/login`. That deletes **only** accounts and their
-  cascaded sessions — `posts`, `pages`, and images carry no user FK and are untouched.
+  the container's process list), enforces the same 12–1024 character policy as the web forms
+  (#109), and invalidates that user's sessions. Routine rotation while logged in: the "Change my
+  password" card on `/admin/users.html`. A **login lockout** (100 failed attempts on the account
+  within 15 minutes, from any addresses) lives in process memory: it expires on its own 15 minutes
+  after the last failure, or `docker compose restart app` clears it at once — `set-password` does
+  not, since the CLI is a separate process (see `SECURITY.md`, *Rate limiting*). Last-resort
+  fallback: `docker compose exec db psql -U images -d images -c 'DELETE FROM users;'` re-opens
+  `/setup` (zero-users check) on the next visit to `/login`. That deletes **only** accounts and
+  their cascaded sessions — `posts`, `pages`, and images carry no user FK and are untouched.
 
 ### Image originals & incremental archives
 

@@ -3,7 +3,7 @@ import { basename, join, resolve } from 'node:path';
 import { processImage } from './pipeline.js';
 import { contentHashKey, storeVariants, type StorageOptions, type StoredImage } from './storage.js';
 import type { Dump } from './backup.js';
-import type { UserStore } from './users.js';
+import { passwordPolicyViolation, type UserStore } from './users.js';
 import type { SessionStore } from './sessions.js';
 
 /** Reusable: process an in-memory image and store its variants.
@@ -172,8 +172,11 @@ async function setPasswordMain(username: string | undefined, passwordArg: string
   if (password === undefined) {
     password = await promptLine('New password (input is echoed): ');
   }
-  if (!password) {
-    console.error('the new password must not be empty.');
+  // Same rule as the web paths — the hash rejects it anyway, but checking here
+  // fails before a pool is opened and prints one line instead of a stack (#109).
+  const violation = passwordPolicyViolation(password);
+  if (violation) {
+    console.error(`the new ${violation}.`);
     process.exit(1);
   }
   const { createPool } = await import('./db.js');

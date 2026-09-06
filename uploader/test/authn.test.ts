@@ -20,7 +20,7 @@ async function tinyApp() {
 describe('auth hooks', () => {
   it('loadUser returns null without a cookie and the user with a valid one', async () => {
     const { users, sessions } = await tinyApp();
-    const u = await users.create({ username: 'a', password: 'pw', isAdmin: false });
+    const u = await users.create({ username: 'a', password: 'password123456', isAdmin: false });
     const token = await sessions.create(u.id, 60_000);
     expect(await loadUser({ cookies: {} } as never, users, sessions)).toBeNull();
     const got = await loadUser({ cookies: { [SESSION_COOKIE]: token } } as never, users, sessions);
@@ -30,7 +30,7 @@ describe('auth hooks', () => {
   it('requireAuth: 401 anonymous, 200 with session', async () => {
     const { app, users, sessions } = await tinyApp();
     expect((await app.inject({ method: 'GET', url: '/auth-only' })).statusCode).toBe(401);
-    const u = await users.create({ username: 'a', password: 'pw', isAdmin: false });
+    const u = await users.create({ username: 'a', password: 'password123456', isAdmin: false });
     const token = await sessions.create(u.id, 60_000);
     const res = await app.inject({ method: 'GET', url: '/auth-only', cookies: { sid: token } });
     expect(res.statusCode).toBe(200);
@@ -39,10 +39,10 @@ describe('auth hooks', () => {
   it('requireAdmin: 401 anonymous, 403 author, 200 admin', async () => {
     const { app, users, sessions } = await tinyApp();
     expect((await app.inject({ method: 'GET', url: '/admin-only' })).statusCode).toBe(401);
-    const author = await users.create({ username: 'author', password: 'pw', isAdmin: false });
+    const author = await users.create({ username: 'author', password: 'password123456', isAdmin: false });
     const at = await sessions.create(author.id, 60_000);
     expect((await app.inject({ method: 'GET', url: '/admin-only', cookies: { sid: at } })).statusCode).toBe(403);
-    const admin = await users.create({ username: 'admin', password: 'pw', isAdmin: true });
+    const admin = await users.create({ username: 'admin', password: 'password123456', isAdmin: true });
     const adt = await sessions.create(admin.id, 60_000);
     expect((await app.inject({ method: 'GET', url: '/admin-only', cookies: { sid: adt } })).statusCode).toBe(200);
   });

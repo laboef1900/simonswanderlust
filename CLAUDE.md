@@ -829,6 +829,18 @@ blog/
   proper (zero-TTL flip between the check and undici's connect-time lookup) is narrowed, not
   closed; pinning needs `undici` as a dependency and was declined. See
   `docs/superpowers/specs/2026-09-05-safe-fetch-redirects-design.md` and `SECURITY.md`.
+- **Done:** #109 login lockout redesign + single password policy (2026-09-05) — the per-account
+  lock on `/login` was a self-service denial of service: five failures from anywhere locked the
+  public admin username for 15 minutes, correct password or not, so an unauthenticated client
+  could keep the admin out indefinitely. The budget is now **100 failures / 15 min across all
+  sources**, ten times the per-IP limit, so a single address is cut off long before it can lock
+  anyone while a distributed guess is still bounded to 100 per window (NIST SP 800-63B §5.2.2).
+  Both limiter maps are bounded (10 000 keys, expiry-ordered O(1) eviction that can only forget a
+  counter, never refuse) and usernames are capped at 64 so attacker-sized keys never enter them.
+  The 12–1024 password rule moved into `hashPassword` (`assertPasswordPolicy`), so the routes, both
+  stores and the CLI `set-password` recovery path — which used to accept a 1-character admin
+  password — share one rule. See `docs/superpowers/specs/2026-09-05-login-lockout-design.md` and
+  `SECURITY.md` (*Rate limiting*).
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**
