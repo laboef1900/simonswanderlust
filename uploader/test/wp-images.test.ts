@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { createRehostResume, rehostImage } from '../src/wp-images.js';
+import { createWorkLock } from '../src/work-lock.js';
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'wpimg-')); });
@@ -42,6 +43,96 @@ describe('rehostImage', () => {
   it('refuses to fetch internal addresses (SSRF guard)', async () => {
     const fetchImpl = (async () => new Response(new Uint8Array(1))) as unknown as typeof fetch;
     await expect(rehostImage('http://169.254.169.254/latest/meta-data/', 'trips/t/x', 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl })).rejects.toThrow(/internal/i);
+  });
+});
+
+/**
+ * Issue #95: the importer's encode is a lock participant, like the encode
+ * queue's — a build and an import encode never overlap, and a waiting build
+ * preempts the import at the next photo boundary. The FETCH stays outside.
+ *
+ * @ai-context docs/superpowers/specs/2026-09-05-import-work-lock-design.md
+ */
+describe('rehostImage under the work-lock', () => {
+  const jpegOf = () => sharp({ create: { width: 640, height: 480, channels: 3, background: '#345' } }).jpeg().toBuffer();
+  /** A resolvable gate — the repo's `let release = …; new Promise(r => release = r)` idiom, named. */
+  const gate = () => {
+    let open = (): void => {};
+    const opened = new Promise<void>((r) => { open = r; });
+    return { opened, open };
+  };
+  /**
+   * A real lock whose `runShared` also announces that the encode ASKED for the
+   * lock, and records when each encode actually holds it — promise settlement
+   * order would only reflect microtask scheduling, not lock ownership.
+   */
+  const observedLock = () => {
+    const inner = createWorkLock();
+    const asked = gate();
+    const order: string[] = [];
+    const runShared = async <T,>(fn: () => Promise<T>): Promise<T> => {
+      asked.open();
+      return inner.runShared(async () => {
+        order.push('encode:start');
+        try { return await fn(); } finally { order.push('encode:end'); }
+      });
+    };
+    return { lock: { ...inner, runShared }, asked: asked.opened, order };
+  };
+
+  it('does not encode while a build holds the lock, and finishes once it releases', async () => {
+    const { lock, asked } = observedLock();
+    const buildDone = gate();
+    const build = lock.runExclusive(() => buildDone.opened);
+    await Promise.resolve(); // the build now holds the lock
+    expect(lock.stats().exclusiveRunning).toBe(true);
+
+    const jpeg = await jpegOf();
+    let fetched = false;
+    const fetchImpl = (async () => { fetched = true; return new Response(new Uint8Array(jpeg)); }) as unknown as typeof fetch;
+    const rehost = rehostImage('https://wp/x.jpg', 'trips/t/locked', 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lock });
+
+    await asked; // the download completed and the encode is now queued behind the build
+    expect(fetched).toBe(true); // network I/O is not gated …
+    await expect(readdir(join(dir, 'trips', 't'))).rejects.toBeTruthy(); // … but nothing was written
+    expect(lock.stats().sharedRunning).toBe(0);
+
+    buildDone.open();
+    await build;
+    const r = await rehost;
+    expect(r.width).toBe(640);
+    expect((await readdir(join(dir, 'trips', 't'))).some((n) => n.startsWith('locked'))).toBe(true);
+    expect(lock.stats()).toEqual({ exclusiveRunning: false, exclusiveWaiting: 0, sharedRunning: 0 });
+  });
+
+  it('lets a build start while the import is still downloading — the fetch is outside the lock', async () => {
+    const lock = createWorkLock();
+    const jpeg = await jpegOf();
+    const fetching = gate();
+    const finish = gate();
+    const fetchImpl = (async () => { fetching.open(); await finish.opened; return new Response(new Uint8Array(jpeg)); }) as unknown as typeof fetch;
+    const rehost = rehostImage('https://wp/slow.jpg', 'trips/t/slow', 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lock });
+    await fetching.opened; // mid-download
+
+    let buildRan = false;
+    await lock.runExclusive(async () => { buildRan = true; });
+    expect(buildRan).toBe(true); // did not wait for the download
+
+    finish.open();
+    expect((await rehost).height).toBe(480);
+  });
+
+  it('a build requested mid-encode waits for that one encode, then runs before the next', async () => {
+    const { lock, asked, order } = observedLock();
+    const jpeg = await jpegOf();
+    const fetchImpl = (async () => new Response(new Uint8Array(jpeg))) as unknown as typeof fetch;
+    const first = rehostImage('https://wp/1.jpg', 'trips/t/one', 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lock });
+    await asked; // the first encode holds the lock (nothing else contends for it)
+    expect(lock.stats().sharedRunning).toBe(1);
+    const build = lock.runExclusive(async () => { order.push('build'); });
+    const second = rehostImage('https://wp/2.jpg', 'trips/t/two', 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lock });
+    await Promise.all([first, build, second]);
+    expect(order).toEqual(['encode:start', 'encode:end', 'build', 'encode:start', 'encode:end']);
   });
 });
 

@@ -98,7 +98,9 @@ never the path, and the raw numbers go to stdout. An unreadable statfs skips the
 Encoding runs in a bounded background queue: at most 2 concurrent encodes, a backlog cap that
 returns **429** rather than accepting unbounded work, and a shared lock (`work-lock.ts`) that
 makes a site build and image encoding mutually exclusive so the container cannot OOM with both
-running. Encode failures are recorded as a **fixed enum** (`decode_failed`, `encode_failed`,
+running — the WordPress importer's per-image encodes are lock participants too (#95), so a
+multi-minute import cannot run `sharp` beside `astro build` either; only its network fetches run
+outside the lock. Encode failures are recorded as a **fixed enum** (`decode_failed`, `encode_failed`,
 `write_failed`, `no_space`), never a raw message — libvips embeds filesystem paths in its errors
 and the library UI displays that field.
   Non-admin authors may create and edit drafts but **cannot push content to the public site,

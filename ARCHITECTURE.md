@@ -129,7 +129,8 @@ and legacy files predate the library).
 
 The queue runs at concurrency **2** (the measured throughput plateau) and shares a lock with the
 site builder (`uploader/src/work-lock.ts`) so a build and image encoding are **mutually
-exclusive** — both peak around 2 GB in one container. A waiting build *preempts* the encode
+exclusive** — both peak around 2 GB in one container. The WordPress importer's per-image encodes
+take the same lock as shared holders (#95; its fetches do not). A waiting build *preempts* the encode
 backlog at the next job boundary rather than queueing behind it, because Publish awaits the
 rebuild synchronously in the editor. That mutual exclusion is why `docker-compose.yml`'s
 `mem_limit` is sized as `max(build, encode) + baseline` rather than their sum.

@@ -14,6 +14,7 @@ import {
   type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
 } from './media-store.js';
 import { BacklogFullError, type EncodeQueue } from './encode-queue.js';
+import type { WorkLock } from './work-lock.js';
 import { parseExif } from './exif.js';
 import { diskSpace, insufficientSpace, formatBytes } from './disk.js';
 import type { ReconcileReport } from './media-sync.js';
@@ -62,6 +63,14 @@ export interface ServerConfig {
    * see the @ai-warning on `createReconciler` (#117).
    */
   reconciler?: { run: () => Promise<ReconcileReport> };
+  /**
+   * The ONE process-wide build/encode mutex (issue #95), so the WordPress
+   * importer's encodes never overlap `astro build`. The same instance the
+   * builder and the encode queue were constructed with — a second lock would
+   * silently remove the protection. Optional only so route tests that never
+   * encode need not build one.
+   */
+  workLock?: WorkLock;
   /**
    * The WXR importer. Injectable for the same reason as `loginLimiter` and
    * `reconciler`: the real one's pacing and retry behaviour cannot be observed
@@ -1205,7 +1214,10 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     // gate is per-run state and gives no aggregate guarantee — race
     // storeVariantFiles' non-atomic writes into a variant set mixing two source
     // images, and run two sharp pipelines inside one mem_limit'd container.
-    // Deliberately NOT work-lock: no lock is taken and no queue is involved.
+    // This flag is deliberately NOT the work-lock: single-flight is a per-route
+    // rule, not a build/encode one. The per-image ENCODES inside the run do take
+    // `cfg.workLock` as shared holders (issue #95, see rehostImage), so a
+    // Publish preempts the import at the next photo boundary.
     if (importInFlight) {
       return reply.code(409).send({ error: 'an import is already running; wait for it to finish' });
     }
@@ -1231,6 +1243,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
           // issue #94: the same precondition /upload has, judged on the photos
           // this run will fetch (see importWxr) rather than a known byte count.
           diskSpace: () => diskSpace(cfg.storageDir),
+          // issue #95: encodes under the shared mutex, so they never overlap a build.
+          lock: cfg.workLock,
           log: (msg) => console.log(msg),
         });
       } catch (e) {

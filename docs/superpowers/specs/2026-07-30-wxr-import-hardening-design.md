@@ -405,7 +405,9 @@ leave a **mixed variant set from two different source images**; and two `sharp` 
 the image host together.
 
 **Control:** a module-scoped in-flight flag returning **409** before the multipart body is read.
-This is emphatically *not* `work-lock.ts` — no lock is acquired and no queue is involved.
+This is emphatically *not* `work-lock.ts` — no lock is acquired and no queue is involved. (Since
+#95 the per-image *encodes* inside a run do take the lock as shared holders; the single-flight
+flag itself is unchanged.)
 
 ### M3 — A malicious or corrupted `/data/images`
 
@@ -638,9 +640,9 @@ today, so any assertion worth keeping is added to `admin-pages.test.ts` delibera
 - **Import encodes do not take `work-lock`.** `rehostImage` → `processImage` runs `sharp` outside
   the shared build/encode mutex, so a long import can encode concurrently with an in-process
   `astro build`, both peaking near 2 GB in a 4608 MiB container. The elapsed gate *narrows* this
-  window relative to a flat sleep, but does not close it. Refusing to start an import while the
-  exclusive lock is held would be a few lines against `workLock.stats()`; it is excluded here
-  because it belongs with the async move. Filed separately.
+  window relative to a flat sleep, but does not close it. Filed as #95 — **closed 2026-09-06**:
+  `rehostImage` runs the encode under `workLock.runShared()`, the fetch stays outside; see
+  `2026-09-05-import-work-lock-design.md`.
 
 ## Definition of done
 
