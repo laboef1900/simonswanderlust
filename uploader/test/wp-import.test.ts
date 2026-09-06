@@ -692,6 +692,60 @@ describe('importWxr image cap', () => {
   });
 });
 
+/**
+ * Issue #125: Turndown writes `![alt](src "title")`, escapes parens, and wraps
+ * a spaced destination in `<…>`. The importer must fetch the URL Turndown
+ * encoded, not the encoded text.
+ */
+describe('importWxr Turndown image destinations', () => {
+  it('re-hosts a titled image by its real URL and rewrites the reference without the title', async () => {
+    const h = harness();
+    const store = memoryPostStore();
+    const s = await run(pairOf('g', 'de-1', 'en-1', '<img src="https://wp/uploads/a.jpg" alt="Beach" title="IMG_0001">'), h, {}, store);
+    expect(h.calls).toEqual(['https://wp/uploads/a.jpg']);
+    expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+    expect(s.warnings).toEqual([]);
+    const pair = (await store.get((await store.list())[0]!.translationKey))!;
+    expect(pair.de.bodyMarkdown).toBe('![Beach](https://img/trips/de-1/a)');
+    expect(pair.de.images['https://img/trips/de-1/a']).toEqual({ width: 100, height: 80 });
+  });
+
+  it('decodes escaped parens and a <…>-wrapped destination, and the pre-flight count agrees', async () => {
+    const h = harness();
+    const store = memoryPostStore();
+    const html = '<img src="https://wp/u/p-(1).jpg" alt=""><img src="https://wp/u/my photo.jpg" alt="">';
+    // maxImages: 2 — if the pre-flight count saw a different set than buildLocale fetches, this would throw.
+    const s = await run(pairOf('g', 'de-1', 'en-1', html), h, { maxImages: 2 }, store);
+    expect(h.calls).toEqual(['https://wp/u/p-(1).jpg', 'https://wp/u/my photo.jpg']);
+    expect(s.images).toEqual({ total: 2, hosted: 2, failed: 0 });
+    const pair = (await store.get((await store.list())[0]!.translationKey))!;
+    expect(pair.de.bodyMarkdown).not.toContain('https://wp/');
+  });
+
+  it('expands a classic [gallery ids] shortcode against the export\'s attachments and re-hosts it', async () => {
+    const h = harness();
+    const store = memoryPostStore();
+    const xmlWithGallery = wxr([
+      `  <item>
+    <title>one</title>
+    <wp:post_id><![CDATA[41]]></wp:post_id>
+    <wp:post_type><![CDATA[attachment]]></wp:post_type>
+    <wp:status><![CDATA[inherit]]></wp:status>
+    <wp:attachment_url><![CDATA[https://wp/u/one.jpg]]></wp:attachment_url>
+  </item>`,
+      item('de', 'de-1', 'g', '<p>Intro</p>[gallery ids="41,42"]'),
+      item('en', 'en-1', 'g', '<p>x</p>'),
+    ].join('\n'));
+    const s = await run(xmlWithGallery, h, { maxImages: 1 }, store);
+    expect(h.calls).toEqual(['https://wp/u/one.jpg']);
+    expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+    const pair = (await store.get((await store.list())[0]!.translationKey))!;
+    expect(pair.de.bodyMarkdown).toContain('```gallery\nhttps://img/trips/de-1/one\n```'); // WxH lifted into `images` by the store
+    expect(pair.de.images['https://img/trips/de-1/one']).toEqual({ width: 100, height: 80 });
+    expect(pair.de.bodyMarkdown).not.toContain('gallery ids');
+  });
+});
+
 describe('importWxr reporting', () => {
   it('counts distinct photos per pair, so hosted + failed === total', async () => {
     const h = harness({ fail: (u) => (u.includes('b.jpg') ? new FetchError('x', 'blocked') : null) });
