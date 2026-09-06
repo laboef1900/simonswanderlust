@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 export interface RateLimiter {
@@ -8,25 +9,70 @@ export interface RateLimiter {
 export interface RateLimitOptions {
   max: number;
   windowMs: number;
+  /**
+   * Hard cap on tracked keys. Keys are attacker-chosen (any string on the
+   * wire, any address behind the proxy), so without a cap the map is a
+   * memory sink; at the cap the oldest window is evicted, which can only
+   * ever forget a counter, never lock anyone out (#109).
+   */
+  maxKeys?: number;
   now?: () => number;
+}
+
+export const DEFAULT_MAX_KEYS = 10_000;
+
+interface WindowEntry { count: number; resetAt: number }
+
+/**
+ * Fixed-window counters with a hard size cap. Every window has the same
+ * length, so insertion order IS expiry order: `open` re-inserts the key at the
+ * back, expired entries are swept from the front, and when the cap is reached
+ * the front (earliest-expiring, live) entry is evicted — all amortised O(1),
+ * with no full-map sweep an attacker could trigger per request.
+ */
+function windowMap(windowMs: number, maxKeys: number) {
+  const entries = new Map<string, WindowEntry>();
+  return {
+    /** The live entry for `key`, dropping it if its window has passed. */
+    live(key: string, t: number): WindowEntry | undefined {
+      const e = entries.get(key);
+      if (!e) return undefined;
+      if (t >= e.resetAt) {
+        entries.delete(key);
+        return undefined;
+      }
+      return e;
+    },
+    /** Starts a fresh window for `key` with one hit, evicting to stay under the cap. */
+    open(key: string, t: number): WindowEntry {
+      entries.delete(key);
+      for (const [k, e] of entries) {
+        if (t < e.resetAt && entries.size < maxKeys) break;
+        entries.delete(k);
+      }
+      const e = { count: 1, resetAt: t + windowMs };
+      entries.set(key, e);
+      return e;
+    },
+    delete(key: string): void {
+      entries.delete(key);
+    },
+  };
 }
 
 /**
  * Minimal in-memory fixed-window limiter — no dependency, fits the project's
  * memory-store idiom. Intended for the small set of auth endpoints, keyed by
- * client IP. Memory is bounded by an opportunistic sweep of expired entries.
+ * client IP.
  */
-export function fixedWindowLimiter({ max, windowMs, now = () => Date.now() }: RateLimitOptions): RateLimiter {
-  const hits = new Map<string, { count: number; resetAt: number }>();
+export function fixedWindowLimiter({ max, windowMs, maxKeys = DEFAULT_MAX_KEYS, now = () => Date.now() }: RateLimitOptions): RateLimiter {
+  const hits = windowMap(windowMs, maxKeys);
   return {
     check(key) {
       const t = now();
-      if (hits.size > 10_000) {
-        for (const [k, v] of hits) if (v.resetAt <= t) hits.delete(k);
-      }
-      const e = hits.get(key);
-      if (!e || t >= e.resetAt) {
-        hits.set(key, { count: 1, resetAt: t + windowMs });
+      const e = hits.live(key, t);
+      if (!e) {
+        hits.open(key, t);
         return true;
       }
       if (e.count >= max) return false;
@@ -48,7 +94,11 @@ export function rateLimitPreHandler(limiter: RateLimiter) {
 /**
  * Per-account failure limiter. The key is whatever identifies the account at
  * the call site: the submitted username on /login, the session's user id on
- * /users/me/password (the caller is already authenticated there).
+ * /users/me/password (the caller is already authenticated there). Failures
+ * are counted across ALL sources — this is the defence against a brute force
+ * spread over many addresses, which the per-IP limiter cannot see. Its
+ * flip side is that anyone who can reach the budget can lock the account, so
+ * the /login budget is set well above what one address can spend (#109).
  */
 export interface AccountLimiter {
   /** Returns true if the account is locked due to excessive failed attempts. */
@@ -60,37 +110,37 @@ export interface AccountLimiter {
 }
 
 /**
- * In-memory account lockout limiter for defending against distributed-IP brute-force attacks.
+ * Longest account key stored verbatim. Anything longer is stored as `#` +
+ * SHA-256 hex: 65 characters, so it can never equal a verbatim key.
  */
-export function accountLockoutLimiter({ max = 5, windowMs = 900_000, now = () => Date.now() }: Partial<RateLimitOptions> = {}): AccountLimiter {
-  const failures = new Map<string, { count: number; resetAt: number }>();
-  const normalize = (u: string) => u.toLowerCase().trim();
+export const MAX_KEY_LENGTH = 64;
+
+/**
+ * In-memory account lockout limiter: `max` failures inside one window lock the
+ * account until the window ends. Bounded in key COUNT like `fixedWindowLimiter`
+ * and in key LENGTH by hashing over-long accounts, so a 1 MiB username costs the
+ * map 64 characters, while an account that really has such a name (created
+ * before #109 capped them) keeps its own lockout budget.
+ */
+export function accountLockoutLimiter({ max = 5, windowMs = 900_000, maxKeys = DEFAULT_MAX_KEYS, now = () => Date.now() }: Partial<RateLimitOptions> = {}): AccountLimiter {
+  const failures = windowMap(windowMs, maxKeys);
+  const normalize = (u: string) => {
+    const key = u.toLowerCase().trim();
+    return key.length <= MAX_KEY_LENGTH ? key : `#${createHash('sha256').update(key).digest('hex')}`;
+  };
   return {
     isLocked(username) {
       if (!username) return false;
-      const key = normalize(username);
-      const t = now();
-      const entry = failures.get(key);
-      if (!entry) return false;
-      if (t >= entry.resetAt) {
-        failures.delete(key);
-        return false;
-      }
-      return entry.count >= max;
+      const entry = failures.live(normalize(username), now());
+      return entry !== undefined && entry.count >= max;
     },
     recordFailure(username) {
       if (!username) return;
       const key = normalize(username);
       const t = now();
-      if (failures.size > 10_000) {
-        for (const [k, v] of failures) if (v.resetAt <= t) failures.delete(k);
-      }
-      const entry = failures.get(key);
-      if (!entry || t >= entry.resetAt) {
-        failures.set(key, { count: 1, resetAt: t + windowMs });
-      } else {
-        entry.count++;
-      }
+      const entry = failures.live(key, t);
+      if (entry) entry.count++;
+      else failures.open(key, t);
     },
     recordSuccess(username) {
       if (!username) return;

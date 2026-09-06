@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { uploadFile, resetPassword } from '../src/cli.js';
-import { memoryUserStore, verifyPassword } from '../src/users.js';
+import { memoryUserStore, verifyPassword, PasswordPolicyError } from '../src/users.js';
 import { memorySessionStore } from '../src/sessions.js';
 import { runCli, envWithoutDatabaseUrl } from './run-cli.js';
 
@@ -62,18 +62,29 @@ describe('resetPassword', () => {
   it('updates the hash (case-insensitive lookup) and destroys the user\'s sessions', async () => {
     const users = memoryUserStore();
     const sessions = memorySessionStore();
-    const u = await users.create({ username: 'Simon', password: 'old-pw', isAdmin: true });
+    const u = await users.create({ username: 'Simon', password: 'old-password-1', isAdmin: true });
     const token = await sessions.create(u.id, 60_000);
-    await resetPassword(users, sessions, 'simon', 'new-pw');
+    await resetPassword(users, sessions, 'simon', 'new-password-1');
     const after = await users.findById(u.id);
-    expect(verifyPassword('new-pw', after!.passwordHash)).toBe(true);
-    expect(verifyPassword('old-pw', after!.passwordHash)).toBe(false);
+    expect(verifyPassword('new-password-1', after!.passwordHash)).toBe(true);
+    expect(verifyPassword('old-password-1', after!.passwordHash)).toBe(false);
     expect(await sessions.find(token)).toBeNull();
   });
 
   it('throws for an unknown username', async () => {
-    await expect(resetPassword(memoryUserStore(), memorySessionStore(), 'ghost', 'pw'))
+    await expect(resetPassword(memoryUserStore(), memorySessionStore(), 'ghost', 'password123456'))
       .rejects.toThrow('user not found');
+  });
+
+  it('rejects a policy-violating password and keeps the old one working (#109)', async () => {
+    // The documented lockout-recovery path used to accept `set-password simon x`.
+    const users = memoryUserStore();
+    const sessions = memorySessionStore();
+    const u = await users.create({ username: 'simon', password: 'old-password-1', isAdmin: true });
+    const token = await sessions.create(u.id, 60_000);
+    await expect(resetPassword(users, sessions, 'simon', 'x')).rejects.toBeInstanceOf(PasswordPolicyError);
+    expect(verifyPassword('old-password-1', (await users.findById(u.id))!.passwordHash)).toBe(true);
+    expect(await sessions.find(token)).not.toBeNull();
   });
 });
 
@@ -95,12 +106,19 @@ describe('set-password CLI wiring (spawned process)', () => {
 
   it('EOF on the password prompt exits 1 cleanly instead of hanging', async () => {
     // runCli closes stdin immediately, so rl.question() sees EOF without a line —
-    // this pins the Promise.race('close') fallback and the empty-password guard.
+    // this pins the Promise.race('close') fallback and the policy guard on ''.
     const r = await runCli(['set-password', 'simon'],
       { ...process.env, DATABASE_URL: 'postgres://nobody:nope@127.0.0.1:1/nope' });
     expect(r.code).toBe(1);
     expect(r.stdout).toContain('New password');
-    expect(r.stderr).toContain('the new password must not be empty');
+    expect(r.stderr).toContain('the new password must be between 12 and 1024 characters');
+  }, 30_000);
+
+  it('a too-short argv password exits 1 before any database work (#109)', async () => {
+    const r = await runCli(['set-password', 'simon', 'x'],
+      { ...process.env, DATABASE_URL: 'postgres://nobody:nope@127.0.0.1:1/nope' });
+    expect(r.code).toBe(1);
+    expect(r.stderr.trim()).toBe('the new password must be between 12 and 1024 characters.');
   }, 30_000);
 });
 

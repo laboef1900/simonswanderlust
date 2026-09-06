@@ -8,13 +8,39 @@ const KEYLEN = 64;
 
 export const MAX_PASSWORD_LENGTH = 1024;
 export const MIN_PASSWORD_LENGTH = 12;
+/**
+ * Usernames are also rate-limiter keys and `lower(username)` lookup inputs;
+ * capping them bounds both (#109). 64 is generous for a login name.
+ */
+export const MAX_USERNAME_LENGTH = 64;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function hashPassword(password: string): string {
-  if (password.length > MAX_PASSWORD_LENGTH) {
-    throw new Error(`Password exceeds maximum length of ${MAX_PASSWORD_LENGTH} characters`);
+export class PasswordPolicyError extends Error {}
+
+/**
+ * The one password rule (length only — ASVS 5.0 §6.2.5 forbids composition
+ * rules). Returns the user-facing violation, or null when the password is
+ * acceptable; the routes turn it into a 400 and the CLI into an exit 1.
+ */
+export function passwordPolicyViolation(password: string): string | null {
+  if (password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
+    return `password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} characters`;
   }
+  return null;
+}
+
+/**
+ * @throws PasswordPolicyError — enforced inside `hashPassword`, so every
+ * creation and reset path (routes, both stores, the CLI) shares it (#109).
+ */
+export function assertPasswordPolicy(password: string): void {
+  const violation = passwordPolicyViolation(password);
+  if (violation) throw new PasswordPolicyError(violation);
+}
+
+export function hashPassword(password: string): string {
+  assertPasswordPolicy(password);
   const salt = randomBytes(16);
   const hash = scryptSync(password, salt, KEYLEN, { N, r: R, p: P });
   return `scrypt$${N}$${R}$${P}$${salt.toString('hex')}$${hash.toString('hex')}`;

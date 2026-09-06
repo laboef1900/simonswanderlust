@@ -18,7 +18,7 @@ import type { WorkLock } from './work-lock.js';
 import { parseExif } from './exif.js';
 import { diskSpace, insufficientSpace, formatBytes } from './disk.js';
 import type { ReconcileReport } from './media-sync.js';
-import { verifyPassword, type UserStore, UserExistsError, DUMMY_STORED_HASH, MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from './users.js';
+import { verifyPassword, type UserStore, UserExistsError, DUMMY_STORED_HASH, MAX_PASSWORD_LENGTH, MAX_USERNAME_LENGTH, passwordPolicyViolation } from './users.js';
 import type { SessionStore } from './sessions.js';
 import {
   SESSION_TTL_MS, loadUser, requireAuth, requireAdmin,
@@ -169,7 +169,14 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   // Per-IP throttle for the unauthenticated auth endpoints (brute-force defense).
   const loginLimiter = cfg.loginLimiter ?? fixedWindowLimiter({ max: 10, windowMs: 900_000 });
-  const accountLimiter = cfg.accountLimiter ?? accountLockoutLimiter();
+  // @ai-note The /login account budget counts failures from EVERY source and
+  // is deliberately 10x the per-IP budget: one address is cut off at 10 by
+  // limitAuth long before it can lock the account, so locking the admin out
+  // needs a sustained, distributed attack — yet 100 guesses / 15 min is still
+  // no threat to a 12+ character password (NIST SP 800-63B §5.2.2 allows up
+  // to 100). The old max of 5 let anyone lock the admin out with 5 requests
+  // (#109). See docs/superpowers/specs/2026-09-05-login-lockout-design.md.
+  const accountLimiter = cfg.accountLimiter ?? accountLockoutLimiter({ max: 100 });
   const passwordLimiter = cfg.passwordLimiter ?? accountLockoutLimiter();
   // issue #92: memory-backed by default so route tests need no database;
   // main.ts passes the Postgres-backed runner whose rows survive a restart.
@@ -707,9 +714,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const username = String(b.username ?? '').trim();
     const password = String(b.password ?? '');
     if (!username || !password) return reply.code(400).send({ error: 'username and password are required' });
-    if (password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
-      return reply.code(400).send({ error: `password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} characters` });
-    }
+    if (username.length > MAX_USERNAME_LENGTH) return reply.code(400).send({ error: `username must be at most ${MAX_USERNAME_LENGTH} characters` });
+    const violation = passwordPolicyViolation(password);
+    if (violation) return reply.code(400).send({ error: violation });
     const user = await users.create({ username, password, isAdmin: true });
     const token = await sessions.create(user.id, SESSION_TTL_MS);
     setSessionCookie(reply, token, isSecureRequest(req));
@@ -720,6 +727,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const b = (req.body ?? {}) as { username?: unknown; password?: unknown };
     const username = String(b.username ?? '').trim();
     const password = String(b.password ?? '');
+    // Looked up whatever its length: accounts created before #109 capped new
+    // usernames at 64 may be longer, and must keep signing in. The limiter
+    // hashes over-long keys, so the length costs the map nothing.
     const user = await users.findByUsername(username);
     // A locked account is refused BEFORE scrypt runs, so a client that already
     // tripped the lockout cannot keep driving ~16 MiB / tens-of-ms hashes on
@@ -735,7 +745,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const isValid = verifyPassword(password, storedHash);
 
     if (!user || !isValid) {
-      if (username) accountLimiter.recordFailure(username);
+      accountLimiter.recordFailure(username);
       return reply.code(401).send({ error: 'invalid username or password' });
     }
 
@@ -763,9 +773,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const password = String(b.password ?? '');
     const isAdmin = Boolean(b.isAdmin);
     if (!username || !password) return reply.code(400).send({ error: 'username and password are required' });
-    if (password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
-      return reply.code(400).send({ error: `password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} characters` });
-    }
+    if (username.length > MAX_USERNAME_LENGTH) return reply.code(400).send({ error: `username must be at most ${MAX_USERNAME_LENGTH} characters` });
+    const violation = passwordPolicyViolation(password);
+    if (violation) return reply.code(400).send({ error: violation });
     try {
       const user = await users.create({ username, password, isAdmin });
       return reply.send({ id: user.id, username: user.username, isAdmin: user.isAdmin, createdAt: user.createdAt });
@@ -799,9 +809,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (!currentPassword || !newPassword) {
       return reply.code(400).send({ error: 'current and new password are required' });
     }
-    if (newPassword.length < MIN_PASSWORD_LENGTH || newPassword.length > MAX_PASSWORD_LENGTH || currentPassword.length > MAX_PASSWORD_LENGTH) {
-      return reply.code(400).send({ error: `new password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} characters` });
-    }
+    const violation = passwordPolicyViolation(newPassword);
+    if (violation) return reply.code(400).send({ error: `new ${violation}` });
+    if (currentPassword.length > MAX_PASSWORD_LENGTH) return reply.code(400).send({ error: 'current password is incorrect' });
     const user = req.authUser ? await users.findById(req.authUser.id) : null;
     if (!user) return reply.code(401).send({ error: 'unauthorized' });
     if (passwordLimiter.isLocked(user.id)) {

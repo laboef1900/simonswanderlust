@@ -1,25 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { hashPassword, verifyPassword, memoryUserStore, UserExistsError, DUMMY_STORED_HASH } from '../src/users.js';
+import { hashPassword, verifyPassword, memoryUserStore, UserExistsError, DUMMY_STORED_HASH, PasswordPolicyError } from '../src/users.js';
 
 describe('password hashing', () => {
   it('produces a scrypt string that is not the plaintext', () => {
-    const h = hashPassword('hunter2');
+    const h = hashPassword('hunter2hunter2');
     expect(h.startsWith('scrypt$')).toBe(true);
-    expect(h).not.toContain('hunter2');
+    expect(h).not.toContain('hunter2hunter2');
   });
   it('verifies the correct password and rejects a wrong one', () => {
-    const h = hashPassword('hunter2');
-    expect(verifyPassword('hunter2', h)).toBe(true);
+    const h = hashPassword('hunter2hunter2');
+    expect(verifyPassword('hunter2hunter2', h)).toBe(true);
     expect(verifyPassword('nope', h)).toBe(false);
   });
   it('rejects a malformed stored hash', () => {
     expect(verifyPassword('x', 'not-a-hash')).toBe(false);
   });
-  it('rejects passwords exceeding maximum allowed length', () => {
+  it('hashPassword enforces the length policy on both ends (the stores and the CLI inherit it)', () => {
     const longPassword = 'a'.repeat(1025);
-    expect(() => hashPassword(longPassword)).toThrow(/maximum length/);
-    const validHash = hashPassword('validPassword');
+    expect(() => hashPassword(longPassword)).toThrow(PasswordPolicyError);
+    expect(() => hashPassword('elevenchars')).toThrow(/between 12 and 1024 characters/);
+    expect(() => hashPassword('twelve-chars')).not.toThrow();
+    const validHash = hashPassword('validPassword1');
     expect(verifyPassword(longPassword, validHash)).toBe(false);
+  });
+  it('setPassword with a policy-violating password leaves the old hash valid', async () => {
+    const s = memoryUserStore();
+    const u = await s.create({ username: 'a', password: 'old-password-1', isAdmin: false });
+    await expect(s.setPassword(u.id, 'x')).rejects.toBeInstanceOf(PasswordPolicyError);
+    expect(verifyPassword('old-password-1', (await s.findById(u.id))!.passwordHash)).toBe(true);
   });
   it('exports a valid DUMMY_STORED_HASH for timing-safe user checks', () => {
     expect(typeof DUMMY_STORED_HASH).toBe('string');
@@ -31,7 +39,7 @@ describe('memoryUserStore', () => {
   it('creates, counts, finds (case-insensitive) and lists', async () => {
     const s = memoryUserStore();
     expect(await s.count()).toBe(0);
-    const u = await s.create({ username: 'Simon', password: 'pw', isAdmin: true });
+    const u = await s.create({ username: 'Simon', password: 'password123456', isAdmin: true });
     expect(u.isAdmin).toBe(true);
     expect(await s.count()).toBe(1);
     expect(await s.countAdmins()).toBe(1);
@@ -41,25 +49,25 @@ describe('memoryUserStore', () => {
   });
   it('rejects a duplicate username case-insensitively', async () => {
     const s = memoryUserStore();
-    await s.create({ username: 'Simon', password: 'pw', isAdmin: false });
-    await expect(s.create({ username: 'simon', password: 'x', isAdmin: false })).rejects.toBeInstanceOf(UserExistsError);
+    await s.create({ username: 'Simon', password: 'password123456', isAdmin: false });
+    await expect(s.create({ username: 'simon', password: 'password-x-1234', isAdmin: false })).rejects.toBeInstanceOf(UserExistsError);
   });
   it('removes a user', async () => {
     const s = memoryUserStore();
-    const u = await s.create({ username: 'a', password: 'pw', isAdmin: false });
+    const u = await s.create({ username: 'a', password: 'password123456', isAdmin: false });
     await s.remove(u.id);
     expect(await s.count()).toBe(0);
   });
   it('setPassword replaces the stored hash (old rejected, new verifies)', async () => {
     const s = memoryUserStore();
-    const u = await s.create({ username: 'a', password: 'old-pw', isAdmin: false });
-    await s.setPassword(u.id, 'new-pw');
+    const u = await s.create({ username: 'a', password: 'old-password-1', isAdmin: false });
+    await s.setPassword(u.id, 'new-password-1');
     const after = await s.findById(u.id);
-    expect(verifyPassword('old-pw', after!.passwordHash)).toBe(false);
-    expect(verifyPassword('new-pw', after!.passwordHash)).toBe(true);
+    expect(verifyPassword('old-password-1', after!.passwordHash)).toBe(false);
+    expect(verifyPassword('new-password-1', after!.passwordHash)).toBe(true);
   });
   it('setPassword throws for an unknown id', async () => {
     const s = memoryUserStore();
-    await expect(s.setPassword('nope', 'pw')).rejects.toThrow('user not found');
+    await expect(s.setPassword('nope', 'password123456')).rejects.toThrow('user not found');
   });
 });
