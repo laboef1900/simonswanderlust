@@ -189,6 +189,24 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       created_at timestamptz NOT NULL DEFAULT now()
     )
   `);
+  // @ai-note import_jobs (issue #92) is OPERATIONAL state, not content: the
+  // progress and outcome of WordPress imports, so GET /import/status can tell
+  // the truth across a restart. Deliberately excluded from the DB backup and
+  // untouched by restore; pruned to the newest rows on insert (import-jobs.ts).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS import_jobs (
+      id          uuid PRIMARY KEY,
+      status      text NOT NULL CHECK (status IN ('running','done','failed','interrupted')),
+      started_by  text NOT NULL,
+      started_at  timestamptz NOT NULL DEFAULT now(),
+      updated_at  timestamptz NOT NULL DEFAULT now(),
+      finished_at timestamptz,
+      progress    jsonb NOT NULL,
+      summary     jsonb,
+      error       text
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS import_jobs_started_idx ON import_jobs (started_at DESC)`);
 
   // --- column migrations -----------------------------------------------------
   // @ai-note Schema evolution convention (issue #32): `CREATE TABLE IF NOT

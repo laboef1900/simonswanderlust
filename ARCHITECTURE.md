@@ -213,6 +213,14 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
   and `uploaded_by` (FK, `ON DELETE SET NULL`).
 - **`media_folders`** — `path` primary key; the single source of truth for the folder tree
   (every write that sets a `folder` upserts the row and its ancestors).
+- **`import_jobs`** — one row per WordPress import (#92): `status` (`running` / `done` /
+  `failed` / `interrupted`), `started_by`, timestamps, `progress` (jsonb counters) and the
+  final `summary`. Operational state, not content — **excluded from the DB backup** and untouched
+  by restore, pruned to the newest 20 rows. `POST /import` runs the pre-flight synchronously and
+  answers 202 with the job; `GET /import/status` serves the running job's live counters from
+  memory, else the newest row. Boot marks a row the previous process left `running` as
+  `interrupted` (`importJobs.recover()`, before `listen()`); the recovery is running the import
+  again, which resumes from disk.
 
 > **The filesystem stays the source of truth for a file's existence.** A `media` row is metadata
 > *about* a file under `STORAGE_DIR`, never the other way round — which is what preserves the

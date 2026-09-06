@@ -8,6 +8,7 @@ import { pgPostStore } from './posts.js';
 import { pgPageStore } from './pages.js';
 import { bootstrapRelease, createSiteBuilder } from './build.js';
 import { createDbBackup, isBackupDue } from './backup.js';
+import { createImportRunner, pgImportJobStore } from './import-jobs.js';
 import { createShutdown } from './shutdown.js';
 import { makeDbCheck } from './health.js';
 import { createWorkLock } from './work-lock.js';
@@ -31,6 +32,10 @@ const users = pgUserStore(pool);
 const sessions = pgSessionStore(pool);
 const posts = pgPostStore(pool);
 const pages = pgPageStore(pool);
+// issue #92: a job the previous process left `running` is marked interrupted
+// BEFORE listen(), so no request can observe a stale row as "busy".
+const importJobs = createImportRunner({ store: pgImportJobStore(pool) });
+await importJobs.recover();
 
 const baseUrl = process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com';
 let imgHost: string;
@@ -99,6 +104,7 @@ const app = buildServer({
   settings,
   posts,
   pages,
+  importJobs,
   media,
   encodeQueue,
   workLock,

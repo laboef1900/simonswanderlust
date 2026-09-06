@@ -454,7 +454,41 @@ async function buildLocale(
   return { locale: p.locale, slug: p.slug, title: p.title, excerpt: p.excerpt, country: '', heroImage, bodyMarkdown: body, images };
 }
 
+/** Live counters for a running import (issue #92). `planned` is fixed at pre-flight. */
+export interface ImportProgress {
+  groups: { total: number; done: number };
+  images: { planned: number; hosted: number; failed: number };
+}
+
+/**
+ * A parsed, validated, pre-flighted import that has not fetched anything yet.
+ * `groups` counts EVERY group in the export (including those already rejected
+ * or skipped as published), so the route can 400 an export with nothing in it
+ * before starting a job; `planned` is what `run()` will do.
+ */
+export interface PreparedImport {
+  groups: number;
+  planned: ImportProgress;
+  /**
+   * Perform the import. `onProgress` fires after every image outcome and every
+   * group outcome with the same object, mutated in place — copy it if you keep it.
+   */
+  run(onProgress?: (p: ImportProgress) => void): Promise<ImportSummary>;
+}
+
+/** The whole import in one call — the pre-#92 shape, kept for the CLI and tests. */
 export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSummary> {
+  return (await prepareImport(xml, deps)).run();
+}
+
+/**
+ * Everything that can REFUSE the export happens here, synchronously from the
+ * route's point of view, and keeps its status code: no groups (400), over the
+ * distinct-image cap (400, #96), not enough free space (507, #94). What comes
+ * back is a `run()` that performs the multi-minute part off the request path
+ * (issue #92).
+ */
+export async function prepareImport(xml: string, deps: ImportDeps): Promise<PreparedImport> {
   const { attachments, posts } = parseWxr(xml);
   const baseRehost = deps.rehost ?? ((url, key, alt) => rehostImage(url, key, alt, { storageDir: deps.storageDir, baseUrl: deps.baseUrl, lock: deps.lock }));
   const log = deps.log ?? ((msg: string) => console.log(msg));
@@ -499,6 +533,9 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
     return hit;
   };
 
+  /** Progress emitter, bound by `run()`; a no-op until then. */
+  let tick = (): void => {};
+
   /**
    * Resume from disk, count, and report — the one place that sees exactly one
    * call per distinct (pair, url), because `sharedRehost` sits above it.
@@ -510,13 +547,15 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
   const runRehost: RehostFn = async (url, key, alt) => {
     images.total++;
     const already = await lookupResume(key);
-    if (already) { images.hosted++; return already; }
+    if (already) { images.hosted++; tick(); return already; }
     try {
       const r = await resilient(url, key, alt);
       images.hosted++;
+      tick();
       return r;
     } catch (e) {
       images.failed++;
+      tick();
       warnings.push(`image ${url} (${key}): ${failureReason(e)}`);
       log(`import: ${key} <- ${url} failed: ${(e as Error).message}`);
       throw e;
@@ -620,30 +659,50 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
     }
   }
 
-  for (const { de, en, prior } of pending) {
-    try {
-      // One cache per pair: de and en describe the same trip and share photos.
-      const pairRehost = sharedRehost(runRehost);
-      const pair: PostPair = {
-        translationKey: prior?.translationKey ?? '',
-        status: 'draft',
-        shared: { date: de.date, countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } },
-        de: await buildLocale(de, attachments, pairRehost),
-        en: await buildLocale(en, attachments, pairRehost),
-      };
-      await deps.postStore.upsertDraft(pair);
-      if (prior) summary.updated++; else summary.imported++;
-    } catch (e) { summary.failed++; warnings.push(`${de.slug}/${en.slug}: ${(e as Error).message}`); }
-  }
+  const progress: ImportProgress = {
+    groups: { total: pending.length, done: 0 },
+    images: { planned: distinct, hosted: 0, failed: 0 },
+  };
 
-  for (const notice of resilient.notices) warnings.pushPriority(notice);
+  let started = false;
+  const run = async (onProgress?: (p: ImportProgress) => void): Promise<ImportSummary> => {
+    if (started) throw new Error('a prepared import can only run once');
+    started = true;
+    tick = () => {
+      progress.images.hosted = images.hosted;
+      progress.images.failed = images.failed;
+      onProgress?.(progress);
+    };
+    for (const { de, en, prior } of pending) {
+      try {
+        // One cache per pair: de and en describe the same trip and share photos.
+        const pairRehost = sharedRehost(runRehost);
+        const pair: PostPair = {
+          translationKey: prior?.translationKey ?? '',
+          status: 'draft',
+          shared: { date: de.date, countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } },
+          de: await buildLocale(de, attachments, pairRehost),
+          en: await buildLocale(en, attachments, pairRehost),
+        };
+        await deps.postStore.upsertDraft(pair);
+        if (prior) summary.updated++; else summary.imported++;
+      } catch (e) { summary.failed++; warnings.push(`${de.slug}/${en.slug}: ${(e as Error).message}`); }
+      progress.groups.done++;
+      tick();
+    }
 
-  // @ai-note stdout, not only the response. A real export is a multi-minute
-  // single request that the reverse proxy or the browser usually abandons
-  // (issue #72), so the response is the one channel the author will not see.
-  log(`import finished: imported=${summary.imported} updated=${summary.updated} `
-    + `skippedPublished=${summary.skippedPublished} rejected=${summary.rejected} failed=${summary.failed} `
-    + `images=${images.hosted}/${images.total} hosted, ${images.failed} failed`);
+    for (const notice of resilient.notices) warnings.pushPriority(notice);
 
-  return { ...summary, images, warnings: warnings.finish() };
+    // @ai-note stdout, not only the response. Before #92 a real export was a
+    // multi-minute single request that the reverse proxy or the browser usually
+    // abandoned (issue #72); the job row and GET /import/status now carry the
+    // summary too, but the log line stays the channel that survives everything.
+    log(`import finished: imported=${summary.imported} updated=${summary.updated} `
+      + `skippedPublished=${summary.skippedPublished} rejected=${summary.rejected} failed=${summary.failed} `
+      + `images=${images.hosted}/${images.total} hosted, ${images.failed} failed`);
+
+    return { ...summary, images, warnings: warnings.finish() };
+  };
+
+  return { groups: groups.size, planned: progress, run };
 }

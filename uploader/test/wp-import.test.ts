@@ -4,7 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { importWxr, ImportTooLargeError, ImportInsufficientSpaceError, DEFAULT_MAX_IMAGES, type ImportDeps } from '../src/wp-import.js';
+import { importWxr, prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, DEFAULT_MAX_IMAGES, type ImportDeps } from '../src/wp-import.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { createRehostResume, rehostImage, type RehostResult } from '../src/wp-images.js';
 import { FetchError } from '../src/safe-fetch.js';
@@ -988,6 +988,87 @@ describe('importWxr free-space precondition', () => {
     await expect(run(three(), h, { maxImages: 2, diskSpace: async () => { probed = true; return { free: 0, total: 1 }; } }))
       .rejects.toBeInstanceOf(ImportTooLargeError);
     expect(probed).toBe(false);
+  });
+});
+
+/**
+ * Issue #92: the pre-flight/run split and the progress callback the job
+ * runner consumes.
+ *
+ * @ai-context docs/superpowers/specs/2026-09-05-async-import-job-design.md
+ */
+describe('prepareImport', () => {
+  const prep = (body: string, h: ReturnType<typeof harness>, extra: Partial<ImportDeps> = {}, store: PostStore = memoryPostStore()) =>
+    prepareImport(body, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: h.rehost, sleep: h.sleep, now: h.now, delayMs: 0, retries: 0, ...extra });
+
+  it('performs no fetch and writes no post until run() is called', async () => {
+    const h = harness();
+    const store = memoryPostStore();
+    const p = await prep(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg')), h, {}, store);
+    expect(p.groups).toBe(1);
+    expect(p.planned).toEqual({ groups: { total: 1, done: 0 }, images: { planned: 2, hosted: 0, failed: 0 } });
+    expect(h.calls).toHaveLength(0);
+    expect(await store.list()).toHaveLength(0);
+    const s = await p.run();
+    expect(s.imported).toBe(1);
+    expect(h.calls).toHaveLength(2);
+  });
+
+  it('counts EVERY group in `groups`, including rejected and already-published ones, but plans only the pending', async () => {
+    const h = harness();
+    const store = memoryPostStore();
+    const body = wxr([
+      item('de', 'de-1', 'g1', imgs('https://wp/a.jpg')), item('en', 'en-1', 'g1', '<p>x</p>'),
+      item('de', 'lonely', 'g2', imgs('https://wp/b.jpg')), // no EN twin → rejected
+    ].join('\n'));
+    const p = await prep(body, h, {}, store);
+    expect(p.groups).toBe(2);
+    expect(p.planned.groups.total).toBe(1);
+    expect(p.planned.images.planned).toBe(1);
+    const s = await p.run();
+    expect(s).toMatchObject({ imported: 1, rejected: 1 });
+  });
+
+  it('reports progress after every image and every group, ending at the totals', async () => {
+    const h = harness({ fail: (u) => (u.includes('c.jpg') ? new FetchError('x', 'blocked') : null) });
+    const body = wxr([
+      item('de', 'de-1', 'g1', imgs('https://wp/a.jpg', 'https://wp/b.jpg')), item('en', 'en-1', 'g1', '<p>x</p>'),
+      item('de', 'de-2', 'g2', imgs('https://wp/c.jpg')), item('en', 'en-2', 'g2', '<p>x</p>'),
+    ].join('\n'));
+    const p = await prep(body, h);
+    const seen: string[] = [];
+    const s = await p.run((pr) => seen.push(`${pr.groups.done}/${pr.groups.total} ${pr.images.hosted}+${pr.images.failed}/${pr.images.planned}`));
+    expect(seen).toEqual([
+      '0/2 1+0/3', '0/2 2+0/3', '1/2 2+0/3', // group 1: two photos, then the group boundary
+      '1/2 2+1/3', '2/2 2+1/3',             // group 2: one failed photo, then the boundary
+    ]);
+    expect(s.images).toEqual({ total: 3, hosted: 2, failed: 1 });
+  });
+
+  it('counts a resumed photo as progress without a fetch', async () => {
+    const h = harness();
+    const resume = { lookup: async (key: string) => (key.endsWith('/a') ? { src: 'https://img/kept', width: 12, height: 34 } : null) };
+    const p = await prep(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg')), h, { resume });
+    const hosted: number[] = [];
+    await p.run((pr) => hosted.push(pr.images.hosted));
+    expect(hosted).toEqual([1, 2, 2]);
+    expect(h.calls).toEqual(['https://wp/b.jpg']);
+  });
+
+  it('a prepared import runs once', async () => {
+    const h = harness();
+    const p = await prep(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg')), h);
+    await p.run();
+    await expect(p.run()).rejects.toThrow(/only run once/);
+    expect(h.calls).toHaveLength(1);
+  });
+
+  it('importWxr is prepareImport().run(): the same summary for the same export', async () => {
+    const h1 = harness(); const h2 = harness();
+    const body = pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg'));
+    const viaImport = await run(body, h1);
+    const viaPrepare = await (await prep(body, h2)).run();
+    expect(viaPrepare).toEqual(viaImport);
   });
 });
 

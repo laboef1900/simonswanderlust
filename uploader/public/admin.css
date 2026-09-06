@@ -303,6 +303,17 @@ small {
   font-size: 0.88rem;
 }
 
+/* ---- import progress (issue #92) ---- */
+.progress { margin-top: 0.75rem; }
+.progress progress { display: block; width: 100%; height: 0.6rem; accent-color: var(--navy); }
+.progress p {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+
 #list { list-style: none; padding: 0; }
 #list li {
   display: flex;

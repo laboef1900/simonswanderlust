@@ -791,6 +791,17 @@ blog/
   every writer, and it is atomic across processes — the finished temp file is published with
   `link(2)`, which fails with `EEXIST` where `rename` would clobber, and a taken name advances
   to the next free second (`createdAt` keeps the real time). See `docs/superpowers/specs/2026-09-05-restore-cli-confirmation-design.md`.
+- **Done:** #92 async WordPress import with a progress endpoint (2026-09-06) — `POST /import`
+  now runs only the pre-flight on the request path (parse, group validation, the #96 cap, the
+  #94 free-space check — every refusal keeps its status code) and hands the multi-minute run to
+  `import-jobs.ts`, answering 202; `import.html` polls the admin-only `GET /import/status`.
+  `importWxr` became `prepareImport(...).run()` with a progress callback. Progress and outcome
+  live in a new **`import_jobs`** table (operational state: excluded from backups, pruned to 20
+  rows); boot marks a row the previous process left `running` as `interrupted`, and the page
+  says "run it again" — #85's resume makes that free for photos already on disk. Deliberately
+  NOT on `encode-queue.ts`: the whole import under `runShared` would hold every Publish off for
+  its duration, the opposite of #95. See
+  `docs/superpowers/specs/2026-09-05-async-import-job-design.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

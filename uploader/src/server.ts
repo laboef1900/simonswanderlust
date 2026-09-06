@@ -30,7 +30,8 @@ import { renderPreviewHtml } from './preview.js';
 import { type PageStore, type PagePair, type PageContent, type ImageDims, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
-import { importWxr, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type ImportSummary } from './wp-import.js';
+import { prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type PreparedImport } from './wp-import.js';
+import { createImportRunner, memoryImportJobStore, ImportBusyError, type ImportRunner, type ImportJob } from './import-jobs.js';
 import { createRehostResume } from './wp-images.js';
 import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, type RateLimiter, type AccountLimiter } from './rate-limit.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
@@ -72,23 +73,21 @@ export interface ServerConfig {
    */
   workLock?: WorkLock;
   /**
-   * The WXR importer. Injectable for the same reason as `loginLimiter` and
-   * `reconciler`: the real one's pacing and retry behaviour cannot be observed
-   * from a route test, because every failure mode reachable without a network
-   * (the SSRF guard, an unresolvable host) is classified NON-retryable by
-   * design, and the retryable ones cost 15 s each.
+   * The WXR pre-flight (parse, validate, cap, free space) that returns the
+   * `run()` the job executes. Injectable for the same reason as `loginLimiter`
+   * and `reconciler`: the real one's pacing and retry behaviour cannot be
+   * observed from a route test, because every failure mode reachable without a
+   * network (the SSRF guard, an unresolvable host) is classified NON-retryable
+   * by design, and the retryable ones cost 15 s each.
    */
-  importRunner?: (xml: string, deps: ImportDeps) => Promise<ImportSummary>;
+  prepareImport?: (xml: string, deps: ImportDeps) => Promise<PreparedImport>;
+  /**
+   * The background import runner (issue #92) — owns single-flight and the
+   * `import_jobs` rows. Defaults to a memory-backed one so a route test needs
+   * no database; `main.ts` passes the Postgres-backed instance.
+   */
+  importJobs?: ImportRunner;
 }
-
-/**
- * Whether a WordPress import is running right now (issue #85).
- *
- * @ai-note Module-scoped, so it is per PROCESS, which is the right granularity:
- * the app runs as a single container and the resource it protects (the source
- * host's patience, plus `${storageDir}` variant writes) is per process too.
- */
-let importInFlight = false;
 
 const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
 
@@ -172,6 +171,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   const loginLimiter = cfg.loginLimiter ?? fixedWindowLimiter({ max: 10, windowMs: 900_000 });
   const accountLimiter = cfg.accountLimiter ?? accountLockoutLimiter();
   const passwordLimiter = cfg.passwordLimiter ?? accountLockoutLimiter();
+  // issue #92: memory-backed by default so route tests need no database;
+  // main.ts passes the Postgres-backed runner whose rows survive a restart.
+  const importJobs = cfg.importJobs ?? createImportRunner({ store: memoryImportJobStore() });
   const limitAuth = rateLimitPreHandler(loginLimiter);
 
   // Unexpected errors (DB failures, bugs) must not leak internals to clients:
@@ -1254,73 +1256,83 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // under /data and makes hundreds of outbound fetches to a host chosen by the
   // export — the same trust boundary as /rebuild, /settings and /backups, whose
   // importDelayMs/importRetries knobs govern this run.
+  //
+  // issue #92: the multi-minute part runs OFF the request path. Everything that
+  // can refuse the export (not WXR, no groups, over the image cap, no space, an
+  // import already running) still happens here and keeps its status code; on
+  // success the answer is a 202 with the job id and import.html polls
+  // GET /import/status.
+  //
+  // @ai-warning ONE import at a time, as before. Resumability (issue #85)
+  // makes "run the import again" the documented recovery path, so concurrent
+  // runs are a real scenario: two of them would each see a mostly-empty
+  // resume index and re-fetch everything, hit the source host at twice the
+  // configured rate — the pacing gate is per-run state — race
+  // storeVariantFiles' non-atomic writes and run two sharp pipelines in one
+  // mem_limit'd container. The runner owns that rule (`start` throws
+  // ImportBusyError); the per-image ENCODES inside the run take `cfg.workLock`
+  // as shared holders (issue #95), so a Publish preempts the import at the
+  // next photo boundary rather than the run holding the lock for its duration.
   app.post('/import', { preHandler: requireAdmin }, async (req, reply) => {
-    // @ai-warning ONE import at a time. Resumability (issue #85) makes "run the
-    // import again" the documented recovery path when the browser or the reverse
-    // proxy gives up on a multi-minute request, so concurrent runs stopped being
-    // hypothetical. Two of them would each see a mostly-empty resume index and
-    // re-fetch everything (the very double-charging resumability exists to
-    // prevent), hit the source host at twice the configured rate — the pacing
-    // gate is per-run state and gives no aggregate guarantee — race
-    // storeVariantFiles' non-atomic writes into a variant set mixing two source
-    // images, and run two sharp pipelines inside one mem_limit'd container.
-    // This flag is deliberately NOT the work-lock: single-flight is a per-route
-    // rule, not a build/encode one. The per-image ENCODES inside the run do take
-    // `cfg.workLock` as shared holders (issue #95, see rehostImage), so a
-    // Publish preempts the import at the next photo boundary.
-    if (importInFlight) {
+    if (importJobs.current()) {
       return reply.code(409).send({ error: 'an import is already running; wait for it to finish' });
     }
-    importInFlight = true;
-    try {
-      let xml = '';
-      for await (const part of req.parts()) {
-        if (part.type === 'file') xml = (await part.toBuffer()).toString('utf8');
-      }
-      if (!xml.includes('<rss') || !xml.includes('wordpress.org/export')) {
-        return reply.code(400).send({ error: 'not a WordPress export (.xml) file' });
-      }
-      const { importDelayMs, importRetries } = cfg.settings.get();
-      let summary: ImportSummary;
-      try {
-        summary = await (cfg.importRunner ?? importWxr)(xml, {
-          postStore: cfg.posts, storageDir: cfg.storageDir, baseUrl: cfg.baseUrl,
-          delayMs: importDelayMs,
-          retries: importRetries,
-          // A FRESH disk walk per import, which is why this is built here rather
-          // than injected once at boot like `settings` or `dbBackup`.
-          resume: await createRehostResume({ storageDir: cfg.storageDir, baseUrl: cfg.baseUrl }),
-          // issue #94: the same precondition /upload has, judged on the photos
-          // this run will fetch (see importWxr) rather than a known byte count.
-          diskSpace: () => diskSpace(cfg.storageDir),
-          // issue #95: encodes under the shared mutex, so they never overlap a build.
-          lock: cfg.workLock,
-          log: (msg) => console.log(msg),
-        });
-      } catch (e) {
-        // issue #96: an export whose distinct-image count exceeds the cap is
-        // rejected BEFORE any fetch — a 400 naming the count, not a 500.
-        if (e instanceof ImportTooLargeError) return reply.code(400).send({ error: e.message });
-        // issue #94: the volume cannot hold what this run would fetch — 507 like
-        // /upload; the numbers went to stdout from importWxr, the client gets the
-        // sanitized message.
-        if (e instanceof ImportInsufficientSpaceError) return reply.code(507).send({ error: e.message });
-        throw e;
-      }
-      // 400 only when the export yielded no groups at all. Every group lands in exactly
-      // one bucket (issue #100), so an all-published or all-rejected export is a 200
-      // with an honest summary — the old check 400'd a re-run of an already-published
-      // export, and a 400 cannot say WHICH groups were rejected and why.
-      if (summary.imported + summary.updated + summary.skippedPublished + summary.rejected + summary.failed === 0) {
-        return reply.code(400).send({ error: 'no importable posts found in export' });
-      }
-      return reply.send(summary);
-    } finally {
-      // finally, not after send: a throw here would otherwise wedge the endpoint
-      // until the process restarts.
-      importInFlight = false;
+    let xml = '';
+    for await (const part of req.parts()) {
+      if (part.type === 'file') xml = (await part.toBuffer()).toString('utf8');
     }
+    if (!xml.includes('<rss') || !xml.includes('wordpress.org/export')) {
+      return reply.code(400).send({ error: 'not a WordPress export (.xml) file' });
+    }
+    const { importDelayMs, importRetries } = cfg.settings.get();
+    let prepared: PreparedImport;
+    try {
+      prepared = await (cfg.prepareImport ?? prepareImport)(xml, {
+        postStore: cfg.posts, storageDir: cfg.storageDir, baseUrl: cfg.baseUrl,
+        delayMs: importDelayMs,
+        retries: importRetries,
+        // A FRESH disk walk per import, which is why this is built here rather
+        // than injected once at boot like `settings` or `dbBackup`.
+        resume: await createRehostResume({ storageDir: cfg.storageDir, baseUrl: cfg.baseUrl }),
+        // issue #94: the same precondition /upload has, judged on the photos
+        // this run will fetch (see prepareImport) rather than a known byte count.
+        diskSpace: () => diskSpace(cfg.storageDir),
+        // issue #95: encodes under the shared mutex, so they never overlap a build.
+        lock: cfg.workLock,
+        log: (msg) => console.log(msg),
+      });
+    } catch (e) {
+      // issue #96: an export whose distinct-image count exceeds the cap is
+      // rejected BEFORE any fetch — a 400 naming the count, not a 500.
+      if (e instanceof ImportTooLargeError) return reply.code(400).send({ error: e.message });
+      // issue #94: the volume cannot hold what this run would fetch — 507 like
+      // /upload; the numbers went to stdout from prepareImport, the client gets
+      // the sanitized message.
+      if (e instanceof ImportInsufficientSpaceError) return reply.code(507).send({ error: e.message });
+      throw e;
+    }
+    // 400 only when the export yielded no groups at all. Every group lands in exactly
+    // one bucket (issue #100), so an all-published or all-rejected export is a job
+    // with an honest summary — a 400 cannot say WHICH groups were rejected and why.
+    if (prepared.groups === 0) {
+      return reply.code(400).send({ error: 'no importable posts found in export' });
+    }
+    let job: ImportJob;
+    try {
+      job = await importJobs.start({ startedBy: req.authUser?.username ?? '', planned: prepared.planned, run: prepared.run });
+    } catch (e) {
+      // Two pre-flights raced; the loser's prepared import is dropped unrun.
+      if (e instanceof ImportBusyError) return reply.code(409).send({ error: e.message });
+      throw e;
+    }
+    return reply.code(202).send({ id: job.id, status: job.status, planned: job.progress });
   });
+
+  // The running job's live counters, else the most recent job — including one
+  // the previous process left `interrupted`, so the page can say "run it
+  // again" instead of silently showing nothing. Same trust boundary as the
+  // import itself; the summary is exactly what the old 200 carried.
+  app.get('/import/status', { preHandler: requireAdmin }, async () => ({ job: await importJobs.latest() }));
 
   // @ai-note: the image host doubles as a blog host so that LOCAL DEV works, and
   // ONLY for local dev. uploader/.env.example tells you to set IMG_HOST=localhost:3000
