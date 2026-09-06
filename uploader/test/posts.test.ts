@@ -61,6 +61,24 @@ describe('memoryPostStore', () => {
     expect((await s.get(c.translationKey))?.status).toBe('published');
   });
 
+  // Issue #119: the write-DE-first workflow saves with en.slug '' — the second
+  // such draft used to fail with duplicate_slug because '' counted as taken.
+  it('two DE-first drafts with an unset EN slug coexist; a real EN slug is still unique', async () => {
+    const s = memoryPostStore();
+    const enUnset = (title: string, deSlug: string) => pair({
+      de: { ...pair().de, slug: deSlug, title }, en: { ...pair().en, slug: '', title: '', bodyMarkdown: '' },
+    });
+    const a = await s.upsertDraft(enUnset('A', 'a'));
+    const b = await s.upsertDraft(enUnset('B', 'b'));
+    expect(a.translationKey).not.toBe(b.translationKey);
+    expect((await s.list()).map((p) => p.slugEn)).toEqual(['', '']);
+    // filling in the EN slug on one draft still collides with an existing real slug
+    await s.upsertDraft({ ...a, en: { ...a.en, slug: 'shared' } });
+    await expect(s.upsertDraft({ ...b, en: { ...b.en, slug: 'shared' } })).rejects.toMatchObject({ code: 'duplicate_slug' });
+    // publishing a draft whose EN slug is still unset is refused
+    expect(() => validateForPublish(enUnset('C', 'c'))).toThrow(PostError);
+  });
+
   it('a new draft and a fresh publish report no unpublished changes', async () => {
     const s = memoryPostStore();
     const c = await s.upsertDraft(pair());
@@ -348,9 +366,11 @@ describe('memoryPostStore revisions', () => {
 });
 
 describe('post validation', () => {
-  it('draft requires only a DE title and valid slugs', () => {
+  it('draft requires only a DE title and valid slugs; an empty slug is unset, not invalid', () => {
     expect(() => validateDraft(pair({ de: { ...pair().de, title: '' } }))).toThrow(PostError);
     expect(() => validateDraft(pair({ de: { ...pair().de, slug: 'Bad Slug' } }))).toThrow(PostError);
+    expect(() => validateDraft(pair({ en: { ...pair().en, slug: ' ' } }))).toThrow(PostError);
+    expect(() => validateDraft(pair({ en: { ...pair().en, slug: '' } }))).not.toThrow();
     expect(() => validateDraft(pair())).not.toThrow();
   });
   // Issue #120: validateDraft is the HTTP boundary; shape errors must be

@@ -388,6 +388,44 @@ maybe('pgPostStore (integration)', () => {
     expect(got?.en).toMatchObject({ slug: '', title: '', heroImage: { src: '' } });
     await pool.end();
   });
+
+  // Issue #119: '' is "no EN slug yet". Two DE-first drafts must coexist, the
+  // unique index must still catch a real collision, and a database created
+  // before #119 (non-partial index) must be migrated on boot without data loss.
+  it('empty EN slug is unset: DE-first drafts coexist; the pre-#119 index is migrated to the partial form', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const indexDef = async () => (await pool.query<{ indexdef: string }>(
+      `SELECT indexdef FROM pg_indexes WHERE tablename='posts' AND indexname='posts_locale_slug_idx'`,
+    )).rows[0]?.indexdef ?? '';
+    // Rewind to the pre-#119 schema and seed one DE-first draft under it.
+    await pool.query(`DROP INDEX posts_locale_slug_idx`);
+    await pool.query(`CREATE UNIQUE INDEX posts_locale_slug_idx ON posts (locale, slug)`);
+    const store = pgPostStore(pool);
+    const deFirst = (deSlug: string) => ({ ...base, de: { ...base.de, slug: deSlug }, en: { ...base.en, slug: '', title: '', bodyMarkdown: '' } });
+    const a = await store.upsertDraft(deFirst('first'));
+    await ensureSchema(pool);
+    expect(await indexDef()).toMatch(/WHERE \(?slug <> ''/);
+    expect((await store.get(a.translationKey))?.de.slug).toBe('first');
+    // The second DE-first draft now saves — the 23505 backstop no longer fires on ''.
+    const b = await store.upsertDraft(deFirst('second'));
+    expect(b.translationKey).not.toBe(a.translationKey);
+    expect((await store.list()).map((p) => p.slugEn)).toEqual(['', '']);
+    // A real slug is still unique, both at the pre-check and at the index.
+    await store.upsertDraft({ ...a, en: { ...a.en, slug: 'taken' } });
+    await expect(store.upsertDraft({ ...b, en: { ...b.en, slug: 'taken' } })).rejects.toMatchObject({ code: 'duplicate_slug' });
+    await expect(pool.query(
+      `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region, excerpt, hero_image, coordinates, body_markdown)
+       VALUES ($1, $2, 'en', 'taken', 'T', '2024-10-03', 'X', 'RO', 'europe', 'e', '{}', '{}', 'b')`,
+      [randomUUID(), randomUUID()],
+    )).rejects.toMatchObject({ code: '23505', constraint: 'posts_locale_slug_idx' });
+    // Running ensureSchema again leaves the partial index alone.
+    const before = await indexDef();
+    await ensureSchema(pool);
+    expect(await indexDef()).toBe(before);
+    await pool.end();
+  });
 });
 
 maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
