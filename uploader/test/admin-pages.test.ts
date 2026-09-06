@@ -352,10 +352,10 @@ describe('DraftGuard per-tab stash keys (#138)', () => {
   it('a reloaded tab is offered its own previous stash through the orphan scan', () => {
     const store = new Map<string, string>();
     const first = newTab(store);
-    const g1 = first.sb.api.createDraftGuard({ storageKey: first.key, orphanPrefix: PREFIX + ':', collect: () => ({ title: 'typed' }) });
+    const g1 = first.sb.api.createDraftGuard({ storageKey: first.key, orphanPrefix: PREFIX, collect: () => ({ title: 'typed' }) });
     g1.markDirty(); first.sb.flushTimers();
     const reloaded = newTab(store);
-    const g2 = reloaded.sb.api.createDraftGuard({ storageKey: reloaded.key, orphanPrefix: PREFIX + ':', collect: () => ({}) });
+    const g2 = reloaded.sb.api.createDraftGuard({ storageKey: reloaded.key, orphanPrefix: PREFIX, collect: () => ({}) });
     expect(g2.tryRestore()?.payload).toEqual({ title: 'typed' });
   });
 
@@ -363,8 +363,8 @@ describe('DraftGuard per-tab stash keys (#138)', () => {
     const store = new Map<string, string>();
     const a = newTab(store);
     const b = newTab(store);
-    const guardA = a.sb.api.createDraftGuard({ storageKey: a.key, orphanPrefix: PREFIX + ':', collect: () => ({ title: 'A' }) });
-    const guardB = b.sb.api.createDraftGuard({ storageKey: b.key, orphanPrefix: PREFIX + ':', collect: () => ({ title: 'B' }) });
+    const guardA = a.sb.api.createDraftGuard({ storageKey: a.key, orphanPrefix: PREFIX, collect: () => ({ title: 'A' }) });
+    const guardB = b.sb.api.createDraftGuard({ storageKey: b.key, orphanPrefix: PREFIX, collect: () => ({ title: 'B' }) });
     guardA.markDirty(); a.sb.flushTimers();
     guardB.markDirty(); b.sb.flushTimers();
     // A saves: re-key to the real translationKey, then markClean
@@ -383,21 +383,32 @@ describe('DraftGuard per-tab stash keys (#138)', () => {
     store.set(crashed.key, JSON.stringify({ savedAt: '2026-09-06T11:00:00.000Z', payload: { title: 'newest' } }));
 
     const fresh = newTab(store);
-    const guard = fresh.sb.api.createDraftGuard({ storageKey: fresh.key, orphanPrefix: PREFIX + ':', collect: () => ({ title: 'restored+edited' }) });
+    const guard = fresh.sb.api.createDraftGuard({ storageKey: fresh.key, orphanPrefix: PREFIX, collect: () => ({ title: 'restored+edited' }) });
     const stash = guard.tryRestore();
     expect(stash?.payload).toEqual({ title: 'newest' });
     expect(stash?.key).toBe(crashed.key);
 
     guard.adopt(stash);
-    // moved under this tab's key: not offered to a third tab, and this tab's
-    // stash/markClean touch only its own entry
-    expect(store.has(crashed.key)).toBe(false);
+    // copied under this tab's key: this tab's stash/markClean touch its own
+    // entry, and the source survives until this tab has saved (a still-open
+    // source tab must not lose its work should it crash before its next edit)
+    expect(JSON.parse(store.get(crashed.key) ?? '').payload).toEqual({ title: 'newest' });
     expect(JSON.parse(store.get(fresh.key) ?? '').payload).toEqual({ title: 'newest' });
     guard.markDirty(); fresh.sb.flushTimers();
     expect(JSON.parse(store.get(fresh.key) ?? '').payload).toEqual({ title: 'restored+edited' });
+    expect(JSON.parse(store.get(crashed.key) ?? '').payload).toEqual({ title: 'newest' });
     guard.markClean();
     expect(store.has(fresh.key)).toBe(false);
+    expect(store.has(crashed.key)).toBe(false); // saved server-side — not offered again
     expect(store.has(older.key)).toBe(true); // never touched
+  });
+
+  it('still offers a pre-#138 stash left under the bare swl:draft:new key', () => {
+    const store = new Map<string, string>();
+    store.set('swl:draft:new', JSON.stringify({ savedAt: '2026-09-06T11:00:00.000Z', payload: { title: 'legacy' } }));
+    const fresh = newTab(store);
+    const guard = fresh.sb.api.createDraftGuard({ storageKey: fresh.key, orphanPrefix: PREFIX, collect: () => ({}) });
+    expect(guard.tryRestore()?.payload).toEqual({ title: 'legacy' });
   });
 
   it('declining an orphan leaves it alone and is remembered for that stash only', () => {
@@ -405,7 +416,7 @@ describe('DraftGuard per-tab stash keys (#138)', () => {
     const other = newTab(store);
     store.set(other.key, JSON.stringify({ savedAt: '2026-09-06T11:00:00.000Z', payload: { title: 'theirs' } }));
     const fresh = newTab(store);
-    const guard = fresh.sb.api.createDraftGuard({ storageKey: fresh.key, orphanPrefix: PREFIX + ':', collect: () => ({ title: 'mine' }) });
+    const guard = fresh.sb.api.createDraftGuard({ storageKey: fresh.key, orphanPrefix: PREFIX, collect: () => ({ title: 'mine' }) });
     const stash = guard.tryRestore();
     guard.dismissRestore(stash);
     expect(guard.wasDismissed(guard.tryRestore())).toBe(true);
@@ -430,7 +441,7 @@ describe('DraftGuard per-tab stash keys (#138)', () => {
     store.set(PREFIX + ':bad', '{not json');
     store.set(PREFIX + ':good', JSON.stringify({ savedAt: '2026-09-06T11:00:00.000Z', payload: { title: 'ok' } }));
     const fresh = newTab(store);
-    const guard = fresh.sb.api.createDraftGuard({ storageKey: fresh.key, orphanPrefix: PREFIX + ':', collect: () => ({}) });
+    const guard = fresh.sb.api.createDraftGuard({ storageKey: fresh.key, orphanPrefix: PREFIX, collect: () => ({}) });
     expect(guard.tryRestore()?.payload).toEqual({ title: 'ok' });
   });
 });

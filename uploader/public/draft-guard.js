@@ -46,6 +46,7 @@ window.DraftGuard = (function () {
     let dirty = false;
     let timer = null;
     let generation = 0; // bumped on every edit; lets markClean detect mid-save edits
+    let adoptedFrom = null; // another tab's stash key this tab restored from
 
     // All localStorage access is best-effort: quota errors / private mode
     // degrade to warning-only behavior (the beforeunload prompt still works).
@@ -78,7 +79,13 @@ window.DraftGuard = (function () {
       if (token !== undefined && token !== generation) return;
       dirty = false;
       cancelTimer();
-      try { localStorage.removeItem(key); } catch (e) { /* best-effort */ }
+      try {
+        localStorage.removeItem(key);
+        // The restored orphan is now saved server-side: drop it so it is not
+        // offered again. Deferred until here so a still-open source tab keeps
+        // its stash until its content has actually been persisted.
+        if (adoptedFrom !== null) { localStorage.removeItem(adoptedFrom); adoptedFrom = null; }
+      } catch (e) { /* best-effort */ }
     }
 
     function parseStash(raw) {
@@ -114,17 +121,16 @@ window.DraftGuard = (function () {
       }
     }
 
-    // The author chose to restore `stash`: move it under THIS tab's key, so it
-    // is not offered to yet another tab and this tab's later stash/markClean
-    // touch only its own entry. If the stash belonged to a tab that is still
-    // open, that tab simply re-stashes on its next edit — nothing is lost.
-    // Only on acceptance: moving on decline would hide it from the tab it
-    // belongs to.
+    // The author chose to restore `stash`: copy it under THIS tab's key, so
+    // this tab's later stash/markClean touch its own entry. The source is left
+    // in place until markClean — if it belongs to a tab that is still open,
+    // deleting it now would lose that tab's work should it crash before its
+    // next edit. Only on acceptance: a declined stash is never touched.
     function adopt(stash) {
       if (!stash || typeof stash.key !== 'string' || stash.key === key) return;
       try {
         const v = localStorage.getItem(stash.key);
-        if (v !== null) { localStorage.setItem(key, v); localStorage.removeItem(stash.key); }
+        if (v !== null) { localStorage.setItem(key, v); adoptedFrom = stash.key; }
       } catch (e) { /* best-effort */ }
     }
 
