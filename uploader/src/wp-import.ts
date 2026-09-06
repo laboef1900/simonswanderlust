@@ -1,5 +1,5 @@
 import { parseWxr, type ParsedPost } from './wxr-parse.js';
-import { htmlToMarkdown } from './wp-content.js';
+import { htmlToMarkdown, markdownImages } from './wp-content.js';
 import { rehostImage, type RehostResult, type RehostResume } from './wp-images.js';
 import { isSafeSlug, type ImageDims, type PostLocale, type PostPair, type PostStatus, type PostStore, type PostSummary } from './posts.js';
 import { rewriteFences } from './body-content.js';
@@ -339,7 +339,8 @@ function resilientRehost(rehost: RehostFn, cfg: {
  * (featured image) plus every body-image and gallery-fence URL.
  *
  * @ai-warning This mirrors `buildLocale`'s extraction EXACTLY — the same
- * `htmlToMarkdown`, the same markdown-image regex, the same `rewriteFences`
+ * `htmlToMarkdown` (with the same attachment map, so classic shortcodes expand
+ * identically), the same `markdownImages` parser, the same `rewriteFences`
  * scan, the same scheme filter. The pre-flight count in `importWxr` (issue
  * #96) is only as good as this agreement: if `buildLocale` ever changes which
  * URLs it fetches, this must change with it, or the cap would count a different
@@ -349,10 +350,9 @@ function rehostUrlSet(p: ParsedPost, attachments: Map<string, string>): Set<stri
   const urls = new Set<string>();
   const heroUrl = p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
   if (heroUrl) urls.add(heroUrl);
-  const body = htmlToMarkdown(p.contentHtml);
-  for (const m of body.matchAll(/!\[([^\]]*)\]\(([^)]+)\)/g)) {
-    const url = m[2];
-    if (url && /^https?:\/\//.test(url)) urls.add(url);
+  const body = htmlToMarkdown(p.contentHtml, attachments);
+  for (const { url } of markdownImages(body)) {
+    if (/^https?:\/\//.test(url)) urls.add(url);
   }
   rewriteFences(body, (line) => {
     const url = (line.split('|')[0] ?? '').trim();
@@ -408,12 +408,15 @@ async function buildLocale(
     try { const r = await rehost(heroUrl, heroKey(p), p.title); heroImage = { src: r.src, width: r.width, height: r.height, alt: p.title }; }
     catch { /* reported by the tally wrapper; hero stays a placeholder */ }
   }
-  // body: convert, then re-host each markdown image and rewrite the ref
-  let body = htmlToMarkdown(p.contentHtml);
+  // body: convert, then re-host each markdown image and rewrite the ref.
+  // @ai-note `markdownImages` decodes Turndown's destination encoding (escaped
+  // parens, `<…>` around a space, a trailing " title") — issue #125. The rewrite
+  // drops the title: Elementor fills it with the attachment filename, which is
+  // noise, and the re-hosted URL needs no escaping.
+  let body = htmlToMarkdown(p.contentHtml, attachments);
   const images: Record<string, ImageDims> = {};
-  for (const m of [...body.matchAll(/!\[([^\]]*)\]\(([^)]+)\)/g)]) {
-    const full = m[0]; const alt = m[1] ?? ''; const url = m[2];
-    if (!url || !/^https?:\/\//.test(url)) continue;
+  for (const { full, alt, url } of markdownImages(body)) {
+    if (!/^https?:\/\//.test(url)) continue;
     try {
       const r = await rehost(url, imageKey(p, url), alt);
       body = body.replaceAll(full, `![${alt}](${r.src})`);
