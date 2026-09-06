@@ -9,6 +9,8 @@ const KEYLEN = 64;
 export const MAX_PASSWORD_LENGTH = 1024;
 export const MIN_PASSWORD_LENGTH = 12;
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function hashPassword(password: string): string {
   if (password.length > MAX_PASSWORD_LENGTH) {
     throw new Error(`Password exceeds maximum length of ${MAX_PASSWORD_LENGTH} characters`);
@@ -121,6 +123,10 @@ export function pgUserStore(pool: DbPool): UserStore {
       return rows[0] ? rowToUser(rows[0]) : null;
     },
     async findById(id) {
+      // Reject non-UUID ids before querying: `DELETE /users/:id` passes the raw
+      // route param through here, and a malformed uuid parameter raises
+      // Postgres 22P02 (a logged 500) instead of the 404 the route wants.
+      if (!UUID_RE.test(id)) return null;
       const { rows } = await pool.query<UserRow>('SELECT * FROM users WHERE id = $1', [id]);
       return rows[0] ? rowToUser(rows[0]) : null;
     },
