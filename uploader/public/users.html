@@ -69,10 +69,17 @@
                 + 'This cannot be undone.')) return;
               btn.disabled = true; // no double-fire while the request is in flight
               $('out').textContent = 'Removing ' + u.username + '…';
-              const d = await fetch('/users/' + u.id, { method: 'DELETE' });
-              if (d.status === 401) { location.href = '/login'; return; }
-              if (d.ok) { $('out').textContent = 'Removed ' + u.username + '.'; load(); }
-              else { btn.disabled = false; const r = await d.json().catch(() => ({})); $('out').textContent = r.error || ('Failed: ' + d.status); }
+              try {
+                const d = await fetch('/users/' + u.id, { method: 'DELETE' });
+                if (d.status === 401) { location.href = '/login'; return; }
+                if (d.ok) { $('out').textContent = 'Removed ' + u.username + '.'; load(); return; }
+                const r = await d.json().catch(() => ({}));
+                $('out').textContent = r.error || ('Failed: ' + d.status);
+              } catch (e) {
+                $('out').textContent = 'Failed: ' + (e && e.message ? e.message : 'network error');
+              } finally {
+                btn.disabled = false;
+              }
             });
             li.appendChild(btn);
           }
