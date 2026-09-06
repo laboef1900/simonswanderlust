@@ -30,7 +30,8 @@
         </p>
 
         <label for="baseUrl">LM Studio base URL (as this browser reaches it)</label>
-        <input id="baseUrl" type="text" placeholder="http://localhost:1234/v1" />
+        <input id="baseUrl" type="text" placeholder="http://localhost:1234/v1" aria-describedby="baseUrlWarn" />
+        <p id="baseUrlWarn" class="notice-warn" role="status" hidden></p>
 
         <label for="model">Model</label>
         <select id="model"></select>
@@ -111,8 +112,18 @@
     <script>
       const $ = (id) => document.getElementById(id);
 
+      // A plain-http model URL on an https page is blocked as mixed content and
+      // surfaces only as "Failed to fetch"; say so next to the field (#140).
+      function checkBaseUrl() {
+        const why = LLM.mixedContentWarning($('baseUrl').value.trim(), location.protocol);
+        $('baseUrlWarn').textContent = why;
+        $('baseUrlWarn').hidden = !why;
+      }
+      $('baseUrl').addEventListener('input', checkBaseUrl);
+
       function fill(s) {
         $('baseUrl').value = s.lmBaseUrl || '';
+        checkBaseUrl();
         $('timeout').value = s.captionTimeoutMs ?? '';
         $('maxEdge').value = s.captionMaxEdge ?? '';
         $('prompt').value = s.captionPrompt || '';
@@ -172,8 +183,9 @@
             $('out').textContent = 'Reachable, but no models are loaded in LM Studio.';
           }
         } catch (e) {
-          $('out').textContent = 'Not reachable from this browser (' + e.message +
-            '). Is LM Studio running and serving on ' + $('baseUrl').value.trim() + '?';
+          const why = LLM.mixedContentWarning($('baseUrl').value.trim(), location.protocol);
+          $('out').textContent = 'Not reachable from this browser (' + e.message + '). ' +
+            (why || 'Is LM Studio running and serving on ' + $('baseUrl').value.trim() + '?');
         }
       });
 

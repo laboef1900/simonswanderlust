@@ -3,10 +3,43 @@
  * the browser (the model runs on the same machine you author from), so the
  * server never needs to reach it. LM Studio sends `Access-Control-Allow-Origin: *`,
  * so cross-origin calls work; on an https admin page, browsers treat http://localhost
- * as a secure origin (use Chrome if a browser blocks it).
+ * as a secure origin — any OTHER plain-http host is blocked as mixed content
+ * (see mixedContentWarning).
  */
 window.LLM = (function () {
   const base = (u) => String(u).replace(/\/+$/, '');
+
+  // Mirrors src/caption.ts MAX_ALT / cleanAlt (enforced by test/llm-mirror.test.ts):
+  // model output is untrusted input — one line, single-spaced, capped, never
+  // ending on a lone high surrogate.
+  const MAX_ALT = 300;
+  function cleanAlt(v) {
+    const s = String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_ALT);
+    return /[\uD800-\uDBFF]$/.test(s) ? s.slice(0, -1) : s;
+  }
+
+  // Browsers treat these as potentially trustworthy origins even over http:
+  // (Secure Contexts §3.1), so they escape the mixed-content block.
+  function isLoopbackHost(hostname) {
+    const h = hostname.toLowerCase();
+    return h === 'localhost' || h.endsWith('.localhost') || h === '[::1]' || /^127\.\d+\.\d+\.\d+$/.test(h);
+  }
+
+  /**
+   * Why a fetch to `baseUrl` from a page served over `pageProtocol` is doomed
+   * before it starts, or '' when it is not. A plain-http model URL on an https
+   * admin page fails with a bare "Failed to fetch" that reads like LM Studio is
+   * down; this names the actual cause so the author can fix the URL (#140).
+   */
+  function mixedContentWarning(baseUrl, pageProtocol) {
+    if (pageProtocol !== 'https:') return '';
+    let u;
+    try { u = new URL(String(baseUrl)); } catch (_) { return ''; }
+    if (u.protocol !== 'http:' || isLoopbackHost(u.hostname)) return '';
+    return 'This admin page is served over https, but ' + u.origin + ' is plain http on a ' +
+      'non-local host — the browser blocks that as mixed content before the request is ' +
+      'sent. Use an https:// URL for LM Studio, or run it on localhost.';
+  }
 
   // Index of the `}` balancing the `{` at `start`, or -1. String-aware so a `}`
   // inside a value doesn't end the object early. Mirrors src/caption.ts.
@@ -43,8 +76,8 @@ window.LLM = (function () {
         continue;
       }
       sawJson = true;
-      const altEn = String(o.altEn ?? '').trim();
-      const altDe = String(o.altDe ?? '').trim();
+      const altEn = cleanAlt(o.altEn);
+      const altDe = cleanAlt(o.altDe);
       if (altEn && altDe) return { altEn, altDe };
     }
     throw new Error(sawJson ? 'model response missing fields' : 'no JSON object in model response');
@@ -113,5 +146,5 @@ window.LLM = (function () {
     }
   }
 
-  return { parseCaption, listModels, prepImage, caption };
+  return { parseCaption, listModels, prepImage, caption, mixedContentWarning };
 })();

@@ -496,6 +496,22 @@ describe('images-map validation at the store chokepoint', () => {
     const saved = await s.upsertDraft(p);
     expect(saved.de.images['https://img/x/y']).toEqual({ width: 8, height: 6, alt: 'a', caption: 'c' });
   });
+
+  it('caps the hero alt at the same chokepoint — a 2 kB suggestion is refused, not saved (#140)', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.en.heroImage = { src: 'https://img/h', width: 800, height: 600, alt: 'x'.repeat(1001) };
+    await expect(s.upsertDraft(p)).rejects.toThrow(/en: heroImage.alt must be at most 1000/);
+    p.en.heroImage.alt = 'x'.repeat(1000);
+    await expect(s.upsertDraft(p)).resolves.toBeTruthy();
+  });
+
+  it('rejects a node-shaped hero alt', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.de.heroImage = { src: 'https://img/h', width: 1, height: 1, alt: { type: 'raw', value: '<script>' } } as unknown as PostPair['de']['heroImage'];
+    await expect(s.upsertDraft(p)).rejects.toThrow(/de: heroImage.alt must be a string/);
+  });
 });
 
 describe('gallery fences at the store chokepoint', () => {
@@ -582,6 +598,15 @@ describe('normalizeBodyImages', () => {
     const saved = await s.upsertDraft(p);
     const mdx = renderPostToMdx(saved, 'de');
     expect(mdx).toContain('<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />');
+  });
+
+  it('escapes brackets when a pasted <BodyImage> alt becomes a Markdown label (#140)', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.de.bodyMarkdown = '<BodyImage src="https://img/x/y" width={16} height={10} alt="Blick [Norwegen]" />';
+    const saved = await s.upsertDraft(p);
+    expect(saved.de.bodyMarkdown).toBe('![Blick \\[Norwegen\\]](https://img/x/y)');
+    expect(renderPostToMdx(saved, 'de')).toContain('alt="Blick [Norwegen]"');
   });
 
   it('converts a tag whose quoted alt contains ">" (legacy exports escaped only quotes)', () => {
