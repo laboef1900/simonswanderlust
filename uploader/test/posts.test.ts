@@ -194,6 +194,17 @@ describe('memoryPostStore', () => {
     await expect(s.unpublish('nope')).rejects.toBeInstanceOf(PostError);
   });
 
+  // #121: a post is a draft or published — nothing else exists, so the stats
+  // carry exactly those two buckets (a "scheduled" count that can never be
+  // non-zero is a lie to the dashboard).
+  it('getCmsStats counts pairs as draft or published and nothing else', async () => {
+    const s = memoryPostStore();
+    const a = await s.upsertDraft(pair());
+    await s.publish(a.translationKey);
+    await s.upsertDraft(pair({ de: { ...pair().de, slug: 'b-de' }, en: { ...pair().en, slug: 'b-en' }, shared: { ...pair().shared, categories: ['City'], tags: ['x', 'y'] } }));
+    expect(await s.getCmsStats!()).toEqual({ totalPosts: 2, draftPosts: 1, publishedPosts: 1, totalCategories: 1, totalTags: 2 });
+  });
+
   it('list reports hasEnBody (blank EN body → false)', async () => {
     const s = memoryPostStore();
     const withEn = await s.upsertDraft(pair());

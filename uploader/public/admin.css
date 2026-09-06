@@ -1246,7 +1246,7 @@ a:hover { color: var(--red-light); }
 
 .cms-stat-icon.published { background: #dcfce7; color: #166534; }
 .cms-stat-icon.draft { background: #fef3c7; color: #92400e; }
-.cms-stat-icon.scheduled { background: #e0f2fe; color: #075985; }
+.cms-stat-icon.total { background: #e0f2fe; color: #075985; }
 .cms-stat-icon.media { background: #f3e8ff; color: #6b21a8; }
 
 .cms-stat-icon svg {
@@ -1287,8 +1287,6 @@ a:hover { color: var(--red-light); }
 
 .status-pill.published { background: #dcfce7; color: #166534; }
 .status-pill.draft { background: #fef3c7; color: #92400e; }
-.status-pill.scheduled { background: #e0f2fe; color: #075985; }
-.status-pill.archived { background: #f1f5f9; color: #475569; }
 
 .status-pill::before {
   content: '';

@@ -1021,7 +1021,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   app.get('/api/cms/stats', { preHandler: requireAuth }, async () => {
-    const postStats = posts.getCmsStats ? await posts.getCmsStats() : { totalPosts: 0, draftPosts: 0, publishedPosts: 0, scheduledPosts: 0, archivedPosts: 0, totalCategories: 0, totalTags: 0 };
+    const postStats = posts.getCmsStats ? await posts.getCmsStats() : { totalPosts: 0, draftPosts: 0, publishedPosts: 0, totalCategories: 0, totalTags: 0 };
     const mediaRes = await cfg.media.list({});
     return {
       ...postStats,

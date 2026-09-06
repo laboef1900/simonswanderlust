@@ -37,7 +37,9 @@ interface Element {
 }
 interface EditorApi {
   populateForm(post: unknown): void;
-  buildPayload(): PostPair;
+  // No `status`/`scheduledAt`: the store decides status and nothing consumes
+  // scheduled_at, so the editor sends neither (#121).
+  buildPayload(): Omit<PostPair, 'status'>;
 }
 
 function element(): Element {
@@ -128,7 +130,7 @@ function fullPair(): PostPair {
     shared: {
       date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 44.4, lng: 26.1 },
       stops: [{ name: 'Bukarest', lat: 44.4, lng: 26.1 }], route: 'Bukarest – Brașov',
-      categories: ['City', 'Culture'], tags: ['balkan', 'autumn'], scheduledAt: '2024-11-01T09:30:00.000Z',
+      categories: ['City', 'Culture'], tags: ['balkan', 'autumn'],
     },
     de: loc('de', 'bukarest', 'Bukarest', 'Rumänien'),
     en: loc('en', 'bucharest', 'Bucharest', 'Romania'),
@@ -159,7 +161,6 @@ describe('editor.html inline script against its own markup', () => {
     expect(el('fmRegion').value).toBe('europe');
     expect(el('fmCategories').value).toBe('City, Culture');
     expect(el('fmTags').value).toBe('balkan, autumn');
-    expect(el('fmScheduledAt').value).toBe('2024-11-01T09:30');
   });
 
   it('names the CodeMirror inputs EasyMDE swaps in for the labelled body textareas (SC 4.1.2)', () => {
@@ -175,10 +176,23 @@ describe('editor.html inline script against its own markup', () => {
     expect(out.en.country).toBe('Romania');
     expect(out.shared.categories).toEqual(['City', 'Culture']);
     expect(out.shared.tags).toEqual(['balkan', 'autumn']);
-    expect(out.shared.scheduledAt).toBe('2024-11-01T09:30');
     expect(out.shared.countryCode).toBe('RO');
     expect(out.shared.region).toBe('europe');
     expect(out.shared.date).toBe('2024-10-03');
+  });
+
+  // #121: the "Post Status" select and "Scheduled Publish" field were inert —
+  // the server ignores payload status and nothing consumes scheduled_at — so
+  // the editor must offer neither control and send neither key, or an author
+  // picks "Published", saves, and reasonably believes it worked.
+  it('offers no status or schedule control and sends neither key', () => {
+    const { api } = loadEditor();
+    expect(ids.has('fmStatus')).toBe(false);
+    expect(ids.has('fmScheduledAt')).toBe(false);
+    api.populateForm({ ...fullPair(), status: 'published', shared: { ...fullPair().shared, scheduledAt: '2024-11-01T09:30:00.000Z' } });
+    const out = api.buildPayload();
+    expect(Object.keys(out)).not.toContain('status');
+    expect(Object.keys(out.shared)).not.toContain('scheduledAt');
   });
 
   it('buildPayload does not throw on a pristine form (new post → Save draft)', () => {
@@ -191,7 +205,7 @@ describe('editor.html inline script against its own markup', () => {
     const { api, el } = loadEditor();
     api.populateForm(fullPair());
     api.populateForm(minimalPair());
-    for (const id of ['fmDate', 'fmCountryCode', 'fmRegion', 'fmLat', 'fmLng', 'fmRoute', 'fmCategories', 'fmTags', 'fmScheduledAt',
+    for (const id of ['fmDate', 'fmCountryCode', 'fmRegion', 'fmLat', 'fmLng', 'fmRoute', 'fmCategories', 'fmTags',
       'deCountry', 'enCountry', 'deHeroSrc', 'enHeroSrc', 'deHeroAlt', 'enHeroAlt']) {
       expect(el(id).value, id).toBe('');
     }
