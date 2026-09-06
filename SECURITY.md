@@ -85,6 +85,16 @@ leave a partial variant set with no complete record. Free space is also reported
 but **never as a health verdict**: a low-space 503 would trigger a restart loop, which makes a
 full disk strictly worse.
 
+`POST /import` has the same precondition (issue #94), with the same 507 and the same reserve, but
+sized from a **count** rather than a byte total — a WXR declares URLs, not sizes — using the
+measured ~17.5 MB whole cost of one re-hosted photo. The count is the photos the run will actually
+*fetch*: `importWxr` asks the disk-derived resume index about every key it is about to write and
+charges only the misses, so the post-ENOSPC re-run (the documented recovery path) is judged on the
+remainder rather than refused for the export it has mostly already re-hosted. The check runs
+after the distinct-image cap and before any fetch; the message names the count and rounded sizes,
+never the path, and the raw numbers go to stdout. An unreadable statfs skips the check, as on
+`/upload`.
+
 Encoding runs in a bounded background queue: at most 2 concurrent encodes, a backlog cap that
 returns **429** rather than accepting unbounded work, and a shared lock (`work-lock.ts`) that
 makes a site build and image encoding mutually exclusive so the container cannot OOM with both

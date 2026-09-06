@@ -4,6 +4,7 @@ import { rehostImage, type RehostResult, type RehostResume } from './wp-images.j
 import { isSafeSlug, type ImageDims, type PostLocale, type PostPair, type PostStatus, type PostStore, type PostSummary } from './posts.js';
 import { rewriteFences } from './body-content.js';
 import { FetchError } from './safe-fetch.js';
+import { insufficientSpaceForImport, type DiskSpace } from './disk.js';
 
 /** Per-image accounting, so a partial import cannot masquerade as a clean one. */
 export interface ImportImageCounts {
@@ -55,6 +56,12 @@ export interface ImportDeps {
    * first attempts against a host that keeps answering — this is the bound that does.
    */
   maxImages?: number;
+  /**
+   * Free/total bytes of the volume the images land on (issue #94). Omit to
+   * skip the free-space precondition; a throwing probe is logged and skipped
+   * too, mirroring `/upload` — an unreadable statfs must not block an import.
+   */
+  diskSpace?: () => Promise<DiskSpace>;
   log?: (msg: string) => void;
 }
 
@@ -136,6 +143,19 @@ export class ImportTooLargeError extends Error {
   constructor(readonly count: number, readonly cap: number) {
     super(`import rejected: would re-host ${count} distinct images, which exceeds the cap of ${cap}`);
     this.name = 'ImportTooLargeError';
+  }
+}
+
+/**
+ * The volume cannot hold the photos this run would fetch (issue #94). Thrown
+ * BEFORE any fetch, from the same pre-flight as `ImportTooLargeError`, so no
+ * work is performed and no partial state is left. The `/import` route maps it
+ * to a 507, the status `/upload` already uses for the same condition.
+ */
+export class ImportInsufficientSpaceError extends Error {
+  constructor(message: string, readonly photos: number, readonly freeBytes: number) {
+    super(message);
+    this.name = 'ImportInsufficientSpaceError';
   }
 }
 
@@ -335,6 +355,34 @@ function rehostUrlSet(p: ParsedPost, attachments: Map<string, string>): Set<stri
   return urls;
 }
 
+/** Storage key for a post's featured image. Never resumed from disk (see `HERO_KEY_RE`). */
+const heroKey = (p: ParsedPost): string => `trips/${p.slug}/hero`;
+/** Storage key for a body or gallery image. Deterministic and un-hashed — `/data/images` is the resume record. */
+const imageKey = (p: ParsedPost, url: string): string => `trips/${p.slug}/${nameFromUrl(url)}`;
+
+/**
+ * The distinct (pair, url) re-host operations one pair performs, each with the
+ * storage key it will be written under — url → key, in call order.
+ *
+ * @ai-warning Mirrors `sharedRehost` + `buildLocale`: the pair's cache is keyed
+ * by URL and memoises the FIRST caller's key, and `buildLocale` runs de before
+ * en and the hero before the body, so a URL both locales reference lands under
+ * the DE slug and a hero URL that also appears in the body lands in the hero
+ * slot. `rehostUrlSet` preserves that order (hero, body, gallery). The size of
+ * this map is the #96 cap's quantity; its keys feed the #94 resume-aware
+ * free-space estimate. `test/wp-import.test.ts` pins both against the run.
+ */
+function rehostPlan(de: ParsedPost, en: ParsedPost, attachments: Map<string, string>): Map<string, string> {
+  const plan = new Map<string, string>();
+  for (const p of [de, en]) {
+    const hero = p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
+    for (const url of rehostUrlSet(p, attachments)) {
+      if (!plan.has(url)) plan.set(url, url === hero ? heroKey(p) : imageKey(p, url));
+    }
+  }
+  return plan;
+}
+
 async function buildLocale(
   p: ParsedPost, attachments: Map<string, string>,
   rehost: (url: string, key: string, alt: string) => Promise<RehostResult>,
@@ -350,7 +398,7 @@ async function buildLocale(
   let heroImage = { ...PLACEHOLDER_HERO };
   const heroUrl = p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
   if (heroUrl) {
-    try { const r = await rehost(heroUrl, `trips/${p.slug}/hero`, p.title); heroImage = { src: r.src, width: r.width, height: r.height, alt: p.title }; }
+    try { const r = await rehost(heroUrl, heroKey(p), p.title); heroImage = { src: r.src, width: r.width, height: r.height, alt: p.title }; }
     catch { /* reported by the tally wrapper; hero stays a placeholder */ }
   }
   // body: convert, then re-host each markdown image and rewrite the ref
@@ -360,7 +408,7 @@ async function buildLocale(
     const full = m[0]; const alt = m[1] ?? ''; const url = m[2];
     if (!url || !/^https?:\/\//.test(url)) continue;
     try {
-      const r = await rehost(url, `trips/${p.slug}/${nameFromUrl(url)}`, alt);
+      const r = await rehost(url, imageKey(p, url), alt);
       body = body.replaceAll(full, `![${alt}](${r.src})`);
       images[r.src] = { width: r.width, height: r.height };
     } catch { /* reported by the tally wrapper; the WordPress URL is left in place */ }
@@ -382,7 +430,7 @@ async function buildLocale(
   const rehosted = new Map<string, RehostResult>();
   for (const url of galleryUrls) {
     try {
-      rehosted.set(url, await rehost(url, `trips/${p.slug}/${nameFromUrl(url)}`, ''));
+      rehosted.set(url, await rehost(url, imageKey(p, url), ''));
     } catch { /* reported by the tally wrapper */ }
   }
   body = rewriteFences(body, (line) => {
@@ -418,6 +466,30 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
   });
 
   /**
+   * Resume lookups, memoised per key. The #94 pre-flight probes every key the
+   * run will touch, and the run then asks again — without this a resumed
+   * 665-photo import would read every original's metadata twice.
+   *
+   * @ai-note Resumability is an OPTIMISATION, so a broken index must degrade to
+   * "fetch it" rather than fail the image. Without this guard a throwing lookup
+   * would propagate into buildLocale's silent catch: no warning, and
+   * hosted + failed !== total.
+   */
+  const resumed = new Map<string, Promise<RehostResult | null>>();
+  const lookupResume = (key: string): Promise<RehostResult | null> => {
+    if (!deps.resume) return Promise.resolve(null);
+    let hit = resumed.get(key);
+    if (!hit) {
+      hit = deps.resume.lookup(key).then((r) => r ?? null, (e: unknown) => {
+        log(`import: resume lookup failed for ${key}, re-fetching: ${(e as Error).message}`);
+        return null;
+      });
+      resumed.set(key, hit);
+    }
+    return hit;
+  };
+
+  /**
    * Resume from disk, count, and report — the one place that sees exactly one
    * call per distinct (pair, url), because `sharedRehost` sits above it.
    *
@@ -427,16 +499,7 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
    */
   const runRehost: RehostFn = async (url, key, alt) => {
     images.total++;
-    // @ai-note Resumability is an OPTIMISATION, so a broken index must degrade to
-    // "fetch it" rather than fail the image. Without this guard a throwing lookup
-    // would propagate into buildLocale's silent catch: no warning, and
-    // hosted + failed !== total.
-    let already: RehostResult | null = null;
-    try {
-      already = (await deps.resume?.lookup(key)) ?? null;
-    } catch (e) {
-      log(`import: resume lookup failed for ${key}, re-fetching: ${(e as Error).message}`);
-    }
+    const already = await lookupResume(key);
     if (already) { images.hosted++; return already; }
     try {
       const r = await resilient(url, key, alt);
@@ -519,11 +582,32 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
   // Count distinct (pair, url) — the same quantity `images.total` tallies per
   // fetch — and reject before any of it happens.
   const cap = deps.maxImages ?? DEFAULT_MAX_IMAGES;
+  const plans = pending.map((g) => rehostPlan(g.de, g.en, attachments));
   let distinct = 0;
-  for (const g of pending) distinct += new Set([...rehostUrlSet(g.de, attachments), ...rehostUrlSet(g.en, attachments)]).size;
+  for (const plan of plans) distinct += plan.size;
   if (distinct > cap) {
     log(`import: ${distinct} distinct images exceeds the cap of ${cap}; rejecting without fetching`);
     throw new ImportTooLargeError(distinct, cap);
+  }
+
+  // issue #94: the /data free-space precondition `/upload` has, sized from the
+  // photos this run will actually FETCH — the ones the resume index does not
+  // already hold — so the post-ENOSPC re-run (the documented recovery path)
+  // is judged on the remainder, not on the whole export again.
+  if (deps.diskSpace) {
+    let toFetch = 0;
+    for (const plan of plans) for (const key of plan.values()) if (!(await lookupResume(key))) toFetch++;
+    let space: DiskSpace | null = null;
+    try {
+      space = await deps.diskSpace();
+    } catch (e) {
+      log(`import: free-space check skipped (statfs failed): ${(e as Error).message}`);
+    }
+    const problem = space && insufficientSpaceForImport(space, toFetch);
+    if (space && problem) {
+      log(`import refused: ${space.free} bytes free, ${toFetch} of ${distinct} photos still to fetch`);
+      throw new ImportInsufficientSpaceError(problem, toFetch, space.free);
+    }
   }
 
   for (const { de, en, prior } of pending) {

@@ -29,7 +29,7 @@ import { renderPreviewHtml } from './preview.js';
 import { type PageStore, type PagePair, type PageContent, type ImageDims, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
-import { importWxr, ImportTooLargeError, type ImportDeps, type ImportSummary } from './wp-import.js';
+import { importWxr, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type ImportSummary } from './wp-import.js';
 import { createRehostResume } from './wp-images.js';
 import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, type RateLimiter, type AccountLimiter } from './rate-limit.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
@@ -1228,12 +1228,19 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
           // A FRESH disk walk per import, which is why this is built here rather
           // than injected once at boot like `settings` or `dbBackup`.
           resume: await createRehostResume({ storageDir: cfg.storageDir, baseUrl: cfg.baseUrl }),
+          // issue #94: the same precondition /upload has, judged on the photos
+          // this run will fetch (see importWxr) rather than a known byte count.
+          diskSpace: () => diskSpace(cfg.storageDir),
           log: (msg) => console.log(msg),
         });
       } catch (e) {
         // issue #96: an export whose distinct-image count exceeds the cap is
         // rejected BEFORE any fetch — a 400 naming the count, not a 500.
         if (e instanceof ImportTooLargeError) return reply.code(400).send({ error: e.message });
+        // issue #94: the volume cannot hold what this run would fetch — 507 like
+        // /upload; the numbers went to stdout from importWxr, the client gets the
+        // sanitized message.
+        if (e instanceof ImportInsufficientSpaceError) return reply.code(507).send({ error: e.message });
         throw e;
       }
       // 400 only when the export yielded no groups at all. Every group lands in exactly
