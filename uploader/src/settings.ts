@@ -45,63 +45,109 @@ export function defaultSettings(): Settings {
   };
 }
 
+/**
+ * One validator per field, each accepting `unknown` — a hand-edited
+ * settings.json can hold any JSON type, so the type check is part of the rule.
+ * Returns the user-facing reason, or `null` when the value is acceptable.
+ * The key order is the order `validate()` reports errors in.
+ */
+const FIELD_CHECKS: { [K in keyof Settings]: (v: unknown) => string | null } = {
+  lmBaseUrl: (v) => {
+    let url: URL;
+    try {
+      url = new URL(typeof v === 'string' ? v : '');
+    } catch {
+      return 'Base URL is not a valid URL.';
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return 'Base URL must start with http:// or https://.';
+    }
+    return null;
+  },
+  lmModel: (v) => (typeof v === 'string' && v.trim() !== '' ? null : 'Model is required.'),
+  captionTimeoutMs: (v) =>
+    intInRange(v, 1000, 600000) ? null : 'Timeout must be a whole number of milliseconds between 1000 and 600000.',
+  captionMaxEdge: (v) =>
+    intInRange(v, 256, 4096) ? null : 'Max edge must be a whole number between 256 and 4096 pixels.',
+  captionPrompt: (v) => (typeof v === 'string' && v.trim() !== '' ? null : 'Prompt is required.'),
+  backupSchedule: (v) =>
+    v === 'off' || v === 'daily' || v === 'weekly' ? null : 'Backup schedule must be off, daily, or weekly.',
+  backupRetention: (v) =>
+    intInRange(v, 1, 100) ? null : 'Backup retention must be a whole number between 1 and 100.',
+  importDelayMs: (v) =>
+    intInRange(v, 0, 10000) ? null : 'Import delay must be a whole number of milliseconds between 0 and 10000.',
+  importRetries: (v) =>
+    intInRange(v, 0, 5) ? null : 'Import retries must be a whole number between 0 and 5.',
+};
+
+const SETTINGS_KEYS = Object.keys(FIELD_CHECKS) as (keyof Settings)[];
+
+function intInRange(v: unknown, min: number, max: number): boolean {
+  return typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
+}
+
 export function validate(s: Settings): Settings {
-  let url: URL;
-  try {
-    url = new URL(s.lmBaseUrl);
-  } catch {
-    throw new SettingsError('Base URL is not a valid URL.');
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new SettingsError('Base URL must start with http:// or https://.');
-  }
-  if (!s.lmModel.trim()) throw new SettingsError('Model is required.');
-  if (!Number.isInteger(s.captionTimeoutMs) || s.captionTimeoutMs < 1000 || s.captionTimeoutMs > 600000) {
-    throw new SettingsError('Timeout must be a whole number of milliseconds between 1000 and 600000.');
-  }
-  if (!Number.isInteger(s.captionMaxEdge) || s.captionMaxEdge < 256 || s.captionMaxEdge > 4096) {
-    throw new SettingsError('Max edge must be a whole number between 256 and 4096 pixels.');
-  }
-  if (!s.captionPrompt.trim()) throw new SettingsError('Prompt is required.');
-  if (!['off', 'daily', 'weekly'].includes(s.backupSchedule)) {
-    throw new SettingsError('Backup schedule must be off, daily, or weekly.');
-  }
-  if (!Number.isInteger(s.backupRetention) || s.backupRetention < 1 || s.backupRetention > 100) {
-    throw new SettingsError('Backup retention must be a whole number between 1 and 100.');
-  }
-  if (!Number.isInteger(s.importDelayMs) || s.importDelayMs < 0 || s.importDelayMs > 10000) {
-    throw new SettingsError('Import delay must be a whole number of milliseconds between 0 and 10000.');
-  }
-  if (!Number.isInteger(s.importRetries) || s.importRetries < 0 || s.importRetries > 5) {
-    throw new SettingsError('Import retries must be a whole number between 0 and 5.');
+  for (const key of SETTINGS_KEYS) {
+    const reason = FIELD_CHECKS[key](s[key]);
+    if (reason) throw new SettingsError(reason);
   }
   return s;
 }
 
-export function createSettingsStore({ path, defaults }: { path: string; defaults: Settings }): SettingsStore {
-  let current: Settings = { ...defaults };
+/**
+ * Read settings.json and merge it over the defaults FIELD BY FIELD. A field the
+ * validator rejects falls back to its own default and is logged by name; every
+ * other field is kept. Whole-file rejection (issue #112) would silently flip
+ * `backupSchedule` back to `off` because an unrelated LM field went out of
+ * range — and nothing would notice until someone opened the Settings page.
+ * Unknown keys are dropped so they are not re-persisted forever.
+ */
+function loadSettings(path: string, defaults: Settings, log: (msg: string) => void): Settings {
+  let raw: string;
   try {
-    // Pick known keys only, so truly unknown fields in an older settings.json are
-    // dropped instead of re-persisted forever.
-    const fromFile = JSON.parse(readFileSync(path, 'utf8')) as Partial<Settings>;
-    const merged: Settings = { ...defaults };
-    if (fromFile.lmBaseUrl !== undefined) merged.lmBaseUrl = fromFile.lmBaseUrl;
-    if (fromFile.lmModel !== undefined) merged.lmModel = fromFile.lmModel;
-    if (fromFile.captionTimeoutMs !== undefined) merged.captionTimeoutMs = fromFile.captionTimeoutMs;
-    if (fromFile.captionMaxEdge !== undefined) merged.captionMaxEdge = fromFile.captionMaxEdge;
-    if (fromFile.captionPrompt !== undefined) merged.captionPrompt = fromFile.captionPrompt;
-    if (fromFile.backupSchedule !== undefined) merged.backupSchedule = fromFile.backupSchedule;
-    if (fromFile.backupRetention !== undefined) merged.backupRetention = fromFile.backupRetention;
-    if (fromFile.importDelayMs !== undefined) merged.importDelayMs = fromFile.importDelayMs;
-    if (fromFile.importRetries !== undefined) merged.importRetries = fromFile.importRetries;
-    // Validate on load too, not just on update(): a hand-edited or partially
-    // written settings.json must not serve out-of-range values (e.g. a negative
-    // captionTimeoutMs reaching the browser's abort timer). Reject → safe defaults.
-    current = validate(merged);
-  } catch {
-    // No file yet, unreadable/corrupt, or failed validation — keep defaults.
-    current = { ...defaults };
+    raw = readFileSync(path, 'utf8');
+  } catch (e) {
+    // No file yet is the normal first-boot state; anything else is worth a line.
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') log(`settings: cannot read ${path}, using defaults: ${(e as Error).message}`);
+    return { ...defaults };
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    log(`settings: ${path} is not valid JSON, using defaults: ${(e as Error).message}`);
+    return { ...defaults };
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    log(`settings: ${path} is not a JSON object, using defaults`);
+    return { ...defaults };
+  }
+  const fromFile = parsed as Record<string, unknown>;
+  const loaded: Record<keyof Settings, unknown> = { ...defaults };
+  for (const key of SETTINGS_KEYS) {
+    const value = fromFile[key];
+    if (value === undefined) continue;
+    const reason = FIELD_CHECKS[key](value);
+    if (reason) {
+      log(`settings: ignoring invalid "${key}" in ${path} (${reason}); using default ${JSON.stringify(defaults[key])}`);
+      continue;
+    }
+    loaded[key] = value;
+  }
+  // Every key was either copied from `defaults` or passed its own type check.
+  return loaded as Settings;
+}
+
+export function createSettingsStore({
+  path,
+  defaults,
+  log = console.error,
+}: {
+  path: string;
+  defaults: Settings;
+  log?: (msg: string) => void;
+}): SettingsStore {
+  let current = loadSettings(path, defaults, log);
 
   return {
     get: () => ({ ...current }),
