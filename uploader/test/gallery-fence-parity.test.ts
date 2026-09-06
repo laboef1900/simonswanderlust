@@ -99,6 +99,8 @@ describe('scanner parity: fenceAt vs the server rewriteFences', () => {
     ['closer with a trailing tab', '```gallery\n' + PHOTO + '\n```\t'],
     ['closer with a trailing NBSP', '```gallery\n' + PHOTO + '\n```' + NBSP + '\n' + PHOTO + '\n```'],
     ['closer with a trailing form feed', '```gallery\n' + PHOTO + '\n```' + FORM_FEED + '\n' + PHOTO + '\n```'],
+    ['CRLF line endings', '```gallery\r\n' + PHOTO + '\r\n```\r\n' + PHOTO + '\r\n```\r\n'],
+    ['CRLF closer followed by prose', '```gallery\r\n' + PHOTO + '\r\n```\r\n\r\nprose | with a pipe\r\n'],
     ['unterminated gallery', '```gallery\n' + PHOTO + '\n\nlater prose | with a pipe'],
     ['unterminated js block', '```js\nconst x = 1;\n\nmore | text'],
     ['backtick in the info string', 'text ```js `x`\n\n```gallery\n' + PHOTO + '\n```'],
@@ -135,6 +137,24 @@ describe('an unterminated gallery is reported, not silently edited', () => {
 
   it('and refuses removal too', () => {
     expect(G.replaceFenceAt(body, body.indexOf('https://i/a'), '').blocked).toBe('unterminated');
+  });
+});
+
+describe('a CRLF gallery is closed, not unterminated', () => {
+  // CodeMirror normalises to LF, so this only bites when raw server text is
+  // handed to the scanner — but the parity rule is the whole point (#142).
+  const body = '```gallery\r\nhttps://i/a | 10x20\r\n```\r\n\r\nreal prose\r\n';
+
+  it('fenceAt ends the block at the closer', () => {
+    const found = G.fenceAt(body, body.indexOf('https://i/a'));
+    expect(found?.unterminated).toBe(false);
+    expect(found?.text).toBe('```gallery\r\nhttps://i/a | 10x20\r\n```\r');
+  });
+
+  it('replaceFenceAt edits the block and leaves the prose alone', () => {
+    const out = G.replaceFenceAt(body, body.indexOf('https://i/a'), '```gallery\nhttps://i/b\n```');
+    expect(out.blocked).toBeUndefined();
+    expect(apply(body, out)).toBe('```gallery\nhttps://i/b\n```\n\r\nreal prose\r\n');
   });
 });
 

@@ -235,6 +235,9 @@ window.GalleryFence = (function () {
    *  3. An unterminated fence runs to EOF, as CommonMark and the server both
    *     have it. Returning null instead made the picker nest a second gallery
    *     inside the first.
+   *  4. A trailing '\r' is stripped before the fence test, as the server does.
+   *     Left on the line it lands in the info string, so a CRLF closer never
+   *     matched rule 2 and a perfectly closed gallery was "unterminated" (#142).
    *
    * Recognising an ENCLOSING fence stays deliberately liberal (indent and tildes
    * included), also matching the server: being generous about what protects
@@ -251,10 +254,15 @@ window.GalleryFence = (function () {
     var open = null;
 
     for (var i = 0; i < lines.length; i++) {
-      var line = lines[i];
+      var raw = lines[i];
       var lineStart = pos;
-      var lineEnd = pos + line.length;
+      var lineEnd = pos + raw.length;
       pos = lineEnd + 1; // + newline
+
+      // Keep CRLF intact: split('\n') leaves the '\r' on the line, and the
+      // server (`rewriteFences`) strips it before testing the fence. Left in,
+      // it lands in `info` and a closer never matches CLOSER_TAIL_RE (#142).
+      var line = raw.charAt(raw.length - 1) === '\r' ? raw.slice(0, -1) : raw;
 
       var m = FENCE_RE.exec(line);
       if (!m) continue;
