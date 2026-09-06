@@ -71,9 +71,15 @@ such hot-link 404s on the live site.
   attacker-influenced export) and the image origin from configuration.
 - The check renders and reads back; it performs no fetch, no DNS, no file access. The rendered
   HTML is discarded — it is never served from here.
-- Origin comparison is **equality on `new URL(u).origin`**, never a prefix — the same rule as the
-  gallery allow-list in `body-images.ts`, for the same reason (`https://img.example.com.evil/x`
-  and `https://img.example.com@evil/x` are foreign).
+- Origin comparison is **equality on `new URL(u, imageOrigin).origin`**, never a prefix — the same
+  rule as the gallery allow-list in `body-images.ts`, for the same reason
+  (`https://img.example.com.evil/x` and `https://img.example.com@evil/x` are foreign). The URL is
+  resolved **against the image host** — the same origin that serves the blog in this deployment —
+  because that is what a browser does with a reference carrying no origin of its own, and the gate
+  must agree with the browser in both directions: `//old.example/a.jpg` (also spelled
+  `&#47;&#47;old.example/a.jpg` or `\\old.example/a.jpg`, all of which WHATWG reads as an
+  authority) is a foreign hot-link the sanitizer keeps, while `https:old.example/a.jpg` is a path
+  on our own host and refusing it would be a false refusal. Parsing without a base got both wrong.
 - The response echoes URLs already in the author's own body back to an admin (publish is
   admin-only); nothing new is disclosed.
 

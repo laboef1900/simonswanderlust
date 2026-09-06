@@ -350,7 +350,11 @@ gallery line fails the origin allow-list), and after the DNS cutover both 404. `
 /posts/:tk/publish` and the bulk `publish` action therefore refuse while the **rendered** body of
 either locale would emit an `<img>` — or contains a gallery line — whose **origin is not the image
 host** (`foreignImageUrls`, `uploader/src/publish-gate.ts` — origin equality, never a prefix, the
-gallery allow-list's rule). The gate renders the body with the build's own `renderMarkdown` and
+gallery allow-list's rule). Each candidate is resolved against the image host first, because a
+browser gives a reference with no origin of its own the page's: `//old.example/a.jpg` (and its
+`&#47;&#47;` and `\\` spellings) is a foreign hot-link the sanitizer keeps, while
+`https:old.example/a.jpg` is a path on our own host and refusing it would be a false refusal.
+The gate renders the body with the build's own `renderMarkdown` and
 reads `img`/`source` sources and gallery lines from the sanitized hast tree itself
 (`bodyImageSources` in `site/src/lib/body-images.ts`, before any `images` resolution), so every Markdown/HTML subtlety — escapes,
 `<…>` destinations, character references, code spans, backticks inside attributes — is decided

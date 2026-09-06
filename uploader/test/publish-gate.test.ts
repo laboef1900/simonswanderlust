@@ -25,7 +25,9 @@ describe('foreignImageUrls', () => {
     const urls = [...html.matchAll(/\b(?:src|srcset)="([^"]*)"/g)]
       .flatMap((m) => (m[1] ?? '').split(',').map((c) => c.trim().split(/\s+/, 1)[0] ?? ''))
       .map((u) => u.replace(/&#x26;/g, '&').replace(/&#x22;/g, '"'));
-    return [...new Set(urls.filter((u) => { try { const p = new URL(u); return (p.protocol === 'https:' || p.protocol === 'http:') && p.origin !== ORIGIN; } catch { return false; } }))];
+    // Resolved against ORIGIN, like a browser on the page: a reference with no
+    // origin of its own (`//host/x`, `\\host/x`) is foreign, `https:host/x` is not.
+    return [...new Set(urls.filter((u) => { try { const p = new URL(u, ORIGIN); return (p.protocol === 'https:' || p.protocol === 'http:') && p.origin !== ORIGIN; } catch { return false; } }))];
   };
 
   const cases: [body: string, expected: string[]][] = [
@@ -62,6 +64,18 @@ describe('foreignImageUrls', () => {
     [`<img src="https&colon;//old&period;example/a.jpg">`, [`${OLD}/a.jpg`]],
     [`<img src="https&#00000058;//old.example/a.jpg">`, [`${OLD}/a.jpg`]],
     [`![x](https://old&#x2e;example/b.jpg)`, [`${OLD}/b.jpg`]],
+    // No scheme of its own: the browser takes the page's, so a protocol-relative
+    // reference IS a foreign hot-link — in every spelling WHATWG reads as an
+    // authority (`//`, its character-reference form, and `\\`).
+    ['![x](//old.example/a.jpg)', ['//old.example/a.jpg']],
+    ['<img src="//old.example/a.jpg">', ['//old.example/a.jpg']],
+    ['<img src="&#47;&#47;old.example/a.jpg">', ['//old.example/a.jpg']],
+    ['<img src="\\\\old.example/a.jpg">', ['\\\\old.example/a.jpg']],
+    [`<picture><source srcset="//old.example/a.jpg 800w"><img src="${ORIGIN}/a"></picture>`, ['//old.example/a.jpg']],
+    // The inverse, and why the base matters in both directions: to a browser
+    // `https:old.example/a.jpg` is a PATH on our own host, so refusing it would
+    // be a false refusal on a body that hot-links nothing.
+    ['<img src="https:old.example/a.jpg">', []],
     // Own-origin URLs, whatever their query encoding, and non-http destinations pass.
     [`![x](${ORIGIN}/a?x=1&AMP;b=2) ![y](${ORIGIN}/a?x=1&amP;b=2) ![z](${ORIGIN}/trips/x/photo)`, []],
     ['![](data:image/png;base64,AAAA) ![](/relative/x.jpg) ![](not a url)', []],
@@ -94,6 +108,13 @@ describe('foreignImageUrls', () => {
       expect(rendered).toContain(`${ORIGIN}/trips/x/one`);
       expect(rendered).not.toContain('old.example');
     }
+  });
+
+  it('reports a protocol-relative gallery line', async () => {
+    const body = ['```gallery', `${ORIGIN}/trips/x/one | 3000x2000`, '//old.example/wp-content/uploads/g.jpg', '```'].join('\n');
+    // galleryPhotos parses the line without a base too, so the renderer drops it
+    // silently — the same disappearing photo, one spelling further out.
+    expect(await foreignImageUrls(body, ORIGIN)).toEqual(['//old.example/wp-content/uploads/g.jpg']);
   });
 
   it('de-duplicates across shapes', async () => {

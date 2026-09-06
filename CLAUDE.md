@@ -868,7 +868,9 @@ blog/
   line) — and after the DNS cutover both 404. `foreignImageUrls(body, imageOrigin)` in
   `publish-gate.ts` **renders** the body with the build's own `renderMarkdown` and reads every
   `img`/`source` URL and gallery line from the sanitized hast tree (`bodyImageSources` in
-  `site/src/lib/body-images.ts`, before `images` resolution) whose origin is not the image host, by **origin equality**;
+  `site/src/lib/body-images.ts`, before `images` resolution) whose origin is not the image host, by
+  **origin equality** on the URL *resolved against that host* — a browser gives an origin-less
+  reference the page's, so `//old.example/a.jpg` hot-links and `https:old.example/a.jpg` does not;
   `POST /posts/:tk/publish` and the bulk action refuse (409, count + up to five examples) before
   the media-store check. Rendering instead of scanning is the lesson of the review: three rounds
   of a text scanner each found a fresh divergence from the renderer (code spans across blocks,

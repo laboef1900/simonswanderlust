@@ -34,7 +34,15 @@ export async function foreignImageUrls(body: string, imageOrigin: string): Promi
   const { sources, galleryLines } = bodyImageSources(await renderMarkdown(body));
   for (const raw of [...sources, ...galleryLines]) {
     let u: URL;
-    try { u = new URL(raw); } catch { continue; }
+    // Resolved against the image host — which in this deployment is the origin
+    // that serves the blog too — because that is what the reader's browser
+    // does with a reference that carries no origin of its own. Parsing without
+    // a base disagreed with it in both directions: `//old.example/a.jpg`
+    // (also its `&#47;&#47;` and `\\` spellings, which WHATWG resolves the same
+    // way) failed to parse and was passed as harmless while the page hot-linked
+    // old.example, and `https:old.example/a.jpg` parsed as a foreign origin
+    // while the browser reads it as a path on our own host — a false refusal.
+    try { u = new URL(raw, allowed); } catch { continue; }
     if (u.protocol !== 'https:' && u.protocol !== 'http:') continue;
     if (u.origin !== allowed) found.add(raw);
   }
