@@ -373,16 +373,19 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       // and the folder only if the photo is still in the root (#135). The
       // browser always sends the folder that is currently open, so a second
       // drop of the same camera export must not relocate a curated photo.
-      const folder2 = existing.folder === '' ? folder : existing.folder;
-      if (alt || title || (folder && existing.folder === '')) {
-        await cfg.media.patch(versionedKey, {
-          ...(title ? { title } : {}), ...(folder && existing.folder === '' ? { folder } : {}),
+      const fillFolder = folder !== '' && existing.folder === '';
+      let stored = existing;
+      if (alt || title || fillFolder) {
+        // Best-effort on a duplicate — but the response reports what was
+        // PERSISTED, so a failed patch cannot claim a folder the photo is not in.
+        stored = await cfg.media.patch(versionedKey, {
+          ...(title ? { title } : {}), ...(fillFolder ? { folder } : {}),
           ...(alt ? { alt: { de: existing.alt.de || alt, en: existing.alt.en || alt } } : {}),
-        }).catch(() => { /* metadata update is best-effort on a duplicate */ });
+        }).catch(() => existing);
       }
       return reply.send({
         src, key: versionedKey, width: existing.width, height: existing.height,
-        status: existing.status, duplicate: true, folder: folder2,
+        status: existing.status, duplicate: true, folder: stored.folder,
         snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt),
       });
     }

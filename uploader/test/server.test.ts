@@ -255,6 +255,19 @@ describe('POST /upload', () => {
     expect(busy.json()).toMatchObject({ duplicate: true, status: 'processing', folder: 'Iceland/South' });
   });
 
+  it('a duplicate reports the folder that was PERSISTED, not the one a failed best-effort patch asked for', async () => {
+    const media = memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
+    const failing: MediaStore = { ...media, patch: async () => { throw new Error('db down'); } };
+    const b = build({ media: failing });
+    const { cookie } = await authed(b);
+    const img = await jpeg();
+    const key = (await upload(b, cookie, { key: 'trips/dup/hero' }, img)).json().key as string;
+    await media.setStatus(key, 'ready');
+    const res = await upload(b, cookie, { key: 'trips/dup/hero', folder: 'Iceland/South' }, img);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ duplicate: true, folder: '' });
+  });
+
   it('serves stored variants with a long immutable cache header', async () => {
     const b = buildEncoding();
     const { cookie } = await authed(b);
