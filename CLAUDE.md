@@ -882,8 +882,9 @@ blog/
   key (`posts` is keyed `(translation_key, locale)`) and `remove()` deleted only `posts`, so up
   to 20 full-body snapshots of a deleted post stayed readable by any author holding a revision
   URL, and — being excluded from backups by design — were never pruned either.
-  `pgPostStore.remove` now deletes post and revisions in one data-modifying CTE (no crash
-  window, no second round trip), `ensureSchema` sweeps orphans left by earlier deletes once per
+  `pgPostStore.remove` now deletes post and revisions in one transaction — two statements, not a
+  data-modifying CTE, whose shared snapshot would miss a revision committed by a save the delete
+  had to wait for — `ensureSchema` sweeps orphans left by earlier deletes once per
   boot, and `GET /posts/:tk/revisions/:id` 404s when the post is gone, like the list route. See
   `docs/superpowers/specs/2026-09-06-delete-post-revisions-design.md` and `SECURITY.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
