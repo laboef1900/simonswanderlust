@@ -486,7 +486,7 @@ export function memoryPostStore(): PostStore {
         hasUnpublishedChanges: status === 'published',
       };
       byKey.set(key, stored);
-      return { translationKey: key, status: stored.status, shared: stored.shared, de: stored.de, en: stored.en, hasUnpublishedChanges: stored.hasUnpublishedChanges, updatedAt: stored.updatedAt };
+      return structuredClone(stored);
     },
     async publish(tk) {
       const p = byKey.get(tk);
@@ -505,6 +505,7 @@ export function memoryPostStore(): PostStore {
     },
     async remove(tk) {
       if (!byKey.delete(tk)) throw new PostError('post not found');
+      revisionsByKey.delete(tk); // #137: snapshots must not outlive their post
     },
     async listRevisions(tk) {
       return (revisionsByKey.get(tk) ?? [])
@@ -784,9 +785,18 @@ export function pgPostStore(pool: DbPool): PostStore {
       if (res.rowCount === 0) throw new PostError('post not found');
     },
     async remove(tk) {
-      // One statement deletes both locale rows atomically and frees their slugs.
-      const res = await pool.query(`DELETE FROM posts WHERE translation_key=$1`, [tk]);
-      if (res.rowCount === 0) throw new PostError('post not found');
+      // One statement deletes both locale rows AND the post's revisions
+      // atomically (#137): post_revisions has no FK — posts is keyed
+      // (translation_key, locale) — so nothing cascades on its own, and a
+      // second round trip would leave a crash window in which the post is
+      // gone but its full-body snapshots stay readable.
+      const { rows } = await pool.query<{ n: number }>(
+        `WITH gone AS (DELETE FROM posts WHERE translation_key = $1 RETURNING 1),
+              revs AS (DELETE FROM post_revisions WHERE translation_key = $1)
+         SELECT count(*)::int AS n FROM gone`,
+        [tk],
+      );
+      if ((rows[0]?.n ?? 0) === 0) throw new PostError('post not found');
     },
     async listRevisions(tk) {
       // Pull only the summary fields out of the jsonb — bodies can be large.

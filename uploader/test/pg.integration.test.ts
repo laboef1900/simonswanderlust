@@ -632,4 +632,41 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     const count = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key=$1`, [tk]);
     expect(count.rows[0].n).toBe(REVISION_CAP);
   });
+
+  // #137: post_revisions has no FK, so nothing cascades on its own.
+  it('remove() deletes the post\'s revisions with it and leaves other posts\' revisions alone', async () => {
+    const store = pgPostStore(pool);
+    const doomed = await store.upsertDraft(base('doomed'));
+    await store.upsertDraft({ ...doomed, de: { ...doomed.de, title: 'edited' } });
+    const kept = await store.upsertDraft(base('kept'));
+    await store.upsertDraft({ ...kept, de: { ...kept.de, title: 'edited' } });
+    const [doomedRev] = await store.listRevisions(doomed.translationKey);
+    expect(doomedRev).toBeDefined();
+
+    await store.remove(doomed.translationKey);
+    expect(await store.listRevisions(doomed.translationKey)).toEqual([]);
+    expect(await store.getRevision(doomed.translationKey, doomedRev!.id)).toBeNull();
+    const { rows } = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key=$1`, [doomed.translationKey]);
+    expect(rows[0].n).toBe(0);
+    expect(await store.listRevisions(kept.translationKey)).toHaveLength(1);
+
+    // An unknown key still reports not found and deletes nothing.
+    await expect(store.remove('no-such-post')).rejects.toThrow('post not found');
+    expect(await store.listRevisions(kept.translationKey)).toHaveLength(1);
+  });
+
+  it('ensureSchema sweeps revisions orphaned before #137 and keeps live posts\' revisions', async () => {
+    const store = pgPostStore(pool);
+    const live = await store.upsertDraft(base('live'));
+    await store.upsertDraft({ ...live, de: { ...live.de, title: 'edited' } });
+    // A revision whose post is gone — what a pre-#137 delete left behind.
+    await pool.query(
+      `INSERT INTO post_revisions (id, translation_key, snapshot) VALUES ($1, 'ghost-post', '{"status":"draft","de":{"title":"secret"}}')`,
+      [randomUUID()],
+    );
+    await ensureSchema(pool);
+    const ghosts = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key='ghost-post'`);
+    expect(ghosts.rows[0].n).toBe(0);
+    expect(await store.listRevisions(live.translationKey)).toHaveLength(1);
+  });
 });

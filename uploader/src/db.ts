@@ -111,6 +111,12 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS post_revisions_tk_saved_idx ON post_revisions (translation_key, saved_at DESC)`);
+  // #137: revisions must not outlive their post. pgPostStore.remove now deletes
+  // them with the post, but rows deleted before that change (and a dump restored
+  // over a database that still holds revisions — dumps carry none) left
+  // full-body snapshots readable forever. Sweep orphans once per boot; a no-op
+  // on a consistent database, indexed on translation_key.
+  await pool.query(`DELETE FROM post_revisions r WHERE NOT EXISTS (SELECT 1 FROM posts p WHERE p.translation_key = r.translation_key)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pages (
       key           text NOT NULL,
