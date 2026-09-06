@@ -4,10 +4,14 @@
 
 ## Decision
 
-1. **`remove()` deletes the revisions with the post, atomically.** `pgPostStore.remove` becomes
-   one statement — a data-modifying CTE that deletes the `posts` rows and the `post_revisions`
-   rows for the same `translation_key` — so there is no window in which the post is gone and its
-   snapshots are not, and no second round trip that a crash could skip. `memoryPostStore.remove`
+1. **`remove()` deletes the revisions with the post, atomically.** `pgPostStore.remove` runs
+   two statements in one transaction — `DELETE FROM posts`, then, only if that deleted a row,
+   `DELETE FROM post_revisions` for the same `translation_key` — so there is no window in which
+   the post is gone and its snapshots are not, and a crash between the two rolls both back.
+   Deliberately **not** one data-modifying CTE: every sub-statement of a CTE shares the
+   statement's snapshot, so a revision committed by a concurrent save while the `posts` DELETE
+   waited on that save's row locks would be invisible to the revisions DELETE and survive; in
+   READ COMMITTED the second statement takes a fresh snapshot and sees it. `memoryPostStore.remove`
    drops its `revisionsByKey` entry. Both `DELETE /posts/:tk` and the bulk `delete` action go
    through the store, so both are covered without touching the routes.
 2. **A one-time orphan sweep at boot.** `ensureSchema` runs
@@ -46,13 +50,17 @@ revision URL. The list route already 404'd (it checks `posts.get` first); the it
 
 ## Misuse / failure cases
 
-- Crash between the `posts` delete and the revisions delete → impossible; one statement.
+- Crash between the `posts` delete and the revisions delete → the transaction rolls back; the
+  post and its revisions are both still there and the delete can be repeated.
 - Restoring a `db-*.json.gz` dump (which has no revisions) over a database that still has them
-  → the sweep on the next boot removes revisions of posts the dump does not contain.
-- Concurrent save and delete: `updateLocale` already throws `post not found` when the pair
-  vanished; a revision inserted by a save that committed before the delete is deleted with the
-  post; one committed after is impossible because the save's transaction reads the post first
-  and the delete has already removed it.
+  → the sweep on the next boot removes revisions of posts the dump does not contain. Until that
+  boot, `remove(<key the dump lacks>)` throws `post not found` and leaves those orphans alone —
+  cleanup is the sweep's job, never a side effect of a failed delete.
+- Concurrent save and delete. Save committed first (the delete's `posts` DELETE waits on the
+  save's row locks, then proceeds): the revision that save inserted is committed by the time the
+  revisions DELETE takes its snapshot, so it is deleted with the post — this is why `remove()`
+  is two statements, not one CTE. Delete committed first: `updateLocale` throws `post not found`
+  inside the save's transaction, which rolls back the revision it had inserted; no orphan.
 
 ## Rollback
 

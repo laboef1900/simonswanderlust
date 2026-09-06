@@ -785,18 +785,30 @@ export function pgPostStore(pool: DbPool): PostStore {
       if (res.rowCount === 0) throw new PostError('post not found');
     },
     async remove(tk) {
-      // One statement deletes both locale rows AND the post's revisions
-      // atomically (#137): post_revisions has no FK — posts is keyed
-      // (translation_key, locale) — so nothing cascades on its own, and a
-      // second round trip would leave a crash window in which the post is
-      // gone but its full-body snapshots stay readable.
-      const { rows } = await pool.query<{ n: number }>(
-        `WITH gone AS (DELETE FROM posts WHERE translation_key = $1 RETURNING 1),
-              revs AS (DELETE FROM post_revisions WHERE translation_key = $1)
-         SELECT count(*)::int AS n FROM gone`,
-        [tk],
-      );
-      if ((rows[0]?.n ?? 0) === 0) throw new PostError('post not found');
+      // Both locale rows AND the post's revisions go in one transaction (#137):
+      // post_revisions has no FK — posts is keyed (translation_key, locale) —
+      // so nothing cascades on its own, and a crash between the two would
+      // leave the post gone but its full-body snapshots readable. Two
+      // statements rather than one data-modifying CTE on purpose: every
+      // sub-statement of a CTE shares the statement's snapshot, so a revision
+      // committed by a concurrent save while the posts DELETE waited on that
+      // save's row locks would be invisible to the revisions DELETE and
+      // survive. In READ COMMITTED the second statement takes a fresh snapshot
+      // and sees it. The revisions DELETE runs only when the post existed:
+      // an unknown key deletes nothing (orphans are the boot sweep's job).
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const gone = await client.query(`DELETE FROM posts WHERE translation_key = $1`, [tk]);
+        if (gone.rowCount === 0) throw new PostError('post not found');
+        await client.query(`DELETE FROM post_revisions WHERE translation_key = $1`, [tk]);
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
     },
     async listRevisions(tk) {
       // Pull only the summary fields out of the jsonb — bodies can be large.
