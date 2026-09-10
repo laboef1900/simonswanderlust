@@ -7,12 +7,9 @@
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body class="login-page">
-    <header class="masthead">
-      <div class="masthead-inner" style="text-align:center">
-        <p class="eyebrow">Expedition Log · Image Station</p>
-        <h1 id="title">Sign in</h1>
-        <p class="lede" id="lede" style="margin-left:auto;margin-right:auto">Enter your username and password.</p>
-      </div>
+    <header class="login-brand">
+      <h1>Image Station</h1>
+      <p>Expedition Log</p>
     </header>
     <main>
       <!-- @ai-note: a real <form> (not bare inputs plus a click handler) so that
@@ -20,17 +17,15 @@
            card itself is the form so `.card > label:first-of-type` still matches.
            Submission is intercepted below; there is deliberately no action/method. -->
       <form class="card" id="login-form">
+        <h2 id="title">Sign in</h2>
+        <p class="lede" id="lede">Enter your username and password.</p>
         <label for="username">Username</label>
         <input id="username" type="text" autocomplete="username" />
         <label for="password">Password</label>
         <input id="password" type="password" autocomplete="current-password" />
         <button id="submit" type="submit">Sign in</button>
-        <p class="section-label" style="margin-top:1.25rem">Status</p>
-        <!-- Two live regions, the editor's pattern: progress is polite (a
-             status region must already exist to be announced), the failure —
-             the only feedback a locked-out user gets — interrupts. -->
-        <pre id="out" role="status">—</pre>
-        <p id="err" class="err" role="alert" style="display:none"></p>
+        <p id="out" class="page-status" role="status"></p>
+        <p id="err" class="err" role="alert" hidden></p>
       </form>
     </main>
     <script src="/admin/auth.js"></script>
@@ -38,8 +33,6 @@
     <script>
       const $ = (id) => document.getElementById(id);
       let needsSetup = false;
-      // Post-login return target (?next=…), validated to same-origin /admin/ paths
-      // so an expired session lands back on the exact page (e.g. the editor).
       const nextPath = DraftGuard.safeNextPath(new URLSearchParams(location.search).get('next'));
       async function init() {
         const s = await Auth.status();
@@ -52,8 +45,8 @@
           $('password').setAttribute('autocomplete', 'new-password');
         }
       }
-      function setStatus(msg) { $('out').textContent = msg || '—'; }
-      function showErr(msg) { const el = $('err'); el.textContent = msg; el.style.display = msg ? '' : 'none'; }
+      function setStatus(msg) { $('out').textContent = msg || ''; }
+      function showErr(msg) { const el = $('err'); el.textContent = msg; el.hidden = !msg; }
       $('login-form').addEventListener('submit', async (event) => {
         event.preventDefault();
         showErr('');
@@ -69,10 +62,10 @@
           if (res.ok) { location.href = nextPath; return; }
           const r = await res.json().catch(() => ({}));
           setStatus('');
-          showErr(r.error || ('Failed: ' + res.status));
+          showErr(r.error || 'Sign-in failed. Check your username and password.');
         } catch (e) {
           setStatus('');
-          showErr('Error: ' + e);
+          showErr('Could not reach the server. Check your connection and try again.');
         }
       });
       init();

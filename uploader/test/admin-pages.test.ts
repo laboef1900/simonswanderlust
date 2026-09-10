@@ -488,22 +488,26 @@ describe('admin page wiring', () => {
   it('the runtime shell is Image Station, not Wanderlust CMS', () => {
     expect(auth).toContain('Image Station');
     expect(auth).toContain('Expedition Log');
-    expect(auth).toContain('aria-label="Log out"');
+    expect(auth).toContain('Log out');
     expect(auth).toContain('class="skip-link"');
     expect(auth).not.toContain('Wanderlust CMS');
     expect(auth).not.toContain('System Live');
     expect(auth).not.toContain('cms-brand-badge');
     expect(auth).not.toContain('#38bdf8');
+    expect(auth).not.toContain('aria-label="Log out"');
   });
 
-  it('Publish, Rebuild, Save & rebuild, and Unpublish go through AdminConfirm', () => {
+  it('Publish, Rebuild, Save & rebuild, Unpublish, and Delete go through AdminConfirm', () => {
     expect(editor).toContain('AdminConfirm.ask');
     expect(editor).toContain('Publish to the live site?');
     expect(editor).toContain('setPublishedLive');
     expect(about).toContain('AdminConfirm.ask');
-    expect(about).toContain('Save About and rebuild the live site?');
+    expect(about).toContain('Publish the About page?');
     expect(readFileSync('public/settings.html', 'utf8')).toContain('Rebuild the live site?');
     expect(readFileSync('public/posts.html', 'utf8')).toContain('Unpublish this trip?');
+    expect(readFileSync('public/posts.html', 'utf8')).toContain('Delete this trip?');
+    expect(readFileSync('public/users.html', 'utf8')).toContain('Remove this account?');
+    expect(readFileSync('public/media-browser.js', 'utf8')).toContain('Delete this photo?');
   });
 
   it('the desk is a publishing home, not a second uploader', () => {
@@ -538,7 +542,7 @@ describe('admin page wiring', () => {
     expect(about).toContain("'Upload failed: ' + e");
     expect(about).toContain("'Save failed: ' + e");
     expect(about).toContain("'Could not load: ' + e");
-    expect(login).toContain("'Error: ' + e");
+    expect(login).toContain('Could not reach the server');
   });
 
   it('declining the restore prompt keeps the stash (non-destructive) instead of wiping it', () => {

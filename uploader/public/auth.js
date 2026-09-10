@@ -92,34 +92,13 @@ window.Auth = (function () {
   function renderHeader(s) {
     if (document.querySelector('.cms-app-shell')) return;
 
-    const legacyNav = document.getElementById('mainnav');
-    if (legacyNav) {
-      legacyNav.textContent = '';
-      const here = currentNavHref();
-      for (const item of NAV) {
-        if (item.admin && !s.isAdmin) continue;
-        const a = document.createElement('a');
-        a.href = item.href;
-        a.textContent = item.label;
-        if (item.href === here) a.setAttribute('aria-current', 'page');
-        legacyNav.appendChild(a);
-      }
-    }
-
-    const legacyWhoami = document.getElementById('whoami');
-    if (legacyWhoami) {
-      legacyWhoami.textContent = 'Logged in as ' + s.username;
-    }
-
     const body = document.body;
-    const masthead = document.querySelector('.masthead');
     const main = document.querySelector('main');
-    if (!masthead || !main) return;
+    if (!main) return;
 
-    const pageTitle = masthead.querySelector('h1')?.textContent || 'Image Station';
-    const pageLede = masthead.querySelector('.lede')?.textContent || '';
-    masthead.hidden = true;
-
+    const meta = document.querySelector('.cms-page-meta') || document.querySelector('.masthead');
+    const heading = meta && meta.querySelector('h1');
+    const lede = meta && meta.querySelector('.lede');
     if (!main.id) main.id = 'cms-main';
 
     const here = currentNavHref();
@@ -152,8 +131,9 @@ window.Auth = (function () {
               '<span class="cms-user-role"></span>' +
             '</div>' +
           '</div>' +
-          '<button type="button" id="cmsLogoutBtn" class="cms-logout-btn" aria-label="Log out">' +
+          '<button type="button" id="cmsLogoutBtn" class="cms-logout-btn">' +
             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>' +
+            '<span>Log out</span>' +
           '</button>' +
         '</div>' +
       '</aside>' +
@@ -163,10 +143,7 @@ window.Auth = (function () {
             '<button type="button" class="cms-menu-btn" id="cmsMenuBtn" aria-expanded="false" aria-controls="cmsSidebar" aria-label="Open menu">' +
               '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>' +
             '</button>' +
-            '<div class="cms-title-block">' +
-              '<h1 class="cms-page-title"></h1>' +
-              '<p class="cms-page-lede" hidden></p>' +
-            '</div>' +
+            '<div class="cms-title-block"></div>' +
           '</div>' +
           '<div class="cms-topbar-right">' +
             '<a href="/" target="_blank" rel="noopener" class="cms-btn-ghost">View site</a>' +
@@ -175,17 +152,27 @@ window.Auth = (function () {
         '<div class="cms-content"></div>' +
       '</div>';
 
-    // The username is the one user-controlled string in this shell; it is set
-    // as text AFTER the parse so it can never be markup (#131).
+    // Username is the one user-controlled string in this shell; set as text
+    // AFTER the parse so it can never be markup (#131).
     shell.querySelector('.cms-avatar').textContent = (s.username[0] || '?').toUpperCase();
     shell.querySelector('.cms-user-name').textContent = s.username;
     shell.querySelector('.cms-user-role').textContent = s.isAdmin ? 'Admin' : 'Author';
-    shell.querySelector('.cms-page-title').textContent = pageTitle;
-    const ledeEl = shell.querySelector('.cms-page-lede');
-    if (pageLede) {
-      ledeEl.textContent = pageLede;
-      ledeEl.hidden = false;
+
+    const titleBlock = shell.querySelector('.cms-title-block');
+    if (heading) {
+      heading.className = 'cms-page-title';
+      titleBlock.appendChild(heading);
+    } else {
+      const t = document.createElement('h1');
+      t.className = 'cms-page-title';
+      t.textContent = 'Image Station';
+      titleBlock.appendChild(t);
     }
+    if (lede) {
+      lede.className = 'cms-page-lede';
+      titleBlock.appendChild(lede);
+    }
+    if (meta) meta.remove();
 
     const contentArea = shell.querySelector('.cms-content');
     contentArea.appendChild(main);

@@ -482,7 +482,13 @@
   }
 
   async function deleteOne(item) {
-    if (!confirm('Delete "' + (item.title || item.key) + '"?\n\nThe image files and its metadata are removed. This cannot be undone.')) return;
+    var ok = await window.AdminConfirm.ask({
+      title: 'Delete this photo?',
+      body: '"' + (item.title || item.key) + '"\n\nThe image files and its metadata are removed. This cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await client.remove(item.key);
       state.detailKey = null;
@@ -511,6 +517,13 @@
     $('fRecursive').addEventListener('change', function () {
       state.recursive = $('fRecursive').checked;
       reload();
+    });
+    var more = $('fMore');
+    if (more) more.addEventListener('click', function () {
+      var extra = $('fExtra');
+      extra.hidden = !extra.hidden;
+      more.setAttribute('aria-expanded', extra.hidden ? 'false' : 'true');
+      more.textContent = extra.hidden ? 'More filters' : 'Fewer filters';
     });
     $('prevPage').addEventListener('click', function () { state.page = Math.max(1, state.page - 1); reload(); });
     $('nextPage').addEventListener('click', function () { state.page += 1; reload(); });
@@ -555,7 +568,13 @@
     });
     $('deleteFolder').addEventListener('click', async function () {
       if (!state.folder) { say('Pick a folder first.'); return; }
-      if (!confirm('Delete the empty folder "' + state.folder + '"?')) return;
+      var ok = await window.AdminConfirm.ask({
+        title: 'Delete this folder?',
+        body: 'Delete the empty folder "' + state.folder + '"?',
+        confirmLabel: 'Delete',
+        danger: true,
+      });
+      if (!ok) return;
       try {
         await client.deleteFolder(state.folder);
         state.folder = api.parentOf(state.folder);

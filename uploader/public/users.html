@@ -7,13 +7,8 @@
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body>
-    <header class="masthead">
-      <div class="masthead-inner">
-        <nav id="mainnav" aria-label="Admin"></nav>
-        <p class="eyebrow">Expedition Log · Image Station</p>
-        <h1>Users</h1>
-        <p class="muted" id="whoami"></p>
-      </div>
+    <header class="cms-page-meta">
+      <h1>Users</h1>
     </header>
     <main>
       <!-- Real <form>s (not bare inputs plus a click handler) so that Enter in a
@@ -27,8 +22,7 @@
         <input id="password" type="password" autocomplete="new-password" />
         <label><input id="isAdmin" type="checkbox" /> Administrator</label>
         <button id="add" type="submit">Add user</button>
-        <p class="section-label">Status</p>
-        <pre id="out" role="status">—</pre>
+        <p id="out" class="page-status" role="status"></p>
       </form>
       <section class="card">
         <h2>Existing users</h2>
@@ -41,11 +35,11 @@
         <label for="newpw">New password</label>
         <input id="newpw" type="password" autocomplete="new-password" />
         <button id="changepw" type="submit">Change password</button>
-        <p class="section-label">Status</p>
-        <pre id="pwout" role="status">—</pre>
+        <p id="pwout" class="page-status" role="status"></p>
       </form>
     </main>
     <script src="/admin/auth.js"></script>
+    <script src="/admin/admin-confirm.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       let me = null;
@@ -63,14 +57,17 @@
           if (!(me && u.username === me.username)) {
             const btn = document.createElement('button');
             btn.textContent = 'Remove';
+            btn.className = 'btn-remove';
             btn.setAttribute('aria-label', 'Remove user ' + u.username);
             btn.addEventListener('click', async () => {
-              // Irreversible and cascading: sessions are dropped and media
-              // attribution is nulled (db.ts). Name the scope before acting.
-              if (!confirm('Remove the ' + role + ' account "' + u.username + '"?\n\n'
-                + 'They are logged out of every session immediately, and their name is cleared from the photos they uploaded. '
-                + 'This cannot be undone.')) return;
-              btn.disabled = true; // no double-fire while the request is in flight
+              const ok = await AdminConfirm.ask({
+                title: 'Remove this account?',
+                body: 'Remove the ' + role + ' account "' + u.username + '"?\n\nThey are logged out of every session immediately, and their name is cleared from the photos they uploaded. This cannot be undone.',
+                confirmLabel: 'Remove',
+                danger: true,
+              });
+              if (!ok) return;
+              btn.disabled = true;
               $('out').textContent = 'Removing ' + u.username + '…';
               try {
                 const d = await fetch('/users/' + u.id, { method: 'DELETE' });

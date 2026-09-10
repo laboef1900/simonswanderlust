@@ -157,10 +157,8 @@ describe('posts.html wiring', () => {
   });
 
   it('requires a typed confirmation for bulk delete only', () => {
-    // Bulk delete is irreversible (revisions are per-save snapshots and
-    // remove() hard-deletes both locale rows) — a plain confirm() is not enough.
     expect(page).toContain("Type DELETE to confirm:");
-    expect(page).toContain("return typed === 'DELETE'");
+    expect(page).toContain("typed: 'DELETE'");
   });
 
   it('posts bulk actions to the single admin-only endpoint', () => {

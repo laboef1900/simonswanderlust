@@ -61,73 +61,35 @@ body {
   line-height: 1.55;
 }
 
-/* ---- masthead (navy band — identical to blog header/footer) ---- */
-.masthead {
+.login-brand {
   background: var(--navy);
   color: #fff;
-  padding: 0;
+  text-align: center;
+  padding: 2rem 1.25rem 1.5rem;
 }
-.masthead-inner {
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 1.5rem 1.25rem 1.25rem;
-}
-.eyebrow {
+.login-brand h1 {
   margin: 0;
-  font-family: var(--mono);
-  font-size: 0.65rem;
-  font-weight: 600;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--red-light);
-}
-.masthead h1 {
-  margin: 0.3rem 0 0;
   font-size: clamp(1.4rem, 3.5vw, 1.75rem);
   font-weight: 800;
   letter-spacing: -0.01em;
-  color: #fff;
 }
-.masthead .lede {
-  margin: 0.4rem 0 0;
-  max-width: 56ch;
-  color: rgba(255, 255, 255, 0.65);
+.login-brand p {
+  margin: 0.35rem 0 0;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.78);
+}
+body.login-page .card h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.15rem;
+  color: var(--navy);
+}
+body.login-page .card .lede {
+  margin: 0 0 1rem;
   font-size: 0.9rem;
-  line-height: 1.5;
-}
-
-/* Navigation — clean text links matching the blog nav, active = brand-red */
-.masthead nav {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.15rem;
-  margin-top: 1rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  padding-top: 0.85rem;
-}
-.masthead nav a {
-  font-family: var(--sans);
-  font-size: 0.78rem;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.7);
-  text-decoration: none;
-  padding: 0.4rem 0.75rem;
-  border-radius: 0.35rem;
-  transition: color 0.15s, background 0.15s;
-}
-.masthead nav a:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.06);
-}
-/* @ai-note: --red-light straight on the navy + 6% white pill is only 3.97:1 —
-   under AA for this 0.78rem label. Tinting the brand red 18% toward white keeps
-   the palette and lifts it to 4.74:1 (5.66:1 on bare navy). If color-mix is
-   unsupported the declaration drops and the link inherits the 6.9:1 white. */
-.masthead nav a[aria-current='page'] {
-  color: color-mix(in srgb, var(--red-light) 82%, #fff);
-  font-weight: 600;
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
 }
 
 /* ---- layout ---- */
@@ -166,9 +128,9 @@ label {
   display: block;
   margin: 1rem 0 0.35rem;
   font-family: var(--mono);
-  font-size: 0.65rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  letter-spacing: 0.15em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--navy);
 }
@@ -208,13 +170,14 @@ input[type='file']::file-selector-button {
 }
 input[type='file']::file-selector-button:hover { background: var(--red); }
 
-/* ---- buttons ---- */
+/* Default control is navy. Live-site mutations (Publish / Rebuild) are the
+   only red. Destructive actions use .btn-remove. */
 button {
   margin-top: 1.25rem;
   padding: 0.65rem 1.2rem;
   border: 0;
   border-radius: 0.4rem;
-  background: var(--red);
+  background: var(--navy);
   color: #fff;
   font-family: var(--sans);
   font-weight: 600;
@@ -222,44 +185,29 @@ button {
   cursor: pointer;
   transition: background 0.15s, transform 0.1s;
 }
-button:hover { background: var(--red-light); }
+button:hover { background: #1e3f5e; }
 button:active { transform: scale(0.98); }
 button:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
 
-/* ---- route divider (dashed line — matches blog RouteDivider) ---- */
-.route {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin: 1.75rem 0 1rem;
-}
-.route .dot {
-  height: 5px;
-  width: 5px;
-  border-radius: 9999px;
+.btn-primary,
+.btn-primary-publish,
+.btn-publish {
   background: var(--red);
+  color: #fff;
 }
-.route .ring {
-  height: 5px;
-  width: 5px;
-  border-radius: 9999px;
-  border: 1.5px solid var(--red);
-  background: var(--canvas);
-}
-.route .seg {
-  flex: 1;
-  border-top: 2px dashed var(--line);
-}
-.route svg { color: rgba(22, 33, 46, 0.35); }
+.btn-primary:hover,
+.btn-primary-publish:hover,
+.btn-publish:hover { background: var(--red-light); }
+
 
 .section-label {
   margin: 0 0 0.5rem;
   font-family: var(--mono);
-  font-size: 0.65rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--red);
+  color: var(--navy);
 }
 
 /* ---- output (terminal readout) ---- */
@@ -275,6 +223,27 @@ pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.page-status {
+  margin: 0.5rem 0 0;
+  min-height: 1.25rem;
+  font-size: 0.88rem;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.page-status:empty { display: none; }
+.cms-page-meta {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 1.25rem 1.25rem 0;
+}
+.cms-page-meta h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  color: var(--navy);
+}
+.cms-app-shell .cms-page-meta { display: none; }
 
 .err {
   color: var(--red);
@@ -297,7 +266,7 @@ small {
 .notice-warn {
   margin-top: 0.75rem;
   padding: 0.65rem 0.8rem;
-  border-left: 3px solid #b45309;
+  border: 1px solid #b45309;
   background: #fef3c7;
   color: #92400e;
   font-size: 0.88rem;
@@ -335,17 +304,15 @@ small {
 
 .btn-new {
   display: inline-block;
-  padding: 0.6rem 1.1rem;
-  background: var(--red);
+  background: var(--navy);
   color: #fff;
-  font-family: var(--sans);
+  text-decoration: none;
+  padding: 0.65rem 1.2rem;
+  border-radius: 0.4rem;
   font-weight: 600;
   font-size: 0.85rem;
-  text-decoration: none;
-  border-radius: 0.4rem;
-  transition: background 0.15s;
 }
-.btn-new:hover { background: var(--red-light); }
+.btn-new:hover { background: #1e3f5e; color: #fff; }
 
 .posts-table {
   width: 100%;
@@ -356,10 +323,10 @@ small {
   text-align: left;
   padding: 0.4rem 0.6rem;
   font-family: var(--mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.14em;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--navy);
   border-bottom: 2px solid var(--line-strong);
 }
 .posts-table td {
@@ -419,10 +386,10 @@ small {
 }
 .filter-field > span {
   font-family: var(--mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.14em;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--navy);
 }
 .filter-field input,
 .filter-field select { margin: 0; font-size: 0.85rem; padding: 0.4rem 0.55rem; }
@@ -473,10 +440,10 @@ small {
 .drop-zone__pick { display: inline-flex; flex-direction: column; gap: 0.4rem; align-items: center; }
 .drop-zone__pick > span {
   font-family: var(--mono);
-  font-size: 0.65rem;
-  letter-spacing: 0.12em;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--navy);
 }
 
 .upload-queue { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.3rem; }
@@ -490,7 +457,6 @@ small {
   border-bottom: 1px solid var(--line);
 }
 .upload-row__name { overflow-wrap: anywhere; }
-.upload-row__state { white-space: nowrap; color: var(--muted); }
 
 .media-layout {
   display: grid;
@@ -520,7 +486,7 @@ small {
 .folder-btn:hover { background: #f3f4f6; }
 .folder-btn.is-current { background: var(--navy); color: #fff; }
 .folder-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.folder-actions button { margin-top: 0; font-size: 0.68rem; padding: 0.3rem 0.5rem; }
+.folder-actions button { margin-top: 0; font-size: 0.78rem; padding: 0.3rem 0.5rem; }
 
 .media-grid {
   display: grid;
@@ -843,11 +809,6 @@ a:hover { color: var(--red-light); }
 @media (max-width: 600px) {
   .form-row-2 { grid-template-columns: 1fr; }
   .posts-toolbar { flex-direction: column; align-items: flex-start; }
-  .masthead nav { flex-wrap: wrap; }
-  .masthead nav a {
-    padding: 0.35rem 0.55rem;
-    font-size: 0.72rem;
-  }
 }
 
 /* ── gallery picker: the ordering strip (#75) ─────────────────────────────
@@ -954,14 +915,15 @@ a:hover { color: var(--red-light); }
   gap: 0.4rem;
   width: 100%;
   padding: 0.55rem 0.85rem;
-  background: var(--red);
+  background: transparent;
   color: #fff;
   font-weight: 600;
   font-size: 0.85rem;
   border-radius: 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.55);
   text-decoration: none;
 }
-.cms-btn-new:hover { background: var(--red-light); color: #fff; }
+.cms-btn-new:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
 .cms-btn-new svg { width: 1rem; height: 1rem; }
 
 .cms-nav-group {
@@ -1052,15 +1014,17 @@ a:hover { color: var(--red-light); }
   background: transparent;
   border: 0;
   color: rgba(255, 255, 255, 0.88);
-  padding: 0.4rem;
+  padding: 0.4rem 0.55rem;
   border-radius: 0.3rem;
   cursor: pointer;
-  display: flex;
+  display: inline-flex;
+  gap: 0.35rem;
   margin: 0;
-  min-width: 2.5rem;
   min-height: 2.5rem;
   align-items: center;
   justify-content: center;
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 .cms-logout-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
 .cms-logout-btn svg { width: 1.1rem; height: 1.1rem; }
@@ -1132,7 +1096,10 @@ a:hover { color: var(--red-light); }
   max-width: 52rem;
   width: 100%;
 }
-.cms-nav-scrim { display: none; }
+.cms-content:has(.editor-workspace),
+.cms-content:has(.media-layout) {
+  max-width: none;
+}
 
 @media (max-width: 900px) {
   .cms-app-shell { display: block; }
@@ -1236,9 +1203,7 @@ a:hover { color: var(--red-light); }
   border-radius: 50%;
   background: currentColor;
 }
-/* ==========================================
-   MODERN EXPEDITION STUDIO EDITOR WORKSPACE
-   ========================================== */
+/* Editor workspace */
 
 .editor-workspace {
   display: grid;
@@ -1288,11 +1253,11 @@ a:hover { color: var(--red-light); }
 
 .lang-switch-bar {
   display: flex;
-  background: #f1f5f9;
+  background: var(--canvas);
   padding: 0.25rem;
   border-radius: 0.5rem;
   gap: 0.25rem;
-  border: 1px solid rgba(20, 42, 66, 0.08);
+  border: 1px solid var(--line);
 }
 
 .lang-switch-bar .tab-btn {
@@ -1302,7 +1267,7 @@ a:hover { color: var(--red-light); }
   padding: 0.45rem 0.95rem;
   font-size: 0.825rem;
   font-weight: 600;
-  color: #64748b;
+  color: var(--muted);
   background: transparent;
   display: inline-flex;
   align-items: center;
@@ -1367,10 +1332,10 @@ a:hover { color: var(--red-light); }
   width: 100%;
   border: none;
   background: transparent;
-  font-size: 1.85rem;
-  font-weight: 800;
+  font-size: 1.35rem;
+  font-weight: 650;
   line-height: 1.25;
-  color: #0f172a;
+  color: var(--ink);
   padding: 0.5rem 0;
   margin-bottom: 0.5rem;
   border-bottom: 2px solid transparent;
@@ -1387,25 +1352,23 @@ a:hover { color: var(--red-light); }
 }
 
 .editor-title-input::placeholder {
-  color: #94a3b8;
+  color: var(--muted);
   font-weight: 700;
 }
 
 /* Hero Banner Zone */
 .hero-banner-zone {
-  background: #f8fafc;
-  border: 2px dashed rgba(20, 42, 66, 0.12);
+  background: var(--canvas);
+  border: 2px dashed var(--line-control);
   border-radius: 0.65rem;
   padding: 1.25rem;
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
-  transition: all 0.15s ease;
 }
-
 .hero-banner-zone:hover {
-  border-color: rgba(20, 42, 66, 0.25);
-  background: #f1f5f9;
+  border-color: var(--navy);
+  background: #fff;
 }
 
 .hero-actions-row {
@@ -1419,24 +1382,7 @@ a:hover { color: var(--red-light); }
   margin-top: 0;
 }
 
-/* Permanent Link / Slug Bar */
-.permalink-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  background: #f8fafc;
-  border: 1px solid rgba(20, 42, 66, 0.12);
-  border-radius: 0.5rem;
-  padding: 0.35rem 0.75rem;
-  margin-bottom: 1rem;
-}
 
-.permalink-label {
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  color: #64748b;
-  white-space: nowrap;
-}
 
 /* EasyMDE Editor Overrides */
 .EasyMDEContainer {
@@ -1448,20 +1394,21 @@ a:hover { color: var(--red-light); }
 }
 
 .EasyMDEContainer .editor-toolbar {
-  background: #f8fafc;
+  background: var(--canvas);
   border: none;
-  border-bottom: 1px solid rgba(20, 42, 66, 0.08);
+  border-bottom: 1px solid var(--line);
   opacity: 0.95;
   padding: 0.5rem;
 }
-
 .EasyMDEContainer .editor-toolbar button {
   border-radius: 0.35rem;
-  color: #334155;
+  color: var(--ink);
+  background: transparent;
+  margin-top: 0;
+  padding: 0.25rem 0.4rem;
 }
-
 .EasyMDEContainer .editor-toolbar button:hover {
-  background: #e2e8f0;
+  background: #e8edf2;
 }
 
 .EasyMDEContainer .CodeMirror {
@@ -1526,6 +1473,10 @@ a:hover { color: var(--red-light); }
   gap: 0.5rem;
 }
 .editor-sticky-bar button { margin-top: 0; }
+.editor-sticky-bar button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
 .editor-sticky-bar a { color: #fff; text-decoration: underline; }
 .editor-sticky-bar a:hover { color: #fff; }
 .btn-primary-publish {
@@ -1544,4 +1495,85 @@ a:hover { color: var(--red-light); }
   border-radius: 0.4rem;
 }
 .btn-ghost-preview:hover { background: rgba(255, 255, 255, 0.12); }
+
+.hero-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin: 0;
+  cursor: pointer;
+}
+.hero-drop-copy {
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+.hero-drop-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+.hero-drop:focus-within .hero-drop-copy {
+  color: var(--navy);
+}
+
+.editor-card > summary.editor-card-title {
+  cursor: pointer;
+  list-style: none;
+}
+.editor-card > summary.editor-card-title::-webkit-details-marker { display: none; }
+.editor-card > summary.editor-card-title::after {
+  content: 'Show';
+  margin-left: auto;
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 600;
+  color: var(--muted);
+}
+.editor-card[open] > summary.editor-card-title::after { content: 'Hide'; }
+
+.locale-chip {
+  margin: 0;
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.85);
+  white-space: normal;
+}
+.locale-chip.is-incomplete { color: #fde68a; }
+.locale-chip-link {
+  margin: 0;
+  padding: 0.15rem 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  min-height: 1.5rem;
+}
+.locale-chip-link:hover { color: #fff; }
+
+.posts-filters-extra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  width: 100%;
+}
+.posts-filters-extra[hidden] { display: none; }
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.settings-actions button { margin-top: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cms-sidebar { transition: none; }
+}
 

@@ -7,24 +7,20 @@
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body>
-    <header class="masthead">
-      <div class="masthead-inner">
-        <nav id="mainnav" aria-label="Admin"></nav>
-        <p class="eyebrow">Expedition Log · Image Station</p>
-        <h1>Posts</h1>
-        <p class="lede">Manage DE/EN post pairs — create drafts, edit content, and publish to the live blog.</p>
-        <p class="muted" id="whoami"></p>
-      </div>
+    <header class="cms-page-meta">
+      <h1>Posts</h1>
+      <p class="lede">Manage DE/EN post pairs — create drafts, edit content, and publish to the live blog.</p>
     </header>
 
     <main>
       <section class="card">
         <div class="posts-toolbar">
-          <a href="/admin/editor.html" class="btn-new">+ New post</a>
-          <button id="exportAll">Export all</button>
+          <a href="/admin/editor.html" class="btn-new">New post</a>
+          <button id="exportAll" type="button" class="btn-secondary">Export all</button>
+          <p id="out" class="page-status" role="status"></p>
         </div>
 
-        <div class="posts-filters" id="filters" style="display:none">
+        <div class="posts-filters" id="filters" hidden>
           <label class="filter-field">
             <span>Search</span>
             <input id="fSearch" type="search" placeholder="Title, slug or country" autocomplete="off" />
@@ -37,36 +33,39 @@
               <option value="published">Published</option>
             </select>
           </label>
-          <label class="filter-field">
-            <span>Region</span>
-            <select id="fRegion"><option value="">All</option></select>
-          </label>
-          <label class="filter-field">
-            <span>Country</span>
-            <select id="fCountry"><option value="">All</option></select>
-          </label>
-          <label class="filter-field">
-            <span>Sort</span>
-            <select id="fSort">
-              <option value="updated">Updated</option>
-              <option value="date">Trip date</option>
-              <option value="title">Title (DE)</option>
-            </select>
-          </label>
-          <label class="filter-field">
-            <span>Order</span>
-            <select id="fOrder">
-              <option value="desc">Descending</option>
-              <option value="asc">Ascending</option>
-            </select>
-          </label>
-          <button id="fReset" class="btn-remove filter-reset" type="button">Reset</button>
+          <button type="button" id="fMore" class="btn-link filter-reset" aria-expanded="false" aria-controls="fExtra">More filters</button>
+          <div class="posts-filters-extra" id="fExtra" hidden>
+            <label class="filter-field">
+              <span>Region</span>
+              <select id="fRegion"><option value="">All</option></select>
+            </label>
+            <label class="filter-field">
+              <span>Country</span>
+              <select id="fCountry"><option value="">All</option></select>
+            </label>
+            <label class="filter-field">
+              <span>Sort</span>
+              <select id="fSort">
+                <option value="updated">Updated</option>
+                <option value="date">Trip date</option>
+                <option value="title">Title (DE)</option>
+              </select>
+            </label>
+            <label class="filter-field">
+              <span>Order</span>
+              <select id="fOrder">
+                <option value="desc">Descending</option>
+                <option value="asc">Ascending</option>
+              </select>
+            </label>
+            <button id="fReset" class="btn-secondary filter-reset" type="button">Reset</button>
+          </div>
         </div>
 
         <div class="bulk-bar" id="bulkBar" hidden>
           <span id="bulkCount" aria-live="polite"></span>
-          <button id="bulkPublish" type="button">Publish</button>
-          <button id="bulkUnpublish" type="button">Unpublish</button>
+          <button id="bulkPublish" type="button" class="btn-primary">Publish</button>
+          <button id="bulkUnpublish" type="button" class="btn-secondary">Unpublish</button>
           <button id="bulkDelete" type="button" class="btn-remove">Delete</button>
         </div>
 
@@ -87,14 +86,6 @@
         </table>
       </section>
 
-      <div class="route" aria-hidden="true">
-        <span class="dot"></span><span class="seg"></span>
-        <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>
-        <span class="seg"></span><span class="ring"></span>
-      </div>
-
-      <p class="section-label">Status</p>
-      <pre id="out" role="status">—</pre>
     </main>
 
     <script src="/admin/auth.js"></script>
@@ -168,7 +159,13 @@
         const warning = p.status === 'published'
           ? '\n\nThis post is PUBLISHED — it will be removed from the live site on the next build.'
           : '';
-        if (!confirm('Delete "' + title + '"' + slugSuffix(p) + '?' + warning + '\n\nThis cannot be undone.')) return;
+        const ok = await AdminConfirm.ask({
+          title: 'Delete this trip?',
+          body: '"' + title + '"' + slugSuffix(p) + '?' + warning + '\n\nThis cannot be undone.',
+          confirmLabel: 'Delete',
+          danger: true,
+        });
+        if (!ok) return;
         btn.disabled = true; // no double-fire while the request is in flight
         $('out').textContent = 'Deleting…';
         try {
@@ -195,14 +192,19 @@
       // a silently-derived one is what gets published by accident.
       async function duplicatePost(p) {
         const title = p.titleDe || '(untitled)';
-        // Locale-appropriate suffix: these are only prefills the author edits,
-        // but the EN slug is a public URL and `norway-2024-kopie` is not English.
         const suggest = (slug, suffix) => (slug ? slug + suffix : '');
-        const slugDe = prompt('New DE slug for the copy of "' + title + '":', suggest(p.slugDe, '-kopie'));
-        if (slugDe === null) return;
-        const slugEn = prompt('New EN slug for the copy:', suggest(p.slugEn, '-copy'));
-        if (slugEn === null) return;
-        const slugs = { de: slugDe.trim(), en: slugEn.trim() };
+        const origin = location.origin || '';
+        const values = await AdminConfirm.askFields({
+          title: 'New from this one',
+          body: 'Copy of "' + title + '". Pick slugs for the new draft — these become the live URLs if you publish it.',
+          confirmLabel: 'Create copy',
+          fields: [
+            { name: 'de', label: 'DE slug', value: suggest(p.slugDe, '-kopie'), prefix: origin + '/' },
+            { name: 'en', label: 'EN slug', value: suggest(p.slugEn, '-copy'), prefix: origin + '/en/' },
+          ],
+        });
+        if (!values) return;
+        const slugs = { de: String(values.de || '').trim(), en: String(values.en || '').trim() };
         const problem = PostsDuplicate.slugError(slugs);
         if (problem) { $('out').textContent = 'Duplicate cancelled: ' + problem; return; }
 
@@ -220,13 +222,9 @@
         if (res.status === 401) { location.href = '/login'; return; }
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
-          // A taken slug comes back as 409 duplicate_slug — fail loudly rather
-          // than silently picking a different one.
           $('out').textContent = 'Duplicate failed: ' + (body.error || res.status);
           return;
         }
-        // Straight into the editor: the copy needs a new title, date and
-        // coordinates before it can be published.
         location.href = '/admin/editor.html?tk=' + encodeURIComponent(body.translationKey);
       }
 
@@ -242,7 +240,7 @@
       // Bulk DELETE is irreversible and has no undo — revisions are per-save
       // snapshots and remove() hard-deletes both locale rows. So it gets a
       // typed confirmation, distinct from the plain confirm() on the others.
-      function confirmBulk(action, keys) {
+      async function confirmBulk(action, keys) {
         const live = keys.filter((k) => {
           const p = allPosts.find((x) => x.translationKey === k);
           return p && p.status === 'published';
@@ -251,14 +249,24 @@
           const warning = live > 0
             ? '\n\n' + live + ' of them ' + (live === 1 ? 'is' : 'are') + ' PUBLISHED and will be removed from the live site.'
             : '';
-          const typed = prompt(
-            'Delete ' + keys.length + ' post(s)? This CANNOT be undone.' + warning
-            + '\n\nType DELETE to confirm:',
-          );
-          return typed === 'DELETE';
+          return AdminConfirm.ask({
+            title: 'Delete ' + keys.length + ' post(s)?',
+            body: 'This CANNOT be undone.' + warning + '\n\nType DELETE to confirm:',
+            confirmLabel: 'Delete',
+            danger: true,
+            typed: 'DELETE',
+          });
         }
         const verb = action === 'publish' ? 'Publish' : 'Unpublish';
-        return confirm(verb + ' ' + keys.length + ' post(s)?');
+        const liveNote = live > 0
+          ? live + ' of them ' + (live === 1 ? 'is' : 'are') + ' already on the live site.'
+          : 'None of these are currently live.';
+        return AdminConfirm.ask({
+          title: verb + ' ' + keys.length + ' post(s)?',
+          body: liveNote,
+          confirmLabel: verb,
+          danger: action === 'unpublish',
+        });
       }
 
       function summarizeBulk(action, body) {
@@ -274,7 +282,7 @@
       async function runBulk(action) {
         const keys = [...selected];
         if (keys.length === 0) return;
-        if (!confirmBulk(action, keys)) return;
+        if (!(await confirmBulk(action, keys))) return;
         const buttons = [$('bulkPublish'), $('bulkUnpublish'), $('bulkDelete')];
         buttons.forEach((b) => { b.disabled = true; });
         $('out').textContent = 'Running ' + action + ' on ' + keys.length + ' post(s)…';
@@ -413,7 +421,7 @@
           // POST /posts already allows any signed-in author to do.
           const dupBtn = document.createElement('button');
           dupBtn.textContent = 'Duplicate';
-          dupBtn.className = 'btn-remove';
+          dupBtn.className = 'btn-secondary';
           dupBtn.style.marginLeft = '0.75rem';
           dupBtn.style.fontSize = '0.7rem';
           dupBtn.addEventListener('click', () => duplicatePost(p));
@@ -422,7 +430,7 @@
             if (p.status === 'published') {
               const unpubBtn = document.createElement('button');
               unpubBtn.textContent = 'Unpublish';
-              unpubBtn.className = 'btn-remove';
+              unpubBtn.className = 'btn-secondary';
               unpubBtn.style.marginLeft = '0.75rem';
               unpubBtn.style.fontSize = '0.7rem';
               unpubBtn.addEventListener('click', () => unpublishPost(p, unpubBtn));
@@ -496,7 +504,7 @@
           if (!allPosts.some((p) => p.translationKey === k)) selected.delete(k);
         }
         $('loadMsg').style.display = 'none';
-        $('filters').style.display = '';
+        $('filters').hidden = false;
         fillOptions($('fRegion'), PostsFilter.REGIONS);
         fillOptions($('fCountry'), PostsFilter.countries(allPosts));
         render();
@@ -514,6 +522,12 @@
         $('fSort').value = 'updated';
         $('fOrder').value = 'desc';
         render();
+      });
+      $('fMore').addEventListener('click', () => {
+        const extra = $('fExtra');
+        extra.hidden = !extra.hidden;
+        $('fMore').setAttribute('aria-expanded', extra.hidden ? 'false' : 'true');
+        $('fMore').textContent = extra.hidden ? 'More filters' : 'Fewer filters';
       });
 
       $('selectAll').addEventListener('change', () => {
