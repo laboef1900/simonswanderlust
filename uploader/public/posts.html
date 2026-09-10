@@ -98,6 +98,7 @@
     </main>
 
     <script src="/admin/auth.js"></script>
+    <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/posts-filter.js"></script>
     <script src="/admin/posts-duplicate.js"></script>
     <script>
@@ -138,8 +139,14 @@
       // await, leaving "Deleting…" on screen and the buttons dead until reload.
       async function unpublishPost(p, btn) {
         const title = p.titleDe || '(untitled)';
-        if (!confirm('Unpublish "' + title + '"' + slugSuffix(p) + '?\n\nThe post will be removed from the live site on the next build and revert to a draft.')) return;
-        btn.disabled = true; // no double-fire while the request is in flight
+        const ok = await AdminConfirm.ask({
+          title: 'Unpublish this trip?',
+          body: '"' + title + '"' + slugSuffix(p) + ' will leave the live site on the next build and revert to a draft.',
+          confirmLabel: 'Unpublish',
+          danger: true,
+        });
+        if (!ok) return;
+        btn.disabled = true;
         $('out').textContent = 'Unpublishing…';
         try {
           const res = await fetch('/posts/' + encodeURIComponent(p.translationKey) + '/unpublish', { method: 'POST' });
@@ -148,8 +155,6 @@
           if (!res.ok) { $('out').textContent = 'Unpublish failed: ' + (body.error || res.status); return; }
           const msg = 'Unpublished "' + title + '".' + describeBuild(body.build);
           $('out').textContent = msg;
-          // Pass the outcome so load() does not clobber it with "N post(s) loaded."
-          // — a failed rebuild (body.build.ok === false) must stay visible to the admin.
           await load(msg);
         } catch (e) {
           $('out').textContent = 'Unpublish failed: ' + e;

@@ -254,12 +254,13 @@
         <div class="bar-actions">
           <button id="saveDraft" type="button" class="btn-secondary">Save Draft</button>
           <button id="previewBtn" type="button" class="btn-ghost-preview">Open Preview ↗</button>
-          <button id="publishBtn" type="button" class="btn-primary-publish">Publish Post 🚀</button>
+          <button id="publishBtn" type="button" class="btn-primary-publish">Publish</button>
         </div>
       </div>
     </main>
 
     <script src="/admin/auth.js"></script>
+    <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/draft-guard.js"></script>
     <script src="/admin/vendor/easymde.min.js"></script>
     <script src="/admin/llm.js"></script>
@@ -796,7 +797,35 @@
         el.style.display = msg ? '' : 'none';
       }
 
-      function setStatus(msg) { $('actionStatus').textContent = msg; }
+      function setStatus(msg) {
+        const el = $('actionStatus');
+        el.textContent = msg;
+      }
+
+      function setPublishedLive(slugs, release) {
+        const el = $('actionStatus');
+        el.textContent = '';
+        const urls = AdminConfirm.liveUrls(slugs);
+        el.appendChild(document.createTextNode(
+          'Published' + (release ? ' (release ' + release + ')' : '') + '. Live: '
+        ));
+        const links = [];
+        if (urls.de) links.push({ href: urls.de, label: 'DE' });
+        if (urls.en) links.push({ href: urls.en, label: 'EN' });
+        if (!links.length) {
+          el.appendChild(document.createTextNode('open the site from View site.'));
+          return;
+        }
+        links.forEach((u, i) => {
+          if (i) el.appendChild(document.createTextNode(' · '));
+          const a = document.createElement('a');
+          a.href = u.href;
+          a.textContent = u.label;
+          a.target = '_blank';
+          a.rel = 'noopener';
+          el.appendChild(a);
+        });
+      }
 
       // ---- save draft ----
       // Persists the current on-screen form. Returns true on success so Publish
@@ -890,17 +919,30 @@
 
       // ---- publish ----
       $('publishBtn').addEventListener('click', async () => {
+        const titleDe = $('deTitle').value.trim() || '(untitled)';
+        const titleEn = $('enTitle').value.trim() || '(untitled)';
+        const slugs = { de: $('slugFieldDe').value.trim(), en: $('slugFieldEn').value.trim() };
+        const urlBlock = AdminConfirm.urlsPlain(slugs);
+        const ok = await AdminConfirm.ask({
+          title: 'Publish to the live site?',
+          body: titleDe + ' / ' + titleEn + '\n\n'
+            + (urlBlock ? urlBlock + '\n\n' : '')
+            + 'This rebuilds the public journal. It can take several minutes. The live pages stay unchanged until the rebuild finishes.',
+          confirmLabel: 'Publish',
+        });
+        if (!ok) return;
         // Save the on-screen form FIRST so publish validates what's on screen
         // (not a stale last-saved value) — e.g. a country just typed in.
         const saved = await doSaveDraft();
         if (!saved) return;
+        const btn = $('publishBtn');
+        btn.disabled = true;
         setStatus('Building…');
         try {
           const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/publish', { method: 'POST' });
           if (res.status === 401) { guard.redirectToLogin(); return; }
           const body = await res.json().catch(() => ({}));
           if (!res.ok) {
-            // #91: the gate names up to five of the offending URLs so the author can find them.
             const examples = Array.isArray(body.foreignImages) && body.foreignImages.length
               ? ' Examples: ' + body.foreignImages.join(', ') : '';
             showErr((body.error || ('Publish failed: ' + res.status)) + examples);
@@ -912,17 +954,17 @@
             setStatus('');
             return;
           }
-          const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
-          setStatus('Published ✓' + release);
+          const release = (body.build && body.build.release) ? body.build.release : '';
+          setPublishedLive(slugs, release);
           isPublished = true;
-          // Publish bumps the stored updated_at — re-sync the concurrency echo
-          // or the very next Save in this tab would falsely report a conflict.
           if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
           $('slugFieldDe').disabled = true;
           $('slugFieldEn').disabled = true;
         } catch (e) {
           showErr('Publish failed: ' + e);
           setStatus('');
+        } finally {
+          btn.disabled = false;
         }
       });
 

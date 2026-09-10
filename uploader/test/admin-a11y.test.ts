@@ -41,6 +41,7 @@ describe('admin outcome messages are announced (SC 4.1.3)', () => {
     ['users', ['out', 'pwout']], ['settings', ['out', 'backupStatus']],
     ['editor', ['actionStatus', 'actionError', 'deHeroStatus', 'enHeroStatus', 'deBodyImgStatus', 'enBodyImgStatus']],
     ['about', ['actionStatus', 'actionError', 'deBodyImgStatus', 'enBodyImgStatus']],
+    ['index', ['deskStatus', 'deskError']],
   ];
   for (const [page, ids] of cases) {
     it(`${page}.html`, () => {
