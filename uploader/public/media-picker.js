@@ -245,7 +245,7 @@ window.MediaPicker = (function () {
     foot.appendChild(pager);
     var prev = el('button', 'btn-secondary', 'Previous');
     var next = el('button', 'btn-secondary', 'Next');
-    var cancel = el('button', 'btn-remove', 'Cancel');
+    var cancel = el('button', 'btn-secondary', 'Cancel');
     var choose = el('button', null, o.confirmLabel || (multiple ? 'Insert gallery' : 'Use this photo'));
     [prev, next, cancel, choose].forEach(function (b) { b.type = 'button'; foot.appendChild(b); });
     dialog.appendChild(foot);

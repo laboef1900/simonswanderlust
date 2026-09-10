@@ -8,18 +8,15 @@
     <link rel="stylesheet" href="/admin/vendor/easymde.min.css" />
   </head>
   <body>
-    <header class="masthead">
-      <div class="masthead-inner">
-        <nav id="mainnav" aria-label="Admin"></nav>
-        <p class="eyebrow">Expedition Log · Image Station</p>
-        <h1>About page</h1>
-        <p class="muted" id="whoami"></p>
-      </div>
+    <header class="cms-page-meta">
+      <h1>About page</h1>
     </header>
     <main>
-      <div class="tabs-bar" role="tablist" aria-label="Page language">
-        <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">Deutsch (DE)</button>
-        <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">English (EN)</button>
+      <div class="editor-topbar">
+        <div class="lang-switch-bar" role="tablist" aria-label="Page language">
+          <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">Deutsch <span class="lang-code" aria-hidden="true">DE</span></button>
+          <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">English <span class="lang-code" aria-hidden="true">EN</span></button>
+        </div>
       </div>
 
       <section id="tab-de" class="card locale-tab" role="tabpanel" aria-labelledby="tabbtn-de">
@@ -50,10 +47,14 @@
         </div>
       </section>
 
-      <div class="editor-actions card">
-        <button id="saveBtn" class="btn-publish">Save &amp; rebuild</button>
-        <p id="actionStatus" class="muted" role="status"></p>
-        <p id="actionError" class="err" role="alert" style="display:none"></p>
+      <div class="editor-sticky-bar">
+        <div class="bar-left">
+          <p id="actionStatus" class="muted" role="status" style="color:#ffffff; margin:0; font-size:0.85rem;"></p>
+          <p id="actionError" class="err" role="alert" hidden style="color:#fca5a5; margin:0; font-size:0.85rem;"></p>
+        </div>
+        <div class="bar-actions">
+          <button id="saveBtn" type="button" class="btn-primary-publish">Publish</button>
+        </div>
       </div>
 
       <section class="card" id="revisionsCard" hidden aria-labelledby="revisionsHeading">
@@ -105,7 +106,7 @@
         onChange: (tab) => { (tab === 'en' ? enMDE : deMDE).codemirror.refresh(); },
       });
 
-      function showErr(msg) { const el = $('actionError'); el.textContent = msg; el.style.display = msg ? '' : 'none'; }
+      function showErr(msg) { const el = $('actionError'); el.textContent = msg; el.hidden = !msg; }
       function setStatus(msg) { $('actionStatus').textContent = msg; }
 
       async function uploadBodyImg(locale) {
@@ -142,12 +143,12 @@
 
       $('saveBtn').addEventListener('click', async () => {
         const ok = await AdminConfirm.ask({
-          title: 'Save About and rebuild the live site?',
+          title: 'Publish the About page?',
           body: 'The About page is saved, then the public journal rebuilds. This can take several minutes. Live pages stay unchanged until the rebuild finishes.',
-          confirmLabel: 'Save & rebuild',
+          confirmLabel: 'Publish',
         });
         if (!ok) return;
-        showErr(''); setStatus('Saving & rebuilding…');
+        showErr(''); setStatus('Publishing…');
         const snap = guard.snapshot();
         const payload = { updatedAt: loadedUpdatedAt || undefined, de: localeObj('de'), en: localeObj('en') };
         const btn = $('saveBtn');
@@ -160,12 +161,12 @@
           if (res.status === 409 && body.code === 'conflict') {
             setStatus('');
             showErr(body.error || 'The About page was modified since you opened it — nothing was saved.');
-            const reload = confirm(
-              'The About page was changed elsewhere (another tab or user) since you opened it, '
-              + 'so saving would overwrite those changes. Nothing was saved and the site was not rebuilt.\n\n'
-              + 'OK — reload the latest version into the editor (your edits in this tab are lost).\n'
-              + 'Cancel — keep your edits on screen so you can copy them out first.'
-            );
+            const reload = await AdminConfirm.ask({
+              title: 'Reload the latest About page?',
+              body: 'The About page was changed elsewhere (another tab or user) since you opened it, so saving would overwrite those changes. Nothing was saved and the site was not rebuilt.\n\nConfirm — reload the latest version (your edits in this tab are lost).\nCancel — keep your edits on screen so you can copy them out first.',
+              confirmLabel: 'Reload',
+              danger: true,
+            });
             if (reload) { await loadPage(); guard.markClean(guard.snapshot()); showErr(''); }
             return;
           }
@@ -259,16 +260,21 @@
         // Offer to restore locally stashed changes; filling above fired CodeMirror
         // change events, so settle the guard's dirty state here either way.
         const stash = guard.tryRestore();
-        if (stash && !guard.wasDismissed(stash)
-            && confirm('Found unsaved About-page changes from ' + new Date(stash.savedAt).toLocaleString() + '. Restore them?')) {
-          fill('de', stash.payload.de); fill('en', stash.payload.en);
-          enMDE.codemirror.refresh();
-          guard.markDirty();
-          setStatus('Restored unsaved changes — remember to Save.');
+        if (stash && !guard.wasDismissed(stash)) {
+          const restore = await AdminConfirm.ask({
+            title: 'Restore unsaved About-page changes?',
+            body: 'Found unsaved changes from ' + new Date(stash.savedAt).toLocaleString() + '.',
+            confirmLabel: 'Restore',
+          });
+          if (restore) {
+            fill('de', stash.payload.de); fill('en', stash.payload.en);
+            enMDE.codemirror.refresh();
+            guard.markDirty();
+            setStatus('Restored unsaved changes — remember to Save.');
+          } else {
+            guard.dismissRestore(stash);
+          }
         } else if (stash) {
-          // Declined (or already dismissed this session): keep the stash so a
-          // misclicked Cancel can't destroy unsaved work — just disarm dirty and
-          // remember the dismissal so it isn't re-offered on every reload.
           guard.dismissRestore(stash);
         } else {
           guard.markClean();

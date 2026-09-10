@@ -60,6 +60,10 @@ window.Tabs = (function () {
         var on = tabs.filter(function (t) { return t.getAttribute('aria-selected') === 'true'; })[0];
         return on ? on.dataset.tab : null;
       },
+      select: function (name) {
+        var tab = tabs.filter(function (t) { return t.dataset.tab === name; })[0];
+        if (tab) select(tab, false);
+      },
     };
   }
 

@@ -7,50 +7,14 @@
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body>
-    <header class="masthead">
-      <div class="masthead-inner">
-        <nav id="mainnav" aria-label="Admin"></nav>
-        <p class="eyebrow">Expedition Log · Image Station</p>
-        <h1>Settings</h1>
-        <p class="lede">
-          Configure the local vision model for alt-text suggestions, schedule database
-          backups, and rebuild the public site. Saved settings apply immediately; no redeploy.
-        </p>
-        <p class="muted" id="whoami"></p>
-      </div>
+    <header class="cms-page-meta">
+      <h1>Settings</h1>
+      <p class="lede">Live site, backups, and the local alt-text model. Saved settings apply immediately; no redeploy.</p>
     </header>
 
     <main>
       <section class="card">
-        <h2 class="card-heading">AI alt-text (local LM Studio)</h2>
-        <p class="muted">
-          Suggestions run in <em>this browser</em> against the base URL below (your machine's
-          LM Studio) — the server never contacts the model. Set it to where LM Studio listens
-          here, usually <code>http://localhost:1234/v1</code>.
-        </p>
-
-        <label for="baseUrl">LM Studio base URL (as this browser reaches it)</label>
-        <input id="baseUrl" type="text" placeholder="http://localhost:1234/v1" aria-describedby="baseUrlWarn" />
-        <p id="baseUrlWarn" class="notice-warn" role="status" hidden></p>
-
-        <label for="model">Model</label>
-        <select id="model"></select>
-        <input id="modelManual" type="text" placeholder="…or type a model id" aria-label="Model id (typed manually)" />
-
-        <label for="timeout">Caption timeout (ms)</label>
-        <input id="timeout" type="number" min="1000" max="600000" />
-
-        <label for="maxEdge">Max image edge (px)</label>
-        <input id="maxEdge" type="number" min="256" max="4096" />
-
-        <label for="prompt">Caption prompt</label>
-        <textarea id="prompt" rows="8"></textarea>
-
-        <button id="test">Test connection</button>
-      </section>
-
-      <section class="card">
-        <h2 class="card-heading">Site &amp; database</h2>
+        <h2 class="card-heading">Live site &amp; backups</h2>
 
         <label for="backupSchedule">Database backup schedule</label>
         <select id="backupSchedule">
@@ -78,11 +42,13 @@
           failures are retried — a blocked address or a missing file is not.
         </p>
 
-        <button id="backupNow">Back up now</button>
-        <button id="rebuild">Rebuild site now</button>
-
+        <div class="settings-actions">
+          <button id="backupNow" type="button" class="btn-secondary">Back up now</button>
+          <button id="rebuild" type="button" class="btn-primary">Rebuild site now</button>
+          <button id="save" type="button" class="btn-secondary">Save settings</button>
+        </div>
         <p class="section-label">Last backup</p>
-        <pre id="backupStatus" role="status">—</pre>
+        <p id="backupStatus" class="page-status" role="status"></p>
         <p class="section-label">Backup files</p>
         <ul id="backupFiles"></ul>
         <p class="section-label">Image archives</p>
@@ -95,16 +61,38 @@
         </p>
       </section>
 
-      <button id="save">Save settings</button>
+      <section class="card">
+        <h2 class="card-heading">Alt-text model</h2>
+        <p class="muted">
+          Suggestions run in <em>this browser</em> against the base URL below (your machine's
+          LM Studio) — the server never contacts the model. Set it to where LM Studio listens
+          here, usually <code>http://localhost:1234/v1</code>.
+        </p>
 
-      <div class="route" aria-hidden="true">
-        <span class="dot"></span><span class="seg"></span>
-        <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>
-        <span class="seg"></span><span class="ring"></span>
-      </div>
+        <label for="baseUrl">LM Studio base URL (as this browser reaches it)</label>
+        <input id="baseUrl" type="text" placeholder="http://localhost:1234/v1" aria-describedby="baseUrlWarn" />
+        <p id="baseUrlWarn" class="notice-warn" role="status" hidden></p>
 
-      <p class="section-label">Status</p>
-      <pre id="out" role="status">—</pre>
+        <label for="model">Model</label>
+        <select id="model"></select>
+        <input id="modelManual" type="text" placeholder="…or type a model id" aria-label="Model id (typed manually)" />
+
+        <label for="timeout">Caption timeout (ms)</label>
+        <input id="timeout" type="number" min="1000" max="600000" />
+
+        <label for="maxEdge">Max image edge (px)</label>
+        <input id="maxEdge" type="number" min="256" max="4096" />
+
+        <label for="prompt">Caption prompt</label>
+        <textarea id="prompt" rows="8"></textarea>
+
+        <div class="settings-actions">
+          <button id="test" type="button" class="btn-secondary">Test connection</button>
+          <button id="saveAi" type="button" class="btn-secondary">Save settings</button>
+        </div>
+      </section>
+
+      <p id="out" class="page-status" role="status"></p>
     </main>
 
     <script src="/admin/auth.js"></script>
@@ -190,7 +178,7 @@
         }
       });
 
-      $('save').addEventListener('click', async () => {
+      async function saveSettings() {
         $('out').textContent = 'Saving…';
         let res;
         try {
@@ -217,7 +205,9 @@
         if (!res.ok) { $('out').textContent = 'Not saved: ' + (r.error || res.status); return; }
         fill(r);
         $('out').textContent = 'Saved.';
-      });
+      }
+      $('save').addEventListener('click', saveSettings);
+      $('saveAi').addEventListener('click', saveSettings);
 
       function renderBackups(data) {
         const st = data.state || {};

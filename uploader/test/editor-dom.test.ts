@@ -22,6 +22,8 @@ interface Element {
   innerHTML: string;
   hidden: boolean;
   disabled: boolean;
+  open: boolean;
+  title: string;
   dataset: Record<string, string>;
   style: Record<string, string>;
   classList: { add(): void; remove(): void; toggle(): void; contains(): boolean };
@@ -30,6 +32,7 @@ interface Element {
   querySelector(): null;
   querySelectorAll(): never[];
   appendChild(): void;
+  replaceChildren(): void;
   remove(): void;
   focus(): void;
   setAttribute(k: string, v: string): void;
@@ -47,12 +50,13 @@ function element(): Element {
   const attrs: Record<string, string> = {};
   return {
     value: '', checked: false, textContent: '', innerHTML: '', hidden: false, disabled: false,
+    open: false, title: '',
     dataset: {}, style: {},
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     addEventListener(type, fn) { (listeners[type] ??= []).push(fn); },
     fire(type) { for (const fn of listeners[type] ?? []) fn(); },
     querySelector() { return null; }, querySelectorAll() { return []; },
-    appendChild() {}, remove() {}, focus() {},
+    appendChild() {}, replaceChildren() {}, remove() {}, focus() {},
     setAttribute(k: string, v: string) { attrs[k] = v; }, getAttribute(k: string) { return attrs[k] ?? null; },
   };
 }
@@ -91,6 +95,7 @@ function loadEditor(): { api: EditorApi; el: (id: string) => Element; editors: {
       querySelectorAll: () => [],
       addEventListener() {},
       createElement: () => { const e = element(); created.push(e); return e; },
+      createTextNode: (t: string) => { const e = element(); e.textContent = t; return e; },
     },
     location: { search: '', pathname: '/admin/editor.html', href: '' },
     history: { replaceState() {} },
@@ -106,11 +111,12 @@ function loadEditor(): { api: EditorApi; el: (id: string) => Element; editors: {
     navigator: {},
     EasyMDE: class extends EasyMDE { constructor() { super(); editors.push(this); } },
     Auth: { ensureAuthed: async () => null, renderHeader() {} },
+    AdminConfirm: { ask: async () => false, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     DraftGuard: { createDraftGuard: () => guard, tabScopedKey: (p: string) => p + ':test' },
     MediaPicker: { open() {} },
     GalleryFence: {},
     AltSuggest: { wire() {} },
-    Tabs: { wire: () => ({ active: () => 'de' }) },
+    Tabs: { wire: () => ({ active: () => 'de', select() {} }) },
   };
   ctx.window = ctx;
   vm.createContext(ctx);

@@ -7,14 +7,9 @@
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body>
-    <header class="masthead">
-      <div class="masthead-inner">
-        <nav id="mainnav" aria-label="Admin"></nav>
-        <p class="eyebrow">Expedition Log · Image Station</p>
-        <h1>Media</h1>
-        <p class="lede">Drop photos to upload them, sort them into folders, and give each one a title, alt text and caption. Uploads return immediately — the responsive variants encode in the background.</p>
-        <p class="muted" id="whoami"></p>
-      </div>
+    <header class="cms-page-meta">
+      <h1>Media</h1>
+      <p class="lede">Drop photos to upload them, sort them into folders, and give each one a title, alt text and caption. Uploads return immediately — the responsive variants encode in the background.</p>
     </header>
 
     <main>
@@ -58,27 +53,30 @@
                 <option value="missing">Missing</option>
               </select>
             </label>
-            <label class="filter-field">
-              <span>Sort</span>
-              <select id="fSort">
-                <option value="uploaded">Uploaded</option>
-                <option value="taken">Taken</option>
-                <option value="title">Title</option>
-                <option value="key">Key</option>
-              </select>
-            </label>
-            <label class="filter-field">
-              <span>Order</span>
-              <select id="fOrder">
-                <option value="desc">Descending</option>
-                <option value="asc">Ascending</option>
-              </select>
-            </label>
-            <label class="filter-field filter-field--check">
-              <span>Subfolders</span>
-              <input id="fRecursive" type="checkbox" checked />
-            </label>
-            <button id="rescan" type="button" class="btn-secondary">Rescan disk</button>
+            <button type="button" id="fMore" class="btn-link filter-reset" aria-expanded="false" aria-controls="fExtra">More filters</button>
+            <div class="posts-filters-extra" id="fExtra" hidden>
+              <label class="filter-field">
+                <span>Sort</span>
+                <select id="fSort">
+                  <option value="uploaded">Uploaded</option>
+                  <option value="taken">Taken</option>
+                  <option value="title">Title</option>
+                  <option value="key">Key</option>
+                </select>
+              </label>
+              <label class="filter-field">
+                <span>Order</span>
+                <select id="fOrder">
+                  <option value="desc">Descending</option>
+                  <option value="asc">Ascending</option>
+                </select>
+              </label>
+              <label class="filter-field filter-field--check">
+                <span>Subfolders</span>
+                <input id="fRecursive" type="checkbox" checked />
+              </label>
+              <button id="rescan" type="button" class="btn-secondary">Rescan disk</button>
+            </div>
           </div>
 
           <div class="bulk-bar" id="bulkTools" hidden>
@@ -87,9 +85,9 @@
               <span>Move to</span>
               <select id="moveTarget"></select>
             </label>
-            <button id="moveSelected" type="button">Move</button>
-            <button id="retrySelected" type="button">Retry encoding</button>
-            <button id="clearSelection" type="button" class="btn-remove">Clear</button>
+            <button id="moveSelected" type="button" class="btn-secondary">Move</button>
+            <button id="retrySelected" type="button" class="btn-secondary">Retry encoding</button>
+            <button id="clearSelection" type="button" class="btn-secondary">Clear</button>
           </div>
 
           <!-- aria-multiselectable + roving tabindex: arrows move focus, Space
@@ -105,18 +103,12 @@
 
         <aside id="detail" class="media-detail"></aside>
       </section>
+      <p id="out" class="page-status" role="status"></p>
 
-      <div class="route" aria-hidden="true">
-        <span class="dot"></span><span class="seg"></span>
-        <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>
-        <span class="seg"></span><span class="ring"></span>
-      </div>
-
-      <p class="section-label">Status</p>
-      <pre id="out" role="status">—</pre>
     </main>
 
     <script src="/admin/auth.js"></script>
+    <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/media-api.js"></script>
     <script src="/admin/media-browser.js"></script>
   </body>

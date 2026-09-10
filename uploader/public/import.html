@@ -7,14 +7,9 @@
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body>
-    <header class="masthead">
-      <div class="masthead-inner">
-        <nav id="mainnav" aria-label="Admin"></nav>
-        <p class="eyebrow">Expedition Log · Image Station</p>
-        <h1>WordPress Import</h1>
-        <p class="lede">Upload a WordPress export (.xml) file to import posts as drafts. Published posts are never touched; drafts you already have keep your edits and only pick up photos that are still missing. The import runs on the server — you can close this page and come back to it.</p>
-        <p class="muted" id="whoami"></p>
-      </div>
+    <header class="cms-page-meta">
+      <h1>WordPress Import</h1>
+      <p class="lede">Upload a WordPress export (.xml) file to import posts as drafts. Published posts are never touched; drafts you already have keep your edits and only pick up photos that are still missing. The import runs on the server — you can close this page and come back to it.</p>
     </header>
 
     <main>
@@ -42,15 +37,8 @@
           a time.
         </p>
       </section>
+      <p id="out" class="page-status" role="status"></p>
 
-      <div class="route" aria-hidden="true">
-        <span class="dot"></span><span class="seg"></span>
-        <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>
-        <span class="seg"></span><span class="ring"></span>
-      </div>
-
-      <p class="section-label">Status</p>
-      <pre id="out" role="status">—</pre>
       <div id="progress" class="progress" hidden>
         <progress id="progressBar" max="1" value="0" aria-labelledby="progressText"></progress>
         <p id="progressText" role="status" aria-live="polite"></p>
@@ -66,6 +54,7 @@
     </main>
 
     <script src="/admin/auth.js"></script>
+    <script src="/admin/admin-confirm.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       const POLL_MS = 2000;
@@ -231,12 +220,15 @@
         // Destructive and opt-in (issue #126): name the scope before sending,
         // the same confirm() the posts list and media library use.
         const overwriteRequested = $('overwriteDrafts').checked;
-        if (overwriteRequested && !confirm(
-          'Replace every existing draft that this export matches?\n\n'
-          + 'Those drafts are rebuilt from the export: country, region, coordinates, key facts, '
-          + 'alt text and body edits you made to them are discarded. Published posts are never touched.\n\n'
-          + 'Each replaced draft keeps a revision you can restore from the editor.',
-        )) return;
+        if (overwriteRequested) {
+          const ok = await AdminConfirm.ask({
+            title: 'Replace existing drafts?',
+            body: 'Those drafts are rebuilt from the export: country, region, coordinates, key facts, alt text and body edits you made to them are discarded. Published posts are never touched.\n\nEach replaced draft keeps a revision you can restore from the editor.',
+            confirmLabel: 'Replace drafts',
+            danger: true,
+          });
+          if (!ok) return;
+        }
         overwrite = overwriteRequested;
 
         setBusy(true);
