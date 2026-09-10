@@ -65,6 +65,7 @@
     </main>
 
     <script src="/admin/auth.js"></script>
+    <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/draft-guard.js"></script>
     <script src="/admin/vendor/easymde.min.js"></script>
     <script src="/admin/tabs.js"></script>
@@ -140,12 +141,17 @@
       }
 
       $('saveBtn').addEventListener('click', async () => {
+        const ok = await AdminConfirm.ask({
+          title: 'Save About and rebuild the live site?',
+          body: 'The About page is saved, then the public journal rebuilds. This can take several minutes. Live pages stay unchanged until the rebuild finishes.',
+          confirmLabel: 'Save & rebuild',
+        });
+        if (!ok) return;
         showErr(''); setStatus('Saving & rebuilding…');
-        // The synchronous astro rebuild makes this request slow (tens of
-        // seconds); snapshot first so text typed mid-save survives markClean.
         const snap = guard.snapshot();
-        // Concurrency echo — JSON.stringify drops it when undefined (never-saved key).
         const payload = { updatedAt: loadedUpdatedAt || undefined, de: localeObj('de'), en: localeObj('en') };
+        const btn = $('saveBtn');
+        btn.disabled = true;
         try {
           const res = await fetch('/pages/' + KEY, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
           if (res.status === 401) { guard.redirectToLogin(); return; }
@@ -160,22 +166,21 @@
               + 'OK — reload the latest version into the editor (your edits in this tab are lost).\n'
               + 'Cancel — keep your edits on screen so you can copy them out first.'
             );
-            // Reloaded from the server: settle the guard on what is now on screen.
             if (reload) { await loadPage(); guard.markClean(guard.snapshot()); showErr(''); }
             return;
           }
           if (!res.ok) { showErr(body.error || ('Save failed: ' + res.status)); setStatus(''); return; }
           if (body.build && !body.build.ok) { showErr('Build error: ' + (body.build.error || 'unknown')); setStatus(''); return; }
           const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
-          guard.markClean(snap); // saved server-side — no-op if edits landed mid-save
-          // Re-sync the echo with what this save wrote, and refresh the list
-          // (this save snapshotted the previous state).
+          guard.markClean(snap);
           if (body.saved && body.saved.updatedAt) loadedUpdatedAt = body.saved.updatedAt;
           loadRevisions().catch(() => {});
-          setStatus('Saved & rebuilt ✓' + release);
+          setStatus('Saved & rebuilt. Live: ' + location.origin + '/uber-mich/ · ' + location.origin + '/en/about-me/' + release);
         } catch (e) {
           showErr('Save failed: ' + e);
           setStatus('');
+        } finally {
+          btn.disabled = false;
         }
       });
 

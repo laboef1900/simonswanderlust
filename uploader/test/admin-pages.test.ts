@@ -472,11 +472,48 @@ describe('admin page wiring', () => {
   });
 
   it('the sidebar user badge never interpolates the username into innerHTML (#131)', () => {
-    // The shell is one template literal assigned to innerHTML; the username is
-    // the only user-controlled string in it and must be set as text afterwards.
-    const shell = auth.slice(auth.indexOf('shell.innerHTML'), auth.indexOf('shell.querySelector'));
+    // The shell is one template assigned to innerHTML; user-controlled strings
+    // (username, page title, lede) are set as text afterwards.
+    const start = auth.indexOf('shell.innerHTML');
+    const end = auth.indexOf("shell.querySelector('.cms-avatar')");
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const shell = auth.slice(start, end);
     expect(shell).not.toMatch(/\$\{s\.username/);
+    expect(shell).not.toMatch(/\$\{pageTitle/);
+    expect(shell).not.toMatch(/\$\{pageLede/);
     expect(auth).toContain(".cms-user-name').textContent = s.username");
+  });
+
+  it('the runtime shell is Image Station, not Wanderlust CMS', () => {
+    expect(auth).toContain('Image Station');
+    expect(auth).toContain('Expedition Log');
+    expect(auth).toContain('aria-label="Log out"');
+    expect(auth).toContain('class="skip-link"');
+    expect(auth).not.toContain('Wanderlust CMS');
+    expect(auth).not.toContain('System Live');
+    expect(auth).not.toContain('cms-brand-badge');
+    expect(auth).not.toContain('#38bdf8');
+  });
+
+  it('Publish, Rebuild, Save & rebuild, and Unpublish go through AdminConfirm', () => {
+    expect(editor).toContain('AdminConfirm.ask');
+    expect(editor).toContain('Publish to the live site?');
+    expect(editor).toContain('setPublishedLive');
+    expect(about).toContain('AdminConfirm.ask');
+    expect(about).toContain('Save About and rebuild the live site?');
+    expect(readFileSync('public/settings.html', 'utf8')).toContain('Rebuild the live site?');
+    expect(readFileSync('public/posts.html', 'utf8')).toContain('Unpublish this trip?');
+  });
+
+  it('the desk is a publishing home, not a second uploader', () => {
+    const index = readFileSync('public/index.html', 'utf8');
+    expect(index).toContain('<h1>Desk</h1>');
+    expect(index).toContain("fetch('/posts')");
+    expect(index).toContain("fetch('/media/queue')");
+    expect(index).not.toContain("fetch('/upload'");
+    expect(index).not.toContain('/api/cms/stats');
+    expect(index).not.toContain('id="key"');
   });
 
   it('the gallery picker offers exactly the layout modes the renderer accepts', () => {

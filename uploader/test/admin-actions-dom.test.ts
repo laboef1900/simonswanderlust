@@ -55,12 +55,13 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>): { ctx: R
       getElementById: (id: string): Element | null => (ids.has(id) ? el(id) : null),
       createElement: () => element(),
     },
-    location: { href: '', protocol: 'http:' },
+    location: { href: '', origin: 'http://localhost', protocol: 'http:' },
     fetch: () => Promise.reject(NETWORK_DOWN),
     console,
     confirm: () => true,
     prompt: () => 'DELETE',
     Auth: { ensureAuthed: async () => null, renderHeader() {} },
+    AdminConfirm: { ask: async () => true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     ...extraGlobals,
   };
   ctx.window = ctx;
@@ -147,5 +148,15 @@ describe('settings.html actions survive a dropped connection', () => {
     await el('rebuild').click();
     expect(el('rebuild').disabled).toBe(false);
     expect(el('out').textContent).toBe('Rebuild failed: TypeError: Failed to fetch');
+  });
+
+  it('Rebuild does not start when the confirm is declined', async () => {
+    const { el } = loadPage('public/settings.html', {
+      LLM: { mixedContentWarning: () => '' },
+      AdminConfirm: { ask: async () => false },
+    });
+    await el('rebuild').click();
+    expect(el('rebuild').disabled).toBe(false);
+    expect(el('out').textContent).not.toMatch(/Rebuilding|Rebuilt|failed/);
   });
 });

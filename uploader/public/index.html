@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>CMS Studio Dashboard · Simon's Wanderlust</title>
+    <title>Desk · Simon's Wanderlust</title>
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body>
@@ -11,158 +11,203 @@
       <div class="masthead-inner">
         <nav id="mainnav" aria-label="Admin"></nav>
         <p class="eyebrow">Expedition Log · Image Station</p>
-        <h1>CMS Dashboard</h1>
-        <p class="lede">Overview of trip reports, content drafts, photo assets, and rapid upload tools.</p>
+        <h1>Desk</h1>
+        <p class="lede">What to write, what still needs publishing, and whether photos are still encoding.</p>
         <p class="muted" id="whoami"></p>
       </div>
     </header>
 
     <main>
-      <!-- Stats Overview Grid -->
-      <div class="cms-stats-grid" id="statsGrid">
-        <div class="cms-stat-card">
-          <div class="cms-stat-icon published">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-          </div>
-          <div class="cms-stat-info">
-            <span class="cms-stat-val" id="statPublished">—</span>
-            <span class="cms-stat-label">Published Trips</span>
-          </div>
-        </div>
-        <div class="cms-stat-card">
-          <div class="cms-stat-icon draft">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-          </div>
-          <div class="cms-stat-info">
-            <span class="cms-stat-val" id="statDraft">—</span>
-            <span class="cms-stat-label">Working Drafts</span>
-          </div>
-        </div>
-        <div class="cms-stat-card">
-          <div class="cms-stat-icon total">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-          </div>
-          <div class="cms-stat-info">
-            <span class="cms-stat-val" id="statTotal">—</span>
-            <span class="cms-stat-label">Total Stories</span>
-          </div>
-        </div>
-        <div class="cms-stat-card">
-          <div class="cms-stat-icon media">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-          </div>
-          <div class="cms-stat-info">
-            <span class="cms-stat-val" id="statMedia">—</span>
-            <span class="cms-stat-label">Photo Library</span>
-          </div>
-        </div>
-      </div>
+      <p id="deskStatus" class="muted" role="status"></p>
+      <p id="deskError" class="err" role="alert" hidden></p>
 
-      <div class="form-row-2">
-        <section class="card">
-          <h2>Quick Photo Upload</h2>
-          <p class="muted">Upload photos directly into the image processing pipeline to generate responsive AVIF/WebP variants and markdown snippets.</p>
-          
-          <label for="key">Key — e.g. trips/bucharest-2024/hero</label>
-          <input id="key" type="text" placeholder="trips/iceland-2026/hero" />
-          <p class="muted">A content hash is appended automatically for cache invalidation.</p>
-          
-          <label for="alt">Alt text</label>
-          <input id="alt" type="text" placeholder="Describe photo scene..." />
-          <button type="button" id="suggestAlt" class="btn-secondary">Suggest alt text</button>
-          <p class="muted" id="altStatus"></p>
-          <p class="muted" id="altHint"></p>
+      <section class="desk-next" aria-labelledby="deskNextHeading">
+        <h2 id="deskNextHeading" class="desk-heading">Next to write</h2>
+        <div id="deskNext"></div>
+      </section>
 
-          <label for="file">Photo File</label>
-          <input id="file" type="file" accept="image/*" />
-          <button id="go">Upload & Process</button>
+      <section class="desk-list-block" aria-labelledby="deskUnpubHeading">
+        <h2 id="deskUnpubHeading" class="desk-heading">Unpublished changes</h2>
+        <div id="deskUnpub"></div>
+      </section>
 
-          <p class="section-label" style="margin-top:1.25rem">heroImage snippet</p>
-          <pre id="out">—</pre>
-
-          <p class="section-label" style="margin-top:1rem">Body snippet (paste into markdown body)</p>
-          <pre id="outBody">—</pre>
-        </section>
-
-        <section class="card">
-          <h2>Studio Quick Actions</h2>
-          <div style="display:flex; flex-direction:column; gap:0.75rem; margin-top:1rem;">
-            <a href="/admin/editor.html" class="btn-new" style="text-align:center;">+ Create New Trip Report</a>
-            <a href="/admin/posts.html" class="btn-secondary" style="text-align:center;">Browse All Content</a>
-            <a href="/admin/media.html" class="btn-secondary" style="text-align:center;">Manage Media Library</a>
-          </div>
-
-          <h3 style="margin-top:1.75rem; font-size:0.95rem; color:var(--ink);">System Info</h3>
-          <ul style="list-style:none; padding:0; margin:0.5rem 0 0; font-size:0.85rem; display:flex; flex-direction:column; gap:0.4rem;" id="sysInfo">
-            <li><strong>Engine:</strong> Fastify + Postgres</li>
-            <li><strong>Build Pipeline:</strong> Astro SSR/Static</li>
-            <li><strong>Locales:</strong> German (DE) / English (EN)</li>
-          </ul>
-        </section>
-      </div>
+      <section class="desk-meta" aria-labelledby="deskMetaHeading">
+        <h2 id="deskMetaHeading" class="desk-heading">Site</h2>
+        <ul id="deskMeta" class="desk-meta-list"></ul>
+      </section>
     </main>
 
     <script src="/admin/auth.js"></script>
-    <script src="/admin/llm.js"></script>
-    <script src="/admin/alt-suggest.js"></script>
+    <script src="/admin/posts-filter.js"></script>
+    <script src="/admin/desk.js"></script>
     <script>
-      document.getElementById('go').addEventListener('click', async () => {
-        const out = document.getElementById('out');
-        const outBody = document.getElementById('outBody');
-        const file = document.getElementById('file').files[0];
-        outBody.textContent = '—';
-        if (!file) { out.textContent = 'Pick a file first.'; return; }
-        const key = document.getElementById('key').value;
-        const alt = document.getElementById('alt').value;
-        const fd = new FormData();
-        fd.append('key', key);
-        fd.append('alt', alt);
-        fd.append('file', file);
-        out.textContent = 'Uploading…';
-        try {
-          const res = await fetch('/upload', {
-            method: 'POST',
-            body: fd,
-          });
-          if (res.status === 401) { location.href = '/login'; return; }
-          const body = await res.json();
-          if (!res.ok) { out.textContent = 'Error: ' + (body.error || res.status); return; }
-          out.textContent = body.snippet;
-          if (!/(^|\/)hero$/.test(key.trim())) {
-            const escAlt = alt.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
-              .replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            outBody.textContent = '<BodyImage src="' + body.src + '" width={' + body.width +
-              '} height={' + body.height + '} alt="' + escAlt + '" />';
-          }
-        } catch (e) {
-          out.textContent = 'Error: ' + e;
+      const $ = (id) => document.getElementById(id);
+
+      function say(msg) { $('deskStatus').textContent = msg; }
+      function fail(msg) {
+        const el = $('deskError');
+        el.hidden = !msg;
+        el.textContent = msg || '';
+      }
+
+      function editorHref(tk) {
+        return '/admin/editor.html?tk=' + encodeURIComponent(tk);
+      }
+
+      function el(tag, className) {
+        const n = document.createElement(tag);
+        if (className) n.className = className;
+        return n;
+      }
+
+      function tripLink(post, label) {
+        const a = el('a', 'desk-title');
+        a.href = editorHref(post.translationKey);
+        a.textContent = label || post.titleDe || '(untitled)';
+        return a;
+      }
+
+      function heroFigure(post) {
+        const url = PostsFilter.thumbUrl(post);
+        if (!url) {
+          const ph = el('div', 'desk-hero thumb-placeholder');
+          ph.setAttribute('aria-hidden', 'true');
+          return ph;
         }
-      });
-      AltSuggest.wire({
-        button: document.getElementById('suggestAlt'),
-        fileInput: document.getElementById('file'),
-        altInput: document.getElementById('alt'),
-        statusEl: document.getElementById('altStatus'),
-        lang: 'en',
-        hintEl: document.getElementById('altHint'),
-      });
+        const img = el('img', 'desk-hero');
+        img.src = url;
+        img.alt = '';
+        img.addEventListener('error', () => {
+          img.replaceWith(el('div', 'desk-hero thumb-placeholder'));
+        });
+        return img;
+      }
+
+      function renderNext(post) {
+        const root = $('deskNext');
+        root.textContent = '';
+        if (!post) {
+          const empty = el('div', 'desk-empty');
+          const p = el('p');
+          p.textContent = 'No drafts. The next trip starts as a DE/EN pair — photos live in Media.';
+          const cta = el('a', 'btn-new');
+          cta.href = '/admin/editor.html';
+          cta.textContent = 'New trip';
+          empty.appendChild(p);
+          empty.appendChild(cta);
+          root.appendChild(empty);
+          return;
+        }
+        const card = el('article', 'desk-next-card');
+        card.appendChild(heroFigure(post));
+        const body = el('div', 'desk-next-body');
+        body.appendChild(tripLink(post));
+        const meta = el('p', 'muted');
+        const bits = [post.country, post.region, post.hasEnBody ? 'DE + EN' : 'DE only'].filter(Boolean);
+        meta.textContent = bits.join(' · ');
+        body.appendChild(meta);
+        const open = el('a', 'action-link');
+        open.href = editorHref(post.translationKey);
+        open.textContent = 'Continue editing';
+        body.appendChild(open);
+        card.appendChild(body);
+        root.appendChild(card);
+      }
+
+      function renderUnpub(posts) {
+        const root = $('deskUnpub');
+        root.textContent = '';
+        if (!posts.length) {
+          const p = el('p', 'muted');
+          p.textContent = 'Every published trip matches what’s live. Edit a post, then Publish when the pair is ready.';
+          root.appendChild(p);
+          return;
+        }
+        const ul = el('ul', 'desk-unpub');
+        posts.forEach((post) => {
+          const li = el('li');
+          li.appendChild(tripLink(post));
+          const go = el('a', 'action-link');
+          go.href = editorHref(post.translationKey);
+          go.textContent = 'Review & publish';
+          li.appendChild(go);
+          ul.appendChild(li);
+        });
+        root.appendChild(ul);
+      }
+
+      function renderMeta(encode, release) {
+        const ul = $('deskMeta');
+        ul.textContent = '';
+        const encodeLi = el('li');
+        if (encode > 0) {
+          const a = el('a', 'action-link');
+          a.href = '/admin/media.html';
+          a.textContent = encode === 1
+            ? '1 photo is still encoding — publish will wait for it'
+            : encode + ' photos are still encoding — publish will wait for them';
+          encodeLi.appendChild(a);
+        } else {
+          encodeLi.textContent = 'Photo encode queue is idle.';
+        }
+        ul.appendChild(encodeLi);
+
+        const relLi = el('li');
+        if (release) {
+          const a = el('a', 'action-link');
+          a.href = '/';
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.textContent = 'Live site has a current release';
+          relLi.appendChild(a);
+        } else {
+          relLi.textContent = 'No live release yet — Publish a trip or rebuild from Settings.';
+        }
+        ul.appendChild(relLi);
+      }
+
+      async function loadDesk() {
+        fail('');
+        say('Loading…');
+        try {
+          const [postsRes, queueRes, healthRes] = await Promise.all([
+            fetch('/posts'),
+            fetch('/media/queue'),
+            fetch('/health'),
+          ]);
+          if (postsRes.status === 401 || queueRes.status === 401) {
+            location.href = '/login?next=' + encodeURIComponent(location.pathname);
+            return;
+          }
+          if (!postsRes.ok) throw new Error('posts ' + postsRes.status);
+          const posts = await postsRes.json();
+          const queue = queueRes.ok ? await queueRes.json() : { pending: 0, running: 0 };
+          const health = healthRes.ok ? await healthRes.json() : {};
+          renderNext(Desk.nextDraft(posts));
+          renderUnpub(Desk.unpublished(posts));
+          renderMeta(Desk.encodeCount(queue), !!health.release);
+          say('');
+        } catch (e) {
+          say('');
+          fail('Could not load the desk: ' + e);
+          $('deskNext').textContent = '';
+          $('deskUnpub').textContent = '';
+          $('deskMeta').textContent = '';
+          const retry = document.createElement('button');
+          retry.type = 'button';
+          retry.className = 'btn-secondary';
+          retry.textContent = 'Try again';
+          retry.addEventListener('click', loadDesk);
+          $('deskError').appendChild(document.createTextNode(' '));
+          $('deskError').appendChild(retry);
+        }
+      }
+
       (async () => {
         const s = await Auth.ensureAuthed();
-        if (s) {
-          Auth.renderHeader(s);
-          try {
-            const res = await fetch('/api/cms/stats');
-            if (res.ok) {
-              const data = await res.json();
-              document.getElementById('statPublished').textContent = data.publishedPosts || 0;
-              document.getElementById('statDraft').textContent = data.draftPosts || 0;
-              document.getElementById('statTotal').textContent = data.totalPosts || 0;
-              document.getElementById('statMedia').textContent = data.mediaCount || 0;
-            }
-          } catch (e) {
-            console.error('Failed to load stats', e);
-          }
-        }
+        if (!s) return;
+        Auth.renderHeader(s);
+        await loadDesk();
       })();
     </script>
   </body>
