@@ -105,4 +105,44 @@ describe('auth hooks', () => {
     expect(secure.headers['set-cookie']).toMatch(/Secure/i);
     expect(insecure.headers['set-cookie']).not.toMatch(/Secure/i);
   });
+
+  // A guard that refuses a request must be OBSERVED to have refused it before
+  // the handler is reached. `reply.sent` only flips once the response is
+  // written, so an async hook anywhere in the onSend chain delays that — and a
+  // guard that merely called `reply.send()` without returning the reply let the
+  // handler run on top of the refusal (a 401 came back as the handler's 400, an
+  // admin-only route answered 404, a rebuild ran three times). This pins the
+  // fix with the exact trigger; it fails without `return reply` in createAuthn.
+  it('refuses before the handler even with an async hook in the send chain', async () => {
+    const users = memoryUserStore();
+    const sessions = memorySessionStore();
+    const app = Fastify();
+    await app.register(cookie);
+    app.decorateRequest('authUser', null);
+    // Stands in for any async onSend hook — compression, headers, a plugin.
+    // It awaits once, which is what pushes the write past the guard's promise.
+    app.addHook('onSend', async (_req, _reply, payload) => { await Promise.resolve(); return payload; });
+    const { requireAuth, requireAdmin } = createAuthn(users, sessions);
+    let handlerRuns = 0;
+    const handler = async () => { handlerRuns += 1; return { ok: true }; };
+    app.get('/auth-only', { preHandler: requireAuth }, handler);
+    app.get('/admin-only', { preHandler: requireAdmin }, handler);
+
+    const anon = await app.inject({ method: 'GET', url: '/auth-only' });
+    expect(anon.statusCode).toBe(401);
+    expect(anon.json()).toEqual({ error: 'unauthorized' });
+    const author = await users.create({ username: 'author', password: 'password123456', isAdmin: false });
+    const token = await sessions.create(author.id, 60_000);
+    const forbidden = await app.inject({ method: 'GET', url: '/admin-only', cookies: { sid: token } });
+    expect(forbidden.statusCode).toBe(403);
+    expect(forbidden.json()).toEqual({ error: 'forbidden' });
+    expect(handlerRuns).toBe(0);
+
+    // The admit path is unaffected: the guard returns nothing and the handler runs.
+    const admin = await users.create({ username: 'admin', password: 'password123456', isAdmin: true });
+    const adminToken = await sessions.create(admin.id, 60_000);
+    const ok = await app.inject({ method: 'GET', url: '/admin-only', cookies: { sid: adminToken } });
+    expect(ok.statusCode).toBe(200);
+    expect(handlerRuns).toBe(1);
+  });
 });
