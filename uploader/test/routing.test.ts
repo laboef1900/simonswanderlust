@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import { buildServer, type ServerConfig } from '../src/server.js';
 import { defaultSettings, validate, type Settings, type SettingsStore } from '../src/settings.js';
 import { memoryUserStore } from '../src/users.js';
@@ -25,6 +26,11 @@ const MAIN = 'simonswanderlust.com';
 /** Local-dev IMG_HOST (uploader/.env.example): the only host that exists, so the
  *  image mount shadows the blog mount and the img-host blog fallback engages. */
 const LOCAL = 'localhost:3000';
+/** Above the hook's 1024-byte threshold, and compressible enough that a
+ *  round-trip proves the encoder actually ran. */
+const BIG_CSS = `body{margin:0}\n${'/* expedition log */\n'.repeat(120)}`;
+/** Binary-ish payload for the basemap: same size class, no text content type. */
+const BIG_BINARY = 'PMTILES'.padEnd(4096, 'x');
 
 const SETTINGS: Settings = defaultSettings();
 const fakeStore = (): SettingsStore => {
@@ -383,5 +389,116 @@ describe('/map/ assets', () => {
     const res = await build().inject({ method: 'GET', url: '/map/fonts/0-255.pbf', headers: { host: MAIN } });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toBe('application/x-protobuf');
+  });
+
+  it('keeps a compression-capable range read identity: 206, octet-stream, no encoding', async () => {
+    // PMTiles is read with HTTP RANGE requests, and a 206 body is a byte range
+    // of the IDENTITY representation — encoding it would hand MapLibre bytes
+    // that do not match the content-range it asked for.
+    await mkdir(join(dir, 'map'), { recursive: true });
+    await writeFile(join(dir, 'map', 'basemap.pmtiles'), BIG_BINARY);
+    await release('r1', { 'index.html': 'home', '404.html': 'nf' });
+    const app = build();
+    const gz = { host: MAIN, 'accept-encoding': 'gzip, br' };
+    const part = await app.inject({
+      method: 'GET', url: '/map/basemap.pmtiles', headers: { ...gz, range: 'bytes=0-6' },
+    });
+    expect(part.statusCode).toBe(206);
+    expect(part.headers['content-type']).toBe('application/octet-stream');
+    expect(part.headers['content-encoding']).toBeUndefined();
+    expect(part.headers['content-range']).toBe(`bytes 0-6/${BIG_BINARY.length}`);
+    expect(part.body).toBe('PMTILES');
+    // …and the full read, well above the threshold, stays range-capable.
+    const full = await app.inject({ method: 'GET', url: '/map/basemap.pmtiles', headers: gz });
+    expect(full.statusCode).toBe(200);
+    expect(full.headers['content-type']).toBe('application/octet-stream');
+    expect(full.headers['content-encoding']).toBeUndefined();
+    expect(full.headers['accept-ranges']).toBe('bytes');
+    expect(full.rawPayload.length).toBe(BIG_BINARY.length);
+  });
+});
+
+describe('response compression', () => {
+  it('compresses a text asset and the bytes survive the round-trip', async () => {
+    await release('r1', { 'index.html': 'home', '404.html': 'nf', '_astro/app.css': BIG_CSS });
+    const res = await build().inject({
+      method: 'GET', url: '/_astro/app.css',
+      headers: { host: MAIN, 'accept-encoding': 'gzip' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-encoding']).toBe('gzip');
+    expect(String(res.headers.vary).toLowerCase()).toContain('accept-encoding');
+    expect(res.rawPayload.length).toBeLessThan(Buffer.byteLength(BIG_CSS));
+    expect(gunzipSync(res.rawPayload).toString()).toBe(BIG_CSS);
+    // A range of the encoded body is not a range of the resource.
+    expect(res.headers['accept-ranges']).toBeUndefined();
+    // Compression must not cost the asset its cache lifetime.
+    expect(res.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+  });
+
+  it('prefers brotli when the client offers both', async () => {
+    await release('r1', { 'index.html': `<h1>blog</h1>${BIG_CSS}`, '404.html': 'nf' });
+    const res = await build().inject({
+      method: 'GET', url: '/',
+      headers: { host: MAIN, 'accept-encoding': 'gzip, deflate, br' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-encoding']).toBe('br');
+    expect(brotliDecompressSync(res.rawPayload).toString()).toBe(`<h1>blog</h1>${BIG_CSS}`);
+  });
+
+  it('serves identity bytes to a client that offers nothing, or refuses with q=0', async () => {
+    await release('r1', { 'index.html': 'home', '404.html': 'nf', '_astro/app.css': BIG_CSS });
+    const app = build();
+    const plain = await app.inject({ method: 'GET', url: '/_astro/app.css', headers: { host: MAIN } });
+    expect(plain.headers['content-encoding']).toBeUndefined();
+    expect(plain.body).toBe(BIG_CSS);
+    expect(plain.headers['accept-ranges']).toBe('bytes');
+    const refused = await app.inject({
+      method: 'GET', url: '/_astro/app.css',
+      headers: { host: MAIN, 'accept-encoding': 'gzip;q=0' },
+    });
+    expect(refused.headers['content-encoding']).toBeUndefined();
+    expect(refused.body).toBe(BIG_CSS);
+  });
+
+  it('leaves a payload below the threshold alone', async () => {
+    await release('r1', { 'index.html': 'home', '404.html': 'nf' });
+    const res = await build().inject({
+      method: 'GET', url: '/', headers: { host: MAIN, 'accept-encoding': 'gzip, br' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-encoding']).toBeUndefined();
+    expect(res.body).toBe('home');
+  });
+
+  it('never compresses an image variant', async () => {
+    await mkdir(join(dir, 'images'), { recursive: true });
+    await writeFile(join(dir, 'images', 'k-640.webp'), BIG_BINARY);
+    const res = await build().inject({
+      method: 'GET', url: '/k-640.webp', headers: { host: IMG, 'accept-encoding': 'gzip, br' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-encoding']).toBeUndefined();
+    expect(res.rawPayload.length).toBe(Buffer.byteLength(BIG_BINARY));
+  });
+});
+
+describe('asset cache lifetimes', () => {
+  it('caches fingerprinted assets immutably and the HTML document never', async () => {
+    await release('r1', {
+      'index.html': 'home', '404.html': 'nf', 'robots.txt': 'User-agent: *',
+      '_astro/Base.CREtK3y4.css': BIG_CSS, 'rumaenien/index.html': 'trip',
+    });
+    const app = build();
+    const asset = await app.inject({ method: 'GET', url: '/_astro/Base.CREtK3y4.css', headers: { host: MAIN } });
+    expect(asset.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+    // The document is what names the hashed assets, and `current` is a symlink
+    // a publish repoints — it must be revalidated every visit.
+    for (const url of ['/', '/rumaenien/', '/robots.txt']) {
+      const res = await app.inject({ method: 'GET', url, headers: { host: MAIN } });
+      expect(String(res.headers['cache-control']), url).toContain('max-age=0');
+      expect(String(res.headers['cache-control']), url).not.toContain('immutable');
+    }
   });
 });

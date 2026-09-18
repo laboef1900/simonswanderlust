@@ -38,6 +38,7 @@ import { createRehostResume } from './wp-images.js';
 import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, type RateLimiter, type AccountLimiter } from './rate-limit.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
+import { compressionHook } from './compress.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -171,7 +172,27 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       if (path.endsWith('.pmtiles')) reply.header('content-type', 'application/octet-stream');
       else if (path.endsWith('.pbf')) reply.header('content-type', 'application/x-protobuf');
     }
+    // Fingerprinted blog assets get a real cache lifetime; the HTML document
+    // and every other path keep @fastify/send's `public, max-age=0`
+    // (revalidate-always). Astro hashes the content into the filename under
+    // build.assets = '_astro' (Base.CREtK3y4.css), so these bytes are
+    // immutable by construction — while `${siteDir}/current` is a symlink a
+    // publish repoints, which is exactly why the DOCUMENT must not be cached:
+    // it is what points at the new asset names.
+    // @ai-note Set here rather than via the mount's `setHeaders`, which
+    // @fastify/static overwrites with its own cacheControl value (see the
+    // image mount below); an onSend `reply.header` is the last writer.
+    if (path.startsWith('/_astro/') && reply.statusCode < 400) {
+      reply.header('cache-control', 'public, max-age=31536000, immutable');
+    }
   });
+
+  // @ai-warning Registered AFTER the hook above ON PURPOSE: onSend hooks run in
+  // registration order, and the compressor's allow-list judges the FINAL
+  // content-type — including the /map/ overrides that hook assigns, since
+  // @fastify/static's setHeaders never fires for a 206. /map/ is additionally
+  // excluded by prefix so a range read of the basemap stays identity bytes.
+  app.addHook('onSend', compressionHook({ skipPrefixes: ['/map/'] }));
 
   // Per-IP throttle for the unauthenticated auth endpoints (brute-force defense).
   const loginLimiter = cfg.loginLimiter ?? fixedWindowLimiter({ max: 10, windowMs: 900_000 });
