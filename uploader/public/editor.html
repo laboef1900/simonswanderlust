@@ -256,6 +256,20 @@
             <label for="fmRoute" style="margin-top:0.75rem">Route</label>
             <input id="fmRoute" type="text" placeholder="e.g. Athens → Rhodes" />
 
+            <!-- Shared, not per-locale: a cover choice is not translatable, so it
+                 lives here beside date/ISO/region/coordinates rather than in a
+                 locale tab. Several posts may be flagged at once — nothing is
+                 unset elsewhere when this is ticked; the homepage simply takes
+                 the newest flagged story. -->
+            <label class="check-field" for="fmFeatured">
+              <input type="checkbox" id="fmFeatured" aria-describedby="fmFeaturedHint" />
+              Use as homepage cover
+            </label>
+            <p class="muted" id="fmFeaturedHint" style="font-size:0.78rem">
+              The newest flagged story becomes the homepage cover. With nothing flagged, the newest
+              story is used.
+            </p>
+
             <div id="stopsContainer">
               <p class="section-label" style="margin-top:1.25rem">Waypoints / Stops</p>
               <div id="stopsList"></div>
@@ -891,6 +905,10 @@
           route: $('fmRoute').value.trim() || undefined,
           categories,
           tags,
+          // Always sent, false included: unticking the box must clear the flag,
+          // and an omitted key would only ever mean "leave it alone" once the
+          // server started merging. Shared, so it reaches both locale rows.
+          featured: $('fmFeatured').checked,
         };
 
         // Remove undefined keys for a clean payload
@@ -1315,6 +1333,9 @@
         $('fmLat').value = coords.lat ?? '';
         $('fmLng').value = coords.lng ?? '';
         $('fmRoute').value = shared.route || '';
+        // Unconditional, like every other shared field above: a restore payload
+        // without the key must untick the box, not keep the previous post's.
+        $('fmFeatured').checked = shared.featured === true;
         populateStops(shared.stops);
 
         populateLocale('de', post.de);

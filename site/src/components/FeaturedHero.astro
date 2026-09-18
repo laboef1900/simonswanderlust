@@ -104,8 +104,20 @@ const HERO_SIZES = '(max-width: 639px) max(100vw, 105vh), max(100vw, 98vh)';
         {number !== undefined && <span class="text-brand-red-light">{entryLabel(number)}</span>}
         <span class="text-white">{meta}</span>
       </p>
+      {/*
+        @ai-warning `break-words hyphens-auto` is not cosmetic. A 30-character
+        German compound at `text-3xl`/extrabold overflows a 390px viewport as
+        one unbreakable word: measured `scrollingElement.scrollWidth` 819
+        against `clientWidth` 390, i.e. 429px of sideways pan on the LANDING
+        page in the default locale. Nav.astro carries the same German-width
+        warning (its labels are ~40px wider than the English ones) and the
+        audit behind it missed this heading — the largest type on the site.
+        Base.astro sets `<html lang={locale}>`, so on a DE page `hyphens-auto`
+        breaks at syllables rather than mid-morpheme. StoryCard's <h3> already
+        carries the same rule.
+      */}
       <h1
-        class="mt-3 max-w-3xl text-3xl leading-[1.15] font-extrabold text-white drop-shadow-xs sm:text-4xl md:text-5xl md:leading-[1.08]"
+        class="mt-3 max-w-3xl text-3xl leading-[1.15] font-extrabold break-words hyphens-auto text-white drop-shadow-xs sm:text-4xl md:text-5xl md:leading-[1.08]"
       >
         {trip.data.title}
       </h1>

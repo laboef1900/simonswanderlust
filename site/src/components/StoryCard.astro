@@ -20,9 +20,19 @@ const meta = `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
 
 // The lead tile is the only double-height one; the levelled tail tiles are
 // wide but single-height. Three title sizes, so the grid has a hierarchy
-// instead of one weight doing all the work.
+// instead of one weight doing all the work — and they scale in the BASE
+// regime too, not only at `lg`. Below 640px every card is full-width, so the
+// span differences are invisible and a single `text-lg` rendered nine
+// identical tiles at one type size inside a 4525px document; the lead tile's
+// base `row-span-2` (StoryGrid) is what gives the largest step the room for a
+// second clamped line. One source for the size: the <h3> below carries no
+// size class of its own.
 const lead = span.lgRows === 2 && span.lg >= 4;
-const titleSize = lead ? 'lg:text-2xl' : span.lg >= 3 ? 'lg:text-xl' : 'lg:text-lg';
+const titleSize = lead
+  ? 'text-xl lg:text-2xl'
+  : span.lg >= 3
+    ? 'text-lg lg:text-xl'
+    : 'text-base lg:text-lg';
 
 // Shared with FeaturedHero: a stored alt that only repeats the title is
 // decorative here too (the <h3> below announces it), but a real description of
@@ -38,11 +48,21 @@ const alt = heroAltOf(trip);
     // border AND a wide soft shadow. The hover ring is a STATE, not resting
     // elevation, and it is what keeps a hover cue for a reduced-motion
     // visitor now that the resting opacity lift is gone: ring and shadow are
-    // both box-shadow, so `transition-[transform,box-shadow]` covers them and
-    // only the translate/scale is gated behind `motion-safe`. Never widen this
-    // to `transition-all` or `transition-colors` — both interpolate
+    // both box-shadow, so one entry covers them both.
+    //
+    // @ai-warning `translate` MUST stay in this list. Tailwind 4 compiles
+    // `-translate-y-1` to the `translate` PROPERTY, not to `transform`
+    // (`.motion-safe\:hover\:-translate-y-1:hover{--tw-translate-y:…;
+    // translate:var(--tw-translate-x) var(--tw-translate-y)}` in the built
+    // stylesheet), so a list of `transform,box-shadow` transitioned nothing
+    // and the 4px lift landed in a single frame — measured final at 50ms —
+    // beside a 500ms ring/shadow fade. `transform` is kept for the same
+    // reason the image below is unaffected: the shorthand `transition-transform`
+    // expands to `transform,translate,scale,rotate`, which is why the photo's
+    // `scale-[1.04]` on the <RemoteImage> below never had this bug. Never
+    // widen this to `transition-all` or `transition-colors` — both interpolate
     // `outline-color` and turn the focus ring into a 1.5px smudge (global.css).
-    'group relative block min-w-0 overflow-hidden rounded-xl bg-navy shadow-sm transition-[transform,box-shadow] duration-500 hover:shadow-xl hover:ring-2 hover:ring-brand-red motion-safe:hover:-translate-y-1',
+    'group relative block min-w-0 overflow-hidden rounded-xl bg-navy shadow-sm transition-[transform,translate,box-shadow] duration-500 hover:shadow-xl hover:ring-2 hover:ring-brand-red motion-safe:hover:-translate-y-1',
     placement,
   ]}
 >
@@ -90,7 +110,13 @@ const alt = heroAltOf(trip);
       {number !== undefined && <span class="shrink-0 text-brand-red-light">{entryLabel(number)}</span>}
       <span class="min-w-0 break-words text-white">{meta}</span>
     </p>
-    <h3 class:list={['mt-2 text-lg font-extrabold break-words line-clamp-2', titleSize]}>
+    {/*
+      `title` is the only signal that the clamp fired: a long title measured
+      scrollHeight 140 against clientHeight 56 with nothing on screen saying
+      so. The text is also in the <h3> itself, so this adds no name a screen
+      reader has to hear twice.
+    */}
+    <h3 class:list={['mt-2 font-extrabold break-words line-clamp-2', titleSize]} title={trip.data.title}>
       {trip.data.title}
     </h3>
   </div>

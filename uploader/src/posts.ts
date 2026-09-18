@@ -42,6 +42,20 @@ export interface PostShared {
   categories?: string[];
   tags?: string[];
   scheduledAt?: string | null;
+  /**
+   * "Use as homepage cover": the homepage renders the NEWEST flagged published
+   * story and falls back to the newest story overall when nothing is flagged.
+   * @ai-note SHARED, not per-locale (issue #87's rule): a cover choice is not
+   * translatable, so `upsertDraft` writes the same value to BOTH locale rows.
+   * @ai-note Deliberately NOT unique — any number of posts may carry it, so
+   * setting it on one post never writes to another (no cross-post mutation, no
+   * race); "newest wins" resolves the ambiguity at render time.
+   * @ai-warning Optional on the way IN only, exactly like `categories`/`tags`:
+   * an older client and the WXR importer (wp-import.ts) build a `shared`
+   * without it. `draftWithDefaults` normalizes absent → false, and both stores
+   * always return a real boolean, so no reader has to handle undefined.
+   */
+  featured?: boolean;
 }
 export interface PostPair {
   translationKey: string; status: PostStatus;
@@ -255,6 +269,9 @@ export function validateDraft(pair: unknown): asserts pair is PostPair {
   if (shared.scheduledAt !== undefined && shared.scheduledAt !== null && shared.scheduledAt !== '') {
     if (typeof shared.scheduledAt !== 'string' || Number.isNaN(Date.parse(shared.scheduledAt))) throw new PostError('shared.scheduledAt must be an ISO date-time or null');
   }
+  // Rejected, never coerced: a truthy string ('false', 'off') from a hand-made
+  // payload must not silently promote a post to the homepage cover.
+  if (shared.featured !== undefined && typeof shared.featured !== 'boolean') throw new PostError('shared.featured must be a boolean');
   for (const locale of ['de', 'en'] as Locale[]) {
     const l = pair[locale];
     if (!isPlainObject(l)) throw new PostError(`${locale} must be an object`);
@@ -422,6 +439,10 @@ function draftWithDefaults(pair: PostPair): PostPair {
       countryCode: s.countryCode || PLACEHOLDER_COUNTRY_CODE,
       region: s.region || PLACEHOLDER_REGION,
       coordinates: s.coordinates ?? { lat: 0, lng: 0 },
+      // Absent = not the cover. Normalized here, the one chokepoint both
+      // stores and the WXR importer pass through, so every stored pair carries
+      // a real boolean and `featured boolean NOT NULL` is never bound undefined.
+      featured: s.featured ?? false,
     },
     de: fillLocale(pair.de, 'de'),
     en: fillLocale(pair.en, 'en'),
@@ -581,6 +602,7 @@ interface PostRow {
   categories: string[] | null;
   tags: string[] | null;
   scheduled_at: Date | string | null;
+  featured: boolean;
 }
 
 interface PostListRow {
@@ -621,6 +643,9 @@ function rowShared(r: PostRow): PostShared {
     categories: r.categories ?? [],
     tags: r.tags ?? [],
     scheduledAt: r.scheduled_at ? new Date(r.scheduled_at).toISOString() : null,
+    // NOT NULL DEFAULT false in the schema, so both locale rows always answer
+    // with the same real boolean — no `?? false` fallback to hide a bad write.
+    featured: r.featured,
   };
 }
 
@@ -630,12 +655,20 @@ function isSlugCollision(e: unknown): boolean {
   return err.code === '23505' && err.constraint === 'posts_locale_slug_idx';
 }
 
+/**
+ * The parameter row shared by insertLocale and updateLocale. Everything read
+ * off `shared` (date, countryCode, region, coordinates, stops, route,
+ * categories, tags, scheduledAt, featured) is therefore written IDENTICALLY to
+ * the DE and the EN row — that is what "shared field" means here, and what
+ * issue #87 fixed by moving `country`/`keyFacts` OUT of it.
+ */
 function localeParams(tk: string, status: string, shared: PostShared, p: PostLocale): unknown[] {
   return [tk, p.locale, p.slug, p.title, shared.date, p.country, shared.countryCode, shared.region,
     p.excerpt, JSON.stringify(p.heroImage), JSON.stringify(shared.coordinates),
     shared.stops?.length ? JSON.stringify(shared.stops) : null, shared.route ?? null, p.keyFacts ? JSON.stringify(p.keyFacts) : null,
     p.bodyMarkdown, JSON.stringify(p.images), status,
-    shared.categories ?? [], shared.tags ?? [], shared.scheduledAt ? new Date(shared.scheduledAt) : null];
+    shared.categories ?? [], shared.tags ?? [], shared.scheduledAt ? new Date(shared.scheduledAt) : null,
+    shared.featured ?? false];
 }
 
 export function pgPostStore(pool: DbPool): PostStore {
@@ -646,8 +679,8 @@ export function pgPostStore(pool: DbPool): PostStore {
     await client.query(
       `INSERT INTO posts (translation_key, locale, slug, title, date, country, country_code, region,
          excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status,
-         categories, tags, scheduled_at, id, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21, now())`,
+         categories, tags, scheduled_at, featured, id, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22, now())`,
       [...localeParams(tk, status, shared, p), randomUUID()],
     );
   }
@@ -658,7 +691,7 @@ export function pgPostStore(pool: DbPool): PostStore {
     const res = await client.query(
       `UPDATE posts SET slug=$3, title=$4, date=$5, country=$6, country_code=$7, region=$8, excerpt=$9,
          hero_image=$10, coordinates=$11, stops=$12, route=$13, key_facts=$14, body_markdown=$15, images=$16,
-         status=$17, categories=$18, tags=$19, scheduled_at=$20, updated_at=now()
+         status=$17, categories=$18, tags=$19, scheduled_at=$20, featured=$21, updated_at=now()
        WHERE translation_key=$1 AND locale=$2`,
       localeParams(tk, status, shared, p),
     );

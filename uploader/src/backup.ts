@@ -9,13 +9,14 @@ import { POST_SNAPSHOT_SQL, type DbPool } from './db.js';
 import { diskSpace, formatBytes, UPLOAD_HEADROOM_BYTES, type DiskSpace } from './disk.js';
 
 /**
+ * v5 added `posts.featured` (the homepage-cover flag);
  * v4 added `posts.categories`, `posts.tags` and `posts.scheduled_at` (issue #107);
  * v3 added `media` + `media_folders` (issue #64); v2 added `pages`.
  * @ai-warning Bumping this ALSO requires widening the allow-list guard in
  * `restoreDatabase` — otherwise every newly written dump becomes unrestorable,
  * and a test that only checks "an old dump still restores" passes anyway.
  */
-export const DUMP_VERSION = 4;
+export const DUMP_VERSION = 5;
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
 export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 /**
@@ -94,7 +95,7 @@ export async function dumpDatabase(db: Connectable, dir: string, now: Date = new
       `SELECT id, translation_key, locale, slug, title, to_char(date, 'YYYY-MM-DD') AS date, country,
          country_code, region, excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown,
          images, status, created_at, updated_at, published_snapshot, published_at,
-         categories, tags, scheduled_at
+         categories, tags, scheduled_at, featured
        FROM posts ORDER BY created_at`,
     )).rows;
     pages = (await client.query('SELECT key, locale, title, body_markdown, images FROM pages ORDER BY key, locale')).rows;
@@ -483,7 +484,7 @@ export interface Dump {
  * added here or dumps written by the new code are unrestorable. */
 export function readDump(filePath: string): Dump {
   const dump = JSON.parse(gunzipSync(readFileSync(filePath)).toString('utf8')) as Dump;
-  if (![1, 2, 3, 4].includes(dump.version)) throw new BackupError(`unsupported dump version ${dump.version}`);
+  if (![1, 2, 3, 4, 5].includes(dump.version)) throw new BackupError(`unsupported dump version ${dump.version}`);
   return dump;
 }
 
@@ -525,19 +526,22 @@ export async function restoreDatabase(
     for (const p of dump.tables.posts) {
       // published_snapshot/published_at are absent from older dumps → inserted
       // as NULL here, then backfilled below in this same transaction.
-      // categories/tags/scheduled_at are absent from v<=3 dumps → restored at
-      // their column defaults ('{}', '{}', NULL); nothing to backfill from.
+      // categories/tags/scheduled_at are absent from v<=3 dumps, `featured`
+      // from v<=4 dumps → restored at their column defaults ('{}', '{}', NULL,
+      // false); nothing to backfill from. `featured` is coerced with `=== true`
+      // rather than passed through, because the column is NOT NULL and an old
+      // dump has no key at all.
       await client.query(
         `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
            excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status, created_at, updated_at,
-           published_snapshot, published_at, categories, tags, scheduled_at)
+           published_snapshot, published_at, categories, tags, scheduled_at, featured)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15::jsonb,$16,$17::jsonb,$18,$19,$20,$21::jsonb,$22,
-           $23::text[],$24::text[],$25)`,
+           $23::text[],$24::text[],$25,$26)`,
         [p.id, p.translation_key, p.locale, p.slug, p.title, p.date, p.country, p.country_code, p.region,
          p.excerpt, asJsonb(p.hero_image), asJsonb(p.coordinates), asJsonb(p.stops), p.route,
          asJsonb(p.key_facts), p.body_markdown, asJsonb(p.images), p.status, p.created_at, p.updated_at,
          asJsonb(p.published_snapshot), p.published_at ?? null,
-         asTextArray(p.categories), asTextArray(p.tags), p.scheduled_at ?? null],
+         asTextArray(p.categories), asTextArray(p.tags), p.scheduled_at ?? null, p.featured === true],
       );
     }
     // @ai-warning: pre-snapshot dumps (v1, and v2 files written before issue

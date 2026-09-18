@@ -16,8 +16,18 @@ interface Props {
 
 const { locale } = Astro.props;
 const t = useTranslations(locale);
+// `byLocale` sorts newest-first (trips.ts: `b.data.date - a.data.date`), so
+// `trips[0]` is the newest story and is the fallback cover.
 const trips = byLocale(await getCollection('trips'), locale);
-const featured = trips[0];
+// @ai-note The cover is an EDITORIAL choice, not "whatever was published last":
+// `featured` (content.config.ts) lets the author nominate the photograph the
+// front door leads with. Uniqueness is deliberately not enforced anywhere —
+// several posts may carry the flag and the newest of them wins, which is why
+// this is a `find` over a newest-first list rather than a lookup that could
+// fail. No flag at all = the newest story, i.e. the pre-#209 behaviour.
+const flagged = trips.findIndex((t) => t.data.featured);
+const coverIndex = flagged >= 0 ? flagged : 0;
+const featured = trips[coverIndex];
 ---
 
 <Base
@@ -37,10 +47,13 @@ const featured = trips[0];
       and held 8, and the one story it omitted was the newest: exactly the one
       the site most wants opened. (An older revision had the opposite bug, the
       grid repeating the hero as a second full-size tile; the fix for that was
-      to exclude it, which bought this one.) The hero is now a promotion of the
-      grid's first entry rather than a twin of it, the way a lead story also
-      appears in the index below it — and the count is true by construction,
-      with nothing to keep in sync.
+      to exclude it, which bought this one.) The hero is a promotion of one of
+      the grid's own entries rather than a twin of it, the way a lead story
+      also appears in the index below it — and the count is true by
+      construction, with nothing to keep in sync. What the grid DOES do about
+      the repetition is hand the 4×2 lead tile to another story when the cover
+      sits at index 0 (`coverIndex` → `demoteCover`), so the cover photograph
+      is never painted at poster size twice on one screen.
     */
     trips.length > 0 && (
       <section id="stories" class="mx-auto max-w-6xl px-5 py-14">
@@ -49,7 +62,12 @@ const featured = trips[0];
           <RegionFilter locale={locale} />
         </div>
         <div class="mt-6">
-          <StoryGrid trips={trips} locale={locale} numberingPool={trips} />
+          <StoryGrid
+            trips={trips}
+            locale={locale}
+            numberingPool={trips}
+            coverIndex={coverIndex}
+          />
         </div>
       </section>
     )

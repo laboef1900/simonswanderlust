@@ -545,8 +545,9 @@ small {
 .filter-field--check input { width: auto; }
 
 /* A single checkbox option outside the filter bar (import.html's "replace
-   existing drafts", #126): the label keeps the admin's mono voice but sits
-   beside its box, and the base 100%-width control rule is undone. */
+   existing drafts", #126; the editor's "Use as homepage cover"): the label
+   keeps the admin's mono voice but sits beside its box, and the base
+   100%-width control rule is undone. */
 .check-field { display: flex; align-items: center; gap: 0.5rem; margin: 1rem 0 0.25rem; }
 .check-field input { width: auto; margin: 0; }
 .check-field + .muted { margin-top: 0; }

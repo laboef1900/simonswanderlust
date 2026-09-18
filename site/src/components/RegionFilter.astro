@@ -34,11 +34,26 @@ const allHref = homePath(locale) + '#stories';
 // uploader/public/admin.css, "3.49:1 on --canvas"), and `styles/tokens.test.ts`
 // pins it. Measure any change by resolving the composited `oklab()` through a
 // canvas, never by reading the token alpha — 0.45 "looks like" 3:1 and is 2.67.
+//
+// @ai-warning `translate` MUST be in the transition list. Tailwind 4 compiles
+// `-translate-y-0.5` to the `translate` property, not to `transform`, so the
+// old `…,transform` list animated nothing and the hover lift snapped in one
+// frame. `transform` stays for any future scale/rotate on these chips.
 const chip =
-  'inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-full border px-4 py-2 text-sm font-medium transition-[color,background-color,border-color,transform] motion-safe:hover:-translate-y-0.5';
+  'inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-full border px-4 py-2 text-sm font-medium transition-[color,background-color,border-color,transform,translate] motion-safe:hover:-translate-y-0.5';
 const on = 'border-navy bg-navy text-white shadow-sm';
 const off = 'border-navy/55 bg-canvas text-ink/70 hover:border-brand-red hover:text-brand-red';
-const count = 'font-mono text-[11px] tabular-nums opacity-70';
+// @ai-warning NO opacity utility here, and no alpha on the colour either. The
+// count used to carry `opacity-70` ON TOP of the idle chip's `text-ink/70`,
+// and the two MULTIPLY: `#16212e` landed at α 0.49, not 0.70, and measured
+// 3.14:1 on canvas — a WCAG AA failure on the one glyph these chips were added
+// to show. The active chip's count was white/70 on navy (7.85:1) and passed,
+// which is exactly why the pair read as consistent styling. The count now
+// inherits its chip's own text colour (5.97:1 idle, 14.6:1 active) and is
+// de-emphasised by SIZE and the mono face instead — a register change that
+// costs no contrast. `tokens.test.ts` pins the composite; the same trap as the
+// border two lines above, one layer further in.
+const count = 'font-mono text-[11px] tabular-nums';
 ---
 
 <nav aria-label={t('regions.filterLabel')} class="flex flex-wrap gap-2">

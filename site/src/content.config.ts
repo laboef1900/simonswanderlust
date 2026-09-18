@@ -32,6 +32,14 @@ const trips = defineCollection({
       stops: z.array(z.object({ name: z.string(), lat: z.number(), lng: z.number() })).optional(),
       route: z.string().optional(),
       keyFacts: z.record(z.string(), z.string()).optional(),
+      // Optional, never defaulted: absent/undefined = not featured, so every
+      // entry written before this field stays valid without a migration of
+      // the content shape. It marks "use as the homepage cover"; uniqueness is
+      // NOT enforced, because a unique flag would need a cross-post mutation
+      // on every save. HomePage.astro takes the FIRST flagged entry of the
+      // locale's newest-first set and falls back to the newest entry overall,
+      // so zero flags and several flags both render something sensible.
+      featured: z.boolean().optional(),
     }),
 });
 

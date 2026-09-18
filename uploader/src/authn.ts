@@ -45,7 +45,25 @@ export async function loadUser(req: FastifyRequest, users: UserStore, sessions: 
   return { id: user.id, username: user.username, isAdmin: user.isAdmin };
 }
 
-export type AuthGuard = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
+/**
+ * @ai-warning The return type is `void | FastifyReply`, not `void`, and a guard
+ * that refuses a request MUST `return reply.code(...).send(...)` — Fastify 5's
+ * contract for an ASYNC hook that answers on its own. `reply.sent` is
+ * `kReplyHijacked || raw.writableEnded` (fastify/lib/reply.js), i.e. it only
+ * flips once the response has actually been written, and
+ * `preHandlerCallback` (fastify/lib/handle-request.js) runs the route handler
+ * unless `reply.sent` is true by the time the hook's promise settles. A bare
+ * `reply.send(...); return;` settles one microtask too early as soon as
+ * anything asynchronous sits in the onSend chain, and then the HANDLER RUNS ON
+ * TOP OF A REFUSED REQUEST: adding a single async onSend hook turned a 401
+ * from this guard into the handler's 400 on POST /users/me/password, made an
+ * admin-only backup route answer 404, and let PUT /pages/:key rebuild the site
+ * three times. Returning the reply works because `Reply.prototype.then` exists
+ * and resolves on end-of-stream, so the async guard's promise cannot settle
+ * before the refusal is on the wire. `authn.test.ts` pins this with a
+ * deliberately async no-op onSend hook.
+ */
+export type AuthGuard = (req: FastifyRequest, reply: FastifyReply) => Promise<void | FastifyReply>;
 
 export interface Authn {
   /** Resolves the session if a cookie is present; never refuses the request. */
@@ -75,12 +93,12 @@ export function createAuthn(users: UserStore, sessions: SessionStore): Authn {
   };
   const requireAuth: AuthGuard = async (req, reply) => {
     await optionalAuth(req, reply);
-    if (!req.authUser) { reply.code(401).send({ error: 'unauthorized' }); return; }
+    if (!req.authUser) return reply.code(401).send({ error: 'unauthorized' });
   };
   const requireAdmin: AuthGuard = async (req, reply) => {
     await optionalAuth(req, reply);
-    if (!req.authUser) { reply.code(401).send({ error: 'unauthorized' }); return; }
-    if (!req.authUser.isAdmin) { reply.code(403).send({ error: 'forbidden' }); return; }
+    if (!req.authUser) return reply.code(401).send({ error: 'unauthorized' });
+    if (!req.authUser.isAdmin) return reply.code(403).send({ error: 'forbidden' });
   };
   return { optionalAuth, requireAuth, requireAdmin };
 }

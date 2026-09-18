@@ -18,11 +18,14 @@ const de = {
   'home.title': 'Reiseabenteuer',
   'home.mapTeaser.title': 'Wo ich gewesen bin',
   'home.mapTeaser.cta': 'Zur Karte',
-  // Accessible name for the plotted graticule in the map band. The chart shows
+  // Accessible name for the plotted chart in the map band. The chart shows
   // WHERE, which the stats line beside it does not; it names the kind of
   // drawing rather than listing nine places, because the real, navigable map
-  // is one link away and already carries a text fallback.
-  'home.mapTeaser.chartLabel': 'Reiseziele, eingezeichnet auf einem Gradnetz aus Längen- und Breitengraden',
+  // is one link away and already carries a text fallback. Says "coastlines"
+  // now that it draws measured ones (Natural Earth 1:110m) — a screen-reader
+  // user should know the pins sit on land, not on a bare grid.
+  'home.mapTeaser.chartLabel':
+    'Reiseziele, eingezeichnet auf einer Karte mit Küstenlinien und einem Gradnetz aus Längen- und Breitengraden',
   'home.allStories': 'Alle Reiseberichte',
   'home.filter.all': 'Alle',
   'home.readStory': 'Geschichte lesen',
@@ -89,7 +92,8 @@ const en: Record<UIKey, string> = {
   'home.title': 'Travel adventures',
   'home.mapTeaser.title': "Where I've been",
   'home.mapTeaser.cta': 'View the map',
-  'home.mapTeaser.chartLabel': 'Destinations plotted on a grid of latitude and longitude',
+  'home.mapTeaser.chartLabel':
+    'Destinations plotted on a map of coastlines with a grid of latitude and longitude',
   'home.allStories': 'All travel stories',
   'home.filter.all': 'All',
   'home.readStory': 'Read the story',
