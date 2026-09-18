@@ -61,6 +61,10 @@ export function renderPostToMdx(pair: PostPair, locale: Locale): string {
   ];
   if (s.route) lines.push(`route: ${q(s.route)}`);
   if (s.stops?.length) lines.push(`stops: ${JSON.stringify(s.stops)}`);
+  // Zod has it as `featured: z.boolean().optional()` (site/src/content.config.ts):
+  // absent = not the cover. Writing `featured: false` would be valid but would
+  // change every existing backup file, so the key is omitted when unset.
+  if (s.featured) lines.push('featured: true');
   if (p.keyFacts && Object.keys(p.keyFacts).length) {
     lines.push('keyFacts:');
     for (const [k, v] of Object.entries(p.keyFacts)) lines.push(`  ${q(k)}: ${q(v)}`);

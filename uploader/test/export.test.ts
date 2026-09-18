@@ -124,6 +124,19 @@ describe('renderPostToMdx', () => {
     expect(back.bodyMarkdown).toBe(body);
     expect(back.images).toEqual({ [src]: { width: 1600, height: 1067 } });
   });
+
+  // The MDX files are the recovery path, so the cover choice has to survive
+  // them — but the Zod field is `z.boolean().optional()` with no default, so
+  // an unflagged post must export exactly as it did before the flag existed.
+  it('emits `featured: true` only when the flag is set, in both locales', () => {
+    expect(renderPostToMdx(pair, 'de')).not.toContain('featured');
+    const flagged: PostPair = { ...pair, shared: { ...pair.shared, featured: true } };
+    expect(renderPostToMdx(flagged, 'de')).toContain('\nfeatured: true\n');
+    // Shared, not per-locale: the EN backup carries it too.
+    expect(renderPostToMdx(flagged, 'en')).toContain('\nfeatured: true\n');
+    const unflagged: PostPair = { ...pair, shared: { ...pair.shared, featured: false } };
+    expect(renderPostToMdx(unflagged, 'de')).toBe(renderPostToMdx(pair, 'de'));
+  });
 });
 
 describe('exportPost', () => {

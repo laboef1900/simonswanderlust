@@ -191,6 +191,38 @@ describe('editor.html inline script against its own markup', () => {
   });
 
   /**
+   * The cover flag is declared in four places across two tsconfigs —
+   * `PostShared` here, the `posts.featured` column, the loader's `PostRow` and
+   * the Zod schema — and it is optional everywhere, so a checkbox the script
+   * never reads (or a payload key the markup has no control for) type-checks
+   * perfectly while the author's choice is dropped on save. Only a round-trip
+   * through the real markup catches that.
+   */
+  it('round-trips the homepage-cover checkbox, and sends false when unticked', () => {
+    const { api, el } = loadEditor();
+    api.populateForm({ ...fullPair(), shared: { ...fullPair().shared, featured: true } });
+    expect(el('fmFeatured').checked).toBe(true);
+    expect(api.buildPayload().shared.featured).toBe(true);
+
+    // A payload without the key means "not the cover": the box must clear
+    // rather than keep the previously loaded post's choice.
+    api.populateForm(fullPair());
+    expect(el('fmFeatured').checked).toBe(false);
+    expect(api.buildPayload().shared.featured).toBe(false);
+  });
+
+  // #87's rule: a cover choice is not translatable, so the control belongs in
+  // the shared sidebar. Inside a locale tab it would read as a per-locale
+  // choice while the server writes one value to both rows. (Its accessible
+  // name is covered generically by admin-a11y.test.ts.)
+  it('keeps the cover checkbox outside both locale tabs', () => {
+    const sidebar = markup.slice(markup.indexOf('id="expeditionDetails"'));
+    const localeTabs = markup.slice(markup.indexOf('id="tab-de"'), markup.indexOf('id="expeditionDetails"'));
+    expect(sidebar).toContain('id="fmFeatured"');
+    expect(localeTabs).not.toContain('fmFeatured');
+  });
+
+  /**
    * The focal point is declared in THREE places across two tsconfigs —
    * `HeroImage` here, `RemoteHeroImage` in site/src/lib/images.ts, and the Zod
    * schema in site/src/content.config.ts — and it is optional, so a one-sided

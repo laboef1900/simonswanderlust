@@ -113,15 +113,66 @@ maybe('backup round-trip (Postgres)', () => {
   });
 
   it('rejects an unsupported dump version without touching data', async () => {
-    // @ai-warning: the guard is an ALLOW-LIST (1, 2, 3, 4), not a minimum — so
-    // this probes the next UNRELEASED version. Bump it whenever DUMP_VERSION
-    // is bumped, or this stops testing anything.
-    const { gzipSync } = await import('node:zlib');
-    const { writeFileSync } = await import('node:fs');
+    // @ai-warning: the guard is an ALLOW-LIST (1, 2, 3, 4, 5), not a minimum —
+    // so this probes the next UNRELEASED version. Bump it whenever
+    // DUMP_VERSION is bumped, or this stops testing anything.
+    // gzipSync/writeFileSync are imported statically at the top of the file.
     const bad = join(dir, 'db-20260101-000000.json.gz');
-    writeFileSync(bad, gzipSync(JSON.stringify({ version: 5, tables: { users: [], posts: [] } })));
+    writeFileSync(bad, gzipSync(JSON.stringify({ version: 6, tables: { users: [], posts: [] } })));
     await expect(restoreDatabase(pool, bad)).rejects.toThrow(/unsupported dump version/);
     expect((await pool.query('SELECT count(*) AS n FROM users')).rows[0].n).toBe('1');
+  });
+
+  // Dump v5: `featured` is an explicit column in the SELECT/INSERT lists, so
+  // leaving it out silently un-features the homepage cover on every restore —
+  // the same defect issue #107 fixed for categories/tags/scheduled_at.
+  it('a v5 dump round-trips the featured flag on both locale rows', async () => {
+    const posts = pgPostStore(pool);
+    await pool.query('DELETE FROM posts');
+    const base = {
+      translationKey: '', status: 'draft' as const,
+      shared: { date: '2026-02-02', countryCode: 'IS', region: 'europe', coordinates: { lat: 64, lng: -21 }, featured: true },
+      de: { locale: 'de' as const, slug: 'cover-reise', title: 'Cover', excerpt: 'x', country: 'Island', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hallo', images: {} },
+      en: { locale: 'en' as const, slug: 'cover-trip', title: 'Cover', excerpt: 'x', country: 'Iceland', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hello', images: {} },
+    };
+    const created = await posts.upsertDraft(base);
+    await posts.publish(created.translationKey);
+
+    const file = join(dir, await dumpDatabase(pool, dir));
+    expect(readDump(file).version).toBe(5);
+    await pool.query('DELETE FROM posts');
+    await restoreDatabase(pool, file);
+
+    const rows = (await pool.query(
+      `SELECT locale, featured, published_snapshot->'featured' AS snap FROM posts
+        WHERE translation_key=$1 ORDER BY locale`, [created.translationKey],
+    )).rows;
+    expect(rows.map((r) => [r.locale, r.featured, r.snap])).toEqual([['de', true, true], ['en', true, true]]);
+    expect((await posts.get(created.translationKey))?.shared.featured).toBe(true);
+    await pool.query('DELETE FROM posts');
+  });
+
+  // A dump written before the column existed carries no `featured` key at all.
+  // The column is NOT NULL, so restoring it must land the default (false),
+  // never a constraint violation that aborts the whole restore.
+  it('restores a v4 dump with no featured key as featured=false', async () => {
+    const v4Post = {
+      id: randomUUID(), translation_key: 'v4-pair', locale: 'de', slug: 'v4-reise', title: 'V4',
+      date: '2025-06-01', country: 'Peru', country_code: 'PE', region: 'south-america', excerpt: 'x',
+      hero_image: { src: 'https://img.example/h', width: 100, height: 50, alt: 'a' },
+      coordinates: { lat: -12, lng: -77 }, stops: null, route: null, key_facts: null,
+      body_markdown: 'Body', images: {}, status: 'draft',
+      created_at: '2025-06-01T10:00:00.000Z', updated_at: '2025-06-02T10:00:00.000Z',
+      categories: ['reise'], tags: [], scheduled_at: null,
+    };
+    const v4 = join(dir, 'db-20260401-000000.json.gz');
+    writeFileSync(v4, gzipSync(JSON.stringify({ version: 4, tables: { users: [], posts: [v4Post] } })));
+
+    await restoreDatabase(pool, v4);
+    const row = (await pool.query(`SELECT featured, categories FROM posts WHERE slug='v4-reise'`)).rows[0];
+    expect(row.featured).toBe(false);
+    expect(row.categories).toEqual(['reise']); // the v4 columns still restore
+    await pool.query('DELETE FROM posts');
   });
 
   it('restores a v1 dump (no pages) without wiping existing pages', async () => {
@@ -204,7 +255,7 @@ maybe('backup round-trip (Postgres)', () => {
     const dump = JSON.parse(
       (await import('node:zlib')).gunzipSync((await import('node:fs')).readFileSync(join(dir, name))).toString('utf8'),
     );
-    expect(dump.version).toBe(4);
+    expect(dump.version).toBe(5);
 
     await pool.query('DELETE FROM media');
     await pool.query('DELETE FROM media_folders');
@@ -389,10 +440,10 @@ maybe('backup round-trip (Postgres)', () => {
     it('refuses an unsupported dump version before writing a pre-dump', async () => {
       const { backupDir, env } = await seed();
       const bad = join(dir, 'db-20260102-000000.json.gz');
-      writeFileSync(bad, gzipSync(JSON.stringify({ version: 5, tables: { users: [], posts: [] } })));
+      writeFileSync(bad, gzipSync(JSON.stringify({ version: 6, tables: { users: [], posts: [] } })));
       const r = await runCli(['restore', '--yes', bad], env);
       expect(r.code).toBe(1);
-      expect(r.stderr).toContain('unsupported dump version 5');
+      expect(r.stderr).toContain('unsupported dump version 6');
       expect(await usernames()).toEqual(['alice', 'bob']);
       expect(preDumps(backupDir)).toEqual([]);
     }, 30_000);

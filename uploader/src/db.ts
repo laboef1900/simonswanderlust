@@ -35,7 +35,8 @@ export const POST_SNAPSHOT_SQL = `jsonb_build_object(
   'region', region, 'excerpt', excerpt, 'hero_image', hero_image, 'coordinates', coordinates,
   'stops', stops, 'route', route, 'key_facts', key_facts,
   'body_markdown', body_markdown, 'images', images,
-  'categories', categories, 'tags', tags, 'scheduled_at', scheduled_at
+  'categories', categories, 'tags', tags, 'scheduled_at', scheduled_at,
+  'featured', featured
 )`;
 
 export async function ensureSchema(pool: DbPool): Promise<void> {
@@ -67,6 +68,7 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       excerpt text NOT NULL, hero_image jsonb NOT NULL, coordinates jsonb NOT NULL,
       stops jsonb, route text, key_facts jsonb, body_markdown text NOT NULL,
       images jsonb NOT NULL DEFAULT '{}', status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
+      featured boolean NOT NULL DEFAULT false,
       created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())
   `);
   // @ai-note Partial: '' means "no slug yet" (a DE-first draft without an EN
@@ -84,6 +86,18 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS categories text[] NOT NULL DEFAULT '{}'`);
   await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}'`);
   await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS scheduled_at timestamptz`);
+  // @ai-note "Use as homepage cover" (the homepage picks the NEWEST flagged
+  // published entry and falls back to the newest entry overall). Deliberately
+  // NOT unique: several posts may carry the flag, so setting it on one post
+  // never mutates another — no cross-post write, no race. false is the
+  // fail-safe default, so every pre-existing row stays "not the cover".
+  // @ai-warning This ALTER must stay ABOVE the published_snapshot backfill
+  // below: that UPDATE expands POST_SNAPSHOT_SQL, which names `featured`, and
+  // Postgres rejects the statement at analysis time on a database that does
+  // not have the column yet — even when no row matches its WHERE. Same reason
+  // categories/tags/scheduled_at are migrated here rather than in the column
+  // migrations section at the bottom of this function.
+  await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS featured boolean NOT NULL DEFAULT false`);
   await pool.query(`CREATE INDEX IF NOT EXISTS posts_categories_idx ON posts USING gin (categories)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS posts_tags_idx ON posts USING gin (tags)`);
   // One-time backfill for rows published before the column existed. The

@@ -10,6 +10,12 @@ interface PostRow {
   coordinates: { lat: number; lng: number };
   stops: { name: string; lat: number; lng: number }[] | null; route: string | null;
   key_facts: Record<string, string> | null; body_markdown: string; images: Record<string, ImageDims>;
+  /**
+   * "Use as homepage cover" (uploader `PostShared.featured`, column
+   * `featured boolean NOT NULL DEFAULT false`). Optional here because a
+   * snapshot written before the column existed simply has no key.
+   */
+  featured?: boolean;
 }
 
 /**
@@ -57,6 +63,11 @@ export function rowToEntryInput(row: PostRow, imageHost: string) {
       ...(row.stops ? { stops: row.stops } : {}),
       ...(row.route ? { route: row.route } : {}),
       ...(row.key_facts ? { keyFacts: row.key_facts } : {}),
+      // Emitted only when true: the Zod field is `.optional()` and NOT
+      // defaulted, so a false/absent flag must produce no key at all — that is
+      // what keeps every pre-existing entry valid. Not unique either: several
+      // entries may carry it and the homepage takes the newest.
+      ...(row.featured ? { featured: true as const } : {}),
     },
   };
 }

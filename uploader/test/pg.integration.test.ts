@@ -212,6 +212,51 @@ maybe('pgPostStore (integration)', () => {
     await pool.end();
   });
 
+  // The homepage cover flag is SHARED — ONE value written to BOTH locale rows.
+  // That is issue #87's bug class (a shared field written per-locale), and it
+  // only reproduces on Postgres, where the pair really is two rows. The site
+  // is built from published_snapshot, so the flag has to ride in there too
+  // (POST_SNAPSHOT_SQL in db.ts) or it never reaches the blog.
+  it('writes featured to both locale rows and carries it into the published snapshot', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    const created = await store.upsertDraft({ ...base, shared: { ...base.shared, featured: true } });
+    const tk = created.translationKey;
+    const flags = async () => (await pool.query<{ locale: string; featured: boolean }>(
+      `SELECT locale, featured FROM posts WHERE translation_key=$1 ORDER BY locale`, [tk],
+    )).rows;
+    expect(await flags()).toEqual([{ locale: 'de', featured: true }, { locale: 'en', featured: true }]);
+    expect((await store.get(tk))?.shared.featured).toBe(true);
+
+    await store.publish(tk);
+    const snapshots = (await pool.query<{ s: { featured?: boolean } }>(
+      `SELECT published_snapshot AS s FROM posts WHERE translation_key=$1 ORDER BY locale`, [tk],
+    )).rows;
+    expect(snapshots.map((r) => r.s.featured)).toEqual([true, true]);
+
+    // Unticking the box clears both rows (the update path, not just the insert).
+    await store.upsertDraft({ ...created, shared: { ...created.shared, featured: false } });
+    expect(await flags()).toEqual([{ locale: 'de', featured: false }, { locale: 'en', featured: false }]);
+    expect((await store.get(tk))?.shared.featured).toBe(false);
+    await pool.end();
+  });
+
+  // Same answer as memoryPostStore: a payload without the key (the WXR
+  // importer, any pre-flag client) stores false instead of failing NOT NULL.
+  it('defaults featured to false for a payload that omits it', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    expect('featured' in base.shared).toBe(false);
+    const created = await store.upsertDraft(base);
+    expect(created.shared.featured).toBe(false);
+    expect((await store.get(created.translationKey))?.shared.featured).toBe(false);
+    await pool.end();
+  });
+
   it('ensureSchema backfills published_snapshot for pre-migration published rows, idempotently', async () => {
     const pool = createPool(url!);
     await ensureSchema(pool);
@@ -239,6 +284,36 @@ maybe('pgPostStore (integration)', () => {
     )).rows[0];
     expect(second.s.body_markdown).toBe('## legacy');
     expect(second.p.getTime()).toBe(first.p.getTime());
+    await pool.end();
+  });
+
+  // The additive `featured` migration must run BEFORE the published_snapshot
+  // backfill in the same ensureSchema call: that UPDATE expands
+  // POST_SNAPSHOT_SQL, which names `featured`, and Postgres rejects the
+  // statement at analysis time when the column is missing — even though no row
+  // would match its WHERE. Simulate a pre-#featured database by dropping the
+  // column from a populated table and re-running the whole bootstrap.
+  it('adds featured to an existing posts table before the snapshot backfill runs', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    await pool.query(
+      `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
+         excerpt, hero_image, coordinates, body_markdown, status)
+       VALUES (gen_random_uuid(), 'pre-featured', 'de', 'pre-featured-de', 'T', '2024-10-03', 'X', 'RO', 'europe',
+         'e', '{"src":"https://i/h","width":10,"height":10,"alt":"a"}', '{"lat":1,"lng":2}', '## legacy', 'published')`,
+    );
+    await pool.query('ALTER TABLE posts DROP COLUMN featured');
+
+    await ensureSchema(pool);
+
+    const row = (await pool.query<{ featured: boolean; s: { featured?: boolean } }>(
+      `SELECT featured, published_snapshot AS s FROM posts WHERE slug='pre-featured-de'`,
+    )).rows[0];
+    // NOT NULL DEFAULT false: an existing post is simply not the cover.
+    expect(row?.featured).toBe(false);
+    expect(row?.s.featured).toBe(false);
+    await pool.query('DELETE FROM posts');
     await pool.end();
   });
 

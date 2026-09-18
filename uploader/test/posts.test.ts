@@ -308,6 +308,50 @@ describe('country and keyFacts are per-locale (issue #87)', () => {
   });
 });
 
+// The homepage cover flag is SHARED (not per-locale, #87's rule) and optional
+// on the way in: the WXR importer and any pre-flag client send a `shared`
+// without it. What the stores must agree on is the value a reader sees back —
+// a real boolean, false when the payload omitted the key. The pg half of this
+// contract (both locale rows, and the published snapshot) lives in
+// pg.integration.test.ts, which skips without TEST_DATABASE_URL.
+describe('featured: the homepage cover flag', () => {
+  it('defaults to false when the payload omits it (the importer/older-client path)', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    expect('featured' in p.shared).toBe(false);
+    const created = await s.upsertDraft(p);
+    expect(created.shared.featured).toBe(false);
+    expect((await s.get(created.translationKey))?.shared.featured).toBe(false);
+  });
+
+  it('round-trips true and can be cleared again by a later save', async () => {
+    const s = memoryPostStore();
+    const created = await s.upsertDraft(pair({ shared: { ...pair().shared, featured: true } }));
+    expect((await s.get(created.translationKey))?.shared.featured).toBe(true);
+    const cleared = await s.upsertDraft({ ...created, shared: { ...created.shared, featured: false } });
+    expect(cleared.shared.featured).toBe(false);
+    expect((await s.get(created.translationKey))?.shared.featured).toBe(false);
+  });
+
+  it('flagging one post leaves another flagged post alone (no uniqueness, no cross-post write)', async () => {
+    const s = memoryPostStore();
+    const first = await s.upsertDraft(pair({ shared: { ...pair().shared, featured: true } }));
+    const second = await s.upsertDraft(pair({
+      de: { ...pair().de, slug: 'other-de' }, en: { ...pair().en, slug: 'other-en' },
+      shared: { ...pair().shared, featured: true },
+    }));
+    expect((await s.get(first.translationKey))?.shared.featured).toBe(true);
+    expect((await s.get(second.translationKey))?.shared.featured).toBe(true);
+  });
+
+  it('validateDraft rejects a non-boolean instead of coercing it', () => {
+    const draft = { shared: { featured: 'true' }, de: { title: 'T' }, en: {} };
+    expect(() => validateDraft(draft)).toThrow(/shared.featured must be a boolean/);
+    expect(() => validateDraft({ ...draft, shared: { featured: true } })).not.toThrow();
+    expect(() => validateDraft({ ...draft, shared: {} })).not.toThrow();
+  });
+});
+
 describe('memoryPostStore optimistic concurrency', () => {
   it('get() and upsertDraft() return the stored updatedAt', async () => {
     const s = memoryPostStore();

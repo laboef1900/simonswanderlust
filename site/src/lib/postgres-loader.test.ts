@@ -68,6 +68,16 @@ describe('rowToEntryInput', () => {
     // without a timeZone) renders the same month in every build timezone.
     expect(snap.data.date).toEqual(new Date(2024, 9, 3));
   });
+
+  // `featured` is `z.boolean().optional()` in content.config.ts with NO
+  // default, so a false/absent flag must produce no key at all — that is what
+  // keeps every pre-flag snapshot valid and every unflagged entry unchanged.
+  // A snapshot written before the column existed carries no key either.
+  it('emits featured only when the snapshot says true', () => {
+    expect('featured' in rowToEntryInput(row as never, 'https://img').data).toBe(false);
+    expect('featured' in rowToEntryInput({ ...row, featured: false } as never, 'https://img').data).toBe(false);
+    expect(rowToEntryInput({ ...row, featured: true } as never, 'https://img').data.featured).toBe(true);
+  });
 });
 
 type LoaderContext = Parameters<Loader['load']>[0];
