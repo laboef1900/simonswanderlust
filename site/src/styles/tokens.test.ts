@@ -39,6 +39,16 @@ export function contrast(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
+/**
+ * Alpha compositing of an `oklab(c / a)` utility over an opaque backdrop —
+ * which is the only number that counts, for a border or for text.
+ */
+const over = (hex: string, alpha: number, bg: string): string => {
+  const ch = (s: string, i: number) => parseInt(s.slice(1 + i * 2, 3 + i * 2), 16);
+  const mix = (i: number) => Math.round(alpha * ch(hex, i) + (1 - alpha) * ch(bg, i));
+  return `#${[0, 1, 2].map((i) => mix(i).toString(16).padStart(2, '0')).join('')}`;
+};
+
 const canvas = token('canvas');
 const navy = token('navy');
 const ink = token('ink');
@@ -89,13 +99,6 @@ describe('brand token contrast', () => {
  * ought to clear 3:1 and composites to 2.67:1; only the composite counts.
  */
 describe('non-text contrast of alpha borders', () => {
-  /** Alpha compositing of an `oklab(c / a)` border over an opaque backdrop. */
-  const over = (hex: string, alpha: number, bg: string): string => {
-    const ch = (s: string, i: number) => parseInt(s.slice(1 + i * 2, 3 + i * 2), 16);
-    const mix = (i: number) => Math.round(alpha * ch(hex, i) + (1 - alpha) * ch(bg, i));
-    return `#${[0, 1, 2].map((i) => mix(i).toString(16).padStart(2, '0')).join('')}`;
-  };
-
   it('the idle region chip border clears 3:1 on canvas', () => {
     // RegionFilter.astro: border-navy/55, matching the admin's --line-control.
     expect(contrast(over(navy, 0.55, canvas), canvas)).toBeGreaterThanOrEqual(3);
@@ -108,6 +111,31 @@ describe('non-text contrast of alpha borders', () => {
     // MapTeaser.astro: border-white/50.
     expect(contrast(over('#ffffff', 0.5, navy), navy)).toBeGreaterThanOrEqual(3);
     expect(contrast(over('#ffffff', 0.3, navy), navy)).toBeLessThan(3);
+  });
+});
+
+/**
+ * Text contrast of the alpha colour utilities, WCAG 2.2 SC 1.4.3 (4.5:1). The
+ * borders above are the same trap one layer out; these are the glyphs.
+ *
+ * @ai-warning Alphas MULTIPLY, and nothing in the class list says so. The
+ * region chip's count carried `opacity-70` on top of the chip's own
+ * `text-ink/70`: α 0.49, not 0.70, and 3.14:1 on canvas. It hid for a release
+ * because the ACTIVE chip's count was white/70 on navy (7.85:1), so the pair
+ * looked deliberate. Never stack an opacity utility on an alpha text colour —
+ * change the colour, or de-emphasise by size and face as the count now does.
+ */
+describe('text contrast of alpha text utilities', () => {
+  it('ink/70 clears AA on canvas — the chip count and the inactive locale link', () => {
+    // RegionFilter.astro (count, inheriting the chip) and LangSwitcher.astro.
+    expect(contrast(over(ink, 0.7, canvas), canvas)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('records the two alphas that shipped below AA', () => {
+    // text-ink/70 × opacity-70 → α 0.49 → 3.14:1 on the three idle chips.
+    expect(contrast(over(ink, 0.7 * 0.7, canvas), canvas)).toBeLessThan(4.5);
+    // text-ink/60 → 4.33:1 on the control a non-German visitor needs most.
+    expect(contrast(over(ink, 0.6, canvas), canvas)).toBeLessThan(4.5);
   });
 });
 

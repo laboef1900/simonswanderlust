@@ -30,6 +30,12 @@ const label: Record<Locale, string> = {
 // padded box, not `underline`, so it clears the glyph descenders and cannot be
 // confused with the link styling beside it.
 const target = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded';
+// @ai-warning `text-ink/60` here measured 4.33:1 on canvas — below AA at
+// 12px/600, and on the single control a non-German visitor landing on `/`
+// needs most. `/70` composites to 5.97:1, and the state signal is the active
+// item's brand underline above, not this one being faded, so the alpha is
+// free to rise. `tokens.test.ts` pins the composite.
+const inactive = 'text-ink/70 transition-[color] hover:text-brand-red';
 ---
 
 <div class="flex items-center text-xs font-semibold tracking-wide uppercase">
@@ -46,7 +52,7 @@ const target = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-cente
             href={otherHref}
             hreflang={code}
             aria-label={label[code]}
-            class={`${target} text-ink/60 transition-[color] hover:text-brand-red`}
+            class={`${target} ${inactive}`}
           >
             {code.toUpperCase()}
           </a>
