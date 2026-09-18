@@ -13,28 +13,44 @@ interface Props {
 
 const { trip, featured = false, number } = Astro.props;
 const locale = localeOf(trip);
-const label = [number !== undefined ? entryLabel(number) : null, `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`]
-  .filter(Boolean)
-  .join(' — ');
+const meta = `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
 ---
 
 <a
   href={pathOf(trip)}
   class:list={[
-    'group relative block min-w-0 overflow-hidden rounded-md border border-navy/10 bg-navy shadow-sm transition-all duration-500 hover:border-brand-red/40 hover:shadow-xl motion-safe:hover:-translate-y-1 motion-safe:hover:rotate-[0.5deg] focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2',
+    'group relative block min-w-0 overflow-hidden rounded-md border border-navy/10 bg-navy shadow-sm transition-[transform,box-shadow,border-color] duration-500 hover:border-brand-red/40 hover:shadow-xl motion-safe:hover:-translate-y-1',
     featured ? 'md:col-span-2 md:row-span-2' : '',
   ]}
 >
   <RemoteImage
     image={trip.data.heroImage}
     alt=""
-    sizes={featured ? '(min-width: 768px) 66vw, 100vw' : '(min-width: 768px) 33vw, 100vw'}
-    class="h-full w-full object-cover opacity-90 transition-all duration-500 group-hover:opacity-100 motion-safe:group-hover:scale-[1.04]"
+    sizes={featured ? '(min-width: 768px) 66vw, calc(100vw - 2.5rem)' : '(min-width: 768px) 33vw, calc(100vw - 2.5rem)'}
+    class="h-full w-full object-cover opacity-90 transition-[opacity,transform] duration-500 group-hover:opacity-100 motion-safe:group-hover:scale-[1.04]"
   />
-  <div class="absolute inset-0 bg-gradient-to-t from-navy/90 via-navy/30 to-transparent transition-opacity duration-300 group-hover:from-navy/85"></div>
+  <div class="absolute inset-0 bg-gradient-to-t from-navy/90 via-navy/30 to-transparent"></div>
   <div class="absolute right-0 bottom-0 left-0 p-5 text-white">
-    <p class="font-mono text-[11px] font-semibold tracking-[0.2em] text-brand-red-light uppercase truncate">{label}</p>
-    <h3 class:list={['mt-1 font-extrabold line-clamp-2 break-words transition-colors duration-300 group-hover:text-white', featured ? 'text-2xl' : 'text-lg']}>
+    {/*
+      @ai-warning Opaque plate, for the same reason as FeaturedHero's: this line
+      was `text-brand-red-light` straight over the photograph and measured
+      1.90:1 to 5.01:1 depending only on which part of which frame sat behind
+      the glyphs — the identity was legible on a jungle photo and invisible on
+      sea-and-sky. On solid navy the accent is 4.8:1 and white is 14.6:1 on
+      every card. Do not tint the plate with an alpha.
+    */}
+    <p
+      class="inline-flex max-w-full items-center gap-x-2 rounded border border-white/15 bg-navy px-2 py-1 font-mono text-[11px] font-semibold tracking-[0.18em] uppercase"
+    >
+      {number !== undefined && <span class="shrink-0 text-brand-red-light">{entryLabel(number)}</span>}
+      <span class="truncate text-white">{meta}</span>
+    </p>
+    <h3
+      class:list={[
+        'mt-2 font-extrabold break-words line-clamp-2',
+        featured ? 'text-2xl' : 'text-lg',
+      ]}
+    >
       {trip.data.title}
     </h3>
   </div>

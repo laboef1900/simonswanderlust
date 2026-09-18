@@ -25,30 +25,43 @@ const [featured, ...rest] = trips;
   description={t('site.tagline')}
   locale={locale}
   alternates={{ de: '/', en: '/en/' }}
+  image={featured?.data.heroImage}
 >
   {featured && <FeaturedHero trip={featured} number={entryNumberOf(featured, trips)} />}
   <MapTeaser locale={locale} />
-  <section id="stories" class="mx-auto max-w-6xl px-5 py-14">
-    <div class="flex flex-wrap items-baseline justify-between gap-4">
-      <h2 class="text-2xl font-extrabold text-navy">{t('home.allStories')}</h2>
-      <RegionFilter locale={locale} />
-    </div>
-    <div class="mt-6">
-      {/* Single-story locale: grid repeats the hero story — duplicate beats an empty grid during migration. */}
-      <StoryGrid trips={rest.length > 0 ? rest : trips} locale={locale} numberingPool={trips} />
-    </div>
-  </section>
+  {
+    /*
+      The grid renders only what the hero does not. It used to fall back to
+      repeating the hero story ("duplicate beats an empty grid during
+      migration") — on a page whose premise is that the photograph is the
+      content, one photograph twice in a single scroll is worse than no second
+      section at all, and the migration it was written for is long over.
+    */
+    rest.length > 0 && (
+      <section id="stories" class="mx-auto max-w-6xl px-5 py-14">
+        <div class="flex flex-wrap items-baseline justify-between gap-4">
+          <h2 class="text-2xl font-extrabold text-navy">{t('home.allStories')}</h2>
+          <RegionFilter locale={locale} />
+        </div>
+        <div class="mt-6">
+          <StoryGrid trips={rest} locale={locale} numberingPool={trips} />
+        </div>
+      </section>
+    )
+  }
   <RouteDivider />
   <section>
     <div class="mx-auto max-w-3xl px-5 py-14 text-center">
-      <h2 class="text-xl font-extrabold text-navy">{t('nav.about')}</h2>
-      <p class="mt-3 text-ink/80">{t('home.aboutTeaser.text')}</p>
+      <h2 class="text-2xl font-extrabold text-navy">{t('nav.about')}</h2>
+      <p class="mx-auto mt-3 max-w-prose text-ink/80">{t('home.aboutTeaser.text')}</p>
+      {/* The cameras are the credibility asset and only lived on /uber-mich/. */}
+      <p class="mt-4 font-mono text-[11px] tracking-[0.18em] text-navy/70 uppercase">{t('about.gear')}</p>
       <a
         href={aboutPath(locale)}
-        class="group/about mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-brand-red hover:text-brand-red-light"
+        class="group/about mt-4 inline-flex min-h-[44px] items-center gap-1.5 rounded px-2 text-sm font-semibold text-brand-red transition-[color] hover:text-brand-red-light"
       >
         <span>{t('home.aboutTeaser.cta')}</span>
-        <svg aria-hidden="true" focusable="false" class="h-4 w-4 transition-transform duration-300 group-hover/about:translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+        <svg aria-hidden="true" focusable="false" class="h-4 w-4 transition-transform duration-300 motion-safe:group-hover/about:translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </a>

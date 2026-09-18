@@ -1,5 +1,6 @@
 import type { CollectionEntry } from 'astro:content';
 import type { Locale, UIKey } from '../i18n/ui';
+import { regions, type Region } from './paths';
 
 export type Trip = CollectionEntry<'trips'>;
 
@@ -54,6 +55,22 @@ export function tripStats(trips: Trip[]): TripStats {
     countries: new Set(trips.map((t) => t.data.countryCode)).size,
     continents: new Set(trips.map((t) => t.data.region)).size,
   };
+}
+
+/**
+ * Story count per region for one locale's set, for the region chips.
+ *
+ * @ai-note Every region gets a key, including zero-count ones: the chip row is
+ * built from `regions` (paths.ts), so a missing key would render a chip with a
+ * blank count rather than an honest 0.
+ */
+export function regionCounts(trips: Trip[]): Record<Region, number> {
+  const counts = Object.fromEntries(regions.map((r) => [r, 0])) as Record<Region, number>;
+  for (const trip of trips) {
+    const region = trip.data.region as Region;
+    if (region in counts) counts[region] += 1;
+  }
+  return counts;
 }
 
 /** "20 REISEN · 10 LÄNDER · 3 KONTINENTE" — the expedition-log stat line. */

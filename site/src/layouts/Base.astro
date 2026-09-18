@@ -6,7 +6,7 @@ import '../styles/global.css';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
-import { imageOrigin } from '../lib/images';
+import { imageOrigin, largestVariant } from '../lib/images';
 import { PROD_SITE, type SeoImage } from '../lib/seo';
 import { SHIKI_CSS } from '../lib/shiki-classes';
 
@@ -35,6 +35,11 @@ const otherLocale: Locale = locale === 'de' ? 'en' : 'de';
 // cannot reuse an anonymous-CORS connection; fonts ship locally via @fontsource,
 // so nothing on the page needs one.
 const imgOrigin = imageOrigin(import.meta.env.PUBLIC_BASE_URL);
+// @ai-warning `heroImage.src` is the variant BASE (".../hero"), not a file:
+// srcset/fallbackSrc append `-<width>.<format>`. Emitting it raw as og:image
+// shipped a 404 to every crawler — story pages have done so since the tag was
+// added. Resolve it to the largest real variant instead.
+const ogImage = image && largestVariant(image, 'webp');
 // Code-block colours as classes (#124): body HTML is sanitized with no `style`
 // allowed anywhere, so Shiki's palette ships as this generated stylesheet.
 // Unlayered on purpose — it must win over @tailwindcss/typography's `pre`
@@ -76,9 +81,10 @@ const shikiStyle = `<style>${SHIKI_CSS}</style>`;
     <meta property="og:locale" content={ogLocale[locale]} />
     {alternates && <meta property="og:locale:alternate" content={ogLocale[otherLocale]} />}
     {
-      image && (
+      image && ogImage && (
         <>
-          <meta property="og:image" content={image.src} />
+          <meta property="og:image" content={ogImage} />
+          <meta property="og:image:type" content="image/webp" />
           <meta property="og:image:width" content={String(image.width)} />
           <meta property="og:image:height" content={String(image.height)} />
           <meta property="og:image:alt" content={image.alt} />

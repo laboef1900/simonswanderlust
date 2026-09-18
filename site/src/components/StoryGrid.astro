@@ -16,10 +16,11 @@ const t = useTranslations(locale);
 
 // @ai-warning Do NOT put `content-visibility: auto` on the card grid. It implies
 // `contain: paint`, which clips descendants to the padding box — this grid has no
-// padding and the cards fill their tracks exactly, so the cards'
-// `focus-visible:outline-offset-2` ring gets sliced off on every edge card
-// (WCAG 2.4.7). The grid is also the main content of the home/region pages, so
-// skipping its layout buys little.
+// padding and the cards fill their tracks exactly, so the 2px focus ring every
+// focusable gets from `:focus-visible` in global.css (offset 2px, so it paints
+// OUTSIDE the card) would be sliced off on every edge card (WCAG 2.4.7). The
+// grid is also the main content of the home/region pages, so skipping its
+// layout buys little.
 ---
 
 {

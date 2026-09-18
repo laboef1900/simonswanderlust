@@ -19,6 +19,37 @@
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
 }
 
+/* ── browser surfaces ────────────────────────────────────────────────────
+ * The focus ring and the selection colour are part of this design system, not
+ * the user agent's. One themed ring for every focusable element replaces the
+ * four appearances the pages used to ship (an authored brand-red ring on cards
+ * and region chips, the UA's white ring on the hero CTA, the UA's ink ring on
+ * every nav and footer link, and no ring at all on the skip link).
+ * On dark bands, components override the colour with
+ * `focus-visible:outline-brand-red-light` — brand-red on navy is 3.1:1, the
+ * light accent 4.8:1.
+ * @ai-warning NEVER let a transition touch `outline`. Two ways to break this,
+ * both observed on this page: `transition-all` on a story card used to
+ * interpolate outline-width/-color, so the first ~0.5s of a focus ring was a
+ * 1.5px ink line; and Tailwind 4's `transition-colors` shorthand INCLUDES
+ * `outline-color`, which animated the ring from `currentColor` — the nav
+ * wordmark's ring came up navy and the language link's ink-grey. Both are under
+ * the 2px, 3:1 perimeter WCAG 2.2 SC 2.4.11 asks for. Interactive components
+ * therefore name their transition properties explicitly
+ * (`transition-[color]`, `transition-[transform,box-shadow,border-color]`).
+ */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-brand-red);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--color-brand-red) 22%, transparent);
+    color: var(--color-ink);
+  }
+}
+
 /* ── gallery (```gallery fence → body-images.ts galleryNode) ──────────────
  * Plain CSS classes, not Tailwind utilities, for three reasons:
  *   (i)  uploader/src/preview.ts inlines its own STYLE and loads no Tailwind

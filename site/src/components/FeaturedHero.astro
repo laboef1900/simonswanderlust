@@ -14,27 +14,36 @@ interface Props {
 const { trip, number } = Astro.props;
 const locale = localeOf(trip);
 const t = useTranslations(locale);
-const label = [
-  t('home.heroLabel'),
-  [number !== undefined ? entryLabel(number) : null, `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`]
-    .filter(Boolean)
-    .join(' '),
-].join(' — ');
+const meta = `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
+
+// @ai-note The stored hero alt is the post title on every WordPress-imported
+// post, and the <h1> two lines below announces that title anyway — so a screen
+// reader heard it twice. Decorative ONLY in that case: a hand-written alt that
+// actually describes the photograph still reaches the image.
+const heroAlt = trip.data.heroImage.alt === trip.data.title ? '' : undefined;
 ---
 
-<section class="relative h-[55vh] sm:h-[65vh] min-h-[360px] sm:min-h-[420px]">
+<section class="relative h-[70vh] min-h-[460px] sm:h-[65vh] sm:min-h-[420px]">
   <RemoteImage
     image={trip.data.heroImage}
+    alt={heroAlt}
     sizes="100vw"
     loading="eager"
     fetchpriority="high"
     class="absolute inset-0 h-full w-full object-cover"
   />
-  <div class="absolute inset-0 bg-gradient-to-t from-navy/95 via-navy/50 to-navy/20"></div>
-  
+  {/*
+    Lighter than instinct says, on purpose: the log mark no longer depends on
+    the scrim for contrast (it carries its own opaque plate), so the gradient
+    only has to hold the white headline — which measures >11:1 at these stops.
+    Alpha above that is photograph thrown away on a page whose premise is the
+    photograph.
+  */}
+  <div class="absolute inset-0 bg-gradient-to-t from-navy/90 via-navy/40 to-navy/10"></div>
+
   {/* Stamp Watermark Signature (Desktop/Tablet) */}
-  <div class="pointer-events-none absolute top-6 right-6 z-10 hidden sm:block opacity-90 transition-opacity hover:opacity-100">
-    <div class="rounded border border-white/20 bg-navy/60 p-2.5 backdrop-blur-xs shadow-lg">
+  <div class="pointer-events-none absolute top-6 right-6 z-10 hidden opacity-90 transition-opacity hover:opacity-100 sm:block">
+    <div class="rounded border border-white/20 bg-navy/60 p-2.5 shadow-lg backdrop-blur-xs">
       <Stamp
         countryCode={trip.data.countryCode}
         country={trip.data.country}
@@ -46,26 +55,53 @@ const label = [
   </div>
 
   <div class="absolute right-0 bottom-0 left-0">
-    <div class="mx-auto max-w-6xl px-5 pb-8 sm:pb-12 text-white">
-      <div class="mb-2 flex flex-wrap items-center gap-2">
-        <span class="inline-flex items-center rounded border border-white/25 bg-navy/60 px-2.5 py-0.5 font-mono text-[11px] font-semibold tracking-[0.15em] text-white/90 uppercase backdrop-blur-xs">
-          {t('site.title')} — {t('site.tagline')}
-        </span>
-      </div>
-      <p class="font-mono text-xs font-semibold tracking-[0.25em] text-brand-red-light uppercase">
-        {label}
+    <div class="mx-auto max-w-6xl px-5 pb-8 text-white sm:pb-12">
+      {/*
+        @ai-warning The log mark sits on an OPAQUE navy plate, and that is the
+        whole point: painted straight onto the photograph it measured 1.19:1 on
+        a phone and 3.50:1 on a desktop (the mobile crop puts bright sky behind
+        it), because a fixed gradient scrim is weakest exactly where this line
+        sits. On solid navy the light accent is 4.8:1 and white is 14.6:1,
+        whatever the frame underneath. Never move this text back onto the
+        gradient, and never tint the plate with an alpha — an /80 plate over a
+        white sky drops the accent to 3.5:1 again.
+      */}
+      <p
+        class="inline-flex flex-wrap items-center gap-x-2 rounded border border-white/15 bg-navy px-2.5 py-1 font-mono text-[11px] font-semibold tracking-[0.18em] uppercase sm:text-xs"
+      >
+        {number !== undefined && <span class="text-brand-red-light">{entryLabel(number)}</span>}
+        <span class="text-white">{meta}</span>
       </p>
-      <h1 class="mt-2 max-w-3xl text-4xl font-extrabold md:text-5xl text-white drop-shadow-xs">{trip.data.title}</h1>
-      <p class="mt-3 max-w-xl text-white/90">{trip.data.excerpt}</p>
-      <p class="mt-2 font-mono text-xs tracking-[0.15em] text-white/70">
+      <h1
+        class="mt-3 max-w-3xl text-3xl leading-[1.15] font-extrabold text-white drop-shadow-xs sm:text-4xl md:text-5xl md:leading-[1.08]"
+      >
+        {trip.data.title}
+      </h1>
+      {/*
+        Hidden below `sm`, not shrunk: at 390px the excerpt (a 158-character
+        WordPress meta description) plus the coordinate line pushed the text
+        block to 79% of the hero's height, leaving 11% of the first viewport as
+        unobstructed photograph on a site whose premise is that the photograph
+        is the content.
+      */}
+      <p class="mt-3 hidden max-w-xl text-white/90 sm:block">{trip.data.excerpt}</p>
+      <p class="mt-2 hidden font-mono text-xs tracking-[0.15em] text-white/70 sm:block">
         {coordsLabel(trip.data.coordinates)}
       </p>
       <a
         href={pathOf(trip)}
-        class="group/btn mt-5 inline-flex items-center gap-2 rounded bg-brand-red px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-brand-red-light hover:shadow-lg"
+        class="group/btn mt-5 inline-flex min-h-[44px] items-center gap-2 rounded bg-brand-red px-5 py-3 text-sm font-semibold text-white transition-[background-color,box-shadow] hover:bg-brand-red-light hover:shadow-lg focus-visible:outline-brand-red-light"
       >
         <span>{t('home.readStory')}</span>
-        <svg aria-hidden="true" focusable="false" class="h-4 w-4 transition-transform duration-300 group-hover/btn:translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+        <svg
+          aria-hidden="true"
+          focusable="false"
+          class="h-4 w-4 transition-transform duration-300 motion-safe:group-hover/btn:translate-x-1"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
           <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </a>

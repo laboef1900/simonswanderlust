@@ -1,5 +1,5 @@
 ---
-import type { Locale } from '../i18n/ui';
+import { locales, useTranslations, type Locale } from '../i18n/ui';
 import { homePath } from '../lib/paths';
 
 interface Props {
@@ -8,16 +8,43 @@ interface Props {
 }
 
 const { locale, alternates } = Astro.props;
+const t = useTranslations(locale);
 const other: Locale = locale === 'de' ? 'en' : 'de';
 const otherHref = alternates ? alternates[other] : homePath(other);
+
+// @ai-note The switcher used to expose nothing to assistive tech: the current
+// locale was a bare <span> with no `aria-current`, the outgoing link's whole
+// accessible name was the string "EN", and the "|" between them was an
+// un-hidden text node read out as "vertical line". The divider is now a 1px
+// rule (drawn, not a glyph), the current locale carries `aria-current`, and the
+// link names its destination in the reader's language.
+const label: Record<Locale, string> = {
+  de: t('nav.viewInGerman'),
+  en: t('nav.viewInEnglish'),
+};
+const target = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded';
 ---
 
-<div class="flex items-center gap-1 text-xs font-semibold tracking-wide uppercase">
-  <span class={locale === 'de' ? 'text-navy' : 'text-ink/60'}>
-    {locale === 'de' ? 'DE' : <a href={otherHref} class="hover:text-brand-red">DE</a>}
-  </span>
-  <span class="text-ink/30">|</span>
-  <span class={locale === 'en' ? 'text-navy' : 'text-ink/60'}>
-    {locale === 'en' ? 'EN' : <a href={otherHref} class="hover:text-brand-red">EN</a>}
-  </span>
+<div class="flex items-center text-xs font-semibold tracking-wide uppercase">
+  {
+    locales.map((code, i) => (
+      <>
+        {i > 0 && <span aria-hidden="true" class="h-3 w-px bg-navy/20"></span>}
+        {code === locale ? (
+          <span aria-current="true" class={`${target} text-navy`}>
+            {code.toUpperCase()}
+          </span>
+        ) : (
+          <a
+            href={otherHref}
+            hreflang={code}
+            aria-label={label[code]}
+            class={`${target} text-ink/60 transition-[color] hover:text-brand-red`}
+          >
+            {code.toUpperCase()}
+          </a>
+        )}
+      </>
+    ))
+  }
 </div>
