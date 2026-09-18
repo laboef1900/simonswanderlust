@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   cardSizes,
   cellsUsed,
+  demoteCover,
   GRID_COLUMNS,
   storyGridSpans,
   tileWidth,
@@ -31,6 +32,11 @@ describe('storyGridSpans', () => {
       const used = cellsUsed(storyGridSpans(n));
       expect(used.sm % GRID_COLUMNS, `sm regime leaves a hole at ${n} cards`).toBe(0);
       expect(used.lg % GRID_COLUMNS, `lg regime leaves a hole at ${n} cards`).toBe(0);
+      // Same invariant AFTER the homepage demotes its cover story — the swap
+      // must not be able to open a cell the renderer cannot fill.
+      const demoted = cellsUsed(demoteCover(storyGridSpans(n), 0));
+      expect(demoted.sm % GRID_COLUMNS, `swapped sm regime leaves a hole at ${n}`).toBe(0);
+      expect(demoted.lg % GRID_COLUMNS, `swapped lg regime leaves a hole at ${n}`).toBe(0);
     }
   });
 
@@ -74,6 +80,50 @@ describe('storyGridSpans', () => {
   });
 });
 
+/**
+ * The homepage shows its cover story twice — once as the hero, once as a card
+ * — so the cover must not also hold the 4×2 lead tile. The swap is the only
+ * mechanism that can do that without touching the span multiset the
+ * no-empty-cell invariant above depends on.
+ */
+describe('demoteCover', () => {
+  const isLead = (s: StorySpan | undefined) => s?.lgRows === 2 && s.lg >= 4;
+
+  it('moves the lead tile off the cover when the cover is the newest story', () => {
+    for (const n of [4, 5, 7, 9, 10, 11, 20]) {
+      const plan = demoteCover(storyGridSpans(n), 0);
+      expect(isLead(plan[0]), `${n} cards: index 0 still holds the lead tile`).toBe(false);
+      expect(isLead(plan[1]), `${n} cards: the second story should lead`).toBe(true);
+    }
+  });
+
+  it('leaves the plan alone when the flagged cover is not the first story', () => {
+    const plan = storyGridSpans(9);
+    expect(demoteCover(plan, 3)).toEqual(plan);
+    // Nothing to promote past: the lead stays at index 0 and the cover is a
+    // small tile wherever it sits.
+    expect(isLead(demoteCover(plan, 3)[0])).toBe(true);
+  });
+
+  it('does not disturb counts too small to carry a lead tile', () => {
+    for (const n of [1, 2, 3]) {
+      expect(demoteCover(storyGridSpans(n), 0)).toEqual(storyGridSpans(n));
+    }
+  });
+
+  it('preserves the span multiset, which is what keeps the grid gapless', () => {
+    const plan = storyGridSpans(12);
+    const key = (s: StorySpan) => `${s.sm}/${s.lg}/${s.lgRows}`;
+    expect(demoteCover(plan, 0).map(key).sort()).toEqual(plan.map(key).sort());
+  });
+
+  it('does not mutate the plan it was given', () => {
+    const plan = storyGridSpans(9);
+    demoteCover(plan, 0);
+    expect(isLead(plan[0])).toBe(true);
+  });
+});
+
 describe('tileWidth', () => {
   it('measures a span against the locked-width grid', () => {
     // 6 columns of 178.67 plus 5 gaps of 16 = the 1152px content box.
@@ -110,5 +160,19 @@ describe('cardSizes', () => {
   it('scales the hint with the span', () => {
     expect(cardSizes({ sm: 3, lg: 4, lgRows: 2 })).toContain('(min-width: 1024px) 67vw');
     expect(cardSizes({ sm: 6, lg: 6, lgRows: 1 })).toContain('(min-width: 640px) 100vw');
+  });
+
+  it('corrects the base hint for a double-height tile, which crops by height', () => {
+    // Base regime: one column wide (~350px) but 2 × 240 + 16 = 496 tall, so a
+    // 3:2 frame under `object-fit: cover` paints 496 × 1.5 = 744px. A plain
+    // `100vw` claimed 350 and shipped an upscaled artifact.
+    const lead = cardSizes({ sm: 3, lg: 4, lgRows: 2 });
+    expect(lead.endsWith('max(calc(100vw - 2.5rem), 744px)')).toBe(true);
+    // Single-height cards are wider than tall, so the box width is the hint.
+    expect(cardSizes({ sm: 3, lg: 2, lgRows: 1 }).endsWith('calc(100vw - 2.5rem)')).toBe(true);
+    // Only the base entry changes; `sm` resets the tile to one row and `lg`
+    // makes it 763px wide against the same 496.
+    expect(lead).toContain('(min-width: 640px) 50vw');
+    expect(lead).toContain('(min-width: 1192px) 763px');
   });
 });

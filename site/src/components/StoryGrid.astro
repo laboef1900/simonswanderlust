@@ -2,7 +2,7 @@
 import StoryCard from './StoryCard.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
 import { entryNumberOf, type Trip } from '../lib/trips';
-import { storyGridSpans } from '../lib/story-grid-layout';
+import { demoteCover, storyGridSpans } from '../lib/story-grid-layout';
 
 interface Props {
   trips: Trip[];
@@ -10,11 +10,19 @@ interface Props {
   locale: Locale;
   /** Full locale trip set used for chronological numbering; defaults to `trips`. */
   numberingPool?: Trip[];
+  /**
+   * Index in `trips` of the story the page also shows as its cover, if any.
+   * Only affects which card gets the lead tile — see `demoteCover`.
+   */
+  coverIndex?: number;
 }
 
-const { trips, locale, numberingPool = trips } = Astro.props;
+const { trips, locale, numberingPool = trips, coverIndex } = Astro.props;
 const t = useTranslations(locale);
-const spans = storyGridSpans(trips.length);
+// The cover story stays in the grid (see HomePage.astro's @ai-warning) but must
+// not ALSO hold the 4×2 lead tile, or the page paints the same photograph
+// twice at poster size within one and a half viewports.
+const spans = demoteCover(storyGridSpans(trips.length), coverIndex ?? -1);
 
 // @ai-warning Do NOT put `content-visibility: auto` on the card grid. It implies
 // `contain: paint`, which clips descendants to the padding box — this grid has no
@@ -57,7 +65,14 @@ const LG_COL: Record<number, string> = {
               'col-span-6',
               SM_COL[span.sm],
               LG_COL[span.lg],
-              span.lgRows === 2 ? 'lg:row-span-2' : '',
+              // Double height in the base regime too, where every card is
+              // full-width and the grid otherwise renders one flat size — nine
+              // identical 350×240 tiles inside a 4525px document at 390px.
+              // `sm:row-span-1` is REQUIRED, not tidying: the `sm` regime puts
+              // two cards per row and `cellsUsed()` accounts one row per card,
+              // so a tile spanning two rows there would punch exactly the hole
+              // this module exists to prevent.
+              span.lgRows === 2 ? 'row-span-2 sm:row-span-1 lg:row-span-2' : '',
             ]
               .filter(Boolean)
               .join(' ')}

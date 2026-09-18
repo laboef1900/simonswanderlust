@@ -27,6 +27,15 @@ export const GRID_COLUMNS = 6;
 const ROW_HEIGHT = 240;
 const GAP = 16;
 
+/**
+ * Height of a double-height tile, and the width its photograph actually
+ * paints there. See the @ai-note on `cardSizes`.
+ */
+const DOUBLE_ROW_HEIGHT = 2 * ROW_HEIGHT + GAP;
+/** Aspect ratio of the landscape hero frames the cards crop (3:2). */
+const FRAME_ASPECT = 3 / 2;
+const DOUBLE_PAINTED_WIDTH = Math.round(DOUBLE_ROW_HEIGHT * FRAME_ASPECT);
+
 /** Widest the grid's content box gets (`max-w-6xl` minus the section's `px-5`). */
 const MAX_CONTENT = 1152;
 /** Viewport width at which the content box stops growing. */
@@ -96,6 +105,39 @@ function mosaic(count: number): StorySpan[] {
   return spans;
 }
 
+/**
+ * Hands the 4×2 lead tile to the SECOND story when the homepage cover is the
+ * first one, and returns the plan otherwise unchanged.
+ *
+ * @ai-note Why: the homepage renders its cover story TWICE — once as
+ * `FeaturedHero` and once as a card, because the grid must contain every
+ * story for the count beside its heading to be true by construction (see the
+ * @ai-warning in HomePage.astro). With the cover also holding the lead tile,
+ * the same photograph was painted at 1440×585 and again at 736×496 inside
+ * 1.4 viewports, and the `<h1>` string was repeated verbatim by the first
+ * `<h3>`: 8 `.avif` references to one story in the served HTML against 2 for
+ * every other. Demoting it to a small tile keeps the story in the grid and
+ * gives the lead slot to a photograph the visitor has not seen yet.
+ *
+ * @ai-warning Swapping two entries is the ONLY safe way to do this, because it
+ * preserves the span multiset and therefore the module's no-empty-cell
+ * invariant at every count — never shrink or drop a span here. The hole the
+ * swap opens in the first row is filled by CSS grid's own sparse
+ * auto-placement: a 2-column card, then the 4-column/2-row lead, then the
+ * next 2-column card drops back into row 2, columns 1–2.
+ *
+ * A cover flagged further down the list (`coverIndex > 0`) needs no swap: the
+ * lead tile already belongs to a different story, and the cover simply appears
+ * as a small tile. Several stories MAY carry the flag — see `content.config.ts`
+ * — so `coverIndex` is just "wherever the chosen one happens to sit".
+ */
+export function demoteCover(spans: StorySpan[], coverIndex: number): StorySpan[] {
+  if (coverIndex !== 0 || spans.length < 3) return spans;
+  const swapped = [...spans];
+  [swapped[0], swapped[1]] = [swapped[1]!, swapped[0]!];
+  return swapped;
+}
+
 /** Rendered width in CSS px of a tile spanning `cols` of the locked-width grid. */
 export function tileWidth(cols: number): number {
   const track = (MAX_CONTENT - (GRID_COLUMNS - 1) * GAP) / GRID_COLUMNS;
@@ -106,18 +148,30 @@ export function tileWidth(cols: number): number {
  * `sizes` for a card photo, exact above `CONTENT_LOCKED_AT` and a column
  * fraction below it.
  *
- * @ai-note Cards crop with `object-fit: cover` into a box that is WIDER than
- * it is tall (a 2-column tile is 373×240), so unlike the full-bleed hero the
- * painted width is the box width and a plain width hint is correct here. The
- * hero's hint is not — see the @ai-warning in FeaturedHero.astro.
+ * @ai-note Single-height cards crop with `object-fit: cover` into a box that
+ * is WIDER than it is tall (a 2-column tile is 373×240), so unlike the
+ * full-bleed hero the painted width is the box width and a plain width hint is
+ * correct for them. A DOUBLE-height card is the hero's trap in miniature: in
+ * the base regime it is one column wide (≈350px) and two rows tall
+ * (2 × 240 + 16 = 496), so a 3:2 frame under `cover` scales by HEIGHT and
+ * paints 496 × 1.5 ≈ 744px while `100vw` claims 350 — the candidate picker
+ * would ship an upscaled artifact for the largest tile on a phone. Only the
+ * base entry needs the correction: at `sm` the tile is reset to one row
+ * (StoryGrid's `sm:row-span-1`), and at `lg` it is 763px wide against the same
+ * 496 height, so width leads again. See the @ai-warning in FeaturedHero.astro
+ * for the measured version of the same mistake.
  */
 export function cardSizes(span: StorySpan): string {
   const pct = (cols: number) => Math.round((cols / GRID_COLUMNS) * 100);
+  const base =
+    span.lgRows === 2
+      ? `max(calc(100vw - 2.5rem), ${DOUBLE_PAINTED_WIDTH}px)`
+      : 'calc(100vw - 2.5rem)';
   return [
     `(min-width: ${CONTENT_LOCKED_AT}px) ${tileWidth(span.lg)}px`,
     `(min-width: 1024px) ${pct(span.lg)}vw`,
     `(min-width: 640px) ${pct(span.sm)}vw`,
-    'calc(100vw - 2.5rem)',
+    base,
   ].join(', ');
 }
 
