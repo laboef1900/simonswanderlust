@@ -1,38 +1,60 @@
 ---
+import { getCollection } from 'astro:content';
 import { useTranslations, type Locale, type UIKey } from '../i18n/ui';
 import { homePath, regionPath, regions, type Region } from '../lib/paths';
+import { byLocale, regionCounts } from '../lib/trips';
 
 interface Props {
   locale: Locale;
   active?: Region;
-  /** Where the "All" chip points; defaults to the home story grid. */
-  allHref?: string;
 }
 
-const { locale, active, allHref = homePath(locale) + '#stories' } = Astro.props;
+const { locale, active } = Astro.props;
 const t = useTranslations(locale);
 
-const chip = 'inline-flex items-center justify-center min-h-[44px] rounded-full border px-4 py-2 text-sm font-medium transition-all motion-safe:hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2';
+// @ai-note These chips are NAVIGATION, not an in-page filter — clicking one
+// leaves for the region's own (SEO-relevant) page. They therefore carry the
+// count of what they lead to: a visitor used to jump blind from nine stories to
+// two. `aria-current="true"`, not `"page"`: the home page's own nav link
+// already claims `page`, and two `aria-current="page"` on one document tell a
+// screen-reader user that two different things are the current page.
+const trips = byLocale(await getCollection('trips'), locale);
+const counts = regionCounts(trips);
+
+// "Alle" means the full story grid in EVERY context. It used to point at the
+// regions index from a region page, so the one escape hatch on the page led
+// somewhere the visitor had never been instead of back to all stories.
+const allHref = homePath(locale) + '#stories';
+
+// @ai-warning The idle chip's border is the ONLY thing that makes it read as a
+// control, so it is non-text contrast under WCAG 2.2 SC 1.4.11 and needs 3:1.
+// `border-navy/20` measured 1.49:1 against canvas — four pills' worth of
+// floating text for a low-vision visitor. 0.55 is not a guess: it is the same
+// alpha the admin UI settled on for exactly this (`--line-control` in
+// uploader/public/admin.css, "3.49:1 on --canvas"), and `styles/tokens.test.ts`
+// pins it. Measure any change by resolving the composited `oklab()` through a
+// canvas, never by reading the token alpha — 0.45 "looks like" 3:1 and is 2.67.
+const chip =
+  'inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-full border px-4 py-2 text-sm font-medium transition-[color,background-color,border-color,transform] motion-safe:hover:-translate-y-0.5';
 const on = 'border-navy bg-navy text-white shadow-sm';
-const off = 'border-navy/20 bg-canvas text-ink/70 hover:border-brand-red hover:text-brand-red';
+const off = 'border-navy/55 bg-canvas text-ink/70 hover:border-brand-red hover:text-brand-red';
+const count = 'font-mono text-[11px] tabular-nums opacity-70';
 ---
 
 <nav aria-label={t('regions.filterLabel')} class="flex flex-wrap gap-2">
-  <a
-    href={allHref}
-    aria-current={!active ? 'page' : undefined}
-    class:list={[chip, active ? off : on]}
-  >
+  <a href={allHref} aria-current={!active ? 'true' : undefined} class:list={[chip, active ? off : on]}>
     {t('home.filter.all')}
+    <span class={count}>{trips.length}</span>
   </a>
   {
     regions.map((region) => (
       <a
         href={regionPath(region, locale)}
-        aria-current={active === region ? 'page' : undefined}
+        aria-current={active === region ? 'true' : undefined}
         class:list={[chip, active === region ? on : off]}
       >
         {t(`region.${region}` as UIKey)}
+        <span class={count}>{counts[region]}</span>
       </a>
     ))
   }

@@ -28,12 +28,12 @@ const alternates = region
     <div class="mx-auto max-w-6xl px-5">
       <div class="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p class="font-mono text-xs font-semibold tracking-[0.2em] text-brand-red uppercase">
+          <p class="font-mono text-xs font-semibold tracking-log text-brand-red uppercase">
             {trips.length} {t('stats.trips')}
           </p>
           <h1 class="mt-1 text-3xl font-extrabold text-navy md:text-4xl">{title}</h1>
         </div>
-        <RegionFilter locale={locale} active={region} allHref={regionsIndexPath(locale)} />
+        <RegionFilter locale={locale} active={region} />
       </div>
     </div>
   </section>

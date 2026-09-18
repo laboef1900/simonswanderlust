@@ -400,8 +400,19 @@ preview as well, so publish review would not catch it. Shiki therefore no longer
 styles at all: `site/src/lib/shiki-classes.ts` registers a transformer (in both
 `astro.config.mjs` and `MARKDOWN_OPTIONS`, lockstep-tested) that rewrites each colour into a
 class, and `SHIKI_CSS` — generated from the same theme object — is inlined by `Base.astro` and
-by the draft preview. `style` is off the schema for every element; the gallery `--r` ratios are
-the only inline styles on a page and are injected post-sanitize from computed numbers.
+by the draft preview. `style` is off the schema for every element; the gallery `--r` ratios and
+the hero focal point are the only inline styles on a page, and both are injected post-sanitize
+from computed numbers.
+
+**The hero focal point does not weaken that** (2026-09-18). `heroImage.focus` lets an author pick
+the `object-position` a `cover` crop keeps in frame, which is an inline style on a component's own
+`<img>` — never on author markup, and never a value passed through. `focusPosition`
+(`site/src/lib/images.ts`) is the single producer: it accepts only two numbers, clamps them to
+0–100, rounds them, and emits nothing at all for anything else, so a hostile string in the
+`posts.hero_image` jsonb column yields no attribute rather than a declaration. It is validated on
+the way in as well, at the store chokepoint (`heroImageError` in `uploader/src/body-content.ts`),
+because the WordPress importer bypasses `validateDraft`. `site/src/lib/images.test.ts` pins the
+clamp and the hostile-input case.
 
 > We deliberately use a maintained, allow-list sanitizer rather than hand-rolled escaping — the
 > cardinal rule of XSS defense.

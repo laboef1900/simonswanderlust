@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   fallbackSrc,
+  focusPosition,
   imageOrigin,
   largestVariant,
   PROD_IMAGE_ORIGIN,
@@ -9,6 +10,52 @@ import {
   variantWidths,
   type RemoteHeroImage,
 } from './images';
+
+/**
+ * `focusPosition` is a render boundary: its output lands in a `style`
+ * attribute, and its input is a key of the `posts.hero_image` jsonb column
+ * that a draft save only shape-checks. These cases are the contract, not
+ * plumbing — dropping the clamp, or the centred-value shortcut, each ships a
+ * real defect (arbitrary CSS in a style attribute; an attribute on every
+ * pre-existing post).
+ */
+describe('focusPosition', () => {
+  const hero: RemoteHeroImage = {
+    src: 'https://img.example/trips/x/hero',
+    width: 1200,
+    height: 800,
+    alt: 'A boat on a canal',
+  };
+
+  it('emits nothing without a focal point, so existing posts render unchanged', () => {
+    expect(focusPosition(hero)).toBeUndefined();
+  });
+
+  it('emits nothing for a centred point, so "reset to centre" is a real removal', () => {
+    expect(focusPosition({ ...hero, focus: { x: 50, y: 50 } })).toBeUndefined();
+  });
+
+  it("emits the author's point", () => {
+    expect(focusPosition({ ...hero, focus: { x: 22, y: 18 } })).toBe('object-position:22% 18%');
+    expect(focusPosition({ ...hero, focus: { x: 0, y: 100 } })).toBe('object-position:0% 100%');
+  });
+
+  it('rounds, since a style attribute gains nothing from two decimals', () => {
+    expect(focusPosition({ ...hero, focus: { x: 33.49, y: 66.51 } })).toBe('object-position:33% 67%');
+  });
+
+  it('clamps values the database can hold but CSS should not receive', () => {
+    expect(focusPosition({ ...hero, focus: { x: -40, y: 1e9 } })).toBe('object-position:0% 100%');
+  });
+
+  it('never lets a non-numeric jsonb value reach the attribute', () => {
+    const hostile = { x: 'red;background:url(//evil/x)', y: null } as unknown as { x: number; y: number };
+    // Both axes fall back to the centre, which collapses to no attribute at all.
+    expect(focusPosition({ ...hero, focus: hostile })).toBeUndefined();
+    const half = { x: 10, y: undefined } as unknown as { x: number; y: number };
+    expect(focusPosition({ ...hero, focus: half })).toBe('object-position:10% 50%');
+  });
+});
 
 const big: RemoteHeroImage = {
   src: 'https://img.simonswanderlust.com/trips/rhodes-2021/hero',

@@ -19,6 +19,14 @@ const trips = defineCollection({
         width: z.number().int().positive(),
         height: z.number().int().positive(),
         alt: z.string().min(1),
+        // Optional by design: absent = centre crop, which is how every post
+        // written before the field renders. `site/src/lib/images.ts`
+        // re-clamps at the render boundary, because the WordPress importer
+        // and a partial draft save both reach `posts.hero_image` without
+        // passing through this schema.
+        focus: z
+          .object({ x: z.number().min(0).max(100), y: z.number().min(0).max(100) })
+          .optional(),
       }),
       coordinates: z.object({ lat: z.number(), lng: z.number() }),
       stops: z.array(z.object({ name: z.string(), lat: z.number(), lng: z.number() })).optional(),

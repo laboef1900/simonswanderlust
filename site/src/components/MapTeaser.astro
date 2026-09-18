@@ -1,8 +1,8 @@
 ---
 import { getCollection } from 'astro:content';
-import Contours from './Contours.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
 import { byLocale, statsLine, tripStats } from '../lib/trips';
+import { mapChart } from '../lib/map-chart';
 import { mapPath } from '../lib/paths';
 
 interface Props {
@@ -13,42 +13,153 @@ const { locale } = Astro.props;
 const t = useTranslations(locale);
 const trips = byLocale(await getCollection('trips'), locale);
 const stats = statsLine(tripStats(trips), t);
+const chart = mapChart(
+  trips.map((trip) => ({
+    lng: trip.data.coordinates.lng,
+    lat: trip.data.coordinates.lat,
+    title: trip.data.title,
+  })),
+);
+
+// Degree labels on the frame edges would be half-clipped; anchor them inward.
+const anchorFor = (at: number, width: number) =>
+  at < width * 0.06 ? 'start' : at > width * 0.94 ? 'end' : 'middle';
 ---
 
+{/*
+  @ai-context site/src/lib/map-chart.ts carries the projection and the two
+  rules this band must not break (no invented coastlines, no route line
+  through unrelated trips).
+
+  @ai-note `Contours` used to render here as well, under a second decorative
+  dashed grid. Both are gone: the graticule below is a real one, and a
+  contour texture layered over a coordinate chart is two competing
+  cartographic fictions in one band. Contours still belong in the footer,
+  which has no data of its own to draw.
+*/}
 <section class="relative overflow-hidden bg-navy text-white">
-  <Contours />
-  {/* Decorative Cartographic Grid Overlay */}
-  <svg
-    aria-hidden="true"
-    class="pointer-events-none absolute inset-0 h-full w-full stroke-white/10 opacity-30"
-    xmlns="http://www.w3.org/2000/svg"
+  {/*
+    @ai-warning The two-column split is `lg`, not `md`, and the chart is
+    width-capped while stacked. Both exist to keep the chart's RENDERED scale
+    in a narrow band, because an SVG `font-size` is in viewBox units: at `md`
+    the 768px viewport gave the chart column ~312px, so the axis labels
+    rendered at 7px and the chart was a postage stamp beside the heading.
+    Capped stacked (350–480px) and side-by-side (616–784px), the labels land
+    between 10.5px and 15.7px everywhere. Re-measure a label's
+    `getBoundingClientRect().height` at 320/390/768/1024/1440 after touching
+    either number, and keep the `@media` breakpoint below equal to this one.
+  */}
+  <div
+    class="relative mx-auto grid max-w-6xl items-center gap-8 px-5 py-11 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)] lg:gap-12"
   >
-    <defs>
-      <pattern id="map-grid" width="40" height="40" patternUnits="userSpaceOnUse">
-        <path d="M 40 0 L 0 0 0 40" fill="none" stroke="currentColor" stroke-width="0.5" stroke-dasharray="2 2" />
-      </pattern>
-    </defs>
-    <rect width="100%" height="100%" fill="url(#map-grid)" />
-  </svg>
-  <div class="relative mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-10">
     <div>
-      <div class="flex items-center gap-2.5">
-        <svg aria-hidden="true" focusable="false" class="h-5 w-5 text-brand-red-light shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z" />
-          <circle cx="12" cy="10" r="3" />
+      {/*
+        No pin glyph beside the heading any more. It was a map-marker icon
+        standing in for the cartography the band did not have; there are nine
+        real ones in the chart to the right, and the 30px it occupied was what
+        pushed this heading onto a second line.
+      */}
+      <h2 class="text-3xl font-extrabold text-balance">{t('home.mapTeaser.title')}</h2>
+      <p class="mt-1 font-mono text-xs tracking-log text-brand-red-light">{stats}</p>
+      <a
+        href={mapPath(locale)}
+        class="group mt-5 inline-flex min-h-[44px] items-center gap-2 rounded border border-white/50 px-4 py-2 text-sm text-white transition-[color,background-color,border-color,transform] hover:border-brand-red-light hover:bg-brand-red/15 focus-visible:outline-brand-red-light motion-safe:hover:-translate-y-0.5"
+      >
+        {/*
+          @ai-warning `border-white/30` here measured 2.64:1 against navy and
+          was the ONLY thing identifying this control — non-text contrast under
+          WCAG 2.2 SC 1.4.11, which wants 3:1. `/50` composites to ≈3.9:1.
+        */}
+        <span>{t('home.mapTeaser.cta')}</span>
+        <svg aria-hidden="true" focusable="false" class="h-4 w-4 transition-transform duration-300 motion-safe:group-hover:translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
-        <h2 class="text-2xl font-extrabold">{t('home.mapTeaser.title')}</h2>
-      </div>
-      <p class="mt-1 font-mono text-xs tracking-[0.15em] text-brand-red-light">{stats}</p>
+      </a>
     </div>
-    <a
-      href={mapPath(locale)}
-      class="group inline-flex items-center gap-2 rounded border border-white/30 px-4 py-2 text-sm text-white/90 transition-all hover:border-brand-red hover:bg-brand-red/10 hover:text-white motion-safe:hover:-translate-y-0.5"
-    >
-      <span>{t('home.mapTeaser.cta')}</span>
-      <svg aria-hidden="true" focusable="false" class="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
-    </a>
+
+    {
+      chart && (
+        <svg
+          class="h-auto w-full max-w-[30rem] lg:max-w-none"
+          viewBox={chart.viewBox}
+          preserveAspectRatio="xMidYMid meet"
+          role="img"
+          aria-label={t('home.mapTeaser.chartLabel')}
+        >
+          <g stroke="currentColor" fill="none" class="text-white">
+            {chart.meridians.map((m) => (
+              <line
+                x1={m.at}
+                y1="0"
+                x2={m.at}
+                y2={chart.height}
+                stroke-width={m.primary ? 2 : 1.25}
+                opacity={m.primary ? 0.34 : 0.14}
+                stroke-dasharray={m.primary ? undefined : '4 6'}
+              />
+            ))}
+            {chart.parallels.map((p) => (
+              <line
+                x1="0"
+                y1={p.at}
+                x2={chart.width}
+                y2={p.at}
+                stroke-width={p.primary ? 2 : 1.25}
+                opacity={p.primary ? 0.34 : 0.14}
+                stroke-dasharray={p.primary ? undefined : '4 6'}
+              />
+            ))}
+          </g>
+          <g class="chart-label" fill="currentColor">
+            {chart.meridians.map((m) => (
+              <text x={m.labelAt} y={chart.labelBaseline} text-anchor={anchorFor(m.labelAt, chart.width)}>
+                {m.label}
+              </text>
+            ))}
+            {chart.parallels.map((p) => (
+              <text x="6" y={p.labelAt} text-anchor="start">
+                {p.label}
+              </text>
+            ))}
+          </g>
+          {chart.pins.map((pin) => (
+            <g class="text-brand-red-light">
+              <circle cx={pin.x} cy={pin.y} r="15" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4" />
+              <circle cx={pin.x} cy={pin.y} r="6" fill="currentColor" />
+            </g>
+          ))}
+        </svg>
+      )
+    }
   </div>
 </section>
+
+<style>
+  /* @ai-warning These degree labels are the chart's scale — the only thing
+   * that makes the graticule a measuring tool rather than the decorative grid
+   * it replaced — so they are informative text and must be readable. Three
+   * things were wrong at `opacity: 0.45` / `font-size: 18` / weight 400:
+   * white at 0.45 over --color-navy is 3.0:1, below AA; an SVG `font-size` is
+   * in viewBox units, so one value rendered ~13px beside the chart's desktop
+   * width and ~6px once the band stacked and the chart halved; and 400-weight
+   * mono at that size is hairline, which measured a 2.3:1 median pixel
+   * contrast even where the colour contrast was fine.
+   * Now: 0.8 alpha composites to 9.8:1, the size pair lands between ~11px and
+   * ~14px at every width, and weight 600 (loaded — see Base.astro) puts the
+   * measured pixel median at 4.6–5.9:1. It also matches every other mono log
+   * label on the site, which are all `font-semibold`.
+   * Never dim these back toward the gridlines, never set one size for both
+   * layouts, and keep the breakpoint equal to the `lg:` grid split above. */
+  .chart-label text {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-weight: 600;
+    font-size: 30px;
+    letter-spacing: 0.12em;
+    opacity: 0.8;
+  }
+  @media (min-width: 1024px) {
+    .chart-label text {
+      font-size: 20px;
+    }
+  }
+</style>

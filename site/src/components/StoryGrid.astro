@@ -2,6 +2,7 @@
 import StoryCard from './StoryCard.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
 import { entryNumberOf, type Trip } from '../lib/trips';
+import { storyGridSpans } from '../lib/story-grid-layout';
 
 interface Props {
   trips: Trip[];
@@ -13,25 +14,60 @@ interface Props {
 
 const { trips, locale, numberingPool = trips } = Astro.props;
 const t = useTranslations(locale);
+const spans = storyGridSpans(trips.length);
 
 // @ai-warning Do NOT put `content-visibility: auto` on the card grid. It implies
 // `contain: paint`, which clips descendants to the padding box — this grid has no
-// padding and the cards fill their tracks exactly, so the cards'
-// `focus-visible:outline-offset-2` ring gets sliced off on every edge card
-// (WCAG 2.4.7). The grid is also the main content of the home/region pages, so
-// skipping its layout buys little.
+// padding and the cards fill their tracks exactly, so the 2px focus ring every
+// focusable gets from `:focus-visible` in global.css (offset 2px, so it paints
+// OUTSIDE the card) would be sliced off on every edge card (WCAG 2.4.7). The
+// grid is also the main content of the home/region pages, so skipping its
+// layout buys little.
+//
+// @ai-note Six columns, never three. The span per card comes from
+// `story-grid-layout.ts`, which levels the last row for ANY card count — a
+// three-column grid cannot split a remainder of two, which is why the old
+// `md:grid-cols-3` left a visible empty cell whenever the count was not a
+// multiple of three. The class strings are written out literally here so
+// Tailwind's source scanner sees every one of them; a computed
+// `` `lg:col-span-${n}` `` would compile to nothing.
+const SM_COL: Record<number, string> = {
+  3: 'sm:col-span-3',
+  6: 'sm:col-span-6',
+};
+const LG_COL: Record<number, string> = {
+  2: 'lg:col-span-2',
+  3: 'lg:col-span-3',
+  4: 'lg:col-span-4',
+  6: 'lg:col-span-6',
+};
 ---
 
 {
   trips.length > 0 ? (
-    <div class="grid auto-rows-[240px] gap-4 md:grid-cols-3">
-      {trips.map((trip, i) => (
-        <StoryCard trip={trip} featured={i === 0} number={entryNumberOf(trip, numberingPool)} />
-      ))}
+    <div class="grid auto-rows-[240px] grid-cols-6 gap-4">
+      {trips.map((trip, i) => {
+        const span = spans[i]!;
+        return (
+          <StoryCard
+            trip={trip}
+            span={span}
+            number={entryNumberOf(trip, numberingPool)}
+            class={[
+              'col-span-6',
+              SM_COL[span.sm],
+              LG_COL[span.lg],
+              span.lgRows === 2 ? 'lg:row-span-2' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+          />
+        );
+      })}
     </div>
   ) : (
     <div class="my-12 rounded-md border border-navy/10 bg-canvas p-8 text-center">
-      <p class="font-mono text-xs font-semibold uppercase tracking-wider text-navy/60">
+      <p class="font-mono text-xs font-semibold tracking-log text-navy/60 uppercase">
         {t('stories.emptyTitle')}
       </p>
       <p class="mt-1 text-sm text-ink/70">{t('stories.emptyBody')}</p>

@@ -3,7 +3,7 @@ import RemoteImage from './RemoteImage.astro';
 import Stamp from './Stamp.astro';
 import { useTranslations } from '../i18n/ui';
 import { coordsLabel, dateLabel, entryLabel } from '../lib/format';
-import { localeOf, pathOf, type Trip } from '../lib/trips';
+import { heroAltOf, localeOf, pathOf, type Trip } from '../lib/trips';
 
 interface Props {
   trip: Trip;
@@ -14,27 +14,68 @@ interface Props {
 const { trip, number } = Astro.props;
 const locale = localeOf(trip);
 const t = useTranslations(locale);
-const label = [
-  t('home.heroLabel'),
-  [number !== undefined ? entryLabel(number) : null, `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`]
-    .filter(Boolean)
-    .join(' '),
-].join(' — ');
+const meta = `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
+
+// @ai-note The stored hero alt is the post title on every WordPress-imported
+// post, and the <h1> two lines below announces that title anyway — so a screen
+// reader heard it twice. Decorative ONLY in that case: a hand-written alt that
+// actually describes the photograph still reaches the image. Shared with
+// StoryCard, which shows the same photo beside the same title.
+const heroAlt = heroAltOf(trip);
+
+/*
+  @ai-warning `sizes` must describe the width the browser PAINTS, not the
+  width of the box. This hero is a portrait-ish full-bleed box holding a
+  landscape frame under `object-fit: cover`, so cover scales by height:
+  painted width = box height × the photo's aspect ratio. At 390×591 that is
+  ~886px while `100vw` claimed 390, so the candidate picker chose `-640` and
+  the LCP artifact of a photography-led site shipped 1.38× UPSCALED — and
+  it did not self-correct at DPR 2 either (the 1280 candidate still owes
+  1772 device px). 105vh ≈ 70vh × 1.5 below `sm`, 98vh ≈ 65vh × 1.5 above it,
+  matching the two hero heights below; `max()` keeps landscape viewports on
+  the box width. A browser too old to parse `max()` here ignores the whole
+  descriptor and falls back to 100vw, i.e. exactly today's behaviour.
+*/
+const HERO_SIZES = '(max-width: 639px) max(100vw, 105vh), max(100vw, 98vh)';
 ---
 
-<section class="relative h-[55vh] sm:h-[65vh] min-h-[360px] sm:min-h-[420px]">
+<section class="relative h-[70vh] min-h-[460px] sm:h-[65vh] sm:min-h-[420px]">
   <RemoteImage
     image={trip.data.heroImage}
-    sizes="100vw"
+    alt={heroAlt}
+    sizes={HERO_SIZES}
     loading="eager"
     fetchpriority="high"
     class="absolute inset-0 h-full w-full object-cover"
   />
-  <div class="absolute inset-0 bg-gradient-to-t from-navy/95 via-navy/50 to-navy/20"></div>
-  
-  {/* Stamp Watermark Signature (Desktop/Tablet) */}
-  <div class="pointer-events-none absolute top-6 right-6 z-10 hidden sm:block opacity-90 transition-opacity hover:opacity-100">
-    <div class="rounded border border-white/20 bg-navy/60 p-2.5 backdrop-blur-xs shadow-lg">
+  {/*
+    Lighter than instinct says, on purpose: the log mark no longer depends on
+    the scrim for contrast (it carries its own opaque plate), so the gradient
+    only has to hold the white headline — which measures >11:1 at these stops.
+    Alpha above that is photograph thrown away on a page whose premise is the
+    photograph.
+  */}
+  <div class="absolute inset-0 bg-gradient-to-t from-navy/90 via-navy/40 to-navy/10"></div>
+
+  {/*
+    @ai-warning The stamp's inks are DARK (`lib/stamp.ts`: near-black, navy,
+    oxblood, plum, forest) and it blends `multiply` — a rubber stamp pressed
+    onto paper. It used to sit on a `bg-navy/60` backdrop-blur plate, i.e.
+    dark ink multiplied into a dark translucent panel, and measured 1.28:1 to
+    2.58:1 against the sky behind it: the single most ownable mark on the site
+    rendered as an illegible smudge, and was then hidden below `sm` so most
+    visitors never saw it at all. It now sits on an OPAQUE canvas chip — the
+    passport page the ink belongs on — where the lightest ink (#c0311e)
+    measures 5.49:1 and the darkest 16.5:1, on every photograph. Never tint
+    this chip or make it translucent.
+
+    The chip stays square while the ink inside it is rotated by
+    `stampStyle()`, so the stamp reads as pressed askew onto straight paper
+    rather than as a tilted widget. Shown at every width now that it is
+    legible: 124px + margins clears a 320px viewport.
+  */}
+  <div class="pointer-events-none absolute top-4 right-4 z-10 origin-top-right scale-90 sm:top-6 sm:right-6 sm:scale-100">
+    <div class="rounded-sm bg-canvas p-2 shadow-lg sm:p-2.5">
       <Stamp
         countryCode={trip.data.countryCode}
         country={trip.data.country}
@@ -46,26 +87,53 @@ const label = [
   </div>
 
   <div class="absolute right-0 bottom-0 left-0">
-    <div class="mx-auto max-w-6xl px-5 pb-8 sm:pb-12 text-white">
-      <div class="mb-2 flex flex-wrap items-center gap-2">
-        <span class="inline-flex items-center rounded border border-white/25 bg-navy/60 px-2.5 py-0.5 font-mono text-[11px] font-semibold tracking-[0.15em] text-white/90 uppercase backdrop-blur-xs">
-          {t('site.title')} — {t('site.tagline')}
-        </span>
-      </div>
-      <p class="font-mono text-xs font-semibold tracking-[0.25em] text-brand-red-light uppercase">
-        {label}
+    <div class="mx-auto max-w-6xl px-5 pb-8 text-white sm:pb-12">
+      {/*
+        @ai-warning The log mark sits on an OPAQUE navy plate, and that is the
+        whole point: painted straight onto the photograph it measured 1.19:1 on
+        a phone and 3.50:1 on a desktop (the mobile crop puts bright sky behind
+        it), because a fixed gradient scrim is weakest exactly where this line
+        sits. On solid navy the light accent is 4.8:1 and white is 14.6:1,
+        whatever the frame underneath. Never move this text back onto the
+        gradient, and never tint the plate with an alpha — an /80 plate over a
+        white sky drops the accent to 3.5:1 again.
+      */}
+      <p
+        class="inline-flex flex-wrap items-center gap-x-2 rounded border border-white/15 bg-navy px-2.5 py-1 font-mono text-[11px] font-semibold tracking-log uppercase sm:text-xs"
+      >
+        {number !== undefined && <span class="text-brand-red-light">{entryLabel(number)}</span>}
+        <span class="text-white">{meta}</span>
       </p>
-      <h1 class="mt-2 max-w-3xl text-4xl font-extrabold md:text-5xl text-white drop-shadow-xs">{trip.data.title}</h1>
-      <p class="mt-3 max-w-xl text-white/90">{trip.data.excerpt}</p>
-      <p class="mt-2 font-mono text-xs tracking-[0.15em] text-white/70">
+      <h1
+        class="mt-3 max-w-3xl text-3xl leading-[1.15] font-extrabold text-white drop-shadow-xs sm:text-4xl md:text-5xl md:leading-[1.08]"
+      >
+        {trip.data.title}
+      </h1>
+      {/*
+        Hidden below `sm`, not shrunk: at 390px the excerpt (a 158-character
+        WordPress meta description) plus the coordinate line pushed the text
+        block to 79% of the hero's height, leaving 11% of the first viewport as
+        unobstructed photograph on a site whose premise is that the photograph
+        is the content.
+      */}
+      <p class="mt-3 hidden max-w-xl text-white/90 sm:block">{trip.data.excerpt}</p>
+      <p class="mt-2 hidden font-mono text-xs tracking-log text-white/70 sm:block">
         {coordsLabel(trip.data.coordinates)}
       </p>
       <a
         href={pathOf(trip)}
-        class="group/btn mt-5 inline-flex items-center gap-2 rounded bg-brand-red px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-brand-red-light hover:shadow-lg"
+        class="group/btn mt-5 inline-flex min-h-[44px] items-center gap-2 rounded bg-brand-red px-5 py-3 text-sm font-semibold text-white transition-[background-color,box-shadow] hover:bg-brand-red-light hover:shadow-lg focus-visible:outline-brand-red-light"
       >
         <span>{t('home.readStory')}</span>
-        <svg aria-hidden="true" focusable="false" class="h-4 w-4 transition-transform duration-300 group-hover/btn:translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+        <svg
+          aria-hidden="true"
+          focusable="false"
+          class="h-4 w-4 transition-transform duration-300 motion-safe:group-hover/btn:translate-x-1"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
           <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </a>

@@ -414,6 +414,11 @@ tsconfigs (`ImageMeta` in `uploader/src/body-content.ts` vs `ImageDims` in
 `site/src/lib/body-images.ts`). Optional fields mean a one-sided widening keeps *both* `tsc` and
 `astro check` green while galleries silently lose alt and captions. `uploader/test/body-content.test.ts`
 pins them with a compile-time assertion — extend it rather than trusting the type-checker alone.
+The hero image is the same trap in **three** places: `HeroImage` (`uploader/src/posts.ts`),
+`RemoteHeroImage` (`site/src/lib/images.ts`) and the Zod schema (`site/src/content.config.ts`).
+Its optional `focus` (`{ x, y }` percentages driving `object-position`) is pinned by a round-trip
+through the real editor markup in `uploader/test/editor-dom.test.ts`, since a one-sided widening
+type-checks clean while an author's framing is dropped on save.
 
 ### 3. Contextual Markers
 

@@ -15,32 +15,52 @@ const pathname = Astro.url.pathname;
 const isHome = pathname === homePath(locale) || pathname === homePath(locale) + '/';
 const isMap = pathname.startsWith(mapPath(locale));
 const isAbout = pathname.startsWith(aboutPath(locale));
+
+// @ai-warning Two rules keep this header inside a phone viewport, and both are
+// load-bearing:
+//   (i) the nav wraps to its own line below `sm`. The German labels
+//       ("Reiseberichte" / "Karte" / "Über mich") are ~40px wider than the
+//       English ones, so the single-row header measured scrollWidth 415 against
+//       a 390px viewport — the whole page scrolled sideways and the language
+//       switcher sat entirely off-screen, in the DEFAULT locale.
+//   (ii) targets are padded 44px boxes, not 20px glyph boxes. Nine controls on
+//       the home page were under 24×24 (WCAG 2.2 SC 2.5.8), and the 20px `gap`
+//       was too small to earn the spacing exception.
+// Re-measure `scrollWidth === clientWidth` at 320/360/375/390 in BOTH locales
+// after touching this file; `flex-wrap` on the nav is what makes 320 survive.
+const link = 'inline-flex min-h-[44px] items-center rounded px-2 transition-[color]';
+const active = 'font-semibold text-brand-red';
+const idle = 'text-ink/80 hover:text-brand-red';
 ---
 
 <header class="border-b border-navy/10 bg-canvas">
-  <div class="mx-auto flex max-w-6xl items-center justify-between gap-6 px-5 py-4">
-    <a href={homePath(locale)} class="text-sm font-extrabold tracking-wide text-navy uppercase">
+  <div
+    class="mx-auto flex max-w-6xl flex-col px-5 py-1 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:py-2"
+  >
+    <a
+      href={homePath(locale)}
+      class={`${link} -ml-2 self-start text-sm font-extrabold tracking-wide text-navy uppercase hover:text-brand-red sm:self-auto`}
+    >
       {t('site.title')}
     </a>
-    <nav aria-label={t('nav.ariaLabel')} class="flex items-center gap-5 text-sm font-medium">
+    <nav
+      aria-label={t('nav.ariaLabel')}
+      class="-mx-2 flex flex-wrap items-center gap-x-1 text-sm font-medium sm:mx-0 sm:justify-end"
+    >
       <a
         href={homePath(locale) + '#stories'}
         aria-current={isHome ? 'page' : undefined}
-        class={isHome ? 'font-semibold text-brand-red' : 'text-ink/80 transition-colors hover:text-brand-red'}
+        class:list={[link, isHome ? active : idle]}
       >
         {t('nav.stories')}
       </a>
-      <a
-        href={mapPath(locale)}
-        aria-current={isMap ? 'page' : undefined}
-        class={isMap ? 'font-semibold text-brand-red' : 'text-ink/80 transition-colors hover:text-brand-red'}
-      >
+      <a href={mapPath(locale)} aria-current={isMap ? 'page' : undefined} class:list={[link, isMap ? active : idle]}>
         {t('nav.map')}
       </a>
       <a
         href={aboutPath(locale)}
         aria-current={isAbout ? 'page' : undefined}
-        class={isAbout ? 'font-semibold text-brand-red' : 'text-ink/80 transition-colors hover:text-brand-red'}
+        class:list={[link, isAbout ? active : idle]}
       >
         {t('nav.about')}
       </a>

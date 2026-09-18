@@ -114,6 +114,9 @@ function loadEditor(): { api: EditorApi; el: (id: string) => Element; editors: {
     AdminConfirm: { ask: async () => false, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     DraftGuard: { createDraftGuard: () => guard, tabScopedKey: (p: string) => p + ':test' },
     MediaPicker: { open() {} },
+    // Loaded by editor.html for thumbUrl(), which the hero focal-point
+    // control uses to show the frame an author is framing.
+    PostsFilter: { thumbUrl: () => null },
     GalleryFence: {},
     AltSuggest: { wire() {} },
     Tabs: { wire: () => ({ active: () => 'de', select() {} }) },
@@ -185,6 +188,42 @@ describe('editor.html inline script against its own markup', () => {
     expect(out.shared.countryCode).toBe('RO');
     expect(out.shared.region).toBe('europe');
     expect(out.shared.date).toBe('2024-10-03');
+  });
+
+  /**
+   * The focal point is declared in THREE places across two tsconfigs —
+   * `HeroImage` here, `RemoteHeroImage` in site/src/lib/images.ts, and the Zod
+   * schema in site/src/content.config.ts — and it is optional, so a one-sided
+   * change type-checks clean while the author's framing is silently dropped on
+   * save. Only a round-trip through the real markup catches that.
+   */
+  it('round-trips a hero focal point, and omits it when centred', () => {
+    const { api, el } = loadEditor();
+    const pair = fullPair();
+    pair.de.heroImage = { ...pair.de.heroImage, focus: { x: 22, y: 18 } };
+    api.populateForm(pair);
+    expect(Number(el('deHeroFocusX').value)).toBe(22);
+    expect(Number(el('deHeroFocusY').value)).toBe(18);
+    // The EN hero carries none, so its sliders must read centred rather than
+    // inherit the DE values off screen.
+    expect(Number(el('enHeroFocusX').value)).toBe(50);
+
+    const out = api.buildPayload();
+    expect(out.de.heroImage.focus).toEqual({ x: 22, y: 18 });
+    // 50/50 is the unset value: a centred point must not be stored, or every
+    // post gains a field and "reset to centre" becomes a no-op.
+    expect(out.en.heroImage.focus).toBeUndefined();
+  });
+
+  it('clears a loaded focal point when the next payload carries none (no resurrection)', () => {
+    const { api, el } = loadEditor();
+    const framed = fullPair();
+    framed.de.heroImage = { ...framed.de.heroImage, focus: { x: 5, y: 95 } };
+    api.populateForm(framed);
+    expect(Number(el('deHeroFocusX').value)).toBe(5);
+    api.populateForm(fullPair());
+    expect(Number(el('deHeroFocusX').value)).toBe(50);
+    expect(api.buildPayload().de.heroImage.focus).toBeUndefined();
   });
 
   // #121: the "Post Status" select and "Scheduled Publish" field were inert —

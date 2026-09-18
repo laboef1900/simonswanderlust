@@ -6,6 +6,7 @@ import {
   localeOf,
   pathOf,
   slugOf,
+  regionCounts,
   statsLine,
   translationOf,
   tripStats,
@@ -78,6 +79,32 @@ describe('tripStats', () => {
   it('tracks published content instead of a frozen number', () => {
     const grown = [...trips, fakeWithPlace('de/e', 'US', 'north-america')];
     expect(tripStats(grown)).toEqual({ trips: 5, countries: 4, continents: 3 });
+  });
+});
+
+describe('regionCounts', () => {
+  const trips = [
+    fakeWithPlace('de/a', 'GR', 'europe'),
+    fakeWithPlace('de/b', 'RO', 'europe'),
+    fakeWithPlace('de/c', 'EC', 'south-america'),
+  ];
+
+  it('counts stories per region for the chip labels', () => {
+    expect(regionCounts(trips)).toEqual({
+      europe: 2,
+      'north-america': 0,
+      'south-america': 1,
+    });
+  });
+
+  it('reports an honest 0 for a region with no stories rather than omitting it', () => {
+    // The chip row is built from `regions`, so a missing key would render blank.
+    expect(regionCounts([])).toEqual({ europe: 0, 'north-america': 0, 'south-america': 0 });
+  });
+
+  it('ignores a region value outside the enum instead of inventing a bucket', () => {
+    const stray = [...trips, fakeWithPlace('de/d', 'AQ', 'antarctica')];
+    expect(regionCounts(stray)).toEqual({ europe: 2, 'north-america': 0, 'south-america': 1 });
   });
 });
 
