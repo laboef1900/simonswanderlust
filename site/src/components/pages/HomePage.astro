@@ -17,7 +17,7 @@ interface Props {
 const { locale } = Astro.props;
 const t = useTranslations(locale);
 const trips = byLocale(await getCollection('trips'), locale);
-const [featured, ...rest] = trips;
+const featured = trips[0];
 ---
 
 <Base
@@ -31,20 +31,25 @@ const [featured, ...rest] = trips;
   <MapTeaser locale={locale} />
   {
     /*
-      The grid renders only what the hero does not. It used to fall back to
-      repeating the hero story ("duplicate beats an empty grid during
-      migration") — on a page whose premise is that the photograph is the
-      content, one photograph twice in a single scroll is worse than no second
-      section at all, and the migration it was written for is long over.
+      @ai-warning The grid gets EVERY story, the hero included. It used to get
+      `rest` — everything but the hero — under a heading reading "all travel
+      stories" beside a chip counting `trips.length`, so the section claimed 9
+      and held 8, and the one story it omitted was the newest: exactly the one
+      the site most wants opened. (An older revision had the opposite bug, the
+      grid repeating the hero as a second full-size tile; the fix for that was
+      to exclude it, which bought this one.) The hero is now a promotion of the
+      grid's first entry rather than a twin of it, the way a lead story also
+      appears in the index below it — and the count is true by construction,
+      with nothing to keep in sync.
     */
-    rest.length > 0 && (
+    trips.length > 0 && (
       <section id="stories" class="mx-auto max-w-6xl px-5 py-14">
         <div class="flex flex-wrap items-baseline justify-between gap-4">
-          <h2 class="text-2xl font-extrabold text-navy">{t('home.allStories')}</h2>
+          <h2 class="text-3xl font-extrabold text-navy">{t('home.allStories')}</h2>
           <RegionFilter locale={locale} />
         </div>
         <div class="mt-6">
-          <StoryGrid trips={rest} locale={locale} numberingPool={trips} />
+          <StoryGrid trips={trips} locale={locale} numberingPool={trips} />
         </div>
       </section>
     )
@@ -52,10 +57,10 @@ const [featured, ...rest] = trips;
   <RouteDivider />
   <section>
     <div class="mx-auto max-w-3xl px-5 py-14 text-center">
-      <h2 class="text-2xl font-extrabold text-navy">{t('nav.about')}</h2>
+      <h2 class="text-3xl font-extrabold text-navy">{t('nav.about')}</h2>
       <p class="mx-auto mt-3 max-w-prose text-ink/80">{t('home.aboutTeaser.text')}</p>
       {/* The cameras are the credibility asset and only lived on /uber-mich/. */}
-      <p class="mt-4 font-mono text-[11px] tracking-[0.18em] text-navy/70 uppercase">{t('about.gear')}</p>
+      <p class="mt-4 font-mono text-[11px] tracking-log text-navy/70 uppercase">{t('about.gear')}</p>
       <a
         href={aboutPath(locale)}
         class="group/about mt-4 inline-flex min-h-[44px] items-center gap-1.5 rounded px-2 text-sm font-semibold text-brand-red transition-[color] hover:text-brand-red-light"

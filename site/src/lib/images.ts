@@ -9,6 +9,39 @@ export interface RemoteHeroImage {
   width: number;
   height: number;
   alt: string;
+  /**
+   * Author-chosen subject position as percentages of the frame, fed to
+   * `object-position`. Every surface that shows a hero crops it with
+   * `object-fit: cover` into a box whose aspect ratio it does not control —
+   * the 70vh phone hero keeps ~44% of a 3:2 frame's width — and the default
+   * centre crop decapitated the subject of the two portrait-format heroes in
+   * the corpus. Optional: absent means `50% 50%`, which is what every post
+   * predating this field renders as.
+   */
+  focus?: { x: number; y: number };
+}
+
+/**
+ * `object-position` for a hero, or `undefined` when the author never moved it
+ * (so no attribute ships and the CSS default applies).
+ *
+ * @ai-warning This value lands in a `style` attribute. The numbers are clamped
+ * and rounded HERE rather than trusted from the database: `heroImage` is a
+ * `jsonb` column and a draft save only runs the shape check in
+ * `uploader/src/body-content.ts`, so treat anything inside it as untrusted at
+ * the render boundary — the same rule `uploader/src/preview.ts` applies to
+ * `width`/`height`.
+ */
+export function focusPosition(image: RemoteHeroImage): string | undefined {
+  const f = image.focus;
+  if (!f) return undefined;
+  const pct = (n: unknown): number => {
+    const v = typeof n === 'number' && Number.isFinite(n) ? n : 50;
+    return Math.round(Math.min(100, Math.max(0, v)));
+  };
+  const x = pct(f.x);
+  const y = pct(f.y);
+  return x === 50 && y === 50 ? undefined : `object-position:${x}% ${y}%`;
 }
 
 export type ImageFormat = 'avif' | 'webp';

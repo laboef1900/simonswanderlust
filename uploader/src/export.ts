@@ -51,6 +51,12 @@ export function renderPostToMdx(pair: PostPair, locale: Locale): string {
     `  width: ${p.heroImage.width}`,
     `  height: ${p.heroImage.height}`,
     `  alt: ${q(p.heroImage.alt)}`,
+    // The MDX files are the recovery path, so an author's focal point has to
+    // survive them. Nested under heroImage, matching the Zod schema in
+    // site/src/content.config.ts.
+    ...(p.heroImage.focus
+      ? [`  focus: { x: ${p.heroImage.focus.x}, y: ${p.heroImage.focus.y} }`]
+      : []),
     `coordinates: { lat: ${s.coordinates.lat}, lng: ${s.coordinates.lng} }`,
   ];
   if (s.route) lines.push(`route: ${q(s.route)}`);

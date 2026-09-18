@@ -15,7 +15,7 @@ const items = headings.filter((h) => h.depth === 2);
 {
   items.length > 1 && (
     <nav aria-label={t('story.toc')} class="my-8 rounded-md border border-navy/10 bg-canvas p-5 text-sm">
-      <p class="font-mono text-xs font-bold tracking-[0.2em] text-navy uppercase">{t('story.toc')}</p>
+      <p class="font-mono text-xs font-bold tracking-log text-navy uppercase">{t('story.toc')}</p>
       <ul class="mt-3 space-y-1.5">
         {items.map((h) => (
           <li>

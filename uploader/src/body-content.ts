@@ -89,6 +89,22 @@ export function heroImageError(hero: unknown): string | null {
   for (const dim of ['width', 'height'] as const) {
     if (!Number.isInteger(h[dim]) || (h[dim] as number) < 0) return `heroImage.${dim} must be a non-negative integer`;
   }
+  // Optional focal point: percentages of the frame, fed to `object-position`
+  // by site/src/lib/images.ts so a full-bleed `object-fit: cover` crop keeps
+  // the subject in frame. Validated HERE, at the store chokepoint,
+  // rather than in validateDraft because the WXR importer bypasses that, and
+  // rejected outright rather than coerced — a silently clamped focal point
+  // looks like the author's pick failed to save.
+  if (h.focus !== undefined) {
+    const f = h.focus;
+    if (typeof f !== 'object' || f === null || Array.isArray(f)) return 'heroImage.focus must be an object';
+    for (const axis of ['x', 'y'] as const) {
+      const v = (f as Record<string, unknown>)[axis];
+      if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 100) {
+        return `heroImage.focus.${axis} must be a number between 0 and 100`;
+      }
+    }
+  }
   return null;
 }
 

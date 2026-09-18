@@ -21,6 +21,23 @@ export function pathOf(trip: Trip): string {
   return localeOf(trip) === 'en' ? `/en/${slug}/` : `/${slug}/`;
 }
 
+/**
+ * Alt text for a trip's hero photo, or `''` when the stored alt would only
+ * repeat text the surrounding markup already announces.
+ *
+ * @ai-note Every WordPress-imported post stores the post title as its hero
+ * alt, and both places a hero appears (the home hero's `<h1>`, a story card's
+ * `<h3>`) name the title right beside the image — so that alt was heard twice.
+ * A hand-written description of the photograph is different content and DOES
+ * reach the reader: `alt=""` was hardcoded on story cards, which threw away
+ * the only photographic information a screen-reader user could have got from
+ * a photography-led index.
+ */
+export function heroAltOf(trip: Trip): string | undefined {
+  const alt = trip.data.heroImage.alt.trim();
+  return alt === trip.data.title.trim() ? '' : undefined;
+}
+
 export function byLocale(trips: Trip[], locale: Locale): Trip[] {
   return trips
     .filter((t) => localeOf(t) === locale)

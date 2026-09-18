@@ -61,6 +61,26 @@
                   </div>
                   <input id="deHeroAlt" type="text" maxlength="1000" placeholder="Alt text for hero image (DE)" aria-label="Alt text for hero image (DE)" />
                   <p id="deHeroStatus" class="muted" role="status"></p>
+                  <div class="hero-focus" id="deHeroFocus" hidden>
+                    <span class="section-label">Focal point (DE)</span>
+                    <div class="hero-focus-frame" id="deHeroFocusFrame">
+                      <img id="deHeroFocusImg" alt="" />
+                      <span class="hero-focus-crop" id="deHeroFocusCrop" aria-hidden="true"></span>
+                      <span class="hero-focus-dot" id="deHeroFocusDot" aria-hidden="true"></span>
+                    </div>
+                    <p class="muted">
+                      The reader's phone crops this photo to a tall box and keeps barely half its
+                      width. Click the photo — or use the sliders — to choose what stays in frame.
+                      The outline shows the phone crop.
+                    </p>
+                    <label for="deHeroFocusX">Horizontal <output id="deHeroFocusXOut" for="deHeroFocusX">50%</output></label>
+                    <input id="deHeroFocusX" type="range" min="0" max="100" step="1" value="50" />
+                    <label for="deHeroFocusY">Vertical <output id="deHeroFocusYOut" for="deHeroFocusY">50%</output></label>
+                    <input id="deHeroFocusY" type="range" min="0" max="100" step="1" value="50" />
+                    <div class="hero-actions-row">
+                      <button type="button" id="deHeroFocusReset" class="btn-secondary">Reset to centre</button>
+                    </div>
+                  </div>
                   <input id="deHeroSrc" type="hidden" />
                   <input id="deHeroWidth" type="hidden" />
                   <input id="deHeroHeight" type="hidden" />
@@ -133,6 +153,26 @@
                   </div>
                   <input id="enHeroAlt" type="text" maxlength="1000" placeholder="Alt text for hero image (EN)" aria-label="Alt text for hero image (EN)" />
                   <p id="enHeroStatus" class="muted" role="status"></p>
+                  <div class="hero-focus" id="enHeroFocus" hidden>
+                    <span class="section-label">Focal point (EN)</span>
+                    <div class="hero-focus-frame" id="enHeroFocusFrame">
+                      <img id="enHeroFocusImg" alt="" />
+                      <span class="hero-focus-crop" id="enHeroFocusCrop" aria-hidden="true"></span>
+                      <span class="hero-focus-dot" id="enHeroFocusDot" aria-hidden="true"></span>
+                    </div>
+                    <p class="muted">
+                      The reader's phone crops this photo to a tall box and keeps barely half its
+                      width. Click the photo — or use the sliders — to choose what stays in frame.
+                      The outline shows the phone crop.
+                    </p>
+                    <label for="enHeroFocusX">Horizontal <output id="enHeroFocusXOut" for="enHeroFocusX">50%</output></label>
+                    <input id="enHeroFocusX" type="range" min="0" max="100" step="1" value="50" />
+                    <label for="enHeroFocusY">Vertical <output id="enHeroFocusYOut" for="enHeroFocusY">50%</output></label>
+                    <input id="enHeroFocusY" type="range" min="0" max="100" step="1" value="50" />
+                    <div class="hero-actions-row">
+                      <button type="button" id="enHeroFocusReset" class="btn-secondary">Reset to centre</button>
+                    </div>
+                  </div>
                   <input id="enHeroSrc" type="hidden" />
                   <input id="enHeroWidth" type="hidden" />
                   <input id="enHeroHeight" type="hidden" />
@@ -270,6 +310,9 @@
     <script src="/admin/media-picker.js"></script>
     <script src="/admin/gallery-fence.js"></script>
     <script src="/admin/image-markdown.js"></script>
+    <!-- PostsFilter.thumbUrl(): the hero focal-point control needs the same
+         never-upscale variant rule the posts list uses. -->
+    <script src="/admin/posts-filter.js"></script>
     <script src="/admin/tabs.js"></script>
     <script>
       'use strict';
@@ -521,6 +564,10 @@
           $(locale + 'HeroWidth').value = body.width;
           $(locale + 'HeroHeight').value = body.height;
           // Hidden inputs are set programmatically — no input event fires.
+          // A new photo invalidates the old focal point, so recentre before
+          // showing the control for the new frame.
+          HeroFocus.set(locale, 50, 50);
+          HeroFocus.sync(locale);
           guard.markDirty();
           // Encoding is asynchronous now (see server.ts POST /upload): the URL
           // and dimensions are final, but the variants land a few seconds later
@@ -535,6 +582,101 @@
 
       $('deHeroUpload').addEventListener('click', () => uploadHero('de'));
       $('enHeroUpload').addEventListener('click', () => uploadHero('en'));
+
+      // ---- hero focal point ----
+      // @ai-note The reader's hero is a full-bleed `object-fit: cover` box, so
+      // a phone keeps ~44% of a 3:2 frame's width and the default centre crop
+      // decapitated the subject of both portrait-format heroes in the corpus.
+      // The value round-trips as `heroImage.focus = { x, y }` (percentages);
+      // `heroImageError` in src/body-content.ts validates it and
+      // site/src/lib/images.ts turns it into `object-position`.
+      //
+      // @ai-warning 50/50 is the "unset" value, deliberately: `buildPayload`
+      // omits `focus` when the point is centred, so a post nobody has touched
+      // ships no field and renders exactly as before. Do not add a separate
+      // "has focus" flag — two sources of truth for one state.
+      var HeroFocus = (function () {
+        /** Aspect ratio of the phone hero box (390 × 591), the tightest crop a reader sees. */
+        var CROP_ASPECT = 390 / 591;
+
+        function read(locale) {
+          return {
+            x: parseInt($(locale + 'HeroFocusX').value, 10) || 0,
+            y: parseInt($(locale + 'HeroFocusY').value, 10) || 0,
+          };
+        }
+
+        function paint(locale) {
+          var p = read(locale);
+          $(locale + 'HeroFocusXOut').textContent = p.x + '%';
+          $(locale + 'HeroFocusYOut').textContent = p.y + '%';
+          var dot = $(locale + 'HeroFocusDot');
+          dot.style.left = p.x + '%';
+          dot.style.top = p.y + '%';
+
+          // Where `object-position: x% y%` puts the phone window over the
+          // frame. Expressed as PERCENTAGES of the frame rather than pixels,
+          // so it needs no layout measurement and no resize listener: the
+          // frame's aspect ratio is the photo's, which the hidden dimension
+          // fields already carry. Vertical focus does not move this outline —
+          // the phone crop is height-full on any landscape photo, which is
+          // exactly why it throws away width.
+          var crop = $(locale + 'HeroFocusCrop');
+          var w = parseInt($(locale + 'HeroWidth').value, 10);
+          var h = parseInt($(locale + 'HeroHeight').value, 10);
+          if (!(w > 0) || !(h > 0)) { crop.hidden = true; return; }
+          var widthPct = Math.min(100, (CROP_ASPECT * h * 100) / w);
+          crop.hidden = false;
+          crop.style.width = widthPct + '%';
+          crop.style.left = ((p.x / 100) * (100 - widthPct)) + '%';
+        }
+
+        function set(locale, x, y) {
+          var clamp = function (n) { return Math.max(0, Math.min(100, Math.round(n))); };
+          $(locale + 'HeroFocusX').value = clamp(x);
+          $(locale + 'HeroFocusY').value = clamp(y);
+          paint(locale);
+          guard.markDirty();
+        }
+
+        /** Show the control for the hero currently in the hidden fields, or hide it. */
+        function sync(locale) {
+          var wrap = $(locale + 'HeroFocus');
+          var img = $(locale + 'HeroFocusImg');
+          var url = PostsFilter.thumbUrl({
+            heroSrc: $(locale + 'HeroSrc').value,
+            heroWidth: parseInt($(locale + 'HeroWidth').value, 10),
+          });
+          if (!url) { wrap.hidden = true; return; }
+          // A wrong-but-plausible stored width still 404s (see thumbUrl's own
+          // note), so the control hides itself rather than showing a broken
+          // frame an author would try to click.
+          img.onerror = function () { wrap.hidden = true; };
+          img.onload = function () { paint(locale); };
+          if (img.getAttribute('src') !== url) img.src = url;
+          wrap.hidden = false;
+          paint(locale);
+        }
+
+        function wire(locale) {
+          ['X', 'Y'].forEach(function (axis) {
+            $(locale + 'HeroFocus' + axis).addEventListener('input', function () {
+              paint(locale);
+              guard.markDirty();
+            });
+          });
+          $(locale + 'HeroFocusFrame').addEventListener('click', function (e) {
+            var box = this.getBoundingClientRect();
+            if (!box.width || !box.height) return;
+            set(locale, ((e.clientX - box.left) / box.width) * 100, ((e.clientY - box.top) / box.height) * 100);
+          });
+          $(locale + 'HeroFocusReset').addEventListener('click', function () { set(locale, 50, 50); });
+        }
+
+        return { wire: wire, sync: sync, read: read, set: set };
+      })();
+
+      ['de', 'en'].forEach(HeroFocus.wire);
 
       // Layout modes (#66). The labels are the admin's; the VALUES must match
       // GALLERY_MODES in site/src/lib/gallery-layout.ts, which is what the
@@ -660,6 +802,9 @@
             const libraryAlt = item.alt && item.alt[locale];
             if (libraryAlt && !altInput.value.trim()) altInput.value = libraryAlt;
             // Hidden inputs are set programmatically — no input event fires.
+            // A different photo means a different focal point (see uploadHero).
+            HeroFocus.set(locale, 50, 50);
+            HeroFocus.sync(locale);
             guard.markDirty();
             $(locale + 'HeroStatus').textContent = 'Hero from library: ' + item.src;
           },
@@ -757,6 +902,12 @@
           const heroW = parseInt($(loc + 'HeroWidth').value, 10);
           const heroH = parseInt($(loc + 'HeroHeight').value, 10);
           const heroAlt = $(loc + 'HeroAlt').value.trim();
+          // 50/50 is the unset value: omitting `focus` there keeps a post
+          // nobody has framed byte-identical to what it was before the field
+          // existed, and makes "Reset to centre" a real removal rather than a
+          // stored no-op. See the @ai-warning on HeroFocus.
+          const focus = HeroFocus.read(loc);
+          const framed = focus.x !== 50 || focus.y !== 50;
           const mde = loc === 'de' ? deMDE : enMDE;
           return {
             locale: loc,
@@ -765,7 +916,13 @@
             excerpt: $(loc + 'Excerpt').value.trim(),
             country: $(loc + 'Country').value.trim(),
             heroImage: heroSrc
-              ? { src: heroSrc, width: heroW || 0, height: heroH || 0, alt: heroAlt }
+              ? {
+                  src: heroSrc,
+                  width: heroW || 0,
+                  height: heroH || 0,
+                  alt: heroAlt,
+                  ...(framed ? { focus: focus } : {}),
+                }
               : undefined,
             bodyMarkdown: mde.value(),
             images: loc === 'de' ? { ...deImages } : { ...enImages },
@@ -1122,6 +1279,12 @@
         $(loc + 'HeroHeight').value = hero.height || '';
         $(loc + 'HeroAlt').value = hero.alt || '';
         $(loc + 'HeroStatus').textContent = hero.src ? 'Hero: ' + hero.src : '';
+        // Same no-field-resurrection rule as the fields above: a payload with
+        // no `focus` must recentre, not keep whatever was last on screen.
+        const focus = hero.focus && typeof hero.focus === 'object' ? hero.focus : {};
+        $(loc + 'HeroFocusX').value = Number.isFinite(focus.x) ? focus.x : 50;
+        $(loc + 'HeroFocusY').value = Number.isFinite(focus.y) ? focus.y : 50;
+        HeroFocus.sync(loc);
         // Reset the dimension map before filling it — merging would persist
         // stale entries from the pre-restore state on the next Save.
         const map = loc === 'de' ? deImages : enImages;

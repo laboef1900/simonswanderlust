@@ -12,7 +12,7 @@
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
 import { transformBodyImages } from '../../site/src/lib/body-images.js';
 import { SHIKI_CSS } from '../../site/src/lib/shiki-classes.js';
-import { srcset, fallbackSrc } from '../../site/src/lib/images.js';
+import { focusPosition, srcset, fallbackSrc } from '../../site/src/lib/images.js';
 import { coordsLabel, dateLabel } from '../../site/src/lib/format.js';
 import type { HeroImage, Locale, PostPair } from './posts.js';
 
@@ -45,10 +45,19 @@ function heroHtml(hero: HeroImage | undefined): string {
   const height = Number.isInteger(hero.height) && hero.height > 0 ? hero.height : 0;
   if (width === 0 || height === 0) return '';
   const safeHero: HeroImage = { ...hero, width, height };
+  // `.hero img` crops with `object-fit: cover` under a `max-height`, so the
+  // focal point changes what the author sees here too. `focusPosition` does
+  // its own clamping and returns undefined for an untouched centre, so
+  // nothing untrusted reaches the attribute and pre-focus posts emit none —
+  // but the CSP on this reply (#124) allows inline styles, so this is the
+  // one style attribute the preview ships and it must stay derived, never
+  // pass-through.
+  const focus = focusPosition(safeHero);
+  const style = focus ? ` style="${escapeHtml(focus)}"` : '';
   return `<div class="hero"><picture>
     <source type="image/avif" srcset="${escapeHtml(srcset(safeHero, 'avif'))}" sizes="100vw">
     <source type="image/webp" srcset="${escapeHtml(srcset(safeHero, 'webp'))}" sizes="100vw">
-    <img src="${escapeHtml(fallbackSrc(safeHero))}" alt="${escapeHtml(hero.alt)}" width="${width}" height="${height}">
+    <img src="${escapeHtml(fallbackSrc(safeHero))}" alt="${escapeHtml(hero.alt)}" width="${width}" height="${height}"${style}>
   </picture></div>`;
 }
 

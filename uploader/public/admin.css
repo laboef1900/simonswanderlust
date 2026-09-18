@@ -1519,6 +1519,46 @@ a:hover { color: var(--red-light); }
   color: var(--navy);
 }
 
+/* ── hero focal point ───────────────────────────────────────────────────
+ * The reader's hero is a full-bleed `object-fit: cover` box, so on a phone it
+ * keeps ~44% of a 3:2 frame's width. This control is the only place an author
+ * can see that happening and say which part to keep; `.hero-focus-crop` draws
+ * the phone window over the whole frame, positioned by the same arithmetic
+ * `object-position` uses.
+ */
+.hero-focus { display: grid; gap: 0.4rem; margin-top: 0.25rem; }
+.hero-focus-frame {
+  position: relative;
+  overflow: hidden;
+  max-width: 24rem;
+  border-radius: 0.4rem;
+  background: var(--navy);
+  cursor: crosshair;
+}
+.hero-focus-frame img { display: block; width: 100%; height: auto; }
+.hero-focus-crop {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  box-shadow: 0 0 0 9999px rgba(20, 42, 66, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  pointer-events: none;
+}
+.hero-focus-dot {
+  position: absolute;
+  width: 0.85rem;
+  height: 0.85rem;
+  margin: -0.425rem 0 0 -0.425rem;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: var(--red);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.hero-focus input[type='range'] { width: 100%; max-width: 24rem; accent-color: var(--red); }
+.hero-focus label { display: flex; gap: 0.4rem; margin-bottom: 0; }
+.hero-focus output { font-variant-numeric: tabular-nums; color: var(--muted); }
+
 .editor-card > summary.editor-card-title {
   cursor: pointer;
   list-style: none;

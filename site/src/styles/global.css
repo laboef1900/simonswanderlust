@@ -17,6 +17,14 @@
   --color-brand-red-light: #ff5a4e;
   --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+  /* One tracking value for every mono-tracked uppercase log label. There were
+   * four in the tree (0.15 / 0.18 / 0.2 / 0.25em), close enough to each other
+   * to be arbitrary rather than a scale, and applied inconsistently to the
+   * same kind of element — the hero's log plate at 0.18em beside its own
+   * coordinate line at 0.15em. `tracking-log` is the only tracking utility any
+   * component should reach for; an arbitrary `tracking-[…]` in a component is
+   * the drift this replaces. */
+  --tracking-log: 0.18em;
 }
 
 /* ── browser surfaces ────────────────────────────────────────────────────

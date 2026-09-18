@@ -28,12 +28,12 @@ const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
     <div>
       <p class="text-lg font-extrabold tracking-wider text-white uppercase">{t('site.title')}</p>
       <p class="mt-1 text-sm text-white/60">{t('site.tagline')}</p>
-      <p class="mt-4 font-mono text-[11px] tracking-[0.2em] text-brand-red-light uppercase">
+      <p class="mt-4 font-mono text-[11px] tracking-log text-brand-red-light uppercase">
         {t('footer.logline')}
       </p>
     </div>
     <div>
-      <p class="text-xs font-semibold tracking-[0.15em] text-white/50 uppercase">
+      <p class="text-xs font-semibold tracking-log text-white/50 uppercase">
         {t('footer.latest')}
       </p>
       <ul class="mt-1 text-sm text-white/80">
@@ -52,7 +52,7 @@ const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
       </ul>
     </div>
     <div>
-      <p class="text-xs font-semibold tracking-[0.15em] text-white/50 uppercase">
+      <p class="text-xs font-semibold tracking-log text-white/50 uppercase">
         {t('footer.about')}
       </p>
       <ul class="mt-1 text-sm text-white/80">

@@ -1,36 +1,73 @@
 ---
 import RemoteImage from './RemoteImage.astro';
 import { dateLabel, entryLabel } from '../lib/format';
-import { localeOf, pathOf, type Trip } from '../lib/trips';
+import { cardSizes, type StorySpan } from '../lib/story-grid-layout';
+import { heroAltOf, localeOf, pathOf, type Trip } from '../lib/trips';
 
 interface Props {
   trip: Trip;
-  /** Large card spanning 2 columns/rows in the grid. */
-  featured?: boolean;
+  /** Span plan for this card, from `story-grid-layout.ts`. */
+  span: StorySpan;
   /** Chronological entry number (from entryNumberOf); omits the N° prefix when absent. */
   number?: number;
+  /** Grid-placement classes, computed by StoryGrid from the same span. */
+  class?: string;
 }
 
-const { trip, featured = false, number } = Astro.props;
+const { trip, span, number, class: placement } = Astro.props;
 const locale = localeOf(trip);
 const meta = `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
+
+// The lead tile is the only double-height one; the levelled tail tiles are
+// wide but single-height. Three title sizes, so the grid has a hierarchy
+// instead of one weight doing all the work.
+const lead = span.lgRows === 2 && span.lg >= 4;
+const titleSize = lead ? 'lg:text-2xl' : span.lg >= 3 ? 'lg:text-xl' : 'lg:text-lg';
+
+// Shared with FeaturedHero: a stored alt that only repeats the title is
+// decorative here too (the <h3> below announces it), but a real description of
+// the photograph is the only photographic content a screen-reader user can get
+// from this index, so it is no longer thrown away.
+const alt = heroAltOf(trip);
 ---
 
 <a
   href={pathOf(trip)}
   class:list={[
-    'group relative block min-w-0 overflow-hidden rounded-md border border-navy/10 bg-navy shadow-sm transition-[transform,box-shadow,border-color] duration-500 hover:border-brand-red/40 hover:shadow-xl motion-safe:hover:-translate-y-1',
-    featured ? 'md:col-span-2 md:row-span-2' : '',
+    // Elevation is declared once, as shadow — the old card carried a 1px
+    // border AND a wide soft shadow. The hover ring is a STATE, not resting
+    // elevation, and it is what keeps a hover cue for a reduced-motion
+    // visitor now that the resting opacity lift is gone: ring and shadow are
+    // both box-shadow, so `transition-[transform,box-shadow]` covers them and
+    // only the translate/scale is gated behind `motion-safe`. Never widen this
+    // to `transition-all` or `transition-colors` — both interpolate
+    // `outline-color` and turn the focus ring into a 1.5px smudge (global.css).
+    'group relative block min-w-0 overflow-hidden rounded-xl bg-navy shadow-sm transition-[transform,box-shadow] duration-500 hover:shadow-xl hover:ring-2 hover:ring-brand-red motion-safe:hover:-translate-y-1',
+    placement,
   ]}
 >
+  {/*
+    @ai-warning No resting `opacity` on this image, and the scrim clears the
+    top half. Both were the other way round: `opacity-90` over the navy card
+    mixed 10% navy into every photograph, lifted to full only on
+    `group-hover` — a state a touch device cannot enter, so the majority
+    visitor never saw a single grid photograph at full fidelity on a site
+    whose first principle is that photography leads. The hover reward is the
+    scale, which fires everywhere a hover exists.
+  */}
   <RemoteImage
     image={trip.data.heroImage}
-    alt=""
-    sizes={featured ? '(min-width: 768px) 66vw, calc(100vw - 2.5rem)' : '(min-width: 768px) 33vw, calc(100vw - 2.5rem)'}
-    class="h-full w-full object-cover opacity-90 transition-[opacity,transform] duration-500 group-hover:opacity-100 motion-safe:group-hover:scale-[1.04]"
+    alt={alt}
+    sizes={cardSizes(span)}
+    class="h-full w-full object-cover transition-transform duration-500 motion-safe:group-hover:scale-[1.04]"
   />
-  <div class="absolute inset-0 bg-gradient-to-t from-navy/90 via-navy/30 to-transparent"></div>
-  <div class="absolute right-0 bottom-0 left-0 p-5 text-white">
+  {/*
+    Stops at 55% instead of running the full height: the text below carries
+    its own opaque plate and needs no help from the scrim, so everything above
+    the plate is photograph.
+  */}
+  <div class="absolute inset-0 bg-gradient-to-t from-navy/90 via-navy/25 via-55% to-transparent"></div>
+  <div class="absolute right-0 bottom-0 left-0 p-4 text-white sm:p-5">
     {/*
       @ai-warning Opaque plate, for the same reason as FeaturedHero's: this line
       was `text-brand-red-light` straight over the photograph and measured
@@ -39,18 +76,21 @@ const meta = `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
       sea-and-sky. On solid navy the accent is 4.8:1 and white is 14.6:1 on
       every card. Do not tint the plate with an alpha.
     */}
+    {/*
+      Wraps rather than truncates. `truncate` on the meta span cut the
+      DESTINATION COUNTRY — the identity payload the card exists to deliver —
+      on every card narrower than ~300px: 3 of 9 at a 320px viewport. The
+      plate is `max-w-full` and wraps, so a long country takes a second line
+      inside the plate instead of disappearing behind an ellipsis, and the
+      card has the height to spare.
+    */}
     <p
-      class="inline-flex max-w-full items-center gap-x-2 rounded border border-white/15 bg-navy px-2 py-1 font-mono text-[11px] font-semibold tracking-[0.18em] uppercase"
+      class="inline-flex max-w-full flex-wrap items-center gap-x-2 rounded border border-white/15 bg-navy px-2 py-1 font-mono text-[11px] font-semibold tracking-log uppercase"
     >
       {number !== undefined && <span class="shrink-0 text-brand-red-light">{entryLabel(number)}</span>}
-      <span class="truncate text-white">{meta}</span>
+      <span class="min-w-0 break-words text-white">{meta}</span>
     </p>
-    <h3
-      class:list={[
-        'mt-2 font-extrabold break-words line-clamp-2',
-        featured ? 'text-2xl' : 'text-lg',
-      ]}
-    >
+    <h3 class:list={['mt-2 text-lg font-extrabold break-words line-clamp-2', titleSize]}>
       {trip.data.title}
     </h3>
   </div>

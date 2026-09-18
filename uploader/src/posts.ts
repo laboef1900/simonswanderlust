@@ -2,7 +2,22 @@ import { randomUUID } from 'node:crypto';
 import { heroImageError, imageMarkdown, imagesMapError, normalizeGalleryFences, type ImageMeta } from './body-content.js';
 
 export type Locale = 'de' | 'en';
-export interface HeroImage { src: string; width: number; height: number; alt: string }
+/**
+ * @ai-warning `focus` is declared independently in the site tree as
+ * `RemoteHeroImage.focus` (`site/src/lib/images.ts`) and in the Zod schema
+ * (`site/src/content.config.ts`) — three declarations of one shape across two
+ * tsconfigs, the same trap `ImageMeta`/`ImageDims` documents. It is optional,
+ * so widening one side alone keeps both `tsc` and `astro check` green while
+ * the author's focal point is silently dropped on save. The shape is
+ * validated at the store chokepoint by `heroImageError`.
+ */
+export interface HeroImage {
+  src: string;
+  width: number;
+  height: number;
+  alt: string;
+  focus?: { x: number; y: number };
+}
 /**
  * Intrinsic dimensions plus the optional gallery alt/caption — see
  * `body-content.ts`, the single source of truth for the shape. Kept as a local

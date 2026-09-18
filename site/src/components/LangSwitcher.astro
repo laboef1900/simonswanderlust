@@ -22,6 +22,13 @@ const label: Record<Locale, string> = {
   de: t('nav.viewInGerman'),
   en: t('nav.viewInEnglish'),
 };
+// @ai-note The current locale was `text-navy` against an inactive `text-ink/60`
+// — "active = slightly darker" is the cue most UIs use for enabled vs
+// DISABLED, so the one state that mattered was carried by a contrast step
+// nobody can name. It now carries a 2px brand underline, which is a different
+// KIND of signal rather than more of the same one. Drawn as a border on a
+// padded box, not `underline`, so it clears the glyph descenders and cannot be
+// confused with the link styling beside it.
 const target = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded';
 ---
 
@@ -31,7 +38,7 @@ const target = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-cente
       <>
         {i > 0 && <span aria-hidden="true" class="h-3 w-px bg-navy/20"></span>}
         {code === locale ? (
-          <span aria-current="true" class={`${target} text-navy`}>
+          <span aria-current="true" class={`${target} border-b-2 border-brand-red text-navy`}>
             {code.toUpperCase()}
           </span>
         ) : (

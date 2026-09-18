@@ -26,10 +26,18 @@ const counts = regionCounts(trips);
 // somewhere the visitor had never been instead of back to all stories.
 const allHref = homePath(locale) + '#stories';
 
+// @ai-warning The idle chip's border is the ONLY thing that makes it read as a
+// control, so it is non-text contrast under WCAG 2.2 SC 1.4.11 and needs 3:1.
+// `border-navy/20` measured 1.49:1 against canvas — four pills' worth of
+// floating text for a low-vision visitor. 0.55 is not a guess: it is the same
+// alpha the admin UI settled on for exactly this (`--line-control` in
+// uploader/public/admin.css, "3.49:1 on --canvas"), and `styles/tokens.test.ts`
+// pins it. Measure any change by resolving the composited `oklab()` through a
+// canvas, never by reading the token alpha — 0.45 "looks like" 3:1 and is 2.67.
 const chip =
   'inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-full border px-4 py-2 text-sm font-medium transition-[color,background-color,border-color,transform] motion-safe:hover:-translate-y-0.5';
 const on = 'border-navy bg-navy text-white shadow-sm';
-const off = 'border-navy/20 bg-canvas text-ink/70 hover:border-brand-red hover:text-brand-red';
+const off = 'border-navy/55 bg-canvas text-ink/70 hover:border-brand-red hover:text-brand-red';
 const count = 'font-mono text-[11px] tabular-nums opacity-70';
 ---
 
