@@ -111,4 +111,29 @@ describe('mapChart', () => {
     }
     expect(chart.pins[0]!.y).toBeGreaterThanOrEqual(0);
   });
+
+  /**
+   * The silhouette is measured data clipped to this window (`land-path.ts`),
+   * so the two things worth pinning here are that it arrives at all for the
+   * real corpus and that it never escapes the frame — an unclipped ring would
+   * still parse and paint, just tens of thousands of units off-screen.
+   */
+  it('draws land under the real corpus, entirely inside the viewBox', () => {
+    const chart = mapChart(CORPUS)!;
+    expect(chart.land).not.toBe('');
+    const points = [...chart.land.matchAll(/[ML](-?\d+) (-?\d+)/g)];
+    expect(points.length).toBeGreaterThan(50);
+    for (const [, x, y] of points) {
+      expect(Number(x)).toBeGreaterThanOrEqual(0);
+      expect(Number(x)).toBeLessThanOrEqual(chart.width);
+      expect(Number(y)).toBeGreaterThanOrEqual(0);
+      expect(Number(y)).toBeLessThanOrEqual(chart.height);
+    }
+  });
+
+  it('degrades to a bare graticule over open ocean rather than emitting d=""', () => {
+    // Mid-South-Pacific: the window holds no ring the 110m layer records, so
+    // MapTeaser omits the <path> instead of shipping an empty one.
+    expect(mapChart([{ lng: -140, lat: -30, title: 'nowhere' }])!.land).toBe('');
+  });
 });

@@ -10,19 +10,30 @@
  * self-hosts the real basemap at `/map/`.
  *
  * This turns the same grid into an actual graticule with the real trips plotted
- * on it. Two rules it holds to:
+ * on it, over a real coastline. Two rules it holds to:
  *
- * @ai-warning No coastlines. A hand-authored world silhouette would be an
- * invented picture, and the projection here is honest instead: latitude and
- * longitude are drawn and labelled, so the grid IS the measuring tool the pins
- * are measured against. Do not "improve" this with an approximate landmass
- * path.
+ * @ai-warning Measured coastlines only — never a drawn one. The silhouette is
+ * Natural Earth's 1:110m land layer (public domain), committed as degrees by
+ * `scripts/build-coastlines.mjs` and clipped to this chart's own window by
+ * `land-path.ts`. An approximated, smoothed or hand-tidied landmass would make
+ * the band a picture of a map, and the pins would be plotted against a
+ * fiction; the whole claim here is that every coordinate on screen is
+ * surveyed. Do not edit `coastlines.ts` by hand, do not swap the source for a
+ * "nicer looking" outline, and do not add graticule-free decoration to the
+ * band. (The app self-hosts a real basemap at `/map/`, but that is a ~524 MB
+ * PMTiles slice baked into the Docker image by the repo-root Dockerfile — it
+ * does not exist in a checkout, so deriving this from it would break
+ * `npm run build`, `astro check` and CI's `astro build` everywhere but the
+ * container. See the design spec dated 2026-09-18.)
  *
  * @ai-warning No line joining the pins. Each pin is a separate trip, not a leg
  * of one journey — a polyline through them would draw a route that was never
  * travelled. The dashed route divider elsewhere on the site is ornament with no
  * data behind it; this chart has data behind it and must not overclaim.
  */
+
+import { LAND_RINGS } from './coastlines.js';
+import { landPath } from './land-path.js';
 
 export interface ChartPin {
   x: number;
@@ -51,6 +62,12 @@ export interface MapChart {
   meridians: ChartGridLine[];
   parallels: ChartGridLine[];
   pins: ChartPin[];
+  /**
+   * Land silhouette as SVG path data in viewBox units, clipped to the window
+   * and meant for `fill-rule="evenodd"`. Empty string when no ring intersects
+   * the window, so the caller omits the element rather than emitting `d=""`.
+   */
+  land: string;
   /** Baseline for the meridian labels along the bottom edge. */
   labelBaseline: number;
 }
@@ -140,6 +157,9 @@ export function mapChart(input: ChartInput[]): MapChart | null {
     height,
     viewBox: `0 0 ${WIDTH} ${height}`,
     labelBaseline: round(labelBaseline),
+    // Clipped and projected here, where the window is known, so the emitted
+    // path is the visible coast and nothing else.
+    land: landPath(LAND_RINGS, { west, east, south, north }, { x, y }),
     meridians: ticks(west, east).map((lng) => ({
       at: x(lng),
       labelAt: x(lng),
