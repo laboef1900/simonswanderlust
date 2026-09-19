@@ -31,7 +31,7 @@ vi.mock('pg', () => ({
 
 // pg parses the `date` column to LOCAL midnight — mirror that in the fixture.
 const row = {
-  translation_key: 'bucharest-2024', locale: 'de', slug: 'reisebericht-4-tage-bukarest',
+  translation_key: 'bucharest-2024', locale: 'de' as const, slug: 'reisebericht-4-tage-bukarest',
   title: 'T', date: new Date(2024, 9, 3), country: 'Rumänien', country_code: 'RO', region: 'europe',
   excerpt: 'E', hero_image: { src: 'https://img/h', width: 768, height: 512, alt: 'a' },
   coordinates: { lat: 44.4, lng: 26.1 }, stops: null, route: null, key_facts: { K: 'V' },
@@ -47,6 +47,17 @@ describe('rowToEntryInput', () => {
     expect(e.data.heroImage).toEqual({ src: 'https://img/h', width: 768, height: 512, alt: 'a' });
     expect(e.data.keyFacts).toEqual({ K: 'V' });
     expect(e.body).toBe('## Hi');
+  });
+
+  it('preserves JPEG-only markers on hero and body metadata', () => {
+    const jpegRow = {
+      ...row,
+      hero_image: { ...row.hero_image, format: 'jpeg' as const },
+      images: { 'http://localhost:3000/trips/x/body': { width: 1600, height: 1067, format: 'jpeg' as const } },
+    };
+    const entry = rowToEntryInput(jpegRow, 'https://img.example.com');
+    expect(entry.data.heroImage).toMatchObject({ src: 'https://img.example.com/h', format: 'jpeg' });
+    expect(entry.images['https://img.example.com/trips/x/body']).toMatchObject({ format: 'jpeg' });
   });
 
   // The loader now builds from the `published_snapshot` jsonb (issue #20),

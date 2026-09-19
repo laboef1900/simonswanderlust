@@ -1,7 +1,7 @@
 # simonswanderlust-images
 
 Self-hosted image uploader **and admin CMS** for the Astro blog: uploads a photo and generates
-responsive AVIF/WebP variants, and hosts the in-admin editor, the media library and the WordPress
+responsive AVIF/WebP variants (or JPEG for JPG uploads when conversion is off), and hosts the in-admin editor, the media library and the WordPress
 import — and, since the single-app-container merge, **also serves the public blog itself**
 and runs its Astro builds in-process (no separate build server). How it fits the rest of the
 stack: [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Security model: [`../SECURITY.md`](../SECURITY.md).
@@ -13,15 +13,36 @@ stack: [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Security model: [`../SECURITY
 ## Contract
 
 Filenames: `{key}-{width}.{format}` at widths 640/1280/1920 (plus the source's
-own width, never upscaled), formats `avif` + `webp`. Must match the blog's
-`site/src/lib/images.ts`. `/upload` (and the CLI) append a short content-hash
-suffix to the key (`…/hero-<hash8>`), so re-uploading a photo mints a new URL
-and old URLs keep serving — which is what justifies serving variants with a
+own width, never upscaled), formats `avif` + `webp` by default or `jpeg` for JPEG-only images.
+Image references carry `format: 'jpeg'` for the latter; omission preserves the existing
+modern-format contract. Must match the blog's `site/src/lib/images.ts`. `/upload` and the CLI
+hash the original bytes **and encoding settings** into a short key suffix (`…/hero-<hash8>`),
+so changing the photo or encoding profile mints a new URL and old URLs keep serving —
+which is what justifies serving variants with a
 one-year immutable cache. (WP-import rehost keys stay deterministic so
 re-imports are idempotent.) The untouched upload is additionally persisted as
 `{key}-orig.<ext>` next to the variants, so the images dir is a complete media
 archive (and future re-encodes stay possible). Originals exist only for uploads
 made from this version onward; earlier uploads exist as variants only.
+
+### Image conversion settings
+
+Open **Settings → Image conversion**:
+
+- **Convert JPG images to WebP and AVIF** is on by default. Turn it off to create responsive
+  JPEG variants from new JPG uploads. JPEG output still corrects orientation, strips GPS and
+  uses the same metadata allow-list; it is not a public copy of the original.
+- **WebP quality** and **AVIF quality** accept whole numbers from 1 to 100; defaults are 75
+  and 55. Higher values generally mean larger files. These controls do not change JPEG output
+  (quality 90), and non-JPEG uploads still produce both modern formats.
+- **Save image settings** saves this section independently of pending AI or backup edits.
+  No redeploy is needed. Existing photos are not automatically reprocessed, and queued uploads
+  retain their captured settings through retries/restarts. The CLI reads the same settings store.
+
+New import work uses the settings; complete body/gallery variant sets are reused regardless
+of the current preference. The importer's explicit **overwrite existing drafts** option still
+has its existing featured-image overwrite semantics. Untouched originals remain private.
+Backup v7 preserves each media item's format and encoding profile.
 
 ---
 
@@ -280,9 +301,9 @@ settings fail, the new key can remain associated with the old endpoint. The UI c
 typed key and reloads on partial/unknown outcomes; inspect the destination and deliberately
 replace/remove the key before remote use. Local caption config never reads secrets.
 
-**Recovery:** v6 DB dumps include encrypted secrets, not the master key or settings.json.
+**Recovery:** v6 and later DB dumps include encrypted secrets, not the master key or settings.json.
 Escrow the master key separately offsite and keep historical keys for historical dumps.
-Absent secrets in legacy v1–v5 preserve live rows; an empty v6 array intentionally clears
+Absent secrets in legacy v1–v5 preserve live rows; an empty v6-or-later array intentionally clears
 them. Restore is still CLI-only, confirmed, with a pre-restore undo dump. Pause AI/settings
 edits during restore and reconcile the provider in settings.json before resuming.
 

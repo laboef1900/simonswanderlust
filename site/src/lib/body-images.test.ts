@@ -81,6 +81,18 @@ describe('transformBodyImages — responsive <picture>', () => {
     expect(out).toContain('alt="A caption"');
     expect(out).toContain('class="block w-full rounded-lg"');
   });
+  it('renders JPEG-only body images without inventing AVIF or WebP URLs', () => {
+    const src = 'https://img/x/jpeg-only';
+    const out = transformBodyImages(
+      `<p><img src="${src}" alt="JPEG"></p>`,
+      { [src]: { width: 1600, height: 1067, format: 'jpeg' } },
+      ORIGIN,
+    );
+    expect(out).toContain('<source type="image/jpeg"');
+    expect(out).toContain(`${src}-1280.jpeg`);
+    expect(out).not.toContain(`${src}-640.avif`);
+    expect(out).not.toContain(`${src}-640.webp`);
+  });
   it('unwraps the <p> when a known <img> is its sole meaningful child', () => {
     const out = transformBodyImages('<p><img src="https://img/x/y" alt="A caption"></p>', images, ORIGIN);
     expect(out).toContain('<figure');
@@ -114,6 +126,20 @@ describe('transformBodyImages — gallery fence', () => {
     expect(out).toContain('<figcaption class="jgal__cap">Day 3</figcaption>');
     expect(out).toContain('width="2000"');
     expect(out).toContain('height="3000"');
+  });
+
+  it('keeps JPEG-only and modern gallery photos on their own generated formats', () => {
+    const mixed = {
+      ...gallery,
+      [A]: { ...gallery[A], format: 'jpeg' as const },
+    };
+    const out = transformBodyImages(fence(`${A}\n${B}`), mixed, ORIGIN);
+    expect(out).toContain(`href="${A}-3000.jpeg"`);
+    expect(out).toContain(`${A}-1280.jpeg`);
+    expect(out).not.toContain(`${A}-640.avif`);
+    expect(out).not.toContain(`${A}-640.webp`);
+    expect(out).toContain(`${B}-1280.webp`);
+    expect(out).toContain(`${B}-640.avif`);
   });
 
   it('omits the figcaption when the photo has no caption', () => {

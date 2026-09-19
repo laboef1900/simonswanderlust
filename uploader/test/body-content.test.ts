@@ -51,6 +51,7 @@ describe('imagesMapError', () => {
     expect(imagesMapError({})).toBeNull();
     expect(imagesMapError({ [A]: { width: 3000, height: 2000 } })).toBeNull();
     expect(imagesMapError({ [A]: { width: 1, height: 1, alt: '', caption: 'x' } })).toBeNull();
+    expect(imagesMapError({ [A]: { width: 1, height: 1, format: 'jpeg' } })).toBeNull();
   });
 
   it('rejects a non-object map', () => {
@@ -85,6 +86,12 @@ describe('imagesMapError', () => {
   it('rejects oversize text', () => {
     expect(imagesMapError({ [A]: { width: 8, height: 6, alt: 'x'.repeat(1001) } })).toMatch(/at most/);
   });
+
+  it('rejects every supplied format except the exact JPEG marker', () => {
+    for (const format of ['jpg', 'webp', 'avif', '', true]) {
+      expect(imagesMapError({ [A]: { width: 8, height: 6, format } })).toMatch(/format must be "jpeg"/);
+    }
+  });
 });
 
 describe('heroImageError', () => {
@@ -92,6 +99,7 @@ describe('heroImageError', () => {
     expect(heroImageError(undefined)).toBeNull();
     expect(heroImageError({ src: '', width: 0, height: 0, alt: '' })).toBeNull();
     expect(heroImageError({ src: A, width: 3000, height: 2000, alt: 'Sunrise' })).toBeNull();
+    expect(heroImageError({ src: A, width: 3000, height: 2000, alt: 'Sunrise', format: 'jpeg' })).toBeNull();
   });
 
   it('rejects a non-object or a non-string src/alt', () => {
@@ -110,6 +118,11 @@ describe('heroImageError', () => {
     for (const dims of [{ width: -1, height: 1 }, { width: 1.5, height: 1 }, { width: '3000', height: 1 }, { width: 1, height: NaN }]) {
       expect(heroImageError({ src: A, alt: '', ...dims })).toMatch(/non-negative integer/);
     }
+  });
+
+  it('rejects a malformed hero format instead of treating it as modern', () => {
+    expect(heroImageError({ src: A, width: 1, height: 1, alt: '', format: 'jpg' }))
+      .toMatch(/format must be "jpeg"/);
   });
 });
 
@@ -146,6 +159,14 @@ describe('normalizeGalleryFences', () => {
     const out = normalizeGalleryFences(body, {});
     expect(out.bodyMarkdown).toBe(fence(A));
     expect(out.images[A]).toEqual({ width: 3000, height: 2000, alt: 'Sunrise', caption: 'Day 3' });
+  });
+
+  it('lifts and preserves the JPEG-only marker', () => {
+    const body = fence(`${A} | 3000x2000 | format="jpeg" | alt="Sunrise"`);
+    const out = normalizeGalleryFences(body, {});
+    expect(out.bodyMarkdown).toBe(fence(A));
+    expect(out.images[A]).toEqual({ width: 3000, height: 2000, format: 'jpeg', alt: 'Sunrise' });
+    expect(galleryFencesToMdx(out.bodyMarkdown, out.images)).toContain('format="jpeg"');
   });
 
   it('decodes escaped alt/caption text', () => {

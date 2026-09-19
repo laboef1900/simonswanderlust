@@ -1,12 +1,13 @@
 import { request } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { SESSION_COOKIE } from './authn.js';
-import { processImage } from './pipeline.js';
+import { normalizeProcessOptions, processImage, type ProcessOptions } from './pipeline.js';
 import { contentHashKey, storeVariants, type StorageOptions, type StoredImage } from './storage.js';
 import type { Dump } from './backup.js';
 import { passwordPolicyViolation, type UserStore } from './users.js';
 import type { SessionStore } from './sessions.js';
+import { createSettingsStore, defaultSettings } from './settings.js';
 
 /** Reusable: process an in-memory image and store its variants.
  * Keys are content-hash versioned like POST /upload, so a re-upload mints a
@@ -16,9 +17,11 @@ export async function uploadFile(
   key: string,
   alt: string,
   opts: StorageOptions,
+  encoding: ProcessOptions = {},
 ): Promise<StoredImage> {
-  const result = await processImage(input);
-  return storeVariants(contentHashKey(key, input), alt, result, opts);
+  const profile = normalizeProcessOptions(encoding);
+  const result = await processImage(input, profile);
+  return storeVariants(contentHashKey(key, input, profile), alt, result, opts);
 }
 
 /** One line from stdin. Resolves '' when stdin closes without a line (EOF /
@@ -376,7 +379,13 @@ async function main(): Promise<void> {
     storageDir: process.env.STORAGE_DIR ?? './data/images',
     baseUrl: process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com',
   };
-  const stored = await uploadFile(await readFile(file), key, alt, opts);
+  const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(opts.storageDir), 'settings.json');
+  const current = createSettingsStore({ path: settingsPath, defaults: defaultSettings() }).get();
+  const stored = await uploadFile(await readFile(file), key, alt, opts, {
+    convertJpeg: current.convertJpeg,
+    webpQuality: current.webpQuality,
+    avifQuality: current.avifQuality,
+  });
   console.log(stored.snippet);
 }
 

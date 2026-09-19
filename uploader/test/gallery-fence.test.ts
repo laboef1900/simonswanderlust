@@ -28,6 +28,7 @@ interface PickedItem {
   height: number;
   alt?: { de?: string; en?: string };
   caption?: { de?: string; en?: string };
+  format?: 'jpeg';
 }
 interface ParsedLine {
   src: string;
@@ -35,8 +36,9 @@ interface ParsedLine {
   height?: number;
   alt?: string;
   caption?: string;
+  format?: 'jpeg';
 }
-type PostMeta = Record<string, { alt?: string; caption?: string }>;
+type PostMeta = Record<string, { alt?: string; caption?: string; format?: 'jpeg' }>;
 interface Edit {
   text: string;
   start: number;
@@ -160,6 +162,11 @@ describe('serialize', () => {
     expect(out).not.toContain('caption=');
   });
 
+  it('serializes the JPEG-only marker from a library row', () => {
+    const out = G.serialize([item({ format: 'jpeg' })], 'de');
+    expect(out).toContain('3000x2000 | format="jpeg" | alt="Berg"');
+  });
+
   it('escapes metadata that would break the line format', () => {
     const out = G.serialize([item({ alt: { de: 'a | b' }, caption: { de: 'two\nlines' } })], 'de');
     const body = out.split('\n')[1] ?? '';
@@ -236,6 +243,13 @@ describe('parse', () => {
     ]);
   });
 
+  it('round-trips the JPEG-only marker', () => {
+    const item: PickedItem = { src: 'https://i/jpeg', width: 30, height: 20, format: 'jpeg' };
+    expect(G.parse(G.serialize([item], 'de')).lines).toEqual([
+      { src: item.src, width: 30, height: 20, format: 'jpeg' },
+    ]);
+  });
+
   it('accepts a bare-URL fence (the stored form after normalizeGalleryFences)', () => {
     const parsed = G.parse('```gallery\nhttps://i/a\nhttps://i/b\n```');
     expect(parsed.lines.map((l) => l.src)).toEqual(['https://i/a', 'https://i/b']);
@@ -306,10 +320,12 @@ describe('the server accepts what the picker emits', () => {
   // anything in the chain forgets the post's own text: the stored fence is bare
   // URLs, so `parse` yields no alt/caption, and the picker re-serializes from
   // library rows. `postMeta` is what carries the post's `images` entry across.
-  it('re-editing a gallery keeps the post’s alt and caption, not the library’s', () => {
+  it('re-editing a gallery keeps the post’s alt, caption and JPEG format', () => {
     const stored = '```gallery\nhttps://i/a\n```';
-    const storedImages: Record<string, { width: number; height: number; alt?: string; caption?: string }> = {
-      'https://i/a': { width: 10, height: 20, alt: 'Hand-tuned alt', caption: 'Hand-tuned caption' },
+    const storedImages: Record<string, { width: number; height: number; alt?: string; caption?: string; format?: 'jpeg' }> = {
+      'https://i/a': {
+        width: 10, height: 20, alt: 'Hand-tuned alt', caption: 'Hand-tuned caption', format: 'jpeg',
+      },
     };
     const libraryRow = {
       src: 'https://i/a',
@@ -327,6 +343,7 @@ describe('the server accepts what the picker emits', () => {
       postMeta[line.src] = {
         alt: line.alt ?? storedImages[line.src]?.alt,
         caption: line.caption ?? storedImages[line.src]?.caption,
+        format: line.format ?? storedImages[line.src]?.format,
       };
     }
 
@@ -337,6 +354,7 @@ describe('the server accepts what the picker emits', () => {
       height: 20,
       alt: 'Hand-tuned alt',
       caption: 'Hand-tuned caption',
+      format: 'jpeg',
     });
   });
 

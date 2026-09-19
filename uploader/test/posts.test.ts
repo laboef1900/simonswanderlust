@@ -37,6 +37,18 @@ describe('memoryPostStore', () => {
     });
   });
 
+  it('list summaries preserve a JPEG-only hero marker for admin thumbnails', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.de.heroImage = { ...p.de.heroImage, format: 'jpeg' };
+    await s.upsertDraft(p);
+    expect((await s.list())[0]).toMatchObject({
+      heroSrc: 'https://img/h',
+      heroWidth: 768,
+      heroFormat: 'jpeg',
+    });
+  });
+
   it('list falls back to the EN hero when the DE row still has the empty-src placeholder', async () => {
     const s = memoryPostStore();
     const p = pair();
@@ -598,6 +610,14 @@ describe('normalizeBodyImages', () => {
     const out = normalizeBodyImages(body, {});
     expect(out.bodyMarkdown).toBe('Intro\n\n![Gasse](https://img/x/y)\n\nMore');
     expect(out.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
+  });
+
+  it('preserves JPEG format through BodyImage normalization', () => {
+    const src = 'https://img/x/jpeg';
+    const body = `<BodyImage src="${src}" width={1600} height={1067} alt="Gasse" format="jpeg" />`;
+    const out = normalizeBodyImages(body, {});
+    expect(out.bodyMarkdown).toBe(`![Gasse](${src})`);
+    expect(out.images).toEqual({ [src]: { width: 1600, height: 1067, format: 'jpeg' } });
   });
 
   it('accepts quoted numeric attrs and decodes &quot; in alt (inverse of export escaping)', () => {

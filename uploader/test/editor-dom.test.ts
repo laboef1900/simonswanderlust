@@ -344,6 +344,28 @@ describe('editor.html inline script against its own markup', () => {
     expect(out.en.heroImage.focus).toBeUndefined();
   });
 
+  it('round-trips JPEG-only hero and body metadata through the real editor fields', () => {
+    const { api, el } = loadEditor();
+    const jpegPair = fullPair();
+    jpegPair.de.heroImage = { ...jpegPair.de.heroImage, format: 'jpeg' };
+    jpegPair.de.images = {
+      'https://img/jpeg-body': { width: 1600, height: 1067, format: 'jpeg' },
+    };
+    api.populateForm(jpegPair);
+    expect(el('deHeroFormat').value).toBe('jpeg');
+    const out = api.buildPayload();
+    expect(out.de.heroImage.format).toBe('jpeg');
+    expect(out.de.images['https://img/jpeg-body']).toEqual({
+      width: 1600,
+      height: 1067,
+      format: 'jpeg',
+    });
+
+    api.populateForm(fullPair());
+    expect(el('deHeroFormat').value).toBe('');
+    expect(api.buildPayload().de.heroImage.format).toBeUndefined();
+  });
+
   it('clears a loaded focal point when the next payload carries none (no resurrection)', () => {
     const { api, el } = loadEditor();
     const framed = fullPair();

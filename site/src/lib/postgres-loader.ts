@@ -6,7 +6,7 @@ import { imageOrigin, retargetImageOrigins } from './images.js';
 interface PostRow {
   translation_key: string; locale: 'de' | 'en'; slug: string; title: string; date: Date | string;
   country: string; country_code: string; region: string; excerpt: string;
-  hero_image: { src: string; width: number; height: number; alt: string; focus?: { x: number; y: number } };
+  hero_image: { src: string; width: number; height: number; alt: string; format?: 'jpeg'; focus?: { x: number; y: number } };
   coordinates: { lat: number; lng: number };
   stops: { name: string; lat: number; lng: number }[] | null; route: string | null;
   key_facts: Record<string, string> | null; body_markdown: string; images: Record<string, ImageDims>;

@@ -31,10 +31,9 @@ window.PostsFilter = (function () {
    * Thumbnail URL for a post summary, or null when there is no usable hero.
    *
    * `heroSrc` is a base URL with no width/format suffix, and `variantWidths()`
-   * never upscales: a hero narrower than 640px has no `-640.webp`, only
-   * `-<intrinsicWidth>.webp`. `min(640, heroWidth)` is correct for every case
-   * because 640 is the smallest standard width. webp matches what GET /images
-   * picks for its own thumbnails.
+   * never upscales. `min(640, heroWidth)` is therefore the smallest generated
+   * width. `heroFormat: "jpeg"` selects JPEG-only variants; omission preserves
+   * the existing WebP thumbnail.
    *
    * Returns null for the empty-src draft placeholder (two independent sources
    * of it: PLACEHOLDER_HERO in posts.ts and another in wp-import.ts) and for a
@@ -45,9 +44,11 @@ window.PostsFilter = (function () {
   function thumbUrl(post) {
     var src = text(post && post.heroSrc);
     var width = post && post.heroWidth;
+    var format = post && post.heroFormat;
     if (!src) return null;
     if (typeof width !== 'number' || !isFinite(width) || Math.floor(width) !== width || width <= 0) return null;
-    return src + '-' + Math.min(SMALLEST_WIDTH, width) + '.webp';
+    if (format !== undefined && format !== 'jpeg') return null;
+    return src + '-' + Math.min(SMALLEST_WIDTH, width) + '.' + (format || 'webp');
   }
 
   /** Free-text countries present in the loaded rows, de-duplicated and sorted. */

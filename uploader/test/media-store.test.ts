@@ -141,6 +141,41 @@ describe('memoryMediaStore', () => {
     expect((await s.get('library/2025/a'))?.thumbSrc).toBe(`${BASE}/library/2025/a-640.webp`);
   });
 
+  it('derives JPEG thumbnails and preserves the snapped encoding profile', async () => {
+    const s = store();
+    await add(s, 'library/2026/jpeg', {
+      format: 'jpeg',
+      encoding: { convertJpeg: false, webpQuality: 81, avifQuality: 61 },
+    });
+    expect(await s.get('library/2026/jpeg')).toMatchObject({
+      format: 'jpeg',
+      encoding: { convertJpeg: false, webpQuality: 81, avifQuality: 61 },
+      thumbSrc: `${BASE}/library/2026/jpeg-640.jpeg`,
+    });
+    const modern = await add(s, 'library/2026/modern');
+    expect(modern).not.toHaveProperty('format');
+    expect(modern).not.toHaveProperty('encoding');
+    expect(modern.thumbSrc).toBe(`${BASE}/library/2026/modern-640.webp`);
+  });
+
+  it('does not leak mutable encoding objects through upsert or get', async () => {
+    const s = store();
+    const encoding = { convertJpeg: false, webpQuality: 80, avifQuality: 60 };
+    await add(s, 'profile-clone', { format: 'jpeg', encoding });
+    encoding.webpQuality = 1;
+    const first = await s.get('profile-clone');
+    expect(first?.encoding?.webpQuality).toBe(80);
+    if (first?.encoding) first.encoding.webpQuality = 2;
+    expect((await s.get('profile-clone'))?.encoding?.webpQuality).toBe(80);
+  });
+
+  it('rejects malformed persisted format/profile values at the memory-store boundary', async () => {
+    const s = store();
+    await expect(add(s, 'bad-format', { format: 'webp' })).rejects.toThrow(/format/);
+    await expect(add(s, 'missing-profile', { format: 'jpeg' })).rejects.toThrow(/persisted conversion profile/);
+    await expect(add(s, 'bad-profile', { encoding: { webpQuality: 0 } })).rejects.toThrow(/encoding profile/);
+  });
+
   it('filters by folder, status, tag and free text', async () => {
     const s = store();
     await add(s, 'k1', { folder: 'Island', title: 'Sunrise', tags: ['dawn'] });

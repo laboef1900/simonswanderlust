@@ -1,5 +1,5 @@
 ---
-import { focusPosition, srcset, fallbackSrc, type RemoteHeroImage } from '../lib/images';
+import { focusPosition, sourceFormats, srcset, fallbackSrc, type RemoteHeroImage } from '../lib/images';
 
 interface Props {
   image: RemoteHeroImage;
@@ -19,8 +19,11 @@ const style = focusPosition(image);
 ---
 
 <picture>
-  <source type="image/avif" srcset={srcset(image, 'avif')} sizes={sizes} />
-  <source type="image/webp" srcset={srcset(image, 'webp')} sizes={sizes} />
+  {
+    sourceFormats(image).map((format) => (
+      <source type={`image/${format}`} srcset={srcset(image, format)} sizes={sizes} />
+    ))
+  }
   <img
     src={fallbackSrc(image)}
     alt={alt ?? image.alt}

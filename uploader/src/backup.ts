@@ -8,17 +8,17 @@ import type { BackupSchedule } from './settings.js';
 import { POST_SNAPSHOT_SQL, type DbPool } from './db.js';
 import { diskSpace, formatBytes, UPLOAD_HEADROOM_BYTES, type DiskSpace } from './disk.js';
 import { isEncryptedSecret, type EncryptedSecret } from './secrets.js';
+import { storedProcessOptions } from './pipeline.js';
 
 /**
+ * v7 added media `format` + `encoding`, preserving JPEG-only sets and their
+ * snapped retry/recovery profile across restore.
  * v6 added encrypted `app_secrets` (never the encryption master key);
- * v5 added `posts.featured` (the homepage-cover flag);
- * v4 added `posts.categories`, `posts.tags` and `posts.scheduled_at` (issue #107);
- * v3 added `media` + `media_folders` (issue #64); v2 added `pages`.
- * @ai-warning Bumping this ALSO requires widening the allow-list guard in
- * `restoreDatabase` — otherwise every newly written dump becomes unrestorable,
- * and a test that only checks "an old dump still restores" passes anyway.
+ * v5 added `posts.featured`; v4 added categories/tags/scheduling;
+ * v3 added `media` + `media_folders`; v2 added `pages`.
+ * @ai-warning Bumping this ALSO requires widening the allow-list guard below.
  */
-export const DUMP_VERSION = 6;
+export const DUMP_VERSION = 7;
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
 export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 /**
@@ -504,11 +504,30 @@ export function readDump(filePath: string): Dump {
     // JSON errors may quote secret-bearing file contents.
     throw new BackupError('Cannot read backup dump.');
   }
-  if (!dump || ![1, 2, 3, 4, 5, 6].includes(dump.version)) {
+  if (!dump || ![1, 2, 3, 4, 5, 6, 7].includes(dump.version)) {
     throw new BackupError(`unsupported dump version ${typeof dump?.version === 'number' ? dump.version : '(invalid)'}`);
   }
   if (!dump.tables || !Array.isArray(dump.tables.users) || !Array.isArray(dump.tables.posts)) {
     throw new BackupError('Invalid backup tables.');
+  }
+  if (dump.tables.media !== undefined) {
+    if (!Array.isArray(dump.tables.media)) throw new BackupError('Invalid media in backup.');
+    for (const row of dump.tables.media) {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) {
+        throw new BackupError('Invalid media in backup.');
+      }
+      if (row.format !== undefined && row.format !== null && row.format !== 'jpeg') {
+        throw new BackupError('Invalid media format in backup.');
+      }
+      try {
+        const encoding = storedProcessOptions(row.encoding);
+        if (row.format === 'jpeg' && encoding?.convertJpeg !== false) {
+          throw new Error('jpeg media requires its persisted conversion profile');
+        }
+      } catch {
+        throw new BackupError('Invalid media encoding profile in backup.');
+      }
+    }
   }
   if (dump.tables.app_secrets !== undefined) {
     if (!Array.isArray(dump.tables.app_secrets)) throw new BackupError('Invalid encrypted credentials in backup.');
@@ -622,12 +641,12 @@ export async function restoreDatabase(
       await client.query(
         `INSERT INTO media (key, folder, title, alt_de, alt_en, caption_de, caption_en, tags,
                             width, height, orig_bytes, variant_bytes, status, error,
-                            taken_at, camera, lens, lat, lng, uploaded_at, uploaded_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::text[],$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+                            taken_at, camera, lens, lat, lng, uploaded_at, uploaded_by, format, encoding)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::text[],$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb)`,
         [m.key, m.folder, m.title, m.alt_de, m.alt_en, m.caption_de, m.caption_en, asTextArray(m.tags),
          m.width, m.height, m.orig_bytes, m.variant_bytes, m.status, m.error ?? null,
          m.taken_at ?? null, m.camera ?? null, m.lens ?? null, m.lat ?? null, m.lng ?? null,
-         m.uploaded_at ?? new Date(), m.uploaded_by ?? null],
+         m.uploaded_at ?? new Date(), m.uploaded_by ?? null, m.format ?? null, asJsonb(m.encoding)],
       );
     }
     // Undefined means this snapshot never captured secrets; [] intentionally

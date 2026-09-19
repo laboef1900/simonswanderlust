@@ -305,3 +305,44 @@ describe('editorial review settings', () => {
     expect(log.mock.calls.flat().join(' ')).not.toContain('private-fixture');
   });
 });
+
+describe('image conversion settings', () => {
+  it('loads legacy settings without changing image behavior and persists an independent image update', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ backupSchedule: 'daily', lmModel: 'local-caption' }));
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(store.get()).toMatchObject({ convertJpeg: true, webpQuality: 75, avifQuality: 55 });
+    store.update({ convertJpeg: false, webpQuality: 100, avifQuality: 1 });
+    expect(createSettingsStore({ path, defaults: DEFAULTS }).get()).toMatchObject({
+      convertJpeg: false, webpQuality: 100, avifQuality: 1,
+      backupSchedule: 'daily', lmModel: 'local-caption',
+    });
+  });
+
+  it('rejects malformed image settings without changing memory or disk', async () => {
+    const path = join(dir, 'settings.json');
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    store.update({ convertJpeg: false, webpQuality: 80, avifQuality: 60 });
+    const before = await readFile(path, 'utf8');
+    const invalid: Record<string, unknown>[] = [
+      { convertJpeg: 'false' }, { convertJpeg: 0 }, { convertJpeg: null },
+      { webpQuality: 0 }, { avifQuality: 101 }, { webpQuality: 75.5 },
+      { avifQuality: '55' }, { webpQuality: Number.NaN },
+    ];
+    for (const partial of invalid) {
+      expect(() => store.update(partial)).toThrow(SettingsError);
+      expect(store.get()).toMatchObject({ convertJpeg: false, webpQuality: 80, avifQuality: 60 });
+      expect(await readFile(path, 'utf8')).toBe(before);
+    }
+  });
+
+  it('recovers invalid on-disk quality without re-enabling a disabled conversion preference', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ convertJpeg: false, webpQuality: 0, avifQuality: 64 }));
+    const log = vi.fn();
+    expect(createSettingsStore({ path, defaults: DEFAULTS, log }).get()).toMatchObject({
+      convertJpeg: false, webpQuality: 75, avifQuality: 64,
+    });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('"webpQuality"'));
+  });
+});

@@ -27,7 +27,7 @@ Shared state, all under the **`/data`** volume (bind-mounted from `./uploader/da
 - `site/releases/<stamp>` + `site/current` (symlink) — built static output (`SITE_DIR`).
 - `backup/` — MDX export backups; `backup/db/` — gzipped Postgres dumps and incremental
   image archives.
-- `settings.json` — admin-configurable settings (backup schedule/retention).
+- `settings.json` — admin-configurable settings, including backup scheduling and image conversion/quality.
 
 Plus the **`pgdata`** volume — Postgres data.
 
@@ -115,24 +115,33 @@ immediately — no rebuild on every boot.
 
 ## Image pipeline
 
-The app optimizes each photo into AVIF + WebP at fixed widths (640/1280/1920 plus the source
-width, never upscaled). Metadata is **not** copied wholesale: `pipeline.ts` re-injects only an
+By default, the app optimizes each photo into AVIF + WebP at fixed widths (640/1280/1920 plus
+the source width, never upscaled). **Settings → Image conversion** can keep new JPEG inputs
+as responsive JPEG variants instead; other input formats still produce AVIF + WebP.
+WebP and AVIF quality are configurable (1–100, defaults 75 and 55); JPEG output uses quality 90.
+Metadata is **not** copied wholesale: `pipeline.ts` re-injects only an
 EXIF **allow-list** (camera make/model/lens, capture time, exposure, aperture, ISO, focal length)
 built by `uploader/src/exif.ts`, plus the ICC profile — GPS, XMP, IPTC and `Orientation` never
 reach a public variant. The untouched upload (`{key}-orig.<ext>`) keeps its full original
 metadata but is never served (excluded from the image-host static mount). See
 [SECURITY.md](SECURITY.md#published-image-metadata-allow-list) for why and what's kept. `/upload`
-appends a short content hash to the client's key, so files land as `{key}-{hash8}-{width}.{format}`
-under `STORAGE_DIR`: replacing a photo mints a new URL while previously published URLs keep
-serving untouched — which is what makes the one-year immutable cache correct. (The WP-import
-rehost path keeps deterministic `{key}-{width}.{format}` keys so re-imports stay idempotent.)
+hashes the original bytes together with the encoding profile into the client's key, so files
+land as `{key}-{hash8}-{width}.{format}` under `STORAGE_DIR`: replacing a photo or changing its
+encoding settings mints a new URL while previously published URLs keep serving untouched.
+WP-import body/gallery keys stay deterministic and complete existing sets are resumed.
+Its explicit **overwrite existing drafts** action retains the existing featured-image overwrite behavior.
 `/upload` accepts **one file per request** (a second file in the same multipart body is rejected
 with 413 rather than silently dropped — see [SECURITY.md](SECURITY.md#input-validation)); bulk
 upload is N single-file requests by design.
 
 **Uploads are asynchronous.** The request returns as soon as the untouched original is on disk;
-the AVIF/WebP variants encode in a background queue (`uploader/src/encode-queue.ts`). The
-response is still complete — the storage key is a pure function of the content hash, and a
+variants encode in a background queue (`uploader/src/encode-queue.ts`). The media row stores
+the encoding profile before the original is written; retries and crash recovery use that
+snapshot, not the current global preference. `media.format` and `media.encoding` are additive
+columns; legacy NULL values mean the original modern-format/default-quality contract.
+Hero/body references carry optional `format: 'jpeg'`; absence means AVIF + WebP. Settings
+changes never automatically reprocess existing files. The
+response is still complete — the storage key is a pure function of the bytes and profile, and a
 metadata-only probe reads orientation-corrected dimensions in ~0.0002 s versus ~0.467 s for the
 re-encode probe it replaced. This exists because encoding a 24 MP frame costs ~19 s and ~1.94 GB
 peak RSS: at concurrency 2 the old synchronous path held the connection for 40–90 s, against a
@@ -322,7 +331,7 @@ botched restore, accidental delete), **not** against disk failure or host loss.
 `uploader/src/backup.ts` provides app-native logical dumps (no `pg_dump`, no sidecar container):
 
 - **Dump format** — one file per run, `/data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`, containing
-  `{ "version": 6, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […] } }`
+  `{ "version": 7, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […] } }`
   with full column fidelity — an integration test diffs the dumped `posts` keys against
   `information_schema.columns`, so a column added in `db.ts` without touching `backup.ts` fails
   the suite instead of silently vanishing from every backup. The six table reads run on one
@@ -334,7 +343,7 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   the directory, so the finished temp file is published with `link(2)` (fails with `EEXIST`
   where `rename` would clobber) and a taken name advances to the next free second while
   `createdAt` keeps the real time (#114).
-  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 6), so
+  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 7), so
   every bump must widen it or newly written dumps become unrestorable. v1 predates `pages`, v2
   predates the media tables, v3 predates `posts.categories`/`tags`/`scheduled_at`, v4 predates
   `posts.featured` (the homepage-cover flag); all still restore and leave what they never
@@ -343,6 +352,8 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   v5 predates `app_secrets`: an absent secrets field preserves live rows; a present empty
   array clears them; present rows replace them in the content restore transaction.
   Restore needs no master key, but subsequent decryption needs the original key.
+  v6 predates media `format`/`encoding`; v7 preserves both so JPEG-only files and queued
+  encoding profiles survive restore. Older dumps restore media with legacy modern defaults.
   The CLI names replacement versus preservation and its pre-restore undo dump includes
   current encrypted secrets. Pause AI/settings edits during restore and reconcile the
   provider in settings.json before resuming: that file is not part of a logical DB dump.

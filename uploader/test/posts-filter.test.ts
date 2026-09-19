@@ -12,7 +12,7 @@ const src = readFileSync('public/posts-filter.js', 'utf8');
 interface Summary {
   translationKey: string; titleDe: string; slugDe: string; slugEn: string;
   status: 'draft' | 'published'; updatedAt: string; hasUnpublishedChanges: boolean;
-  hasEnBody: boolean; heroSrc: string; heroWidth: number;
+  hasEnBody: boolean; heroSrc: string; heroWidth: number; heroFormat?: 'jpeg';
   date: string; country: string; region: string;
 }
 interface Api {
@@ -21,7 +21,7 @@ interface Api {
   countries(posts: Summary[]): string[];
   extraFilterCount(opts: Record<string, string>): number;
   fromSearch(search: string, countries: string[]): Record<string, string>;
-  thumbUrl(post: { heroSrc?: unknown; heroWidth?: unknown }): string | null;
+  thumbUrl(post: { heroSrc?: unknown; heroWidth?: unknown; heroFormat?: unknown }): string | null;
   toSearch(opts: Record<string, string>): string;
 }
 
@@ -50,6 +50,14 @@ describe('PostsFilter.thumbUrl', () => {
   it('picks the intrinsic width below 640 — variantWidths never upscales, so -640 does not exist', () => {
     expect(api.thumbUrl(post({ heroWidth: 500 }))).toBe('https://img/h-500.webp');
     expect(api.thumbUrl(post({ heroWidth: 639 }))).toBe('https://img/h-639.webp');
+  });
+
+  it('uses the exact .jpeg suffix for a JPEG-only hero', () => {
+    expect(api.thumbUrl(post({ heroFormat: 'jpeg' }))).toBe('https://img/h-640.jpeg');
+  });
+
+  it('fails closed on an unknown format hint', () => {
+    expect(api.thumbUrl({ heroSrc: 'https://img/h', heroWidth: 1600, heroFormat: 'jpg' })).toBeNull();
   });
 
   it('returns null for the empty-src draft placeholder', () => {

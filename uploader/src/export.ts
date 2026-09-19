@@ -27,7 +27,7 @@ function bodyToMdx(p: PostLocale): string {
     // inverse — a raw '>' in alt would otherwise defeat its tag regex on paste-back.
     const escapedAlt = unescapeAltText(img.alt)
       .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const tag = `<BodyImage src="${img.url}" width={${dims.width}} height={${dims.height}} alt="${escapedAlt}" />`;
+    const tag = `<BodyImage src="${img.url}" width={${dims.width}} height={${dims.height}} alt="${escapedAlt}"${dims.format === 'jpeg' ? ' format="jpeg"' : ''} />`;
     // Callback form: a string replacement would read `$&`/`$1` in the alt as tokens.
     out = out.replaceAll(img.full, () => tag);
   }
@@ -51,6 +51,7 @@ export function renderPostToMdx(pair: PostPair, locale: Locale): string {
     `  width: ${p.heroImage.width}`,
     `  height: ${p.heroImage.height}`,
     `  alt: ${q(p.heroImage.alt)}`,
+    ...(p.heroImage.format === 'jpeg' ? ['  format: jpeg'] : []),
     // The MDX files are the recovery path, so an author's focal point has to
     // survive them. Nested under heroImage, matching the Zod schema in
     // site/src/content.config.ts.

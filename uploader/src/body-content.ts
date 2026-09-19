@@ -22,7 +22,7 @@
  * the two together with a compile-time assertion — plain assignment does NOT
  * catch this, see the comment there before changing it.
  */
-export interface ImageMeta { width: number; height: number; alt?: string; caption?: string }
+export interface ImageMeta { width: number; height: number; alt?: string; caption?: string; format?: 'jpeg' }
 
 /** Longest alt/caption accepted — these end up in every gallery's HTML. */
 const MAX_TEXT = 1000;
@@ -58,6 +58,9 @@ export function imagesMapError(images: unknown): string | null {
         return `images["${src}"].${dim} must be a positive integer`;
       }
     }
+    if (v.format !== undefined && v.format !== 'jpeg') {
+      return `images["${src}"].format must be "jpeg"`;
+    }
     for (const text of ['alt', 'caption'] as const) {
       if (v[text] === undefined || v[text] === null) continue;
       if (typeof v[text] !== 'string') return `images["${src}"].${text} must be a string`;
@@ -89,6 +92,7 @@ export function heroImageError(hero: unknown): string | null {
   for (const dim of ['width', 'height'] as const) {
     if (!Number.isInteger(h[dim]) || (h[dim] as number) < 0) return `heroImage.${dim} must be a non-negative integer`;
   }
+  if (h.format !== undefined && h.format !== 'jpeg') return 'heroImage.format must be "jpeg"';
   // Optional focal point: percentages of the frame, fed to `object-position`
   // by site/src/lib/images.ts so a full-bleed `object-fit: cover` crop keeps
   // the subject in frame. Validated HERE, at the store chokepoint,
@@ -229,7 +233,7 @@ export function rewriteFences(body: string, rewriteLine: (line: string) => strin
 }
 
 const DIMS_RE = /^(\d{1,6})x(\d{1,6})$/;
-const ATTR_RE = /^(alt|caption)="([^"]*)"$/;
+const ATTR_RE = /^(alt|caption|format)="([^"]*)"$/;
 
 /**
  * Save-time normalization of gallery fences, the exact inverse of
@@ -261,6 +265,8 @@ export function normalizeGalleryFences(
     let height: number | undefined;
     let alt: string | undefined;
     let caption: string | undefined;
+    let format: 'jpeg' | undefined;
+    let invalidFormat = false;
     for (const field of fields.slice(1)) {
       const dims = DIMS_RE.exec(field);
       if (dims) {
@@ -272,9 +278,12 @@ export function normalizeGalleryFences(
       if (attr) {
         const value = unescapeMeta(attr[2] ?? '').slice(0, MAX_TEXT);
         if (attr[1] === 'alt') alt = value;
-        else caption = value;
+        else if (attr[1] === 'caption') caption = value;
+        else if (value === 'jpeg') format = value;
+        else invalidFormat = true;
       }
     }
+    if (invalidFormat) return line;
     const existing = merged[src];
     const w = width ?? existing?.width ?? 0;
     const hgt = height ?? existing?.height ?? 0;
@@ -284,6 +293,7 @@ export function normalizeGalleryFences(
     merged[src] = {
       width: w,
       height: hgt,
+      ...(format !== undefined ? { format } : existing?.format !== undefined ? { format: existing.format } : {}),
       ...(alt !== undefined ? { alt } : existing?.alt !== undefined ? { alt: existing.alt } : {}),
       ...(caption !== undefined
         ? { caption }
@@ -311,6 +321,7 @@ export function galleryFencesToMdx(
     const meta = images[src];
     if (!meta) return line;
     const parts = [src, `${meta.width}x${meta.height}`];
+    if (meta.format === 'jpeg') parts.push('format="jpeg"');
     if (meta.alt) parts.push(`alt="${escapeMeta(meta.alt)}"`);
     if (meta.caption) parts.push(`caption="${escapeMeta(meta.caption)}"`);
     return parts.join(' | ');

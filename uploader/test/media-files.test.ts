@@ -21,6 +21,7 @@ describe('VARIANT_FILE_RE', () => {
   it('matches the {key}-{width}.{fmt} contract only', () => {
     expect(VARIANT_FILE_RE.test('hero-640.webp')).toBe(true);
     expect(VARIANT_FILE_RE.test('hero-1280.avif')).toBe(true);
+    expect(VARIANT_FILE_RE.test('hero-1280.jpeg')).toBe(true);
     expect(VARIANT_FILE_RE.test('hero.webp')).toBe(false);
     expect(VARIANT_FILE_RE.test('hero-640.jpg')).toBe(false);
     expect(VARIANT_FILE_RE.test('notes.txt')).toBe(false);
@@ -99,6 +100,7 @@ describe('imageUsage', () => {
 
   it('counts a hand-written direct variant URL as usage', () => {
     expect(imageUsage(SRC, post({ body: `<img src="${SRC}-640.webp">` }), [])).toHaveLength(1);
+    expect(imageUsage(SRC, post({ body: `<img src="${SRC}-640.jpeg">` }), [])).toHaveLength(1);
   });
 
   it('finds page usage too', () => {
@@ -127,10 +129,11 @@ describe('deleteMedia', () => {
     await put('trips/x/hero-640.webp');
     await put('trips/x/hero-640.avif');
     await put('trips/x/hero-1280.webp');
+    await put('trips/x/hero-1280.jpeg');
     await put('trips/x/hero-2-640.webp');
     await put('trips/x/notes.txt');
     const removed = await deleteMedia(dir, 'trips/x/hero');
-    expect(removed).toBe(3);
+    expect(removed).toBe(4);
     const left = await readdir(join(dir, 'trips/x'));
     expect(left.sort()).toEqual(['hero-2-640.webp', 'notes.txt']);
   });

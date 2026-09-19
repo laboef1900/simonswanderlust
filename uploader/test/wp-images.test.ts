@@ -14,10 +14,17 @@ let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'wpimg-')); });
 
 /** Re-host one image into `dir` so the resume index has something real to find. */
-async function seed(key: string, width = 800, height = 600): Promise<void> {
+async function seed(
+  key: string,
+  width = 800,
+  height = 600,
+  encoding: { convertJpeg: boolean } = { convertJpeg: true },
+): Promise<void> {
   const jpeg = await sharp({ create: { width, height, channels: 3, background: '#345' } }).jpeg().toBuffer();
   const fetchImpl = (async () => new Response(new Uint8Array(jpeg))) as unknown as typeof fetch;
-  await rehostImage('https://wp/seed.jpg', key, 'a', { storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lookup: publicLookup });
+  await rehostImage('https://wp/seed.jpg', key, 'a', {
+    storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lookup: publicLookup, encoding,
+  });
 }
 
 describe('rehostImage', () => {
@@ -38,6 +45,19 @@ describe('rehostImage', () => {
       'body-800.avif',
       'body-800.webp',
       'body-orig.jpg', // the untouched original is persisted next to the variants (issue #21)
+    ]);
+  });
+
+  it('returns format jpeg and writes no modern variants when the import snapshot disables conversion', async () => {
+    const jpeg = await sharp({ create: { width: 800, height: 600, channels: 3, background: '#234' } }).jpeg().toBuffer();
+    const fetchImpl = (async () => new Response(new Uint8Array(jpeg))) as unknown as typeof fetch;
+    const result = await rehostImage('https://wp.example/photo.jpg', 'trips/x/jpeg', 'alt', {
+      storageDir: dir, baseUrl: 'https://img.example', fetchImpl, lookup: publicLookup,
+      encoding: { convertJpeg: false },
+    });
+    expect(result).toMatchObject({ format: 'jpeg', width: 800, height: 600 });
+    expect((await readdir(join(dir, 'trips/x'))).sort()).toEqual([
+      'jpeg-640.jpeg', 'jpeg-800.jpeg', 'jpeg-orig.jpg',
     ]);
   });
   it('throws on a non-200 download', async () => {
@@ -155,6 +175,14 @@ describe('createRehostResume', () => {
     const resume = await createRehostResume({ storageDir: dir, baseUrl: 'https://img.example' });
     expect(await resume.lookup('trips/t/strand')).toEqual({
       src: 'https://img.example/trips/t/strand', width: 1000, height: 750,
+    });
+  });
+
+  it('resumes a complete JPEG-only set and preserves its format regardless of current settings', async () => {
+    await seed('trips/t/jpeg', 1000, 750, { convertJpeg: false });
+    const resume = await createRehostResume({ storageDir: dir, baseUrl: 'https://img.example' });
+    expect(await resume.lookup('trips/t/jpeg')).toEqual({
+      src: 'https://img.example/trips/t/jpeg', width: 1000, height: 750, format: 'jpeg',
     });
   });
 

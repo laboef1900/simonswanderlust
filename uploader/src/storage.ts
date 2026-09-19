@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { ProcessResult, Variant } from './pipeline.js';
+import { normalizeProcessOptions, type ProcessOptions, type ProcessResult, type Variant } from './pipeline.js';
+import type { ImageOutputFormat } from './variants.js';
 
 export interface StorageOptions {
   storageDir: string;
@@ -14,6 +15,7 @@ export interface StoredImage {
   height: number;
   files: string[];
   snippet: string;
+  format?: ImageOutputFormat;
 }
 
 // Central chokepoint for every write path (direct /upload AND the WordPress
@@ -67,20 +69,16 @@ export function isOriginalFile(pathName: string): boolean {
   return ORIGINAL_FILE_RE.test(pathName);
 }
 
-// Append a short content hash to a key so the resulting variant URLs are truly
-// immutable: replacing a photo mints a new URL, while previously published
-// URLs keep serving from disk untouched (nothing is overwritten or deleted).
-// Deterministic over the ORIGINAL upload bytes, so re-uploading the identical
-// file reuses the same key — a harmless identical overwrite. Hex output stays
-// within SAFE_KEY_RE.
-// @ai-note: hashing the original (not the encoded variants) means a future
-// sharp upgrade could write slightly different encoded bytes under an
-// unchanged URL if the same original is re-uploaded — visually identical,
-// accepted trade-off.
+// Append a short hash of the original bytes AND the snapped encoding profile so
+// a settings change always mints a new immutable URL. Legacy byte-only keys are
+// intentionally left untouched on disk; the first upload after this feature
+// gets a new key even when it uses the historical default profile.
 // @ai-warning: the WP-import rehost path (wp-images.ts) deliberately does NOT
-// use this — its keys must stay deterministic so re-imports are idempotent.
-export function contentHashKey(key: string, data: Buffer): string {
-  const hash = createHash('sha256').update(data).digest('hex').slice(0, 8);
+// use this — its keys must stay deterministic so disk-derived resume works.
+export function contentHashKey(key: string, data: Buffer, options: ProcessOptions = {}): string {
+  const profile = normalizeProcessOptions(options);
+  const identity = `\0convertJpeg=${profile.convertJpeg};webpQuality=${profile.webpQuality};avifQuality=${profile.avifQuality}`;
+  const hash = createHash('sha256').update(data).update(identity).digest('hex').slice(0, 8);
   return `${key}-${hash}`;
 }
 
@@ -91,7 +89,7 @@ export function contentHashKey(key: string, data: Buffer): string {
  * to leave a non-empty truncated file under the final name — indistinguishable
  * from a good one for every "is it present and non-empty" check (media-sync's
  * backfill, the WXR resume lookup). The temp suffix ends in neither
- * `.avif`/`.webp` nor `-orig.<ext>`, so a leftover from a crash is invisible to
+ * `.avif`/`.webp`/`.jpeg` nor `-orig.<ext>`, so a leftover from a crash is invisible to
  * `VARIANT_FILE_RE` / `ORIGINAL_FILE_RE` and every walk built on them.
  */
 async function writeAtomic(abs: string, data: Buffer): Promise<void> {
@@ -161,13 +159,20 @@ export async function storeVariantFiles(
 }
 
 /** The paste-ready `heroImage:` YAML block returned by the upload routes. */
-export function heroSnippet(src: string, width: number, height: number, alt: string): string {
+export function heroSnippet(
+  src: string,
+  width: number,
+  height: number,
+  alt: string,
+  format?: ImageOutputFormat,
+): string {
   return [
     'heroImage:',
     `  src: '${src}'`,
     `  width: ${width}`,
     `  height: ${height}`,
     `  alt: '${alt.replace(/'/g, "''")}'`, // YAML single-quote escaping
+    ...(format ? [`  format: '${format}'`] : []),
   ].join('\n');
 }
 
@@ -196,6 +201,7 @@ export async function storeVariants(
   const src = `${baseUrl.replace(/\/+$/, '')}/${key}`;
   return {
     src, width: result.width, height: result.height, files,
-    snippet: heroSnippet(src, result.width, result.height, alt),
+    ...(result.format ? { format: result.format } : {}),
+    snippet: heroSnippet(src, result.width, result.height, alt, result.format),
   };
 }

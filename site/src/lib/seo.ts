@@ -1,3 +1,5 @@
+import { largestVariant } from './images.js';
+
 import type { Locale } from '../i18n/ui';
 
 // @ai-note: schema.org structured data, not user-visible UI copy — deliberately
@@ -31,6 +33,7 @@ export interface SeoImage {
   width: number;
   height: number;
   alt: string;
+  format?: 'jpeg';
 }
 
 export interface BlogPostingInput {
@@ -68,7 +71,7 @@ export function blogPostingJsonLd(input: BlogPostingInput): BlogPostingJsonLd {
     inLanguage: input.locale,
     image: {
       '@type': 'ImageObject',
-      url: input.image.src,
+      url: largestVariant(input.image),
       width: input.image.width,
       height: input.image.height,
     },

@@ -25,11 +25,12 @@ describe('rowToPageEntry', () => {
       {
         key: 'about', locale: 'de', title: 'Über mich',
         body_markdown: '```gallery\nhttp://localhost:3000/pages/about/a\n```',
-        images: { 'http://localhost:3000/pages/about/a': { width: 8, height: 6 } },
+        images: { 'http://localhost:3000/pages/about/a': { width: 8, height: 6, format: 'jpeg' as const } },
       },
       'https://img.example.com',
     );
     expect(Object.keys(out.images)).toEqual(['https://img.example.com/pages/about/a']);
     expect(out.body).toContain('https://img.example.com/pages/about/a');
+    expect(out.images['https://img.example.com/pages/about/a']?.format).toBe('jpeg');
   });
 });

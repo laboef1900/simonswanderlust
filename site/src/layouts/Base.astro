@@ -39,7 +39,8 @@ const imgOrigin = imageOrigin(import.meta.env.PUBLIC_BASE_URL);
 // srcset/fallbackSrc append `-<width>.<format>`. Emitting it raw as og:image
 // shipped a 404 to every crawler — story pages have done so since the tag was
 // added. Resolve it to the largest real variant instead.
-const ogImage = image && largestVariant(image, 'webp');
+const ogImage = image && largestVariant(image);
+const ogImageType = image?.format === 'jpeg' ? 'image/jpeg' : 'image/webp';
 // Code-block colours as classes (#124): body HTML is sanitized with no `style`
 // allowed anywhere, so Shiki's palette ships as this generated stylesheet.
 // Unlayered on purpose — it must win over @tailwindcss/typography's `pre`
@@ -84,7 +85,7 @@ const shikiStyle = `<style>${SHIKI_CSS}</style>`;
       image && ogImage && (
         <>
           <meta property="og:image" content={ogImage} />
-          <meta property="og:image:type" content="image/webp" />
+          <meta property="og:image:type" content={ogImageType} />
           <meta property="og:image:width" content={String(image.width)} />
           <meta property="og:image:height" content={String(image.height)} />
           <meta property="og:image:alt" content={image.alt} />

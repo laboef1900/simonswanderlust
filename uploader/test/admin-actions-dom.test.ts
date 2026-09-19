@@ -498,3 +498,50 @@ describe('settings.html shared review key lifecycle', () => {
     expect(el('aiKeyStatus').textContent).toBe('Unknown — reload');
   });
 });
+
+describe('settings.html image controls', () => {
+  function loadImageSettings(fetch?: (url: string, init?: { body?: string }) => Promise<unknown>) {
+    const page = loadPage('public/settings.html', {
+      LLM: { mixedContentWarning: () => '' },
+      Option: class { constructor(public text: string, public value: string) {} },
+      ...(fetch ? { fetch } : {}),
+    });
+    (page.ctx.fill as (state: unknown) => void)({ ...defaultSettings(), hasAiApiKey: false });
+    return page;
+  }
+
+  it('keeps pending values and allows retry after a dropped save connection', async () => {
+    const { el } = loadImageSettings();
+    el('convertJpeg').checked = false;
+    el('webpQuality').value = '86';
+    el('avifQuality').value = '64';
+    await el('imageSettings').fire('submit');
+    expect(el('saveImages').disabled).toBe(false);
+    expect(el('imageOut').textContent).toMatch(/could not save/i);
+    expect(el('convertJpeg').checked).toBe(false);
+    expect(el('webpQuality').value).toBe('86');
+    expect(el('avifQuality').value).toBe('64');
+  });
+
+  it('saves only image preferences without overwriting pending AI or backup edits', async () => {
+    let persisted = { ...defaultSettings(), hasAiApiKey: false };
+    const { el } = loadImageSettings(async (_url, init) => {
+      persisted = { ...persisted, ...JSON.parse(init?.body ?? '{}') };
+      return { ok: true, status: 200, json: async () => persisted };
+    });
+    el('baseUrl').value = 'http://localhost:1235/v1';
+    el('backupSchedule').value = 'weekly';
+    el('aiModel').value = 'unsaved-review-model';
+    el('convertJpeg').checked = false;
+    el('webpQuality').value = '86';
+    await el('imageSettings').fire('submit');
+    expect(persisted).toMatchObject({
+      convertJpeg: false, webpQuality: 86, avifQuality: 55,
+      lmBaseUrl: defaultSettings().lmBaseUrl, backupSchedule: 'off',
+    });
+    expect(el('baseUrl').value).toBe('http://localhost:1235/v1');
+    expect(el('backupSchedule').value).toBe('weekly');
+    expect(el('aiModel').value).toBe('unsaved-review-model');
+    expect(el('saveImages').disabled).toBe(false);
+  });
+});

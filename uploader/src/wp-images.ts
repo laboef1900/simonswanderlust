@@ -1,13 +1,13 @@
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { processImage } from './pipeline.js';
+import { processImage, type ProcessOptions } from './pipeline.js';
 import { assertSafeKey, storeVariants } from './storage.js';
 import { safeFetch, type LookupFn } from './safe-fetch.js';
-import { FORMATS, variantWidths } from './variants.js';
+import { JPEG_FORMAT, formatsFor, variantWidths, type ImageOutputFormat } from './variants.js';
 import type { WorkLock } from './work-lock.js';
 
-export interface RehostResult { src: string; width: number; height: number }
+export interface RehostResult { src: string; width: number; height: number; format?: ImageOutputFormat }
 
 export interface RehostOptions {
   storageDir: string;
@@ -17,6 +17,8 @@ export interface RehostOptions {
   lookup?: LookupFn;
   timeoutMs?: number;
   maxBytes?: number;
+  /** Immutable snapshot for this import run; never read global settings per image. */
+  encoding?: ProcessOptions;
   /**
    * The shared build/encode mutex (issue #95). When present, the sharp encode
    * runs under `runShared` so it can never overlap `astro build` — the same
@@ -33,11 +35,14 @@ export async function rehostImage(url: string, key: string, alt: string, opts: R
   // the mutex across a stalling source host would delay a Publish for nothing.
   // Only the sharp pipeline + variant writes are what a build must never overlap.
   const encode = async () => {
-    const result = await processImage(buffer);
+    const result = await processImage(buffer, opts.encoding);
     return storeVariants(key, alt, result, { storageDir: opts.storageDir, baseUrl: opts.baseUrl });
   };
   const stored = opts.lock ? await opts.lock.runShared(encode) : await encode();
-  return { src: stored.src, width: stored.width, height: stored.height };
+  return {
+    src: stored.src, width: stored.width, height: stored.height,
+    ...(stored.format ? { format: stored.format } : {}),
+  };
 }
 
 /**
@@ -143,24 +148,34 @@ export async function createRehostResume(
       if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) return null;
 
       // Fail closed on a partial set, measured against the original's width.
-      // A crashed encode leaves files and no record — trusting that would
-      // publish a srcset pointing at variants nobody ever wrote. Each file that
-      // does exist is complete: storage.ts writes to a `.part-*` temp and
-      // renames (#118), so a truncated variant can never carry the final name.
-      for (const w of variantWidths(width)) {
-        for (const format of FORMATS) {
-          const file = `${name}-${w}.${format}`;
-          if (!names.has(file)) return null;
-          try {
-            const st = await stat(join(opts.storageDir, dir, file));
-            if (!st.isFile() || st.size === 0) return null;
-          } catch {
-            return null;
+      // A complete set of EITHER contract is resumable: disk wins over the
+      // current conversion preference so changing Settings never rewrites a
+      // healthy import. Each existing file must also be non-empty.
+      const complete = async (format?: ImageOutputFormat): Promise<boolean> => {
+        for (const w of variantWidths(width)) {
+          for (const variantFormat of formatsFor(format)) {
+            const file = `${name}-${w}.${variantFormat}`;
+            if (!names.has(file)) return false;
+            try {
+              const st = await stat(join(opts.storageDir, dir, file));
+              if (!st.isFile() || st.size === 0) return false;
+            } catch {
+              return false;
+            }
           }
         }
+        return true;
+      };
+      let format: ImageOutputFormat | undefined;
+      if (!(await complete())) {
+        format = JPEG_FORMAT;
+        if (!(await complete(format))) return null;
       }
 
-      return { src: `${base}/${key}`, width, height };
+      return {
+        src: `${base}/${key}`, width, height,
+        ...(format ? { format } : {}),
+      };
     },
   };
 }
