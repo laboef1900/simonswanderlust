@@ -289,8 +289,26 @@ fetches go through `safeFetch` (`uploader/src/safe-fetch.ts`), which:
 Design and misuse cases: `docs/superpowers/specs/2026-09-05-safe-fetch-redirects-design.md` and
 `docs/superpowers/specs/2026-09-06-safe-fetch-literals-and-body-cancel-design.md`.
 
-(The former LM Studio caption feature — the app's only other outbound-fetch surface — was removed
-in July 2026; the WordPress importer is now the sole remote-fetch path.)
+AI inference is **browser-direct**, not a server remote-fetch path. Local LM Studio
+alt-text suggestions and the editorial-review client (#213) never call `safeFetch`
+or a server inference proxy. `src/editorial-review.ts` contains only the contract,
+schema, prompt and parser.
+
+The review client scopes an optional Bearer key to the configured completion request;
+it never shares credentials with caption calls or model discovery. Review requests omit
+cookies/referrers and refuse redirects (including same-origin redirects), preventing
+credentials from being forwarded to a different endpoint. OpenRouter attribution uses
+exact URL hostname equality, not a string/prefix match. Provider errors and abort reasons
+are not surfaced verbatim, since they may echo credentials or unpublished content.
+One abortable deadline covers attempts and body reads; only an HTTP 400 explicitly naming
+unsupported `response_format` permits one retry without that parameter.
+
+Model output is untrusted: both review parsers validate required fields, types and statuses,
+reject extra properties, strip Unicode controls, and cap text/list lengths. This is not
+HTML sanitization: consumers must render results through `textContent`/input values, never
+`innerHTML`. The prompt treats the draft as data and asks for missing facts to verify,
+not invented facts or links. Reviews grant no write/publish authority. Credential storage
+and the editor drawer are outside #213 and tracked separately in #214/#215.
 
 ### Retry widened the per-URL window (issue #85, 2026-07-30; narrowed by #93, 2026-09-05)
 

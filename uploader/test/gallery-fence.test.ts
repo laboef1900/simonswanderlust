@@ -53,6 +53,7 @@ interface Api {
     postMeta?: PostMeta,
   ): string;
   parse(text: string): { directives: string[]; lines: ParsedLine[] };
+  scanFences(text: string): { start: number; end: number; isGallery: boolean; unterminated: boolean }[];
   fenceAt(body: string, cursor: number): { text: string; start: number; end: number } | null;
   replaceFenceAt(body: string, cursor: number, fence: string): Edit;
   LAYOUTS: string[];
@@ -448,6 +449,50 @@ describe('replaceFenceAt', () => {
       expect(out.start).toBe(out.end);
       expect(apply(body, out)).toBe(body);
     });
+  });
+});
+
+describe('scanFences public seam', () => {
+  it('exposes the same gallery ranges as fenceAt while retaining enclosing code blocks', () => {
+    const sections = [
+      '````md\r\n```gallery\r\nhttps://i/example\r\n```\r\n`````',
+      '```gallery\r\n#layout: slider\r\nhttps://i/a\r\n````',
+      '~~~js\r\n# Not a heading\r\n~~~~',
+      '````gallery\r\nhttps://i/b',
+    ];
+    const body = 'intro\r\n' + sections.join('\r\nbetween\r\n');
+    const blocks = G.scanFences(body);
+    expect(blocks).toEqual(sections.map((section, index) => ({
+      start: body.indexOf(section),
+      // Ranges exclude LF but retain the closer's CR; the EOF block has neither.
+      end: body.indexOf(section) + section.length + (index < sections.length - 1 ? 1 : 0),
+      isGallery: index === 1 || index === 3,
+      unterminated: index === 3,
+    })));
+    for (const block of blocks) {
+      const found = G.fenceAt(body, block.start + 1);
+      if (block.isGallery) {
+        expect(found).toEqual({
+          start: block.start, end: block.end,
+          text: body.slice(block.start, block.end), unterminated: block.unterminated,
+        });
+      } else {
+        expect(found).toBeNull();
+      }
+    }
+  });
+
+  it('shares the strict closer rule and gallery classification used by the picker', () => {
+    const protectedBlock = '````gallery\n```\n````\u00a0\nhttps://i/a\n`````';
+    const prose = '\nAfter\n';
+    const other = '  ```gallery\nhttps://i/b\n```';
+    const body = protectedBlock + prose + other;
+    expect(G.scanFences(body)).toEqual([
+      { start: 0, end: protectedBlock.length, isGallery: true, unterminated: false },
+      { start: protectedBlock.length + prose.length, end: body.length, isGallery: false, unterminated: false },
+    ]);
+    expect(G.fenceAt(body, body.indexOf('https://i/a'))?.text).toBe(protectedBlock);
+    expect(G.fenceAt(body, body.indexOf('https://i/b'))).toBeNull();
   });
 });
 

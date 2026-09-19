@@ -405,6 +405,7 @@ window.GalleryFence = (function () {
     withLayout: withLayout,
     serialize: serialize,
     parse: parse,
+    scanFences: scanFences,
     fenceAt: fenceAt,
     replaceFenceAt: replaceFenceAt,
   };

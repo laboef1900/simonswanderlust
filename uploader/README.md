@@ -212,6 +212,63 @@ directly — the app server never contacts the model. LM config (`lmBaseUrl`, `l
 the admin-only Settings page; authors read it read-only via `GET /ai-config`. No
 `docker-compose`/`.env` LM variables are needed.
 
+### Editorial-review client API (#213)
+
+`public/llm.js` also exports
+`LLM.reviewStory(baseUrl, model, prompt, story, apiKey, timeoutMs, signal?)` and
+`LLM.parseEditorialReview(content)`. The story is an active-locale snapshot:
+`{ locale: 'de' | 'en', title, excerpt, markdown, heroAlt, heroSrc }`, with string text
+fields. It is sent as untrusted JSON in a user message, separate from the review prompt.
+`src/editorial-review.ts` exports `EditorialReviewResult`, `DEFAULT_REVIEW_PROMPT`,
+`EDITORIAL_REVIEW_SCHEMA`, and the matching pure parser.
+
+The parser accepts JSON wrapped in prose/fences or preceded by `<think>` reasoning,
+but rejects missing fields, wrong types/statuses, and extra keys. It strips Unicode
+control characters, caps text at 1,000 UTF-16 units, and caps each list at 10 strings
+of 200 units (without splitting surrogate pairs). Empty strings/lists are allowed;
+title suggestions and the suggested excerpt are optional. Alt-text observations use
+`practicalDetails`, because the agreed result contract has no separate alt-text section.
+Parsing also bounds synchronous work: raw output may contain at most 128 Ki UTF-16
+units, with at most 32 open objects and 128 completed object candidates. A single
+string-aware traversal still recovers a valid review after unmatched prose braces;
+it never repeatedly scans the same suffix. Exceeding a bound rejects the response,
+rather than blocking the browser before its deadline/cancellation handler can run.
+
+Review calls use a 60-second default deadline (positive values up to 600,000 ms),
+covering response reads and at most one fallback without `response_format` after an
+HTTP 400 explicitly identifying that parameter as unsupported. Cancellation rejects
+with `AbortError`; deadline expiry with `TimeoutError`. Other failures are sanitized,
+without provider error text, draft content or keys. Redirects are refused, cookies are
+omitted, and OpenRouter attribution is attached only for hostname `openrouter.ai`.
+Base URLs must be HTTP(S) with no credentials, query or fragment.
+
+This is the reusable client/contract slice, not a new editor action. Settings/secrets
+and the review drawer remain separate issues #214/#215. Existing `caption`, `listModels`,
+`prepImage`, and alt-text workflows are unchanged.
+
+## Deterministic editorial checks
+
+`public/editor-linter.js` exposes `window.EditorLinter` for one unsaved locale; load
+`gallery-fence.js` first. It is a pure, network-free advisory module, not a save/publish
+gate. The review drawer is integrated separately (#215).
+
+Call `lintStory({ title, excerpt, markdown, heroSrc, heroAlt })`, or the individual
+`lintTitle`, `lintExcerpt`, `lintHeadings`, `lintAltText`, and `lintInternalLinks` checks.
+Title (20–70) and excerpt (100–160) limits use the exact field's JavaScript string length,
+including spaces. The result contains each check, `pass`, and `warningCount` (individual
+findings, not categories). Findings have stable `code` values and readable `message`s;
+alt findings identify `target: 'hero' | 'inline' | 'gallery'`. Markdown `line` values are
+**1-indexed**; subtract one for CodeMirror. Hero and document-wide link findings have no line.
+
+ATX headings and inline image/link syntax ignore fenced examples through the same
+`GalleryFence.scanFences` used by the picker. Headings are checked before inline syntax;
+inline image/link checks hide code spans without crossing blank lines or ATX headings.
+Gallery metadata uses `GalleryFence.parse`. Inline checks cover `![alt](url)` / `[label](path)`, including
+escaped labels, optional titles, and angle destinations; reference links and raw HTML are
+outside this check. Another-story links can be root-relative or path-relative, not remote
+URLs, fragment-only links, or query-only links. Alt checks flag missing/whitespace-only text,
+not generic wording; they inspect the supplied markdown rather than the saved `images` map.
+
 ## Alt-text audit (advisory)
 
 The editor shows a warning listing every photo of the post that reaches a reader with **no
