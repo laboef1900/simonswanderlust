@@ -237,6 +237,24 @@ STORAGE_DIR=./data/images PUBLIC_BASE_URL=https://img.simonswanderlust.com \
 Prints the paste-ready `heroImage:` snippet and writes all variants (plus the
 untouched `-orig` original) under `STORAGE_DIR`.
 
+## CLI rebuild
+
+Rebuild the live blog from the current database without signing in:
+
+```bash
+docker compose exec app node --import tsx src/cli.ts rebuild
+```
+
+Use it after something changed the database behind the app's back — a `restore`, or a hand-run
+`UPDATE`. Normal publishing needs none of this: Publish, unpublish, delete and page saves all
+trigger a build themselves and wait for it.
+
+It asks the **running** app over loopback (minting and immediately revoking a one-request admin
+session) rather than spawning its own `astro build`. That is deliberate: `work-lock.ts` makes a
+build and image encoding mutually exclusive within one process, and `docker-compose.yml` sizes
+`mem_limit` as `max(build, encode) + baseline` on exactly that assumption — a second, unlocked
+builder could OOM the container. It exits non-zero on a failed build and prints the reason.
+
 ## CLI password reset (recovery)
 
 Forgot a password? Reset it from the host — the runtime image has no shell, so use the exec form:

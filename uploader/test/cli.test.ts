@@ -3,9 +3,10 @@ import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { uploadFile, resetPassword } from '../src/cli.js';
+import { uploadFile, resetPassword, triggerRebuild } from '../src/cli.js';
 import { memoryUserStore, verifyPassword, PasswordPolicyError } from '../src/users.js';
 import { memorySessionStore } from '../src/sessions.js';
+import { SESSION_COOKIE } from '../src/authn.js';
 import { runCli, envWithoutDatabaseUrl } from './run-cli.js';
 
 let dir: string;
@@ -145,5 +146,95 @@ describe('restore CLI wiring (spawned process)', () => {
     const r = await runCli(['restore', 'db-20260101-000000.json.gz', '--yes'], envWithoutDatabaseUrl());
     expect(r.code).toBe(1);
     expect(r.stderr).toContain('DATABASE_URL is required for restore');
+  }, 30_000);
+});
+
+/*
+ * `triggerRebuild` mints an admin session, spends it on one request, and must
+ * revoke it whatever happens. The transport is injected, so these exercise the
+ * contract rather than a socket; `rebuild CLI wiring` below covers the argv and
+ * env guards in a real process.
+ */
+describe('triggerRebuild', () => {
+  async function withAdmin() {
+    const users = memoryUserStore();
+    const sessions = memorySessionStore();
+    await users.create({ username: 'author', password: 'password123456', isAdmin: false });
+    await users.create({ username: 'boss', password: 'password123456', isAdmin: true });
+    return { users, sessions };
+  }
+
+  it('spends an admin session on the request and returns the release', async () => {
+    const { users, sessions } = await withAdmin();
+    let seen = '';
+    const release = await triggerRebuild(users, sessions, async (cookie) => {
+      seen = cookie;
+      // The session must be live AT THE MOMENT the app would resolve it.
+      const token = cookie.slice(`${SESSION_COOKIE}=`.length);
+      const session = await sessions.find(token);
+      expect(session, 'the cookie the app receives resolves to no session').not.toBeNull();
+      const admin = await users.findByUsername('boss');
+      expect(session?.userId, 'the session belongs to a non-admin').toBe(admin?.id);
+      return { status: 200, body: JSON.stringify({ ok: true, release: '1789-7-0000' }) };
+    });
+    expect(release).toBe('1789-7-0000');
+    expect(seen.startsWith(`${SESSION_COOKIE}=`)).toBe(true);
+    // Revoked: the token must not outlive the one request it was minted for.
+    expect(await sessions.find(seen.slice(`${SESSION_COOKIE}=`.length))).toBeNull();
+  });
+
+  it('revokes the session even when the build fails or the socket dies', async () => {
+    for (const transport of [
+      async () => ({ status: 200, body: JSON.stringify({ ok: false, error: 'astro build timed out' }) }),
+      async () => ({ status: 403, body: 'forbidden' }),
+      async () => ({ status: 200, body: 'not json at all' }),
+      () => Promise.reject(new Error('ECONNRESET')),
+    ]) {
+      const { users, sessions } = await withAdmin();
+      const created: string[] = [];
+      const spy = { ...sessions, create: async (id: string, ttl: number) => {
+        const t = await sessions.create(id, ttl);
+        created.push(t);
+        return t;
+      } };
+      await expect(triggerRebuild(users, spy, transport)).rejects.toThrow();
+      expect(created).toHaveLength(1);
+      expect(await sessions.find(created[0]!), 'a failed rebuild leaked its session').toBeNull();
+    }
+  });
+
+  it('reports a failed build instead of reading 200 as success', async () => {
+    const { users, sessions } = await withAdmin();
+    await expect(
+      triggerRebuild(users, sessions, async () => ({
+        status: 200,
+        body: JSON.stringify({ ok: false, error: 'trips/de/x.mdx: country is required' }),
+      })),
+    ).rejects.toThrow('country is required');
+  });
+
+  it('refuses when no admin exists, without minting anything', async () => {
+    const users = memoryUserStore();
+    const sessions = memorySessionStore();
+    await users.create({ username: 'author', password: 'password123456', isAdmin: false });
+    let called = false;
+    await expect(
+      triggerRebuild(users, sessions, async () => { called = true; return { status: 200, body: '{}' }; }),
+    ).rejects.toThrow('no admin user');
+    expect(called).toBe(false);
+  });
+});
+
+describe('rebuild CLI wiring (spawned process)', () => {
+  it('stops at the missing DATABASE_URL rather than guessing a database', async () => {
+    const r = await runCli(['rebuild'], envWithoutDatabaseUrl());
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('DATABASE_URL is required for rebuild');
+  }, 30_000);
+
+  it('lists rebuild in the usage when no subcommand matches', async () => {
+    const r = await runCli([], envWithoutDatabaseUrl());
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('src/cli.ts rebuild');
   }, 30_000);
 });

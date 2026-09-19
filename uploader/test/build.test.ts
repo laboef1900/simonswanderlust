@@ -217,7 +217,14 @@ describe('runChildBuild', () => {
     const hang = `require('node:fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000);`;
     // Real clock on purpose: the deadline is exercised against a real spawned
     // process, which fake timers cannot drive.
-    await expect(runChildBuild(node, ['-e', hang, pidFile], root, 300)).rejects.toBeInstanceOf(BuildTimeoutError);
+    //
+    // @ai-warning The deadline must clear Node's COLD START, not merely be
+    // "short". At 300ms this failed roughly one run in four with
+    // `ENOENT … /pid`: on a loaded machine the child was killed before it
+    // reached its first statement, so the pid file the assertions below read
+    // never existed. 1.5s is still far under any real build, and the child
+    // hangs forever, so the timeout path is exercised exactly as before.
+    await expect(runChildBuild(node, ['-e', hang, pidFile], root, 1_500)).rejects.toBeInstanceOf(BuildTimeoutError);
     const pid = Number(await readFile(pidFile, 'utf8'));
     expect(pid).toBeGreaterThan(0);
     // Signal 0 probes for existence; the child must be gone (reaped), not lingering.
