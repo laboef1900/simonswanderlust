@@ -53,22 +53,52 @@ window.EditorLinter = (function () {
     return parts.join('');
   }
 
+  var ATX_RE = /^ {0,3}(#{1,6})(?:[ \t]+|$)/;
+
+  // Inline code cannot cross paragraph breaks or interrupting ATX headings.
+  // Keep multiline spans within prose, but inspect each heading independently:
+  // CommonMark establishes block structure before resolving inline backticks.
+  function hideInlineExamples(value) {
+    var lines = value.split('\n');
+    var parts = [];
+    var paragraph = [];
+    function flush() {
+      if (paragraph.length) parts.push(hideCodeSpans(paragraph.join('\n')));
+      paragraph = [];
+    }
+    lines.forEach(function (line) {
+      var content = line.replace(/\r$/, '');
+      if (/^[ \t]*$/.test(content) || ATX_RE.test(content)) {
+        flush();
+        parts.push(hideCodeSpans(line));
+      } else {
+        paragraph.push(line);
+      }
+    });
+    flush();
+    return parts.join('\n');
+  }
+
   function prepare(markdown) {
     var source = text(markdown);
     var blocks = window.GalleryFence.scanFences(source);
     var parts = [];
+    var inlineParts = [];
     var pos = 0;
     blocks.forEach(function (block) {
-      // Process prose separately so a code span cannot bridge a fenced block.
-      parts.push(hideCodeSpans(source.slice(pos, block.start)), blank(source.slice(block.start, block.end)));
+      var prose = source.slice(pos, block.start);
+      var fenced = blank(source.slice(block.start, block.end));
+      parts.push(prose, fenced);
+      inlineParts.push(hideInlineExamples(prose), fenced);
       pos = block.end;
     });
-    parts.push(hideCodeSpans(source.slice(pos)));
+    parts.push(source.slice(pos));
+    inlineParts.push(hideInlineExamples(source.slice(pos)));
     var starts = [0];
     for (var i = 0; i < source.length; i++) {
       if (source.charAt(i) === '\n') starts.push(i + 1);
     }
-    return { source: source, visible: parts.join(''), blocks: blocks, starts: starts };
+    return { source: source, blockSource: parts.join(''), visible: inlineParts.join(''), blocks: blocks, starts: starts };
   }
 
   function lineAt(starts, offset) {
@@ -87,8 +117,8 @@ window.EditorLinter = (function () {
     // The article title already supplies level 1, including before the first
     // body heading. CommonMark also permits an empty ATX heading at end of line.
     var previous = 1;
-    doc.visible.split('\n').forEach(function (line, index) {
-      var heading = /^ {0,3}(#{1,6})(?:[ \t]+|$)/.exec(line.replace(/\r$/, ''));
+    doc.blockSource.split('\n').forEach(function (line, index) {
+      var heading = ATX_RE.exec(line.replace(/\r$/, ''));
       if (!heading) return;
       var level = heading[1].length;
       if (level === 1) findings.push({ code: 'body-h1', message: 'The article title already supplies H1; use H2 or below in the body.', line: index + 1 });

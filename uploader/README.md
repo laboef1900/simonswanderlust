@@ -227,8 +227,9 @@ alt findings identify `target: 'hero' | 'inline' | 'gallery'`. Markdown `line` v
 **1-indexed**; subtract one for CodeMirror. Hero and document-wide link findings have no line.
 
 ATX headings and inline image/link syntax ignore fenced examples through the same
-`GalleryFence.scanFences` used by the picker, as well as inline code spans. Gallery metadata
-uses `GalleryFence.parse`. Inline checks cover `![alt](url)` / `[label](path)`, including
+`GalleryFence.scanFences` used by the picker. Headings are checked before inline syntax;
+inline image/link checks hide code spans without crossing blank lines or ATX headings.
+Gallery metadata uses `GalleryFence.parse`. Inline checks cover `![alt](url)` / `[label](path)`, including
 escaped labels, optional titles, and angle destinations; reference links and raw HTML are
 outside this check. Another-story links can be root-relative or path-relative, not remote
 URLs, fragment-only links, or query-only links. Alt checks flag missing/whitespace-only text,

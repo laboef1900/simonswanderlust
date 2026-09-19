@@ -107,8 +107,17 @@ describe('CommonMark ATX headings', () => {
     expect(locations(L.lintHeadings(body))).toEqual([{ code: 'body-h1', line: 6, target: undefined }]);
   });
 
-  it('does not inspect headings inside multiline inline-code examples', () => {
-    expect(locations(L.lintHeadings('``example\n# Not a heading\n` nested\n``\n# Real'))).toEqual([{ code: 'body-h1', line: 5, target: undefined }]);
+  it('detects headings that interrupt prose with unmatched backticks', () => {
+    expect(locations(L.lintHeadings('``example\n# Body heading\n` nested\n``\n# Real'))).toEqual([
+      { code: 'body-h1', line: 2, target: undefined },
+      { code: 'body-h1', line: 5, target: undefined },
+    ]);
+  });
+
+  it('does not let backticks in separate paragraphs conceal a heading', () => {
+    expect(locations(L.lintHeadings('`open\r\n\r\n# Body title\r\n\r\nclose`'))).toEqual([
+      { code: 'body-h1', line: 3, target: undefined },
+    ]);
   });
 });
 
@@ -179,6 +188,24 @@ describe('relative internal links', () => {
 
   it('counts angle destinations and multiline labels with optional titles', () => {
     expect(L.lintInternalLinks('[Another\nstory](</reisen/> "Trip") and [One more](/en/trips/)')).toEqual({ status: 'pass', findings: [], count: 2 });
+  });
+});
+
+describe('inline code block boundaries', () => {
+  it.each([
+    ['`open\n\n![](/photo.webp)\n[Story](/reisen/)\n\nclose`', 3],
+    ['`open\r\n# ![](/photo.webp) [Story](/reisen/)\r\nclose`', 2],
+  ] as const)('does not conceal real images or links across paragraph/heading boundaries', (markdown, line) => {
+    expect(locations(L.lintAltText({ markdown }))).toEqual([
+      { code: 'missing-alt', line, target: 'inline' },
+    ]);
+    expect(L.lintInternalLinks(markdown)).toEqual({ status: 'pass', findings: [], count: 1 });
+  });
+
+  it('still hides multiline inline-code examples inside one paragraph', () => {
+    const markdown = '``example\n![](/photo.webp) [Story](/reisen/)\n` nested\n``';
+    expect(L.lintAltText({ markdown })).toEqual({ status: 'pass', findings: [] });
+    expect(L.lintInternalLinks(markdown)).toMatchObject({ status: 'warn', count: 0 });
   });
 });
 
