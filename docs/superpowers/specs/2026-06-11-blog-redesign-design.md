@@ -55,6 +55,29 @@ Locale model: German is the default locale at root (no prefix); English under `/
 4. Story grid: asymmetric editorial grid of all trips (one large card per row-group, smaller satellites), region filter chips above
 5. About teaser (photo + two sentences + link), footer (localized strings only, Instagram link)
 
+#### Homepage refinement — 2026-09-19
+
+The current editorial-log implementation supersedes the original composition
+above: hero → complete chronological story index → map band → footer. The
+existing `featured` choice remains authoritative, with newest-story fallback.
+
+- Below `640px`, show the hero photograph at its natural aspect ratio and the
+  opaque paper entry below it. Long titles expand in flow, never over the photo.
+- Mobile story cards preserve each photo's aspect ratio and put the full title
+  and date on a solid navy caption below. Retire index-based double-height cards.
+- Keep the promoted story in the full index, using a compact mobile thumbnail
+  beside its title rather than repeating the opening photo at full size.
+  Preserve chronology, all entries, and the desktop mosaic's no-empty-cell rule.
+- Region navigation uses 14px mono labels with counts, arrows and 44px targets.
+  These remain links to region pages, not in-place filters.
+- Preserve content, editorial flags, slugs, DE/EN parity, palettes and fonts.
+  No database writes, publishing changes or new client-side interaction.
+
+Verification: affected Vitest coverage for image source hints, Astro check,
+and rendered DE/EN layouts, image proportions, navigation and keyboard focus
+at mobile, tablet and desktop sizes. Rollback is a source revert; stored
+content is untouched.
+
 ### Story page composition
 1. Full-bleed hero image, title + label overlaid
 2. Intro + key-facts box (country stats, as today) + section TOC

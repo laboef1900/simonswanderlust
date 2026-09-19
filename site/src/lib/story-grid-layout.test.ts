@@ -60,11 +60,23 @@ describe('storyGridSpans', () => {
 
   it('levels the tail: one leftover becomes a band, two split the row', () => {
     // 9 = 3 in the lead block + 6, an exact pair of rows: no levelling needed.
-    expect(storyGridSpans(9).slice(3).map((s) => s.lg)).toEqual([2, 2, 2, 2, 2, 2]);
+    expect(
+      storyGridSpans(9)
+        .slice(3)
+        .map((s) => s.lg),
+    ).toEqual([2, 2, 2, 2, 2, 2]);
     // 10 leaves one card alone.
-    expect(storyGridSpans(10).slice(3).map((s) => s.lg)).toEqual([2, 2, 2, 2, 2, 2, 6]);
+    expect(
+      storyGridSpans(10)
+        .slice(3)
+        .map((s) => s.lg),
+    ).toEqual([2, 2, 2, 2, 2, 2, 6]);
     // 11 leaves two.
-    expect(storyGridSpans(11).slice(3).map((s) => s.lg)).toEqual([2, 2, 2, 2, 2, 2, 3, 3]);
+    expect(
+      storyGridSpans(11)
+        .slice(3)
+        .map((s) => s.lg),
+    ).toEqual([2, 2, 2, 2, 2, 2, 3, 3]);
   });
 
   it('widens the odd card out at sm so its row is not half empty', () => {
@@ -112,7 +124,10 @@ describe('demoteCover', () => {
     // double-height tile directly below it.
     for (const n of [1, 2]) {
       const plan = demoteCover(storyGridSpans(n), 0);
-      expect(plan.every((s) => s.lgRows === 1), `${n} cards: a tile is still two rows tall`).toBe(true);
+      expect(
+        plan.every((s) => s.lgRows === 1),
+        `${n} cards: a tile is still two rows tall`,
+      ).toBe(true);
       expect(plan.map((s) => s.lg)).toEqual(storyGridSpans(n).map((s) => s.lg));
     }
     // Three cards already carry no lead tile, so the swap is a no-op.
@@ -167,41 +182,34 @@ describe('tileWidth', () => {
 
 describe('cardSizes', () => {
   /*
-   * @ai-warning Every entry is `max(box, painted)` because a 3:2 frame under
-   * `object-fit: cover` paints `max(boxWidth, boxHeight × 1.5)`. At a 280px
-   * row that second term wins on most of the grid: 420px for one row, 864px
-   * for two.
+   * Desktop entries correct for the painted width under object-fit: cover.
+   * Mobile uses the original aspect ratio, so its source hint is only the
+   * available width. Keeping the old height correction wastes image bandwidth.
    */
-  it('hints the painted width, not the box width, in every regime', () => {
+  it('corrects desktop crops without over-fetching uncropped mobile photos', () => {
     const sizes = cardSizes({ sm: 3, lg: 2, lgRows: 1 });
     // 373px box, 420px paint.
     expect(sizes).toContain('(min-width: 1192px) max(373px, 420px)');
     expect(sizes).toContain('(min-width: 1024px) max(33vw, 420px)');
     expect(sizes).toContain('(min-width: 640px) max(50vw, 420px)');
-    expect(sizes.endsWith('max(calc(100vw - 2.5rem), 420px)')).toBe(true);
+    expect(sizes.endsWith('calc(100vw - 2.5rem)')).toBe(true);
   });
 
   it('scales the hint with the span', () => {
-    expect(cardSizes({ sm: 3, lg: 4, lgRows: 2 })).toContain('(min-width: 1024px) max(67vw, 864px)');
-    expect(cardSizes({ sm: 6, lg: 6, lgRows: 1 })).toContain('(min-width: 640px) max(100vw, 420px)');
+    expect(cardSizes({ sm: 3, lg: 4, lgRows: 2 })).toContain(
+      '(min-width: 1024px) max(67vw, 864px)',
+    );
+    expect(cardSizes({ sm: 6, lg: 6, lgRows: 1 })).toContain(
+      '(min-width: 640px) max(100vw, 420px)',
+    );
   });
 
   it('corrects a double-height tile at lg, which a 240px row did not need', () => {
     // 763px wide against 2 × 280 + 16 = 576 tall: aspect 1.32, so the frame
     // paints 576 × 1.5 = 864. At the old 240px row the same tile was 763×496
     // and width led, which is why this entry used to be a bare pixel width.
-    expect(cardSizes({ sm: 3, lg: 4, lgRows: 2 })).toContain('(min-width: 1192px) max(763px, 864px)');
-  });
-
-  it('takes the base regime\u2019s row count from the caller, not from the span', () => {
-    // Below `sm` every card is full-width and StoryGrid picks the tall ones by
-    // index, so the span cannot say. A tall tile paints 864px against a ~350px
-    // box; hinting 420 there would ship an upscaled artifact for the largest
-    // photograph on a phone.
-    const span = { sm: 3, lg: 2, lgRows: 1 } as const;
-    expect(cardSizes(span, true).endsWith('max(calc(100vw - 2.5rem), 864px)')).toBe(true);
-    expect(cardSizes(span, false).endsWith('max(calc(100vw - 2.5rem), 420px)')).toBe(true);
-    // `sm` resets every tile to one row regardless.
-    expect(cardSizes(span, true)).toContain('(min-width: 640px) max(50vw, 420px)');
+    expect(cardSizes({ sm: 3, lg: 4, lgRows: 2 })).toContain(
+      '(min-width: 1192px) max(763px, 864px)',
+    );
   });
 });

@@ -35,43 +35,23 @@ const titleId = 'hero-entry-title';
 // StoryCard, which shows the same photo beside the same title.
 const heroAlt = heroAltOf(trip);
 
-/*
-  @ai-warning `sizes` must describe the width the browser PAINTS, not the width
-  of the box, and under `object-fit: cover` which dimension leads DEPENDS ON
-  THE BOX'S ASPECT:
-
-    box aspect  > frame aspect (3:2)  → width leads,  painted = box width
-    box aspect  < frame aspect        → height leads, painted = box height × 1.5
-
-  Getting that backwards in either direction is a real, measured bug. It shipped
-  once as an under-fetch: at 390×591 the box is portrait, so the hero painted
-  ~886px while a bare `100vw` claimed 390 — the LCP artifact of a photography-led
-  site went out 1.38× UPSCALED, and it did not self-correct at DPR 2 either. It
-  has also been "reported" the other way, as a desktop over-fetch, by computing
-  `height × 1.5` for a box that is WIDER than 3:2 (1425×720 ⇒ aspect 1.98) where
-  cover fills the width and 1425px is the honest answer. Re-derive both branches
-  before touching this string.
-
-  The heights below are `max(78vh, 560px)` and `clamp(480px, 80vh, 720px)`, so:
-    base  painted = max(100vw, 1.5 × max(78vh, 560))       = max(100vw, 117vh, 840px)
-    sm+   painted = max(100vw, 1.5 × clamp(480, 80vh, 720)) = max(100vw, min(120vh, 1080px), 720px)
-  A browser too old to parse `max()`/`min()` here ignores the whole descriptor
-  and falls back to 100vw, i.e. the under-fetch above — acceptable, not correct.
-*/
-const HERO_SIZES =
-  '(max-width: 639px) max(100vw, 117vh, 840px), max(100vw, min(120vh, 1080px), 720px)';
+// Mobile shows the full frame at its natural aspect, above the entry panel.
+// Desktop still crops into a fixed-height cover: hint the painted width,
+// max(box width, cover height × 1.5), rather than under-fetching tall crops.
+const HERO_SIZES = '(max-width: 639px) 100vw, max(100vw, min(120vh, 1080px), 720px)';
 ---
 
-<section class="relative h-[78vh] min-h-[560px] sm:h-[80vh] sm:max-h-[720px] sm:min-h-[480px]">
-  <RemoteImage
-    image={trip.data.heroImage}
-    alt={heroAlt}
-    sizes={HERO_SIZES}
-    loading="eager"
-    fetchpriority="high"
-    class="absolute inset-0 h-full w-full object-cover"
-  />
-  {/*
+<section class="relative bg-canvas sm:h-[80vh] sm:max-h-[720px] sm:min-h-[480px]">
+  <div class="relative sm:absolute sm:inset-0">
+    <RemoteImage
+      image={trip.data.heroImage}
+      alt={heroAlt}
+      sizes={HERO_SIZES}
+      loading="eager"
+      fetchpriority="high"
+      class="block h-auto w-full object-cover sm:h-full"
+    />
+    {/*
     A grounding vignette, not a scrim. Nothing on this hero reads against the
     photograph any more — the entry sits on opaque paper and the stamp on its
     own opaque chip — so the gradient no longer has a contrast job at all. What
@@ -79,9 +59,9 @@ const HERO_SIZES =
     frame and closing the bottom crop. Alpha above this is photograph thrown
     away on a page whose premise is the photograph.
   */}
-  <div class="absolute inset-0 bg-gradient-to-t from-navy/45 via-navy/10 via-40% to-transparent"></div>
+    <div class="absolute inset-0 hidden bg-gradient-to-t from-navy/45 via-navy/10 via-40% to-transparent sm:block"></div>
 
-  {/*
+    {/*
     @ai-warning The stamp's inks are DARK (`lib/stamp.ts`: near-black, navy,
     oxblood, plum, forest) and it blends `multiply` — a rubber stamp pressed
     onto paper. It used to sit on a `bg-navy/60` backdrop-blur plate, i.e.
@@ -98,20 +78,21 @@ const HERO_SIZES =
     rather than as a tilted widget. Shown at every width now that it is
     legible: 124px + margins clears a 320px viewport.
   */}
-  <div class="pointer-events-none absolute top-4 right-4 z-10 origin-top-right scale-90 sm:top-6 sm:right-6 sm:scale-100">
-    <div class="rounded-sm bg-canvas p-2 shadow-lg sm:p-2.5">
-      <Stamp
-        countryCode={trip.data.countryCode}
-        country={trip.data.country}
-        date={trip.data.date}
-        region={trip.data.region}
-        locale={locale}
-      />
+    <div class="pointer-events-none absolute top-4 right-4 z-10 origin-top-right scale-90 sm:top-6 sm:right-6 sm:scale-100">
+      <div class="rounded-sm bg-canvas p-2 shadow-lg sm:p-2.5">
+        <Stamp
+          countryCode={trip.data.countryCode}
+          country={trip.data.country}
+          date={trip.data.date}
+          region={trip.data.region}
+          locale={locale}
+        />
+      </div>
     </div>
   </div>
 
-  <div class="absolute right-0 bottom-0 left-0">
-    <div class="mx-auto max-w-6xl px-5 pb-6 sm:pb-10">
+  <div class="relative sm:absolute sm:right-0 sm:bottom-0 sm:left-0">
+    <div class="mx-auto max-w-6xl px-5 py-6 sm:pt-0 sm:pb-10">
       {/*
         @ai-warning This panel is OPAQUE paper — the same material as the stamp
         chip above it, and for the same reason. Every previous version of this
@@ -124,7 +105,7 @@ const HERO_SIZES =
         gradient above drop to a vignette. Never tint this panel with an alpha,
         and never move type back onto the photograph.
       */}
-      <div class="max-w-2xl rounded-sm bg-canvas p-5 shadow-2xl sm:p-6">
+      <div class="max-w-2xl bg-canvas sm:rounded-sm sm:p-6 sm:shadow-2xl">
         {/*
           Set quietly on purpose. The wordmark is in the header ~60px above
           this line, so repeating the identity at display size would be the
@@ -171,8 +152,8 @@ const HERO_SIZES =
             it did was hyphenate the largest type on the site mid-word
             ("Bukarest in 4 Tagen: Nacht-/zug"). Above `sm`, `break-words`
             alone still catches a genuine overflow, just without the hyphen.
-            `line-clamp-3` is the other half: a five-line title used to push
-            this panel past the hero's own height.
+            The mobile entry stays in document flow, so longer titles grow the
+            panel without colliding with the photograph or the story index.
           */}
           <h2
             id={titleId}
@@ -190,9 +171,7 @@ const HERO_SIZES =
             phone that says what the story is ABOUT rather than where it was.
           */}
           <p class="mt-3 line-clamp-2 text-sm text-ink/80">{trip.data.excerpt}</p>
-          <span
-            class="mt-4 inline-flex min-h-[44px] items-center gap-2 text-sm font-semibold text-brand-red"
-          >
+          <span class="mt-4 inline-flex min-h-[44px] items-center gap-2 text-sm font-semibold text-brand-red">
             <span>{t('home.readStory')}</span>
             <svg
               aria-hidden="true"
