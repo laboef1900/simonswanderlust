@@ -3,17 +3,26 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const src = readFileSync('public/desk.js', 'utf8');
-
 interface Post {
   status: 'draft' | 'published';
   updatedAt: string;
   hasUnpublishedChanges: boolean;
   translationKey: string;
 }
+interface SectionView<T> {
+  loading(): void;
+  ready(value: T): void;
+  unavailable(): void;
+}
 interface Api {
   nextDraft(posts: Post[]): Post | null;
   unpublished(posts: Post[]): Post[];
-  encodeCount(stats: { pending?: number; running?: number } | null): number;
+  encodeCount(stats: { pending?: number; running?: number } | null): number | null;
+  releaseState(health: unknown): boolean | null;
+  releaseFromResponse(response: { status: number; ok: boolean; json(): Promise<unknown> }): Promise<boolean>;
+  englishBodyLabel(hasEnBody: boolean): string;
+  formatUpdatedAt(value: unknown, locales?: string | string[]): string;
+  resilientLoader<T>(load: () => Promise<T>, view: SectionView<T>): () => Promise<void>;
 }
 
 function load(): Api {
@@ -55,12 +64,119 @@ describe('Desk.unpublished', () => {
   });
 });
 
-describe('Desk.encodeCount', () => {
+describe('Desk status interpretation', () => {
   const api = load();
 
-  it('sums pending and running', () => {
+  it('counts pending and running photos without turning unknown data into idle', () => {
     expect(api.encodeCount({ pending: 2, running: 1 })).toBe(3);
     expect(api.encodeCount({ pending: 0, running: 0 })).toBe(0);
-    expect(api.encodeCount(null)).toBe(0);
+    expect(api.encodeCount(null)).toBeNull();
+    expect(api.encodeCount({ pending: 0 })).toBeNull();
+    expect(api.encodeCount({ pending: -1, running: 0 })).toBeNull();
+  });
+
+  it('uses the release verdict carried by health even when its DB probe is 503', async () => {
+    expect(api.releaseState({ release: true })).toBe(true);
+    expect(api.releaseState({ release: false })).toBe(false);
+    expect(api.releaseState({})).toBeNull();
+    expect(api.releaseState(null)).toBeNull();
+    await expect(api.releaseFromResponse({
+      status: 503,
+      ok: false,
+      json: async () => ({ release: true }),
+    })).resolves.toBe(true);
+    await expect(api.releaseFromResponse({
+      status: 500,
+      ok: false,
+      json: async () => ({ error: 'internal server error' }),
+    })).rejects.toThrow();
+  });
+
+  it('describes only the English body hint, not pair completeness or readiness', () => {
+    expect(api.englishBodyLabel(true)).toBe('English body started');
+    expect(api.englishBodyLabel(false)).toBe('English body not started');
+  });
+
+  it('formats a valid last-edit time and omits an invalid one', () => {
+    expect(api.formatUpdatedAt('2026-09-19T10:30:00.000Z', 'en-GB')).not.toBe('');
+    expect(api.formatUpdatedAt('not-a-date', 'en-GB')).toBe('');
+    expect(api.formatUpdatedAt(null, 'en-GB')).toBe('');
+  });
+});
+
+describe('Desk.resilientLoader', () => {
+  const api = load();
+
+  it('lets successful sections render when an independent section fails', async () => {
+    const outcomes: string[] = [];
+    const section = <T>(name: string, task: () => Promise<T>) => api.resilientLoader(task, {
+      loading: () => outcomes.push(`${name}:loading`),
+      ready: () => outcomes.push(`${name}:ready`),
+      unavailable: () => outcomes.push(`${name}:unavailable`),
+    });
+    const posts = section('posts', async () => []);
+    const queue = section('queue', async () => { throw new Error('offline'); });
+    const release = section('release', async () => true);
+
+    await Promise.all([posts(), queue(), release()]);
+
+    expect(outcomes).toContain('posts:ready');
+    expect(outcomes).toContain('release:ready');
+    expect(outcomes).toContain('queue:unavailable');
+    expect(outcomes).not.toContain('posts:unavailable');
+  });
+
+  it('recovers locally on retry without exposing the exception to the view', async () => {
+    let attempts = 0;
+    const states: string[] = [];
+    const run = api.resilientLoader(
+      async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('sensitive internal detail');
+        return 4;
+      },
+      {
+        loading: () => states.push('loading'),
+        ready: (value) => states.push(`ready:${value}`),
+        unavailable: function () {
+          expect(arguments).toHaveLength(0);
+          states.push('unavailable');
+        },
+      },
+    );
+
+    await run();
+    await run();
+
+    expect(states).toEqual(['loading', 'unavailable', 'loading', 'ready:4']);
+  });
+
+  it('coalesces a double retry so a stale request cannot race a newer one', async () => {
+    let requests = 0;
+    let finish!: (value: number) => void;
+    const pending = new Promise<number>((resolve) => { finish = resolve; });
+    const states: string[] = [];
+    const run = api.resilientLoader(
+      async () => {
+        requests += 1;
+        return pending;
+      },
+      {
+        loading: () => states.push('loading'),
+        ready: (value) => states.push(`ready:${value}`),
+        unavailable: () => states.push('unavailable'),
+      },
+    );
+
+    const first = run();
+    const second = run();
+    expect(second).toBe(first);
+    await Promise.resolve();
+    expect(requests).toBe(1);
+    finish(7);
+    await first;
+
+    expect(requests).toBe(1);
+    expect(states).toEqual(['loading', 'ready:7']);
   });
 });

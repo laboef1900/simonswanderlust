@@ -42,6 +42,14 @@ window.Auth = (function () {
     { group: 'Site', label: 'Users', href: '/admin/users.html', admin: true, icon: ICON.users },
   ];
 
+  const drawerMedia = window.matchMedia('(max-width: 900px)');
+
+  function drawerFocusables(sidebar) {
+    return Array.from(sidebar.querySelectorAll(
+      'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ));
+  }
+
   function currentNavHref() {
     const p = location.pathname;
     if (p === '/admin' || p === '/admin/index.html') return '/admin/';
@@ -65,28 +73,35 @@ window.Auth = (function () {
     return html;
   }
 
-  function closeNav(shell) {
+  function closeNav(shell, restoreFocus) {
     const sidebar = shell.querySelector('#cmsSidebar');
     const btn = shell.querySelector('#cmsMenuBtn');
     const scrim = shell.querySelector('#cmsNavScrim');
+    const workspace = shell.querySelector('.cms-workspace');
+    const wasOpen = sidebar.classList.contains('is-open');
     sidebar.classList.remove('is-open');
     if (btn) {
       btn.setAttribute('aria-expanded', 'false');
       btn.setAttribute('aria-label', 'Open menu');
     }
     if (scrim) scrim.hidden = true;
+    if (workspace) workspace.inert = false;
+    if (restoreFocus && wasOpen && drawerMedia.matches && btn) btn.focus();
   }
 
   function openNav(shell) {
     const sidebar = shell.querySelector('#cmsSidebar');
     const btn = shell.querySelector('#cmsMenuBtn');
     const scrim = shell.querySelector('#cmsNavScrim');
+    const workspace = shell.querySelector('.cms-workspace');
     sidebar.classList.add('is-open');
     if (btn) {
       btn.setAttribute('aria-expanded', 'true');
       btn.setAttribute('aria-label', 'Close menu');
     }
     if (scrim) scrim.hidden = false;
+    if (workspace) workspace.inert = true;
+    drawerFocusables(sidebar)[0]?.focus();
   }
 
   function renderHeader(s) {
@@ -100,6 +115,7 @@ window.Auth = (function () {
     const heading = meta && meta.querySelector('h1');
     const lede = meta && meta.querySelector('.lede');
     if (!main.id) main.id = 'cms-main';
+    if (!main.hasAttribute('tabindex')) main.setAttribute('tabindex', '-1');
 
     const here = currentNavHref();
     const shell = document.createElement('div');
@@ -114,6 +130,9 @@ window.Auth = (function () {
             '<span class="cms-brand-sub">Expedition Log</span>' +
           '</div>' +
         '</div>' +
+          '<button type="button" class="cms-nav-close" id="cmsNavClose" aria-label="Close menu">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+          '</button>' +
         '<div class="cms-sidebar-action">' +
           '<a href="/admin/editor.html" class="cms-btn-new">' +
             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
@@ -185,13 +204,36 @@ window.Auth = (function () {
 
     const menuBtn = document.getElementById('cmsMenuBtn');
     const scrim = document.getElementById('cmsNavScrim');
+    const closeBtn = document.getElementById('cmsNavClose');
+    closeBtn.addEventListener('click', () => closeNav(shell, true));
     menuBtn.addEventListener('click', () => {
       if (shell.querySelector('#cmsSidebar').classList.contains('is-open')) closeNav(shell);
       else openNav(shell);
     });
-    scrim.addEventListener('click', () => closeNav(shell));
+    scrim.addEventListener('click', () => closeNav(shell, true));
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeNav(shell);
+      const sidebar = shell.querySelector('#cmsSidebar');
+      if (!drawerMedia.matches || !sidebar.classList.contains('is-open')) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeNav(shell, true);
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const focusable = drawerFocusables(sidebar);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    });
+    drawerMedia.addEventListener('change', (e) => {
+      if (!e.matches) closeNav(shell, false);
     });
   }
 
