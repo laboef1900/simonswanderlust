@@ -213,22 +213,26 @@ describe('runChildBuild', () => {
   const node = process.execPath;
 
   it('kills a child that outlives the deadline and rejects with BuildTimeoutError only once it is dead', async () => {
-    const pidFile = join(root, 'pid');
-    const hang = `require('node:fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000);`;
     // Real clock on purpose: the deadline is exercised against a real spawned
     // process, which fake timers cannot drive.
     //
-    // @ai-warning The deadline must clear Node's COLD START, not merely be
-    // "short". At 300ms this failed roughly one run in four with
-    // `ENOENT … /pid`: on a loaded machine the child was killed before it
-    // reached its first statement, so the pid file the assertions below read
-    // never existed. 1.5s is still far under any real build, and the child
-    // hangs forever, so the timeout path is exercised exactly as before.
-    await expect(runChildBuild(node, ['-e', hang, pidFile], root, 1_500)).rejects.toBeInstanceOf(BuildTimeoutError);
-    const pid = Number(await readFile(pidFile, 'utf8'));
+    // The pid comes from `onSpawn`, which fires synchronously inside
+    // `runChildBuild` before the timer is armed. It used to come from a file
+    // the child wrote as its first statement, and that raced the deadline
+    // under test: when Node's cold start overran the 300ms budget the child
+    // was killed before running, and this died on `ENOENT … /pid` roughly one
+    // run in four under load. The budget is back to 300ms because nothing
+    // here depends on the child reaching any code at all.
+    let pid: number | undefined;
+    const hang = 'setInterval(() => {}, 1000);';
+    await expect(
+      runChildBuild(node, ['-e', hang], root, 300, (child) => { pid = child.pid; }),
+    ).rejects.toBeInstanceOf(BuildTimeoutError);
     expect(pid).toBeGreaterThan(0);
-    // Signal 0 probes for existence; the child must be gone (reaped), not lingering.
-    expect(() => process.kill(pid, 0)).toThrow();
+    // Signal 0 probes for existence; the child must be gone (REAPED, not just
+    // signalled) by the time the promise settles — that is what "only once it
+    // is dead" means, and it is why the promise settles on `close`.
+    expect(() => process.kill(pid!, 0)).toThrow();
   });
 
   it('carries the tail of stderr, bounded, in a non-zero exit rejection', async () => {
