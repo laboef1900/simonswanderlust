@@ -57,9 +57,9 @@ typography:
     letterSpacing: "0.18em"
   label-quiet:
     fontFamily: "IBM Plex Mono, ui-monospace, SFMono-Regular, monospace"
-    fontSize: "0.6875rem"
+    fontSize: "0.75rem"
     fontWeight: 400
-    lineHeight: 1.5
+    lineHeight: 1.3333
     letterSpacing: "0.18em"
   label-lg:
     fontFamily: "IBM Plex Mono, ui-monospace, SFMono-Regular, monospace"
@@ -103,7 +103,7 @@ components:
   card-caption-panel:
     backgroundColor: "{colors.navy}"
     textColor: "#ffffff"
-    padding: "2px 16px 16px"
+    padding: "16px"
   card-meta-line:
     textColor: "rgb(255 255 255 / 0.7)"
     typography: "{typography.label-quiet}"
@@ -128,6 +128,7 @@ components:
   destination-link:
     textColor: "{colors.navy}"
     typography: "{typography.label}"
+    fontSize: "0.875rem"
     rounded: "{rounded.sm}"
     height: "44px"
   destination-link-hover:
@@ -179,15 +180,15 @@ single commitment produced the system's hardest rule: type is never asked to
 survive against a photograph through a scrim. Where words must sit over an
 image they get their own opaque plate — navy for white type, canvas for dark
 ink — which then frees the gradient above to stay light, so the photograph
-survives too. The homepage hero's scrim is a grounding vignette
-(`from-navy/45 via-navy/10 via-40%`), not a contrast device; the story card's
-scrim stops at 55% of the tile so everything above the plate is photograph.
+survives too. On desktop the homepage hero's vignette
+(`from-navy/45 via-navy/10 via-40%`) grounds the paper; story captions use a
+72px ramp. On mobile neither needs a scrim: text sits below the photograph.
 
 Density is low and deliberately uneven. A six-column mosaic gives the index a
 cadence (a 4×2 lead tile, then threes, with the tail levelled so no cell is ever
-empty); below `640px` the mosaic collapses to full-width tiles and every third
-one goes double-height, because nine identical tiles in a row is a flat
-2.5k-pixel scroll with no measure. Explicitly rejected and recorded in
+empty); below `640px` full-width photographs retain their natural proportions,
+with captions beneath. Portraits, not card indices, supply the taller beats.
+The homepage cover repeats only as a compact index entry. Explicitly rejected in
 `CLAUDE.md`: glassmorphism, bento grids, dark-by-default themes, and the generic
 2018–2026 travel-blog hero (full-bleed photo → eyebrow → extrabold headline →
 filled pill CTA).
@@ -307,11 +308,10 @@ allowed to speak.
   headings — "Alle Reiseberichte", the map band, the region page `<h1>`. The map
   band was deliberately pulled down from `30px` at base so the closing band
   never shouts louder than the hero entry it exists to support.
-- **Title** (800, `20px` base; `16–24px` from `sm` up, line-height 1.4): story
-  card headings, `line-clamp-2`, with a `title` attribute because the clamp is
-  otherwise silent (`scrollHeight 140` against `clientHeight 56`). Three tiers
-  exist from `sm` up so the mosaic has hierarchy; at base every card is
-  full-width, so all nine titles share one size on purpose.
+- **Title** (800, `20px` base; `16–24px` from `sm` up, line-height 1.25):
+  story card headings. Mobile captions show the full title; the already-featured
+  cover uses `16px` beside its compact thumbnail. From `sm`, three title tiers
+  follow the mosaic, with a two-line clamp and a full `title` attribute.
 - **Body** (400, `16px`, line-height 1.5): the document default, `ink` on canvas.
 - **Body Long** (400, `18px`, line-height 1.778): the story article, via
   `prose prose-lg`. The column is `768px` minus `20px` gutters = **728px** of
@@ -319,20 +319,23 @@ allowed to speak.
   measure is set by the container, not by the prose.
 - **Body Small** (400, `14px`, line-height 1.43): excerpts, footer links, nav
   labels, the map CTA.
-- **Label** (600 mono, `11px`, `0.18em`, uppercase): the log register at full
-  strength — the hero's entry number and field line, coordinates, the footer
-  logline and gear line, destination index links.
-- **Label Quiet** (400 mono, `11px`, `0.18em`, uppercase): the same register
-  demoted. Currently the story card's date line, where the type has to read as
-  a footnote to the heading above it rather than compete with it.
+- **Label** (600 mono, `11px`, `0.18em`, uppercase): the compact identity
+  register in the footer logline and gear line.
+- **Homepage metadata** (`12px` mono, `0.18em`): the hero entry number and
+  date/country field line use weight 600; coordinates use weight 400.
+- **Label Quiet** (400 mono, `12px`, `0.18em`, uppercase): story-card dates,
+  subordinate to the heading without reducing useful information to microprint.
 - **Label Large** (600 mono, `12px`, `0.18em`, uppercase): section eyebrows —
   Key Facts and TOC headings, footer column labels, the map band's stat line,
   the region page's trip count.
+- **Destination navigation** (600 mono, `14px`, `0.18em`, uppercase): region
+  links are actions rather than metadata; counts and arrows keep their meaning,
+  and each link retains a `44px` minimum hit area.
 
-**One register, several jobs.** The 11px mono label carries entry numbers,
-field lines, coordinates and the footer identity line, with one size of relief
-(12px) and exactly one weight step (400 against 600). That step is the pattern
-to extend: if the register needs another voice, add a size or a weight — never
+**One register, several jobs.** The 11px mono label carries compact footer
+identity; useful homepage metadata and section labels use 12px, and destination
+navigation uses 14px, with a weight step (400 against 600).
+Extend those roles with a size or a weight when needed — never
 a tracking value, and never a coloured plate, which is what the card's date
 line used to be.
 
@@ -363,22 +366,22 @@ carries a `20px` gutter (`px-5`), so the content box locks at 1152px once the
 viewport passes **1192px** — the number `story-grid-layout.ts` calls
 `CONTENT_LOCKED_AT` and uses to emit exact pixel `sizes`.
 
-**The story mosaic.** Six columns at every breakpoint, `280px` auto-rows, `16px`
-gap. What changes is the span: 6 = one card per row, 3 = two, 2 = three. Six
-exists so a remainder of two can be split evenly. From `lg`, four or more cards
+**The story mosaic.** From `640px`, six columns, `280px` auto-rows and `16px`
+gaps. Spans of 3 give two cards per row, spans of 2 give three. Six
+lets a remainder of two split evenly. From `lg`, four or more cards
 render a 4×2 lead tile with one card stacked beside it in each of the first two
 rows, then threes, with the tail levelled — one leftover becomes a full-width
 band, two split the row in half. The plan is computed in TypeScript, not CSS,
 because the remainder rule depends on how many cards fit a row and that differs
 per breakpoint.
 
-**Base-regime rhythm.** Below `640px` every card is full-width, so the mosaic's
-span differences are invisible; every third card (`i % 3 === 1`) is
-double-height there instead, giving a short-short-tall measure. The offset is 1,
-not 0, so the tall tile never lands on the cover story the hero already showed
-at poster size. `sm:row-span-1` resets it — the `sm` regime accounts one row per
-card, and a two-row tile there would punch exactly the hole the module exists to
-prevent.
+**Mobile rhythm.** Below `640px`, one column with `24px` gaps. Photographs use
+their stored width and height to render uncropped; captions follow on solid navy
+and grow with the full title. A portrait photograph naturally makes a taller
+card, while a landscape keeps its breadth. No index-based double-height rule.
+The homepage's promoted cover alone gets a compact `96px` thumbnail beside its
+caption, wherever it falls in the chronological index. Region pages have no
+promoted cover and therefore no compact exception. Every story remains present.
 
 **Breakpoints.** `sm 640px` · `md 768px` · `lg 1024px`. The map band splits
 two-up at `lg`, not `md`, because an SVG `font-size` is in viewBox units: at
@@ -388,16 +391,17 @@ gallery is wider than its parent and a media query would measure the wrong box.
 
 **Vertical rhythm.** Home index `48px → 64px` (`py-12 sm:py-16`); map band
 `32px → 44px`; footer `56px`; region header `40px`; story column `40px`. The
-home hero is `78vh` (min `560px`) at base and `80vh` clamped to `480–720px` from
-`sm`; the story hero is `55vh`, min `360px`. Section order is the argument the
-homepage makes: photograph → index → map band, whose navy runs into the footer's
-navy as one dark base.
+home hero is natural-height at base: the full-width image, followed by its
+paper entry with `24px` vertical padding. From `sm` it stays `80vh`, clamped to
+`480–720px`; the story hero is unchanged at `55vh`, min `360px`.
+The homepage's section order remains photograph → index → map band, whose navy
+runs into the footer's navy as one dark base.
 
-**Imagery.** Hero frames are 3:2 and crop with `object-fit: cover`, which means
-the painted width depends on the box aspect, not the box width: wider than 3:2
-and width leads; narrower and height leads at `height × 1.5`. Getting it
-backwards shipped a 1.38× upscaled LCP artifact at 390×591. Both the hero's
-`sizes` string and `cardSizes()` derive both branches explicitly.
+**Imagery.** Mobile homepage hero and full-size index photographs preserve the
+stored aspect ratio. Their source hints are `100vw` and `calc(100vw - 2.5rem)`
+respectively; a fixed-height correction would over-fetch them. Desktop retains
+the existing cover crops and their height-aware source hints. The compact cover
+thumbnail reuses the photograph already requested by the eager hero.
 
 **Break-out.** A gallery may exceed the story column to
 `min(100% + 24rem, 100vw - 3.5rem, 1112px)` — 24rem is the measured overhang
@@ -545,14 +549,18 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
 
 ### Cards / Containers
 
-- **Story card** — the signature surface. A whole-tile link: navy body, `12px`
-  radius, `overflow-hidden`, full-height, with the photograph filling the tile
-  and a caption ramping in across its foot.
-  - *Caption:* a fixed **72px** ramp (`from-navy/92 to-transparent`, no type in
-    it) into a `navy/92` base holding the heading and, **below** it, the date
-    line. On a `280px` tile the base is 90px — **32%** — and the frame above the
-    ramp is completely unveiled; on the `576px` lead tile the base is 13%.
-  - *Why 92 and not 100:* it is the floor, not a preference. White measures
+- **Story card** — a whole-tile link with navy body and `12px` corners.
+  Below `640px`, the photograph is uncropped and followed by a solid navy caption
+  with `16px` padding. Mobile titles are not clamped. The homepage's promoted
+  cover alone becomes a thumbnail-and-title index row.
+  - *Small and tablet captions:* from `sm`, a two-row grid separates the photo
+    from its solid navy caption (`16px` padding). The image row is
+    `minmax(6rem, 1fr)` and the caption row sizes to its text inside the unchanged
+    `280px` mosaic track. There is no fade or text over a small photograph.
+  - *Lead caption:* only the double-height lead at `lg` fills the tile with a
+    photograph and overlays its caption. A **72px** ramp
+    (`from-navy/92 to-transparent`, no type in it) meets the `navy/92` base.
+  - *Why the lead uses 92 and not 100:* it is the floor, not a preference. White measures
     **11.6:1** on it and `white/70` **6.57:1** over the brightest sky in the
     corpus; at `/80` that second figure is 4.66:1 and at `/75` it is 4.07:1,
     i.e. under AA. The caption could only be lighter by giving up the date
@@ -564,7 +572,7 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
     would differ per card.
   - *Date line:* the month and year, plus the country **only when the title
     does not already name it** — eight of nine live titles do, and printing it
-    twice within 30px made the index read as repeated. Weight 400 in
+    twice within 30px made the index read as repeated. Weight 400 at `12px` in
     `white/70`, below the heading, no box. It wraps rather than truncates:
     `truncate` here cut the destination country, the identity payload the card
     exists to deliver, on 3 of 9 cards at a 320px viewport.
@@ -579,17 +587,17 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
     sky, white lands at **2.87:1** there. Holding it would take roughly `/62`
     at the midpoint, veiling the lower half of every photograph and blurrier
     than the ramp.
-  - *Sizing:* the tile is `280px` per row, which makes most boxes TALLER than
-    the 3:2 frames they crop (a 2-column tile is 373×280), so `cardSizes`
-    hints `max(boxWidth, boxHeight × 1.5)` in **every** regime. At the old
-    `240px` row only the base regime needed that correction.
+  - *Sizing:* mobile height follows the photo and caption, not fixed tracks.
+    From `sm`, the tile is `280px` per row and `cardSizes` retains
+    `max(boxWidth, boxHeight × 1.5)` as a conservative source hint: small photo
+    regions are shorter than their tracks, while the lead still uses its full height.
   - *Shadow strategy:* see Elevation — `shadow-sm` at rest, `shadow-xl` plus a
     `2px brand-red` ring on **hover and `active:`**, over `500ms`.
   - *Motion:* `transition-[transform,translate,box-shadow]`. `translate` is
     load-bearing: Tailwind 4 compiles `-translate-y-1` to the `translate`
     property, so a list of `transform,box-shadow` transitioned nothing and the
     4px lift landed in a single frame (measured final at 50ms) beside a 500ms
-    ring fade. The photograph scales to `1.04` under `motion-safe:`.
+    ring fade. From `sm`, the photograph scales to `1.04` under `motion-safe:`.
   - *Image:* no resting `opacity`. An earlier card mixed 10% navy into every
     photograph and lifted it only on `group-hover` — a state a touch device
     cannot enter.
@@ -616,7 +624,7 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
   `brand-red` bottom border — a different *kind* of signal, not a darker shade —
   and the outgoing link is `ink/70` (**5.97:1**; `/60` was 4.33:1).
 - **Destination index** (`RegionFilter`): navigation set in the log register —
-  11px mono uppercase navy, a `brand-red` `tabular-nums` count, and a 12px arrow
+  14px mono uppercase navy, a `brand-red` `tabular-nums` count, and a 12px arrow
   at `navy/55` that turns red and slides `2px` on hover. Hover adds a **dashed**
   underline at `4px` offset. The current region is not a link to itself: it is
   `brand-red`, arrow-less, and carries `aria-current`. See The No-Pill Rule.
@@ -627,12 +635,16 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
 
 ### Featured Hero (signature)
 
-A full-bleed photograph at `78vh` (min 560px), a grounding vignette, and two
-pieces of opaque paper laid on top of it.
+Below `640px`, a full-width photograph at its natural aspect ratio, followed by
+the paper entry in document flow. The title never overlays the mobile image.
+From `sm`, the existing `80vh` cover (clamped to `480–720px`) retains its vignette
+and overlaid paper entry.
 
-- **Entry panel:** canvas, `4px` radius, `20px` padding (`24px` from `sm`),
-  capped at `672px`, on the system's deepest shadow. Inside, in order: the site
-  tagline as a quiet 16px semibold `navy/75` `<h1>` (the wordmark is 60px above,
+- **Entry panel:** canvas, capped at `672px`. Mobile uses the page's `20px`
+  gutters and `24px` vertical spacing, without a floating shadow. From `sm`,
+  the panel has `4px` corners, `24px` padding and the system's deepest shadow.
+  Inside, in order: the tagline as a quiet 16px semibold `navy/75` `<h1>` (18px
+  from `sm`; the wordmark is already in the header,
   so repeating the identity at display size would be the page shouting its own
   name); a dashed rule; then one link wrapping the whole entry — mono field line
   (`N°` in red, date · country at `navy/70`), display title, coordinates, a
@@ -640,8 +652,8 @@ pieces of opaque paper laid on top of it.
 - **Stamp chip:** a square canvas chip with `8px` padding and a lifted shadow,
   pinned top-right, holding the rotated stamp. Shown at every width — 124px plus
   margins clears a 320px viewport.
-- **Vignette:** `from-navy/45 via-navy/10 via-40% to-transparent`. It has no
-  contrast job left; it seats the paper on the frame and closes the bottom crop.
+- **Vignette:** desktop only, `from-navy/45 via-navy/10 via-40% to-transparent`.
+  It seats the paper on the frame and closes the bottom crop, not text contrast.
   Alpha above this is photograph thrown away on a page whose premise is the
   photograph.
 

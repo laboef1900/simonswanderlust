@@ -1,10 +1,9 @@
 /**
  * Span plan for the story index mosaic.
  *
- * The grid is SIX columns wide at every breakpoint; what changes is how many
- * columns a card spans (6 = one per row, 3 = two per row, 2 = three per row).
- * Six exists so a remainder of two can be split evenly — three columns cannot
- * do that, and the remainder is the whole reason this module exists.
+ * From `sm`, the grid is SIX columns wide: 3 = two cards per row, 2 = three.
+ * Six lets a remainder of two split evenly. Mobile uses natural-height,
+ * single-column rows, so it needs neither a span plan nor a crop correction.
  *
  * @ai-warning The plan MUST leave no empty cell for ANY count, because the
  * count is "however many stories are published" and it changes every time the
@@ -82,10 +81,11 @@ export function storyGridSpans(count: number): StorySpan[] {
 /** Fewer cards than the lead tile's own footprint needs; just fill the rows. */
 function leadOnly(count: number): StorySpan[] {
   if (count === 1) return [{ sm: 6, lg: 6, lgRows: 2 }];
-  if (count === 2) return [
-    { sm: 3, lg: 3, lgRows: 2 },
-    { sm: 3, lg: 3, lgRows: 2 },
-  ];
+  if (count === 2)
+    return [
+      { sm: 3, lg: 3, lgRows: 2 },
+      { sm: 3, lg: 3, lgRows: 2 },
+    ];
   return [
     { sm: 3, lg: 2, lgRows: 1 },
     { sm: 3, lg: 2, lgRows: 1 },
@@ -167,22 +167,11 @@ export function tileWidth(cols: number): number {
  * `sizes` for a card photo, exact above `CONTENT_LOCKED_AT` and a column
  * fraction below it.
  *
- * @ai-warning Under `object-fit: cover` a 3:2 frame paints
- * `max(boxWidth, boxHeight × 1.5)`, so EVERY entry here is that `max()`. It
- * used to correct only the base regime, on the reasoning that a card box is
- * always wider than 3:2 — which held at a 240px row and stopped holding at
- * 280. A 2-column tile is 373×280 (aspect 1.33), the `lg` lead tile 763×576
- * (1.32), and a `sm` tile at a 640px viewport 320×280 (1.14): all three now
- * paint by HEIGHT, and a plain width hint would ship an upscaled artifact for
- * most of the grid. The `max()` is not belt-and-braces — it is the formula.
- *
- * `baseTall` is the one thing this module cannot derive: below `sm` every card
- * is full-width and the double-height rhythm is chosen by StoryGrid from the
- * card's INDEX, not from its span, so the caller must say which tiles are two
- * rows tall there. Getting it wrong is the miniature of the hero's own trap
- * (see the @ai-warning in FeaturedHero.astro).
+ * @ai-warning Desktop crops paint max(boxWidth, boxHeight × 1.5) for a 3:2
+ * frame. Mobile shows uncropped photographs with captions in flow, so its
+ * hint is just the width between the section gutters, never a fixed row height.
  */
-export function cardSizes(span: StorySpan, baseTall = false): string {
+export function cardSizes(span: StorySpan): string {
   const pct = (cols: number) => Math.round((cols / GRID_COLUMNS) * 100);
   const painted = (rows: 1 | 2) =>
     Math.round((rows === 2 ? DOUBLE_ROW_HEIGHT : ROW_HEIGHT) * FRAME_ASPECT);
@@ -190,9 +179,9 @@ export function cardSizes(span: StorySpan, baseTall = false): string {
   return [
     `(min-width: ${CONTENT_LOCKED_AT}px) ${hint(`${tileWidth(span.lg)}px`, span.lgRows)}`,
     `(min-width: 1024px) ${hint(`${pct(span.lg)}vw`, span.lgRows)}`,
-    // `sm:row-span-1` in StoryGrid resets every tile to one row in this regime.
+    // Every tile occupies one row between `sm` and `lg`.
     `(min-width: 640px) ${hint(`${pct(span.sm)}vw`, 1)}`,
-    hint('calc(100vw - 2.5rem)', baseTall ? 2 : 1),
+    'calc(100vw - 2.5rem)',
   ].join(', ');
 }
 
