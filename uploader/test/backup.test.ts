@@ -26,6 +26,7 @@ const fakeDb = (
       : sql.includes('FROM pages') ? pages
       : sql.includes('FROM media_folders') ? mediaFolders
       : sql.includes('FROM media') ? media
+      : sql.includes('FROM app_secrets') ? []
       : posts,
   });
   return { query, connect: async () => ({ query, release() {} }) };
@@ -61,7 +62,7 @@ describe('dumpDatabase', () => {
     expect(name).toBe('db-20260703-143005.json.gz');
     expect(BACKUP_FILE_RE.test(name)).toBe(true);
     const dump = JSON.parse(gunzipSync(await readFile(join(dir, name))).toString('utf8'));
-    expect(dump.version).toBe(5);
+    expect(dump.version).toBe(6);
     expect(dump.tables.users).toEqual([{ id: 'u1', username: 'simon' }]);
     expect(dump.tables.posts).toEqual([{ id: 'p1', slug: 's' }]);
     expect(dump.tables.pages).toEqual([{ key: 'about', locale: 'de', title: 'X', body_markdown: 'B', images: {} }]);
@@ -118,6 +119,23 @@ describe('dumpDatabase', () => {
     expect(new Set(tagsOnDisk).size).toBe(80);
     expect((await readdir(dir)).filter((n) => n.endsWith('.tmp'))).toEqual([]);
   }, 60_000);
+
+  it('does not publish an incomplete backup or leak driver detail if secrets cannot be captured', async () => {
+    const db = fakeDb();
+    const connect = db.connect;
+    db.connect = async () => {
+      const client = await connect();
+      return {
+        release: client.release,
+        async query(sql, params) {
+          if (sql.includes('FROM app_secrets')) throw new Error('private-driver-fixture');
+          return client.query(sql, params);
+        },
+      };
+    };
+    await expect(dumpDatabase(db, dir)).rejects.toThrow('Encrypted credentials could not be backed up.');
+    expect(await readdir(dir)).toEqual([]);
+  });
 });
 
 describe('list + prune + state', () => {

@@ -24,7 +24,8 @@ import {
   SESSION_TTL_MS, createAuthn,
   setSessionCookie, clearSessionCookie, isSecureRequest, SESSION_COOKIE,
 } from './authn.js';
-import { SettingsError, type SettingsStore } from './settings.js';
+import { SettingsError, validate as validateSettings, type Settings, type SettingsStore } from './settings.js';
+import { SecretsError, type SecretsStore } from './secrets.js';
 import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale } from './posts.js';
 import { foreignImageUrls } from './publish-gate.js';
 import { auditAltText } from './alt-audit.js';
@@ -47,6 +48,7 @@ export interface ServerConfig {
   users: UserStore;
   sessions: SessionStore;
   settings: SettingsStore;
+  secrets: SecretsStore;
   posts: PostStore;
   pages: PageStore;
   imgHost: string;   // Host header that serves image variants (img subdomain)
@@ -161,6 +163,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
     const route = req.routeOptions.url;
+    if (route === '/settings' || route === '/ai-config') reply.header('Cache-Control', 'no-store');
     if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
       reply.header('Referrer-Policy', 'no-referrer');
@@ -700,14 +703,48 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send({ ok: true, deleted });
   });
 
-  // Settings govern backups (what gets written to disk and retained) — same
-  // trust boundary as /rebuild and /backups, so the whole surface is admin-only.
-  app.get('/settings', { preHandler: requireAdmin }, async (_req, reply) => {
-    return reply.send(cfg.settings.get());
-  });
+  // Serialize config reads and writes: JSON settings and Postgres cannot commit
+  // together. Caption-only reads deliberately bypass this optional secret path.
+  let settingsTail = Promise.resolve();
+  function settingsOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = settingsTail.then(operation);
+    settingsTail = result.then(() => {}, () => {});
+    return result;
+  }
+  function captionConfig(s: Settings) {
+    return {
+      lmBaseUrl: s.lmBaseUrl, lmModel: s.lmModel, captionPrompt: s.captionPrompt,
+      captionTimeoutMs: s.captionTimeoutMs, captionMaxEdge: s.captionMaxEdge,
+    };
+  }
+  function settingsResponse(s: Settings, hasAiApiKey: boolean) {
+    return {
+      ...captionConfig(s), backupSchedule: s.backupSchedule, backupRetention: s.backupRetention,
+      importDelayMs: s.importDelayMs, importRetries: s.importRetries,
+      aiProvider: s.aiProvider, aiModel: s.aiModel, aiCustomBaseUrl: s.aiCustomBaseUrl,
+      reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs, hasAiApiKey,
+    };
+  }
+  // No raw database/crypto error reaches the global logger (driver detail can
+  // contain credential material). Unknown failures have the same fixed boundary.
+  function secretFailure(error: unknown) {
+    const safe = error instanceof SecretsError ? error : new SecretsError('ai_secret_store_unavailable');
+    return { error: safe.message, code: safe.code };
+  }
 
-  app.post('/settings', { preHandler: requireAdmin }, async (req, reply) => {
-    const b = (req.body ?? {}) as Record<string, unknown>;
+  app.get('/settings', { preHandler: requireAdmin }, async (_req, reply) => settingsOperation(async () => {
+    try {
+      return reply.send(settingsResponse(cfg.settings.get(), await cfg.secrets.has('ai_api_key')));
+    } catch (e) {
+      return reply.code(503).send(secretFailure(e));
+    }
+  }));
+
+  app.post('/settings', { preHandler: requireAdmin }, async (req, reply) => settingsOperation(async () => {
+    if (typeof req.body !== 'object' || req.body === null || Array.isArray(req.body)) {
+      return reply.code(400).send({ error: 'Settings must be a JSON object.' });
+    }
+    const b = req.body as Record<string, unknown>;
     const partial: Record<string, unknown> = {};
     if (b.lmBaseUrl !== undefined) partial.lmBaseUrl = String(b.lmBaseUrl).trim();
     if (b.lmModel !== undefined) partial.lmModel = String(b.lmModel).trim();
@@ -718,25 +755,71 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (b.backupRetention !== undefined) partial.backupRetention = Number(b.backupRetention);
     if (b.importDelayMs !== undefined) partial.importDelayMs = Number(b.importDelayMs);
     if (b.importRetries !== undefined) partial.importRetries = Number(b.importRetries);
+    for (const field of ['aiProvider', 'aiModel', 'aiCustomBaseUrl', 'reviewPrompt', 'reviewTimeoutMs'] as const) {
+      if (Object.hasOwn(b, field)) partial[field] = b[field];
+    }
+    const changesSecret = Object.hasOwn(b, 'aiApiKey');
+    const key = b.aiApiKey;
+    if (changesSecret && key !== null && (typeof key !== 'string' || /[\p{C}]/u.test(key))) {
+      return reply.code(400).send({ error: 'API key must be a string without control characters, or null.' });
+    }
+    let next: Settings;
     try {
-      return reply.send(cfg.settings.update(partial));
+      next = validateSettings({ ...cfg.settings.get(), ...partial });
     } catch (e) {
       if (e instanceof SettingsError) return reply.code(400).send({ error: e.message });
-      throw e;
+      return reply.code(500).send({ error: 'Settings could not be read.' });
     }
-  });
+    let hasAiApiKey: boolean;
+    try {
+      if (changesSecret) {
+        if (typeof key === 'string' && key !== '') {
+          await cfg.secrets.set('ai_api_key', key);
+          hasAiApiKey = true;
+        } else {
+          await cfg.secrets.delete('ai_api_key');
+          hasAiApiKey = false;
+        }
+      } else {
+        hasAiApiKey = await cfg.secrets.has('ai_api_key');
+      }
+    } catch (e) {
+      return reply.code(503).send(secretFailure(e));
+    }
+    try {
+      if (Object.keys(partial).length) next = cfg.settings.update(partial);
+    } catch {
+      // @ai-warning Secret commit already succeeded. Do not pretend rollback or
+      // send "nothing saved"; a replacement key can now meet the OLD endpoint.
+      return reply.code(500).send(changesSecret
+        ? { code: 'settings_partial_failure', error: 'API key change saved, but settings were not saved. Reload settings before retrying.' }
+        : { code: 'settings_write_failed', error: 'Settings were not saved. Reload settings before retrying.' });
+    }
+    return reply.send(settingsResponse(next, hasAiApiKey));
+  }));
 
-  // Read-only LM config for the browser-direct alt-text suggester. Any signed-in
-  // author may READ it (to run a suggestion); CHANGING it stays admin-only via
-  // POST /settings. Deliberately excludes backup settings.
-  app.get('/ai-config', { preHandler: requireAuth }, async (_req, reply) => {
-    const s = cfg.settings.get();
-    return reply.send({
-      lmBaseUrl: s.lmBaseUrl,
-      lmModel: s.lmModel,
-      captionPrompt: s.captionPrompt,
-      captionTimeoutMs: s.captionTimeoutMs,
-      captionMaxEdge: s.captionMaxEdge,
+  app.get('/ai-config', { preHandler: requireAuth }, async (req, reply) => {
+    const purpose = (req.query as Record<string, unknown>).purpose;
+    if (purpose === 'caption') return reply.send(captionConfig(cfg.settings.get()));
+    if (purpose !== undefined) return reply.code(400).send({ error: 'Unknown AI configuration purpose.' });
+    return settingsOperation(async () => {
+      const s = cfg.settings.get();
+      const aiBaseUrl = s.aiProvider === 'lm-studio' ? s.lmBaseUrl
+        : s.aiProvider === 'openrouter' ? 'https://openrouter.ai/api/v1'
+          : s.aiProvider === 'deepseek' ? 'https://api.deepseek.com/v1' : s.aiCustomBaseUrl;
+      if (!aiBaseUrl) return reply.code(400).send({ code: 'invalid_review_configuration', error: 'Configure a custom review base URL first.' });
+      try {
+        // get() checks encryption availability even when no row exists. Local
+        // captions/review never decrypt or receive a remotely configured key.
+        const aiApiKey = s.aiProvider === 'lm-studio' ? null : await cfg.secrets.get('ai_api_key');
+        const hasAiApiKey = s.aiProvider === 'lm-studio' ? await cfg.secrets.has('ai_api_key') : aiApiKey !== null;
+        return reply.send({
+          ...captionConfig(s), aiProvider: s.aiProvider, aiBaseUrl, aiModel: s.aiModel,
+          reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs, hasAiApiKey, aiApiKey,
+        });
+      } catch (e) {
+        return reply.code(503).send(secretFailure(e));
+      }
     });
   });
 

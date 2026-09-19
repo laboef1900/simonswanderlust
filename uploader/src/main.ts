@@ -15,12 +15,17 @@ import { createWorkLock } from './work-lock.js';
 import { pgMediaStore } from './media-store.js';
 import { createEncodeQueue } from './encode-queue.js';
 import { createMediaSync, createReconciler } from './media-sync.js';
+import { parseEncryptionKey, pgSecretsStore } from './secrets.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
   console.error('DATABASE_URL is required; refusing to start without it.');
   process.exit(1);
 }
+
+// Validate before connecting/migrating. Absence disables only optional remote AI.
+const encryptionKey = parseEncryptionKey(process.env.ENCRYPTION_KEY);
+if (encryptionKey === undefined) console.info('ENCRYPTION_KEY not configured in .env; encrypted remote AI credentials are unavailable.');
 
 const storageDir = process.env.STORAGE_DIR ?? '/data/images';
 const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(storageDir), 'settings.json');
@@ -102,6 +107,7 @@ const app = buildServer({
   users,
   sessions,
   settings,
+  secrets: pgSecretsStore(pool, encryptionKey),
   posts,
   pages,
   importJobs,

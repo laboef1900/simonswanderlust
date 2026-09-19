@@ -209,7 +209,7 @@ The post editor and photo uploader offer a "Suggest alt text" button per alt fie
 downscales the picked photo and calls the author's local LM Studio (`<lmBaseUrl>/chat/completions`)
 directly — the app server never contacts the model. LM config (`lmBaseUrl`, `lmModel`,
 `captionTimeoutMs`, `captionMaxEdge`, `captionPrompt`) lives in the JSON settings store, edited on
-the admin-only Settings page; authors read it read-only via `GET /ai-config`. No
+the admin-only Settings page; authors read it via `GET /ai-config?purpose=caption`. No
 `docker-compose`/`.env` LM variables are needed.
 
 ### Editorial-review client API (#213)
@@ -242,9 +242,51 @@ without provider error text, draft content or keys. Redirects are refused, cooki
 omitted, and OpenRouter attribution is attached only for hostname `openrouter.ai`.
 Base URLs must be HTTP(S) with no credentials, query or fragment.
 
-This is the reusable client/contract slice, not a new editor action. Settings/secrets
-and the review drawer remain separate issues #214/#215. Existing `caption`, `listModels`,
-`prepImage`, and alt-text workflows are unchanged.
+This is the reusable client/contract slice, not a new editor action. The review drawer
+remains #215; #214 supplies provider settings and encrypted credential storage below.
+Existing `caption`, `listModels`, and `prepImage` behavior is unchanged.
+
+### Review providers and encrypted credentials (#214)
+
+Settings → **Editorial review** selects Local LM Studio, OpenRouter, DeepSeek, or a custom
+HTTP(S) OpenAI-compatible API base. Review model/prompt/timeout are separate from captions.
+The default provider is local; remote review is optional. No inference occurs on save.
+
+For remote credentials, privately generate a master key with `openssl rand -hex 32`, store
+its 64 hex characters as `ENCRYPTION_KEY` in the untracked root `.env`, and recreate the
+app container so Compose injects it. Never share its output or `docker compose config`
+output containing it. Leave the variable **unset**, not empty, for local-only use.
+Malformed supplied keys refuse boot; missing keys permit local startup/captions but
+encrypted operations report `ENCRYPTION_KEY not configured in .env`.
+
+Enter the provider key in the masked field. Blank leaves an existing key untouched;
+**Remove stored key** explicitly deletes it after confirmation. The chip means stored,
+not tested. Postgres stores AES-256-GCM ciphertext; **every signed-in author receives the
+shared plaintext key in browser memory** for direct provider calls. The server never
+contacts a model. The chosen provider receives review content; use provider-side limits
+and revoke/reissue a credential after suspected exposure.
+
+One key follows the selected remote destination. Review the warning when changing
+providers/custom URL; replace/remove a key that belongs elsewhere. Prefer HTTPS for
+custom endpoints. Browser CORS/mixed-content failures are not bypassed by a server proxy.
+
+Settings and key saves are not atomic across disk/Postgres. If the key commits and
+settings fail, the new key can remain associated with the old endpoint. The UI clears the
+typed key and reloads on partial/unknown outcomes; inspect the destination and deliberately
+replace/remove the key before remote use. Local caption config never reads secrets.
+
+**Recovery:** v6 DB dumps include encrypted secrets, not the master key or settings.json.
+Escrow the master key separately offsite and keep historical keys for historical dumps.
+Absent secrets in legacy v1–v5 preserve live rows; an empty v6 array intentionally clears
+them. Restore is still CLI-only, confirmed, with a pre-restore undo dump. Pause AI/settings
+edits during restore and reconcile the provider in settings.json before resuming.
+
+To rotate a provider key, replace it in Settings then revoke the old one externally.
+To rotate the master key, back up DB/settings and escrow the old key, pause remote use,
+install a new generated key/recreate the app, re-enter the provider credential, verify
+deliberately with non-sensitive content, and take a new backup. Changing only the master
+key does not re-encrypt old rows. Lost master keys require reissued provider credentials.
+Full misuse cases and rollback: [approved design](../docs/superpowers/specs/2026-09-19-encrypted-ai-review-secrets-design.md).
 
 ## Deterministic editorial checks
 

@@ -9,7 +9,7 @@
   <body>
     <header class="cms-page-meta">
       <h1>Settings</h1>
-      <p class="lede">Live site, backups, and the local alt-text model. Saved settings apply immediately; no redeploy.</p>
+      <p class="lede">Live site, backups, and browser-direct AI. Saved settings apply immediately; no redeploy.</p>
     </header>
 
     <main>
@@ -92,6 +92,42 @@
         </div>
       </section>
 
+      <section class="card" aria-labelledby="reviewHeading">
+        <h2 id="reviewHeading" class="card-heading">Editorial review</h2>
+        <p class="muted" id="reviewPrivacy">Reviews run from the author's browser. The selected provider receives the draft.
+          The server never calls a model. Local review uses the saved LM Studio base URL above; caption settings are otherwise independent.</p>
+        <label for="aiProvider">Review provider</label>
+        <select id="aiProvider" aria-describedby="reviewPrivacy reviewDestination">
+          <option value="lm-studio">Local LM Studio</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="custom">Custom</option>
+        </select>
+        <div id="customReviewFields" hidden>
+          <label for="aiCustomBaseUrl">Custom API base URL</label>
+          <input id="aiCustomBaseUrl" type="url" placeholder="https://your-provider.example/v1" aria-describedby="reviewUrlWarning" />
+        </div>
+        <p id="reviewDestination" class="muted"></p>
+        <p id="reviewUrlWarning" class="notice-warn" role="status" hidden></p>
+        <p id="reviewKeyWarning" class="notice-warn" role="status" hidden></p>
+        <label for="aiModel">Review model ID</label>
+        <input id="aiModel" type="text" maxlength="100" />
+        <label for="reviewTimeoutMs">Review timeout (ms)</label>
+        <input id="reviewTimeoutMs" type="number" min="5000" max="300000" step="1" />
+        <label for="reviewPrompt">Review instructions</label>
+        <textarea id="reviewPrompt" rows="8"></textarea>
+        <label for="aiApiKey">Replace API key <span id="aiKeyStatus" class="status-badge status-draft" role="status">Loading</span></label>
+        <input id="aiApiKey" type="password" autocomplete="new-password" aria-describedby="aiKeyHelp" />
+        <p id="aiKeyHelp" class="muted">Leave blank to keep the stored key. Keys are encrypted in Postgres, but every signed-in
+          author receives the shared key in browser memory for direct calls. A configured key has not been tested.
+          Keep the encryption master key separately from database backups.</p>
+        <div class="settings-actions">
+          <button id="saveReview" type="button" class="btn-secondary">Save review settings</button>
+          <button id="removeAiKey" type="button" class="btn-remove" disabled>Remove stored key</button>
+        </div>
+        <p id="reviewOut" class="page-status" role="status"></p>
+      </section>
+
       <p id="out" class="page-status" role="status"></p>
     </main>
 
@@ -100,6 +136,34 @@
     <script src="/admin/llm.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
+      let savedReview = null;
+
+      function reviewDestination(provider, custom, local) {
+        return provider === 'lm-studio' ? local
+          : provider === 'openrouter' ? 'https://openrouter.ai/api/v1'
+            : provider === 'deepseek' ? 'https://api.deepseek.com/v1' : custom;
+      }
+
+      function updateReviewWarnings() {
+        const provider = $('aiProvider').value;
+        const custom = $('aiCustomBaseUrl').value.trim();
+        const destination = reviewDestination(provider, custom, savedReview?.lmBaseUrl || '');
+        $('customReviewFields').hidden = provider !== 'custom';
+        $('reviewDestination').textContent = 'Requests go to: ' + (destination || 'set a custom base URL');
+        const why = provider === 'custom' && custom.startsWith('http:')
+          ? 'HTTP can expose the shared key and draft on the network. Prefer HTTPS. Your browser may block this connection.'
+          : LLM.mixedContentWarning(destination, location.protocol);
+        $('reviewUrlWarning').textContent = why || '';
+        $('reviewUrlWarning').hidden = !why;
+        const previous = savedReview && reviewDestination(savedReview.aiProvider, savedReview.aiCustomBaseUrl, savedReview.lmBaseUrl);
+        const changesDestination = savedReview && savedReview.hasAiApiKey && provider !== 'lm-studio'
+          && (provider !== savedReview.aiProvider || destination !== previous);
+        $('reviewKeyWarning').hidden = !changesDestination;
+        $('reviewKeyWarning').textContent = changesDestination
+          ? 'The stored key will be sent to ' + destination + ' instead of ' + previous + '. Replace or remove it if it belongs to the previous provider.' : '';
+      }
+      $('aiProvider').addEventListener('change', updateReviewWarnings);
+      $('aiCustomBaseUrl').addEventListener('input', updateReviewWarnings);
 
       // A plain-http model URL on an https page is blocked as mixed content and
       // surfaces only as "Failed to fetch"; say so next to the field (#140).
@@ -110,7 +174,7 @@
       }
       $('baseUrl').addEventListener('input', checkBaseUrl);
 
-      function fill(s) {
+      function fillGeneral(s) {
         $('baseUrl').value = s.lmBaseUrl || '';
         checkBaseUrl();
         $('timeout').value = s.captionTimeoutMs ?? '';
@@ -125,6 +189,30 @@
           sel.add(new Option(s.lmModel, s.lmModel));
         }
         if (s.lmModel) sel.value = s.lmModel;
+      }
+
+      function rememberReview(s) {
+        savedReview = {
+          aiProvider: s.aiProvider, aiCustomBaseUrl: s.aiCustomBaseUrl,
+          lmBaseUrl: s.lmBaseUrl, hasAiApiKey: s.hasAiApiKey,
+        };
+        $('aiKeyStatus').textContent = s.hasAiApiKey ? 'Configured' : 'Not configured';
+        $('removeAiKey').disabled = !s.hasAiApiKey;
+      }
+
+      function fillReview(s) {
+        rememberReview(s);
+        $('aiProvider').value = s.aiProvider;
+        $('aiModel').value = s.aiModel;
+        $('aiCustomBaseUrl').value = s.aiCustomBaseUrl;
+        $('reviewPrompt').value = s.reviewPrompt;
+        $('reviewTimeoutMs').value = s.reviewTimeoutMs;
+        updateReviewWarnings();
+      }
+
+      function fill(s) {
+        fillGeneral(s);
+        fillReview(s);
       }
 
       // Repopulate the dropdown from a live model list, preserving the current
@@ -203,11 +291,67 @@
         if (res.status === 401) { location.href = '/login'; return; }
         const r = await res.json().catch(() => ({}));
         if (!res.ok) { $('out').textContent = 'Not saved: ' + (r.error || res.status); return; }
-        fill(r);
+        // Refresh this section and persisted review metadata, not pending review edits.
+        fillGeneral(r);
+        rememberReview(r);
+        updateReviewWarnings();
         $('out').textContent = 'Saved.';
       }
       $('save').addEventListener('click', saveSettings);
       $('saveAi').addEventListener('click', saveSettings);
+
+      async function saveReviewSettings(removeKey = false) {
+        if (removeKey && !await AdminConfirm.ask({
+          title: 'Remove the shared API key?',
+          body: 'Future remote reviews will lose this key. Already-copied keys and encrypted backups remain; revoke the key at the provider to stop external use. Local captions are unaffected.',
+          confirmLabel: 'Remove key',
+        })) return;
+        if (!removeKey && !$('reviewKeyWarning').hidden && !await AdminConfirm.ask({
+          title: 'Change the review destination?',
+          body: $('reviewKeyWarning').textContent + ' Saving a key and settings is not atomic: if settings fail, the new key may remain with the old destination. No review runs on save.',
+          confirmLabel: 'Save destination',
+        })) return;
+        const payload = removeKey ? { aiApiKey: null } : {
+          aiProvider: $('aiProvider').value,
+          aiModel: $('aiModel').value,
+          aiCustomBaseUrl: $('aiCustomBaseUrl').value.trim(),
+          reviewPrompt: $('reviewPrompt').value,
+          reviewTimeoutMs: Number($('reviewTimeoutMs').value),
+          ...($('aiApiKey').value ? { aiApiKey: $('aiApiKey').value } : {}),
+        };
+        $('saveReview').disabled = true;
+        $('removeAiKey').disabled = true;
+        $('reviewOut').textContent = 'Saving…';
+        let message;
+        try {
+          const res = await fetch('/settings', {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+          });
+          if (res.status === 401) { location.href = '/login'; return; }
+          const result = await res.json();
+          message = res.ok ? 'Saved. No review request was sent.'
+            : (result.error || 'Could not save review settings.') + ' Check the reloaded destination and key status before using remote review.';
+        } catch {
+          message = 'Save outcome is unknown. Check the reloaded destination and deliberately replace or remove the key before using remote review.';
+        } finally {
+          $('aiApiKey').value = '';
+          delete payload.aiApiKey;
+          try {
+            const res = await fetch('/settings');
+            if (!res.ok) throw new Error('reload failed');
+            fillReview(await res.json());
+          } catch {
+            message = (message || '') + ' Reload failed; refresh this page before trying again.';
+            savedReview = null;
+            $('aiKeyStatus').textContent = 'Unknown — reload';
+          }
+          $('saveReview').disabled = false;
+          $('removeAiKey').disabled = !savedReview || !savedReview.hasAiApiKey;
+          $('reviewOut').textContent = message || 'Reload settings before continuing.';
+        }
+      }
+      $('saveReview').addEventListener('click', () => saveReviewSettings());
+      $('removeAiKey').addEventListener('click', () => saveReviewSettings(true));
 
       function renderBackups(data) {
         const st = data.state || {};
