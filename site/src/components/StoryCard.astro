@@ -8,15 +8,11 @@ interface Props {
   trip: Trip;
   /** Span plan for this card, from `story-grid-layout.ts`. */
   span: StorySpan;
-  /**
-   * True when StoryGrid gives this card two rows in the BASE regime. Only the
-   * caller knows — below `sm` the rhythm comes from the card's index, not from
-   * its span — and `cardSizes` needs it to hint the right width.
-   */
-  baseTall?: boolean;
+  /** Already promoted in the homepage hero; keep its mobile index entry compact. */
+  cover?: boolean;
 }
 
-const { trip, span, baseTall = false } = Astro.props;
+const { trip, span, cover = false } = Astro.props;
 const locale = localeOf(trip);
 const meta = cardMetaLabel(trip.data.date, trip.data.country, trip.data.title, locale);
 
@@ -32,20 +28,17 @@ const meta = cardMetaLabel(trip.data.date, trip.data.country, trip.data.title, l
 */
 const titleId = `card-${slugOf(trip)}`;
 
-/*
-  Three title sizes from `sm` up, so the mosaic has a hierarchy instead of one
-  weight doing all the work — but ONE size below it. Base is the regime where
-  every card is full-width, so the span differences the tiers are derived from
-  are invisible there: varying the type without varying the tile read as
-  inconsistency rather than importance, and the smallest tier landed on
-  `text-base`, i.e. the same 16px as body copy, for eight of nine cards.
-*/
+// Desktop typography follows the mosaic; mobile captions show the full title.
+// The cover is a compact index entry because its photograph already leads home.
 const lead = span.lgRows === 2 && span.lg >= 4;
-const titleSize = lead
-  ? 'text-xl lg:text-2xl'
-  : span.lg >= 3
-    ? 'text-xl sm:text-lg lg:text-xl'
-    : 'text-xl sm:text-base lg:text-lg';
+const titleSize = [
+  cover ? 'text-base' : 'text-xl',
+  lead
+    ? 'sm:text-xl lg:text-2xl'
+    : span.lg >= 3
+      ? 'sm:text-lg lg:text-xl'
+      : 'sm:text-base lg:text-lg',
+];
 
 // Shared with FeaturedHero: a stored alt that only repeats the title is
 // decorative here too (the <h3> below announces it), but a real description of
@@ -83,58 +76,34 @@ const alt = heroAltOf(trip);
     // `scale-[1.04]` on the <RemoteImage> below never had this bug. Never
     // widen this to `transition-all` or `transition-colors` — both interpolate
     // `outline-color` and turn the focus ring into a 1.5px smudge (global.css).
-    'group relative block h-full min-w-0 overflow-hidden rounded-xl bg-navy shadow-sm transition-[transform,translate,box-shadow] duration-500 hover:shadow-xl hover:ring-2 hover:ring-brand-red active:shadow-xl active:ring-2 active:ring-brand-red motion-safe:hover:-translate-y-1',
+    'group relative grid h-full min-w-0 overflow-hidden rounded-xl bg-navy shadow-sm transition-[transform,translate,box-shadow] duration-500 hover:shadow-xl hover:ring-2 hover:ring-brand-red active:shadow-xl active:ring-2 active:ring-brand-red motion-safe:hover:-translate-y-1 sm:grid-cols-1 sm:grid-rows-[minmax(6rem,1fr)_auto]',
+    cover ? 'min-h-28 grid-cols-[6rem_minmax(0,1fr)] sm:min-h-0' : 'grid-cols-1',
+    lead && 'lg:block',
   ]}
 >
-  {/*
-    @ai-warning No resting `opacity` on this image, and the scrim clears the
-    top half. Both were the other way round: `opacity-90` over the navy card
-    mixed 10% navy into every photograph, lifted to full only on
-    `group-hover` — a state a touch device cannot enter, so the majority
-    visitor never saw a single grid photograph at full fidelity on a site
-    whose first principle is that photography leads. The hover reward is the
-    scale, which fires everywhere a hover exists.
-  */}
-  <RemoteImage
-    image={trip.data.heroImage}
-    alt={alt}
-    sizes={cardSizes(span, baseTall)}
-    class="h-full w-full object-cover transition-transform duration-500 motion-safe:group-hover:scale-[1.04]"
-  />
-  {/*
-    @ai-warning The caption is a 72px ramp into a `navy/92` base, and both
-    numbers are contrast decisions rather than taste.
-
-    The RAMP is a fixed length, not a percentage of the panel: a percentage
-    scales with the title's line count, so the one distance that guarantees
-    type never lands in the fade would differ per card. `pt-0.5` on the base
-    block is all the headroom the type needs because the ramp above it carries
-    none.
-
-    The 92% BASE is the floor, not a preference. White is 11.6:1 on it and
-    `white/70` 6.57:1 over the brightest sky in the corpus; at /80 that second
-    figure is 4.66:1 and at /75 it is 4.07:1, i.e. under AA. The panel could
-    only be made lighter than this by giving up the second line.
-
-    It may not go back to a card-height gradient. With the date line BELOW the
-    heading the title's top sits around 46% of the card, where such a gradient
-    measured 2.87:1 against the same pale Rhodes sky that once forced its mid
-    stop to /35; holding the title from there would take roughly /62 at the
-    midpoint — the lower half of every photograph veiled, and blurrier than
-    this. Above the ramp the frame is completely unveiled.
-  */}
-  <div class="absolute inset-x-0 bottom-0">
-    <div class="h-18 bg-gradient-to-t from-navy/92 to-transparent"></div>
-    <div class="bg-navy/92 px-4 pt-0.5 pb-4 text-white sm:px-5 sm:pb-5">
-      {/*
-        `title` is the only signal that the clamp fired: a long title measured
-        scrollHeight 140 against clientHeight 56 with nothing on screen saying
-        so. The text is also in the <h3> itself, so this adds no name a screen
-        reader has to hear twice.
-      */}
+  {/* Mobile photographs are uncropped; the cover alone uses an index thumbnail.
+      Mosaic captions get their own row, with at least 6rem left for the photo.
+      Only the double-height lead overlays its caption from lg. */}
+  <div class:list={['overflow-hidden sm:h-full sm:min-h-0', cover ? 'relative sm:static' : '']}>
+    <RemoteImage
+      image={trip.data.heroImage}
+      alt={alt}
+      sizes={cardSizes(span)}
+      class={[
+        'block w-full object-cover transition-transform duration-500 sm:h-full motion-safe:sm:group-hover:scale-[1.04]',
+        cover ? 'absolute inset-0 h-full sm:static' : 'h-auto',
+      ].join(' ')}
+    />
+  </div>
+  {/* The lg lead alone keeps the fixed ramp and navy/92 contrast floor.
+      Smaller tiles use solid captions below an unobscured image region. */}
+  <div class:list={['relative self-center sm:self-stretch', lead && 'lg:absolute lg:inset-x-0 lg:bottom-0']}>
+    {lead && <div class="hidden h-18 bg-gradient-to-t from-navy/92 to-transparent lg:block"></div>}
+    <div class:list={['bg-navy p-4 text-white', lead && 'lg:bg-navy/92 lg:px-5 lg:pt-0.5 lg:pb-5']}>
+      {/* Mobile captions grow with the title; only fixed desktop tiles clamp. */}
       <h3
         id={titleId}
-        class:list={['font-extrabold leading-tight break-words line-clamp-2', titleSize]}
+        class:list={['font-extrabold leading-tight break-words sm:line-clamp-2', ...titleSize]}
         title={trip.data.title}
       >
         {trip.data.title}
@@ -152,7 +121,7 @@ const alt = heroAltOf(trip);
         destination country — the identity payload the card exists to deliver
         — on every card narrower than ~300px: 3 of 9 at a 320px viewport.
       */}
-      <p class="mt-1.5 max-w-full font-mono text-[11px] tracking-log break-words text-white/70 uppercase">
+      <p class="mt-1.5 max-w-full font-mono text-xs tracking-log break-words text-white/70 uppercase">
         {meta}
       </p>
     </div>

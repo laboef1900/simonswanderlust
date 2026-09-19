@@ -75,8 +75,7 @@ const featured = trips[coverIndex];
       </section>
     )
   }
-  {
-    /*
+  {/*
       @ai-warning The grid gets EVERY story, the hero included. It used to get
       `rest` — everything but the hero — under a heading reading "all travel
       stories" beside a chip counting `trips.length`, so the section claimed 9
@@ -86,10 +85,10 @@ const featured = trips[coverIndex];
       to exclude it, which bought this one.) The hero is a promotion of one of
       the grid's own entries rather than a twin of it, the way a lead story
       also appears in the index below it — and the count is true by
-      construction, with nothing to keep in sync. Two things now mark the
-      repetition instead of hiding it: `coverIndex` hands the 4×2 lead tile to
-      another story (`demoteCover`), and the cover's own card carries a
-      "Titelgeschichte" kicker.
+      construction, with nothing to keep in sync. `coverIndex` hands the desktop
+      lead tile to another story and makes the cover a compact mobile index
+      entry. The collection stays complete and chronological without showing
+      the opening photograph at full size twice in succession.
 
       @ai-note This section is NOT gated on `trips.length > 0` any more.
       StoryGrid has an authored empty state and the gate made it unreachable,
@@ -97,8 +96,7 @@ const featured = trips[coverIndex];
       no grid and no explanation — just a navy band reading "0 Reisen · 0
       Länder · 0 Kontinente". The band itself is gated instead: with no trips
       the chart emits nothing and the stat line is the only thing left in it.
-    */
-  }
+    */}
   <section id="stories" class="mx-auto max-w-6xl px-5 py-12 sm:py-16">
     <h2 class="text-2xl font-extrabold text-navy sm:text-3xl">{t('home.allStories')}</h2>
     {trips.length > 0 && (
