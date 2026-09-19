@@ -1,0 +1,57 @@
+---
+import RemoteImage from './RemoteImage.astro';
+import { useTranslations, type Locale } from '../i18n/ui';
+import { pathOf, type Trip } from '../lib/trips';
+
+interface Props {
+  older?: Trip;
+  newer?: Trip;
+  locale: Locale;
+}
+
+const { older, newer, locale } = Astro.props;
+const t = useTranslations(locale);
+const links: { trip: Trip; direction: 'older' | 'newer' }[] = [];
+if (older) links.push({ trip: older, direction: 'older' });
+if (newer) links.push({ trip: newer, direction: 'newer' });
+---
+
+{
+  links.length > 0 && (
+    <nav
+      aria-label={t('story.pagination')}
+      class:list={['mt-12 grid gap-8', links.length === 2 && 'md:grid-cols-2']}
+    >
+      {links.map(({ trip, direction }) => (
+        <a
+          href={pathOf(trip)}
+          class="group grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] content-start items-start gap-x-4 gap-y-3 rounded-sm bg-canvas text-navy hover:text-brand-red active:text-brand-red focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-4 motion-safe:transition-[color] motion-safe:duration-200"
+        >
+          <span class="col-span-2 flex min-w-0 items-center gap-2 font-mono text-[11px] font-semibold tracking-log text-navy/70 uppercase">
+            {direction === 'older' && (
+              <svg aria-hidden="true" focusable="false" class="h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M13 8H3M7 4L3 8l4 4" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            )}
+            <span class="min-w-0 break-words">{t(direction === 'older' ? 'story.prev' : 'story.next')}</span>
+            {direction === 'newer' && (
+              <svg aria-hidden="true" focusable="false" class="h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            )}
+          </span>
+          <RemoteImage
+            image={trip.data.heroImage}
+            alt=""
+            sizes="80px"
+            loading="lazy"
+            class="block aspect-square w-20 rounded-sm object-cover"
+          />
+          <span class="min-w-0 self-center text-base font-bold leading-snug break-words underline-offset-4 group-hover:underline group-active:underline">
+            {trip.data.title}
+          </span>
+        </a>
+      ))}
+    </nav>
+  )
+}

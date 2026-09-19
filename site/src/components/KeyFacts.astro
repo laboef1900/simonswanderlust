@@ -11,26 +11,18 @@ const { facts, country, locale } = Astro.props;
 const t = useTranslations(locale);
 ---
 
-<aside
-  aria-label={`${t('story.keyFactsAbout')} ${country}`}
-  class="my-8 rounded-lg border border-navy/10 bg-canvas p-6 shadow-sm"
->
-  <div class="flex items-center gap-2 border-b border-navy/10 pb-3">
-    <svg aria-hidden="true" focusable="false" class="h-4 w-4 text-brand-red" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
-      <path d="M8 1v14M1 8h14M3 3l10 10M13 3L3 13" stroke-linecap="round" />
-    </svg>
-    <p class="font-mono text-xs font-bold tracking-log text-navy uppercase">
-      {t('story.keyFactsAbout')} {country}
-    </p>
-  </div>
-  <dl class="mt-4 grid gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
+<details class="mb-6 border-b border-navy/15 bg-canvas">
+  <summary class="min-h-[44px] cursor-pointer py-3 text-sm font-semibold text-navy marker:text-brand-red hover:text-brand-red focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2 [overflow-wrap:anywhere]">
+    {t('story.keyFactsAbout')} {country}
+  </summary>
+  <dl class="grid gap-x-8 gap-y-4 pt-2 pb-5 text-sm leading-6 sm:grid-cols-2">
     {
       Object.entries(facts).map(([key, value]) => (
-        <div class="flex items-baseline gap-2">
-          <dt class="font-mono text-xs font-semibold text-navy/60 uppercase tracking-wider">{key}:</dt>
-          <dd class="font-medium text-ink">{value}</dd>
+        <div class="min-w-0 [overflow-wrap:anywhere]">
+          <dt class="font-mono text-xs font-semibold tracking-wider text-navy uppercase">{key}</dt>
+          <dd class="mt-1 text-ink">{value}</dd>
         </div>
       ))
     }
   </dl>
-</aside>
+</details>
