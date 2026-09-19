@@ -26,6 +26,16 @@
         </div>
       </div>
 
+      <!-- Alt-text audit (advisory) — photos that reach a reader with no
+           description, per src/alt-audit.ts. It is a WARNING: nothing here
+           disables Publish, and the copy says so. Each entry is a real button
+           that jumps to the control which fixes that photo, next to its
+           "Suggest alt text" button. -->
+      <div id="altAudit" class="notice-warn alt-audit" hidden>
+        <p id="altAuditSummary" role="status"></p>
+        <ul id="altAuditList" class="alt-audit-list"></ul>
+      </div>
+
       <div class="editor-workspace">
         <!-- Main Canvas (Left Column) -->
         <div class="editor-canvas">
@@ -1080,6 +1090,87 @@
         });
       }
 
+      // ---- alt-text audit (advisory; server: src/alt-audit.ts) ----
+      // A photo whose alt is empty — or only repeats the post title, which the
+      // site renders as alt="" because the heading already says those words —
+      // reaches a screen-reader user as nothing at all. This names those
+      // photos. It NEVER gates anything: publishBtn.disabled is not touched
+      // here, and the copy tells the author the post publishes either way.
+      const ALT_AUDIT_WHERE = { hero: 'hero photo', body: 'body photo', gallery: 'gallery photo' };
+      const ALT_AUDIT_WHY = { empty: 'no alt text', 'repeats-title': 'alt text that only repeats the title' };
+
+      // Variant URLs are long and all share a prefix; the file name is what the
+      // author recognises in a list.
+      function photoName(src) {
+        const clean = String(src).split('?')[0].split('#')[0];
+        const parts = clean.split('/');
+        return parts[parts.length - 1] || clean;
+      }
+
+      // Reachability: each kind is fixed in a different control.
+      function jumpToPhoto(locale, kind) {
+        if (kind === 'hero') { jumpToGap(locale, 'hero alt'); return; } // beside "Suggest alt text"
+        if (tabsApi && tabsApi.select) tabsApi.select(locale);
+        // A gallery photo's alt lives in the images map and is edited in the
+        // picker; an inline body photo's alt is its Markdown label, so the
+        // markdown editor itself is where that one is fixed.
+        if (kind === 'gallery') {
+          const gallery = $(locale + 'Gallery');
+          if (gallery && gallery.focus) gallery.focus();
+          return;
+        }
+        const mde = locale === 'de' ? deMDE : enMDE;
+        if (mde && mde.codemirror && mde.codemirror.focus) { mde.codemirror.focus(); return; }
+        const body = $(locale + 'Body');
+        if (body && body.focus) body.focus();
+      }
+
+      function renderAltAudit(audit, published) {
+        const box = $('altAudit');
+        const summary = $('altAuditSummary');
+        const list = $('altAuditList');
+        if (!box || !summary || !list) return;
+        const images = (audit && audit.images) || [];
+        list.replaceChildren();
+        if (!images.length) {
+          box.hidden = true;
+          summary.textContent = '';
+          return;
+        }
+        // Unhide BEFORE writing the text: a live region that is not rendered
+        // when its content changes is not announced. Nothing calls focus() —
+        // the author keeps the caret wherever they were typing.
+        box.hidden = false;
+        summary.textContent = (published
+          ? 'Warning: the post published, but ' + images.length + ' photo(s) went live with no description.'
+          : 'Warning: ' + images.length + ' photo(s) have no description. They publish either way — this does not block Publish.')
+          + ' Alt text that only repeats the title counts as none, because the heading beside the photo already says it.'
+          + ' Choose a photo to fix it:';
+        images.forEach((img) => {
+          const li = document.createElement('li');
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn-link';
+          btn.textContent = img.locale.toUpperCase() + ' ' + (ALT_AUDIT_WHERE[img.kind] || 'photo')
+            + ' · ' + (ALT_AUDIT_WHY[img.reason] || 'no description')
+            + ' — ' + photoName(img.src);
+          btn.addEventListener('click', () => jumpToPhoto(img.locale, img.kind));
+          li.appendChild(btn);
+          list.appendChild(li);
+        });
+      }
+
+      // Advisory, so every failure path is silent: a 401/500 here must never
+      // interrupt a save or a publish, it just leaves the last rendering up.
+      async function refreshAltAudit() {
+        if (!currentTk) { renderAltAudit(null, false); return; }
+        try {
+          const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/alt-audit');
+          if (!res.ok) return;
+          renderAltAudit(await res.json(), false);
+        } catch (e) { /* advisory only */ }
+      }
+
       // ---- save draft ----
       // Persists the current on-screen form. Returns true on success so Publish
       // can save first and validate exactly what's on screen.
@@ -1152,6 +1243,9 @@
         loadedSlugs.de = (body.de && body.de.slug) || '';
         loadedSlugs.en = (body.en && body.en.slug) || '';
         loadRevisions().catch(() => {});
+        // What was just stored is what the audit judges — refresh from the
+        // server rather than re-deriving the rule in the browser.
+        refreshAltAudit().catch(() => {});
         const skipped = partialStopCount();
         const savedMsg = isPublished ? 'Saved draft. The live post is unchanged until you Publish.' : 'Saved draft.';
         setStatus(skipped
@@ -1217,6 +1311,8 @@
           if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
           $('slugFieldDe').disabled = true;
           $('slugFieldEn').disabled = true;
+          // The publish reply carries the audit of what actually went live.
+          renderAltAudit(body.altAudit, true);
           updateLocaleChip();
         } catch (e) {
           showErr('Publish failed: ' + e);
@@ -1387,6 +1483,9 @@
         populateForm(post);
 
         loadRevisions().catch(() => {});
+        // Visible before publishing, not only after it: an imported draft is
+        // undescribed the moment it is opened.
+        refreshAltAudit().catch(() => {});
 
         let state = '';
         if (isPublished) {

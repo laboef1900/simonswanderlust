@@ -1534,6 +1534,70 @@ describe('publish gate (encode status)', () => {
   });
 });
 
+describe('alt-text audit (advisory, never a gate)', () => {
+  // The WordPress import stores the post title as every hero's alt, so ~20
+  // drafts are entirely undescribed. The audit must SAY so and must never
+  // stand in the way — a gate here would strand the whole imported corpus.
+  const IMG = 'https://img.simonswanderlust.com';
+  const undescribedPair = {
+    translationKey: '', status: 'draft',
+    shared: { date: '2024-10-03', countryCode: 'GR', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: {
+      locale: 'de', slug: 'rhodos', title: 'Rhodos', excerpt: 'e', country: 'Griechenland',
+      heroImage: { src: `${IMG}/trips/rhodos/hero`, width: 9, height: 9, alt: 'Rhodos' },
+      bodyMarkdown: `![Rhodos](${IMG}/trips/rhodos/b1)`,
+      images: { [`${IMG}/trips/rhodos/b1`]: { width: 9, height: 9 } },
+    },
+    en: {
+      locale: 'en', slug: 'rhodes', title: 'Rhodes', excerpt: 'e', country: 'Greece',
+      heroImage: { src: `${IMG}/trips/rhodes/hero`, width: 9, height: 9, alt: 'rhodes' },
+      bodyMarkdown: '## b', images: {},
+    },
+  };
+  const create = async (b: Built, cookie: { sid: string }) =>
+    (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: undescribedPair })).json().translationKey;
+
+  it('publishes a post whose every photo is undescribed, and names them in the reply', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const tk = await create(b, cookie);
+    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ published: true, build: { ok: true, release: 'r1' } });
+    expect(res.json().altAudit).toEqual({
+      count: 3,
+      images: [
+        { locale: 'de', kind: 'hero', src: `${IMG}/trips/rhodos/hero`, reason: 'repeats-title' },
+        { locale: 'de', kind: 'body', src: `${IMG}/trips/rhodos/b1`, reason: 'repeats-title' },
+        { locale: 'en', kind: 'hero', src: `${IMG}/trips/rhodes/hero`, reason: 'repeats-title' },
+      ],
+    });
+    expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('published');
+  });
+
+  it('serves the same audit before publishing, to any authed author', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false });
+    const tk = await create(b, cookie);
+    const res = await b.app.inject({ method: 'GET', url: `/posts/${tk}/alt-audit`, cookies: cookie });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().count).toBe(3);
+  });
+
+  it('is silent for a post whose photos are described', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const described = {
+      ...undescribedPair,
+      de: { ...undescribedPair.de, heroImage: { ...undescribedPair.de.heroImage, alt: 'Fischerboote im Hafen von Lindos' }, bodyMarkdown: `![Ziegen auf der Küstenstraße](${IMG}/trips/rhodos/b1)` },
+      en: { ...undescribedPair.en, heroImage: { ...undescribedPair.en.heroImage, alt: 'Fishing boats in Lindos harbour' } },
+    };
+    const tk = (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: described })).json().translationKey;
+    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(res.json().altAudit).toEqual({ count: 0, images: [] });
+  });
+});
+
 describe('publish gate (foreign images, #91)', () => {
   const IMG = 'https://img.simonswanderlust.com';
   const pairWithBody = (deBody: string, enBody = '## b') => ({

@@ -1,15 +1,13 @@
 ---
 import StoryCard from './StoryCard.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
-import { entryNumberOf, type Trip } from '../lib/trips';
+import type { Trip } from '../lib/trips';
 import { demoteCover, storyGridSpans } from '../lib/story-grid-layout';
 
 interface Props {
   trips: Trip[];
   /** Locale of the surrounding page — drives the empty state (the grid itself can be empty). */
   locale: Locale;
-  /** Full locale trip set used for chronological numbering; defaults to `trips`. */
-  numberingPool?: Trip[];
   /**
    * Index in `trips` of the story the page also shows as its cover, if any.
    * Only affects which card gets the lead tile — see `demoteCover`.
@@ -17,7 +15,7 @@ interface Props {
   coverIndex?: number;
 }
 
-const { trips, locale, numberingPool = trips, coverIndex } = Astro.props;
+const { trips, locale, coverIndex } = Astro.props;
 const t = useTranslations(locale);
 // The cover story stays in the grid (see HomePage.astro's @ai-warning) but must
 // not ALSO hold the 4×2 lead tile, or the page paints the same photograph
@@ -49,37 +47,68 @@ const LG_COL: Record<number, string> = {
   4: 'lg:col-span-4',
   6: 'lg:col-span-6',
 };
+
+/*
+  @ai-note Base-regime rhythm, independent of the `lg` mosaic on purpose.
+  Below 640px every card is full-width, so the mosaic's span differences are
+  invisible and the grid rendered as nine tiles of one identical height — a
+  flat 2.5k-pixel run with no cadence, on the viewport most visitors arrive
+  from. Every third card is double-height there, giving a short-short-tall
+  measure that the eye can hold.
+
+  The offset is 1, not 0, so the tall base tile lands on the same story the
+  `lg` lead tile does after `demoteCover` swaps it forward — and so it never
+  lands on the cover story at index 0, which the hero already showed at poster
+  size. `sm:row-span-1` is REQUIRED, not tidying: the `sm` regime puts two
+  cards per row and `cellsUsed()` accounts one row per card, so a tile spanning
+  two rows there would punch exactly the hole `story-grid-layout` exists to
+  prevent.
+*/
+const rowSpan = (baseTall: boolean, lgTall: boolean): string =>
+  baseTall
+    ? lgTall
+      ? 'row-span-2 sm:row-span-1 lg:row-span-2'
+      : 'row-span-2 sm:row-span-1'
+    : lgTall
+      ? 'lg:row-span-2'
+      : '';
 ---
 
 {
   trips.length > 0 ? (
-    <div class="grid auto-rows-[240px] grid-cols-6 gap-4">
+    /*
+      A list, because it is one: nine sibling links with no prose between them
+      used to be a bare `<div>` of `<a>`s, so a screen-reader user got no
+      "list of 9 items" and no item-n-of-n position while arrowing through the
+      index. The `<li>` carries the grid placement; the card fills it.
+
+      @ai-warning `role="list"` is REQUIRED here, not belt-and-braces. Tailwind
+      Preflight sets `list-style: none` on every `ul`, and WebKit drops the
+      implicit list semantics of a list styled that way — so the `<ul>` alone
+      bought nothing in the one browser/screen-reader pair (Safari + VoiceOver)
+      most likely to read this page. Verified against the rendered a11y tree,
+      not assumed.
+    */
+    <ul role="list" class="grid list-none auto-rows-[280px] grid-cols-6 gap-4">
       {trips.map((trip, i) => {
         const span = spans[i]!;
+        const baseTall = i % 3 === 1;
         return (
-          <StoryCard
-            trip={trip}
-            span={span}
-            number={entryNumberOf(trip, numberingPool)}
+          <li
             class={[
-              'col-span-6',
+              'min-w-0 col-span-6',
               SM_COL[span.sm],
               LG_COL[span.lg],
-              // Double height in the base regime too, where every card is
-              // full-width and the grid otherwise renders one flat size — nine
-              // identical 350×240 tiles inside a 4525px document at 390px.
-              // `sm:row-span-1` is REQUIRED, not tidying: the `sm` regime puts
-              // two cards per row and `cellsUsed()` accounts one row per card,
-              // so a tile spanning two rows there would punch exactly the hole
-              // this module exists to prevent.
-              span.lgRows === 2 ? 'row-span-2 sm:row-span-1 lg:row-span-2' : '',
+              rowSpan(baseTall, span.lgRows === 2),
             ]
               .filter(Boolean)
               .join(' ')}
-          />
+          >
+            <StoryCard trip={trip} span={span} baseTall={baseTall} />
+          </li>
         );
       })}
-    </div>
+    </ul>
   ) : (
     <div class="my-12 rounded-md border border-navy/10 bg-canvas p-8 text-center">
       <p class="font-mono text-xs font-semibold tracking-log text-navy/60 uppercase">

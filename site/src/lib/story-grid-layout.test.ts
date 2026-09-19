@@ -4,6 +4,7 @@ import {
   cellsUsed,
   demoteCover,
   GRID_COLUMNS,
+  GRID_ROW_HEIGHT,
   storyGridSpans,
   tileWidth,
   type StorySpan,
@@ -105,9 +106,22 @@ describe('demoteCover', () => {
     expect(isLead(demoteCover(plan, 3)[0])).toBe(true);
   });
 
-  it('does not disturb counts too small to carry a lead tile', () => {
-    for (const n of [1, 2, 3]) {
-      expect(demoteCover(storyGridSpans(n), 0)).toEqual(storyGridSpans(n));
+  it('levels every tile when the count is too small to hand the lead tile on', () => {
+    // The old contract here was "return the plan unchanged", which is how a
+    // one- or two-trip site ended up painting its cover as the hero AND as a
+    // double-height tile directly below it.
+    for (const n of [1, 2]) {
+      const plan = demoteCover(storyGridSpans(n), 0);
+      expect(plan.every((s) => s.lgRows === 1), `${n} cards: a tile is still two rows tall`).toBe(true);
+      expect(plan.map((s) => s.lg)).toEqual(storyGridSpans(n).map((s) => s.lg));
+    }
+    // Three cards already carry no lead tile, so the swap is a no-op.
+    expect(demoteCover(storyGridSpans(3), 0)).toEqual(storyGridSpans(3));
+  });
+
+  it('leaves the plan alone when no story is flagged as the cover', () => {
+    for (const n of [1, 2, 9]) {
+      expect(demoteCover(storyGridSpans(n), -1)).toEqual(storyGridSpans(n));
     }
   });
 
@@ -132,47 +146,62 @@ describe('tileWidth', () => {
     expect(tileWidth(4)).toBe(763);
   });
 
-  it('keeps tiles close to the 3:2 frames they crop', () => {
-    // Every tile is 240px tall per row; the lead spans two rows plus the gap.
+  it('keeps tiles within a sane crop of the 3:2 frames they hold', () => {
     for (const [cols, rows] of [
       [2, 1],
       [3, 1],
       [4, 2],
       [6, 1],
     ] as const) {
-      const height = rows * 240 + (rows - 1) * 16;
+      const height = rows * GRID_ROW_HEIGHT + (rows - 1) * 16;
       const aspect = tileWidth(cols) / height;
-      expect(aspect, `${cols}x${rows} tile`).toBeGreaterThan(1.3);
+      // Below 1.5 the tile is TALLER than the frame it crops, so `cover`
+      // scales by height — legal, and exactly why `cardSizes` corrects every
+      // regime. Below 1.0 it would be a portrait box holding a landscape
+      // photograph, which crops away most of the frame.
+      expect(aspect, `${cols}x${rows} tile`).toBeGreaterThan(1);
       expect(aspect, `${cols}x${rows} tile`).toBeLessThan(5);
     }
   });
 });
 
 describe('cardSizes', () => {
-  it('states an exact pixel width once the grid stops growing', () => {
+  /*
+   * @ai-warning Every entry is `max(box, painted)` because a 3:2 frame under
+   * `object-fit: cover` paints `max(boxWidth, boxHeight × 1.5)`. At a 280px
+   * row that second term wins on most of the grid: 420px for one row, 864px
+   * for two.
+   */
+  it('hints the painted width, not the box width, in every regime', () => {
     const sizes = cardSizes({ sm: 3, lg: 2, lgRows: 1 });
-    expect(sizes).toContain('(min-width: 1192px) 373px');
-    expect(sizes).toContain('(min-width: 1024px) 33vw');
-    expect(sizes).toContain('(min-width: 640px) 50vw');
-    expect(sizes.endsWith('calc(100vw - 2.5rem)')).toBe(true);
+    // 373px box, 420px paint.
+    expect(sizes).toContain('(min-width: 1192px) max(373px, 420px)');
+    expect(sizes).toContain('(min-width: 1024px) max(33vw, 420px)');
+    expect(sizes).toContain('(min-width: 640px) max(50vw, 420px)');
+    expect(sizes.endsWith('max(calc(100vw - 2.5rem), 420px)')).toBe(true);
   });
 
   it('scales the hint with the span', () => {
-    expect(cardSizes({ sm: 3, lg: 4, lgRows: 2 })).toContain('(min-width: 1024px) 67vw');
-    expect(cardSizes({ sm: 6, lg: 6, lgRows: 1 })).toContain('(min-width: 640px) 100vw');
+    expect(cardSizes({ sm: 3, lg: 4, lgRows: 2 })).toContain('(min-width: 1024px) max(67vw, 864px)');
+    expect(cardSizes({ sm: 6, lg: 6, lgRows: 1 })).toContain('(min-width: 640px) max(100vw, 420px)');
   });
 
-  it('corrects the base hint for a double-height tile, which crops by height', () => {
-    // Base regime: one column wide (~350px) but 2 × 240 + 16 = 496 tall, so a
-    // 3:2 frame under `object-fit: cover` paints 496 × 1.5 = 744px. A plain
-    // `100vw` claimed 350 and shipped an upscaled artifact.
-    const lead = cardSizes({ sm: 3, lg: 4, lgRows: 2 });
-    expect(lead.endsWith('max(calc(100vw - 2.5rem), 744px)')).toBe(true);
-    // Single-height cards are wider than tall, so the box width is the hint.
-    expect(cardSizes({ sm: 3, lg: 2, lgRows: 1 }).endsWith('calc(100vw - 2.5rem)')).toBe(true);
-    // Only the base entry changes; `sm` resets the tile to one row and `lg`
-    // makes it 763px wide against the same 496.
-    expect(lead).toContain('(min-width: 640px) 50vw');
-    expect(lead).toContain('(min-width: 1192px) 763px');
+  it('corrects a double-height tile at lg, which a 240px row did not need', () => {
+    // 763px wide against 2 × 280 + 16 = 576 tall: aspect 1.32, so the frame
+    // paints 576 × 1.5 = 864. At the old 240px row the same tile was 763×496
+    // and width led, which is why this entry used to be a bare pixel width.
+    expect(cardSizes({ sm: 3, lg: 4, lgRows: 2 })).toContain('(min-width: 1192px) max(763px, 864px)');
+  });
+
+  it('takes the base regime\u2019s row count from the caller, not from the span', () => {
+    // Below `sm` every card is full-width and StoryGrid picks the tall ones by
+    // index, so the span cannot say. A tall tile paints 864px against a ~350px
+    // box; hinting 420 there would ship an upscaled artifact for the largest
+    // photograph on a phone.
+    const span = { sm: 3, lg: 2, lgRows: 1 } as const;
+    expect(cardSizes(span, true).endsWith('max(calc(100vw - 2.5rem), 864px)')).toBe(true);
+    expect(cardSizes(span, false).endsWith('max(calc(100vw - 2.5rem), 420px)')).toBe(true);
+    // `sm` resets every tile to one row regardless.
+    expect(cardSizes(span, true)).toContain('(min-width: 640px) max(50vw, 420px)');
   });
 });

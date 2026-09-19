@@ -3,6 +3,7 @@ import { useTranslations } from '../i18n/ui';
 import {
   byLocale,
   entryNumberOf,
+  heroAltOf,
   localeOf,
   pathOf,
   slugOf,
@@ -24,6 +25,10 @@ function fakeWithPlace(id: string, countryCode: string, region: string): Trip {
   } as unknown as Trip;
 }
 
+function fakeWithAlt(title: string, alt: string): Trip {
+  return { id: 'de/x', data: { title, heroImage: { alt } } } as unknown as Trip;
+}
+
 const rhodesDe = fake('de/sonne-und-abenteuer-rhodos', '2021-07-25', 'rhodes-2021');
 const rhodesEn = fake('en/sun-and-adventure-on-rhodes', '2021-07-25', 'rhodes-2021');
 const buchDe = fake('de/reisebericht-4-tage-bukarest', '2024-10-03', 'bucharest-2024');
@@ -39,6 +44,38 @@ describe('trips helpers', () => {
   it('builds URLs matching the live WordPress structure', () => {
     expect(pathOf(rhodesDe)).toBe('/sonne-und-abenteuer-rhodos/');
     expect(pathOf(rhodesEn)).toBe('/en/sun-and-adventure-on-rhodes/');
+  });
+
+  /*
+   * @ai-warning These pin a CROSS-TREE contract. `uploader/src/alt-audit.ts`
+   * decides which photos the editor warns an author about using the same rule,
+   * and the two trees have separate tsconfigs, so nothing but these tests and
+   * the paired comments keeps them from drifting apart into "the admin nags
+   * about a hero the site describes" or the reverse.
+   */
+  describe('heroAltOf', () => {
+    it('drops an alt that only repeats the title, whatever its case or padding', () => {
+      expect(heroAltOf(fakeWithAlt('Rhodos', 'Rhodos'))).toBe('');
+      expect(heroAltOf(fakeWithAlt('Rhodos', '  Rhodos  '))).toBe('');
+      // Every WordPress-imported post stores the title as its alt; the
+      // importer does not normalise case, so "RHODOS" is the same duplicate.
+      expect(heroAltOf(fakeWithAlt('Rhodos', 'RHODOS'))).toBe('');
+      expect(heroAltOf(fakeWithAlt('  Rhodos', 'rhodos'))).toBe('');
+    });
+
+    it('keeps a real description of the photograph', () => {
+      // `undefined` means "use the stored alt", not "no alt".
+      expect(heroAltOf(fakeWithAlt('Rhodos', 'Fischerboote im Hafen von Lindos'))).toBeUndefined();
+      // A superset of the title is still new information.
+      expect(heroAltOf(fakeWithAlt('Rhodos', 'Rhodos bei Sonnenuntergang'))).toBeUndefined();
+    });
+
+    it('does not special-case a blank stored alt — the image simply has none', () => {
+      // `undefined` here means "pass the stored alt through", and the stored
+      // alt is ''. So the rendered image is still `alt=""`, and the place that
+      // does something about it is the editor's audit, not this function.
+      expect(heroAltOf(fakeWithAlt('Rhodos', ''))).toBeUndefined();
+    });
   });
 
   it('filters by locale, newest first', () => {

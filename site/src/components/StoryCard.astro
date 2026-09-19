@@ -1,38 +1,51 @@
 ---
 import RemoteImage from './RemoteImage.astro';
-import { dateLabel, entryLabel } from '../lib/format';
+import { cardMetaLabel } from '../lib/format';
 import { cardSizes, type StorySpan } from '../lib/story-grid-layout';
-import { heroAltOf, localeOf, pathOf, type Trip } from '../lib/trips';
+import { heroAltOf, localeOf, pathOf, slugOf, type Trip } from '../lib/trips';
 
 interface Props {
   trip: Trip;
   /** Span plan for this card, from `story-grid-layout.ts`. */
   span: StorySpan;
-  /** Chronological entry number (from entryNumberOf); omits the N° prefix when absent. */
-  number?: number;
-  /** Grid-placement classes, computed by StoryGrid from the same span. */
-  class?: string;
+  /**
+   * True when StoryGrid gives this card two rows in the BASE regime. Only the
+   * caller knows — below `sm` the rhythm comes from the card's index, not from
+   * its span — and `cardSizes` needs it to hint the right width.
+   */
+  baseTall?: boolean;
 }
 
-const { trip, span, number, class: placement } = Astro.props;
+const { trip, span, baseTall = false } = Astro.props;
 const locale = localeOf(trip);
-const meta = `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
+const meta = cardMetaLabel(trip.data.date, trip.data.country, trip.data.title, locale);
 
-// The lead tile is the only double-height one; the levelled tail tiles are
-// wide but single-height. Three title sizes, so the grid has a hierarchy
-// instead of one weight doing all the work — and they scale in the BASE
-// regime too, not only at `lg`. Below 640px every card is full-width, so the
-// span differences are invisible and a single `text-lg` rendered nine
-// identical tiles at one type size inside a 4525px document; the lead tile's
-// base `row-span-2` (StoryGrid) is what gives the largest step the room for a
-// second clamped line. One source for the size: the <h3> below carries no
-// size class of its own.
+/*
+  @ai-note Nine consecutive links each named "N°09 OKT 2024 · RUMÄNIEN
+  <title>" is what a screen-reader user got from this index — catalogue data
+  before learning what the story is, nine times in a row. `aria-labelledby` on
+  the link scopes the name to the heading; the date line stays in the tree as
+  content, just not as the link's name. The id is the slug, which is unique per
+  document because a trip appears at most once in a grid (the home page's cover
+  is the hero, which carries its own id). Same device as FeaturedHero's entry
+  link.
+*/
+const titleId = `card-${slugOf(trip)}`;
+
+/*
+  Three title sizes from `sm` up, so the mosaic has a hierarchy instead of one
+  weight doing all the work — but ONE size below it. Base is the regime where
+  every card is full-width, so the span differences the tiers are derived from
+  are invisible there: varying the type without varying the tile read as
+  inconsistency rather than importance, and the smallest tier landed on
+  `text-base`, i.e. the same 16px as body copy, for eight of nine cards.
+*/
 const lead = span.lgRows === 2 && span.lg >= 4;
 const titleSize = lead
   ? 'text-xl lg:text-2xl'
   : span.lg >= 3
-    ? 'text-lg lg:text-xl'
-    : 'text-base lg:text-lg';
+    ? 'text-xl sm:text-lg lg:text-xl'
+    : 'text-xl sm:text-base lg:text-lg';
 
 // Shared with FeaturedHero: a stored alt that only repeats the title is
 // decorative here too (the <h3> below announces it), but a real description of
@@ -43,12 +56,20 @@ const alt = heroAltOf(trip);
 
 <a
   href={pathOf(trip)}
+  aria-labelledby={titleId}
   class:list={[
     // Elevation is declared once, as shadow — the old card carried a 1px
     // border AND a wide soft shadow. The hover ring is a STATE, not resting
     // elevation, and it is what keeps a hover cue for a reduced-motion
     // visitor now that the resting opacity lift is gone: ring and shadow are
     // both box-shadow, so one entry covers them both.
+    //
+    // @ai-warning `active:` is not a duplicate of `hover:`. Tailwind 4 compiles
+    // every `hover:` utility under `@media (hover: hover)`, and
+    // `motion-safe:group-hover:` under that AND the reduced-motion query, so on
+    // a touch device NONE of the feedback below can ever fire — the majority
+    // visitor tapped a card and got the browser's default grey flash as the
+    // only sign it registered. `active:` has no media gate.
     //
     // @ai-warning `translate` MUST stay in this list. Tailwind 4 compiles
     // `-translate-y-1` to the `translate` PROPERTY, not to `transform`
@@ -62,8 +83,7 @@ const alt = heroAltOf(trip);
     // `scale-[1.04]` on the <RemoteImage> below never had this bug. Never
     // widen this to `transition-all` or `transition-colors` — both interpolate
     // `outline-color` and turn the focus ring into a 1.5px smudge (global.css).
-    'group relative block min-w-0 overflow-hidden rounded-xl bg-navy shadow-sm transition-[transform,translate,box-shadow] duration-500 hover:shadow-xl hover:ring-2 hover:ring-brand-red motion-safe:hover:-translate-y-1',
-    placement,
+    'group relative block h-full min-w-0 overflow-hidden rounded-xl bg-navy shadow-sm transition-[transform,translate,box-shadow] duration-500 hover:shadow-xl hover:ring-2 hover:ring-brand-red active:shadow-xl active:ring-2 active:ring-brand-red motion-safe:hover:-translate-y-1',
   ]}
 >
   {/*
@@ -78,46 +98,63 @@ const alt = heroAltOf(trip);
   <RemoteImage
     image={trip.data.heroImage}
     alt={alt}
-    sizes={cardSizes(span)}
+    sizes={cardSizes(span, baseTall)}
     class="h-full w-full object-cover transition-transform duration-500 motion-safe:group-hover:scale-[1.04]"
   />
   {/*
-    Stops at 55% instead of running the full height: the text below carries
-    its own opaque plate and needs no help from the scrim, so everything above
-    the plate is photograph.
+    @ai-warning The caption is a 72px ramp into a `navy/92` base, and both
+    numbers are contrast decisions rather than taste.
+
+    The RAMP is a fixed length, not a percentage of the panel: a percentage
+    scales with the title's line count, so the one distance that guarantees
+    type never lands in the fade would differ per card. `pt-0.5` on the base
+    block is all the headroom the type needs because the ramp above it carries
+    none.
+
+    The 92% BASE is the floor, not a preference. White is 11.6:1 on it and
+    `white/70` 6.57:1 over the brightest sky in the corpus; at /80 that second
+    figure is 4.66:1 and at /75 it is 4.07:1, i.e. under AA. The panel could
+    only be made lighter than this by giving up the second line.
+
+    It may not go back to a card-height gradient. With the date line BELOW the
+    heading the title's top sits around 46% of the card, where such a gradient
+    measured 2.87:1 against the same pale Rhodes sky that once forced its mid
+    stop to /35; holding the title from there would take roughly /62 at the
+    midpoint — the lower half of every photograph veiled, and blurrier than
+    this. Above the ramp the frame is completely unveiled.
   */}
-  <div class="absolute inset-0 bg-gradient-to-t from-navy/90 via-navy/25 via-55% to-transparent"></div>
-  <div class="absolute right-0 bottom-0 left-0 p-4 text-white sm:p-5">
-    {/*
-      @ai-warning Opaque plate, for the same reason as FeaturedHero's: this line
-      was `text-brand-red-light` straight over the photograph and measured
-      1.90:1 to 5.01:1 depending only on which part of which frame sat behind
-      the glyphs — the identity was legible on a jungle photo and invisible on
-      sea-and-sky. On solid navy the accent is 4.8:1 and white is 14.6:1 on
-      every card. Do not tint the plate with an alpha.
-    */}
-    {/*
-      Wraps rather than truncates. `truncate` on the meta span cut the
-      DESTINATION COUNTRY — the identity payload the card exists to deliver —
-      on every card narrower than ~300px: 3 of 9 at a 320px viewport. The
-      plate is `max-w-full` and wraps, so a long country takes a second line
-      inside the plate instead of disappearing behind an ellipsis, and the
-      card has the height to spare.
-    */}
-    <p
-      class="inline-flex max-w-full flex-wrap items-center gap-x-2 rounded border border-white/15 bg-navy px-2 py-1 font-mono text-[11px] font-semibold tracking-log uppercase"
-    >
-      {number !== undefined && <span class="shrink-0 text-brand-red-light">{entryLabel(number)}</span>}
-      <span class="min-w-0 break-words text-white">{meta}</span>
-    </p>
-    {/*
-      `title` is the only signal that the clamp fired: a long title measured
-      scrollHeight 140 against clientHeight 56 with nothing on screen saying
-      so. The text is also in the <h3> itself, so this adds no name a screen
-      reader has to hear twice.
-    */}
-    <h3 class:list={['mt-2 font-extrabold break-words line-clamp-2', titleSize]} title={trip.data.title}>
-      {trip.data.title}
-    </h3>
+  <div class="absolute inset-x-0 bottom-0">
+    <div class="h-18 bg-gradient-to-t from-navy/92 to-transparent"></div>
+    <div class="bg-navy/92 px-4 pt-0.5 pb-4 text-white sm:px-5 sm:pb-5">
+      {/*
+        `title` is the only signal that the clamp fired: a long title measured
+        scrollHeight 140 against clientHeight 56 with nothing on screen saying
+        so. The text is also in the <h3> itself, so this adds no name a screen
+        reader has to hear twice.
+      */}
+      <h3
+        id={titleId}
+        class:list={['font-extrabold leading-tight break-words line-clamp-2', titleSize]}
+        title={trip.data.title}
+      >
+        {trip.data.title}
+      </h3>
+      {/*
+        @ai-note What is left of the log register on a card: a date, and the
+        country only when the title does not already name it. The entry number
+        and the cover-story marker were both removed — nine `N°` labels down
+        the index restated an order the grid already shows, and the marker was
+        a second coloured object on the one card that least needed decorating.
+        The `N°` still leads the hero's entry and every story page, which is
+        where it carries information.
+
+        It wraps rather than truncates. `truncate` here once cut the
+        destination country — the identity payload the card exists to deliver
+        — on every card narrower than ~300px: 3 of 9 at a 320px viewport.
+      */}
+      <p class="mt-1.5 max-w-full font-mono text-[11px] tracking-log break-words text-white/70 uppercase">
+        {meta}
+      </p>
+    </div>
   </div>
 </a>

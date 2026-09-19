@@ -62,9 +62,9 @@ describe('brand token contrast', () => {
    * decimals because the whole point is that there is nothing to spare.
    */
   it.each([
-    [brandRed, canvas, 'brand-red on canvas (nav active, About link, region chip hover)', 4.609],
-    [brandRedLight, navy, 'brand-red-light on navy (N° labels, footer logline, map stats)', 4.741],
-    ['#ffffff', brandRed, 'white on brand-red (the hero CTA button)', 4.763],
+    [brandRed, canvas, 'brand-red on canvas (nav active, hero N° and CTA, destination counts)', 4.609],
+    [brandRedLight, navy, 'brand-red-light on navy (footer logline, map stats and pins)', 4.741],
+    ['#ffffff', brandRed, 'white on brand-red (the focused skip link)', 4.763],
   ])('$2 still clears 4.5:1', (fg, bg, name, measured) => {
     const ratio = contrast(fg as string, bg as string);
     expect(ratio, name as string).toBeGreaterThanOrEqual(4.5);
@@ -99,8 +99,10 @@ describe('brand token contrast', () => {
  * ought to clear 3:1 and composites to 2.67:1; only the composite counts.
  */
 describe('non-text contrast of alpha borders', () => {
-  it('the idle region chip border clears 3:1 on canvas', () => {
-    // RegionFilter.astro: border-navy/55, matching the admin's --line-control.
+  it('the admin control border alpha clears 3:1 on canvas', () => {
+    // navy/55, matching the admin's --line-control. It also used to draw the
+    // home page's region chips; those are plain text links now, but the alpha
+    // is still the project's answer to "a 1px line that must read as a control".
     expect(contrast(over(navy, 0.55, canvas), canvas)).toBeGreaterThanOrEqual(3);
     // The two values it replaced, recorded so neither comes back.
     expect(contrast(over(navy, 0.2, canvas), canvas)).toBeLessThan(3);
@@ -126,8 +128,13 @@ describe('non-text contrast of alpha borders', () => {
  * change the colour, or de-emphasise by size and face as the count now does.
  */
 describe('text contrast of alpha text utilities', () => {
-  it('ink/70 clears AA on canvas — the chip count and the inactive locale link', () => {
-    // RegionFilter.astro (count, inheriting the chip) and LangSwitcher.astro.
+  it('ink/70 and navy/70 clear AA on canvas — hero panel meta and the locale link', () => {
+    // FeaturedHero.astro sets the panel's two mono lines (the N°/date/country
+    // field line and the coordinates) at navy/70 on opaque canvas paper.
+    expect(contrast(over(navy, 0.7, canvas), canvas)).toBeGreaterThanOrEqual(4.5);
+    // navy/60 is the value that looked close enough and measures 4.05:1.
+    expect(contrast(over(navy, 0.6, canvas), canvas)).toBeLessThan(4.5);
+    // LangSwitcher.astro.
     expect(contrast(over(ink, 0.7, canvas), canvas)).toBeGreaterThanOrEqual(4.5);
   });
 
@@ -136,6 +143,57 @@ describe('text contrast of alpha text utilities', () => {
     expect(contrast(over(ink, 0.7 * 0.7, canvas), canvas)).toBeLessThan(4.5);
     // text-ink/60 → 4.33:1 on the control a non-German visitor needs most.
     expect(contrast(over(ink, 0.6, canvas), canvas)).toBeLessThan(4.5);
+  });
+});
+
+/**
+ * The footer's real backdrop is not the navy token. `<Contours />` paints a
+ * pale line colour over it at a fixed opacity, and every secondary colour in
+ * Footer.astro sits on the resulting RIDGE, not on `--color-navy`.
+ *
+ * @ai-warning This is the trap the alpha-border block above is, one surface
+ * further out: the class list says `bg-navy`, the token says #142a42, and the
+ * pixel under the glyph says rgb(47,73,99). `text-white/50` on the column
+ * labels and `text-white/60` on the tagline both read as obviously-safe white
+ * and both measured below AA. Reads the texture out of Contours.astro rather
+ * than restating it, for the same reason the palette is read out of global.css.
+ */
+const CONTOURS = readFileSync(
+  fileURLToPath(new URL('../components/Contours.astro', import.meta.url)),
+  'utf8',
+);
+const ridge = (() => {
+  const m = /text-\[(#[0-9a-fA-F]{6})\][^"]*?opacity-(\d+)/.exec(CONTOURS);
+  if (!m) throw new Error('Contours.astro no longer declares text-[#rrggbb] … opacity-NN');
+  return over(m[1] as string, Number(m[2]) / 100, navy);
+})();
+
+describe('text contrast over the footer contour texture', () => {
+  it('white/70 is the floor for footer secondary text', () => {
+    // 5.578:1 on the ridge. The model is validated: `brand-red-light` on this
+    // computed ridge is 3.058:1 against 3.03:1 measured on the rendered page.
+    expect(contrast(over('#ffffff', 0.7, ridge), ridge)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('records why the floor is /70 and not /50 or /60', () => {
+    // The column labels shipped at white/50 — 3.705:1 at 12px semibold, a
+    // straight AA failure that reads as obviously-safe white in the class list.
+    expect(contrast(over('#ffffff', 0.5, ridge), ridge)).toBeLessThan(4.5);
+    // white/60 (the old tagline) clears by 0.077 of a point. Passing on the
+    // worst pixel of today's texture is not a floor; one darker line colour or
+    // one opacity bump and it is under. That headroom is the whole argument
+    // for /70.
+    const sixty = contrast(over('#ffffff', 0.6, ridge), ridge);
+    expect(sixty).toBeGreaterThanOrEqual(4.5);
+    expect(sixty).toBeLessThan(4.6);
+  });
+
+  it('the accent cannot be rescued by alpha, which is why the logline has a plate', () => {
+    // brand-red-light is barely lighter than the ridge: opaque, at full
+    // strength, it is still under AA. Footer.astro puts it on an opaque navy
+    // plate instead, where it is the 4.741:1 pinned at the top of this file.
+    expect(contrast(brandRedLight, ridge)).toBeLessThan(4.5);
+    expect(contrast(brandRedLight, navy)).toBeGreaterThanOrEqual(4.5);
   });
 });
 

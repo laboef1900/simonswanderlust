@@ -66,7 +66,13 @@ const anchorFor = (at: number, width: number) =>
         real ones in the chart to the right, and the 30px it occupied was what
         pushed this heading onto a second line.
       */}
-      <h2 class="text-3xl font-extrabold text-balance">{t('home.mapTeaser.title')}</h2>
+      {/*
+        `text-2xl` at base, not `text-3xl`: below `sm` this was 30px while the
+        featured story's own heading in the hero was 24px, so the closing band
+        shouted louder than the entry the page exists to get opened. It matches
+        the "Alle Reiseberichte" heading at every width now.
+      */}
+      <h2 class="text-2xl font-extrabold text-balance sm:text-3xl">{t('home.mapTeaser.title')}</h2>
       <p class="mt-1 font-mono text-xs tracking-log text-brand-red-light">{stats}</p>
       <a
         href={mapPath(locale)}

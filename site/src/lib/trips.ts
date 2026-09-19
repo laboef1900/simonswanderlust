@@ -26,16 +26,25 @@ export function pathOf(trip: Trip): string {
  * repeat text the surrounding markup already announces.
  *
  * @ai-note Every WordPress-imported post stores the post title as its hero
- * alt, and both places a hero appears (the home hero's `<h1>`, a story card's
- * `<h3>`) name the title right beside the image — so that alt was heard twice.
- * A hand-written description of the photograph is different content and DOES
- * reach the reader: `alt=""` was hardcoded on story cards, which threw away
- * the only photographic information a screen-reader user could have got from
- * a photography-led index.
+ * alt, and both places a hero appears (the home hero's entry heading, a story
+ * card's `<h3>`) name the title right beside the image — so that alt was heard
+ * twice. A hand-written description of the photograph is different content and
+ * DOES reach the reader: `alt=""` was hardcoded on story cards, which threw
+ * away the only photographic information a screen-reader user could have got
+ * from a photography-led index.
+ *
+ * @ai-warning The comparison is case-INSENSITIVE, and that is a cross-tree
+ * contract: `uploader/src/alt-audit.ts` applies the same rule to decide which
+ * photos the editor warns an author about. Tightening this to `===` would have
+ * the admin flagging a hero the site still describes (alt "RHODOS" on a post
+ * titled "Rhodos"), and loosening it further would silently drop a real
+ * description. The two trees have separate tsconfigs and cannot share the
+ * type, so the only thing keeping them honest is this pair of comments and
+ * their tests.
  */
 export function heroAltOf(trip: Trip): string | undefined {
   const alt = trip.data.heroImage.alt.trim();
-  return alt === trip.data.title.trim() ? '' : undefined;
+  return alt.toLowerCase() === trip.data.title.trim().toLowerCase() ? '' : undefined;
 }
 
 export function byLocale(trips: Trip[], locale: Locale): Trip[] {

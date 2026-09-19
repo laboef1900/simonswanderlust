@@ -23,18 +23,25 @@
 /** Columns in the grid. Not configurable — the class lookup in StoryGrid.astro is written out for these spans. */
 export const GRID_COLUMNS = 6;
 
-/** Fixed row height in px, and the gap between tracks, used to derive `sizes`. */
-const ROW_HEIGHT = 240;
+/**
+ * Fixed row height in px, and the gap between tracks, used to derive `sizes`.
+ *
+ * @ai-warning 280, not 240, and the two numbers are not interchangeable: the
+ * card's caption panel is ~150px tall with a two-line title, which is 63% of a
+ * 240px tile and 54% of a 280px one. Raising it also flips which dimension
+ * `object-fit: cover` scales by on several tiles — a 3:2 frame in a box taller
+ * than width/1.5 paints by HEIGHT — which is why `cardSizes` below corrects
+ * every regime rather than only the base one. Change this and re-derive that
+ * function, `StoryGrid`'s literal `auto-rows-[…]` class (Tailwind cannot read
+ * this constant) and the aspect test.
+ */
+const ROW_HEIGHT = 280;
 const GAP = 16;
 
-/**
- * Height of a double-height tile, and the width its photograph actually
- * paints there. See the @ai-note on `cardSizes`.
- */
+/** Height of a double-height tile. */
 const DOUBLE_ROW_HEIGHT = 2 * ROW_HEIGHT + GAP;
 /** Aspect ratio of the landscape hero frames the cards crop (3:2). */
 const FRAME_ASPECT = 3 / 2;
-const DOUBLE_PAINTED_WIDTH = Math.round(DOUBLE_ROW_HEIGHT * FRAME_ASPECT);
 
 /** Widest the grid's content box gets (`max-w-6xl` minus the section's `px-5`). */
 const MAX_CONTENT = 1152;
@@ -130,9 +137,21 @@ function mosaic(count: number): StorySpan[] {
  * lead tile already belongs to a different story, and the cover simply appears
  * as a small tile. Several stories MAY carry the flag — see `content.config.ts`
  * — so `coverIndex` is just "wherever the chosen one happens to sit".
+ *
+ * @ai-warning Below three cards there is no sibling to hand the tall tile to,
+ * and the old code simply gave up and returned the plan — so a site with one
+ * or two published trips painted its cover as the 65vh hero AND as a
+ * double-height tile immediately below, which is the exact failure this
+ * function exists to prevent, surviving in the only case it was never
+ * exercised on. Levelling EVERY tile to one row is the safe answer at those
+ * counts and only those: one card fills its row alone, two fill one row
+ * together, so no cell is opened either way. Levelling just the cover's tile
+ * would leave its neighbour two rows tall beside a one-row gap.
  */
 export function demoteCover(spans: StorySpan[], coverIndex: number): StorySpan[] {
-  if (coverIndex !== 0 || spans.length < 3) return spans;
+  if (coverIndex < 0 || coverIndex >= spans.length) return spans;
+  if (spans.length < 3) return spans.map((span) => ({ ...span, lgRows: 1 }));
+  if (coverIndex !== 0) return spans;
   const swapped = [...spans];
   [swapped[0], swapped[1]] = [swapped[1]!, swapped[0]!];
   return swapped;
@@ -148,30 +167,32 @@ export function tileWidth(cols: number): number {
  * `sizes` for a card photo, exact above `CONTENT_LOCKED_AT` and a column
  * fraction below it.
  *
- * @ai-note Single-height cards crop with `object-fit: cover` into a box that
- * is WIDER than it is tall (a 2-column tile is 373×240), so unlike the
- * full-bleed hero the painted width is the box width and a plain width hint is
- * correct for them. A DOUBLE-height card is the hero's trap in miniature: in
- * the base regime it is one column wide (≈350px) and two rows tall
- * (2 × 240 + 16 = 496), so a 3:2 frame under `cover` scales by HEIGHT and
- * paints 496 × 1.5 ≈ 744px while `100vw` claims 350 — the candidate picker
- * would ship an upscaled artifact for the largest tile on a phone. Only the
- * base entry needs the correction: at `sm` the tile is reset to one row
- * (StoryGrid's `sm:row-span-1`), and at `lg` it is 763px wide against the same
- * 496 height, so width leads again. See the @ai-warning in FeaturedHero.astro
- * for the measured version of the same mistake.
+ * @ai-warning Under `object-fit: cover` a 3:2 frame paints
+ * `max(boxWidth, boxHeight × 1.5)`, so EVERY entry here is that `max()`. It
+ * used to correct only the base regime, on the reasoning that a card box is
+ * always wider than 3:2 — which held at a 240px row and stopped holding at
+ * 280. A 2-column tile is 373×280 (aspect 1.33), the `lg` lead tile 763×576
+ * (1.32), and a `sm` tile at a 640px viewport 320×280 (1.14): all three now
+ * paint by HEIGHT, and a plain width hint would ship an upscaled artifact for
+ * most of the grid. The `max()` is not belt-and-braces — it is the formula.
+ *
+ * `baseTall` is the one thing this module cannot derive: below `sm` every card
+ * is full-width and the double-height rhythm is chosen by StoryGrid from the
+ * card's INDEX, not from its span, so the caller must say which tiles are two
+ * rows tall there. Getting it wrong is the miniature of the hero's own trap
+ * (see the @ai-warning in FeaturedHero.astro).
  */
-export function cardSizes(span: StorySpan): string {
+export function cardSizes(span: StorySpan, baseTall = false): string {
   const pct = (cols: number) => Math.round((cols / GRID_COLUMNS) * 100);
-  const base =
-    span.lgRows === 2
-      ? `max(calc(100vw - 2.5rem), ${DOUBLE_PAINTED_WIDTH}px)`
-      : 'calc(100vw - 2.5rem)';
+  const painted = (rows: 1 | 2) =>
+    Math.round((rows === 2 ? DOUBLE_ROW_HEIGHT : ROW_HEIGHT) * FRAME_ASPECT);
+  const hint = (box: string, rows: 1 | 2) => `max(${box}, ${painted(rows)}px)`;
   return [
-    `(min-width: ${CONTENT_LOCKED_AT}px) ${tileWidth(span.lg)}px`,
-    `(min-width: 1024px) ${pct(span.lg)}vw`,
-    `(min-width: 640px) ${pct(span.sm)}vw`,
-    base,
+    `(min-width: ${CONTENT_LOCKED_AT}px) ${hint(`${tileWidth(span.lg)}px`, span.lgRows)}`,
+    `(min-width: 1024px) ${hint(`${pct(span.lg)}vw`, span.lgRows)}`,
+    // `sm:row-span-1` in StoryGrid resets every tile to one row in this regime.
+    `(min-width: 640px) ${hint(`${pct(span.sm)}vw`, 1)}`,
+    hint('calc(100vw - 2.5rem)', baseTall ? 2 : 1),
   ].join(', ');
 }
 

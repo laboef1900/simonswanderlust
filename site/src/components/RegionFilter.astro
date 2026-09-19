@@ -12,65 +12,100 @@ interface Props {
 const { locale, active } = Astro.props;
 const t = useTranslations(locale);
 
-// @ai-note These chips are NAVIGATION, not an in-page filter — clicking one
-// leaves for the region's own (SEO-relevant) page. They therefore carry the
-// count of what they lead to: a visitor used to jump blind from nine stories to
-// two. `aria-current="true"`, not `"page"`: the home page's own nav link
-// already claims `page`, and two `aria-current="page"` on one document tell a
-// screen-reader user that two different things are the current page.
+/*
+  @ai-warning These are NAVIGATION. They used to be `rounded-full` pills with a
+  filled active state, sitting in the same baseline row as the "Alle
+  Reiseberichte" heading under the label "Nach Region filtern" — which is the
+  universal grammar of an in-page filter, and every part of it was a lie. A
+  visitor clicking "Europa 5" expected nine cards to become five; what happened
+  was the document unloaded, the hero and the map went with it, and the only
+  route back was another pill. That fired at the highest-intent moment on the
+  page, the instant someone started narrowing toward a click.
+
+  The control now says what it does: an index of destinations in the log
+  register, each with the count of what it leads to and a trailing arrow, and
+  no pill anywhere. If you ever want the other behaviour, filter the already
+  rendered cards in place and keep `/reiseziele/*` as the crawlable href — the
+  travel map is the precedent for that progressive enhancement. Do not go back
+  to a control that looks like one and behaves like the other.
+
+  The counts stay: a visitor used to jump blind from nine stories to two.
+*/
 const trips = byLocale(await getCollection('trips'), locale);
 const counts = regionCounts(trips);
 
-// "Alle" means the full story grid in EVERY context. It used to point at the
-// regions index from a region page, so the one escape hatch on the page led
-// somewhere the visitor had never been instead of back to all stories.
+/*
+  @ai-note "Alle" appears only on a region page. On the home page it was an
+  `aria-current="true"` link to `/#stories` — announced as the current thing
+  and still activatable, to nowhere, from a page already showing all nine
+  stories directly below it. The escape hatch only exists where there is
+  something to escape from, and it still means the full grid in every context
+  (it used to point at the regions index from a region page, so the one way out
+  led somewhere the visitor had never been).
+*/
 const allHref = homePath(locale) + '#stories';
 
-// @ai-warning The idle chip's border is the ONLY thing that makes it read as a
-// control, so it is non-text contrast under WCAG 2.2 SC 1.4.11 and needs 3:1.
-// `border-navy/20` measured 1.49:1 against canvas — four pills' worth of
-// floating text for a low-vision visitor. 0.55 is not a guess: it is the same
-// alpha the admin UI settled on for exactly this (`--line-control` in
-// uploader/public/admin.css, "3.49:1 on --canvas"), and `styles/tokens.test.ts`
-// pins it. Measure any change by resolving the composited `oklab()` through a
-// canvas, never by reading the token alpha — 0.45 "looks like" 3:1 and is 2.67.
-//
-// @ai-warning `translate` MUST be in the transition list. Tailwind 4 compiles
-// `-translate-y-0.5` to the `translate` property, not to `transform`, so the
-// old `…,transform` list animated nothing and the hover lift snapped in one
-// frame. `transform` stays for any future scale/rotate on these chips.
-const chip =
-  'inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-full border px-4 py-2 text-sm font-medium transition-[color,background-color,border-color,transform,translate] motion-safe:hover:-translate-y-0.5';
-const on = 'border-navy bg-navy text-white shadow-sm';
-const off = 'border-navy/55 bg-canvas text-ink/70 hover:border-brand-red hover:text-brand-red';
-// @ai-warning NO opacity utility here, and no alpha on the colour either. The
-// count used to carry `opacity-70` ON TOP of the idle chip's `text-ink/70`,
-// and the two MULTIPLY: `#16212e` landed at α 0.49, not 0.70, and measured
-// 3.14:1 on canvas — a WCAG AA failure on the one glyph these chips were added
-// to show. The active chip's count was white/70 on navy (7.85:1) and passed,
-// which is exactly why the pair read as consistent styling. The count now
-// inherits its chip's own text colour (5.97:1 idle, 14.6:1 active) and is
-// de-emphasised by SIZE and the mono face instead — a register change that
-// costs no contrast. `tokens.test.ts` pins the composite; the same trap as the
-// border two lines above, one layer further in.
-const count = 'font-mono text-[11px] tabular-nums';
+const item =
+  'group/dest inline-flex min-h-[44px] items-center gap-1.5 rounded font-mono text-[11px] font-semibold tracking-log uppercase underline-offset-4 transition-[color]';
+const link = `${item} text-navy hover:text-brand-red hover:underline hover:decoration-dashed active:text-brand-red`;
+/*
+  @ai-note The current region is not a link to itself. It reads as the place
+  you are — brand-red, no arrow, `aria-current` — which is the same decision as
+  dropping "Alle" from the home page, one level in.
+*/
+const current = `${item} text-brand-red`;
+// @ai-warning NO opacity utility on the count, and no alpha on the colour. It
+// once carried `opacity-70` on top of an inherited `text-ink/70` and the two
+// MULTIPLIED: `#16212e` landed at α 0.49 and measured 3.14:1 on canvas, a WCAG
+// AA failure on the one glyph these links were given a count for. `brand-red`
+// on canvas is 4.58:1 flat. `styles/tokens.test.ts` pins it.
+const count = 'tabular-nums text-brand-red';
 ---
 
-<nav aria-label={t('regions.filterLabel')} class="flex flex-wrap gap-2">
-  <a href={allHref} aria-current={!active ? 'true' : undefined} class:list={[chip, active ? off : on]}>
-    {t('home.filter.all')}
-    <span class={count}>{trips.length}</span>
-  </a>
+<nav aria-label={t('regions.navLabel')} class="flex flex-wrap items-center gap-x-5 gap-y-1">
   {
-    regions.map((region) => (
-      <a
-        href={regionPath(region, locale)}
-        aria-current={active === region ? 'true' : undefined}
-        class:list={[chip, active === region ? on : off]}
-      >
-        {t(`region.${region}` as UIKey)}
-        <span class={count}>{counts[region]}</span>
+    active && (
+      <a href={allHref} class={link}>
+        <span>{t('home.filter.all')}</span>
+        <span class={count}>{trips.length}</span>
+        <svg
+          aria-hidden="true"
+          focusable="false"
+          class="h-3 w-3 text-navy/55 transition-[color,transform] duration-300 group-hover/dest:text-brand-red motion-safe:group-hover/dest:translate-x-0.5"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
       </a>
-    ))
+    )
+  }
+  {
+    regions.map((region) =>
+      active === region ? (
+        <span aria-current="true" class={current}>
+          <span>{t(`region.${region}` as UIKey)}</span>
+          <span class={count}>{counts[region]}</span>
+        </span>
+      ) : (
+        <a href={regionPath(region, locale)} class={link}>
+          <span>{t(`region.${region}` as UIKey)}</span>
+          <span class={count}>{counts[region]}</span>
+          <svg
+            aria-hidden="true"
+            focusable="false"
+            class="h-3 w-3 text-navy/55 transition-[color,transform] duration-300 group-hover/dest:text-brand-red motion-safe:group-hover/dest:translate-x-0.5"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </a>
+      ),
+    )
   }
 </nav>

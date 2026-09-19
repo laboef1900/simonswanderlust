@@ -27,6 +27,7 @@ import {
 import { SettingsError, type SettingsStore } from './settings.js';
 import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale } from './posts.js';
 import { foreignImageUrls } from './publish-gate.js';
+import { auditAltText } from './alt-audit.js';
 import { renderPreviewHtml, previewCsp } from './preview.js';
 import { type PageStore, type PagePair, type PageContent, type ImageDims, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
@@ -964,6 +965,21 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send(pair);
   });
 
+  /**
+   * The alt-text audit (see src/alt-audit.ts): the photos of this post that
+   * reach a reader undescribed. Author-level, like every other read here.
+   *
+   * @ai-warning Advisory ONLY. Nothing in this route, and nothing that reads
+   * it, may refuse a publish — the imported corpus is in exactly this state.
+   * The reply is the audit's own explicit shape, never a stored row.
+   */
+  app.get('/posts/:tk/alt-audit', { preHandler: requireAuth }, async (req, reply) => {
+    const pair = await posts.get((req.params as { tk: string }).tk);
+    if (!pair) return reply.code(404).send({ error: 'post not found' });
+    const audit = auditAltText(pair);
+    return reply.send({ count: audit.count, images: audit.images });
+  });
+
   // Server-side preview of a draft (or published) post, rendered through the
   // same markdown pipeline the site build uses (see src/preview.ts). Drafts
   // are author territory, so requireAuth — publishing stays admin-only. The
@@ -1113,7 +1129,16 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (published) await exportPost(published, cfg.backupDir).catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
     // updatedAt: publish bumps the stored timestamp, so the editor must re-sync
     // its concurrency echo or its very next Save would falsely 409.
-    return reply.send({ published: true, build, updatedAt: published?.updatedAt });
+    // altAudit rides along so the editor can name the photos that went live
+    // undescribed (src/alt-audit.ts) without a second round trip. It is
+    // reported AFTER the publish succeeded, on purpose: it never gates one.
+    const audit = auditAltText(published ?? pair);
+    return reply.send({
+      published: true,
+      build,
+      updatedAt: published?.updatedAt,
+      altAudit: { count: audit.count, images: audit.images },
+    });
   });
 
   // Bulk publish / unpublish / delete from the posts list. Admin-only for the

@@ -39,7 +39,10 @@ describe('admin outcome messages are announced (SC 4.1.3)', () => {
   const cases: [typeof PAGES[number], string[]][] = [
     ['posts', ['out']], ['media', ['out']], ['import', ['out']], ['login', ['out', 'err']],
     ['users', ['out', 'pwout']], ['settings', ['out', 'backupStatus']],
-    ['editor', ['actionStatus', 'actionError', 'deHeroStatus', 'enHeroStatus', 'deBodyImgStatus', 'enBodyImgStatus']],
+    // altAuditSummary: the alt-text audit appears without any navigation, so
+    // it must be announced or the author never learns their photos ship
+    // undescribed. role="status" (not alert) — it is advisory, never a gate.
+    ['editor', ['actionStatus', 'actionError', 'deHeroStatus', 'enHeroStatus', 'deBodyImgStatus', 'enBodyImgStatus', 'altAuditSummary']],
     ['about', ['actionStatus', 'actionError', 'deBodyImgStatus', 'enBodyImgStatus']],
     ['index', ['deskStatus', 'deskError']],
   ];
