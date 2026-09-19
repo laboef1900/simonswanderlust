@@ -20,23 +20,55 @@ const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
 // `content-visibility` is safe here (unlike on the story grid — see
 // StoryGrid.astro): the footer's own `px-5 py-14` padding keeps every link's
 // focus ring well inside the paint-containment box.
+//
+// @ai-warning Every secondary text colour in here is `/70` or heavier, and that
+// is a contrast floor, not a style preference. `<Contours />` paints #7fa3c8 at
+// 25% over the navy, so the real backdrop under a glyph is not #142a42 but a
+// ridge of #2f4864 — light enough that the column labels at `text-white/50`
+// measured 3.705:1, a straight AA failure at 12px, and `text-white/60` on the
+// tagline cleared by 0.077 of a point. `/70` is 5.578:1 against that same
+// ridge. Measure any change against the RIDGE, never against the token;
+// `styles/tokens.test.ts` derives it from Contours.astro and pins all three.
+//
+// @ai-warning The logline cannot be fixed that way: `brand-red-light` measures
+// 3.058:1 over the ridge OPAQUE, at any weight, because the accent is barely
+// lighter than the texture — which is exactly what the live page measured
+// (3.03:1). It therefore sits on an opaque navy plate, the same device the
+// hero and the story cards use to put type over a photograph, and the plate is
+// what restores 4.741:1. Never make it translucent.
 ---
 
-<footer class="relative overflow-hidden bg-navy text-white [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
+<footer
+  class="relative overflow-hidden border-t border-white/10 bg-navy text-white [content-visibility:auto] [contain-intrinsic-size:auto_520px]"
+>
   <Contours />
   <div class="relative mx-auto grid max-w-6xl gap-10 px-5 py-14 md:grid-cols-[2.2fr_1fr_1fr]">
     <div>
       <p class="text-lg font-extrabold tracking-wider text-white uppercase">{t('site.title')}</p>
-      <p class="mt-1 text-sm text-white/60">{t('site.tagline')}</p>
-      <p class="mt-4 font-mono text-[11px] tracking-log text-brand-red-light uppercase">
-        {t('footer.logline')}
-      </p>
+      <p class="mt-1 text-sm text-white/70">{t('site.tagline')}</p>
+      {/*
+        The cameras are the credibility asset for a photography audience and
+        they only lived on /uber-mich/ and, briefly, in an 11px line at the
+        bottom of a centred about teaser on the home page. Here they ride the
+        same plate as the logline, in the same register, on every page.
+      */}
+      <div class="mt-4 inline-block rounded bg-navy px-2.5 py-1.5">
+        <p class="font-mono text-[11px] tracking-log text-brand-red-light uppercase">
+          {t('footer.logline')}
+        </p>
+        <p class="mt-1 font-mono text-[11px] tracking-log text-white/70 uppercase">
+          {t('about.gear')}
+        </p>
+      </div>
     </div>
     <div>
-      <p class="text-xs font-semibold tracking-log text-white/50 uppercase">
+      <p class="text-xs font-semibold tracking-log text-white/70 uppercase">
         {t('footer.latest')}
       </p>
-      <ul class="mt-1 text-sm text-white/80">
+      {/* @ai-warning role="list": Tailwind Preflight strips `list-style` from
+          every `ul`, and WebKit drops implicit list semantics with it. Same
+          reason StoryGrid carries it. */}
+      <ul role="list" class="mt-1 text-sm text-white/80">
         {
           latest.map((trip) => (
             <li>
@@ -52,10 +84,10 @@ const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
       </ul>
     </div>
     <div>
-      <p class="text-xs font-semibold tracking-log text-white/50 uppercase">
+      <p class="text-xs font-semibold tracking-log text-white/70 uppercase">
         {t('footer.about')}
       </p>
-      <ul class="mt-1 text-sm text-white/80">
+      <ul role="list" class="mt-1 text-sm text-white/80">
         <li>
           <a
             href={aboutPath(locale)}

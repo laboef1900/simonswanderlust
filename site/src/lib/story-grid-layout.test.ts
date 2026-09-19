@@ -105,9 +105,22 @@ describe('demoteCover', () => {
     expect(isLead(demoteCover(plan, 3)[0])).toBe(true);
   });
 
-  it('does not disturb counts too small to carry a lead tile', () => {
-    for (const n of [1, 2, 3]) {
-      expect(demoteCover(storyGridSpans(n), 0)).toEqual(storyGridSpans(n));
+  it('levels every tile when the count is too small to hand the lead tile on', () => {
+    // The old contract here was "return the plan unchanged", which is how a
+    // one- or two-trip site ended up painting its cover as the hero AND as a
+    // double-height tile directly below it.
+    for (const n of [1, 2]) {
+      const plan = demoteCover(storyGridSpans(n), 0);
+      expect(plan.every((s) => s.lgRows === 1), `${n} cards: a tile is still two rows tall`).toBe(true);
+      expect(plan.map((s) => s.lg)).toEqual(storyGridSpans(n).map((s) => s.lg));
+    }
+    // Three cards already carry no lead tile, so the swap is a no-op.
+    expect(demoteCover(storyGridSpans(3), 0)).toEqual(storyGridSpans(3));
+  });
+
+  it('leaves the plan alone when no story is flagged as the cover', () => {
+    for (const n of [1, 2, 9]) {
+      expect(demoteCover(storyGridSpans(n), -1)).toEqual(storyGridSpans(n));
     }
   });
 

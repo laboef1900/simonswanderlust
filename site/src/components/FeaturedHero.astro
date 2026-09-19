@@ -16,30 +16,53 @@ const locale = localeOf(trip);
 const t = useTranslations(locale);
 const meta = `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
 
+/*
+  @ai-note This component is the HOME PAGE's front door and nothing else, which
+  is why it owns the document's <h1>. That <h1> is the site's tagline, not the
+  featured trip's title: a homepage whose only <h1> is "Bukarest in 4 Tagen"
+  tells every outline reader — and every first-time visitor — that the page is
+  about Bucharest, and the same string was then repeated verbatim as the first
+  card's <h3> two screens down. The entry below the rule is an <h2>, the same
+  level as "Alle Reiseberichte", because that is what it is: one promoted item,
+  not the subject of the page.
+*/
+const titleId = 'hero-entry-title';
+
 // @ai-note The stored hero alt is the post title on every WordPress-imported
-// post, and the <h1> two lines below announces that title anyway — so a screen
+// post, and the entry heading below announces that title anyway — so a screen
 // reader heard it twice. Decorative ONLY in that case: a hand-written alt that
 // actually describes the photograph still reaches the image. Shared with
 // StoryCard, which shows the same photo beside the same title.
 const heroAlt = heroAltOf(trip);
 
 /*
-  @ai-warning `sizes` must describe the width the browser PAINTS, not the
-  width of the box. This hero is a portrait-ish full-bleed box holding a
-  landscape frame under `object-fit: cover`, so cover scales by height:
-  painted width = box height × the photo's aspect ratio. At 390×591 that is
-  ~886px while `100vw` claimed 390, so the candidate picker chose `-640` and
-  the LCP artifact of a photography-led site shipped 1.38× UPSCALED — and
-  it did not self-correct at DPR 2 either (the 1280 candidate still owes
-  1772 device px). 105vh ≈ 70vh × 1.5 below `sm`, 98vh ≈ 65vh × 1.5 above it,
-  matching the two hero heights below; `max()` keeps landscape viewports on
-  the box width. A browser too old to parse `max()` here ignores the whole
-  descriptor and falls back to 100vw, i.e. exactly today's behaviour.
+  @ai-warning `sizes` must describe the width the browser PAINTS, not the width
+  of the box, and under `object-fit: cover` which dimension leads DEPENDS ON
+  THE BOX'S ASPECT:
+
+    box aspect  > frame aspect (3:2)  → width leads,  painted = box width
+    box aspect  < frame aspect        → height leads, painted = box height × 1.5
+
+  Getting that backwards in either direction is a real, measured bug. It shipped
+  once as an under-fetch: at 390×591 the box is portrait, so the hero painted
+  ~886px while a bare `100vw` claimed 390 — the LCP artifact of a photography-led
+  site went out 1.38× UPSCALED, and it did not self-correct at DPR 2 either. It
+  has also been "reported" the other way, as a desktop over-fetch, by computing
+  `height × 1.5` for a box that is WIDER than 3:2 (1425×720 ⇒ aspect 1.98) where
+  cover fills the width and 1425px is the honest answer. Re-derive both branches
+  before touching this string.
+
+  The heights below are `max(78vh, 560px)` and `clamp(480px, 80vh, 720px)`, so:
+    base  painted = max(100vw, 1.5 × max(78vh, 560))       = max(100vw, 117vh, 840px)
+    sm+   painted = max(100vw, 1.5 × clamp(480, 80vh, 720)) = max(100vw, min(120vh, 1080px), 720px)
+  A browser too old to parse `max()`/`min()` here ignores the whole descriptor
+  and falls back to 100vw, i.e. the under-fetch above — acceptable, not correct.
 */
-const HERO_SIZES = '(max-width: 639px) max(100vw, 105vh), max(100vw, 98vh)';
+const HERO_SIZES =
+  '(max-width: 639px) max(100vw, 117vh, 840px), max(100vw, min(120vh, 1080px), 720px)';
 ---
 
-<section class="relative h-[70vh] min-h-[460px] sm:h-[65vh] sm:min-h-[420px]">
+<section class="relative h-[78vh] min-h-[560px] sm:h-[80vh] sm:max-h-[720px] sm:min-h-[480px]">
   <RemoteImage
     image={trip.data.heroImage}
     alt={heroAlt}
@@ -49,13 +72,14 @@ const HERO_SIZES = '(max-width: 639px) max(100vw, 105vh), max(100vw, 98vh)';
     class="absolute inset-0 h-full w-full object-cover"
   />
   {/*
-    Lighter than instinct says, on purpose: the log mark no longer depends on
-    the scrim for contrast (it carries its own opaque plate), so the gradient
-    only has to hold the white headline — which measures >11:1 at these stops.
-    Alpha above that is photograph thrown away on a page whose premise is the
-    photograph.
+    A grounding vignette, not a scrim. Nothing on this hero reads against the
+    photograph any more — the entry sits on opaque paper and the stamp on its
+    own opaque chip — so the gradient no longer has a contrast job at all. What
+    is left is the job it should always have had: seating the paper on the
+    frame and closing the bottom crop. Alpha above this is photograph thrown
+    away on a page whose premise is the photograph.
   */}
-  <div class="absolute inset-0 bg-gradient-to-t from-navy/90 via-navy/40 to-navy/10"></div>
+  <div class="absolute inset-0 bg-gradient-to-t from-navy/45 via-navy/10 via-40% to-transparent"></div>
 
   {/*
     @ai-warning The stamp's inks are DARK (`lib/stamp.ts`: near-black, navy,
@@ -87,68 +111,103 @@ const HERO_SIZES = '(max-width: 639px) max(100vw, 105vh), max(100vw, 98vh)';
   </div>
 
   <div class="absolute right-0 bottom-0 left-0">
-    <div class="mx-auto max-w-6xl px-5 pb-8 text-white sm:pb-12">
+    <div class="mx-auto max-w-6xl px-5 pb-6 sm:pb-10">
       {/*
-        @ai-warning The log mark sits on an OPAQUE navy plate, and that is the
-        whole point: painted straight onto the photograph it measured 1.19:1 on
-        a phone and 3.50:1 on a desktop (the mobile crop puts bright sky behind
-        it), because a fixed gradient scrim is weakest exactly where this line
-        sits. On solid navy the light accent is 4.8:1 and white is 14.6:1,
-        whatever the frame underneath. Never move this text back onto the
-        gradient, and never tint the plate with an alpha — an /80 plate over a
-        white sky drops the accent to 3.5:1 again.
+        @ai-warning This panel is OPAQUE paper — the same material as the stamp
+        chip above it, and for the same reason. Every previous version of this
+        hero set white type straight onto the gradient and then spent the rest
+        of its life defending that decision: the log line measured 1.19:1 on a
+        phone before it got its own navy plate, and the headline still sat at
+        ~2.8:1 whenever a long German compound pushed its top line up out of the
+        dark end of the scrim. Type on paper is 5.4:1 to 14:1 on every frame,
+        at any length, with no scrim at all — which is also what let the
+        gradient above drop to a vignette. Never tint this panel with an alpha,
+        and never move type back onto the photograph.
       */}
-      <p
-        class="inline-flex flex-wrap items-center gap-x-2 rounded border border-white/15 bg-navy px-2.5 py-1 font-mono text-[11px] font-semibold tracking-log uppercase sm:text-xs"
-      >
-        {number !== undefined && <span class="text-brand-red-light">{entryLabel(number)}</span>}
-        <span class="text-white">{meta}</span>
-      </p>
-      {/*
-        @ai-warning `break-words hyphens-auto` is not cosmetic. A 30-character
-        German compound at `text-3xl`/extrabold overflows a 390px viewport as
-        one unbreakable word: measured `scrollingElement.scrollWidth` 819
-        against `clientWidth` 390, i.e. 429px of sideways pan on the LANDING
-        page in the default locale. Nav.astro carries the same German-width
-        warning (its labels are ~40px wider than the English ones) and the
-        audit behind it missed this heading — the largest type on the site.
-        Base.astro sets `<html lang={locale}>`, so on a DE page `hyphens-auto`
-        breaks at syllables rather than mid-morpheme. StoryCard's <h3> already
-        carries the same rule.
-      */}
-      <h1
-        class="mt-3 max-w-3xl text-3xl leading-[1.15] font-extrabold break-words hyphens-auto text-white drop-shadow-xs sm:text-4xl md:text-5xl md:leading-[1.08]"
-      >
-        {trip.data.title}
-      </h1>
-      {/*
-        Hidden below `sm`, not shrunk: at 390px the excerpt (a 158-character
-        WordPress meta description) plus the coordinate line pushed the text
-        block to 79% of the hero's height, leaving 11% of the first viewport as
-        unobstructed photograph on a site whose premise is that the photograph
-        is the content.
-      */}
-      <p class="mt-3 hidden max-w-xl text-white/90 sm:block">{trip.data.excerpt}</p>
-      <p class="mt-2 hidden font-mono text-xs tracking-log text-white/70 sm:block">
-        {coordsLabel(trip.data.coordinates)}
-      </p>
-      <a
-        href={pathOf(trip)}
-        class="group/btn mt-5 inline-flex min-h-[44px] items-center gap-2 rounded bg-brand-red px-5 py-3 text-sm font-semibold text-white transition-[background-color,box-shadow] hover:bg-brand-red-light hover:shadow-lg focus-visible:outline-brand-red-light"
-      >
-        <span>{t('home.readStory')}</span>
-        <svg
-          aria-hidden="true"
-          focusable="false"
-          class="h-4 w-4 transition-transform duration-300 motion-safe:group-hover/btn:translate-x-1"
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
+      <div class="max-w-2xl rounded-sm bg-canvas p-5 shadow-2xl sm:p-6">
+        {/*
+          Set quietly on purpose. The wordmark is in the header ~60px above
+          this line, so repeating the identity at display size would be the
+          page shouting its own name; what was actually missing was any
+          statement of what the site IS in the first viewport at all — the
+          tagline rendered only in the footer, three screens down.
+        */}
+        <h1 class="text-base font-semibold tracking-[-0.01em] text-navy/75 sm:text-lg">
+          {t('site.tagline')}
+        </h1>
+        {/*
+          The route motif, earned rather than decorative: it separates the
+          masthead from the entry, which is the one place on this page where a
+          dashed rule is dividing two different kinds of thing. RouteDivider
+          draws the same line between the index and the map band.
+        */}
+        <div aria-hidden="true" class="mt-4 border-t border-dashed border-navy/25"></div>
+        {/*
+          One link, not two. The whole entry is the target — a 44px text link
+          under a headline the visitor already read is a second chance to miss —
+          but `aria-labelledby` keeps the accessible name to the title alone,
+          so a screen-reader user is not read the entry number, the date, the
+          country, the coordinates and the excerpt before learning what the
+          story is.
+        */}
+        <a
+          href={pathOf(trip)}
+          aria-labelledby={titleId}
+          class="group/entry mt-4 block rounded-sm focus-visible:outline-brand-red"
         >
-          <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      </a>
+          <p class="flex flex-wrap items-center gap-x-2 font-mono text-[11px] font-semibold tracking-log uppercase">
+            {number !== undefined && <span class="text-brand-red">{entryLabel(number)}</span>}
+            <span class="text-navy/70">{meta}</span>
+          </p>
+          {/*
+            @ai-warning `break-words` is not cosmetic. A 30-character German
+            compound at this weight overflows a 390px viewport as one
+            unbreakable word: measured `scrollingElement.scrollWidth` 819
+            against `clientWidth` 390, i.e. 429px of sideways pan on the
+            LANDING page in the default locale. `hyphens-auto` is the graceful
+            version of that guard and is scoped to where it is needed —
+            Base.astro sets `<html lang={locale}>`, so on a DE page it breaks
+            at syllables — but from `sm` up the panel is wide enough that all
+            it did was hyphenate the largest type on the site mid-word
+            ("Bukarest in 4 Tagen: Nacht-/zug"). Above `sm`, `break-words`
+            alone still catches a genuine overflow, just without the hyphen.
+            `line-clamp-3` is the other half: a five-line title used to push
+            this panel past the hero's own height.
+          */}
+          <h2
+            id={titleId}
+            class="mt-1.5 text-2xl leading-[1.12] font-extrabold text-balance break-words hyphens-auto text-navy transition-[color] group-hover/entry:text-brand-red sm:text-3xl sm:hyphens-none md:text-4xl"
+          >
+            {trip.data.title}
+          </h2>
+          <p class="mt-2 font-mono text-[11px] tracking-log text-navy/70">
+            {coordsLabel(trip.data.coordinates)}
+          </p>
+          {/*
+            Shown at every width now. It was `hidden sm:block` because on the
+            old hero it was white-on-photograph and cost 158 characters of
+            scrim; on paper it costs nothing, and it is the only thing on a
+            phone that says what the story is ABOUT rather than where it was.
+          */}
+          <p class="mt-3 line-clamp-2 text-sm text-ink/80">{trip.data.excerpt}</p>
+          <span
+            class="mt-4 inline-flex min-h-[44px] items-center gap-2 text-sm font-semibold text-brand-red"
+          >
+            <span>{t('home.readStory')}</span>
+            <svg
+              aria-hidden="true"
+              focusable="false"
+              class="h-4 w-4 transition-transform duration-300 motion-safe:group-hover/entry:translate-x-1"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </span>
+        </a>
+      </div>
     </div>
   </div>
 </section>

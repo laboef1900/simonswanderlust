@@ -130,9 +130,21 @@ function mosaic(count: number): StorySpan[] {
  * lead tile already belongs to a different story, and the cover simply appears
  * as a small tile. Several stories MAY carry the flag — see `content.config.ts`
  * — so `coverIndex` is just "wherever the chosen one happens to sit".
+ *
+ * @ai-warning Below three cards there is no sibling to hand the tall tile to,
+ * and the old code simply gave up and returned the plan — so a site with one
+ * or two published trips painted its cover as the 65vh hero AND as a
+ * double-height tile immediately below, which is the exact failure this
+ * function exists to prevent, surviving in the only case it was never
+ * exercised on. Levelling EVERY tile to one row is the safe answer at those
+ * counts and only those: one card fills its row alone, two fill one row
+ * together, so no cell is opened either way. Levelling just the cover's tile
+ * would leave its neighbour two rows tall beside a one-row gap.
  */
 export function demoteCover(spans: StorySpan[], coverIndex: number): StorySpan[] {
-  if (coverIndex !== 0 || spans.length < 3) return spans;
+  if (coverIndex < 0 || coverIndex >= spans.length) return spans;
+  if (spans.length < 3) return spans.map((span) => ({ ...span, lgRows: 1 }));
+  if (coverIndex !== 0) return spans;
   const swapped = [...spans];
   [swapped[0], swapped[1]] = [swapped[1]!, swapped[0]!];
   return swapped;

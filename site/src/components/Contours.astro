@@ -1,15 +1,31 @@
 ---
-/** Decorative topographic contour lines for dark bands. Parent needs `relative overflow-hidden`. */
+/**
+ * Decorative topographic contour lines for dark bands. Parent needs `relative overflow-hidden`.
+ *
+ * @ai-warning `preserveAspectRatio` is `slice`, not `none`, and the strokes are
+ * non-scaling. With `none` the 600×90 viewBox was stretched to whatever box it
+ * landed in: on a 1440×300 desktop footer that reads as contour lines, but on a
+ * 390×510 mobile one the same four curves became three enormous sine waves
+ * filling the whole panel and stopped reading as terrain at all. `slice` keeps
+ * the curves' real shape and crops instead, so a narrow viewport shows a narrow
+ * strip of the same drawing; `vector-effect` then keeps the hairline at 1px
+ * through a ~5.7× scale factor, which `none` also used to distort.
+ *
+ * @ai-warning The opacity here is a contrast input, not a style knob: the ridges
+ * lighten the navy behind them to rgb(47,73,99), which is what sets the `/70`
+ * floor on every secondary text colour in Footer.astro. Raising it invalidates
+ * those measurements.
+ */
 ---
 
 <svg
   aria-hidden="true"
   class="pointer-events-none absolute inset-0 h-full w-full text-[#7fa3c8] opacity-25"
   viewBox="0 0 600 90"
-  preserveAspectRatio="none"
+  preserveAspectRatio="xMidYMid slice"
 >
-  <path d="M0,60 Q80,20 160,45 T320,40 T480,55 T600,35" stroke="currentColor" fill="none" stroke-width="1"></path>
-  <path d="M0,75 Q90,40 180,60 T340,55 T500,70 T600,50" stroke="currentColor" fill="none" stroke-width="1"></path>
-  <path d="M0,45 Q70,5 150,30 T310,25 T470,40 T600,20" stroke="currentColor" fill="none" stroke-width="1"></path>
-  <path d="M0,30 Q100,-5 200,15 T380,10 T560,25 T600,8" stroke="currentColor" fill="none" stroke-width="1"></path>
+  <path d="M0,60 Q80,20 160,45 T320,40 T480,55 T600,35" stroke="currentColor" fill="none" stroke-width="1" vector-effect="non-scaling-stroke"></path>
+  <path d="M0,75 Q90,40 180,60 T340,55 T500,70 T600,50" stroke="currentColor" fill="none" stroke-width="1" vector-effect="non-scaling-stroke"></path>
+  <path d="M0,45 Q70,5 150,30 T310,25 T470,40 T600,20" stroke="currentColor" fill="none" stroke-width="1" vector-effect="non-scaling-stroke"></path>
+  <path d="M0,30 Q100,-5 200,15 T380,10 T560,25 T600,8" stroke="currentColor" fill="none" stroke-width="1" vector-effect="non-scaling-stroke"></path>
 </svg>
