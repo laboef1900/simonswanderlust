@@ -1,0 +1,75 @@
+---
+import RemoteImage from './RemoteImage.astro';
+import Stamp from './Stamp.astro';
+import { useTranslations, type Locale } from '../i18n/ui';
+import { coordsLabel, dateLabel, entryLabel } from '../lib/format';
+import { heroAltOf, type Trip } from '../lib/trips';
+
+interface Props {
+  trip: Trip;
+  number: number;
+  locale: Locale;
+  otherHref?: string;
+}
+
+const { trip, number, locale, otherHref } = Astro.props;
+const t = useTranslations(locale);
+const otherLocale = locale === 'de' ? 'en' : 'de';
+const image = trip.data.heroImage;
+const aspect = image.width / image.height;
+// Cover paints whichever is wider: the viewport or the clamped height ×
+// the photograph's actual aspect ratio. Mobile preserves the whole frame.
+const sizes = `(max-width: 639px) 100vw, max(100vw, clamp(${240 * aspect}px, ${36 * aspect}vh, ${400 * aspect}px))`;
+---
+
+<header class="bg-canvas">
+  <RemoteImage
+    image={image}
+    alt={heroAltOf(trip)}
+    sizes={sizes}
+    loading="eager"
+    fetchpriority="high"
+    class="block h-auto w-full object-cover sm:h-[36vh] sm:max-h-[400px] sm:min-h-[240px]"
+  />
+
+  <div class="mx-auto max-w-3xl px-5 pt-6 pb-4 sm:pt-8">
+    <p class="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-xs font-semibold tracking-log uppercase">
+      <span class="text-brand-red">{entryLabel(number)}</span>
+      <span class="break-words text-navy/70">— {dateLabel(trip.data.date, locale)} · {trip.data.country}</span>
+    </p>
+    <h1 class="mt-2 text-2xl leading-[1.12] font-extrabold text-balance break-words hyphens-auto text-navy sm:text-3xl sm:hyphens-none md:text-4xl">
+      {trip.data.title}
+    </h1>
+    <div class="mt-4 flex items-center justify-between gap-4">
+      <div class="min-w-0">
+        <p class="font-mono text-xs leading-relaxed tracking-log text-navy/70">
+          {coordsLabel(trip.data.coordinates)}
+        </p>
+        {
+          otherHref && (
+            <a
+              href={otherHref}
+              lang={otherLocale}
+              hreflang={otherLocale}
+              class="mt-1 inline-flex min-h-[44px] items-center gap-2 rounded-sm py-2 text-sm font-medium text-brand-red underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2"
+            >
+              <span>{t('story.otherLang')}</span>
+              <svg aria-hidden="true" focusable="false" class="h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </a>
+          )
+        }
+      </div>
+      <div class="shrink-0 p-2">
+        <Stamp
+          countryCode={trip.data.countryCode}
+          country={trip.data.country}
+          date={trip.data.date}
+          region={trip.data.region}
+          locale={locale}
+        />
+      </div>
+    </div>
+  </div>
+</header>

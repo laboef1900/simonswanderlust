@@ -87,11 +87,30 @@ at mobile, tablet and desktop sizes. Rollback is a source revert; stored
 content is untouched.
 
 ### Story page composition
-1. Full-bleed hero image, title + label overlaid
-2. Intro + key-facts box (country stats, as today) + section TOC
-3. Body: prose sections, image galleries (grid + lightbox-free enlarged view; no JS lightbox in v1), tables where present
-4. Mini-map of this trip (pin(s); route line when data exists)
-5. Prev/next story navigation, link to the other language version
+The owner-approved refinement of 2026-09-19 supersedes the original overlaid
+hero and expanded preamble:
+
+1. Full-width photograph: natural aspect ratio on mobile; `36vh`, clamped to
+   `240–400px`, from `640px`. Title and metadata follow on opaque canvas.
+   Coordinates, the arrival stamp and the other-language link form one header.
+2. Compact, initially collapsed native contents and optional key-facts
+   disclosures. Contents stays available while reading; section selection
+   closes it and focuses the destination without replacing native URL history.
+   No-JavaScript links and disclosures remain functional.
+3. Unchanged author prose, headings, galleries and image rendering. The body
+   retains its `728px` desktop measure, `18px` type and `32px` line height;
+   list items also wrap non-breaking text at narrow widths.
+4. Existing trip mini-map and route divider.
+5. Chronological previous/next links with modest photographic thumbnails and
+   complete titles. A lone link uses the full column; absent links create no
+   placeholders, and no navigation is rendered when neither sibling exists.
+
+Content, slugs, DE/EN pairing, typography, palette, gallery behavior and stored
+data are preserved. The UI uses the existing translation keys. Verification
+includes encoded heading navigation, keyboard Escape, native no-JS navigation,
+320px long-content wrapping, portrait heroes, both locales and zero/one/two
+pagination states. Rollback is a source revert; no database migration or
+content rewrite is involved.
 
 ## 5. Technical architecture
 
