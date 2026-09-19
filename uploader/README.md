@@ -212,6 +212,29 @@ directly — the app server never contacts the model. LM config (`lmBaseUrl`, `l
 the admin-only Settings page; authors read it read-only via `GET /ai-config`. No
 `docker-compose`/`.env` LM variables are needed.
 
+## Deterministic editorial checks
+
+`public/editor-linter.js` exposes `window.EditorLinter` for one unsaved locale; load
+`gallery-fence.js` first. It is a pure, network-free advisory module, not a save/publish
+gate. The review drawer is integrated separately (#215).
+
+Call `lintStory({ title, excerpt, markdown, heroSrc, heroAlt })`, or the individual
+`lintTitle`, `lintExcerpt`, `lintHeadings`, `lintAltText`, and `lintInternalLinks` checks.
+Title (20–70) and excerpt (100–160) limits use the exact field's JavaScript string length,
+including spaces. The result contains each check, `pass`, and `warningCount` (individual
+findings, not categories). Findings have stable `code` values and readable `message`s;
+alt findings identify `target: 'hero' | 'inline' | 'gallery'`. Markdown `line` values are
+**1-indexed**; subtract one for CodeMirror. Hero and document-wide link findings have no line.
+
+ATX headings and inline image/link syntax ignore fenced examples through the same
+`GalleryFence.scanFences` used by the picker. Headings are checked before inline syntax;
+inline image/link checks hide code spans without crossing blank lines or ATX headings.
+Gallery metadata uses `GalleryFence.parse`. Inline checks cover `![alt](url)` / `[label](path)`, including
+escaped labels, optional titles, and angle destinations; reference links and raw HTML are
+outside this check. Another-story links can be root-relative or path-relative, not remote
+URLs, fragment-only links, or query-only links. Alt checks flag missing/whitespace-only text,
+not generic wording; they inspect the supplied markdown rather than the saved `images` map.
+
 ## Alt-text audit (advisory)
 
 The editor shows a warning listing every photo of the post that reaches a reader with **no
