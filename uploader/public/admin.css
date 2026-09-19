@@ -1033,7 +1033,23 @@ a:hover { color: var(--red-light); }
   border-radius: 0.4rem;
   border: 1px solid rgba(255, 255, 255, 0.55);
   text-decoration: none;
+  min-height: 2.75rem;
 }
+.cms-nav-close {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  min-height: 2.75rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: #fff;
+}
+.cms-nav-close:hover { background: rgba(255, 255, 255, 0.08); }
+.cms-nav-close svg { width: 1.25rem; height: 1.25rem; }
 .cms-btn-new:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
 .cms-btn-new svg { width: 1rem; height: 1rem; }
 
@@ -1065,6 +1081,7 @@ a:hover { color: var(--red-light); }
   font-size: 0.9rem;
   font-weight: 500;
   border-radius: 0.35rem;
+  min-height: 2.75rem;
 }
 .cms-nav-item:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
 .cms-nav-item[aria-current='page'] {
@@ -1074,7 +1091,8 @@ a:hover { color: var(--red-light); }
 }
 .cms-nav-item:focus-visible,
 .cms-logout-btn:focus-visible,
-.cms-btn-new:focus-visible {
+.cms-btn-new:focus-visible,
+.cms-nav-close:focus-visible {
   outline: 2px solid #fff;
   outline-offset: 2px;
 }
@@ -1131,7 +1149,7 @@ a:hover { color: var(--red-light); }
   display: inline-flex;
   gap: 0.35rem;
   margin: 0;
-  min-height: 2.5rem;
+  min-height: 2.75rem;
   align-items: center;
   justify-content: center;
   font-size: 0.78rem;
@@ -1159,8 +1177,8 @@ a:hover { color: var(--red-light); }
   top: 0;
   z-index: 50;
 }
-.cms-topbar-left { display: flex; align-items: flex-start; gap: 0.65rem; min-width: 0; }
-.cms-title-block { min-width: 0; }
+.cms-topbar-left { display: flex; flex: 1 1 auto; align-items: flex-start; gap: 0.65rem; min-width: 0; }
+.cms-title-block { min-width: 0; overflow-wrap: anywhere; }
 .cms-page-title {
   margin: 0;
   font-size: 1.15rem;
@@ -1181,8 +1199,8 @@ a:hover { color: var(--red-light); }
   color: var(--navy);
   padding: 0.35rem;
   margin: 0;
-  min-width: 2.5rem;
-  min-height: 2.5rem;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
   align-items: center;
   justify-content: center;
   border-radius: 0.3rem;
@@ -1199,6 +1217,7 @@ a:hover { color: var(--red-light); }
   border-radius: 0.35rem;
   border: 1px solid var(--line-control);
   background: #fff;
+  min-height: 2.75rem;
 }
 .cms-btn-ghost:hover { background: #fff; color: var(--red); border-color: var(--red); }
 .cms-content {
@@ -1232,6 +1251,13 @@ a:hover { color: var(--red-light); }
     visibility: visible;
     pointer-events: auto;
   }
+  .cms-sidebar-header { padding-right: 4rem; }
+  .cms-nav-close {
+    display: inline-flex;
+    position: absolute;
+    top: 0.65rem;
+    right: 0.65rem;
+  }
   .cms-nav-scrim:not([hidden]) {
     display: block;
     position: fixed;
@@ -1239,7 +1265,7 @@ a:hover { color: var(--red-light); }
     background: rgba(20, 42, 66, 0.45);
     z-index: 90;
   }
-  .desk-next-card { grid-template-columns: 1fr; }
+  .cms-content { min-width: 0; }
 }
 
 /* Publishing desk (index.html) */
@@ -1268,12 +1294,13 @@ a:hover { color: var(--red-light); }
   border: 1px solid var(--line);
 }
 .desk-hero.thumb-placeholder { min-height: 8rem; }
-.desk-next-body { display: flex; flex-direction: column; gap: 0.4rem; align-items: flex-start; }
+.desk-next-body { display: flex; flex-direction: column; gap: 0.4rem; align-items: flex-start; min-width: 0; }
 .desk-title {
   font-size: 1.2rem;
   font-weight: 650;
   color: var(--navy);
   text-decoration: none;
+  overflow-wrap: anywhere;
 }
 .desk-title:hover { color: var(--red); }
 .desk-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 0.75rem; }
@@ -1285,11 +1312,14 @@ a:hover { color: var(--red-light); }
   justify-content: space-between;
   align-items: baseline;
   gap: 1rem;
+  flex-wrap: wrap;
   padding: 0.5rem 0;
   border-bottom: 1px solid var(--line);
 }
+.desk-unpub .desk-title { flex: 1 1 16rem; min-width: 0; }
+.desk-unpub .action-link { flex: 0 0 auto; }
 .desk-meta-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.45rem; }
-@media (max-width: 600px) {
+@media (max-width: 900px) {
   .desk-next-card { grid-template-columns: 1fr; }
 }
 

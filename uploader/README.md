@@ -124,6 +124,12 @@ DATABASE_URL=postgres://images:YOUR_PASSWORD@127.0.0.1:5432/images \
 The admin panel is reachable directly at `https://simonswanderlust.com/admin/` — the same process
 serves it, so there's nothing to proxy to separately anymore.
 
+The landing page is the publishing **Desk**: it features the most recently edited draft pair,
+lists published trips with saved changes, reports the photo-processing count, and links to the
+current live site. Those three data sources load independently. If posts, queue status, or health
+is unavailable, only that section shows a retry; unknown queue/release state is never presented as
+an idle queue or as confirmation that no release exists.
+
 ### Security notes
 
 Full details in [`../SECURITY.md`](../SECURITY.md); the essentials:

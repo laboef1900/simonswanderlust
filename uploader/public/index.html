@@ -17,18 +17,21 @@
       <p id="deskError" class="err" role="alert" hidden></p>
 
       <section class="desk-next" aria-labelledby="deskNextHeading">
-        <h2 id="deskNextHeading" class="desk-heading">Next to write</h2>
-        <div id="deskNext"></div>
+        <h2 id="deskNextHeading" class="desk-heading">Most recently edited draft</h2>
+        <div id="deskNext" aria-live="polite"></div>
       </section>
 
       <section class="desk-list-block" aria-labelledby="deskUnpubHeading">
         <h2 id="deskUnpubHeading" class="desk-heading">Unpublished changes</h2>
-        <div id="deskUnpub"></div>
+        <div id="deskUnpub" aria-live="polite"></div>
       </section>
 
       <section class="desk-meta" aria-labelledby="deskMetaHeading">
         <h2 id="deskMetaHeading" class="desk-heading">Site</h2>
-        <ul id="deskMeta" class="desk-meta-list"></ul>
+        <ul class="desk-meta-list">
+          <li id="deskQueue" aria-live="polite"></li>
+          <li id="deskRelease" aria-live="polite"></li>
+        </ul>
       </section>
     </main>
 
@@ -37,13 +40,9 @@
     <script src="/admin/desk.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
+      let redirecting = false;
 
       function say(msg) { $('deskStatus').textContent = msg; }
-      function fail(msg) {
-        const el = $('deskError');
-        el.hidden = !msg;
-        el.textContent = msg || '';
-      }
 
       function editorHref(tk) {
         return '/admin/editor.html?tk=' + encodeURIComponent(tk);
@@ -55,10 +54,43 @@
         return n;
       }
 
+      function setMessage(root, text) {
+        root.textContent = '';
+        const p = el('p', 'muted');
+        p.textContent = text;
+        root.appendChild(p);
+      }
+
+      function showUnavailable(root, message, retryLabel, retry) {
+        root.textContent = '';
+        const p = el('p', 'err');
+        p.textContent = message;
+        const button = el('button', 'btn-secondary');
+        button.type = 'button';
+        button.textContent = retryLabel;
+        button.addEventListener('click', retry);
+        root.appendChild(p);
+        root.appendChild(button);
+      }
+
+      function redirectToLogin() {
+        redirecting = true;
+        location.href = '/login?next=' + encodeURIComponent(location.pathname);
+      }
+
+      async function responseJson(response, requiresSession) {
+        if (requiresSession && response.status === 401) {
+          redirectToLogin();
+          throw new Error('redirecting');
+        }
+        if (!response.ok) throw new Error('unavailable');
+        return response.json();
+      }
+
       function tripLink(post, label) {
         const a = el('a', 'desk-title');
         a.href = editorHref(post.translationKey);
-        a.textContent = label || post.titleDe || '(untitled)';
+        a.textContent = label || post.titleDe || '(German title not set)';
         return a;
       }
 
@@ -84,7 +116,7 @@
         if (!post) {
           const empty = el('div', 'desk-empty');
           const p = el('p');
-          p.textContent = 'No drafts. The next trip starts as a DE/EN pair — photos live in Media.';
+          p.textContent = 'No draft pairs are saved. A new trip starts as a German and English pair.';
           const cta = el('a', 'btn-new');
           cta.href = '/admin/editor.html';
           cta.textContent = 'New trip';
@@ -98,7 +130,13 @@
         const body = el('div', 'desk-next-body');
         body.appendChild(tripLink(post));
         const meta = el('p', 'muted');
-        const bits = [post.country, post.region, post.hasEnBody ? 'DE + EN' : 'DE only'].filter(Boolean);
+        const bits = [
+          post.country,
+          post.region,
+          Desk.englishBodyLabel(post.hasEnBody),
+        ].filter(Boolean);
+        const edited = Desk.formatUpdatedAt(post.updatedAt);
+        if (edited) bits.push('Last edited ' + edited);
         meta.textContent = bits.join(' · ');
         body.appendChild(meta);
         const open = el('a', 'action-link');
@@ -114,7 +152,7 @@
         root.textContent = '';
         if (!posts.length) {
           const p = el('p', 'muted');
-          p.textContent = 'Every published trip matches what’s live. Edit a post, then Publish when the pair is ready.';
+          p.textContent = 'Published trips have no saved changes waiting for the next publish.';
           root.appendChild(p);
           return;
         }
@@ -124,78 +162,125 @@
           li.appendChild(tripLink(post));
           const go = el('a', 'action-link');
           go.href = editorHref(post.translationKey);
-          go.textContent = 'Review & publish';
+          go.textContent = 'Review changes';
           li.appendChild(go);
           ul.appendChild(li);
         });
         root.appendChild(ul);
       }
 
-      function renderMeta(encode, release) {
-        const ul = $('deskMeta');
-        ul.textContent = '';
-        const encodeLi = el('li');
-        if (encode > 0) {
+      function renderPostsLoading() {
+        setMessage($('deskNext'), 'Loading drafts…');
+        setMessage($('deskUnpub'), 'Loading unpublished changes…');
+      }
+
+      function renderPostsUnavailable() {
+        if (redirecting) return;
+        showUnavailable($('deskNext'), 'Drafts are unavailable right now.', 'Retry drafts', loadPosts);
+        showUnavailable(
+          $('deskUnpub'),
+          'Unpublished changes are unavailable right now.',
+          'Retry unpublished changes',
+          loadPosts,
+        );
+      }
+
+      function renderQueue(count) {
+        const root = $('deskQueue');
+        root.textContent = '';
+        if (count > 0) {
           const a = el('a', 'action-link');
           a.href = '/admin/media.html';
-          a.textContent = encode === 1
-            ? '1 photo is still encoding — publish will wait for it'
-            : encode + ' photos are still encoding — publish will wait for them';
-          encodeLi.appendChild(a);
+          a.textContent = count === 1
+            ? '1 photo is in the processing queue'
+            : count + ' photos are in the processing queue';
+          root.appendChild(a);
         } else {
-          encodeLi.textContent = 'Photo encode queue is idle.';
+          root.textContent = 'Photo processing queue is idle.';
         }
-        ul.appendChild(encodeLi);
+      }
 
-        const relLi = el('li');
+      function renderRelease(release) {
+        const root = $('deskRelease');
+        root.textContent = '';
         if (release) {
           const a = el('a', 'action-link');
           a.href = '/';
           a.target = '_blank';
           a.rel = 'noopener';
-          a.textContent = 'Live site has a current release';
-          relLi.appendChild(a);
+          a.textContent = 'View live site';
+          root.appendChild(a);
         } else {
-          relLi.textContent = 'No live release yet — Publish a trip or rebuild from Settings.';
+          root.textContent = 'No live release yet — publish a trip or rebuild from Settings.';
         }
-        ul.appendChild(relLi);
       }
 
+      const loadPosts = Desk.resilientLoader(
+        async () => {
+          const posts = await responseJson(await fetch('/posts'), true);
+          if (!Array.isArray(posts)) throw new Error('unavailable');
+          return posts;
+        },
+        {
+          loading: renderPostsLoading,
+          ready(posts) {
+            if (redirecting) return;
+            renderNext(Desk.nextDraft(posts));
+            renderUnpub(Desk.unpublished(posts));
+          },
+          unavailable: renderPostsUnavailable,
+        },
+      );
+
+      const loadQueue = Desk.resilientLoader(
+        async () => {
+          const queue = await responseJson(await fetch('/media/queue'), true);
+          const count = Desk.encodeCount(queue);
+          if (count === null) throw new Error('unavailable');
+          return count;
+        },
+        {
+          loading() { setMessage($('deskQueue'), 'Loading photo processing status…'); },
+          ready(count) { if (!redirecting) renderQueue(count); },
+          unavailable() {
+            if (!redirecting) {
+              showUnavailable(
+                $('deskQueue'),
+                'Photo processing status is unavailable right now.',
+                'Retry processing status',
+                loadQueue,
+              );
+            }
+          },
+        },
+      );
+
+      const loadRelease = Desk.resilientLoader(
+        async () => {
+          return Desk.releaseFromResponse(await fetch('/health'));
+        },
+        {
+          loading() { setMessage($('deskRelease'), 'Loading live site status…'); },
+          ready(release) { if (!redirecting) renderRelease(release); },
+          unavailable() {
+            if (!redirecting) {
+              showUnavailable(
+                $('deskRelease'),
+                'Live site status is unavailable right now.',
+                'Retry live site status',
+                loadRelease,
+              );
+            }
+          },
+        },
+      );
+
       async function loadDesk() {
-        fail('');
-        say('Loading…');
-        try {
-          const [postsRes, queueRes, healthRes] = await Promise.all([
-            fetch('/posts'),
-            fetch('/media/queue'),
-            fetch('/health'),
-          ]);
-          if (postsRes.status === 401 || queueRes.status === 401) {
-            location.href = '/login?next=' + encodeURIComponent(location.pathname);
-            return;
-          }
-          if (!postsRes.ok) throw new Error('posts ' + postsRes.status);
-          const posts = await postsRes.json();
-          const queue = queueRes.ok ? await queueRes.json() : { pending: 0, running: 0 };
-          const health = healthRes.ok ? await healthRes.json() : {};
-          renderNext(Desk.nextDraft(posts));
-          renderUnpub(Desk.unpublished(posts));
-          renderMeta(Desk.encodeCount(queue), !!health.release);
-          say('');
-        } catch (e) {
-          say('');
-          fail('Could not load the desk: ' + e);
-          $('deskNext').textContent = '';
-          $('deskUnpub').textContent = '';
-          $('deskMeta').textContent = '';
-          const retry = document.createElement('button');
-          retry.type = 'button';
-          retry.className = 'btn-secondary';
-          retry.textContent = 'Try again';
-          retry.addEventListener('click', loadDesk);
-          $('deskError').appendChild(document.createTextNode(' '));
-          $('deskError').appendChild(retry);
-        }
+        $('deskError').hidden = true;
+        $('deskError').textContent = '';
+        say('Loading desk…');
+        await Promise.all([loadPosts(), loadQueue(), loadRelease()]);
+        if (!redirecting) say('');
       }
 
       (async () => {
