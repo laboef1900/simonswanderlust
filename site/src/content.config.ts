@@ -19,6 +19,7 @@ const trips = defineCollection({
         width: z.number().int().positive(),
         height: z.number().int().positive(),
         alt: z.string().min(1),
+        format: z.literal('jpeg').optional(),
         // Optional by design: absent = centre crop, which is how every post
         // written before the field renders. `site/src/lib/images.ts`
         // re-clamps at the render boundary, because the WordPress importer

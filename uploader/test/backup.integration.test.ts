@@ -113,14 +113,51 @@ maybe('backup round-trip (Postgres)', () => {
   });
 
   it('rejects an unsupported dump version without touching data', async () => {
-    // @ai-warning: the guard is an ALLOW-LIST (1–6), not a minimum —
+    // @ai-warning: the guard is an ALLOW-LIST (1–7), not a minimum —
     // so this probes the next UNRELEASED version. Bump it whenever
     // DUMP_VERSION is bumped, or this stops testing anything.
     // gzipSync/writeFileSync are imported statically at the top of the file.
     const bad = join(dir, 'db-20260101-000000.json.gz');
-    writeFileSync(bad, gzipSync(JSON.stringify({ version: 7, tables: { users: [], posts: [] } })));
+    writeFileSync(bad, gzipSync(JSON.stringify({ version: 8, tables: { users: [], posts: [] } })));
     await expect(restoreDatabase(pool, bad)).rejects.toThrow(/unsupported dump version/);
     expect((await pool.query('SELECT count(*) AS n FROM users')).rows[0].n).toBe('1');
+  });
+
+  it('rejects malformed media profile metadata before touching data', async () => {
+    const bad = join(dir, 'db-20260101-000001.json.gz');
+    writeFileSync(bad, gzipSync(JSON.stringify({
+      version: 7,
+      tables: {
+        users: [], posts: [],
+        media: [{ key: 'x', format: 'jpeg', encoding: { convertJpeg: 'no' } }],
+      },
+    })));
+    const before = (await pool.query('SELECT count(*) AS n FROM users')).rows[0].n;
+    await expect(restoreDatabase(pool, bad)).rejects.toThrow(/encoding profile/i);
+    expect((await pool.query('SELECT count(*) AS n FROM users')).rows[0].n).toBe(before);
+  });
+
+  it('restores pre-v7 media rows as the legacy modern/default profile', async () => {
+    const legacy = join(dir, 'db-20260101-000002.json.gz');
+    const now = new Date('2026-01-01T00:00:00Z').toISOString();
+    writeFileSync(legacy, gzipSync(JSON.stringify({
+      version: 6, createdAt: now,
+      tables: {
+        users: [], posts: [],
+        media: [{
+          key: 'legacy/photo', folder: '', title: '', alt_de: '', alt_en: '',
+          caption_de: '', caption_en: '', tags: [], width: 800, height: 600,
+          orig_bytes: 10, variant_bytes: 20, status: 'ready', error: null,
+          taken_at: null, camera: null, lens: null, lat: null, lng: null,
+          uploaded_at: now, uploaded_by: null,
+        }],
+      },
+    })));
+    await restoreDatabase(pool, legacy);
+    const restored = await pgMediaStore(pool, { baseUrl: 'https://img.example' }).get('legacy/photo');
+    expect(restored).not.toHaveProperty('format');
+    expect(restored).not.toHaveProperty('encoding');
+    expect(restored?.thumbSrc).toBe('https://img.example/legacy/photo-640.webp');
   });
 
   // Dump v5: `featured` is an explicit column in the SELECT/INSERT lists, so
@@ -139,7 +176,7 @@ maybe('backup round-trip (Postgres)', () => {
     await posts.publish(created.translationKey);
 
     const file = join(dir, await dumpDatabase(pool, dir));
-    expect(readDump(file).version).toBe(6);
+    expect(readDump(file).version).toBe(7);
     await pool.query('DELETE FROM posts');
     await restoreDatabase(pool, file);
 
@@ -230,7 +267,7 @@ maybe('backup round-trip (Postgres)', () => {
     expect(draft.published_at).toBeNull();
   });
 
-  it('a v3 dump round-trips the media library, including tags and folders', async () => {
+  it('a current dump round-trips the media library, including profile, tags and folders', async () => {
     // @ai-warning: without this, a restore brings the photos back (they are on
     // disk) but loses every folder, caption and tag — the worst kind of
     // partial recovery. `tags` is text[], which CANNOT round-trip through the
@@ -246,6 +283,7 @@ maybe('backup round-trip (Postgres)', () => {
       alt: { de: 'DE alt', en: 'EN alt' }, caption: { de: 'Tag 3', en: 'Day 3' },
       tags: ['dawn', 'sea'], status: 'ready',
       width: 3000, height: 2000, origBytes: 10_700_000,
+      format: 'jpeg', encoding: { convertJpeg: false, webpQuality: 86, avifQuality: 66 },
       exif: { takenAt: new Date('2026-07-04T18:23:11Z'), camera: 'LEICA Q2', lens: 'Summilux', lat: 63.0759, lng: 10.3887 },
       uploadedBy: u.id,
     });
@@ -255,7 +293,7 @@ maybe('backup round-trip (Postgres)', () => {
     const dump = JSON.parse(
       (await import('node:zlib')).gunzipSync((await import('node:fs')).readFileSync(join(dir, name))).toString('utf8'),
     );
-    expect(dump.version).toBe(6);
+    expect(dump.version).toBe(7);
 
     await pool.query('DELETE FROM media');
     await pool.query('DELETE FROM media_folders');
@@ -268,6 +306,8 @@ maybe('backup round-trip (Postgres)', () => {
       alt: { de: 'DE alt', en: 'EN alt' }, caption: { de: 'Tag 3', en: 'Day 3' },
       tags: ['dawn', 'sea'], width: 3000, height: 2000,
       origBytes: 10_700_000, variantBytes: 6_900_000, status: 'ready',
+      format: 'jpeg', encoding: { convertJpeg: false, webpQuality: 86, avifQuality: 66 },
+      thumbSrc: 'https://img.example/library/2025/a-640.jpeg',
     });
     expect(back?.exif.camera).toBe('LEICA Q2');
     expect(back?.exif.lat).toBeCloseTo(63.0759, 4);
@@ -440,10 +480,10 @@ maybe('backup round-trip (Postgres)', () => {
     it('refuses an unsupported dump version before writing a pre-dump', async () => {
       const { backupDir, env } = await seed();
       const bad = join(dir, 'db-20260102-000000.json.gz');
-      writeFileSync(bad, gzipSync(JSON.stringify({ version: 7, tables: { users: [], posts: [] } })));
+      writeFileSync(bad, gzipSync(JSON.stringify({ version: 8, tables: { users: [], posts: [] } })));
       const r = await runCli(['restore', '--yes', bad], env);
       expect(r.code).toBe(1);
-      expect(r.stderr).toContain('unsupported dump version 7');
+      expect(r.stderr).toContain('unsupported dump version 8');
       expect(await usernames()).toEqual(['alice', 'bob']);
       expect(preDumps(backupDir)).toEqual([]);
     }, 30_000);

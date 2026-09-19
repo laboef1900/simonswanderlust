@@ -6,7 +6,7 @@ import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } f
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
-import { probeImage } from './pipeline.js';
+import { normalizeProcessOptions, outputFormatForExtension, probeImage } from './pipeline.js';
 import { contentHashKey, storeOriginal, heroSnippet, assertSafeKey } from './storage.js';
 import { deleteMedia, imageUsage, VARIANT_FILE_RE } from './media-files.js';
 import {
@@ -263,7 +263,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     maxAge: '365d',
     immutable: true,
     constraints: { host: cfg.imgHost },
-    // Only finished variants (`<key>-<width>.<avif|webp>`) are web assets.
+    // Only finished variants (`<key>-<width>.<avif|webp|jpeg>`) are web assets.
     // Untouched full-resolution originals (`<key>-orig.<ext>`) live in
     // storageDir so the incremental backup tar captures them, but they are a
     // private DR archive; storage.ts's `.part-<hex>` temps (#118) are
@@ -316,7 +316,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
    * immediately because the storage key is a pure function of the content hash
    * and a metadata-only probe reads orientation-corrected dimensions in
    * ~0.0002 s (vs ~0.467 s for the re-encode probe it replaced). What callers
-   * lose is that `${src}-640.webp` 404s until the encode lands — the media
+   * lose is that the first selected thumbnail (`${src}-640.webp` for modern,
+   * `${src}-640.jpeg` for JPEG-only) 404s until the encode lands — the media
    * library shows a processing badge, and `POST /posts/:tk/publish` refuses to
    * publish a post referencing a photo that is not `ready`.
    */
@@ -354,11 +355,15 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (!KEY_RE.test(key)) {
       return reply.code(400).send({ error: 'invalid key (use lowercase a-z, 0-9, / _ -)' });
     }
-    // Version the key by content hash (issue #26): a re-upload mints a fresh
-    // URL instead of overwriting variants cached as immutable; old URLs keep
-    // serving because nothing on disk is touched. Clients use the returned
-    // src/snippet, never the key they sent.
-    const versionedKey = contentHashKey(key, buf);
+    // Snapshot the full encoding profile before deriving the identity. A
+    // settings change after this point cannot redirect the queued job.
+    const currentSettings = cfg.settings.get();
+    const encoding = normalizeProcessOptions({
+      convertJpeg: currentSettings.convertJpeg,
+      webpQuality: currentSettings.webpQuality,
+      avifQuality: currentSettings.avifQuality,
+    });
+    const versionedKey = contentHashKey(key, buf, encoding);
     const src = `${imageBase}/${versionedKey}`;
     // #133: every input check precedes every write. The store validates the
     // folder again in upsert(), but that ran AFTER storeOriginal, so a bad
@@ -396,6 +401,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (!probe.width || !probe.height) {
       return reply.code(400).send({ error: 'could not read that image' });
     }
+    const format = outputFormatForExtension(probe.ext, encoding);
 
     // Re-uploading identical bytes is the NORMAL case when a folder is dropped
     // twice, so all three states of an existing row are handled explicitly.
@@ -419,7 +425,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       return reply.send({
         src, key: versionedKey, width: existing.width, height: existing.height,
         status: existing.status, duplicate: true, folder: stored.folder,
-        snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt),
+        ...(existing.format ? { format: existing.format } : {}),
+        snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt, existing.format),
       });
     }
     if (existing && existing.status === 'processing') {
@@ -427,23 +434,32 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       return reply.send({
         src, key: versionedKey, width: existing.width, height: existing.height,
         status: 'processing', duplicate: true, folder: existing.folder,
-        snippet: heroSnippet(src, existing.width, existing.height, alt),
+        ...(existing.format ? { format: existing.format } : {}),
+        snippet: heroSnippet(src, existing.width, existing.height, alt, existing.format),
       });
     }
 
     const exif = parseExif(probe.exif);
-    try {
-      await storeOriginal(versionedKey, buf, probe.ext, { storageDir });
-    } catch (e) {
-      console.error(`could not store the original for ${versionedKey}:`, e);
-      return reply.code(500).send({ error: 'internal server error' });
-    }
+    // Persist the immutable profile before the original becomes recoverable
+    // from disk. A crash after this point leaves a deterministic processing
+    // row for boot recovery instead of an origin-only orphan that has lost the
+    // setting snapshot.
     await cfg.media.upsert({
       key: versionedKey, folder, title,
       alt: { de: alt, en: alt },
       width: probe.width, height: probe.height, origBytes: buf.length,
       status: 'processing', exif, uploadedBy: req.authUser?.id ?? null,
+      ...(format ? { format } : {}),
+      encoding,
     });
+    try {
+      await storeOriginal(versionedKey, buf, probe.ext, { storageDir });
+    } catch (e) {
+      if (existing) await cfg.media.setStatus(versionedKey, 'failed', 'write_failed').catch(() => {});
+      else await cfg.media.remove(versionedKey).catch(() => {});
+      console.error(`could not store the original for ${versionedKey}:`, e);
+      return reply.code(500).send({ error: 'internal server error' });
+    }
     try {
       cfg.encodeQueue.enqueue(versionedKey);
     } catch (e) {
@@ -453,7 +469,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send({
       src, key: versionedKey, width: probe.width, height: probe.height,
       status: 'processing',
-      snippet: heroSnippet(src, probe.width, probe.height, alt),
+      ...(format ? { format } : {}),
+      snippet: heroSnippet(src, probe.width, probe.height, alt, format),
     });
   });
 
@@ -720,6 +737,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   function settingsResponse(s: Settings, hasAiApiKey: boolean) {
     return {
       ...captionConfig(s), backupSchedule: s.backupSchedule, backupRetention: s.backupRetention,
+      convertJpeg: s.convertJpeg, webpQuality: s.webpQuality, avifQuality: s.avifQuality,
       importDelayMs: s.importDelayMs, importRetries: s.importRetries,
       aiProvider: s.aiProvider, aiModel: s.aiModel, aiCustomBaseUrl: s.aiCustomBaseUrl,
       reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs, hasAiApiKey,
@@ -755,6 +773,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (b.backupRetention !== undefined) partial.backupRetention = Number(b.backupRetention);
     if (b.importDelayMs !== undefined) partial.importDelayMs = Number(b.importDelayMs);
     if (b.importRetries !== undefined) partial.importRetries = Number(b.importRetries);
+    if (b.convertJpeg !== undefined) partial.convertJpeg = b.convertJpeg;
+    if (b.webpQuality !== undefined) partial.webpQuality = Number(b.webpQuality);
+    if (b.avifQuality !== undefined) partial.avifQuality = Number(b.avifQuality);
     for (const field of ['aiProvider', 'aiModel', 'aiCustomBaseUrl', 'reviewPrompt', 'reviewTimeoutMs'] as const) {
       if (Object.hasOwn(b, field)) partial[field] = b[field];
     }
@@ -980,7 +1001,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     // Origin equality, never a prefix match — same rule as the gallery
     // allow-list (see site/src/lib/body-images.ts).
     if (u.origin !== base.origin || !src.startsWith(prefix)) return null;
-    return src.slice(prefix.length).replace(/-\d+\.(?:avif|webp)$/, '');
+    return src.slice(prefix.length).replace(/-\d+\.(?:avif|webp|jpeg)$/, '');
   }
 
   /**
@@ -1526,13 +1547,16 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (!xml.includes('<rss') || !xml.includes('wordpress.org/export')) {
       return reply.code(400).send({ error: 'not a WordPress export (.xml) file' });
     }
-    const { importDelayMs, importRetries } = cfg.settings.get();
+    const {
+      importDelayMs, importRetries, convertJpeg, webpQuality, avifQuality,
+    } = cfg.settings.get();
     let prepared: PreparedImport;
     try {
       prepared = await (cfg.prepareImport ?? prepareImport)(xml, {
         postStore: cfg.posts, storageDir: cfg.storageDir, baseUrl: cfg.baseUrl,
         delayMs: importDelayMs,
         retries: importRetries,
+        encoding: { convertJpeg, webpQuality, avifQuality },
         // A FRESH disk walk per import, which is why this is built here rather
         // than injected once at boot like `settings` or `dbBackup`.
         resume: await createRehostResume({ storageDir: cfg.storageDir, baseUrl: cfg.baseUrl }),

@@ -8,7 +8,7 @@ const input: BlogPostingInput = {
   excerpt: 'Zwei Wochen Karpaten.',
   locale: 'de',
   image: {
-    src: 'https://img.simonswanderlust.com/rumaenien/hero-1600.avif',
+    src: 'https://img.simonswanderlust.com/rumaenien/hero',
     width: 1600,
     height: 900,
     alt: 'Bergpanorama in den Karpaten',
@@ -27,7 +27,7 @@ describe('blogPostingJsonLd', () => {
       inLanguage: 'de',
       image: {
         '@type': 'ImageObject',
-        url: 'https://img.simonswanderlust.com/rumaenien/hero-1600.avif',
+        url: 'https://img.simonswanderlust.com/rumaenien/hero-1600.webp',
         width: 1600,
         height: 900,
       },
@@ -38,6 +38,15 @@ describe('blogPostingJsonLd', () => {
 
   it('carries the locale through as inLanguage (en)', () => {
     expect(blogPostingJsonLd({ ...input, locale: 'en' }).inLanguage).toBe('en');
+  });
+
+  it('uses the real .jpeg variant for JPEG-only structured-data images', () => {
+    const jpeg = blogPostingJsonLd({
+      ...input,
+      image: { ...input.image, format: 'jpeg' },
+    });
+    expect(jpeg.image.url).toBe('https://img.simonswanderlust.com/rumaenien/hero-1600.jpeg');
+    expect(jpeg.image.url).not.toMatch(/\.(?:avif|webp)$/);
   });
 });
 

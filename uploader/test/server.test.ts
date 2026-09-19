@@ -316,6 +316,50 @@ describe('POST /upload', () => {
     expect(await b.media.get(res.json().key)).toMatchObject({ status: 'processing' });
   });
 
+  it('snapshots the profile, mints a new identity on change, and serves JPEG variants privately', async () => {
+    const settings = fakeStore();
+    const b = buildEncoding({ settings });
+    const { cookie } = await authed(b);
+    const image = await jpeg();
+    const modern = await upload(b, cookie, { key: 'trips/profile/hero', alt: 'a' }, image);
+    await b.settle();
+    settings.update({ convertJpeg: false, webpQuality: 81, avifQuality: 61 });
+    const jpegMode = await upload(b, cookie, { key: 'trips/profile/hero', alt: 'a' }, image);
+    await b.settle();
+
+    expect(jpegMode.json()).toMatchObject({ status: 'processing', format: 'jpeg' });
+    expect(jpegMode.json().key).not.toBe(modern.json().key);
+    expect(await b.media.get(jpegMode.json().key)).toMatchObject({
+      status: 'ready', format: 'jpeg',
+      encoding: { convertJpeg: false, webpQuality: 81, avifQuality: 61 },
+      thumbSrc: `${jpegMode.json().src}-640.jpeg`,
+    });
+    const host = { host: 'img.simonswanderlust.com' };
+    expect((await b.app.inject({ url: `/${modern.json().key}-640.webp`, headers: host })).statusCode).toBe(200);
+    expect((await b.app.inject({ url: `/${jpegMode.json().key}-640.jpeg`, headers: host })).statusCode).toBe(200);
+    expect((await b.app.inject({ url: `/${jpegMode.json().key}-640.webp`, headers: host })).statusCode).toBe(404);
+    expect((await b.app.inject({ url: `/${jpegMode.json().key}-orig.jpg`, headers: host })).statusCode).toBe(404);
+  });
+
+  it('keeps PNG uploads modern when JPEG conversion is off', async () => {
+    const settings = fakeStore({ ...SETTINGS, convertJpeg: false });
+    const b = buildEncoding({ settings });
+    const { cookie } = await authed(b);
+    const png = await sharp({
+      create: { width: 800, height: 600, channels: 3, background: '#246' },
+    }).png().toBuffer();
+    const response = await upload(b, cookie, { key: 'trips/profile/png' }, png);
+    await b.settle();
+    expect(response.json()).not.toHaveProperty('format');
+    expect(await b.media.get(response.json().key)).toMatchObject({
+      status: 'ready',
+      encoding: { convertJpeg: false, webpQuality: 75, avifQuality: 55 },
+    });
+    expect((await b.app.inject({
+      url: `/${response.json().key}-640.webp`, headers: { host: 'img.simonswanderlust.com' },
+    })).statusCode).toBe(200);
+  });
+
   it('derives a storage key from the filename when the client sends none', async () => {
     // Bulk library upload has no post slug, and KEY_RE is lowercase-only — a
     // Leica's L1002345.JPG would otherwise be a 400.
@@ -738,15 +782,17 @@ describe('settings endpoints', () => {
     expect(res.json()).toEqual({ ...SETTINGS, hasAiApiKey: false });
   });
 
-  it('POST /settings is admin-only: 403 for authors', async () => {
-    const b = build();
+  it('POST /settings is admin-only: authors cannot mutate image conversion fields', async () => {
+    const settings = fakeStore();
+    const b = build({ settings });
     const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
     const res = await b.app.inject({
       method: 'POST', url: '/settings',
       headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { backupSchedule: 'daily' },
+      payload: { convertJpeg: false, webpQuality: 1, avifQuality: 1 },
     });
     expect(res.statusCode).toBe(403);
+    expect(settings.get()).toMatchObject({ convertJpeg: true, webpQuality: 75, avifQuality: 55 });
   });
 
   it('POST /settings persists backup schedule + retention', async () => {
@@ -779,6 +825,35 @@ describe('settings endpoints', () => {
     expect(res.json()).toMatchObject({ importDelayMs: 2500, importRetries: 1 });
     const after = await b.app.inject({ method: 'GET', url: '/settings', cookies: cookie });
     expect(after.json()).toMatchObject({ importDelayMs: 2500, importRetries: 1 });
+  });
+
+  it('POST /settings allow-list round-trips image conversion controls', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({
+      method: 'POST', url: '/settings',
+      headers: { 'content-type': 'application/json' }, cookies: cookie,
+      payload: { convertJpeg: false, webpQuality: 83, avifQuality: 63 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ convertJpeg: false, webpQuality: 83, avifQuality: 63 });
+    const after = await b.app.inject({ method: 'GET', url: '/settings', cookies: cookie });
+    expect(after.json()).toMatchObject({ convertJpeg: false, webpQuality: 83, avifQuality: 63 });
+  });
+
+  it('POST /settings rejects malformed image conversion controls', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    for (const payload of [
+      { convertJpeg: 'false' }, { webpQuality: 0 }, { webpQuality: 101 },
+      { avifQuality: 0 }, { avifQuality: 101 }, { avifQuality: 55.5 },
+    ]) {
+      const res = await b.app.inject({
+        method: 'POST', url: '/settings',
+        headers: { 'content-type': 'application/json' }, cookies: cookie, payload,
+      });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+    }
   });
 
   it('POST /settings 400 on out-of-range import pacing', async () => {
@@ -1657,7 +1732,7 @@ describe('publish gate (encode status)', () => {
     const { cookie } = await authed(b);
     const exif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
     await b.media.upsert({ key: 'trips/g/hero', status: 'processing', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null });
-    const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero-1280.webp`, {
+    const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero-1280.jpeg`, {
       // A different origin is not ours to gate on.
       'https://elsewhere.example/photo': { width: 10, height: 10 },
     }));
@@ -2378,11 +2453,14 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
   /** A pre-flight stub: one group, whose run() is `run` (default: instant OK). */
   const prepared = (run: PreparedImport['run'] = async () => OK, groups = 1): PreparedImport => ({ groups, planned: PLANNED, run });
 
-  it('threads the configured pacing, the resume index and the work-lock into the importer', async () => {
+  it('threads pacing, the snapped image profile, resume index and work-lock into the importer', async () => {
     let seen: ImportDeps | null = null;
     const workLock = createWorkLock();
     const b = build({
-      settings: fakeStore({ ...SETTINGS, importDelayMs: 900, importRetries: 4 }),
+      settings: fakeStore({
+        ...SETTINGS, importDelayMs: 900, importRetries: 4,
+        convertJpeg: false, webpQuality: 82, avifQuality: 62,
+      }),
       prepareImport: async (_xml, deps) => { seen = deps; return prepared(); },
       workLock,
     });
@@ -2393,6 +2471,7 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
     // deliberately non-retryable).
     expect(seen!.delayMs).toBe(900);
     expect(seen!.retries).toBe(4);
+    expect(seen!.encoding).toEqual({ convertJpeg: false, webpQuality: 82, avifQuality: 62 });
     expect(seen!.resume).toBeDefined();
     // issue #94: the free-space probe reads the volume the images land on.
     expect(seen!.diskSpace).toBeDefined();

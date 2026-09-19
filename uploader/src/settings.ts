@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DEFAULT_PROMPT } from './caption.js';
 import { DEFAULT_REVIEW_PROMPT } from './editorial-review.js';
+import { DEFAULT_PROCESS_OPTIONS } from './variants.js';
 
 export type BackupSchedule = 'off' | 'daily' | 'weekly';
 
@@ -18,6 +19,9 @@ export interface Settings {
   reviewTimeoutMs: number;
   backupSchedule: BackupSchedule;
   backupRetention: number;
+  convertJpeg: boolean;
+  webpQuality: number;
+  avifQuality: number;
   /**
    * WordPress-import pacing (issue #85). `importDelayMs: 0` restores pre-#85
    * behaviour and is a legitimate choice for a source host on the LAN — blast
@@ -49,6 +53,7 @@ export function defaultSettings(): Settings {
     reviewTimeoutMs: 60000,
     backupSchedule: 'off',
     backupRetention: 14,
+    ...DEFAULT_PROCESS_OPTIONS,
     // The spacing and retry count the 2026-07-29 migration actually completed
     // 665 photos with; at zero spacing the source host cut us off after 37.
     importDelayMs: 1200,
@@ -101,6 +106,11 @@ const FIELD_CHECKS: { [K in keyof Settings]: (v: unknown) => string | null } = {
     v === 'off' || v === 'daily' || v === 'weekly' ? null : 'Backup schedule must be off, daily, or weekly.',
   backupRetention: (v) =>
     intInRange(v, 1, 100) ? null : 'Backup retention must be a whole number between 1 and 100.',
+  convertJpeg: (v) => typeof v === 'boolean' ? null : 'JPEG conversion must be on or off.',
+  webpQuality: (v) =>
+    intInRange(v, 1, 100) ? null : 'WebP quality must be a whole number between 1 and 100.',
+  avifQuality: (v) =>
+    intInRange(v, 1, 100) ? null : 'AVIF quality must be a whole number between 1 and 100.',
   importDelayMs: (v) =>
     intInRange(v, 0, 10000) ? null : 'Import delay must be a whole number of milliseconds between 0 and 10000.',
   importRetries: (v) =>

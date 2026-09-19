@@ -128,6 +128,24 @@ describe('initGalleries — lightbox', () => {
     expect(types).toEqual(['image/avif', 'image/webp']);
   });
 
+  it('keeps a JPEG-only slide JPEG-only in the lightbox', () => {
+    mountJustified(1);
+    const photo = photos()[0]!;
+    photo.href = 'https://img.test/p0-3000.jpeg';
+    const picture = photo.querySelector('picture')!;
+    picture.querySelectorAll('source').forEach((source) => source.remove());
+    const source = document.createElement('source');
+    source.type = 'image/jpeg';
+    source.srcset = 'https://img.test/p0-640.jpeg 640w';
+    picture.prepend(source);
+    picture.querySelector('img')!.src = 'https://img.test/p0-1280.jpeg';
+    initGalleries(document, labels);
+    click(photo);
+    expect(shownSrc()).toBe('https://img.test/p0-1280.jpeg');
+    expect([...dialog()!.querySelectorAll('source')].map((node) => node.type)).toEqual(['image/jpeg']);
+    expect(dialog()!.innerHTML).not.toMatch(/\.(?:avif|webp)/);
+  });
+
   it('moves the lightbox with the arrow keys and Home/End', () => {
     mountJustified(4);
     initGalleries(document, labels);

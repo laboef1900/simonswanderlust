@@ -76,6 +76,17 @@ describe('storeVariants', () => {
       ].join('\n'),
     );
   });
+
+  it('returns the JPEG discriminator in both structured output and the paste-ready snippet', async () => {
+    const jpeg = await storeVariants('trips/t/hero-jpeg', 'A', {
+      ...result,
+      format: 'jpeg',
+      variants: [{ width: 2000, format: 'jpeg', data: Buffer.from('j') }],
+    }, { storageDir: dir, baseUrl: 'https://img.example' });
+    expect(jpeg.format).toBe('jpeg');
+    expect(jpeg.snippet).toContain("  format: 'jpeg'");
+    expect(jpeg.files).toContain('trips/t/hero-jpeg-2000.jpeg');
+  });
 });
 
 // #118: a file carrying a final variant/original name must be complete. The
@@ -165,6 +176,22 @@ describe('contentHashKey', () => {
     const versioned = contentHashKey('trips/x/hero', Buffer.from('img'));
     expect(versioned).toMatch(/^trips\/x\/hero-[0-9a-f]{8}$/);
     expect(() => assertSafeKey(versioned)).not.toThrow();
+  });
+
+  it('includes the complete encoding profile so settings transitions never reuse an immutable URL', () => {
+    const bytes = Buffer.from('same-photo');
+    const modern = contentHashKey('trips/x/hero', bytes, {
+      convertJpeg: true, webpQuality: 75, avifQuality: 55,
+    });
+    expect(contentHashKey('trips/x/hero', bytes, {
+      convertJpeg: false, webpQuality: 75, avifQuality: 55,
+    })).not.toBe(modern);
+    expect(contentHashKey('trips/x/hero', bytes, {
+      convertJpeg: true, webpQuality: 80, avifQuality: 55,
+    })).not.toBe(modern);
+    expect(contentHashKey('trips/x/hero', bytes, {
+      convertJpeg: true, webpQuality: 75, avifQuality: 60,
+    })).not.toBe(modern);
   });
 
   it('does not launder traversal-shaped keys — storeVariants still rejects them', async () => {

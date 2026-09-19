@@ -7,10 +7,10 @@ import type { PagePair } from './pages.js';
 // The variant filename contract: `${key}-${width}.${format}` (see storage.ts /
 // variants.ts). Everything under storageDir that matches this is a variant of
 // some key; anything else is ignored by the media library.
-// @ai-warning: keys carry a content-hash suffix (`…/hero-<hash8>`, issue #26),
-// but that is part of the key, not the variant suffix — this regex still only
-// strips the trailing `-{width}.{avif|webp}`, so a hashed key groups correctly.
-export const VARIANT_FILE_RE = /-(\d+)\.(avif|webp)$/;
+// @ai-warning: keys carry a content/profile-hash suffix, but that is part of
+// the key, not the variant suffix — this regex still only strips the trailing
+// `-{width}.{avif|webp|jpeg}`, so a hashed key groups correctly.
+export const VARIANT_FILE_RE = /-(\d+)\.(avif|webp|jpeg)$/;
 
 // The untouched-original sibling written next to the variants (`${key}-orig.<ext>`,
 // issue #21). It is a private DR asset, not a gallery item, but deleteMedia must
@@ -39,12 +39,12 @@ function escapeRegExp(s: string): string {
 
 /**
  * True when `text` references `src` as a whole URL: the occurrence may carry a
- * `-{width}.{avif|webp}` variant suffix (a hand-written direct variant link)
- * but must not be followed by another key character — so `…/hero` does not
- * match inside `…/hero2` or `…/hero-2`.
+ * `-{width}.{avif|webp|jpeg}` variant suffix (a hand-written direct variant
+ * link) but must not be followed by another key character — so `…/hero` does
+ * not match inside `…/hero2` or `…/hero-2`.
  */
 function textReferences(src: string, text: string): boolean {
-  const re = new RegExp(`${escapeRegExp(src)}(?:-\\d+\\.(?:avif|webp))?(?![a-z0-9/_-])`);
+  const re = new RegExp(`${escapeRegExp(src)}(?:-\\d+\\.(?:avif|webp|jpeg))?(?![a-z0-9/_-])`);
   return re.test(text);
 }
 

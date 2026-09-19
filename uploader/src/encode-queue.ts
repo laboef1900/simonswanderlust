@@ -22,7 +22,7 @@ import { basename, dirname, join } from 'node:path';
 import { processImage } from './pipeline.js';
 import { assertSafeKey, storeVariantFiles } from './storage.js';
 import { deleteMedia } from './media-files.js';
-import type { MediaError, MediaStore } from './media-store.js';
+import type { MediaError, MediaItem, MediaStore } from './media-store.js';
 import type { WorkLock } from './work-lock.js';
 
 /**
@@ -74,8 +74,8 @@ export interface EncodeQueueOptions {
   lock: WorkLock;
   concurrency?: number;
   maxBacklog?: number;
-  /** Injected for tests; defaults to reading the stored original and encoding it. */
-  encodeOne?: (key: string) => Promise<{ bytes: number }>;
+  /** Injected for tests; production passes the row's persisted encoding snapshot. */
+  encodeOne?: (key: string, profile: Pick<MediaItem, 'format' | 'encoding'>) => Promise<{ bytes: number }>;
   log?: (msg: string) => void;
   error?: (msg: string, err: unknown) => void;
 }
@@ -117,9 +117,10 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
   /** Set by drain(): pump() stops dequeuing; only in-flight jobs finish. */
   let draining = false;
 
-  const encodeOne = opts.encodeOne ?? (async (key: string) => {
+  const encodeOne = opts.encodeOne ?? (async (key: string, profile: Pick<MediaItem, 'format' | 'encoding'>) => {
     const buf = await readOriginal(opts.storageDir, key);
-    const result = await processImage(buf);
+    const result = await processImage(buf, profile.encoding);
+    if (result.format !== profile.format) throw new Error('stored image encoding profile does not match its format');
     const { bytes } = await storeVariantFiles(key, result.variants, { storageDir: opts.storageDir });
     return { bytes };
   });
@@ -153,9 +154,16 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
 
   async function runJob(key: string): Promise<void> {
     try {
+      const item = await opts.store.get(key);
+      if (!item) return;
       // Shared: several encodes may run together, but never during a build.
-      const { bytes } = await opts.lock.runShared(() => encodeOne(key));
-      // The row can vanish during the ~19 s encode — a delete that slipped
+      // The immutable row snapshot, not mutable global settings, drives retries
+      // and boot recovery.
+      const { bytes } = await opts.lock.runShared(() => encodeOne(key, {
+        ...(item.format ? { format: item.format } : {}),
+        ...(item.encoding ? { encoding: item.encoding } : {}),
+      }));
+      // The row can vanish during the encode — a delete that slipped
       // past the `processing` gate, or a rescan-inserted row removed out of
       // band. Anything written for a deleted key is a time bomb: media-sync
       // backfills every key with a variant as `ready` on the next pass, so

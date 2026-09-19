@@ -124,7 +124,11 @@
           if (res.status === 401) { guard.redirectToLogin(); return; }
           const body = await res.json().catch(() => ({}));
           if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
-          (locale === 'de' ? deImages : enImages)[body.src] = { width: body.width, height: body.height };
+          (locale === 'de' ? deImages : enImages)[body.src] = {
+            width: body.width,
+            height: body.height,
+            ...(body.format === 'jpeg' ? { format: body.format } : {}),
+          };
           // replaceSelection fires a CodeMirror change → marks the guard dirty
           (locale === 'de' ? deMDE : enMDE).codemirror.replaceSelection(ImageMarkdown.image(altInput.value, body.src));
           statusEl.textContent = 'Inserted: ' + body.src;

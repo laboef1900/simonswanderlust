@@ -1031,6 +1031,7 @@ small {
 .check-field { display: flex; align-items: center; gap: 0.5rem; margin: 1rem 0 0.25rem; }
 .check-field input { width: auto; margin: 0; }
 .check-field + .muted { margin-top: 0; }
+#imageSettings .check-field { min-height: 2.75rem; }
 
 /* First native <dialog> in the admin — same choice as the blog lightbox, for
    the same reasons: focus trap, Esc, inert background and ::backdrop for free. */

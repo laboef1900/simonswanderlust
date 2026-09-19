@@ -50,6 +50,22 @@ maybe('pgMediaStore (integration)', () => {
     expect(typeof saved.origBytes).toBe('number');
   });
 
+  it('round-trips JPEG format and the immutable encoding snapshot', async () => {
+    const saved = await add('library/2026/jpeg', {
+      format: 'jpeg',
+      encoding: { convertJpeg: false, webpQuality: 82, avifQuality: 62 },
+    });
+    expect(saved).toMatchObject({
+      format: 'jpeg',
+      encoding: { convertJpeg: false, webpQuality: 82, avifQuality: 62 },
+      thumbSrc: `${BASE}/library/2026/jpeg-640.jpeg`,
+    });
+    expect(await store.get('library/2026/jpeg')).toMatchObject({
+      format: 'jpeg',
+      encoding: { convertJpeg: false, webpQuality: 82, avifQuality: 62 },
+    });
+  });
+
   it('upserting a folder creates its ancestor rows', async () => {
     await add('k', { folder: 'a/b/c' });
     expect(await store.folders()).toEqual(['a', 'a/b', 'a/b/c']);

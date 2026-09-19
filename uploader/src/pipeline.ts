@@ -1,5 +1,8 @@
 import sharp from 'sharp';
-import { variantWidths, FORMATS, type ImageFormat } from './variants.js';
+import {
+  variantWidths, formatsFor, JPEG_FORMAT, DEFAULT_PROCESS_OPTIONS,
+  type ImageFormat, type ImageOutputFormat,
+} from './variants.js';
 import { allowedExif } from './exif.js';
 
 export interface Variant {
@@ -19,6 +22,8 @@ export interface ProcessResult {
   width: number;
   height: number;
   variants: Variant[];
+  /** Present only when the public variants are JPEG-only. */
+  format?: ImageOutputFormat;
   original: OriginalImage;
 }
 
@@ -30,6 +35,52 @@ const EXT_BY_FORMAT: Record<string, string> = { jpeg: 'jpg', heif: 'avif' };
 export interface ProcessOptions {
   avifQuality?: number;
   webpQuality?: number;
+  convertJpeg?: boolean;
+}
+
+/** Resolve a partial profile to the exact settings an encode will use. */
+export function normalizeProcessOptions(opts: ProcessOptions = {}): Required<ProcessOptions> {
+  const profile = { ...DEFAULT_PROCESS_OPTIONS, ...opts };
+  if (!Number.isInteger(profile.avifQuality) || profile.avifQuality < 1 || profile.avifQuality > 100
+    || !Number.isInteger(profile.webpQuality) || profile.webpQuality < 1 || profile.webpQuality > 100
+    || typeof profile.convertJpeg !== 'boolean') {
+    throw new Error('invalid image encoding profile');
+  }
+  return profile;
+}
+
+/**
+ * Validate persisted JSON at the read boundary. `null`/undefined is the
+ * pre-profile legacy state and means the historical modern defaults.
+ */
+export function storedProcessOptions(value: unknown): ProcessOptions | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid stored image encoding profile');
+  const record = value as Record<string, unknown>;
+  const allowed: Record<string, true> = { avifQuality: true, webpQuality: true, convertJpeg: true };
+  if (Object.keys(record).some((key) => allowed[key] !== true)) throw new Error('invalid stored image encoding profile');
+  const opts: ProcessOptions = {};
+  if (record.avifQuality !== undefined) {
+    if (typeof record.avifQuality !== 'number') throw new Error('invalid stored image encoding profile');
+    opts.avifQuality = record.avifQuality;
+  }
+  if (record.webpQuality !== undefined) {
+    if (typeof record.webpQuality !== 'number') throw new Error('invalid stored image encoding profile');
+    opts.webpQuality = record.webpQuality;
+  }
+  if (record.convertJpeg !== undefined) {
+    if (typeof record.convertJpeg !== 'boolean') throw new Error('invalid stored image encoding profile');
+    opts.convertJpeg = record.convertJpeg;
+  }
+  normalizeProcessOptions(opts);
+  return opts;
+}
+
+export function outputFormatForExtension(
+  extension: string,
+  options: ProcessOptions = {},
+): ImageOutputFormat | undefined {
+  return !normalizeProcessOptions(options).convertJpeg && extension === 'jpg' ? JPEG_FORMAT : undefined;
 }
 
 export interface ImageProbe {
@@ -70,7 +121,7 @@ export async function probeImage(input: Buffer): Promise<ImageProbe> {
 
 /**
  * Auto-orients via EXIF, re-injects ONLY the allow-listed camera metadata,
- * and encodes AVIF + WebP at each contract width without upscaling.
+ * and encodes the selected AVIF+WebP or JPEG-only contract at each width without upscaling.
  *
  * @ai-warning: public variants carry an EXIF ALLOW-LIST (see exif.ts), never
  * `.withMetadata()`. A blanket copy republishes GPS coordinates, XMP and IPTC
@@ -81,7 +132,8 @@ export async function processImage(
   input: Buffer,
   opts: ProcessOptions = {},
 ): Promise<ProcessResult> {
-  const { avifQuality = 55, webpQuality = 75 } = opts;
+  const profile = normalizeProcessOptions(opts);
+  const { avifQuality, webpQuality } = profile;
 
   // One metadata-only probe supplies the orientation-corrected size, the
   // original's extension and the EXIF block. The full decode + rotate +
@@ -94,6 +146,7 @@ export async function processImage(
   // lossless media archive (enables future re-encodes at new widths/formats).
   const { width, height, ext, exif } = await probeImage(input);
   const original: OriginalImage = { data: input, ext };
+  const format = !profile.convertJpeg && ext === 'jpg' ? JPEG_FORMAT : undefined;
 
   // Parsed once: the source EXIF is the same for every variant.
   const keepExif = allowedExif(exif);
@@ -108,7 +161,7 @@ export async function processImage(
   // full-resolution raw image across all encodes (a larger peak, not a smaller one).
   const variants: Variant[] = [];
   for (const w of variantWidths(width)) {
-    for (const format of FORMATS) {
+    for (const variantFormat of formatsFor(format)) {
       let base = sharp(input, { failOn: 'none' })
         .rotate()             // applies EXIF orientation to the PIXELS
         .keepIccProfile()     // colour accuracy; an ICC profile carries no location
@@ -117,13 +170,14 @@ export async function processImage(
       // point: anything not in the allow-list cannot survive. Skipped entirely
       // when the source had nothing worth keeping, leaving the variant clean.
       if (keepExif) base = base.withExif(keepExif);
-      const data =
-        format === 'avif'
-          ? await base.avif({ quality: avifQuality }).toBuffer()
-          : await base.webp({ quality: webpQuality }).toBuffer();
-      variants.push({ width: w, format, data });
+      const data = variantFormat === 'avif'
+        ? await base.avif({ quality: avifQuality }).toBuffer()
+        : variantFormat === 'webp'
+          ? await base.webp({ quality: webpQuality }).toBuffer()
+          : await base.jpeg({ quality: 90 }).toBuffer();
+      variants.push({ width: w, format: variantFormat, data });
     }
   }
 
-  return { width, height, variants, original };
+  return { width, height, variants, original, ...(format ? { format } : {}) };
 }

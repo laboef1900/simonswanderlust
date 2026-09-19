@@ -16,7 +16,7 @@ import { readdir, stat } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import sharp from 'sharp';
 import { ORIGINAL_FILE_RE, VARIANT_FILE_RE } from './media-files.js';
-import { FORMATS, variantWidths } from './variants.js';
+import { FORMATS, JPEG_FORMAT, formatsFor, variantWidths, type ImageOutputFormat } from './variants.js';
 import { MAX_PAGE_SIZE, type MediaStore } from './media-store.js';
 import type { PagePair } from './pages.js';
 import type { PostUsageRow } from './posts.js';
@@ -51,7 +51,7 @@ export interface DiskKey {
   key: string;
   /** Variant files present, as `${width}.${format}` — the shape `isCompleteSet` checks. */
   variants: Set<string>;
-  /** storageDir-relative path of the widest variant (webp preferred), for probing a key with no original. */
+  /** storageDir-relative path of the widest variant (WebP preferred on a tie), for probing without an original. */
   largestVariant: string | null;
   /** storageDir-relative path of the retained `-orig.<ext>`; null for legacy WP-era files. */
   original: string | null;
@@ -107,13 +107,23 @@ export async function walkStorageKeys(storageDir: string): Promise<Map<string, D
 }
 
 /**
- * The variant contract on disk: every width `variantWidths(intrinsicWidth)`
- * prescribes, in every format (variants.ts, mirrored by the site's images.ts —
- * the srcset asks for exactly these files). One stray variant is not a photo.
+ * Require every prescribed width in the image's recorded format contract.
+ * Omission means the historical AVIF+WebP pair.
  */
-export function isCompleteSet(variants: ReadonlySet<string>, intrinsicWidth: number): boolean {
+export function isCompleteSet(
+  variants: ReadonlySet<string>,
+  intrinsicWidth: number,
+  format?: ImageOutputFormat,
+): boolean {
   if (!Number.isInteger(intrinsicWidth) || intrinsicWidth <= 0) return false;
-  return variantWidths(intrinsicWidth).every((w) => FORMATS.every((f) => variants.has(`${w}.${f}`)));
+  return variantWidths(intrinsicWidth).every((w) => formatsFor(format).every((f) => variants.has(`${w}.${f}`)));
+}
+
+function formatOnDisk(variants: ReadonlySet<string>, intrinsicWidth: number): ImageOutputFormat | undefined {
+  if (isCompleteSet(variants, intrinsicWidth)) return undefined;
+  if (isCompleteSet(variants, intrinsicWidth, JPEG_FORMAT)) return JPEG_FORMAT;
+  const hasModern = [...variants].some((variant) => FORMATS.some((format) => variant.endsWith(`.${format}`)));
+  return !hasModern && [...variants].some((variant) => variant.endsWith(`.${JPEG_FORMAT}`)) ? JPEG_FORMAT : undefined;
 }
 
 /**
@@ -131,7 +141,12 @@ async function probeDims(file: string): Promise<{ width: number; height: number 
   }
 }
 
-type DiskVerdict = { status: 'ready' | 'processing' | 'missing'; width: number; height: number };
+type DiskVerdict = {
+  status: 'ready' | 'processing' | 'missing';
+  width: number;
+  height: number;
+  format?: ImageOutputFormat;
+};
 
 /**
  * What the files say a key's status and dimensions should be.
@@ -145,18 +160,24 @@ type DiskVerdict = { status: 'ready' | 'processing' | 'missing'; width: number; 
  * no ground truth to compare against, and the recorded width is then at
  * least self-consistent with the files that exist.
  */
-async function assess(root: string, entry: DiskKey): Promise<DiskVerdict> {
+async function assess(root: string, entry: DiskKey, expectedFormat?: ImageOutputFormat): Promise<DiskVerdict> {
   if (entry.original) {
     const dims = await probeDims(join(root, entry.original));
-    if (dims.width > 0 && isCompleteSet(entry.variants, dims.width)) return { status: 'ready', ...dims };
+    const format = expectedFormat ?? formatOnDisk(entry.variants, dims.width);
+    if (dims.width > 0 && isCompleteSet(entry.variants, dims.width, format)) {
+      return { status: 'ready', ...dims, ...(format ? { format } : {}) };
+    }
     // A crashed upload (no variants), a partial set or an unreadable original:
     // re-encoding is idempotent and either heals it or fails honestly.
-    return { status: 'processing', ...dims };
+    return { status: 'processing', ...dims, ...(format ? { format } : {}) };
   }
   const dims = entry.largestVariant ? await probeDims(join(root, entry.largestVariant)) : { width: 0, height: 0 };
-  if (dims.width > 0 && isCompleteSet(entry.variants, dims.width)) return { status: 'ready', ...dims };
+  const format = expectedFormat ?? formatOnDisk(entry.variants, dims.width);
+  if (dims.width > 0 && isCompleteSet(entry.variants, dims.width, format)) {
+    return { status: 'ready', ...dims, ...(format ? { format } : {}) };
+  }
   // Nothing can re-encode it: flag it so the library shows it and the publish gate blocks it.
-  return { status: 'missing', ...dims };
+  return { status: 'missing', ...dims, ...(format ? { format } : {}) };
 }
 
 /**
@@ -216,6 +237,7 @@ export function createMediaSync(opts: MediaSyncOptions) {
             // flagged `missing` rather than declared whole.
             status: verdict.status,
             width: verdict.width, height: verdict.height, origBytes: entry.origBytes,
+            ...(verdict.format ? { format: verdict.format, encoding: { convertJpeg: false } } : {}),
             alt, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null },
             uploadedBy: null,
           });
@@ -240,12 +262,14 @@ export function createMediaSync(opts: MediaSyncOptions) {
       // drops it out of the `status = 'ready'` filter, so every mutation
       // shifts the rows underneath the next OFFSET and skips one. Collect the
       // whole ready set first (no writes, so paging is stable), then mutate.
-      const ready: { key: string; width: number }[] = [];
+      const ready: { key: string; width: number; format?: ImageOutputFormat }[] = [];
       for (let page = 1; ; page++) {
         const { items, total } = await opts.store.list({
           status: 'ready', sort: 'key', order: 'asc', page, pageSize: MAX_PAGE_SIZE,
         });
-        ready.push(...items.map((i) => ({ key: i.key, width: i.width })));
+        ready.push(...items.map((i) => ({
+          key: i.key, width: i.width, ...(i.format ? { format: i.format } : {}),
+        })));
         if (items.length < MAX_PAGE_SIZE || ready.length >= total) break;
       }
       for (const row of ready) {
@@ -256,9 +280,9 @@ export function createMediaSync(opts: MediaSyncOptions) {
           continue;
         }
         // Fast path, no image read: the srcset is built from the recorded
-        // width, so if every file it can ask for exists nothing can 404.
-        if (isCompleteSet(entry.variants, row.width)) continue;
-        const verdict = await assess(root, entry);
+        // width/format, so if every file it can ask for exists nothing can 404.
+        if (isCompleteSet(entry.variants, row.width, row.format)) continue;
+        const verdict = await assess(root, entry, row.format);
         if (verdict.status === 'ready') continue; // complete for its real width; the recorded one is merely stale
         await opts.store.setStatus(row.key, verdict.status);
         report.demoted++;

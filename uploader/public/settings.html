@@ -9,7 +9,7 @@
   <body>
     <header class="cms-page-meta">
       <h1>Settings</h1>
-      <p class="lede">Live site, backups, and browser-direct AI. Saved settings apply immediately; no redeploy.</p>
+      <p class="lede">Live site, images, backups, and browser-direct AI. Saved settings apply without a redeploy.</p>
     </header>
 
     <main>
@@ -59,6 +59,37 @@
           host-level backup (e.g. restic/rsync cron) of <code>/data</code>
           (host: <code>./uploader/data</code>).
         </p>
+      </section>
+
+      <section class="card" aria-labelledby="imageHeading">
+        <h2 id="imageHeading" class="card-heading">Image conversion</h2>
+        <form id="imageSettings">
+          <label class="check-field" for="convertJpeg">
+            <input id="convertJpeg" type="checkbox" aria-describedby="conversionHelp" />
+            Convert JPG images to WebP and AVIF
+          </label>
+          <p id="conversionHelp" class="muted">
+            When off, new JPG uploads keep the JPEG format. Responsive sizes and GPS removal
+            stay enabled. Other image formats still produce WebP and AVIF.
+          </p>
+
+          <label for="webpQuality">WebP quality</label>
+          <input id="webpQuality" type="number" min="1" max="100" step="1" required aria-describedby="imageQualityHelp" />
+          <label for="avifQuality">AVIF quality</label>
+          <input id="avifQuality" type="number" min="1" max="100" step="1" required aria-describedby="imageQualityHelp" />
+          <p id="imageQualityHelp" class="muted">
+            1–100. Higher quality generally means larger files. Defaults: WebP 75, AVIF 55.
+            These controls apply to WebP and AVIF output, not JPEG.
+          </p>
+          <p class="muted">
+            Applies to new uploads and newly processed import images. Existing photos and queued
+            uploads keep their settings. Original files stay private.
+          </p>
+          <div class="settings-actions">
+            <button id="saveImages" type="submit" class="btn-secondary" disabled>Save image settings</button>
+          </div>
+          <p id="imageOut" class="page-status" role="status"></p>
+        </form>
       </section>
 
       <section class="card">
@@ -191,6 +222,13 @@
         if (s.lmModel) sel.value = s.lmModel;
       }
 
+      function fillImages(s) {
+        $('convertJpeg').checked = s.convertJpeg;
+        $('webpQuality').value = s.webpQuality;
+        $('avifQuality').value = s.avifQuality;
+        $('saveImages').disabled = false;
+      }
+
       function rememberReview(s) {
         savedReview = {
           aiProvider: s.aiProvider, aiCustomBaseUrl: s.aiCustomBaseUrl,
@@ -212,6 +250,7 @@
 
       function fill(s) {
         fillGeneral(s);
+        fillImages(s);
         fillReview(s);
       }
 
@@ -299,6 +338,34 @@
       }
       $('save').addEventListener('click', saveSettings);
       $('saveAi').addEventListener('click', saveSettings);
+
+      $('imageSettings').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        $('saveImages').disabled = true;
+        $('imageOut').textContent = 'Saving image settings…';
+        try {
+          const res = await fetch('/settings', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              convertJpeg: $('convertJpeg').checked,
+              webpQuality: Number($('webpQuality').value),
+              avifQuality: Number($('avifQuality').value),
+            }),
+          });
+          if (res.status === 401) { location.href = '/login'; return; }
+          const result = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            $('imageOut').textContent = 'Not saved: ' + (result.error || res.status);
+            return;
+          }
+          fillImages(result);
+          $('imageOut').textContent = 'Image settings saved. Existing photos are unchanged.';
+        } catch {
+          $('imageOut').textContent = 'Could not save image settings. Check your connection and try again.';
+        } finally {
+          $('saveImages').disabled = false;
+        }
+      });
 
       async function saveReviewSettings(removeKey = false) {
         if (removeKey && !await AdminConfirm.ask({

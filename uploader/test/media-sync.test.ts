@@ -16,11 +16,13 @@ const noExif = { takenAt: null, camera: null, lens: null, lat: null, lng: null }
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'mediasync-')); });
 
-async function writeVariant(key: string, width: number, format: 'webp' | 'avif' = 'webp') {
+async function writeVariant(key: string, width: number, format: 'webp' | 'avif' | 'jpeg' = 'webp') {
   const abs = join(dir, `${key}-${width}.${format}`);
   await mkdir(join(abs, '..'), { recursive: true });
   const img = sharp({ create: { width, height: Math.round(width * 0.75), channels: 3, background: '#123' } });
-  await writeFile(abs, format === 'webp' ? await img.webp().toBuffer() : await img.avif().toBuffer());
+  const data = format === 'webp' ? await img.webp().toBuffer()
+    : format === 'avif' ? await img.avif().toBuffer() : await img.jpeg().toBuffer();
+  await writeFile(abs, data);
 }
 /** The complete contract for an intrinsic width — every `variantWidths` width in every format. */
 async function writeSet(key: string, intrinsicWidth: number, opts: { skip?: string[] } = {}) {
@@ -29,6 +31,11 @@ async function writeSet(key: string, intrinsicWidth: number, opts: { skip?: stri
       if (opts.skip?.includes(`${w}.${f}`)) continue;
       await writeVariant(key, w, f);
     }
+  }
+}
+async function writeJpegSet(key: string, intrinsicWidth: number, skip?: number) {
+  for (const w of variantWidths(intrinsicWidth)) {
+    if (w !== skip) await writeVariant(key, w, 'jpeg');
   }
 }
 /** An UNREADABLE original — what a crashed upload's truncated file looks like to sharp. */
@@ -97,6 +104,14 @@ describe('isCompleteSet', () => {
   it('never accepts an unknown width', () => {
     expect(isCompleteSet(full(640), 0)).toBe(false);
     expect(isCompleteSet(full(640), NaN)).toBe(false);
+  });
+
+  it('accepts exactly one JPEG per width only for the JPEG contract', () => {
+    const jpeg = new Set(variantWidths(800).map((width) => `${width}.jpeg`));
+    expect(isCompleteSet(jpeg, 800, 'jpeg')).toBe(true);
+    expect(isCompleteSet(jpeg, 800)).toBe(false);
+    jpeg.delete('800.jpeg');
+    expect(isCompleteSet(jpeg, 800, 'jpeg')).toBe(false);
   });
 });
 
@@ -206,6 +221,41 @@ describe('createMediaSync', () => {
     await writeSet('wp/legacy', 1280);
     await sync(store).run();
     expect(await store.get('wp/legacy')).toMatchObject({ status: 'ready', width: 1280, height: 960 });
+  });
+
+  it('backfills a complete JPEG-only set with its persistent format/profile', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await writeJpegSet('wp/jpeg', 800);
+    await writeJpegOriginal('wp/jpeg', 800);
+    await sync(store).run();
+    expect(await store.get('wp/jpeg')).toMatchObject({
+      status: 'ready', format: 'jpeg', encoding: { convertJpeg: false },
+      thumbSrc: `${BASE}/wp/jpeg-640.jpeg`,
+    });
+  });
+
+  it('recovers a partial JPEG set as JPEG instead of switching to modern formats', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await writeJpegSet('wp/partial-jpeg', 800, 800);
+    await writeJpegOriginal('wp/partial-jpeg', 800);
+    await sync(store).run();
+    expect(await store.get('wp/partial-jpeg')).toMatchObject({
+      status: 'processing', format: 'jpeg', encoding: { convertJpeg: false },
+    });
+  });
+
+  it('judges ready rows by their recorded contract when both formats coexist', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await writeJpegSet('wp/mixed', 800, 800);
+    await writeSet('wp/mixed', 800);
+    await writeJpegOriginal('wp/mixed', 800);
+    await store.upsert({
+      key: 'wp/mixed', status: 'ready', width: 800, height: 600, origBytes: 1,
+      exif: noExif, uploadedBy: null, format: 'jpeg', encoding: { convertJpeg: false },
+    });
+    const report = await sync(store).run();
+    expect(report.demoted).toBe(1);
+    expect(await store.get('wp/mixed')).toMatchObject({ status: 'processing', format: 'jpeg' });
   });
 
   it('demotes a ready row whose set lost files, and leaves a complete one alone', async () => {

@@ -87,7 +87,7 @@ window.GalleryFence = (function () {
 
   // Mirrors DIMS_RE / ATTR_RE and MAX_TEXT in src/body-content.ts.
   var DIMS_RE = /^(\d{1,6})x(\d{1,6})$/;
-  var ATTR_RE = /^(alt|caption)="([^"]*)"$/;
+  var ATTR_RE = /^(alt|caption|format)="([^"]*)"$/;
   var MAX_TEXT = 1000;
 
   // Mirrors FENCE_OPEN_RE in src/body-content.ts: up to 3 spaces of indent
@@ -118,16 +118,15 @@ window.GalleryFence = (function () {
    * this module has no opinion about what they mean, only that editing a
    * gallery must not silently discard them.
    *
-   * `postMeta` maps a photo URL to the alt/caption already recorded FOR THIS
-   * POST (its `images` entry, plus anything hand-typed on the fence line). It
-   * wins over the media library's own alt/caption.
+   * `postMeta` maps a photo URL to the metadata already recorded FOR THIS POST
+   * (its `images` entry, plus anything hand-typed on the fence line). It wins
+   * over the media library's own alt/caption/format.
    *
    * @ai-warning `postMeta` is load-bearing, not a nicety. `normalizeGalleryFences`
    * lets a value present on the line beat the stored `images` entry
    * (src/body-content.ts), and the stored fence is bare URLs — so without this,
-   * re-serializing from library rows silently overwrites every photo's
-   * post-specific alt and caption with the library defaults, at save time, where
-   * the author cannot see it happen.
+   * re-serializing from library rows silently overwrites post-specific text or
+   * drops the JPEG-only marker at save time, where the author cannot see it.
    */
   function serialize(items, locale, directives, postMeta) {
     var lines = [];
@@ -154,6 +153,8 @@ window.GalleryFence = (function () {
 
       var prior = metaFor(postMeta, src);
       var parts = [src, item.width + 'x' + item.height];
+      var format = typeof prior.format === 'string' ? prior.format : item.format;
+      if (format === 'jpeg') parts.push('format="jpeg"');
       // An empty string in `postMeta` is a deliberate clear and is respected;
       // only an absent key falls back to the library row.
       var alt = (typeof prior.alt === 'string' ? prior.alt : pickLocale(item.alt, locale)).slice(0, MAX_TEXT);
@@ -201,7 +202,8 @@ window.GalleryFence = (function () {
         if (attr) {
           var value = unescapeMeta(attr[2] || '').slice(0, MAX_TEXT);
           if (attr[1] === 'alt') out.alt = value;
-          else out.caption = value;
+          else if (attr[1] === 'caption') out.caption = value;
+          else if (value === 'jpeg') out.format = value;
         }
       });
       lines.push(out);

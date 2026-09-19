@@ -63,6 +63,18 @@ describe('renderPreviewHtml', () => {
     expect(html).toContain('alt="Old town"');
   });
 
+  it('renders JPEG-only body references without requesting nonexistent modern variants', async () => {
+    const p = pair();
+    const src = 'https://img.example.com/trips/bukarest/jpeg';
+    p.de.bodyMarkdown = `![JPEG](${src})`;
+    p.de.images = { [src]: { width: 1600, height: 1200, format: 'jpeg' } };
+    const html = await renderPreviewHtml(p, 'de', ORIGIN);
+    expect(html).toContain('type="image/jpeg"');
+    expect(html).toContain(`${src}-1280.jpeg`);
+    expect(html).not.toContain(`${src}-640.avif`);
+    expect(html).not.toContain(`${src}-640.webp`);
+  });
+
   it('sanitizes the body: strips <script>, inline handlers and javascript: URLs', async () => {
     const p = pair();
     p.de.bodyMarkdown = [
@@ -139,6 +151,16 @@ describe('renderPreviewHtml', () => {
     expect(html).toContain('class="hero"');
     expect(html).toContain('https://img.example.com/trips/bukarest/hero-1280.webp');
     expect(html).toContain('alt="Altstadt"');
+  });
+
+  it('renders a JPEG-only hero using only .jpeg variants', async () => {
+    const p = pair();
+    p.de.heroImage = { ...p.de.heroImage, format: 'jpeg' };
+    const html = await renderPreviewHtml(p, 'de', ORIGIN);
+    expect(html).toContain('type="image/jpeg"');
+    expect(html).toContain('https://img.example.com/trips/bukarest/hero-1280.jpeg');
+    expect(html).not.toContain('https://img.example.com/trips/bukarest/hero-640.avif');
+    expect(html).not.toContain('https://img.example.com/trips/bukarest/hero-640.webp');
   });
 
   it('omits the hero block for the empty-src draft placeholder', async () => {

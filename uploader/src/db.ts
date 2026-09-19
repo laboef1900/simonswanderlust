@@ -204,6 +204,10 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       lens          text,
       lat           double precision,
       lng           double precision,
+      format        text CHECK (format IS NULL OR format = 'jpeg'),
+      encoding      jsonb,
+      CONSTRAINT media_encoding_check
+        CHECK (format IS NULL OR COALESCE(encoding ->> 'convertJpeg' = 'false', false)),
       uploaded_at   timestamptz NOT NULL DEFAULT now(),
       uploaded_by   uuid REFERENCES users(id) ON DELETE SET NULL
     )
@@ -308,4 +312,32 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
        COMMIT`,
     );
   }
+
+  // Image conversion profiles are snapped per media row. NULL is the legacy
+  // AVIF+WebP/default-quality state, so existing rows need no rewrite.
+  await pool.query(`ALTER TABLE media ADD COLUMN IF NOT EXISTS format text`);
+  await pool.query(`ALTER TABLE media ADD COLUMN IF NOT EXISTS encoding jsonb`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = 'media'::regclass AND conname = 'media_format_check'
+      ) THEN
+        ALTER TABLE media ADD CONSTRAINT media_format_check CHECK (format IS NULL OR format = 'jpeg');
+      END IF;
+    END $$;
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = 'media'::regclass AND conname = 'media_encoding_check'
+      ) THEN
+        ALTER TABLE media ADD CONSTRAINT media_encoding_check
+          CHECK (format IS NULL OR COALESCE(encoding ->> 'convertJpeg' = 'false', false));
+      END IF;
+    END $$;
+  `);
 }

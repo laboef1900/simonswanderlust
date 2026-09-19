@@ -12,6 +12,8 @@
 import { randomUUID } from 'node:crypto';
 import type { DbClient, DbPool } from './db.js';
 import type { MediaExif } from './exif.js';
+import { storedProcessOptions, type ProcessOptions } from './pipeline.js';
+import { JPEG_FORMAT, type ImageOutputFormat } from './variants.js';
 
 export type MediaStatus = 'processing' | 'ready' | 'failed' | 'missing';
 /**
@@ -36,6 +38,10 @@ export interface MediaItem {
   exif: MediaExif;                       // lat/lng redacted for non-admins
   uploadedAt: Date;
   uploadedBy: string | null;             // redacted for non-admins
+  /** Omitted means the historical AVIF + WebP pair. */
+  format?: ImageOutputFormat;
+  /** Snapped at upload so retry/recovery never consults mutable global settings. */
+  encoding?: ProcessOptions;
 }
 
 export interface NewMediaItem {
@@ -46,6 +52,8 @@ export interface NewMediaItem {
   status: MediaStatus;                   // required — no implicit default
   exif: MediaExif;
   uploadedBy: string | null;
+  format?: ImageOutputFormat;
+  encoding?: ProcessOptions;
 }
 
 export type MediaPatch = Partial<Pick<NewMediaItem, 'folder' | 'title' | 'alt' | 'caption' | 'tags'>>;
@@ -192,7 +200,8 @@ export function likePattern(q: unknown): string {
  * The width of the thumbnail that actually EXISTS for a photo.
  *
  * @ai-warning Server-derived on purpose. `variantWidths()` never upscales, so
- * a photo narrower than 640px has no `-640.webp` — only `-<intrinsic>.webp`. A
+ * a photo narrower than 640px has no `-640` thumbnail — only the intrinsic
+ * width, using `.webp` for modern rows or `.jpeg` for JPEG-only rows. A
  * client deriving this would be a third copy of the width contract, which the
  * codebase deliberately keeps in exactly two cross-referenced places
  * (uploader/src/variants.ts and site/src/lib/images.ts).
@@ -202,12 +211,19 @@ export function thumbWidth(width: number): number | null {
   return Math.min(640, width);
 }
 
-function thumbSrcFor(baseUrl: string, key: string, width: number, status: MediaStatus): string | null {
+function thumbSrcFor(
+  baseUrl: string,
+  key: string,
+  width: number,
+  status: MediaStatus,
+  format?: ImageOutputFormat,
+): string | null {
   // A photo still encoding (or failed) has no variant files yet — offering a
   // URL that 404s would just produce broken images in the library grid.
   if (status !== 'ready') return null;
   const w = thumbWidth(width);
-  return w === null ? null : `${baseUrl}/${key}-${w}.webp`;
+  const extension = format === JPEG_FORMAT ? JPEG_FORMAT : 'webp';
+  return w === null ? null : `${baseUrl}/${key}-${w}.${extension}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +280,7 @@ export function memoryMediaStore(opts: MediaStoreOptions): MediaStore {
   const toItem = (r: MemRow): MediaItem => ({
     ...structuredClone(r),
     src: `${baseUrl}/${r.key}`,
-    thumbSrc: thumbSrcFor(baseUrl, r.key, r.width, r.status),
+    thumbSrc: thumbSrcFor(baseUrl, r.key, r.width, r.status, r.format),
   });
   const need = (key: string): MemRow => {
     const r = rows.get(key);
@@ -308,6 +324,8 @@ export function memoryMediaStore(opts: MediaStoreOptions): MediaStore {
       // here passes CI and only shows up in production.
       const keep = (incoming: string | undefined, stored: string | undefined): string =>
         cleanText(incoming) || stored || '';
+      const format = imageFormat(item.format);
+      const encoding = mediaEncoding(format, item.encoding);
       const row: MemRow = {
         key: item.key,
         folder: item.folder ?? '',                     // pg: folder = EXCLUDED.folder
@@ -325,6 +343,8 @@ export function memoryMediaStore(opts: MediaStoreOptions): MediaStore {
         origBytes: item.origBytes,
         variantBytes: existing?.variantBytes ?? 0,
         status: item.status, error: null,
+        ...(format ? { format } : {}),
+        ...(encoding ? { encoding } : {}),
         exif: { ...item.exif },
         uploadedAt: existing?.uploadedAt ?? new Date(),
         // pg's ON CONFLICT clause never touches uploaded_by: the first
@@ -430,13 +450,31 @@ interface MediaRow {
   taken_at: Date | null; camera: string | null; lens: string | null;
   lat: number | null; lng: number | null;
   uploaded_at: Date; uploaded_by: string | null;
+  format: unknown;
+  encoding: unknown;
+}
+
+function imageFormat(value: unknown): ImageOutputFormat | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (value !== JPEG_FORMAT) throw new Error('invalid stored image format');
+  return value;
+}
+
+function mediaEncoding(format: ImageOutputFormat | undefined, value: unknown): ProcessOptions | undefined {
+  const encoding = storedProcessOptions(value);
+  if (format === JPEG_FORMAT && encoding?.convertJpeg !== false) {
+    throw new Error('jpeg media requires its persisted conversion profile');
+  }
+  return encoding;
 }
 
 function rowToItem(r: MediaRow, baseUrl: string): MediaItem {
+  const format = imageFormat(r.format);
+  const encoding = mediaEncoding(format, r.encoding);
   return {
     key: r.key,
     src: `${baseUrl}/${r.key}`,
-    thumbSrc: thumbSrcFor(baseUrl, r.key, r.width, r.status),
+    thumbSrc: thumbSrcFor(baseUrl, r.key, r.width, r.status, format),
     folder: r.folder, title: r.title,
     alt: { de: r.alt_de, en: r.alt_en },
     caption: { de: r.caption_de, en: r.caption_en },
@@ -447,12 +485,14 @@ function rowToItem(r: MediaRow, baseUrl: string): MediaItem {
     status: r.status, error: r.error,
     exif: { takenAt: r.taken_at, camera: r.camera, lens: r.lens, lat: r.lat, lng: r.lng },
     uploadedAt: r.uploaded_at, uploadedBy: r.uploaded_by,
+    ...(format ? { format } : {}),
+    ...(encoding ? { encoding } : {}),
   };
 }
 
 const COLS = `key, folder, title, alt_de, alt_en, caption_de, caption_en, tags, width, height,
               orig_bytes, variant_bytes, status, error, taken_at, camera, lens, lat, lng,
-              uploaded_at, uploaded_by`;
+              uploaded_at, uploaded_by, format, encoding`;
 
 export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore {
   const baseUrl = opts.baseUrl.replace(/\/+$/, '');
@@ -549,11 +589,13 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
       // COALESCE on update keeps text a caller omitted (a re-upload of the same
       // bytes must not blank an existing title/alt), while status/dimensions
       // always take the new value.
+      const format = imageFormat(item.format);
+      const encoding = mediaEncoding(format, item.encoding);
       await pool.query(
         `INSERT INTO media (key, folder, title, alt_de, alt_en, caption_de, caption_en, tags,
                             width, height, orig_bytes, status, error,
-                            taken_at, camera, lens, lat, lng, uploaded_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::text[],$9,$10,$11,$12,NULL,$13,$14,$15,$16,$17,$18)
+                            taken_at, camera, lens, lat, lng, uploaded_by, format, encoding)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::text[],$9,$10,$11,$12,NULL,$13,$14,$15,$16,$17,$18,$19,$20::jsonb)
          ON CONFLICT (key) DO UPDATE SET
            folder = EXCLUDED.folder,
            title = CASE WHEN EXCLUDED.title = '' THEN media.title ELSE EXCLUDED.title END,
@@ -565,13 +607,14 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
            width = EXCLUDED.width, height = EXCLUDED.height, orig_bytes = EXCLUDED.orig_bytes,
            status = EXCLUDED.status, error = NULL,
            taken_at = EXCLUDED.taken_at, camera = EXCLUDED.camera, lens = EXCLUDED.lens,
-           lat = EXCLUDED.lat, lng = EXCLUDED.lng`,
+           lat = EXCLUDED.lat, lng = EXCLUDED.lng,
+           format = EXCLUDED.format, encoding = EXCLUDED.encoding`,
         [
           item.key, folder, cleanText(item.title), cleanText(item.alt?.de), cleanText(item.alt?.en),
           cleanText(item.caption?.de), cleanText(item.caption?.en), normalizeTags(item.tags),
           item.width, item.height, item.origBytes, item.status,
           item.exif.takenAt, item.exif.camera, item.exif.lens, item.exif.lat, item.exif.lng,
-          item.uploadedBy,
+          item.uploadedBy, format ?? null, encoding ? JSON.stringify(encoding) : null,
         ],
       );
       const saved = await getRow(item.key);

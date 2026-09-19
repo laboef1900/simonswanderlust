@@ -59,6 +59,40 @@ describe('processImage', () => {
     expect(Math.max(...widths)).toBe(2000); // never exceeds source
   });
 
+  it('emits JPEG-only responsive variants for real JPEG input when conversion is off', async () => {
+    const result = await processImage(await fixture(2000, 1000), { convertJpeg: false });
+    expect(result.format).toBe('jpeg');
+    expect(result.variants.map((v) => v.format)).toEqual(['jpeg', 'jpeg', 'jpeg', 'jpeg']);
+    for (const variant of result.variants) {
+      const meta = await sharp(variant.data).metadata();
+      expect(meta.format).toBe('jpeg');
+      const tags = meta.exif ? exifReader(meta.exif) : null;
+      expect(tags?.GPSInfo ?? null, `jpeg@${variant.width} leaked GPS`).toBeNull();
+      expect(tags?.Image?.Make).toBe('Leica Camera AG');
+      expect(tags?.Image?.Model).toBe('LEICA Q2');
+    }
+  });
+
+  it('keeps non-JPEG inputs on the modern pair even when JPEG conversion is off', async () => {
+    const png = await sharp({
+      create: { width: 800, height: 600, channels: 3, background: '#246' },
+    }).png().toBuffer();
+    const result = await processImage(png, { convertJpeg: false });
+    expect(result.format).toBeUndefined();
+    expect(new Set(result.variants.map((v) => v.format))).toEqual(new Set(['avif', 'webp']));
+  });
+
+  it('applies custom modern qualities without changing the format contract', async () => {
+    const input = await fixture(320, 240);
+    const low = await processImage(input, { avifQuality: 1, webpQuality: 1 });
+    const high = await processImage(input, { avifQuality: 100, webpQuality: 100 });
+    expect(low.format).toBeUndefined();
+    expect(high.format).toBeUndefined();
+    expect(low.variants.map((v) => v.data.equals(high.variants.find(
+      (other) => other.width === v.width && other.format === v.format,
+    )!.data))).toContain(false);
+  });
+
   it('only emits the intrinsic width for tiny sources', async () => {
     const result = await processImage(await fixture(500, 400));
     expect([...new Set(result.variants.map((v) => v.width))]).toEqual([500]);

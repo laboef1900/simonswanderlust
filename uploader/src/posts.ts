@@ -16,6 +16,7 @@ export interface HeroImage {
   width: number;
   height: number;
   alt: string;
+  format?: 'jpeg';
   focus?: { x: number; y: number };
 }
 /**
@@ -84,17 +85,16 @@ export interface PostSummary {
   /** EN-completeness hint for the write-DE-first workflow (true when the EN body is non-blank). */
   hasEnBody: boolean;
   /**
-   * Hero base URL and its INTRINSIC width, for the list thumbnail. Both are
-   * needed: `src` carries no width/format suffix and `variantWidths()` never
-   * upscales, so a hero narrower than 640px has no `-640.webp` — only
-   * `-<intrinsicWidth>.webp`. The client picks `min(640, heroWidth)`.
+   * Hero base URL, intrinsic width and optional JPEG-only marker for the list
+   * thumbnail. Omitted format means the existing AVIF + WebP pair; the client
+   * picks the smallest generated width without ever inventing another format.
    * @ai-warning `heroSrc` is `''` for a draft that has no hero yet — there are
    * TWO independent sources of that placeholder (`PLACEHOLDER_HERO` here and a
    * separate one in `wp-import.ts`), so the UI must render a placeholder cell
-   * rather than emitting `<img src="-640.webp">`. `heroWidth` comes from
-   * untyped jsonb and nothing verifies it, so treat it as a hint.
+   * rather than emitting a variant URL. Width and format come from untyped
+   * jsonb and must be treated as hints.
    */
-  heroSrc: string; heroWidth: number;
+  heroSrc: string; heroWidth: number; heroFormat?: 'jpeg';
   /** Shared trip metadata, for the list's filters and sort. */
   date: string; country: string; region: string;
   categories: string[];
@@ -385,8 +385,15 @@ export function normalizeBodyImages(
       .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
     const width = Number(get('width'));
     const height = Number(get('height'));
+    const format = get('format');
+    if (format !== undefined && format !== 'jpeg') return match;
     if (Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0) {
-      merged[src] = { width, height };
+      merged[src] = {
+        ...merged[src],
+        width,
+        height,
+        ...(format === 'jpeg' ? { format } : {}),
+      };
     }
     return imageMarkdown(alt, src);
   });
@@ -470,6 +477,7 @@ export function memoryPostStore(): PostStore {
             status: p.status, updatedAt: p.updatedAt, hasUnpublishedChanges: p.hasUnpublishedChanges,
             hasEnBody: Boolean(p.en.bodyMarkdown && p.en.bodyMarkdown.trim()),
             heroSrc: hero?.src ?? '', heroWidth: hero?.width ?? 0,
+            ...(hero?.format === 'jpeg' ? { heroFormat: hero.format } : {}),
             // DE-led with an EN fallback, same precedent as the hero above — a
             // pair may have only the EN row's country filled in.
             date: p.shared.date ?? '', country: p.de.country || p.en.country || '', region: p.shared.region ?? '',
@@ -718,6 +726,7 @@ export function pgPostStore(pool: DbPool): PostStore {
           hasUnpublishedChanges: rowHasUnpublishedChanges(e.de) || rowHasUnpublishedChanges(e.en),
           hasEnBody: Boolean(e.en?.has_body),
           heroSrc: hero?.src ?? '', heroWidth: hero?.width ?? 0,
+          ...(hero?.format === 'jpeg' ? { heroFormat: hero.format } : {}),
           date: dateText(shared?.date), country: e.de?.country || e.en?.country || '', region: shared?.region ?? '',
           categories: shared?.categories ?? [],
           tags: shared?.tags ?? [],

@@ -205,6 +205,7 @@
                 <input id="deHeroSrc" type="hidden" />
                 <input id="deHeroWidth" type="hidden" />
                 <input id="deHeroHeight" type="hidden" />
+                <input id="deHeroFormat" type="hidden" />
               </div>
             </section>
           </section>
@@ -278,6 +279,7 @@
                 <input id="enHeroSrc" type="hidden" />
                 <input id="enHeroWidth" type="hidden" />
                 <input id="enHeroHeight" type="hidden" />
+                <input id="enHeroFormat" type="hidden" />
               </div>
             </section>
           </section>
@@ -709,6 +711,7 @@
           $(locale + 'HeroSrc').value = body.src;
           $(locale + 'HeroWidth').value = body.width;
           $(locale + 'HeroHeight').value = body.height;
+          $(locale + 'HeroFormat').value = body.format || '';
           // Hidden inputs are set programmatically — no input event fires.
           // A new photo invalidates the old focal point, so recentre before
           // showing the control for the new frame.
@@ -794,6 +797,7 @@
           var url = PostsFilter.thumbUrl({
             heroSrc: $(locale + 'HeroSrc').value,
             heroWidth: parseInt($(locale + 'HeroWidth').value, 10),
+            heroFormat: $(locale + 'HeroFormat').value || undefined,
           });
           if (!url) {
             wrap.hidden = true;
@@ -857,10 +861,10 @@
         const current = existing ? GalleryFence.parse(existing.text) : { directives: [], lines: [] };
 
         // What this post already says about each photo, which must survive a
-        // re-serialize: the fence's own line metadata if the author typed some
-        // and has not saved yet, otherwise the `images` entry it was lifted into.
-        // Without this the library's alt/caption would overwrite the author's on
-        // every edit — see the @ai-warning on GalleryFence.serialize.
+        // re-serialize: the fence's own metadata if the author typed some and
+        // has not saved yet, otherwise the `images` entry it was lifted into.
+        // Without this, post-specific alt/caption and the JPEG-only marker can
+        // be overwritten or dropped when the picker refreshes from the library.
         const images = locale === 'de' ? deImages : enImages;
         const status = $(locale + 'BodyImgStatus');
         const postMeta = {};
@@ -868,10 +872,12 @@
           const stored = images[line.src] || {};
           const alt = line.alt !== undefined ? line.alt : stored.alt;
           const caption = line.caption !== undefined ? line.caption : stored.caption;
-          if (typeof alt !== 'string' && typeof caption !== 'string') return;
+          const format = line.format !== undefined ? line.format : stored.format;
+          if (typeof alt !== 'string' && typeof caption !== 'string' && format !== 'jpeg') return;
           postMeta[line.src] = {};
           if (typeof alt === 'string') postMeta[line.src].alt = alt;
           if (typeof caption === 'string') postMeta[line.src].caption = caption;
+          if (format === 'jpeg') postMeta[line.src].format = format;
         });
 
         // An unterminated fence's extent runs to end-of-post, so there is no
@@ -895,6 +901,7 @@
             width: line.width ?? stored.width,
             height: line.height ?? stored.height,
             fromPost: true,
+            format: line.format ?? stored.format,
           };
         });
 
@@ -954,6 +961,7 @@
             $(locale + 'HeroSrc').value = item.src;
             $(locale + 'HeroWidth').value = item.width;
             $(locale + 'HeroHeight').value = item.height;
+            $(locale + 'HeroFormat').value = item.format || '';
             // Alt travels with the photo when the field is still empty — the
             // library is where alt text is maintained.
             const altInput = $(locale + 'HeroAlt');
@@ -998,7 +1006,11 @@
 
           // Record dims into the locale-specific images map
           const imagesMap = locale === 'de' ? deImages : enImages;
-          imagesMap[body.src] = { width: body.width, height: body.height };
+          imagesMap[body.src] = {
+            width: body.width,
+            height: body.height,
+            ...(body.format === 'jpeg' ? { format: body.format } : {}),
+          };
 
           // Insert markdown at cursor in the matching EasyMDE instance
           // (replaceSelection fires a CodeMirror change → marks the guard dirty)
@@ -1063,6 +1075,7 @@
           const heroSrc = $(loc + 'HeroSrc').value;
           const heroW = parseInt($(loc + 'HeroWidth').value, 10);
           const heroH = parseInt($(loc + 'HeroHeight').value, 10);
+          const heroFormat = $(loc + 'HeroFormat').value;
           const heroAlt = $(loc + 'HeroAlt').value.trim();
           // 50/50 is the unset value: omitting `focus` there keeps a post
           // nobody has framed byte-identical to what it was before the field
@@ -1083,6 +1096,7 @@
                   width: heroW || 0,
                   height: heroH || 0,
                   alt: heroAlt,
+                  ...(heroFormat === 'jpeg' ? { format: heroFormat } : {}),
                   ...(framed ? { focus: focus } : {}),
                 }
               : undefined,
@@ -1538,6 +1552,7 @@
         $(loc + 'HeroSrc').value = hero.src || '';
         $(loc + 'HeroWidth').value = hero.width || '';
         $(loc + 'HeroHeight').value = hero.height || '';
+        $(loc + 'HeroFormat').value = hero.format || '';
         $(loc + 'HeroAlt').value = hero.alt || '';
         $(loc + 'HeroStatus').textContent = hero.src ? 'Hero: ' + hero.src : '';
         // Same no-field-resurrection rule as the fields above: a payload with

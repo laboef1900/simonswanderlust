@@ -9,6 +9,8 @@ export interface RemoteHeroImage {
   width: number;
   height: number;
   alt: string;
+  /** JPEG-only variants; absent means the existing AVIF + WebP pair. */
+  format?: 'jpeg';
   /**
    * Author-chosen subject position as percentages of the frame, fed to
    * `object-position`. Every surface that shows a hero crops it with
@@ -44,7 +46,12 @@ export function focusPosition(image: RemoteHeroImage): string | undefined {
   return x === 50 && y === 50 ? undefined : `object-position:${x}% ${y}%`;
 }
 
-export type ImageFormat = 'avif' | 'webp';
+export type ImageFormat = 'avif' | 'webp' | 'jpeg';
+
+/** Formats that actually exist for an image reference, best choice first. */
+export function sourceFormats(image: RemoteHeroImage): readonly ImageFormat[] {
+  return image.format === 'jpeg' ? ['jpeg'] : ['avif', 'webp'];
+}
 
 /**
  * Origin the hero images are served from when the build has no configured base
@@ -151,17 +158,18 @@ export function srcset(image: RemoteHeroImage, format: ImageFormat): string {
  * The largest variant that exists for a photo.
  *
  * Two callers, which is why it lives here rather than inline: the gallery's
- * `<a href>` (the no-JS "open full size" target) and the lightbox island that
- * enhances it.
+ * `<a href>` (the no-JS "open full size" target) and SEO/social images.
+ * The optional override is for callers that intentionally select one of the
+ * image's generated formats; normal consumers use the recorded format.
  */
-export function largestVariant(image: RemoteHeroImage, format: ImageFormat = 'webp'): string {
+export function largestVariant(image: RemoteHeroImage, format: ImageFormat = image.format ?? 'webp'): string {
   const widths = variantWidths(image.width);
   return `${image.src}-${widths[widths.length - 1]}.${format}`;
 }
 
-/** Plain <img src> fallback — prefers the 1280 webp, else the largest available. */
+/** Plain <img src> fallback — prefers 1280, using only a generated format. */
 export function fallbackSrc(image: RemoteHeroImage): string {
   const widths = variantWidths(image.width);
   const w = widths.includes(FALLBACK_WIDTH) ? FALLBACK_WIDTH : widths[widths.length - 1];
-  return `${image.src}-${w}.webp`;
+  return `${image.src}-${w}.${image.format ?? 'webp'}`;
 }

@@ -124,6 +124,20 @@ describe('importWxr', () => {
     expect(pair!.de.images['https://img/x']).toEqual({ width: 100, height: 80 });
   });
 
+  it('preserves JPEG format through imported hero and body metadata', async () => {
+    const store = memoryPostStore();
+    await importWxr(xml, {
+      postStore: store, storageDir: '/tmp', baseUrl: 'https://img',
+      rehost: async () => ({ src: 'https://img/jpeg', width: 100, height: 80, format: 'jpeg' }),
+    });
+    const summary = (await store.list())[0]!;
+    const pair = await store.get(summary.translationKey);
+    expect(pair?.de.heroImage).toMatchObject({ src: 'https://img/jpeg', format: 'jpeg' });
+    expect(pair?.de.images['https://img/jpeg']).toMatchObject({
+      width: 100, height: 80, format: 'jpeg',
+    });
+  });
+
   it('rewrites all occurrences of a duplicated body image ref', async () => {
     const dupXml = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"

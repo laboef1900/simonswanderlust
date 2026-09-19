@@ -26,6 +26,26 @@ describe('renderPostToMdx', () => {
     expect(mdx).not.toContain('![Gasse]');
   });
 
+  it('exports JPEG-only hero and body references without losing their format', () => {
+    const jpegPair: PostPair = {
+      ...pair,
+      de: {
+        ...pair.de,
+        heroImage: { ...pair.de.heroImage, format: 'jpeg' },
+        images: { 'https://img/x/y': { width: 1600, height: 1067, format: 'jpeg' } },
+      },
+    };
+    const mdx = renderPostToMdx(jpegPair, 'de');
+    expect(mdx).toContain('\n  format: jpeg\n');
+    expect(mdx).toContain('alt="Gasse" format="jpeg"');
+    const body = mdx.slice(mdx.indexOf('Intro'));
+    expect(normalizeBodyImages(body, {}).images['https://img/x/y']).toEqual({
+      width: 1600,
+      height: 1067,
+      format: 'jpeg',
+    });
+  });
+
   // Regression for issue #87: country and keyFacts are per-locale prose, not
   // shared trip metadata — each locale's export must carry its OWN values,
   // not the other locale's.
@@ -87,7 +107,7 @@ describe('renderPostToMdx', () => {
     const a = 'https://img/g/a-1a2b3c4d';
     const b = 'https://img/g/b-9f8e7d6c';
     const images = {
-      [a]: { width: 3000, height: 2000, alt: 'Sunrise | dawn', caption: 'Day "3"' },
+      [a]: { width: 3000, height: 2000, format: 'jpeg' as const, alt: 'Sunrise | dawn', caption: 'Day "3"' },
       [b]: { width: 2000, height: 3000 },
     };
     const withGallery: PostPair = {
@@ -102,7 +122,7 @@ describe('renderPostToMdx', () => {
       en: { locale: 'en', slug: 'test', title: 'Test', excerpt: 'E', country: 'Test', heroImage: { src: 'https://img/h', width: 768, height: 512, alt: 'Alt' }, bodyMarkdown: 'Intro', images: {} },
     };
     const mdx = renderPostToMdx(withGallery, 'de');
-    expect(mdx).toContain(`${a} | 3000x2000 | alt="Sunrise &#124; dawn" | caption="Day &quot;3&quot;"`);
+    expect(mdx).toContain(`${a} | 3000x2000 | format="jpeg" | alt="Sunrise &#124; dawn" | caption="Day &quot;3&quot;"`);
     expect(mdx).toContain(`${b} | 2000x3000`);
 
     // The exact inverse: pasting the exported body back reproduces the map.

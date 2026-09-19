@@ -7,6 +7,7 @@ import {
   PROD_IMAGE_ORIGIN,
   retargetImageOrigins,
   srcset,
+  sourceFormats,
   variantWidths,
   type RemoteHeroImage,
 } from './images';
@@ -69,6 +70,13 @@ const small: RemoteHeroImage = {
   height: 512,
   alt: 'Bucharest old town',
 };
+const jpeg: RemoteHeroImage = {
+  src: 'https://img.simonswanderlust.com/trips/jpeg/hero',
+  width: 1600,
+  height: 1067,
+  alt: 'JPEG-only photo',
+  format: 'jpeg',
+};
 
 describe('variantWidths', () => {
   it('keeps standard widths below the source and appends the intrinsic width', () => {
@@ -100,8 +108,21 @@ describe('srcset', () => {
         'https://img.simonswanderlust.com/trips/bucharest-2024/hero-768.webp 768w',
     );
   });
+  it('builds an exact .jpeg srcset for a JPEG-only reference', () => {
+    expect(srcset(jpeg, 'jpeg')).toBe(
+      'https://img.simonswanderlust.com/trips/jpeg/hero-640.jpeg 640w, ' +
+        'https://img.simonswanderlust.com/trips/jpeg/hero-1280.jpeg 1280w, ' +
+        'https://img.simonswanderlust.com/trips/jpeg/hero-1600.jpeg 1600w',
+    );
+  });
 });
 
+describe('sourceFormats', () => {
+  it('selects only generated formats for modern and JPEG-only references', () => {
+    expect(sourceFormats(big)).toEqual(['avif', 'webp']);
+    expect(sourceFormats(jpeg)).toEqual(['jpeg']);
+  });
+});
 describe('fallbackSrc', () => {
   it('uses the 1280 webp when available', () => {
     expect(fallbackSrc(big)).toBe('https://img.simonswanderlust.com/trips/rhodes-2021/hero-1280.webp');
@@ -113,6 +134,9 @@ describe('fallbackSrc', () => {
     expect(
       fallbackSrc({ src: 'https://img.simonswanderlust.com/trips/x/hero', width: 1280, height: 800, alt: '' }),
     ).toBe('https://img.simonswanderlust.com/trips/x/hero-1280.webp');
+  });
+  it('uses the .jpeg fallback for a JPEG-only reference', () => {
+    expect(fallbackSrc(jpeg)).toBe('https://img.simonswanderlust.com/trips/jpeg/hero-1280.jpeg');
   });
 });
 
@@ -132,6 +156,11 @@ describe('largestVariant', () => {
   it('can address another format', () => {
     expect(largestVariant(big, 'avif')).toBe(
       'https://img.simonswanderlust.com/trips/rhodes-2021/hero-2560.avif',
+    );
+  });
+  it('uses the recorded JPEG format by default', () => {
+    expect(largestVariant(jpeg)).toBe(
+      'https://img.simonswanderlust.com/trips/jpeg/hero-1600.jpeg',
     );
   });
 

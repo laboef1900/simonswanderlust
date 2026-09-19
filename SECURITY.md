@@ -219,6 +219,14 @@ coordinates on every public file. Untouched originals under `/data/images`
 keep their full metadata; they are never served (`isOriginalFile` excludes
 them from the static mount).
 
+The admin-only **Image conversion** setting does not weaken this boundary. With conversion
+off, JPEG inputs are re-encoded as responsive `.jpeg` variants through the **same** orientation
+correction and EXIF allow-list, never served as untouched originals. Other inputs continue
+producing AVIF/WebP. The per-image format is validated at save/render boundaries; it is not an
+arbitrary file extension. Persisted encoding profiles keep retries/recovery independent of
+later settings changes. New upload keys include the encoding profile, preventing a quality
+or format change from overwriting an existing immutable URL.
+
 **Widening this list is a privacy change, not a refactor.** `audit-exif`
 (`docker compose exec app node --import tsx src/cli.ts audit-exif`) is a
 read-only scan of the stored corpus reporting how many variants carry EXIF

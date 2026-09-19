@@ -210,6 +210,27 @@ describe('createEncodeQueue', () => {
     expect(await store.get('done')).toMatchObject({ status: 'ready' });
   });
 
+  it('uses each row snapshot during recovery instead of mutable global settings', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await store.upsert({
+      key: 'jpeg', status: 'processing', width: 8, height: 6, origBytes: 1,
+      exif: noExif, uploadedBy: null, format: 'jpeg',
+      encoding: { convertJpeg: false, webpQuality: 84, avifQuality: 64 },
+    });
+    const seen: unknown[] = [];
+    const queue = createEncodeQueue({
+      store, storageDir: '/nonexistent', lock: createWorkLock(),
+      encodeOne: async (_key, profile) => { seen.push(profile); return { bytes: 1 }; },
+    });
+    expect(await queue.recover()).toBe(1);
+    await queue.idle();
+    expect(seen).toEqual([{
+      format: 'jpeg',
+      encoding: { convertJpeg: false, webpQuality: 84, avifQuality: 64 },
+    }]);
+    expect(await store.get('jpeg')).toMatchObject({ status: 'ready', format: 'jpeg' });
+  });
+
   it('says so when the backlog cap leaves recovery work behind (no silent truncation)', async () => {
     const { store, queue, logs } = setup({ concurrency: 1, maxBacklog: 2 });
     await seed(store, ['a', 'b', 'c', 'd']);

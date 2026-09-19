@@ -4,7 +4,7 @@ import rehypeStringify from 'rehype-stringify';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import { visit, SKIP } from 'unist-util-visit';
 import { h } from 'hastscript';
-import { srcset, fallbackSrc, largestVariant, type RemoteHeroImage } from './images.js';
+import { srcset, fallbackSrc, largestVariant, sourceFormats, type RemoteHeroImage } from './images.js';
 import {
   BREAKOUT_WIDTH,
   ROW_GAP,
@@ -29,7 +29,7 @@ import {
  * the build — but the assertion lives in the uploader tree, which means a
  * `site`-only check (`astro check` alone) still will not catch it.
  */
-export interface ImageDims { width: number; height: number; alt?: string; caption?: string }
+export interface ImageDims { width: number; height: number; alt?: string; caption?: string; format?: 'jpeg' }
 const SIZES = '(min-width: 768px) 720px, 100vw';
 
 /**
@@ -92,12 +92,18 @@ const BODY_SCHEMA = {
   },
 };
 
+/** `<source>` nodes for exactly the formats recorded on this image. */
+function sourceNodes(image: RemoteHeroImage, sizes: string) {
+  return sourceFormats(image).map((format) =>
+    h('source', { type: `image/${format}`, srcset: srcset(image, format), sizes }),
+  );
+}
+
 /** hast <figure><picture>…</figure> mirroring BodyImage → RemoteImage output. */
 function pictureNode(image: RemoteHeroImage) {
   return h('figure', { class: 'my-8' }, [
     h('picture', [
-      h('source', { type: 'image/avif', srcset: srcset(image, 'avif'), sizes: SIZES }),
-      h('source', { type: 'image/webp', srcset: srcset(image, 'webp'), sizes: SIZES }),
+      ...sourceNodes(image, SIZES),
       h('img', {
         src: fallbackSrc(image),
         alt: image.alt,
@@ -192,9 +198,13 @@ function galleryPhotos(
     const w = d.width;
     const hgt = d.height;
     if (!Number.isInteger(w) || w <= 0 || !Number.isInteger(hgt) || hgt <= 0) continue;
+    if (d.format !== undefined && d.format !== 'jpeg') continue;
     const alt = String(d.alt ?? '');
     const caption = String(d.caption ?? '');
-    photos.push({ image: { src: raw, alt, width: w, height: hgt }, caption });
+    photos.push({
+      image: { src: raw, alt, width: w, height: hgt, ...(d.format === 'jpeg' ? { format: d.format } : {}) },
+      caption,
+    });
   }
   return photos;
 }
@@ -208,8 +218,7 @@ function itemNode(
   return h('figure', { class: 'jgal__item', ...(style ? { style } : {}) }, [
     h('a', { href: largestVariant(image) }, [
       h('picture', [
-        h('source', { type: 'image/avif', srcset: srcset(image, 'avif'), sizes }),
-        h('source', { type: 'image/webp', srcset: srcset(image, 'webp'), sizes }),
+        ...sourceNodes(image, sizes),
         h('img', {
           src: fallbackSrc(image),
           alt: image.alt,
@@ -340,8 +349,12 @@ export function transformBodyImages(
         const src = imgNode.properties?.src as string | undefined;
         if (src && images[src]) {
           const d = images[src];
+          if (d.format !== undefined && d.format !== 'jpeg') return;
           const alt = (imgNode.properties?.alt as string) ?? '';
-          parent.children[index] = pictureNode({ src, alt, width: d.width, height: d.height });
+          parent.children[index] = pictureNode({
+            src, alt, width: d.width, height: d.height,
+            ...(d.format === 'jpeg' ? { format: d.format } : {}),
+          });
           return SKIP;
         }
       }
@@ -351,8 +364,12 @@ export function transformBodyImages(
       const src = node.properties?.src as string | undefined;
       if (!src || !images[src]) return;
       const d = images[src];
+      if (d.format !== undefined && d.format !== 'jpeg') return;
       const alt = (node.properties?.alt as string) ?? '';
-      parent.children[index] = pictureNode({ src, alt, width: d.width, height: d.height });
+      parent.children[index] = pictureNode({
+        src, alt, width: d.width, height: d.height,
+        ...(d.format === 'jpeg' ? { format: d.format } : {}),
+      });
     }
   });
   return unified().use(rehypeStringify, { allowDangerousHtml: true }).stringify(tree);

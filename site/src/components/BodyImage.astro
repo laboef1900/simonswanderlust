@@ -16,6 +16,7 @@ interface Props {
   width: number;
   height: number;
   alt: string;
+  format?: 'jpeg';
   /** Overrides the default sizes (article column is max-w-3xl ≈ 720px wide). */
   sizes?: string;
 }
@@ -25,10 +26,11 @@ const {
   width,
   height,
   alt,
+  format,
   sizes = '(min-width: 768px) 720px, 100vw',
 } = Astro.props;
 
-const image: RemoteHeroImage = { src, width, height, alt };
+const image: RemoteHeroImage = { src, width, height, alt, ...(format === 'jpeg' ? { format } : {}) };
 ---
 
 <figure class="my-8">

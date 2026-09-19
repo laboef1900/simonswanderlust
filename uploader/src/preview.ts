@@ -12,7 +12,7 @@
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
 import { transformBodyImages } from '../../site/src/lib/body-images.js';
 import { SHIKI_CSS } from '../../site/src/lib/shiki-classes.js';
-import { focusPosition, srcset, fallbackSrc } from '../../site/src/lib/images.js';
+import { focusPosition, sourceFormats, srcset, fallbackSrc } from '../../site/src/lib/images.js';
 import { coordsLabel, dateLabel } from '../../site/src/lib/format.js';
 import type { HeroImage, Locale, PostPair } from './posts.js';
 
@@ -44,6 +44,7 @@ function heroHtml(hero: HeroImage | undefined): string {
   const width = Number.isInteger(hero.width) && hero.width > 0 ? hero.width : 0;
   const height = Number.isInteger(hero.height) && hero.height > 0 ? hero.height : 0;
   if (width === 0 || height === 0) return '';
+  if (hero.format !== undefined && hero.format !== 'jpeg') return '';
   const safeHero: HeroImage = { ...hero, width, height };
   // `.hero img` crops with `object-fit: cover` under a `max-height`, so the
   // focal point changes what the author sees here too. `focusPosition` does
@@ -54,9 +55,11 @@ function heroHtml(hero: HeroImage | undefined): string {
   // pass-through.
   const focus = focusPosition(safeHero);
   const style = focus ? ` style="${escapeHtml(focus)}"` : '';
+  const sources = sourceFormats(safeHero)
+    .map((format) => `    <source type="image/${format}" srcset="${escapeHtml(srcset(safeHero, format))}" sizes="100vw">`)
+    .join('\n');
   return `<div class="hero"><picture>
-    <source type="image/avif" srcset="${escapeHtml(srcset(safeHero, 'avif'))}" sizes="100vw">
-    <source type="image/webp" srcset="${escapeHtml(srcset(safeHero, 'webp'))}" sizes="100vw">
+${sources}
     <img src="${escapeHtml(fallbackSrc(safeHero))}" alt="${escapeHtml(hero.alt)}" width="${width}" height="${height}"${style}>
   </picture></div>`;
 }
