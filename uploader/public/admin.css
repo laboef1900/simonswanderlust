@@ -272,6 +272,19 @@ small {
   font-size: 0.88rem;
 }
 
+/* The editor's alt-text audit is one of those: a result that will publish, or
+   already did, with photos no reader can see. It reuses .notice-warn rather
+   than inventing a second callout, and lists each photo as a real button so it
+   is keyboard reachable and jumps to the field that fixes it. */
+.alt-audit { margin: 0 0 1.25rem; }
+.alt-audit p { margin: 0; }
+.alt-audit-list { list-style: none; margin: 0.5rem 0 0; padding: 0; }
+.alt-audit-list li { padding: 0.15rem 0; }
+/* Dark amber on the callout's own background — the wording carries the
+   meaning, the underline carries the affordance. */
+.alt-audit-list .btn-link { color: #7c2d12; text-align: left; }
+.alt-audit-list .btn-link:hover { color: var(--red); }
+
 /* ---- import progress (issue #92) ---- */
 .progress { margin-top: 0.75rem; }
 .progress progress { display: block; width: 100%; height: 0.6rem; accent-color: var(--navy); }

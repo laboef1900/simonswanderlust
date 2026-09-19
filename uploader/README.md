@@ -212,6 +212,21 @@ directly — the app server never contacts the model. LM config (`lmBaseUrl`, `l
 the admin-only Settings page; authors read it read-only via `GET /ai-config`. No
 `docker-compose`/`.env` LM variables are needed.
 
+## Alt-text audit (advisory)
+
+The editor shows a warning listing every photo of the post that reaches a reader with **no
+description** — an empty alt, or an alt that only repeats that locale's title, which
+`heroAltOf` (`site/src/lib/trips.ts`) renders as `alt=""` because the heading beside the photo
+already says those words. It covers both locales' heroes plus the body and gallery photos in the
+`images` map, and each entry is a button that jumps to the field (and the "Suggest alt text"
+button) that fixes it.
+
+It is a **warning, never a gate**: `src/alt-audit.ts` is pure, is not part of `validateForPublish`,
+and touches none of `publish-gate.ts`'s 409 paths — every WordPress-imported post stores the post
+title as its hero alt, so refusing would strand the whole imported corpus. `GET /posts/:tk/alt-audit`
+serves it before publishing; `POST /posts/:tk/publish` carries the same shape as `altAudit` in its
+success reply, so the editor can name what just went live undescribed.
+
 ## CLI upload (Phase 2 migration)
 
 ```bash
