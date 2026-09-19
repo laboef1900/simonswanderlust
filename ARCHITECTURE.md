@@ -217,6 +217,16 @@ directly — the app server never contacts the model. LM config (`lmBaseUrl`, `l
 the admin-only Settings page; authors read it read-only via `GET /ai-config`. No
 `docker-compose`/`.env` LM variables are needed.
 
+The editorial-review client (#213, part of #211) shares `public/llm.js` without changing
+the caption flow. `src/editorial-review.ts` owns the pure result type, JSON Schema,
+default prompt and parser; the browser parser is checked against the same corpus.
+`LLM.reviewStory` sends an active-locale draft snapshot directly to an OpenAI-compatible
+provider with an optional request-local Bearer key. Its one deadline covers the initial
+request, the single unsupported-`response_format` HTTP 400 fallback, and body reads;
+an optional AbortSignal lets the future drawer cancel stale work.
+This client/contract change does not add settings, credential storage, server inference,
+or editor controls: provider/secrets integration is tracked in #214 and the drawer in #215.
+
 ## Data model (Postgres)
 
 Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
