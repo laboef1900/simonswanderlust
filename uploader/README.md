@@ -212,6 +212,35 @@ directly — the app server never contacts the model. LM config (`lmBaseUrl`, `l
 the admin-only Settings page; authors read it read-only via `GET /ai-config`. No
 `docker-compose`/`.env` LM variables are needed.
 
+### Editorial-review client API (#213)
+
+`public/llm.js` also exports
+`LLM.reviewStory(baseUrl, model, prompt, story, apiKey, timeoutMs, signal?)` and
+`LLM.parseEditorialReview(content)`. The story is an active-locale snapshot:
+`{ locale: 'de' | 'en', title, excerpt, markdown, heroAlt, heroSrc }`, with string text
+fields. It is sent as untrusted JSON in a user message, separate from the review prompt.
+`src/editorial-review.ts` exports `EditorialReviewResult`, `DEFAULT_REVIEW_PROMPT`,
+`EDITORIAL_REVIEW_SCHEMA`, and the matching pure parser.
+
+The parser accepts JSON wrapped in prose/fences or preceded by `<think>` reasoning,
+but rejects missing fields, wrong types/statuses, and extra keys. It strips Unicode
+control characters, caps text at 1,000 UTF-16 units, and caps each list at 10 strings
+of 200 units (without splitting surrogate pairs). Empty strings/lists are allowed;
+title suggestions and the suggested excerpt are optional. Alt-text observations use
+`practicalDetails`, because the agreed result contract has no separate alt-text section.
+
+Review calls use a 60-second default deadline (positive values up to 600,000 ms),
+covering response reads and at most one fallback without `response_format` after an
+HTTP 400 explicitly identifying that parameter as unsupported. Cancellation rejects
+with `AbortError`; deadline expiry with `TimeoutError`. Other failures are sanitized,
+without provider error text, draft content or keys. Redirects are refused, cookies are
+omitted, and OpenRouter attribution is attached only for hostname `openrouter.ai`.
+Base URLs must be HTTP(S) with no credentials, query or fragment.
+
+This is the reusable client/contract slice, not a new editor action. Settings/secrets
+and the review drawer remain separate issues #214/#215. Existing `caption`, `listModels`,
+`prepImage`, and alt-text workflows are unchanged.
+
 ## Alt-text audit (advisory)
 
 The editor shows a warning listing every photo of the post that reaches a reader with **no
