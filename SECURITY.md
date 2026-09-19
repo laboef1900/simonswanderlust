@@ -305,10 +305,14 @@ unsupported `response_format` permits one retry without that parameter.
 
 Model output is untrusted: both review parsers validate required fields, types and statuses,
 reject extra properties, strip Unicode controls, and cap text/list lengths. This is not
-HTML sanitization: consumers must render results through `textContent`/input values, never
-`innerHTML`. The prompt treats the draft as data and asks for missing facts to verify,
-not invented facts or links. Reviews grant no write/publish authority. Credential storage
-and the editor drawer are outside #213 and tracked separately in #214/#215.
+HTML sanitization: the editor drawer renders results through `textContent`/input values,
+never `innerHTML`. The prompt treats the draft as data and asks for missing facts to verify,
+not invented facts or links. Reviews grant no write/publish authority: only explicit
+title/excerpt application changes form fields, and saving/publishing remains separate.
+The drawer does not persist results or credentials. It aborts and invalidates work when
+the reviewed draft changes or the drawer closes; late results cannot mutate another
+locale/post. Cancellation does not retract a snapshot already received by the provider.
+Deterministic checks remain usable when remote review fails.
 
 ### Retry widened the per-URL window (issue #85, 2026-07-30; narrowed by #93, 2026-09-05)
 

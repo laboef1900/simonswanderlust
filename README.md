@@ -56,6 +56,9 @@ encrypted in Postgres but delivered to signed-in authors for **browser-direct** 
 the server never runs inference. Local captions require no master key. Remote credentials
 need private `ENCRYPTION_KEY` setup and separate key escrow for recovery — see
 [uploader operations](uploader/README.md#review-providers-and-encrypted-credentials-214).
+The editor's **Review Story** drawer combines immediate checks with optional provider
+suggestions for the unsaved active locale. Applying a title/excerpt is explicit; review
+never saves, rewrites the body or blocks publishing.
 
 ### Hardened base image (Docker Hardened Images)
 

@@ -223,13 +223,13 @@ default prompt and parser; the browser parser is checked against the same corpus
 `LLM.reviewStory` sends an active-locale draft snapshot directly to an OpenAI-compatible
 provider with an optional request-local Bearer key. Its one deadline covers the initial
 request, the single unsupported-`response_format` HTTP 400 fallback, and body reads;
-an optional AbortSignal lets the future drawer cancel stale work.
+an optional AbortSignal lets the drawer cancel stale work.
 Provider/secrets integration (#214) adds non-sensitive review settings to `settings.json`,
 and one AES-256-GCM encrypted `ai_api_key` in Postgres. Default `GET /ai-config` returns
 resolved provider config and the shared key to authenticated authors for browser-direct
 review; settings responses expose only `hasAiApiKey`. Caption-only config never queries
 or decrypts secrets, so a broken remote credential cannot break local captions. Both
-config surfaces are `Cache-Control: no-store`. The editor drawer remains #215.
+config surfaces are `Cache-Control: no-store`.
 
 The master key is optional bootstrap `ENCRYPTION_KEY` (32 bytes / 64 hex characters),
 forwarded explicitly by Compose. Missing means local-only startup remains available;
@@ -241,6 +241,16 @@ clears its input and reloads; saving never runs inference. One key intentionally
 admin-selected remote destinations; the UI warns before a destination change.
 See [the approved design](docs/superpowers/specs/2026-09-19-encrypted-ai-review-secrets-design.md)
 for trust boundaries, failure semantics, key escrow, rotation, and rollback.
+
+The editor's `public/editor-review.js` controller (#215) owns a native modal slide-over:
+`EditorLinter.lintStory` renders five immediate checks, then `LLM.reviewStory` resolves
+semantic suggestions from the same unsaved active-locale snapshot. A request epoch,
+AbortController and editor identity check reject late results after close, re-review,
+locale/post changes, restoration or edits. Applying a suggestion dispatches the normal
+field input event under an owned-apply guard, preserving dirty tracking and slug derivation
+without invalidating the other suggestion. No body rewrite, autosave or publish gate is
+introduced. Source jumps close before focusing EasyMDE's zero-indexed line or hero alt;
+normal close restores the trigger. Review output is rendered as text and is not persisted.
 
 ## Data model (Postgres)
 
