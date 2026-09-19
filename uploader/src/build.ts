@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { cp, mkdir, rm, rename, symlink, readdir, readlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -69,37 +69,55 @@ const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
  * fd (esbuild's service) cannot hold `close` open.
  *
  * Exported for tests; `runAstroBuild` is the astro-specific caller.
+ *
+ * @ai-warning `onSpawn` fires SYNCHRONOUSLY, before the deadline timer is
+ * armed, and that ordering is the whole point of it. The timeout test needs
+ * the child's pid to prove the process was reaped rather than merely
+ * abandoned. It used to get that from a pid file the child wrote as its first
+ * statement — which races the very deadline under test: when Node's cold
+ * start (~75ms idle here, unbounded on a loaded machine) overran the budget,
+ * the child was SIGKILLed before it ran at all and the test died on
+ * `ENOENT … /pid`, about one run in four under load. `child.pid` is set the
+ * moment `spawn` returns, so there is no window left to lose. Never move this
+ * call below the timer, and never reintroduce a side channel the child has to
+ * be alive to write.
  */
-export function runChildBuild(command: string, args: string[], cwd: string, timeoutMs: number): Promise<void> {
-  // Executor form: the uploader compiles against ES2022 (no Promise.withResolvers).
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      env: { ...process.env, ASTRO_TELEMETRY_DISABLED: '1' },
-      stdio: ['ignore', 'inherit', 'pipe'],
-    });
-    let tail = Buffer.alloc(0);
-    child.stderr?.on('data', (chunk: Buffer) => {
-      process.stderr.write(chunk);
-      tail = Buffer.concat([tail, chunk]);
-      if (tail.length > STDERR_TAIL_BYTES) tail = tail.subarray(tail.length - STDERR_TAIL_BYTES);
-    });
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGKILL');
-      child.stderr?.destroy();
-    }, timeoutMs);
-    child.on('error', (err) => { clearTimeout(timer); reject(err); });
-    child.on('close', (code, signal) => {
-      clearTimeout(timer);
-      if (timedOut) return reject(new BuildTimeoutError(timeoutMs));
-      if (code === 0) return resolve();
-      const why = code === null ? `astro build killed by ${signal}` : `astro build exited ${code}`;
-      const detail = tail.toString('utf8').replace(ANSI_RE, '').trim();
-      reject(new Error(detail ? `${why}\n${detail}` : why));
-    });
+export function runChildBuild(
+  command: string,
+  args: string[],
+  cwd: string,
+  timeoutMs: number,
+  onSpawn?: (child: ChildProcess) => void,
+): Promise<void> {
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  const child = spawn(command, args, {
+    cwd,
+    env: { ...process.env, ASTRO_TELEMETRY_DISABLED: '1' },
+    stdio: ['ignore', 'inherit', 'pipe'],
   });
+  onSpawn?.(child);
+  let tail = Buffer.alloc(0);
+  child.stderr?.on('data', (chunk: Buffer) => {
+    process.stderr.write(chunk);
+    tail = Buffer.concat([tail, chunk]);
+    if (tail.length > STDERR_TAIL_BYTES) tail = tail.subarray(tail.length - STDERR_TAIL_BYTES);
+  });
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    child.kill('SIGKILL');
+    child.stderr?.destroy();
+  }, timeoutMs);
+  child.on('error', (err) => { clearTimeout(timer); reject(err); });
+  child.on('close', (code, signal) => {
+    clearTimeout(timer);
+    if (timedOut) return reject(new BuildTimeoutError(timeoutMs));
+    if (code === 0) return resolve();
+    const why = code === null ? `astro build killed by ${signal}` : `astro build exited ${code}`;
+    const detail = tail.toString('utf8').replace(ANSI_RE, '').trim();
+    reject(new Error(detail ? `${why}\n${detail}` : why));
+  });
+  return promise;
 }
 
 /** Spawn `astro build` via plain node — no npx/npm/shell, so the runtime image
