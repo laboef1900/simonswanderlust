@@ -1,15 +1,13 @@
 ---
-import RemoteImage from '../RemoteImage.astro';
 import { getCollection, render } from 'astro:content';
 import Base from '../../layouts/Base.astro';
 import KeyFacts from '../KeyFacts.astro';
 import RouteDivider from '../RouteDivider.astro';
-import Stamp from '../Stamp.astro';
+import StoryHero from '../StoryHero.astro';
+import StoryPagination from '../StoryPagination.astro';
 import Toc from '../Toc.astro';
 import StoryMiniMap from '../StoryMiniMap.astro';
 import GalleryIsland from '../GalleryIsland.astro';
-import { useTranslations } from '../../i18n/ui';
-import { coordsLabel, dateLabel, entryLabel } from '../../lib/format';
 import { byLocale, entryNumberOf, localeOf, pathOf, translationOf, type Trip } from '../../lib/trips';
 import { PROD_SITE, blogPostingJsonLd, serializeJsonLd } from '../../lib/seo';
 
@@ -19,7 +17,6 @@ interface Props {
 
 const { trip } = Astro.props;
 const locale = localeOf(trip);
-const t = useTranslations(locale);
 const { Content, headings } = await render(trip);
 
 const all = await getCollection('trips');
@@ -35,7 +32,6 @@ const alternates = other
     ? { de: pathOf(trip), en: pathOf(other) }
     : { de: pathOf(other), en: pathOf(trip) }
   : undefined;
-const label = `${entryLabel(number)} — ${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
 
 // Same production fallback as Base.astro's canonical URL.
 const site = Astro.site ?? PROD_SITE;
@@ -61,95 +57,27 @@ const jsonLd = serializeJsonLd(
 >
   {/* serializeJsonLd escapes '<' — safe for set:html even with CMS-authored titles. */}
   <script type="application/ld+json" set:html={jsonLd} is:inline />
-  <section class="relative h-[55vh] min-h-[360px]">
-    <RemoteImage
-      image={trip.data.heroImage}
-      sizes="100vw"
-      loading="eager"
-      fetchpriority="high"
-      class="absolute inset-0 h-full w-full object-cover"
-    />
-    <div class="absolute inset-0 bg-gradient-to-t from-navy/85 via-transparent to-navy/20"></div>
-    <div class="absolute right-0 bottom-0 left-0">
-      <div class="mx-auto max-w-3xl px-5 pb-10 text-white">
-        <p class="font-mono text-xs font-semibold tracking-log text-brand-red-light uppercase">{label}</p>
-        <h1 class="mt-2 text-3xl font-extrabold md:text-4xl break-words">{trip.data.title}</h1>
-        <p class="mt-2 font-mono text-xs tracking-log text-white/60">
-          {coordsLabel(trip.data.coordinates)}
-        </p>
-      </div>
-    </div>
-  </section>
+  <StoryHero trip={trip} number={number} locale={locale} otherHref={other ? pathOf(other) : undefined} />
 
-  <div class="mx-auto max-w-3xl px-5 py-10">
-    <div class="flex flex-wrap items-start justify-between gap-4">
-      <p class="text-sm">
-        {
-          other && (
-            <a href={pathOf(other)} class="font-medium text-brand-red hover:underline focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2">
-              {t('story.otherLang')} →
-            </a>
-          )
-        }
-      </p>
-      <Stamp countryCode={trip.data.countryCode} country={trip.data.country} date={trip.data.date} region={trip.data.region} locale={locale} />
+  <div class="mx-auto max-w-3xl px-5 pt-5 pb-10 sm:pt-6">
+    <div class="story-reading">
+      <Toc headings={headings} locale={locale} />
+      {
+        trip.data.keyFacts && (
+          <KeyFacts facts={trip.data.keyFacts} country={trip.data.country} locale={locale} />
+        )
+      }
+      <article id="story-body" class="prose prose-lg max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-headings:break-words prose-p:break-words prose-li:break-words prose-a:font-semibold prose-a:text-brand-red prose-a:no-underline hover:prose-a:underline prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:bg-navy/[0.02] prose-blockquote:py-3 prose-blockquote:px-5 prose-blockquote:italic prose-blockquote:text-navy prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red">
+        <Content />
+      </article>
+      <GalleryIsland locale={locale} />
     </div>
-    <Toc headings={headings} locale={locale} />
-    {
-      trip.data.keyFacts && (
-        <KeyFacts facts={trip.data.keyFacts} country={trip.data.country} locale={locale} />
-      )
-    }
-    <article class="prose prose-lg max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-headings:break-words prose-p:break-words prose-a:font-semibold prose-a:text-brand-red prose-a:no-underline hover:prose-a:underline prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:bg-navy/[0.02] prose-blockquote:py-3 prose-blockquote:px-5 prose-blockquote:italic prose-blockquote:text-navy prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red">
-      <Content />
-    </article>
-    <GalleryIsland locale={locale} />
 
     <StoryMiniMap trip={trip} locale={locale} />
 
     <div class="mt-12">
       <RouteDivider />
     </div>
-    <nav
-      aria-label={t('story.pagination')}
-      class="mt-12 grid gap-4 sm:grid-cols-2"
-    >
-      {
-        older ? (
-          <a
-            href={pathOf(older)}
-            class="group flex min-w-0 flex-col justify-between rounded-md border border-navy/10 bg-canvas p-4 transition-all duration-300 hover:-translate-y-0.5 hover:border-brand-red/40 hover:shadow-md focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2"
-          >
-            <span class="inline-flex items-center gap-1 font-mono text-[11px] font-semibold tracking-wider text-navy/60 uppercase group-hover:text-brand-red">
-              <svg aria-hidden="true" focusable="false" class="h-3.5 w-3.5 transition-transform duration-300 group-hover:-translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M13 8H3M7 4L3 8l4 4" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-              {t('story.prev')}
-            </span>
-            <span class="mt-2 font-bold text-navy line-clamp-1 break-words group-hover:text-brand-red">
-              {older.data.title}
-            </span>
-          </a>
-        ) : <div />
-      }
-      {
-        newer ? (
-          <a
-            href={pathOf(newer)}
-            class="group flex min-w-0 flex-col justify-between rounded-md border border-navy/10 bg-canvas p-4 text-right transition-all duration-300 hover:-translate-y-0.5 hover:border-brand-red/40 hover:shadow-md focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2"
-          >
-            <span class="inline-flex items-center justify-end gap-1 font-mono text-[11px] font-semibold tracking-wider text-navy/60 uppercase group-hover:text-brand-red">
-              {t('story.next')}
-              <svg aria-hidden="true" focusable="false" class="h-3.5 w-3.5 transition-transform duration-300 group-hover:translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </span>
-            <span class="mt-2 font-bold text-navy line-clamp-1 break-words group-hover:text-brand-red">
-              {newer.data.title}
-            </span>
-          </a>
-        ) : <div />
-      }
-    </nav>
+    <StoryPagination older={older} newer={newer} locale={locale} />
   </div>
 </Base>

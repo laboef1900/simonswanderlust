@@ -144,13 +144,11 @@ components:
   panel-keyfacts:
     backgroundColor: "{colors.canvas}"
     textColor: "{colors.ink}"
-    rounded: "{rounded.lg}"
-    padding: "{spacing.panel-padding-lg}"
+    padding: "12px 0"
   panel-toc:
     backgroundColor: "{colors.canvas}"
-    textColor: "rgb(22 33 46 / 0.8)"
-    rounded: "{rounded.md}"
-    padding: "{spacing.panel-padding}"
+    textColor: "{colors.navy}"
+    padding: "12px 16px"
   skip-link:
     backgroundColor: "{colors.brand-red}"
     textColor: "#ffffff"
@@ -390,10 +388,12 @@ use **container** queries instead (`900px`, `600px`), because a break-out
 gallery is wider than its parent and a media query would measure the wrong box.
 
 **Vertical rhythm.** Home index `48px → 64px` (`py-12 sm:py-16`); map band
-`32px → 44px`; footer `56px`; region header `40px`; story column `40px`. The
-home hero is natural-height at base: the full-width image, followed by its
-paper entry with `24px` vertical padding. From `sm` it stays `80vh`, clamped to
-`480–720px`; the story hero is unchanged at `55vh`, min `360px`.
+`32px → 44px`; footer `56px`; region header `40px`; story body starts with
+`20px → 24px` top padding and ends with `40px`. The home hero is natural-height
+at base, followed by its paper entry; from `sm` it stays `80vh`, clamped to
+`480–720px`. The story photograph is natural-height below `640px` and `36vh`,
+clamped to `240–400px`, above it. Its canvas title block follows in normal flow,
+with `24px → 32px` above the metadata and no text over the photograph.
 The homepage's section order remains photograph → index → map band, whose navy
 runs into the footer's navy as one dark base.
 
@@ -427,7 +427,7 @@ Flat by default. Depth is carried first by **tonal banding** — canvas page,
 navy bands (map teaser, footer), navy cards — and second by texture: contour
 lines in the footer, a graticule in the map band. Shadow is not resting
 decoration. It appears in exactly two situations: as a **state** (the card's
-hover/active ring, the pagination card's hover lift) or as a **material cue**,
+hover/active ring) or as a **material cue**,
 where paper is physically lifted off a photograph (the hero entry panel, the
 stamp chip). Nothing else on the public site casts a shadow at rest.
 
@@ -436,8 +436,6 @@ stamp chip). Nothing else on the public site casts a shadow at rest.
 - **Card at rest** (`box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)`):
   the story card's only resting elevation — it replaced a card that carried a 1px
   border *and* a wide soft shadow.
-- **Hover lift** (`box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)`):
-  story pagination cards, which are bordered at rest.
 - **Chip on photograph** (`box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)`):
   the stamp chip — paper laid on an image.
 - **Card raised** (`box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)`):
@@ -457,7 +455,7 @@ stamp chip). Nothing else on the public site casts a shadow at rest.
 shadow, never both. A resting shadow must justify itself as material (paper on a
 photograph); otherwise elevation is a state. Audit test: if an element has a
 visible border at rest and also a resting `shadow-*`, one of them is
-decoration — `KeyFacts.astro`, `AboutPage.astro` and `MapPage.astro` still carry
+decoration — `AboutPage.astro` and `MapPage.astro` still carry
 that pairing and are the drift to clear, not the pattern to copy.
 
 **The Ring-Is-A-State Rule.** The hover ring is feedback, not elevation, and it
@@ -473,9 +471,10 @@ media gate.
 `4px` is the default and the most common value in the tree: it is what "paper"
 gets — the hero entry panel, the stamp chip, the
 footer logline plate, the map CTA, and every 44px link hit box. `6px` is for
-prose-adjacent panels (table of contents, story pagination, the grid's empty
-state). `8px` is for photographic and map surfaces (gallery items, body images,
-the story mini-map, the Key Facts aside). `12px` belongs to exactly one element,
+prose-adjacent panels such as the grid's empty state. Story contents and facts
+are flat disclosures, not rounded panels; pagination links use `4px` corners.
+`8px` is for photographic and map surfaces (gallery items, body images,
+the story mini-map). `12px` belongs to exactly one element,
 the story card — the single tile that reads as a framed photograph.
 
 **Fully round is reserved for non-text objects.** Two instances only: the route
@@ -483,8 +482,8 @@ divider's `6px` terminals (one filled, one open ring) and the gallery slider's
 `44px` circular nav buttons. A text control never wears a pill.
 
 **Borders are hairlines, and dashes are a motif.** Solid hairlines at low alpha
-separate structure: `border-navy/10` under the nav, around canvas panels and the
-pagination cards; `border-white/10` above the footer. Where a border *is* the
+separate structure: `border-navy/10` under the nav and around canvas panels;
+`border-white/10` above the footer. Where a border *is* the
 control it must clear 3:1 against its composite — the map band's ghost link is
 `border-white/50` (≈3.9:1) because `/30` measured **2.64:1**, and the project's
 answer for a control hairline on canvas is `navy/55`. Dashed strokes are the
@@ -601,11 +600,32 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
   - *Image:* no resting `opacity`. An earlier card mixed 10% navy into every
     photograph and lifted it only on `group-hover` — a state a touch device
     cannot enter.
-- **Canvas panels** (Key Facts, table of contents, grid empty state, story
-  pagination): `canvas` fill, `border-navy/10` hairline, `6–8px` radius,
-  `20–24px` padding, with a mono uppercase eyebrow above a hairline divider.
-  Pagination cards are bordered at rest and take `shadow-md` plus a
-  `brand-red/40` border and a `2px` lift on hover.
+- **Grid empty state:** a canvas panel with a navy hairline and shallow corners.
+- **Story contents:** a native, initially collapsed disclosure with an opaque
+  canvas background and horizontal rules. It stays `8px` from the viewport top
+  while the article is in view, then leaves with the reading section. Summary
+  and links have at least `44px` targets; the expanded list scrolls internally.
+  Selecting a section closes the list, focuses the heading and preserves native
+  fragment/history navigation. Escape returns focus to the summary. Without
+  JavaScript the links still work and heading margins clear the expanded list.
+- **Key Facts:** an optional native disclosure with a bottom rule, not a
+  bordered-and-shadowed card. Full key/value pairs wrap in one mobile column
+  and two columns from `640px`; no facts are removed or rewritten.
+- **Story pagination:** chronological links with `80px` square, lazy-loaded
+  photo thumbnails and full wrapped titles. A sole link spans the reading
+  column; two split from `768px`. No empty placeholder cell, border or shadow;
+  underline and color carry hover/active feedback.
+
+### Story Opening
+
+`StoryHero.astro` owns the photograph, title, entry/date/country line,
+coordinates, arrival stamp and optional translation link. The photograph leads;
+every word sits on canvas below it at every width. The title and body share the
+`768px` container with `20px` gutters. The stamp sits beside the coordinate and
+translation group, replacing the old standalone stamp/language row.
+Responsive source hints account for the photograph's actual aspect ratio when
+desktop cover cropping needs a wider source. Mobile retains the whole frame,
+including portrait photographs. No title clamp or photographic scrim.
 
 ### Navigation
 
@@ -723,8 +743,8 @@ it — a pixel cap computed at the design width left a 242px-tall remainder besi
 - **Do** keep every interactive target a padded `min-h-[44px]` box (WCAG 2.2 SC
   2.5.8) — nine controls on the homepage were once under 24×24.
 - **Do** set every mono uppercase label with `tracking-log` (0.18em).
-  `StoryPage.astro` and `KeyFacts.astro` still use `tracking-wider` on mono
-  labels; that is drift to clear.
+  `KeyFacts.astro` retains `tracking-wider` on fact keys; other story metadata
+  and pagination use the shared log register.
 - **Do** re-derive both `object-fit: cover` branches when touching a `sizes`
   string — width leads above 3:2, `height × 1.5` below it.
 - **Do** extend `storyGridSpans` and its test when changing the mosaic, so the
@@ -744,8 +764,8 @@ it — a pixel cap computed at the design width left a 242px-tall remainder besi
 - **Don't** let a transition touch `outline`. `transition-all` interpolated
   `outline-width`/`-color` into a 1.5px ink line for the first ~0.5s of a focus
   ring, and Tailwind 4's `transition-colors` includes `outline-color`, which
-  animated the ring from `currentColor`. `StoryPage.astro`'s pagination cards
-  still carry `transition-all` — do not copy them.
+  animated the ring from `currentColor`. Story pagination now transitions color
+  only under `motion-safe`; focus outlines never transition.
 - **Don't** put `content-visibility: auto` on the card grid. It implies
   `contain: paint`, and the grid has no padding, so the `2px` focus ring at
   `2px` offset would be sliced off every edge card (WCAG 2.4.7). It is safe in
