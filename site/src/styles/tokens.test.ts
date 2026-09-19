@@ -63,7 +63,7 @@ describe('brand token contrast', () => {
    */
   it.each([
     [brandRed, canvas, 'brand-red on canvas (nav active, hero N° and CTA, destination counts)', 4.609],
-    [brandRedLight, navy, 'brand-red-light on navy (card cover marker, footer logline, map stats)', 4.741],
+    [brandRedLight, navy, 'brand-red-light on navy (footer logline, map stats and pins)', 4.741],
     ['#ffffff', brandRed, 'white on brand-red (the focused skip link)', 4.763],
   ])('$2 still clears 4.5:1', (fg, bg, name, measured) => {
     const ratio = contrast(fg as string, bg as string);

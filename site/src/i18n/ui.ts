@@ -40,8 +40,6 @@ const de = {
   // Generic ("hier", not "in dieser Region"): StoryGrid also renders this on the
   // home page and the regions index, where a region-specific wording would lie.
   'stories.emptyBody': 'Hier stehen aktuell noch keine Reiseberichte bereit.',
-  // Kicker on the one grid card the home page also shows as its hero.
-  'stories.coverStory': 'Titelgeschichte',
   'story.toc': 'Inhalt',
   'story.keyFactsAbout': 'Fakten über',
   'story.prev': 'Vorherige Geschichte',
@@ -106,7 +104,6 @@ const en: Record<UIKey, string> = {
   'map.pinCount': 'pin locations',
   'stories.emptyTitle': 'No stories found',
   'stories.emptyBody': 'There are no travel stories here yet.',
-  'stories.coverStory': 'Cover story',
   'story.toc': 'Contents',
   'story.keyFactsAbout': 'Key facts about',
   'story.prev': 'Previous story',

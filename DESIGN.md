@@ -82,7 +82,7 @@ spacing:
   section-y: "48px"
   section-y-lg: "64px"
   footer-y: "56px"
-  grid-row: "240px"
+  grid-row: "280px"
 components:
   hero-entry-panel:
     backgroundColor: "{colors.canvas}"
@@ -107,9 +107,8 @@ components:
   card-meta-line:
     textColor: "rgb(255 255 255 / 0.7)"
     typography: "{typography.label-quiet}"
-  cover-marker:
-    textColor: "{colors.brand-red-light}"
-    typography: "{typography.label-quiet}"
+  card-caption-ramp:
+    height: "72px"
   footer-logline-plate:
     backgroundColor: "{colors.navy}"
     textColor: "{colors.brand-red-light}"
@@ -187,7 +186,7 @@ scrim stops at 55% of the tile so everything above the plate is photograph.
 Density is low and deliberately uneven. A six-column mosaic gives the index a
 cadence (a 4×2 lead tile, then threes, with the tail levelled so no cell is ever
 empty); below `640px` the mosaic collapses to full-width tiles and every third
-one goes double-height, because nine identical 240px tiles in a row is a flat
+one goes double-height, because nine identical tiles in a row is a flat
 2.5k-pixel scroll with no measure. Explicitly rejected and recorded in
 `CLAUDE.md`: glassmorphism, bento grids, dark-by-default themes, and the generic
 2018–2026 travel-blog hero (full-bleed photo → eyebrow → extrabold headline →
@@ -210,16 +209,17 @@ signal red that changes weight, not hue, depending on which material it lands on
 ### Primary
 
 - **Expedition Red** (`brand-red`): the site's one loud voice. Active nav item,
-  entry numbers on light ground, destination counts, the "Read story" call,
-  prose links, the first-letter drop cap, the route divider's terminals, the
-  focus ring, and the skip link. Measured **4.609:1** on canvas — AA with 0.109
-  of a point to spare, which is why a "slightly warmer red" is a breaking
-  change. It no longer fills any plate on the public site; the one that
-  existed, the card's cover kicker, is now a single red word in the meta line.
+  the hero's entry number, destination counts, the "Read story" call, prose
+  links, the first-letter drop cap, the route divider's terminals, the focus
+  ring, and the skip link. Measured **4.609:1** on canvas — AA with 0.109 of a
+  point to spare, which is why a "slightly warmer red" is a breaking change.
+  It fills no plate on the public site: the one that did, the story card's
+  cover-story kicker, was removed rather than restyled.
 - **Signal Red Light** (`brand-red-light`): the same voice on dark material.
-  The card's cover marker, the footer logline, the map band's stat line and its
-  pins. **4.741:1** on navy, where `brand-red` itself is only **3.1:1** and
-  therefore never carries text.
+  The footer logline, the map band's stat line and its pins. **4.741:1** on
+  navy, where `brand-red` itself is only **3.1:1** and therefore never carries
+  text. Nothing on a story card uses it any more, which is what freed that
+  card's caption to be translucent — see Cards.
 
 ### Tertiary
 
@@ -320,22 +320,27 @@ allowed to speak.
 - **Body Small** (400, `14px`, line-height 1.43): excerpts, footer links, nav
   labels, the map CTA.
 - **Label** (600 mono, `11px`, `0.18em`, uppercase): the log register at full
-  strength — entry numbers, the hero's field line, coordinates, the footer
+  strength — the hero's entry number and field line, coordinates, the footer
   logline and gear line, destination index links.
 - **Label Quiet** (400 mono, `11px`, `0.18em`, uppercase): the same register
-  demoted. Currently the story card's meta line — the date, any country the
-  title does not already name, and the cover marker — where the type has to
-  read as a footnote to the heading above it rather than compete with it.
+  demoted. Currently the story card's date line, where the type has to read as
+  a footnote to the heading above it rather than compete with it.
 - **Label Large** (600 mono, `12px`, `0.18em`, uppercase): section eyebrows —
   Key Facts and TOC headings, footer column labels, the map band's stat line,
   the region page's trip count.
 
-**One register, several jobs.** The 11px mono label carries the entry number,
-field lines, coordinates, the cover marker and the footer identity line, with
-one size of relief (12px) and, since the card meta was demoted, exactly one
-weight step (400 against 600). That step is the pattern to extend: if the
-register needs another voice, add a size or a weight — never a tracking value,
-and never a coloured plate, which is what the card meta used to be.
+**One register, several jobs.** The 11px mono label carries entry numbers,
+field lines, coordinates and the footer identity line, with one size of relief
+(12px) and exactly one weight step (400 against 600). That step is the pattern
+to extend: if the register needs another voice, add a size or a weight — never
+a tracking value, and never a coloured plate, which is what the card's date
+line used to be.
+
+**Where the entry number belongs.** `N°09` is a signature mark and it earns
+its place where it says something: the hero's entry, and the story page. It was
+also on every grid card, nine of them down one index, restating an order the
+grid's own newest-first sequence already shows. Removing it there is not a
+retreat from the identity — it is spending the mark where it carries meaning.
 
 ### Named Rules
 
@@ -358,7 +363,7 @@ carries a `20px` gutter (`px-5`), so the content box locks at 1152px once the
 viewport passes **1192px** — the number `story-grid-layout.ts` calls
 `CONTENT_LOCKED_AT` and uses to emit exact pixel `sizes`.
 
-**The story mosaic.** Six columns at every breakpoint, `240px` auto-rows, `16px`
+**The story mosaic.** Six columns at every breakpoint, `280px` auto-rows, `16px`
 gap. What changes is the span: 6 = one card per row, 3 = two, 2 = three. Six
 exists so a remainder of two can be split evenly. From `lg`, four or more cards
 render a 4×2 lead tile with one card stacked beside it in each of the first two
@@ -534,41 +539,50 @@ One plate, and it is not a chip in the filter sense — it is a label.
 - **Footer logline plate:** solid `navy`, `brand-red-light` over white,
   `6px 10px`. It carries both the logline and the camera gear line in one register.
 
-The story card used to carry two more — a bordered navy meta plate and a solid
-`brand-red` cover kicker, stacked above the heading. Both are gone; see Story
-card below for why, and do not reintroduce either.
+The story card used to carry two more — a bordered navy plate around its date
+line and a solid `brand-red` cover-story kicker, both stacked above the
+heading. Both are gone; see Story card below, and do not reintroduce either.
 
 ### Cards / Containers
 
 - **Story card** — the signature surface. A whole-tile link: navy body, `12px`
   radius, `overflow-hidden`, full-height, with the photograph filling the tile
-  and a caption panel across its foot.
-  - *Caption panel:* a fixed `24px` feather (`from-navy to-transparent`, no type
-    in it) above a solid `navy` block holding the heading and, **below** it, the
-    meta line. The panel is the card's entire contrast mechanism and it must
-    stay opaque: white is 14.6:1 on it, `white/70` 7.87:1, and
-    `brand-red-light` 4.741:1 — that last one already misses AA at `/98` over a
-    bright sky, so there is no alpha to spend. The feather is a fixed length
-    rather than a percentage because a percentage scales with the title's line
-    count, which would make the one guaranteeing number differ per card.
-  - *Meta line:* `N°` at weight 600 in white, then the date and any country the
-    title does not already name at weight 400 in `white/70`, then the cover
-    marker as a single `brand-red-light` word. It wraps rather than truncates —
+  and a caption ramping in across its foot.
+  - *Caption:* a fixed **72px** ramp (`from-navy/92 to-transparent`, no type in
+    it) into a `navy/92` base holding the heading and, **below** it, the date
+    line. On a `280px` tile the base is 90px — **32%** — and the frame above the
+    ramp is completely unveiled; on the `576px` lead tile the base is 13%.
+  - *Why 92 and not 100:* it is the floor, not a preference. White measures
+    **11.6:1** on it and `white/70` **6.57:1** over the brightest sky in the
+    corpus; at `/80` that second figure is 4.66:1 and at `/75` it is 4.07:1,
+    i.e. under AA. The caption could only be lighter by giving up the date
+    line. It could not be translucent at all while the card still carried a
+    `brand-red-light` marker, which needs solid navy and misses AA at `/98`
+    over a bright sky — removing that marker is what bought the transparency.
+  - *Why the ramp is a fixed length:* a percentage scales with the title's line
+    count, so the one distance guaranteeing that type never lands in the fade
+    would differ per card.
+  - *Date line:* the month and year, plus the country **only when the title
+    does not already name it** — eight of nine live titles do, and printing it
+    twice within 30px made the index read as repeated. Weight 400 in
+    `white/70`, below the heading, no box. It wraps rather than truncates:
     `truncate` here cut the destination country, the identity payload the card
     exists to deliver, on 3 of 9 cards at a 320px viewport.
-  - *Why it reads this way:* the meta used to sit **above** the heading as a
-    bordered navy box with a red entry number, under a solid red cover kicker.
-    That is a filled, outlined, coloured object introducing a headline — the
-    loudest thing on a card whose one job is to get a title read, and it drew
-    the eye before the title every time. Order, weight and colour all demote it
-    now; the boxes are gone entirely.
+  - *No entry number, no cover marker.* Nine `N°` labels down one index
+    restated an order the newest-first grid already shows, and the cover marker
+    put a second coloured object on the one card that least needed decorating.
+    The `N°` still leads the hero and every story page.
   - *No card-height scrim.* There used to be one (`from-navy/90 via-navy/35
-    via-55%`) serving the title. It cannot serve it any more: with the meta
-    below the heading the title's top sits around 46% of the card, where that
-    gradient is near its weakest — re-derived against the same pale Rhodes sky,
-    white lands at **2.87:1** there. Holding it would take roughly `/62` at the
-    midpoint, veiling the lower half of every photograph. The panel is crisper
-    and cheaper, and everything above it is now completely unveiled.
+    via-55%`) serving the title. It cannot serve it any more: with the date
+    line below the heading the title's top sits around 46% of the card, where
+    that gradient is near its weakest — re-derived against the same pale Rhodes
+    sky, white lands at **2.87:1** there. Holding it would take roughly `/62`
+    at the midpoint, veiling the lower half of every photograph and blurrier
+    than the ramp.
+  - *Sizing:* the tile is `280px` per row, which makes most boxes TALLER than
+    the 3:2 frames they crop (a 2-column tile is 373×280), so `cardSizes`
+    hints `max(boxWidth, boxHeight × 1.5)` in **every** regime. At the old
+    `240px` row only the base regime needed that correction.
   - *Shadow strategy:* see Elevation — `shadow-sm` at rest, `shadow-xl` plus a
     `2px brand-red` ring on **hover and `active:`**, over `500ms`.
   - *Motion:* `transition-[transform,translate,box-shadow]`. `translate` is

@@ -1,7 +1,6 @@
 ---
 import RemoteImage from './RemoteImage.astro';
-import { useTranslations } from '../i18n/ui';
-import { cardMetaLabel, entryLabel } from '../lib/format';
+import { cardMetaLabel } from '../lib/format';
 import { cardSizes, type StorySpan } from '../lib/story-grid-layout';
 import { heroAltOf, localeOf, pathOf, slugOf, type Trip } from '../lib/trips';
 
@@ -9,26 +8,27 @@ interface Props {
   trip: Trip;
   /** Span plan for this card, from `story-grid-layout.ts`. */
   span: StorySpan;
-  /** Chronological entry number (from entryNumberOf); omits the N° prefix when absent. */
-  number?: number;
-  /** This story is also the page's cover (the hero above); marks the card as such. */
-  cover?: boolean;
+  /**
+   * True when StoryGrid gives this card two rows in the BASE regime. Only the
+   * caller knows — below `sm` the rhythm comes from the card's index, not from
+   * its span — and `cardSizes` needs it to hint the right width.
+   */
+  baseTall?: boolean;
 }
 
-const { trip, span, number, cover = false } = Astro.props;
+const { trip, span, baseTall = false } = Astro.props;
 const locale = localeOf(trip);
-const t = useTranslations(locale);
 const meta = cardMetaLabel(trip.data.date, trip.data.country, trip.data.title, locale);
 
 /*
   @ai-note Nine consecutive links each named "N°09 OKT 2024 · RUMÄNIEN
-  <title>" is what a screen-reader user got from this index — entry number,
-  month, year and country before learning what the story is, nine times in a
-  row. `aria-labelledby` on the link scopes the name to the heading; the meta
-  plate stays in the tree as content, just not as the link's name. The id is
-  the slug, which is unique per document because a trip appears at most once
-  in a grid (the home page's cover is the hero, which carries its own id).
-  Same device as FeaturedHero's entry link.
+  <title>" is what a screen-reader user got from this index — catalogue data
+  before learning what the story is, nine times in a row. `aria-labelledby` on
+  the link scopes the name to the heading; the date line stays in the tree as
+  content, just not as the link's name. The id is the slug, which is unique per
+  document because a trip appears at most once in a grid (the home page's cover
+  is the hero, which carries its own id). Same device as FeaturedHero's entry
+  link.
 */
 const titleId = `card-${slugOf(trip)}`;
 
@@ -98,39 +98,34 @@ const alt = heroAltOf(trip);
   <RemoteImage
     image={trip.data.heroImage}
     alt={alt}
-    sizes={cardSizes(span)}
+    sizes={cardSizes(span, baseTall)}
     class="h-full w-full object-cover transition-transform duration-500 motion-safe:group-hover:scale-[1.04]"
   />
   {/*
-    @ai-warning The type sits on an OPAQUE panel, feathered at the top, and
-    that panel is the whole contrast mechanism on this card. It replaces two
-    older ones, both of which failed in a measured way:
+    @ai-warning The caption is a 72px ramp into a `navy/92` base, and both
+    numbers are contrast decisions rather than taste.
 
-      · a card-height gradient, which is weakest exactly where the text is.
-        The meta line read 1.90:1 to 5.01:1 depending only on which part of
-        which frame sat behind the glyphs, and the title still measured
-        4.38:1 on a pale sky patch after the mid stop was raised to /35.
-      · a bordered `bg-navy` chip around the meta line alone. That fixed the
-        contrast and created the problem this panel exists to solve: a filled,
-        outlined, red-lettered box above the heading — the loudest object on a
-        card whose one job is to get a title read.
+    The RAMP is a fixed length, not a percentage of the panel: a percentage
+    scales with the title's line count, so the one distance that guarantees
+    type never lands in the fade would differ per card. `pt-0.5` on the base
+    block is all the headroom the type needs because the ramp above it carries
+    none.
 
-    Do NOT try to serve the title from a card-height gradient again now that
-    the meta sits BELOW it. Moving the title up puts its top around 46% of the
-    card, where that gradient is near its weakest: re-derived against the same
-    Rhodes sky pixel, white lands at 2.87:1 there. Holding the title would
-    take roughly /62 alpha at the midpoint, i.e. veiling the whole lower half
-    of every photograph — worse than a crisp panel and blurrier.
+    The 92% BASE is the floor, not a preference. White is 11.6:1 on it and
+    `white/70` 6.57:1 over the brightest sky in the corpus; at /80 that second
+    figure is 4.66:1 and at /75 it is 4.07:1, i.e. under AA. The panel could
+    only be made lighter than this by giving up the second line.
 
-    The feather is a FIXED 24px with no type in it, not a percentage of the
-    panel: a percentage scales with the title's line count, so the one number
-    that guarantees contrast would change per card. The photograph is now
-    completely unveiled above the panel, where it previously carried gradient
-    over its full height.
+    It may not go back to a card-height gradient. With the date line BELOW the
+    heading the title's top sits around 46% of the card, where such a gradient
+    measured 2.87:1 against the same pale Rhodes sky that once forced its mid
+    stop to /35; holding the title from there would take roughly /62 at the
+    midpoint — the lower half of every photograph veiled, and blurrier than
+    this. Above the ramp the frame is completely unveiled.
   */}
   <div class="absolute inset-x-0 bottom-0">
-    <div class="h-6 bg-gradient-to-t from-navy to-transparent"></div>
-    <div class="bg-navy px-4 pt-0.5 pb-4 text-white sm:px-5 sm:pb-5">
+    <div class="h-18 bg-gradient-to-t from-navy/92 to-transparent"></div>
+    <div class="bg-navy/92 px-4 pt-0.5 pb-4 text-white sm:px-5 sm:pb-5">
       {/*
         `title` is the only signal that the clamp fired: a long title measured
         scrollHeight 140 against clientHeight 56 with nothing on screen saying
@@ -145,27 +140,20 @@ const alt = heroAltOf(trip);
         {trip.data.title}
       </h3>
       {/*
-        @ai-note Below the heading, not above it, and demoted three ways at
-        once. This line used to LEAD the card — entry number, month, year and
-        country, at weight 600, in red on a bordered navy box — so the first
-        thing the eye landed on was the catalogue data and the title came
-        second. It is a footnote to the title and it is now ordered, weighted
-        and coloured like one: no box, weight 400 for everything but the N°,
-        and the cover marker as one red word instead of a filled red plate.
-
-        Measured on the opaque panel: white 14.6:1, white/70 7.87:1,
-        brand-red-light 4.741:1. The last one is why the panel may never be
-        tinted with an alpha — the accent needs solid navy under it and misses
-        AA at /98 over a bright sky.
+        @ai-note What is left of the log register on a card: a date, and the
+        country only when the title does not already name it. The entry number
+        and the cover-story marker were both removed — nine `N°` labels down
+        the index restated an order the grid already shows, and the marker was
+        a second coloured object on the one card that least needed decorating.
+        The `N°` still leads the hero's entry and every story page, which is
+        where it carries information.
 
         It wraps rather than truncates. `truncate` here once cut the
         destination country — the identity payload the card exists to deliver
         — on every card narrower than ~300px: 3 of 9 at a 320px viewport.
       */}
-      <p class="mt-1.5 flex max-w-full flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] tracking-log uppercase">
-        {number !== undefined && <span class="shrink-0 font-semibold text-white">{entryLabel(number)}</span>}
-        <span class="min-w-0 break-words text-white/70">{meta}</span>
-        {cover && <span class="shrink-0 text-brand-red-light">{t('stories.coverStory')}</span>}
+      <p class="mt-1.5 max-w-full font-mono text-[11px] tracking-log break-words text-white/70 uppercase">
+        {meta}
       </p>
     </div>
   </div>

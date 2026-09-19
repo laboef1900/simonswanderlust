@@ -107,7 +107,7 @@ const featured = trips[coverIndex];
       </div>
     )}
     <div class="mt-8">
-      <StoryGrid trips={trips} locale={locale} numberingPool={trips} coverIndex={coverIndex} />
+      <StoryGrid trips={trips} locale={locale} coverIndex={coverIndex} />
     </div>
   </section>
   {trips.length > 0 && <MapTeaser locale={locale} />}
