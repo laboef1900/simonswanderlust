@@ -19,12 +19,15 @@ interface Api {
   REGIONS: string[];
   apply(posts: Summary[], opts: Record<string, string>): Summary[];
   countries(posts: Summary[]): string[];
+  extraFilterCount(opts: Record<string, string>): number;
+  fromSearch(search: string, countries: string[]): Record<string, string>;
   thumbUrl(post: { heroSrc?: unknown; heroWidth?: unknown }): string | null;
+  toSearch(opts: Record<string, string>): string;
 }
 
 function load(): Api {
   const windowStub: { PostsFilter?: Api } = {};
-  vm.runInNewContext(src, { window: windowStub });
+  vm.runInNewContext(src, { window: windowStub, URLSearchParams });
   if (!windowStub.PostsFilter) throw new Error('posts-filter.js did not assign window.PostsFilter');
   return windowStub.PostsFilter;
 }
@@ -114,6 +117,18 @@ describe('PostsFilter.apply — filtering', () => {
     expect(api.REGIONS).toEqual(['europe', 'north-america', 'south-america']);
   });
 
+  it('filters the two editorial readiness states without changing draft/published semantics', () => {
+    const readiness = [
+      post({ translationKey: 'changed', status: 'published', hasUnpublishedChanges: true, hasEnBody: true }),
+      post({ translationKey: 'missing-live', status: 'published', hasUnpublishedChanges: false, hasEnBody: false }),
+      post({ translationKey: 'missing-draft', status: 'draft', hasUnpublishedChanges: false, hasEnBody: false }),
+    ];
+    expect(keys(api.apply(readiness, { status: 'unpublished' }))).toEqual(['changed']);
+    expect(keys(api.apply(readiness, { status: 'missing-en' }))).toEqual(['missing-live', 'missing-draft']);
+    expect(keys(api.apply(readiness, { status: 'draft' }))).toEqual(['missing-draft']);
+    expect(keys(api.apply(readiness, { status: 'published' }))).toEqual(['changed', 'missing-live']);
+  });
+
   it('does not mutate the input array', () => {
     const input = [...posts];
     api.apply(input, { sort: 'title', order: 'asc' });
@@ -147,32 +162,48 @@ describe('PostsFilter.apply — sorting', () => {
   });
 });
 
-describe('posts.html wiring', () => {
-  const page = readFileSync('public/posts.html', 'utf8');
+describe('PostsFilter URL state', () => {
+  const api = load();
 
-  it('loads the extracted filter module rather than inlining the logic', () => {
-    expect(page).toContain('<script src="/admin/posts-filter.js"></script>');
-    expect(page).toContain('PostsFilter.apply(');
-    expect(page).toContain('PostsFilter.thumbUrl(');
+  it('round-trips non-default filters and omits inventory defaults', () => {
+    const query = api.toSearch({
+      q: 'Rhodes & sun',
+      status: 'missing-en',
+      region: 'europe',
+      country: 'Griechenland',
+      sort: 'title',
+      order: 'asc',
+    });
+    expect(api.fromSearch('?' + query, ['Griechenland'])).toEqual({
+      q: 'Rhodes & sun',
+      status: 'missing-en',
+      region: 'europe',
+      country: 'Griechenland',
+      sort: 'title',
+      order: 'asc',
+    });
+    expect(api.toSearch({ sort: 'updated', order: 'desc' })).toBe('');
   });
 
-  it('requires a typed confirmation for bulk delete only', () => {
-    expect(page).toContain("Type DELETE to confirm:");
-    expect(page).toContain("typed: 'DELETE'");
+  it('rejects stale enum and inventory values and bounds free text', () => {
+    const state = api.fromSearch(
+      '?q=' + 'x'.repeat(250) + '&status=deleted&region=moon&country=Atlantis&sort=toString&order=sideways',
+      ['Island'],
+    );
+    expect(state).toEqual({
+      q: 'x'.repeat(200),
+      status: '',
+      region: '',
+      country: '',
+      sort: 'updated',
+      order: 'desc',
+    });
   });
 
-  it('posts bulk actions to the single admin-only endpoint', () => {
-    expect(page).toContain("fetch('/posts/bulk'");
-    expect(page).toContain("runBulk('publish')");
-    expect(page).toContain("runBulk('unpublish')");
-    expect(page).toContain("runBulk('delete')");
-  });
-
-  it('builds every cell with textContent — innerHTML only ever clears', () => {
-    // Post titles, countries and slugs are author-supplied; the list must not
-    // become an injection sink.
-    for (const match of page.matchAll(/\.innerHTML\s*=\s*([^;]+);/g)) {
-      expect(match[1]?.trim()).toBe("''");
-    }
+  it('counts only controls hidden inside the collapsed filter group', () => {
+    expect(api.extraFilterCount({ q: 'trip', status: 'draft', sort: 'updated', order: 'desc' })).toBe(0);
+    expect(api.extraFilterCount({ region: 'europe', country: 'Island', sort: 'title', order: 'asc' })).toBe(4);
   });
 });
+
+

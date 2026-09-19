@@ -444,6 +444,469 @@ small {
   background: #f9fafb;
 }
 
+
+/* Posts administration is wider than the default reading column: seven
+   desktop columns stay readable, then recompose from rows into labelled
+   records when the card itself runs out of room (including beside the
+   desktop sidebar and at browser zoom). */
+.posts-page .cms-content {
+  max-width: 88rem;
+}
+.posts-page .card {
+  container-name: posts-list;
+  container-type: inline-size;
+}
+.posts-page [hidden] {
+  display: none !important;
+}
+.posts-page .posts-toolbar {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.posts-page .posts-toolbar .btn-new,
+.posts-page .posts-toolbar button,
+.posts-page #retryLoad {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  margin-top: 0;
+}
+.posts-page .posts-toolbar .page-status {
+  flex: 1 1 18rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.posts-page .posts-filters {
+  min-width: 0;
+}
+.posts-page .posts-filters-extra {
+  min-width: 0;
+}
+.posts-page .filter-field {
+  min-width: 0;
+}
+.posts-page .filter-field input,
+.posts-page .filter-field select {
+  min-height: 2.75rem;
+}
+.posts-page .filter-field input {
+  max-width: 100%;
+}
+.posts-page #fMore,
+.posts-page #fReset {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  margin-top: 0;
+}
+.posts-page #fMore {
+  padding-inline: 0.35rem;
+}
+.posts-page .posts-results {
+  margin: -0.35rem 0 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.posts-page .posts-results:empty {
+  display: none;
+}
+.posts-page #loadMsg {
+  overflow-wrap: anywhere;
+}
+
+.posts-page .bulk-bar {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.posts-page #bulkCount {
+  flex: 0 1 auto;
+  overflow-wrap: anywhere;
+}
+.posts-page .bulk-bar > button,
+.posts-page .selection-review > summary {
+  min-height: 2.75rem;
+}
+.posts-page .bulk-bar > button {
+  width: auto;
+  margin-top: 0;
+}
+.posts-page .selection-review {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+.posts-page .selection-review > summary {
+  box-sizing: border-box;
+  padding: 0.65rem 0.25rem;
+  cursor: pointer;
+  color: var(--navy);
+  font-weight: 600;
+}
+.posts-page .selection-review > summary:focus-visible,
+.posts-page .post-more > summary:focus-visible,
+.posts-page .post-title-link:focus-visible,
+.posts-page .action-link:focus-visible {
+  outline: 2px solid var(--navy);
+  outline-offset: 2px;
+}
+.posts-page .selection-review ul {
+  margin: 0.25rem 0 0;
+  padding-inline-start: 1.25rem;
+}
+.posts-page .selection-review li {
+  padding-block: 0.15rem;
+  overflow-wrap: anywhere;
+}
+
+.posts-page .posts-table {
+  table-layout: fixed;
+}
+.posts-page .posts-table th,
+.posts-page .posts-table td {
+  min-width: 0;
+}
+.posts-page .posts-table .col-select {
+  width: 3.5rem;
+}
+.posts-page .posts-table .col-thumb {
+  width: 5.5rem;
+}
+.posts-page .posts-table .col-title {
+  width: 30%;
+}
+.posts-page .posts-table .col-trip {
+  width: 18%;
+}
+.posts-page .posts-table .col-status {
+  width: 10rem;
+}
+.posts-page .posts-table .col-updated {
+  width: 7.5rem;
+}
+.posts-page .posts-table .col-actions {
+  width: 9rem;
+}
+.posts-page .posts-table td {
+  overflow-wrap: anywhere;
+}
+.posts-page .posts-table input[type='checkbox'] {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--navy);
+  cursor: pointer;
+}
+.posts-page .post-select-all,
+.posts-page .post-row-select {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  margin: 0;
+  cursor: pointer;
+}
+.posts-page .post-select-all {
+  justify-content: flex-start;
+  gap: 0.45rem;
+}
+.posts-page .post-select-all span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.posts-page .post-title-link {
+  display: inline-flex;
+  align-items: center;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  color: var(--navy);
+  max-width: 100%;
+  white-space: normal;
+  font-weight: 650;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+  overflow-wrap: anywhere;
+}
+.posts-page .post-title-link:hover {
+  color: var(--red);
+}
+.posts-page .post-locale-state {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.posts-page .posts-date {
+  overflow-wrap: anywhere;
+}
+.posts-page .col-status .status-pill {
+  margin: 0.15rem 0.25rem 0.15rem 0;
+}
+
+.posts-page .post-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.posts-page .post-actions > .action-link,
+.posts-page .post-more > summary {
+  box-sizing: border-box;
+  min-height: 2.75rem;
+}
+.posts-page .post-actions > .action-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.75rem;
+  padding-inline: 0.45rem;
+}
+.posts-page .post-more {
+  min-width: 0;
+}
+.posts-page .post-more[open] {
+  flex: 1 1 100%;
+}
+.posts-page .post-more > summary {
+  padding: 0.65rem 0.5rem;
+  border: 1px solid var(--line-control);
+  border-radius: 0.35rem;
+  color: var(--navy);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.posts-page .post-more[open] > summary {
+  width: fit-content;
+}
+.posts-page .post-more:not([open]) > .post-more-actions {
+  display: none;
+}
+.posts-page .post-more-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding-top: 0.45rem;
+  min-width: 0;
+}
+.posts-page .post-more-actions button {
+  width: auto;
+  min-height: 2.75rem;
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+.posts-page .posts-empty {
+  padding-block: 1.5rem;
+  color: var(--muted);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.posts-page .posts-empty button,
+.posts-page .posts-empty .action-link,
+.posts-page #retryLoad {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  min-height: 2.75rem;
+}
+.posts-page .posts-empty .action-link {
+  padding-inline: 0.45rem;
+}
+.posts-page #retryLoad {
+  margin: 0 0 1rem;
+}
+
+@container posts-list (max-width: 50rem) {
+  .posts-page .posts-toolbar {
+    align-items: stretch;
+    gap: 0.65rem;
+  }
+  .posts-page .posts-toolbar .page-status {
+    flex-basis: 100%;
+  }
+  .posts-page .posts-filters,
+  .posts-page .posts-filters-extra {
+    align-items: stretch;
+  }
+  .posts-page .filter-field {
+    flex: 1 1 12rem;
+  }
+  .posts-page .filter-field input {
+    min-width: 0;
+  }
+
+  .posts-page .posts-table,
+  .posts-page .posts-table thead,
+  .posts-page .posts-table tbody {
+    display: block;
+    width: 100%;
+  }
+  .posts-page .posts-table thead {
+    border-bottom: 2px solid var(--line-strong);
+  }
+  .posts-page .posts-table thead tr {
+    display: block;
+  }
+  /* Keep every column header in the accessibility tree after the table
+     recomposes into labelled records; only the visible select-all header
+     participates in the narrow layout. */
+  .posts-page .posts-table thead th {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  .posts-page .posts-table thead .col-select {
+    position: static;
+    width: 100%;
+    height: auto;
+    padding: 0.35rem 0;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+    border-bottom: 0;
+  }
+  .posts-page .post-select-all span {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+  .posts-page .posts-table tbody tr {
+    display: block;
+    padding-block: 0.65rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .posts-page .posts-table tbody tr:last-child {
+    border-bottom: 0;
+  }
+  .posts-page .posts-table tbody td,
+  .posts-page .posts-table tbody .col-select,
+  .posts-page .posts-table tbody .col-thumb,
+  .posts-page .posts-table tbody .col-title,
+  .posts-page .posts-table tbody .col-trip,
+  .posts-page .posts-table tbody .col-status,
+  .posts-page .posts-table tbody .col-updated,
+  .posts-page .posts-table tbody .col-actions {
+    display: grid;
+    grid-template-columns: minmax(5.75rem, 30%) minmax(0, 1fr);
+    gap: 0.75rem;
+    align-items: start;
+    width: 100%;
+    padding: 0.4rem 0;
+    border-bottom: 0;
+  }
+  .posts-page .posts-table tbody td::before {
+    content: attr(data-label);
+    padding-top: 0.15rem;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    line-height: 1.35;
+    text-transform: uppercase;
+    overflow-wrap: anywhere;
+  }
+  .posts-page .posts-table tbody .col-select {
+    align-items: center;
+  }
+  .posts-page .posts-table tbody .col-select:empty {
+    display: none;
+  }
+  .posts-page .posts-table tbody .col-thumb {
+    align-items: center;
+  }
+  .posts-page .posts-table tbody .col-actions {
+    align-items: start;
+  }
+  .posts-page .posts-empty {
+    display: block;
+    width: 100%;
+    padding-block: 1.25rem;
+  }
+  .posts-page .posts-empty::before {
+    content: none;
+  }
+  .posts-page .post-actions {
+    width: 100%;
+  }
+  .posts-page .post-more[open] {
+    min-width: 100%;
+  }
+  .posts-page .bulk-bar {
+    align-items: stretch;
+  }
+  .posts-page #bulkCount,
+  .posts-page .selection-review {
+    flex-basis: 100%;
+  }
+  .posts-page .bulk-bar > button {
+    flex: 1 1 8rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .posts-page .cms-content {
+    padding-inline: 0.75rem;
+  }
+  .posts-page .card {
+    padding-inline: 0.75rem;
+  }
+  .posts-page .posts-toolbar .btn-new,
+  .posts-page .posts-toolbar button {
+    flex: 1 1 100%;
+  }
+  .posts-page .posts-filters > .filter-field,
+  .posts-page .posts-filters-extra > .filter-field {
+    flex-basis: 100%;
+    width: 100%;
+  }
+  .posts-page #fMore,
+  .posts-page #fReset {
+    justify-content: flex-start;
+  }
+  .posts-page .posts-table tbody td,
+  .posts-page .posts-table tbody .col-select,
+  .posts-page .posts-table tbody .col-thumb,
+  .posts-page .posts-table tbody .col-title,
+  .posts-page .posts-table tbody .col-trip,
+  .posts-page .posts-table tbody .col-status,
+  .posts-page .posts-table tbody .col-updated,
+  .posts-page .posts-table tbody .col-actions {
+    grid-template-columns: minmax(4.75rem, 29%) minmax(0, 1fr);
+    gap: 0.55rem;
+  }
+}
 /* ---- media library (issue #64) ---- */
 .drop-zone {
   border: 2px dashed var(--line-control);

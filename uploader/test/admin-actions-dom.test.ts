@@ -12,31 +12,49 @@ import { defaultSettings } from '../src/settings.js';
 // "Deleting…" frozen on screen (#139).
 
 interface Element {
+  id: string;
   value: string;
   textContent: string;
+  href: string;
   innerHTML: string;
   hidden: boolean;
   disabled: boolean;
   checked: boolean;
+  indeterminate: boolean;
+  open: boolean;
+  focused: boolean;
+  className: string;
   style: Record<string, string>;
+  attrs: Record<string, string>;
   options: { value: string }[];
+  children: Element[];
   add(option: { value: string }): void;
-  listeners: Record<string, (() => Promise<void> | void)[]>;
-  addEventListener(type: string, fn: () => Promise<void> | void): void;
+  remove(index: number): void;
+  listeners: Record<string, ((event?: Record<string, unknown>) => Promise<void> | void)[]>;
+  addEventListener(type: string, fn: (event?: Record<string, unknown>) => Promise<void> | void): void;
   click(): Promise<void>;
-  appendChild(): void;
-  setAttribute(): void;
+  fire(type: string, event?: Record<string, unknown>): Promise<void>;
+  appendChild(child?: Element): void;
+  setAttribute(name: string, value: string): void;
+  focus(): void;
 }
 
 function element(): Element {
   const listeners: Element['listeners'] = {};
   return {
-    value: '', textContent: '', innerHTML: '', hidden: false, disabled: false, checked: false,
-    style: {}, listeners, options: [],
+    id: '', value: '', textContent: '', innerHTML: '', href: '', hidden: false, disabled: false, checked: false,
+    indeterminate: false, open: false, focused: false, className: '',
+    style: {}, attrs: {}, listeners, options: [], children: [],
     add(option) { this.options.push(option); },
+    remove(index) { this.options.splice(index, 1); },
     addEventListener(type, fn) { (listeners[type] ??= []).push(fn); },
-    async click() { for (const fn of listeners.click ?? []) await fn(); },
-    appendChild() {}, setAttribute() {},
+    async click() { await this.fire('click'); },
+    async fire(type, event = {}) {
+      for (const fn of listeners[type] ?? []) await fn({ preventDefault() {}, ...event });
+    },
+    appendChild(child) { if (child) this.children.push(child); },
+    setAttribute(name, value) { this.attrs[name] = value; },
+    focus() { this.focused = true; },
   };
 }
 
@@ -56,16 +74,26 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>): { ctx: R
   };
   const ctx: Record<string, unknown> = {
     document: {
+      referrer: '',
       getElementById: (id: string): Element | null => (ids.has(id) ? el(id) : null),
       createElement: () => element(),
     },
-    location: { href: '', origin: 'http://localhost', protocol: 'http:' },
+    location: {
+      href: 'http://localhost/admin/posts.html',
+      origin: 'http://localhost',
+      pathname: '/admin/posts.html',
+      search: '',
+      protocol: 'http:',
+    },
+    history: { replaceState() {} },
+    URL,
+    URLSearchParams,
     fetch: () => Promise.reject(NETWORK_DOWN),
     console,
     confirm: () => true,
     prompt: () => 'DELETE',
     Auth: { ensureAuthed: async () => null, renderHeader() {} },
-    AdminConfirm: { ask: async () => true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
+    AdminConfirm: { ask: async () => true, askFields: async () => null, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     ...extraGlobals,
   };
   ctx.window = ctx;
@@ -74,10 +102,19 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>): { ctx: R
   return { ctx, el };
 }
 
-function loadPosts() {
+function loadPosts(extraGlobals: Record<string, unknown> = {}) {
   return loadPage('public/posts.html', {
-    PostsFilter: { apply: () => [], REGIONS: [], countries: () => [], thumbUrl: () => null },
+    PostsFilter: {
+      apply: (posts: unknown[]) => posts,
+      REGIONS: [],
+      countries: () => [],
+      extraFilterCount: () => 0,
+      fromSearch: () => ({ q: '', status: '', region: '', country: '', sort: 'updated', order: 'desc' }),
+      thumbUrl: () => null,
+      toSearch: () => '',
+    },
     PostsDuplicate: {},
+    ...extraGlobals,
   });
 }
 
@@ -134,6 +171,194 @@ describe('posts.html actions survive a dropped connection', () => {
     const load = vm.runInContext('load', ctx) as (statusMsg?: string) => Promise<void>;
     await load('Unpublished "Bukarest". Rebuild failed: astro exited 1');
     expect(el('out').textContent).toBe('Unpublished "Bukarest". Rebuild failed: astro exited 1\nCould not load posts: TypeError: Failed to fetch');
+  });
+});
+
+describe('posts.html selection, recovery and disclosures', () => {
+  const filterStub = {
+    apply: (posts: (typeof post)[], opts: Record<string, string>) =>
+      opts.status ? posts.filter((item) => item.status === opts.status) : posts,
+    REGIONS: [],
+    countries: () => [],
+    extraFilterCount: () => 0,
+    fromSearch: () => ({ q: '', status: '', region: '', country: '', sort: 'updated', order: 'desc' }),
+    thumbUrl: () => null,
+    toSearch: () => '',
+  };
+
+  it('keeps cross-filter selections visible, reviews every title, and clears them explicitly', async () => {
+    const { ctx, el } = loadPosts({ PostsFilter: filterStub });
+    const posts = [
+      { ...post, translationKey: 'draft', titleDe: 'Draft story', status: 'draft' },
+      { ...post, translationKey: 'live', titleDe: 'Live story', status: 'published' },
+    ];
+    vm.runInContext(`me = { isAdmin: true }; allPosts = ${JSON.stringify(posts)};
+      selected.add('draft'); selected.add('live');`, ctx);
+    el('fStatus').value = 'draft';
+    (vm.runInContext('refreshBulkBar', ctx) as () => void)();
+
+    expect(el('bulkCount').textContent).toBe('2 selected · 1 outside current view');
+    expect(el('selectionList').children.map((item) => item.textContent)).toEqual(['Draft story', 'Live story']);
+    await el('clearSelection').click();
+    expect(vm.runInContext('selected.size', ctx)).toBe(0);
+    expect(el('bulkBar').hidden).toBe(true);
+  });
+
+  it('sends the immutable key snapshot and names every confirmed story', async () => {
+    let requestBody = '';
+    let confirmBody = '';
+    let mutateSelection = () => {};
+    const { ctx } = loadPosts({
+      AdminConfirm: {
+        ask: async (opts: { body: string }) => {
+          confirmBody = opts.body;
+          mutateSelection();
+          return true;
+        },
+        askFields: async () => null,
+      },
+      fetch: async (url: string, init?: { body?: string }) => {
+        if (url === '/posts/bulk') {
+          requestBody = init?.body ?? '';
+          return { status: 200, ok: true, json: async () => ({ succeeded: 2, failed: 0, results: [] }) };
+        }
+        return { status: 200, ok: true, json: async () => [
+          { ...post, translationKey: 'a', titleDe: 'Alpha' },
+          { ...post, translationKey: 'b', titleDe: 'Beta' },
+          { ...post, translationKey: 'c', titleDe: 'Gamma' },
+        ] };
+      },
+    });
+    const posts = [
+      { ...post, translationKey: 'a', titleDe: 'Alpha' },
+      { ...post, translationKey: 'b', titleDe: 'Beta' },
+      { ...post, translationKey: 'c', titleDe: 'Gamma' },
+    ];
+    vm.runInContext(`allPosts = ${JSON.stringify(posts)}; selected.add('a'); selected.add('b');`, ctx);
+    mutateSelection = () => vm.runInContext(`selected.clear(); selected.add('c');`, ctx);
+
+    await (vm.runInContext('runBulk', ctx) as (action: string) => Promise<void>)('publish');
+
+    expect(confirmBody).toContain('"Alpha"');
+    expect(confirmBody).toContain('"Beta"');
+    expect(JSON.parse(requestBody)).toEqual({ action: 'publish', keys: ['a', 'b'] });
+    expect(vm.runInContext('[...selected]', ctx)).toEqual(['c']);
+  });
+
+  it('retains only failed stories after a partial bulk result so they can be retried', async () => {
+    const posts = [
+      { ...post, translationKey: 'a', titleDe: 'Alpha' },
+      { ...post, translationKey: 'b', titleDe: 'Beta' },
+    ];
+    const { ctx, el } = loadPosts({
+      fetch: async (url: string) => url === '/posts/bulk'
+        ? {
+            status: 200,
+            ok: true,
+            json: async () => ({
+              succeeded: 1,
+              failed: 1,
+              results: [
+                { key: 'a', ok: true },
+                { key: 'b', ok: false, error: 'excerpt required' },
+              ],
+            }),
+          }
+        : { status: 200, ok: true, json: async () => posts },
+    });
+    // Let the page's unauthenticated bootstrap settle before installing this
+    // test's authenticated state; otherwise its microtask resets `me` mid-batch.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    vm.runInContext(`me = { isAdmin: true }; allPosts = ${JSON.stringify(posts)};
+      selected.add('a'); selected.add('b');`, ctx);
+
+    await (vm.runInContext('runBulk', ctx) as (action: string) => Promise<void>)('publish');
+
+    expect(vm.runInContext('[...selected]', ctx)).toEqual(['b']);
+    expect(el('out').textContent).not.toMatch(/^Bulk .* failed:/);
+    expect(el('bulkBar').hidden).toBe(false);
+    expect(el('selectionList').children.map((item) => item.textContent)).toEqual(['Beta']);
+  });
+
+  it('carries canonical filter params through Edit and accepts only the posts return path', () => {
+    const { ctx, el } = loadPosts({
+      PostsFilter: {
+        ...filterStub,
+        toSearch: (opts: Record<string, string>) => {
+          const params = new URLSearchParams();
+          if (opts.q) params.set('q', opts.q);
+          if (opts.status) params.set('status', opts.status);
+          return params.toString();
+        },
+      },
+    });
+    el('fSearch').value = 'Rhodes & sun';
+    el('fStatus').value = 'missing-en';
+    const editorHref = vm.runInContext('editorHref', ctx) as (key?: string) => string;
+    const href = new URL(editorHref('pair/key'), 'http://localhost');
+    expect(href.searchParams.get('tk')).toBe('pair/key');
+    expect(href.searchParams.get('returnTo')).toBe('/admin/posts.html?q=Rhodes+%26+sun&status=missing-en');
+    (vm.runInContext('render', ctx) as (updateUrl?: boolean) => void)(true);
+    const newHref = new URL(el('newPost').href, 'http://localhost');
+    expect(newHref.searchParams.has('tk')).toBe(false);
+    expect(newHref.searchParams.get('returnTo')).toBe('/admin/posts.html?q=Rhodes+%26+sun&status=missing-en');
+
+    const documentStub = ctx.document as { referrer: string };
+    documentStub.referrer = href.toString();
+    expect((vm.runInContext('initialFilterSearch', ctx) as () => string)())
+      .toBe('?q=Rhodes+%26+sun&status=missing-en');
+
+    href.searchParams.set('returnTo', '/admin/settings.html?q=secret');
+    documentStub.referrer = href.toString();
+    expect((vm.runInContext('initialFilterSearch', ctx) as () => string)()).toBe('');
+  });
+
+  it('removes stale actions on load failure and Retry reaches a clean loaded state', async () => {
+    let offline = true;
+    const { ctx, el } = loadPosts({
+      fetch: async () => {
+        if (offline) throw NETWORK_DOWN;
+        return { status: 200, ok: true, json: async () => [] };
+      },
+    });
+    vm.runInContext(`me = { isAdmin: true }; allPosts = [${JSON.stringify(post)}]; selected.add('tk1');`, ctx);
+    el('postsTable').hidden = false;
+    el('bulkBar').hidden = false;
+    const load = vm.runInContext('load', ctx) as () => Promise<void>;
+    await load();
+
+    expect(el('postsTable').hidden).toBe(true);
+    expect(el('bulkBar').hidden).toBe(true);
+    expect(el('retryLoad').hidden).toBe(false);
+    expect(el('loadMsg').textContent).toBe('Posts could not be loaded.');
+    expect(vm.runInContext('selected.size', ctx)).toBe(0);
+
+    offline = false;
+    await el('retryLoad').click();
+    expect(el('retryLoad').hidden).toBe(true);
+    expect(el('loadMsg').hidden).toBe(true);
+    expect(el('postsTable').hidden).toBe(false);
+  });
+
+  it('keeps one native disclosure open and Escape closes it with focus restored', async () => {
+    const { ctx } = loadPosts();
+    const wire = vm.runInContext('wirePostDisclosure', ctx) as (details: Element, summary: Element) => void;
+    const first = element();
+    const firstSummary = element();
+    const second = element();
+    const secondSummary = element();
+    wire(first, firstSummary);
+    wire(second, secondSummary);
+
+    first.open = true;
+    await first.fire('toggle');
+    second.open = true;
+    await second.fire('toggle');
+    expect(first.open).toBe(false);
+
+    await second.fire('keydown', { key: 'Escape' });
+    expect(second.open).toBe(false);
+    expect(secondSummary.focused).toBe(true);
   });
 });
 
