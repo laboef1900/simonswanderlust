@@ -7,22 +7,53 @@
     <link rel="stylesheet" href="/admin/admin.css" />
     <link rel="stylesheet" href="/admin/vendor/easymde.min.css" />
   </head>
-  <body>
+  <body class="editor-page">
     <header class="cms-page-meta">
       <h1 id="pageTitle">New post</h1>
     </header>
 
     <main>
-      <!-- Top Navigation & Language Segmented Switcher -->
-      <div class="editor-topbar">
-        <a href="/admin/posts.html" class="action-link">Back to Posts</a>
-        <div class="lang-switch-bar" role="tablist" aria-label="Post language">
-          <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">
-            Deutsch <span class="lang-code" aria-hidden="true">DE</span>
-          </button>
-          <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">
-            English <span class="lang-code" aria-hidden="true">EN</span>
-          </button>
+      <div class="editor-commandbar" id="editorCommandbar">
+        <div class="editor-commandbar__nav">
+          <a href="/admin/posts.html" class="action-link">Back to Posts</a>
+          <div class="lang-switch-bar" role="tablist" aria-label="Post language">
+            <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">
+              Deutsch <span class="lang-code" aria-hidden="true">DE</span>
+            </button>
+            <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">
+              English <span class="lang-code" aria-hidden="true">EN</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="editor-commandbar__status">
+          <p id="localeChip" class="locale-chip" role="status"></p>
+          <p id="actionStatus" class="muted" role="status"></p>
+          <p id="actionError" class="err" role="alert" hidden></p>
+        </div>
+
+        <div class="editor-commandbar__actions">
+          <button id="saveDraft" type="button" class="btn-secondary">Save draft</button>
+          <button id="publishBtn" type="button" class="btn-primary-publish">Publish</button>
+          <button
+            id="inspectorToggle"
+            type="button"
+            class="btn-secondary editor-inspector-toggle"
+            aria-controls="editorInspector"
+            aria-expanded="true"
+          >Story details</button>
+          <details class="editor-actions-menu" id="editorActionsMenu">
+            <summary class="btn-secondary editor-actions-menu__trigger">More actions</summary>
+            <div class="editor-actions-menu__panel">
+              <div class="editor-actions-menu__readiness">
+                <p class="section-label">Publish readiness</p>
+                <p id="mobileLocaleChip" class="locale-chip"></p>
+              </div>
+              <button id="reviewStory" type="button" class="btn-secondary" aria-haspopup="dialog" aria-controls="storyReviewDialog">Review story</button>
+              <button id="previewBtn" type="button" class="btn-secondary">Preview</button>
+              <button id="unpublishBtn" type="button" class="btn-secondary" hidden>Unpublish</button>
+            </div>
+          </details>
         </div>
       </div>
 
@@ -36,91 +67,20 @@
         <ul id="altAuditList" class="alt-audit-list"></ul>
       </div>
 
-      <div class="editor-workspace">
-        <!-- Main Canvas (Left Column) -->
-        <div class="editor-canvas">
-          
-          <!-- DE Locale Section -->
+      <div class="editor-workspace" id="editorWorkspace">
+        <div class="editor-canvas editor-writing-surface" id="editorWritingSurface">
           <section id="tab-de" class="locale-tab" role="tabpanel" aria-labelledby="tabbtn-de">
-            <!-- Title & Hero Box -->
-            <div class="editor-card">
-              <label for="deTitle">Article Title (Deutsch)</label>
+            <div class="editor-card editor-writing-surface__title">
+              <label for="deTitle">Article title (Deutsch)</label>
               <input id="deTitle" type="text" class="editor-title-input" placeholder="Titel des Reiseberichts…" />
-
-              <label for="deCountry">Country (Deutsch)</label>
-              <input id="deCountry" type="text" placeholder="z. B. Griechenland" />
-
-              <label for="slugFieldDe">DE Slug / Permanent Link</label>
-              <div class="slug-preview">
-                <span class="slug-base">simonswanderlust.com/</span>
-                <input id="slugFieldDe" type="text" placeholder="derived-from-de-title" />
-              </div>
-
-              <!-- Hero Image Zone -->
-              <div style="margin-top: 1.25rem;">
-                <span class="section-label" id="deHeroLabel">Hero image (DE)</span>
-                <div class="hero-picker hero-banner-zone">
-                  <label class="hero-drop" for="deHeroFile">
-                    <span class="hero-drop-copy">Drop a photo or browse</span>
-                    <input id="deHeroFile" type="file" accept="image/*" class="hero-drop-input" />
-                  </label>
-                  <div class="hero-actions-row">
-                    <button type="button" id="deHeroUpload" class="btn-secondary">Upload hero</button>
-                    <button type="button" id="deHeroLibrary" class="btn-secondary">Choose from library</button>
-                    <button type="button" id="deHeroSuggest" class="btn-secondary">Suggest alt text</button>
-                  </div>
-                  <input id="deHeroAlt" type="text" maxlength="1000" placeholder="Alt text for hero image (DE)" aria-label="Alt text for hero image (DE)" />
-                  <p id="deHeroStatus" class="muted" role="status"></p>
-                  <div class="hero-focus" id="deHeroFocus" hidden>
-                    <span class="section-label">Focal point (DE)</span>
-                    <div class="hero-focus-frame" id="deHeroFocusFrame">
-                      <img id="deHeroFocusImg" alt="" />
-                      <span class="hero-focus-crop" id="deHeroFocusCrop" aria-hidden="true"></span>
-                      <span class="hero-focus-dot" id="deHeroFocusDot" aria-hidden="true"></span>
-                    </div>
-                    <p class="muted">
-                      The reader's phone crops this photo to a tall box and keeps barely half its
-                      width. Click the photo — or use the sliders — to choose what stays in frame.
-                      The outline shows the phone crop.
-                    </p>
-                    <label for="deHeroFocusX">Horizontal <output id="deHeroFocusXOut" for="deHeroFocusX">50%</output></label>
-                    <input id="deHeroFocusX" type="range" min="0" max="100" step="1" value="50" />
-                    <label for="deHeroFocusY">Vertical <output id="deHeroFocusYOut" for="deHeroFocusY">50%</output></label>
-                    <input id="deHeroFocusY" type="range" min="0" max="100" step="1" value="50" />
-                    <div class="hero-actions-row">
-                      <button type="button" id="deHeroFocusReset" class="btn-secondary">Reset to centre</button>
-                    </div>
-                  </div>
-                  <input id="deHeroSrc" type="hidden" />
-                  <input id="deHeroWidth" type="hidden" />
-                  <input id="deHeroHeight" type="hidden" />
-                </div>
-              </div>
             </div>
 
-            <!-- Excerpt & Key Facts Card -->
-            <div class="editor-card">
-              <h2 class="card-heading">Summary &amp; Key Facts</h2>
-
-              <label for="deExcerpt">Excerpt / Summary (DE)</label>
-              <textarea id="deExcerpt" rows="3" placeholder="Eine kurze Zusammenfassung des Reiseberichts…"></textarea>
-
-              <div id="deKeyFactsContainer" style="margin-top: 1.25rem;">
-                <p class="section-label">Key Facts (DE)</p>
-                <div id="deKeyFactsList"></div>
-                <button type="button" id="deAddKeyFact" class="btn-secondary">+ Add Key Fact</button>
-              </div>
-            </div>
-
-            <!-- Body Markdown Editor Card -->
-            <div class="editor-card">
+            <div class="editor-card editor-writing-surface__body">
               <div class="editor-card-header">
-                <h2 class="editor-card-title">Markdown Content</h2>
+                <h2 class="editor-card-title">Story (Deutsch)</h2>
               </div>
-
-              <label for="deBody" style="display:none">Body (Markdown)</label>
-              <textarea id="deBody"></textarea>
-
+              <label for="deBody" hidden>Body (Markdown)</label>
+              <textarea id="deBody" aria-label="Body (Markdown, DE)"></textarea>
               <div class="body-img-row editor-media-toolbar">
                 <input id="deBodyImgFile" type="file" accept="image/*" aria-label="Body image file (DE)" />
                 <input id="deBodyImgAlt" type="text" placeholder="Alt text for body image (DE)" aria-label="Alt text for body image (DE)" />
@@ -132,87 +92,18 @@
             </div>
           </section>
 
-          <!-- EN Locale Section -->
           <section id="tab-en" class="locale-tab" role="tabpanel" aria-labelledby="tabbtn-en" hidden>
-            <!-- Title & Hero Box -->
-            <div class="editor-card">
-              <label for="enTitle">Article Title (English)</label>
-              <input id="enTitle" type="text" class="editor-title-input" placeholder="Trip Report Title…" />
-
-              <label for="enCountry">Country (English)</label>
-              <input id="enCountry" type="text" placeholder="e.g. Greece" />
-
-              <label for="slugFieldEn">EN Slug / Permanent Link</label>
-              <div class="slug-preview">
-                <span class="slug-base">simonswanderlust.com/en/</span>
-                <input id="slugFieldEn" type="text" placeholder="derived-from-en-title" />
-              </div>
-
-              <!-- Hero Image Zone -->
-              <div style="margin-top: 1.25rem;">
-                <span class="section-label" id="enHeroLabel">Hero image (EN)</span>
-                <div class="hero-picker hero-banner-zone">
-                  <label class="hero-drop" for="enHeroFile">
-                    <span class="hero-drop-copy">Drop a photo or browse</span>
-                    <input id="enHeroFile" type="file" accept="image/*" class="hero-drop-input" />
-                  </label>
-                  <div class="hero-actions-row">
-                    <button type="button" id="enHeroUpload" class="btn-secondary">Upload hero</button>
-                    <button type="button" id="enHeroLibrary" class="btn-secondary">Choose from library</button>
-                    <button type="button" id="enHeroSuggest" class="btn-secondary">Suggest alt text</button>
-                  </div>
-                  <input id="enHeroAlt" type="text" maxlength="1000" placeholder="Alt text for hero image (EN)" aria-label="Alt text for hero image (EN)" />
-                  <p id="enHeroStatus" class="muted" role="status"></p>
-                  <div class="hero-focus" id="enHeroFocus" hidden>
-                    <span class="section-label">Focal point (EN)</span>
-                    <div class="hero-focus-frame" id="enHeroFocusFrame">
-                      <img id="enHeroFocusImg" alt="" />
-                      <span class="hero-focus-crop" id="enHeroFocusCrop" aria-hidden="true"></span>
-                      <span class="hero-focus-dot" id="enHeroFocusDot" aria-hidden="true"></span>
-                    </div>
-                    <p class="muted">
-                      The reader's phone crops this photo to a tall box and keeps barely half its
-                      width. Click the photo — or use the sliders — to choose what stays in frame.
-                      The outline shows the phone crop.
-                    </p>
-                    <label for="enHeroFocusX">Horizontal <output id="enHeroFocusXOut" for="enHeroFocusX">50%</output></label>
-                    <input id="enHeroFocusX" type="range" min="0" max="100" step="1" value="50" />
-                    <label for="enHeroFocusY">Vertical <output id="enHeroFocusYOut" for="enHeroFocusY">50%</output></label>
-                    <input id="enHeroFocusY" type="range" min="0" max="100" step="1" value="50" />
-                    <div class="hero-actions-row">
-                      <button type="button" id="enHeroFocusReset" class="btn-secondary">Reset to centre</button>
-                    </div>
-                  </div>
-                  <input id="enHeroSrc" type="hidden" />
-                  <input id="enHeroWidth" type="hidden" />
-                  <input id="enHeroHeight" type="hidden" />
-                </div>
-              </div>
+            <div class="editor-card editor-writing-surface__title">
+              <label for="enTitle">Article title (English)</label>
+              <input id="enTitle" type="text" class="editor-title-input" placeholder="Trip report title…" />
             </div>
 
-            <!-- Excerpt & Key Facts Card -->
-            <div class="editor-card">
-              <h2 class="card-heading">Summary &amp; Key Facts</h2>
-
-              <label for="enExcerpt">Excerpt / Summary (EN)</label>
-              <textarea id="enExcerpt" rows="3" placeholder="A short summary of the trip report…"></textarea>
-
-              <div id="enKeyFactsContainer" style="margin-top: 1.25rem;">
-                <p class="section-label">Key Facts (EN)</p>
-                <div id="enKeyFactsList"></div>
-                <button type="button" id="enAddKeyFact" class="btn-secondary">+ Add Key Fact</button>
-              </div>
-            </div>
-
-            <!-- Body Markdown Editor Card -->
-            <div class="editor-card">
+            <div class="editor-card editor-writing-surface__body">
               <div class="editor-card-header">
-                <h2 class="editor-card-title">Markdown Content</h2>
+                <h2 class="editor-card-title">Story (English)</h2>
               </div>
-
-              <label for="enBody" style="display:none">Body (Markdown)</label>
-              <textarea id="enBody"></textarea>
-
+              <label for="enBody" hidden>Body (Markdown)</label>
+              <textarea id="enBody" aria-label="Body (Markdown, EN)"></textarea>
               <div class="body-img-row editor-media-toolbar">
                 <input id="enBodyImgFile" type="file" accept="image/*" aria-label="Body image file (EN)" />
                 <input id="enBodyImgAlt" type="text" placeholder="Alt text for body image (EN)" aria-label="Alt text for body image (EN)" />
@@ -224,22 +115,182 @@
             </div>
           </section>
 
-          <p id="slugError" class="err" style="display:none"></p>
+          <p id="slugError" class="err" hidden></p>
         </div>
 
-        <!-- Sidebar Inspector (Right Column) -->
-        <aside class="editor-sidebar">
-          <!-- Card 1: Expedition & Location Details -->
-          <details class="editor-card" id="expeditionDetails">
-            <summary class="editor-card-title">Expedition details</summary>
+        <button
+          type="button"
+          class="editor-inspector-scrim"
+          id="inspectorScrim"
+          aria-label="Close story details"
+          hidden
+        ></button>
 
-            <label for="fmDate">Trip Date</label>
+        <aside
+          class="editor-sidebar editor-inspector"
+          id="editorInspector"
+          aria-labelledby="inspectorHeading"
+        >
+          <header class="editor-inspector__header">
+            <h2 id="inspectorHeading">Story details</h2>
+            <button type="button" class="btn-secondary editor-inspector-close" id="inspectorClose">Close</button>
+          </header>
+
+          <section class="editor-inspector-locale" data-inspector-locale="de" aria-labelledby="deStoryDetailsHeading">
+            <div class="editor-inspector-group" id="deStoryDetails">
+              <h3 class="editor-card-title" id="deStoryDetailsHeading">German story details</h3>
+              <label for="deCountry">Country (Deutsch)</label>
+              <input id="deCountry" type="text" placeholder="z. B. Griechenland" />
+
+              <label for="slugFieldDe">DE permalink</label>
+              <div class="slug-preview">
+                <span class="slug-base">simonswanderlust.com/</span>
+                <input id="slugFieldDe" type="text" placeholder="derived-from-de-title" />
+              </div>
+
+              <label for="deExcerpt">Excerpt / summary (DE)</label>
+              <textarea id="deExcerpt" rows="3" placeholder="Eine kurze Zusammenfassung des Reiseberichts…"></textarea>
+
+              <div id="deKeyFactsContainer" class="keyfacts-editor">
+                <p class="section-label">Key facts (DE)</p>
+                <div id="deKeyFactsList"></div>
+                <button type="button" id="deAddKeyFact" class="btn-secondary">Add key fact</button>
+              </div>
+            </div>
+
+            <section class="editor-inspector-group" id="deHeroDetails" aria-labelledby="deHeroLabel">
+              <h3 class="editor-card-title" id="deHeroLabel">Hero image (DE)</h3>
+              <div class="hero-picker hero-banner-zone">
+                <div class="hero-compact-preview" id="deHeroPreview" hidden>
+                  <img id="deHeroPreviewImg" alt="" />
+                </div>
+                <label for="deHeroAlt">Hero alt text (DE)</label>
+                <div class="hero-alt-row">
+                  <input id="deHeroAlt" type="text" maxlength="1000" placeholder="Describe the hero image in German" />
+                  <button type="button" id="deHeroSuggest" class="btn-secondary">Suggest alt text</button>
+                </div>
+                <p id="deHeroStatus" class="muted" role="status"></p>
+
+                <details class="editor-disclosure hero-replace" id="deHeroReplace">
+                  <summary>Replace photo</summary>
+                  <label class="hero-drop" for="deHeroFile">
+                    <span class="hero-drop-copy">Drop a photo or browse</span>
+                    <input id="deHeroFile" type="file" accept="image/*" class="hero-drop-input" />
+                  </label>
+                  <div class="hero-actions-row">
+                    <button type="button" id="deHeroUpload" class="btn-secondary">Upload hero</button>
+                    <button type="button" id="deHeroLibrary" class="btn-secondary">Choose from library</button>
+                  </div>
+                </details>
+
+                <details class="editor-disclosure hero-focus" id="deHeroFocus" hidden>
+                  <summary>Adjust framing</summary>
+                  <div class="hero-focus-frame" id="deHeroFocusFrame">
+                    <img id="deHeroFocusImg" alt="" />
+                    <span class="hero-focus-crop" id="deHeroFocusCrop" aria-hidden="true"></span>
+                    <span class="hero-focus-dot" id="deHeroFocusDot" aria-hidden="true"></span>
+                  </div>
+                  <p class="muted">
+                    The reader's phone crops this photo to a tall box and keeps barely half its
+                    width. Choose what stays in frame; the outline shows the phone crop.
+                  </p>
+                  <label for="deHeroFocusX">Horizontal <output id="deHeroFocusXOut" for="deHeroFocusX">50%</output></label>
+                  <input id="deHeroFocusX" type="range" min="0" max="100" step="1" value="50" />
+                  <label for="deHeroFocusY">Vertical <output id="deHeroFocusYOut" for="deHeroFocusY">50%</output></label>
+                  <input id="deHeroFocusY" type="range" min="0" max="100" step="1" value="50" />
+                  <div class="hero-actions-row">
+                    <button type="button" id="deHeroFocusReset" class="btn-secondary">Reset to centre</button>
+                  </div>
+                </details>
+                <input id="deHeroSrc" type="hidden" />
+                <input id="deHeroWidth" type="hidden" />
+                <input id="deHeroHeight" type="hidden" />
+              </div>
+            </section>
+          </section>
+
+          <section class="editor-inspector-locale" data-inspector-locale="en" aria-labelledby="enStoryDetailsHeading" hidden>
+            <div class="editor-inspector-group" id="enStoryDetails">
+              <h3 class="editor-card-title" id="enStoryDetailsHeading">English story details</h3>
+              <label for="enCountry">Country (English)</label>
+              <input id="enCountry" type="text" placeholder="e.g. Greece" />
+
+              <label for="slugFieldEn">EN permalink</label>
+              <div class="slug-preview">
+                <span class="slug-base">simonswanderlust.com/en/</span>
+                <input id="slugFieldEn" type="text" placeholder="derived-from-en-title" />
+              </div>
+
+              <label for="enExcerpt">Excerpt / summary (EN)</label>
+              <textarea id="enExcerpt" rows="3" placeholder="A short summary of the trip report…"></textarea>
+
+              <div id="enKeyFactsContainer" class="keyfacts-editor">
+                <p class="section-label">Key facts (EN)</p>
+                <div id="enKeyFactsList"></div>
+                <button type="button" id="enAddKeyFact" class="btn-secondary">Add key fact</button>
+              </div>
+            </div>
+
+            <section class="editor-inspector-group" id="enHeroDetails" aria-labelledby="enHeroLabel">
+              <h3 class="editor-card-title" id="enHeroLabel">Hero image (EN)</h3>
+              <div class="hero-picker hero-banner-zone">
+                <div class="hero-compact-preview" id="enHeroPreview" hidden>
+                  <img id="enHeroPreviewImg" alt="" />
+                </div>
+                <label for="enHeroAlt">Hero alt text (EN)</label>
+                <div class="hero-alt-row">
+                  <input id="enHeroAlt" type="text" maxlength="1000" placeholder="Describe the hero image in English" />
+                  <button type="button" id="enHeroSuggest" class="btn-secondary">Suggest alt text</button>
+                </div>
+                <p id="enHeroStatus" class="muted" role="status"></p>
+
+                <details class="editor-disclosure hero-replace" id="enHeroReplace">
+                  <summary>Replace photo</summary>
+                  <label class="hero-drop" for="enHeroFile">
+                    <span class="hero-drop-copy">Drop a photo or browse</span>
+                    <input id="enHeroFile" type="file" accept="image/*" class="hero-drop-input" />
+                  </label>
+                  <div class="hero-actions-row">
+                    <button type="button" id="enHeroUpload" class="btn-secondary">Upload hero</button>
+                    <button type="button" id="enHeroLibrary" class="btn-secondary">Choose from library</button>
+                  </div>
+                </details>
+
+                <details class="editor-disclosure hero-focus" id="enHeroFocus" hidden>
+                  <summary>Adjust framing</summary>
+                  <div class="hero-focus-frame" id="enHeroFocusFrame">
+                    <img id="enHeroFocusImg" alt="" />
+                    <span class="hero-focus-crop" id="enHeroFocusCrop" aria-hidden="true"></span>
+                    <span class="hero-focus-dot" id="enHeroFocusDot" aria-hidden="true"></span>
+                  </div>
+                  <p class="muted">
+                    The reader's phone crops this photo to a tall box and keeps barely half its
+                    width. Choose what stays in frame; the outline shows the phone crop.
+                  </p>
+                  <label for="enHeroFocusX">Horizontal <output id="enHeroFocusXOut" for="enHeroFocusX">50%</output></label>
+                  <input id="enHeroFocusX" type="range" min="0" max="100" step="1" value="50" />
+                  <label for="enHeroFocusY">Vertical <output id="enHeroFocusYOut" for="enHeroFocusY">50%</output></label>
+                  <input id="enHeroFocusY" type="range" min="0" max="100" step="1" value="50" />
+                  <div class="hero-actions-row">
+                    <button type="button" id="enHeroFocusReset" class="btn-secondary">Reset to centre</button>
+                  </div>
+                </details>
+                <input id="enHeroSrc" type="hidden" />
+                <input id="enHeroWidth" type="hidden" />
+                <input id="enHeroHeight" type="hidden" />
+              </div>
+            </section>
+          </section>
+
+          <details class="editor-inspector-group" id="expeditionDetails">
+            <summary class="editor-card-title">Expedition details</summary>
+            <label for="fmDate">Trip date</label>
             <input id="fmDate" type="date" />
 
-            <div class="form-row-2" style="margin-top:0.75rem">
+            <div class="form-row-2">
               <div>
                 <label for="fmCountryCode">Country (ISO)</label>
-                <input id="fmCountryCode" type="text" maxlength="2" placeholder="GR" style="text-transform:uppercase" />
+                <input id="fmCountryCode" type="text" maxlength="2" placeholder="GR" />
               </div>
               <div>
                 <label for="fmRegion">Region</label>
@@ -252,75 +303,51 @@
               </div>
             </div>
 
-            <div class="form-row-2" style="margin-top:0.75rem">
+            <div class="form-row-2">
               <div>
                 <label for="fmLat">Latitude</label>
-                <input id="fmLat" type="number" step="any" placeholder="37.9755" style="font-family:var(--mono)" />
+                <input id="fmLat" type="number" step="any" placeholder="37.9755" />
               </div>
               <div>
                 <label for="fmLng">Longitude</label>
-                <input id="fmLng" type="number" step="any" placeholder="23.7348" style="font-family:var(--mono)" />
+                <input id="fmLng" type="number" step="any" placeholder="23.7348" />
               </div>
             </div>
 
-            <label for="fmRoute" style="margin-top:0.75rem">Route</label>
+            <label for="fmRoute">Route</label>
             <input id="fmRoute" type="text" placeholder="e.g. Athens → Rhodes" />
 
-            <!-- Shared, not per-locale: a cover choice is not translatable, so it
-                 lives here beside date/ISO/region/coordinates rather than in a
-                 locale tab. Several posts may be flagged at once — nothing is
-                 unset elsewhere when this is ticked; the homepage simply takes
-                 the newest flagged story. -->
             <label class="check-field" for="fmFeatured">
               <input type="checkbox" id="fmFeatured" aria-describedby="fmFeaturedHint" />
               Use as homepage cover
             </label>
-            <p class="muted" id="fmFeaturedHint" style="font-size:0.78rem">
+            <p class="muted" id="fmFeaturedHint">
               The newest flagged story becomes the homepage cover. With nothing flagged, the newest
               story is used.
             </p>
 
             <div id="stopsContainer">
-              <p class="section-label" style="margin-top:1.25rem">Waypoints / Stops</p>
+              <p class="section-label">Waypoints / stops</p>
               <div id="stopsList"></div>
-              <button type="button" id="addStop" class="btn-secondary" style="width:100%">+ Add Stop</button>
+              <button type="button" id="addStop" class="btn-secondary">Add stop</button>
             </div>
           </details>
 
-          <details class="editor-card">
+          <details class="editor-inspector-group" id="taxonomyDetails">
             <summary class="editor-card-title">Taxonomy</summary>
             <label for="fmCategories">Categories</label>
             <input id="fmCategories" type="text" placeholder="Expedition, Photography" />
-
-            <label for="fmTags" style="margin-top:0.75rem">Tags</label>
+            <label for="fmTags">Tags</label>
             <input id="fmTags" type="text" placeholder="Leica Q2, Greece" />
           </details>
 
-          <!-- Card 3: Revisions -->
-          <div class="editor-card" id="revisionsCard" style="display:none">
-            <h2 class="editor-card-title">Revisions</h2>
-            <p class="muted" style="font-size:0.78rem">Snapshots overwrote on save (last 20 kept).</p>
+          <details class="editor-inspector-group" id="revisionsCard" hidden>
+            <summary class="editor-card-title">Revisions</summary>
+            <p class="muted">Snapshots overwritten on save (last 20 kept).</p>
             <ul id="revisionsList" class="revisions-list"></ul>
-            <p id="revisionsEmpty" class="muted" style="display:none">No revisions yet.</p>
-          </div>
-
+            <p id="revisionsEmpty" class="muted" hidden>No revisions yet.</p>
+          </details>
         </aside>
-      </div>
-
-      <!-- Sticky Master Action Bar -->
-      <div class="editor-sticky-bar">
-        <div class="bar-left">
-          <p id="localeChip" class="locale-chip" role="status"></p>
-          <p id="actionStatus" class="muted" role="status" style="color:#ffffff; margin:0; font-size:0.85rem;"></p>
-          <p id="actionError" class="err" role="alert" hidden style="color:#fca5a5; margin:0; font-size:0.85rem;"></p>
-        </div>
-        <div class="bar-actions">
-          <button id="reviewStory" type="button" class="btn-ghost-preview" aria-haspopup="dialog" aria-controls="storyReviewDialog">Review Story</button>
-          <button id="saveDraft" type="button" class="btn-ghost-preview">Save draft</button>
-          <button id="previewBtn" type="button" class="btn-ghost-preview">Preview</button>
-          <button id="unpublishBtn" type="button" class="btn-ghost-preview" hidden>Unpublish</button>
-          <button id="publishBtn" type="button" class="btn-primary-publish">Publish</button>
-        </div>
       </div>
     </main>
 
@@ -367,6 +394,7 @@
          never-upscale variant rule the posts list uses. -->
     <script src="/admin/posts-filter.js"></script>
     <script src="/admin/tabs.js"></script>
+    <script src="/admin/editor-inspector.js"></script>
     <script>
       'use strict';
       const $ = (id) => document.getElementById(id);
@@ -432,16 +460,40 @@
       deMDE.codemirror.on('change', () => { guard.markDirty(); storyReview?.invalidate(); updateLocaleChip(); });
       enMDE.codemirror.on('change', () => { guard.markDirty(); storyReview?.invalidate(); updateLocaleChip(); });
 
+      // ---- responsive story inspector ----
+      const inspectorApi = EditorInspector.wire({
+        body: document.body,
+        inspector: $('editorInspector'),
+        toggle: $('inspectorToggle'),
+        closeButton: $('inspectorClose'),
+        scrim: $('inspectorScrim'),
+        writingSurface: $('editorWritingSurface'),
+        commandbar: $('editorCommandbar'),
+      });
+      $('editorActionsMenu').addEventListener('click', (event) => {
+        const action = event.target.closest('button');
+        // Review restores focus to its trigger when the modal closes. Keep the
+        // disclosure open so that return target stays visible and keyboard-safe.
+        if (action && action.id !== 'reviewStory') $('editorActionsMenu').open = false;
+      });
+
       // ---- tabs ----
       let activeTab = 'de';
+      function syncInspectorLocale(tab) {
+        document.querySelectorAll('[data-inspector-locale]').forEach((panel) => {
+          panel.hidden = panel.dataset.inspectorLocale !== tab;
+        });
+      }
       function activateLocale(tab) {
         storyReview?.invalidate();
         activeTab = tab;
+        syncInspectorLocale(tab);
         (tab === 'en' ? enMDE : deMDE).codemirror.refresh();
       }
       const tabsApi = Tabs.wire(document.querySelector('[role="tablist"]'), {
         onChange: activateLocale,
       });
+      syncInspectorLocale(activeTab);
 
       // ---- slug derivation from locale titles ----
       // @ai-warning Golden Rule 2 (SEO slug contract). A slug is derived from
@@ -489,8 +541,11 @@
         },
         jump: (locale, finding) => {
           if (finding.target === 'hero') {
-            $(locale + 'HeroAlt').focus();
+            jumpToGap(locale, 'hero alt');
           } else {
+            if (tabsApi && tabsApi.select) tabsApi.select(locale);
+            activateLocale(locale);
+            inspectorApi.close();
             const cm = (locale === 'en' ? enMDE : deMDE).codemirror;
             cm.setCursor({ line: finding.line - 1, ch: 0 });
             cm.focus();
@@ -730,22 +785,33 @@
           guard.markDirty();
         }
 
-        /** Show the control for the hero currently in the hidden fields, or hide it. */
+        /** Sync both the compact preview and framing disclosure to the stored hero. */
         function sync(locale) {
           var wrap = $(locale + 'HeroFocus');
           var img = $(locale + 'HeroFocusImg');
+          var preview = $(locale + 'HeroPreview');
+          var previewImg = $(locale + 'HeroPreviewImg');
           var url = PostsFilter.thumbUrl({
             heroSrc: $(locale + 'HeroSrc').value,
             heroWidth: parseInt($(locale + 'HeroWidth').value, 10),
           });
-          if (!url) { wrap.hidden = true; return; }
+          if (!url) {
+            wrap.hidden = true;
+            preview.hidden = true;
+            img.removeAttribute('src');
+            previewImg.removeAttribute('src');
+            return;
+          }
           // A wrong-but-plausible stored width still 404s (see thumbUrl's own
-          // note), so the control hides itself rather than showing a broken
-          // frame an author would try to click.
-          img.onerror = function () { wrap.hidden = true; };
+          // note), so both views hide rather than showing a broken photo.
+          var hideBroken = function () { wrap.hidden = true; preview.hidden = true; };
+          img.onerror = hideBroken;
+          previewImg.onerror = hideBroken;
           img.onload = function () { paint(locale); };
           if (img.getAttribute('src') !== url) img.src = url;
+          if (previewImg.getAttribute('src') !== url) previewImg.src = url;
           wrap.hidden = false;
+          preview.hidden = false;
           paint(locale);
         }
 
@@ -1089,14 +1155,18 @@
             hero: kind + 'HeroFile', 'hero alt': kind + 'HeroAlt',
           };
           const el = $(ids[field] || ids.title);
-          if (el && el.focus) el.focus();
+          const inInspector = ['slug', 'excerpt', 'country', 'hero', 'hero alt'].includes(field);
+          if (inInspector) inspectorApi.reveal(el);
+          else {
+            inspectorApi.close();
+            if (el && el.focus) el.focus();
+          }
           return;
         }
         const details = $('expeditionDetails');
         if (details) details.open = true;
         const tripIds = { date: 'fmDate', ISO: 'fmCountryCode', region: 'fmRegion', coordinates: 'fmLat' };
-        const el = $(tripIds[field] || 'fmDate');
-        if (el && el.focus) el.focus();
+        inspectorApi.reveal($(tripIds[field] || 'fmDate'));
       }
       function chipPart(label, kind, miss) {
         if (!miss.length) {
@@ -1111,10 +1181,7 @@
         btn.addEventListener('click', () => jumpToGap(kind, miss[0]));
         return btn;
       }
-      function updateLocaleChip() {
-        const chip = $('localeChip');
-        if (!chip) return;
-        const g = allPublishGaps();
+      function renderLocaleChip(chip, g) {
         chip.replaceChildren();
         chip.appendChild(chipPart('DE', 'de', g.de));
         chip.appendChild(document.createTextNode(' · '));
@@ -1122,6 +1189,14 @@
         chip.appendChild(document.createTextNode(' · '));
         chip.appendChild(chipPart('Trip', 'trip', g.trip));
         chip.classList.toggle('is-incomplete', gapCount(g) > 0);
+      }
+      function updateLocaleChip() {
+        const chip = $('localeChip');
+        const mobileChip = $('mobileLocaleChip');
+        if (!chip || !mobileChip) return;
+        const g = allPublishGaps();
+        renderLocaleChip(chip, g);
+        renderLocaleChip(mobileChip, g);
         const details = $('expeditionDetails');
         if (details && g.trip.length) details.open = true;
         const pub = $('publishBtn');
@@ -1181,6 +1256,7 @@
         if (kind === 'hero') { jumpToGap(locale, 'hero alt'); return; } // beside "Suggest alt text"
         if (tabsApi && tabsApi.select) tabsApi.select(locale);
         activateLocale(locale);
+        inspectorApi.close();
         // A gallery photo's alt lives in the images map and is edited in the
         // picker; an inline body photo's alt is its Markdown label, so the
         // markdown editor itself is where that one is fixed.
@@ -1576,8 +1652,8 @@
         const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/revisions');
         if (!res.ok) return; // non-fatal: the card just stays as-is
         const revs = await res.json();
-        $('revisionsCard').style.display = '';
-        $('revisionsEmpty').style.display = revs.length ? 'none' : '';
+        $('revisionsCard').hidden = false;
+        $('revisionsEmpty').hidden = revs.length > 0;
         const ul = $('revisionsList');
         ul.innerHTML = '';
         revs.forEach((rev) => {

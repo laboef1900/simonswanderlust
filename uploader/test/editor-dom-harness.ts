@@ -69,7 +69,7 @@ export class EditorElement {
   set disabled(value: boolean) { this.toggleAttribute('disabled', value); }
   get open() { return this.hasAttribute('open'); }
   set open(value: boolean) { this.toggleAttribute('open', value); }
-  get tabIndex() { return Number(this.getAttribute('tabindex') ?? (/^(BUTTON|INPUT|TEXTAREA|SELECT|A)$/.test(this.tagName) ? 0 : -1)); }
+  get tabIndex() { return Number(this.getAttribute('tabindex') ?? (/^(BUTTON|INPUT|TEXTAREA|SELECT|SUMMARY|A)$/.test(this.tagName) ? 0 : -1)); }
   set tabIndex(value: number) { this.setAttribute('tabindex', String(value)); }
   get href() { return this.getAttribute('href') ?? ''; }
   set href(value: string) { this.setAttribute('href', value); }
