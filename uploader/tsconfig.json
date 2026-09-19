@@ -1,6 +1,9 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
+    // Node 26 is the only runtime this ships on (Dockerfile, engines), so the
+    // ES2022 floor was understating it by four years — `Promise.withResolvers`
+    // (ES2024) is available at runtime and was the first thing to notice.
+    "target": "ES2024",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,

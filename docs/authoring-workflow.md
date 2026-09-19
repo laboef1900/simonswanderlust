@@ -337,7 +337,16 @@ use `docker build .` from the repo root instead.)
 
 To trigger a rebuild manually (e.g. after a database restore, or a template code change), sign in
 as an admin and use the **Rebuild site now** button on the settings page (`/admin/settings.html`),
-which calls the admin-only `POST /rebuild` route.
+which calls the admin-only `POST /rebuild` route. From a shell on the host, without signing in:
+
+```bash
+docker compose exec app node --import tsx src/cli.ts rebuild
+```
+
+That subcommand does **not** build in its own process — it asks the running app over loopback, so
+the build still takes the one lock that keeps it from running beside image encoding (which is
+what the container's memory ceiling is sized against). The app therefore has to be up; if there
+is no release at all yet, boot builds one by itself.
 
 Notes:
 

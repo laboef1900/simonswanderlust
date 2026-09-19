@@ -171,6 +171,17 @@ time. This contract is mirrored on the blog side in `site/src/lib/images.ts`.
 **CLI subcommands** (alongside `restore`/`set-password`, see
 [Database dumps](#database-dumps)):
 
+- `rebuild` — rebuilds the live blog from the current database.
+  `docker compose exec app node --import tsx src/cli.ts rebuild`. It does **not** build in the
+  CLI process: it mints a one-request admin session, calls `POST /rebuild` on `127.0.0.1` and
+  revokes the session in a `finally`. That keeps the build inside the single process whose
+  `work-lock.ts` makes building and encoding mutually exclusive — the assumption
+  `docker-compose.yml` sizes `mem_limit` against, and which a second unlocked builder would
+  break (a build beside the encode queue is ≈4.9 GB against a 4.6 GB ceiling). Minting the
+  session is not a new trust boundary: the same CLI already offers `set-password`. Requires the
+  app to be running; exits non-zero with the build's own error message on failure. Normal
+  publishing never needs it — Publish, unpublish, delete and page saves all build on their own;
+  this is for changes made behind the app's back (a `restore`, a hand-run `UPDATE`).
 - `audit-exif` — read-only scan of every variant under `STORAGE_DIR`, reporting how many carry
   EXIF and how many carry GPS, and (when any do) which storage keys and whether each has a
   retained `-orig` to re-encode from. Gates whether a remediation pass is needed at all; nothing

@@ -1,5 +1,7 @@
+import { request } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
+import { SESSION_COOKIE } from './authn.js';
 import { processImage } from './pipeline.js';
 import { contentHashKey, storeVariants, type StorageOptions, type StoredImage } from './storage.js';
 import type { Dump } from './backup.js';
@@ -236,13 +238,133 @@ async function auditExifMain(): Promise<void> {
   console.log('\nBack up first, then: node --import tsx src/cli.ts strip-gps --dry-run');
 }
 
+/** A 60s window is a whole build's worth of headroom for a request the CLI
+ * makes and revokes in the same function. It is not a login. */
+export const REBUILD_SESSION_TTL_MS = 60_000;
+
+/** How `triggerRebuild` reaches the running app. Injected so the contract
+ * below can be tested without a socket. */
+export type RebuildTransport = (cookie: string) => Promise<{ status: number; body: string }>;
+
+/**
+ * Ask the RUNNING app to rebuild the site, as an admin, over loopback.
+ *
+ * @ai-warning It deliberately does NOT build here. `work-lock.ts` makes a site
+ * build and image encoding mutually exclusive WITHIN ONE PROCESS, and
+ * docker-compose.yml sizes `mem_limit` as `max(build, encode) + baseline`
+ * (~4.4 GB) on exactly that assumption. A CLI that spawned its own
+ * `astro build` would be a second, unlocked builder: concurrent with the
+ * encode queue that is ~0.47 + 3.9 + 0.5 ≈ 4.9 GB against a 4.6 GB ceiling,
+ * i.e. an OOM of the whole container — blog, admin, image host and the
+ * in-flight build together. Two racing builders would also both flip the
+ * `current` symlink and both prune `releases/`.
+ *
+ * @ai-note Minting a session for an existing admin is not a new trust
+ * boundary: this same CLI already offers `set-password`, which takes over any
+ * account outright, so anyone who can run it has more power than this. The
+ * session lives for one request and is destroyed in `finally`, including when
+ * the build fails or the socket dies.
+ */
+export async function triggerRebuild(
+  users: UserStore,
+  sessions: SessionStore,
+  post: RebuildTransport,
+): Promise<string> {
+  const admin = (await users.list()).find((u) => u.isAdmin);
+  if (!admin) throw new Error('no admin user exists yet — create one in the admin UI first');
+  const token = await sessions.create(admin.id, REBUILD_SESSION_TTL_MS);
+  try {
+    const { status, body } = await post(`${SESSION_COOKIE}=${token}`);
+    // /rebuild answers 200 with `{ ok: false, error }` for a FAILED build — a
+    // status check alone would report a schema error as success.
+    if (status !== 200) throw new Error(`the app answered ${status}: ${body.slice(0, 300)}`);
+    let outcome: { ok?: boolean; release?: string; error?: string };
+    try {
+      outcome = JSON.parse(body) as typeof outcome;
+    } catch {
+      throw new Error(`the app answered 200 with a non-JSON body: ${body.slice(0, 300)}`);
+    }
+    if (!outcome.ok) throw new Error(outcome.error ?? 'the build failed without a message');
+    return outcome.release ?? '(unnamed release)';
+  } finally {
+    await sessions.destroy(token);
+  }
+}
+
+/** Loopback POST with no client-side deadline: a build may legitimately run
+ * for `BUILD_TIMEOUT_MS` (15 min) plus its wait for the exclusive lock, and
+ * the route answers only when it is done. `node:http` is used rather than
+ * `fetch` for exactly that reason — undici's 5-minute `headersTimeout` would
+ * abort a long but healthy build, and raising it means taking on undici as a
+ * direct dependency. */
+function loopbackRebuild(port: number): RebuildTransport {
+  return (cookie) => {
+    // `settle`, not `resolve`: `resolve` is node:path's, imported at the top.
+    const { promise, resolve: settle, reject } = Promise.withResolvers<{ status: number; body: string }>();
+    const req = request(
+      { host: '127.0.0.1', port, path: '/rebuild', method: 'POST', headers: { cookie } },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (c: string) => { body += c; });
+        res.on('end', () => settle({ status: res.statusCode ?? 0, body }));
+      },
+    );
+    req.on('error', reject);
+    req.end();
+    return promise;
+  };
+}
+
+async function rebuildMain(): Promise<void> {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    console.error('DATABASE_URL is required for rebuild.');
+    process.exit(1);
+  }
+  const port = Number(process.env.PORT ?? 3000);
+  const { createPool } = await import('./db.js');
+  const { pgUserStore } = await import('./users.js');
+  const { pgSessionStore } = await import('./sessions.js');
+  const pool = createPool(databaseUrl);
+  try {
+    console.log(`rebuilding the site via the running app on 127.0.0.1:${port} — this can take a few minutes…`);
+    const release = await triggerRebuild(pgUserStore(pool), pgSessionStore(pool), loopbackRebuild(port));
+    console.log(`site rebuilt and released as ${release}.`);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(
+      (e as NodeJS.ErrnoException)?.code === 'ECONNREFUSED'
+        // The one failure an operator will actually hit, and the fix is not obvious.
+        ? `nothing is listening on 127.0.0.1:${port}. A rebuild runs INSIDE the app process, which holds ` +
+          'the build/encode lock, so the app has to be up. Start it (`docker compose up -d app`); if there ' +
+          'is no release at all yet, boot builds one by itself.'
+        : `rebuild failed: ${msg}`,
+    );
+    process.exitCode = 1;
+  } finally {
+    await pool.end();
+  }
+}
+
 async function main(): Promise<void> {
   if (process.argv[2] === 'audit-exif') return auditExifMain();
   if (process.argv[2] === 'restore') return restoreMain(process.argv.slice(3));
   if (process.argv[2] === 'set-password') return setPasswordMain(process.argv[3], process.argv[4]);
+  if (process.argv[2] === 'rebuild') return rebuildMain();
   const [, , file, key, alt = ''] = process.argv;
   if (!file || !key) {
-    console.error('usage: npm run upload -- <imageFile> <key> [alt]   |   docker compose exec app node --import tsx src/cli.ts restore [--yes] /data/backup/db/<file>   |   docker compose exec app node --import tsx src/cli.ts set-password <username> [newPassword]   |   docker compose exec app node --import tsx src/cli.ts audit-exif');
+    // @ai-warning: the DHI runtime image has no shell, so `docker compose exec`
+    // must invoke node directly — `tsx src/cli.ts ...` cannot run there.
+    const exec = 'docker compose exec app node --import tsx src/cli.ts';
+    console.error(
+      'usage:\n' +
+      '  npm run upload -- <imageFile> <key> [alt]\n' +
+      `  ${exec} rebuild\n` +
+      `  ${exec} restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n` +
+      `  ${exec} set-password <username> [newPassword]\n` +
+      `  ${exec} audit-exif`,
+    );
     process.exit(1);
   }
   const opts: StorageOptions = {
