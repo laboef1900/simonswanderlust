@@ -1,7 +1,7 @@
 ---
 import RemoteImage from './RemoteImage.astro';
 import { useTranslations } from '../i18n/ui';
-import { dateLabel, entryLabel } from '../lib/format';
+import { cardMetaLabel, entryLabel } from '../lib/format';
 import { cardSizes, type StorySpan } from '../lib/story-grid-layout';
 import { heroAltOf, localeOf, pathOf, slugOf, type Trip } from '../lib/trips';
 
@@ -18,7 +18,7 @@ interface Props {
 const { trip, span, number, cover = false } = Astro.props;
 const locale = localeOf(trip);
 const t = useTranslations(locale);
-const meta = `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
+const meta = cardMetaLabel(trip.data.date, trip.data.country, trip.data.title, locale);
 
 /*
   @ai-note Nine consecutive links each named "N°09 OKT 2024 · RUMÄNIEN
@@ -102,67 +102,71 @@ const alt = heroAltOf(trip);
     class="h-full w-full object-cover transition-transform duration-500 motion-safe:group-hover:scale-[1.04]"
   />
   {/*
-    Stops at 55% instead of running the full height: the text below carries
-    its own opaque plate and needs no help from the scrim, so everything above
-    the plate is photograph.
+    @ai-warning The type sits on an OPAQUE panel, feathered at the top, and
+    that panel is the whole contrast mechanism on this card. It replaces two
+    older ones, both of which failed in a measured way:
 
-    @ai-warning The mid stop is 35%, not 25%. The title is the one element on
-    this card that does NOT sit on the opaque plate, and at /25 it measured
-    4.38:1 worst-pixel against a pale sky patch in the Rhodes frame — under AA,
-    because 18px/800 is just below the 18.66px large-text threshold and so owes
-    4.5:1, not 3:1. Re-derived at /35 the same pixel is 5.10:1. Do not trade
-    this back for photograph: the cost is confined to the band the title
-    occupies, and four of nine titles were sitting between 4.38 and 4.82.
+      · a card-height gradient, which is weakest exactly where the text is.
+        The meta line read 1.90:1 to 5.01:1 depending only on which part of
+        which frame sat behind the glyphs, and the title still measured
+        4.38:1 on a pale sky patch after the mid stop was raised to /35.
+      · a bordered `bg-navy` chip around the meta line alone. That fixed the
+        contrast and created the problem this panel exists to solve: a filled,
+        outlined, red-lettered box above the heading — the loudest object on a
+        card whose one job is to get a title read.
+
+    Do NOT try to serve the title from a card-height gradient again now that
+    the meta sits BELOW it. Moving the title up puts its top around 46% of the
+    card, where that gradient is near its weakest: re-derived against the same
+    Rhodes sky pixel, white lands at 2.87:1 there. Holding the title would
+    take roughly /62 alpha at the midpoint, i.e. veiling the whole lower half
+    of every photograph — worse than a crisp panel and blurrier.
+
+    The feather is a FIXED 24px with no type in it, not a percentage of the
+    panel: a percentage scales with the title's line count, so the one number
+    that guarantees contrast would change per card. The photograph is now
+    completely unveiled above the panel, where it previously carried gradient
+    over its full height.
   */}
-  <div class="absolute inset-0 bg-gradient-to-t from-navy/90 via-navy/35 via-55% to-transparent"></div>
-  <div class="absolute right-0 bottom-0 left-0 p-4 text-white sm:p-5">
-    {/*
-      @ai-note The kicker exists because the homepage shows this story twice on
-      purpose — the grid holds EVERY story so the count beside its heading is
-      true by construction — and unmarked repetition reads as a bug rather than
-      as editorial promotion. A newspaper signals "the lead is also in the
-      index" with exactly this: a kicker. It is the only red plate on the page,
-      so it cannot be mistaken for the mono log plate below it.
-    */}
-    {cover && (
-      <p class="mb-1.5 inline-block rounded bg-brand-red px-2 py-0.5 font-mono text-[11px] font-semibold tracking-log text-white uppercase">
-        {t('stories.coverStory')}
+  <div class="absolute inset-x-0 bottom-0">
+    <div class="h-6 bg-gradient-to-t from-navy to-transparent"></div>
+    <div class="bg-navy px-4 pt-0.5 pb-4 text-white sm:px-5 sm:pb-5">
+      {/*
+        `title` is the only signal that the clamp fired: a long title measured
+        scrollHeight 140 against clientHeight 56 with nothing on screen saying
+        so. The text is also in the <h3> itself, so this adds no name a screen
+        reader has to hear twice.
+      */}
+      <h3
+        id={titleId}
+        class:list={['font-extrabold leading-tight break-words line-clamp-2', titleSize]}
+        title={trip.data.title}
+      >
+        {trip.data.title}
+      </h3>
+      {/*
+        @ai-note Below the heading, not above it, and demoted three ways at
+        once. This line used to LEAD the card — entry number, month, year and
+        country, at weight 600, in red on a bordered navy box — so the first
+        thing the eye landed on was the catalogue data and the title came
+        second. It is a footnote to the title and it is now ordered, weighted
+        and coloured like one: no box, weight 400 for everything but the N°,
+        and the cover marker as one red word instead of a filled red plate.
+
+        Measured on the opaque panel: white 14.6:1, white/70 7.87:1,
+        brand-red-light 4.741:1. The last one is why the panel may never be
+        tinted with an alpha — the accent needs solid navy under it and misses
+        AA at /98 over a bright sky.
+
+        It wraps rather than truncates. `truncate` here once cut the
+        destination country — the identity payload the card exists to deliver
+        — on every card narrower than ~300px: 3 of 9 at a 320px viewport.
+      */}
+      <p class="mt-1.5 flex max-w-full flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] tracking-log uppercase">
+        {number !== undefined && <span class="shrink-0 font-semibold text-white">{entryLabel(number)}</span>}
+        <span class="min-w-0 break-words text-white/70">{meta}</span>
+        {cover && <span class="shrink-0 text-brand-red-light">{t('stories.coverStory')}</span>}
       </p>
-    )}
-    {/*
-      @ai-warning Opaque plate, for the same reason as FeaturedHero's: this line
-      was `text-brand-red-light` straight over the photograph and measured
-      1.90:1 to 5.01:1 depending only on which part of which frame sat behind
-      the glyphs — the identity was legible on a jungle photo and invisible on
-      sea-and-sky. On solid navy the accent is 4.8:1 and white is 14.6:1 on
-      every card. Do not tint the plate with an alpha.
-    */}
-    {/*
-      Wraps rather than truncates. `truncate` on the meta span cut the
-      DESTINATION COUNTRY — the identity payload the card exists to deliver —
-      on every card narrower than ~300px: 3 of 9 at a 320px viewport. The
-      plate is `max-w-full` and wraps, so a long country takes a second line
-      inside the plate instead of disappearing behind an ellipsis, and the
-      card has the height to spare.
-    */}
-    <p
-      class="inline-flex max-w-full flex-wrap items-center gap-x-2 rounded border border-white/15 bg-navy px-2 py-1 font-mono text-[11px] font-semibold tracking-log uppercase"
-    >
-      {number !== undefined && <span class="shrink-0 text-brand-red-light">{entryLabel(number)}</span>}
-      <span class="min-w-0 break-words text-white">{meta}</span>
-    </p>
-    {/*
-      `title` is the only signal that the clamp fired: a long title measured
-      scrollHeight 140 against clientHeight 56 with nothing on screen saying
-      so. The text is also in the <h3> itself, so this adds no name a screen
-      reader has to hear twice.
-    */}
-    <h3
-      id={titleId}
-      class:list={['mt-2 font-extrabold break-words line-clamp-2', titleSize]}
-      title={trip.data.title}
-    >
-      {trip.data.title}
-    </h3>
+    </div>
   </div>
 </a>

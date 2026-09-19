@@ -55,6 +55,12 @@ typography:
     fontWeight: 600
     lineHeight: 1.5
     letterSpacing: "0.18em"
+  label-quiet:
+    fontFamily: "IBM Plex Mono, ui-monospace, SFMono-Regular, monospace"
+    fontSize: "0.6875rem"
+    fontWeight: 400
+    lineHeight: 1.5
+    letterSpacing: "0.18em"
   label-lg:
     fontFamily: "IBM Plex Mono, ui-monospace, SFMono-Regular, monospace"
     fontSize: "0.75rem"
@@ -94,18 +100,16 @@ components:
     rounded: "{rounded.xl}"
     padding: "{spacing.card-padding}"
     height: "100%"
-  card-meta-plate:
+  card-caption-panel:
     backgroundColor: "{colors.navy}"
     textColor: "#ffffff"
-    typography: "{typography.label}"
-    rounded: "{rounded.sm}"
-    padding: "4px 8px"
-  cover-kicker:
-    backgroundColor: "{colors.brand-red}"
-    textColor: "#ffffff"
-    typography: "{typography.label}"
-    rounded: "{rounded.sm}"
-    padding: "2px 8px"
+    padding: "2px 16px 16px"
+  card-meta-line:
+    textColor: "rgb(255 255 255 / 0.7)"
+    typography: "{typography.label-quiet}"
+  cover-marker:
+    textColor: "{colors.brand-red-light}"
+    typography: "{typography.label-quiet}"
   footer-logline-plate:
     backgroundColor: "{colors.navy}"
     textColor: "{colors.brand-red-light}"
@@ -208,13 +212,14 @@ signal red that changes weight, not hue, depending on which material it lands on
 - **Expedition Red** (`brand-red`): the site's one loud voice. Active nav item,
   entry numbers on light ground, destination counts, the "Read story" call,
   prose links, the first-letter drop cap, the route divider's terminals, the
-  focus ring, the cover-story kicker plate, and the skip link. Measured
-  **4.609:1** on canvas — AA with 0.109 of a point to spare, which is why a
-  "slightly warmer red" is a breaking change.
+  focus ring, and the skip link. Measured **4.609:1** on canvas — AA with 0.109
+  of a point to spare, which is why a "slightly warmer red" is a breaking
+  change. It no longer fills any plate on the public site; the one that
+  existed, the card's cover kicker, is now a single red word in the meta line.
 - **Signal Red Light** (`brand-red-light`): the same voice on dark material.
-  Card entry numbers over the navy meta plate, the footer logline, the map
-  band's stat line and its pins. **4.741:1** on navy, where `brand-red` itself
-  is only **3.1:1** and therefore never carries text.
+  The card's cover marker, the footer logline, the map band's stat line and its
+  pins. **4.741:1** on navy, where `brand-red` itself is only **3.1:1** and
+  therefore never carries text.
 
 ### Tertiary
 
@@ -251,7 +256,7 @@ stops sampling whatever coastline passes behind it.
 scrim. Where text must sit on an image it gets its own opaque plate — navy for
 white type, canvas for dark ink — and the scrim is then free to stay light so
 the photograph survives. Never tint a plate with an alpha. This is why
-`FeaturedHero`'s entry panel, the story-card meta plate, the stamp chip and the
+`FeaturedHero`'s entry panel, the story card's caption panel, the stamp chip and
 footer logline all look the way they do: the hero's log line measured **1.19:1**
 on a phone before it got a plate and its headline sat at **~2.8:1** whenever a
 long German compound pushed it out of the dark end of the scrim; on paper the
@@ -314,20 +319,23 @@ allowed to speak.
   measure is set by the container, not by the prose.
 - **Body Small** (400, `14px`, line-height 1.43): excerpts, footer links, nav
   labels, the map CTA.
-- **Label** (600 mono, `11px`, `0.18em`, uppercase): the log register — entry
-  numbers, the date · country field line, coordinates, the cover kicker, the
-  footer logline and gear line, destination index links.
+- **Label** (600 mono, `11px`, `0.18em`, uppercase): the log register at full
+  strength — entry numbers, the hero's field line, coordinates, the footer
+  logline and gear line, destination index links.
+- **Label Quiet** (400 mono, `11px`, `0.18em`, uppercase): the same register
+  demoted. Currently the story card's meta line — the date, any country the
+  title does not already name, and the cover marker — where the type has to
+  read as a footnote to the heading above it rather than compete with it.
 - **Label Large** (600 mono, `12px`, `0.18em`, uppercase): section eyebrows —
   Key Facts and TOC headings, footer column labels, the map band's stat line,
   the region page's trip count.
 
-**Known weakness — one register, five jobs.** The 11px mono label is a single
-treatment doing five distinct jobs (entry number, date/country field line,
-coordinates, promotional kicker, footer identity line), separated only by colour
-and by whether it sits on a plate. There is exactly one step of relief available
-(12px), and no weight ladder at all: everything in the register is 600. If this
-system needs more voices, add a size or a weight step — do not add tracking
-values.
+**One register, several jobs.** The 11px mono label carries the entry number,
+field lines, coordinates, the cover marker and the footer identity line, with
+one size of relief (12px) and, since the card meta was demoted, exactly one
+weight step (400 against 600). That step is the pattern to extend: if the
+register needs another voice, add a size or a weight — never a tracking value,
+and never a coloured plate, which is what the card meta used to be.
 
 ### Named Rules
 
@@ -454,7 +462,7 @@ media gate.
 
 **Corners are shallow and squared-off.** Four steps, each with a job.
 `4px` is the default and the most common value in the tree: it is what "paper"
-gets — the hero entry panel, the stamp chip, the meta plate, the kicker, the
+gets — the hero entry panel, the stamp chip, the
 footer logline plate, the map CTA, and every 44px link hit box. `6px` is for
 prose-adjacent panels (table of contents, story pagination, the grid's empty
 state). `8px` is for photographic and map surfaces (gallery items, body images,
@@ -521,26 +529,46 @@ colour and position, not from a filled shape.
 
 ### Chips
 
-Two plates, and neither is a chip in the filter sense — they are labels.
+One plate, and it is not a chip in the filter sense — it is a label.
 
-- **Cover-story kicker:** solid `brand-red`, white 11px mono uppercase at
-  `0.18em`, `2px 8px`, `4px` radius. White on `brand-red` measures **4.763:1**.
-  It is the only red plate on the page, so it cannot be confused with the mono
-  log plate directly below it. It exists because the homepage shows its cover
-  story twice on purpose — the grid holds every story so the count beside its
-  heading is true by construction — and unmarked repetition reads as a bug.
-- **Meta plate (card):** solid `navy` with a `border-white/15` hairline, 11px
-  mono uppercase, `4px 8px`, `4px` radius, `max-w-full` and **wrapping**.
-  `truncate` here cut the destination country — the identity payload the card
-  exists to deliver — on 3 of 9 cards at a 320px viewport.
 - **Footer logline plate:** solid `navy`, `brand-red-light` over white,
   `6px 10px`. It carries both the logline and the camera gear line in one register.
+
+The story card used to carry two more — a bordered navy meta plate and a solid
+`brand-red` cover kicker, stacked above the heading. Both are gone; see Story
+card below for why, and do not reintroduce either.
 
 ### Cards / Containers
 
 - **Story card** — the signature surface. A whole-tile link: navy body, `12px`
-  radius, `overflow-hidden`, full-height, `16px` padding (`20px` from `sm`), with
-  the photograph filling the tile and the text riding the bottom.
+  radius, `overflow-hidden`, full-height, with the photograph filling the tile
+  and a caption panel across its foot.
+  - *Caption panel:* a fixed `24px` feather (`from-navy to-transparent`, no type
+    in it) above a solid `navy` block holding the heading and, **below** it, the
+    meta line. The panel is the card's entire contrast mechanism and it must
+    stay opaque: white is 14.6:1 on it, `white/70` 7.87:1, and
+    `brand-red-light` 4.741:1 — that last one already misses AA at `/98` over a
+    bright sky, so there is no alpha to spend. The feather is a fixed length
+    rather than a percentage because a percentage scales with the title's line
+    count, which would make the one guaranteeing number differ per card.
+  - *Meta line:* `N°` at weight 600 in white, then the date and any country the
+    title does not already name at weight 400 in `white/70`, then the cover
+    marker as a single `brand-red-light` word. It wraps rather than truncates —
+    `truncate` here cut the destination country, the identity payload the card
+    exists to deliver, on 3 of 9 cards at a 320px viewport.
+  - *Why it reads this way:* the meta used to sit **above** the heading as a
+    bordered navy box with a red entry number, under a solid red cover kicker.
+    That is a filled, outlined, coloured object introducing a headline — the
+    loudest thing on a card whose one job is to get a title read, and it drew
+    the eye before the title every time. Order, weight and colour all demote it
+    now; the boxes are gone entirely.
+  - *No card-height scrim.* There used to be one (`from-navy/90 via-navy/35
+    via-55%`) serving the title. It cannot serve it any more: with the meta
+    below the heading the title's top sits around 46% of the card, where that
+    gradient is near its weakest — re-derived against the same pale Rhodes sky,
+    white lands at **2.87:1** there. Holding it would take roughly `/62` at the
+    midpoint, veiling the lower half of every photograph. The panel is crisper
+    and cheaper, and everything above it is now completely unveiled.
   - *Shadow strategy:* see Elevation — `shadow-sm` at rest, `shadow-xl` plus a
     `2px brand-red` ring on **hover and `active:`**, over `500ms`.
   - *Motion:* `transition-[transform,translate,box-shadow]`. `translate` is
@@ -551,11 +579,6 @@ Two plates, and neither is a chip in the filter sense — they are labels.
   - *Image:* no resting `opacity`. An earlier card mixed 10% navy into every
     photograph and lifted it only on `group-hover` — a state a touch device
     cannot enter.
-  - *Scrim:* `from-navy/90 via-navy/35 via-55%`. The mid stop is `/35`, not
-    `/25`: the title is the one element not on the opaque plate, and at `/25` it
-    measured **4.38:1** worst-pixel against a pale sky (18px/800 is just below
-    the 18.66px large-text threshold, so it owes 4.5:1). At `/35` the same pixel
-    is **5.10:1**.
 - **Canvas panels** (Key Facts, table of contents, grid empty state, story
   pagination): `canvas` fill, `border-navy/10` hairline, `6–8px` radius,
   `20–24px` padding, with a mono uppercase eyebrow above a hairline divider.
