@@ -7,8 +7,10 @@ import { create as createTar } from 'tar';
 import type { BackupSchedule } from './settings.js';
 import { POST_SNAPSHOT_SQL, type DbPool } from './db.js';
 import { diskSpace, formatBytes, UPLOAD_HEADROOM_BYTES, type DiskSpace } from './disk.js';
+import { isEncryptedSecret, type EncryptedSecret } from './secrets.js';
 
 /**
+ * v6 added encrypted `app_secrets` (never the encryption master key);
  * v5 added `posts.featured` (the homepage-cover flag);
  * v4 added `posts.categories`, `posts.tags` and `posts.scheduled_at` (issue #107);
  * v3 added `media` + `media_folders` (issue #64); v2 added `pages`.
@@ -16,7 +18,7 @@ import { diskSpace, formatBytes, UPLOAD_HEADROOM_BYTES, type DiskSpace } from '.
  * `restoreDatabase` — otherwise every newly written dump becomes unrestorable,
  * and a test that only checks "an old dump still restores" passes anyway.
  */
-export const DUMP_VERSION = 5;
+export const DUMP_VERSION = 6;
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
 export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 /**
@@ -70,9 +72,9 @@ function fileStamp(now: Date): string {
   return `${iso.slice(0, 10).replace(/-/g, '')}-${iso.slice(11, 19).replace(/:/g, '')}`;
 }
 
-/** Dump users + posts + pages (never sessions — disposable, and token hashes
- * don't belong in backups) as one gzipped, versioned JSON file. Returns the filename.
- * @ai-note The five SELECTs run on ONE client inside a REPEATABLE READ READ ONLY
+/** Dump durable content, accounts, media metadata, and encrypted credentials
+ * (never sessions or the master key) as one gzipped JSON file. Returns the filename.
+ * @ai-note The SELECTs run on ONE client inside a REPEATABLE READ READ ONLY
  * transaction, so they see the same snapshot. Autocommit on the pool would let a
  * bulk delete of a post + its media land between two SELECTs and produce a dump
  * whose posts reference media rows that are not in it. */
@@ -83,6 +85,7 @@ export async function dumpDatabase(db: Connectable, dir: string, now: Date = new
   let pages: Record<string, unknown>[];
   let media: Record<string, unknown>[];
   let mediaFolders: Record<string, unknown>[];
+  let appSecrets: Record<string, unknown>[];
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
     users = (await client.query('SELECT * FROM users ORDER BY created_at')).rows;
@@ -105,6 +108,11 @@ export async function dumpDatabase(db: Connectable, dir: string, now: Date = new
     // kind of partial recovery.
     media = (await client.query('SELECT * FROM media ORDER BY key')).rows;
     mediaFolders = (await client.query('SELECT path, created_at FROM media_folders ORDER BY path')).rows;
+    try {
+      appSecrets = (await client.query('SELECT key, ciphertext, iv, tag, updated_at FROM app_secrets ORDER BY key')).rows;
+    } catch {
+      throw new BackupError('Encrypted credentials could not be backed up.');
+    }
     await client.query('COMMIT');
   } catch (e) {
     await client.query('ROLLBACK');
@@ -115,7 +123,7 @@ export async function dumpDatabase(db: Connectable, dir: string, now: Date = new
   mkdirSync(dir, { recursive: true });
   const payload = gzipSync(JSON.stringify({
     version: DUMP_VERSION, createdAt: now.toISOString(),
-    tables: { users, posts, pages, media, media_folders: mediaFolders },
+    tables: { users, posts, pages, media, media_folders: mediaFolders, app_secrets: appSecrets },
   }));
   // @ai-warning Names have one-second resolution and every writer — the
   // scheduler in the app, "Back up now", and the restore CLI running in a
@@ -465,6 +473,11 @@ export function createDbBackup(
   };
 }
 
+export interface SecretDumpRow extends EncryptedSecret {
+  key: string;
+  updated_at: string;
+}
+
 export interface Dump {
   version: number;
   createdAt: string;
@@ -474,6 +487,7 @@ export interface Dump {
     pages?: Record<string, unknown>[];
     media?: Record<string, unknown>[];
     media_folders?: Record<string, unknown>[];
+    app_secrets?: SecretDumpRow[];
   };
 }
 
@@ -483,8 +497,30 @@ export interface Dump {
  * @ai-warning An ALLOW-LIST, not a minimum. Every DUMP_VERSION bump must be
  * added here or dumps written by the new code are unrestorable. */
 export function readDump(filePath: string): Dump {
-  const dump = JSON.parse(gunzipSync(readFileSync(filePath)).toString('utf8')) as Dump;
-  if (![1, 2, 3, 4, 5].includes(dump.version)) throw new BackupError(`unsupported dump version ${dump.version}`);
+  let dump: Dump;
+  try {
+    dump = JSON.parse(gunzipSync(readFileSync(filePath)).toString('utf8')) as Dump;
+  } catch {
+    // JSON errors may quote secret-bearing file contents.
+    throw new BackupError('Cannot read backup dump.');
+  }
+  if (!dump || ![1, 2, 3, 4, 5, 6].includes(dump.version)) {
+    throw new BackupError(`unsupported dump version ${typeof dump?.version === 'number' ? dump.version : '(invalid)'}`);
+  }
+  if (!dump.tables || !Array.isArray(dump.tables.users) || !Array.isArray(dump.tables.posts)) {
+    throw new BackupError('Invalid backup tables.');
+  }
+  if (dump.tables.app_secrets !== undefined) {
+    if (!Array.isArray(dump.tables.app_secrets)) throw new BackupError('Invalid encrypted credentials in backup.');
+    const names = new Set<string>();
+    for (const row of dump.tables.app_secrets) {
+      if (!isEncryptedSecret(row) || typeof row.key !== 'string' || !row.key || row.key.includes('\0')
+        || typeof row.updated_at !== 'string' || !Number.isFinite(Date.parse(row.updated_at)) || names.has(row.key)) {
+        throw new BackupError('Invalid encrypted credentials in backup.');
+      }
+      names.add(row.key);
+    }
+  }
   return dump;
 }
 
@@ -504,7 +540,7 @@ const asTextArray = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) 
 export async function restoreDatabase(
   pool: DbPool,
   filePath: string,
-): Promise<{ users: number; posts: number; pages: number; media: number }> {
+): Promise<{ users: number; posts: number; pages: number; media: number; appSecrets: number | null }> {
   const dump = readDump(filePath);
   const client = await pool.connect();
   try {
@@ -594,10 +630,26 @@ export async function restoreDatabase(
          m.uploaded_at ?? new Date(), m.uploaded_by ?? null],
       );
     }
+    // Undefined means this snapshot never captured secrets; [] intentionally
+    // clears them. Keep deletion + inserts in the SAME content transaction.
+    if (dump.tables.app_secrets !== undefined) {
+      try {
+        await client.query('DELETE FROM app_secrets');
+        for (const secret of dump.tables.app_secrets) {
+          await client.query(
+            'INSERT INTO app_secrets (key, ciphertext, iv, tag, updated_at) VALUES ($1,$2,$3,$4,$5)',
+            [secret.key, secret.ciphertext, secret.iv, secret.tag, secret.updated_at],
+          );
+        }
+      } catch {
+        throw new BackupError('Encrypted credentials could not be restored.');
+      }
+    }
     await client.query('COMMIT');
     return {
       users: dump.tables.users.length, posts: dump.tables.posts.length,
       pages: dump.tables.pages?.length ?? 0, media: dump.tables.media?.length ?? 0,
+      appSecrets: dump.tables.app_secrets?.length ?? null,
     };
   } catch (e) {
     await client.query('ROLLBACK');

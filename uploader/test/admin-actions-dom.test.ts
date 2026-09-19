@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { defaultSettings } from '../src/settings.js';
 
 // posts.html and settings.html run their actions as plain top-level browser
 // code. Load each inline script in a vm context backed by a stub DOM keyed on
@@ -18,6 +19,8 @@ interface Element {
   disabled: boolean;
   checked: boolean;
   style: Record<string, string>;
+  options: { value: string }[];
+  add(option: { value: string }): void;
   listeners: Record<string, (() => Promise<void> | void)[]>;
   addEventListener(type: string, fn: () => Promise<void> | void): void;
   click(): Promise<void>;
@@ -29,7 +32,8 @@ function element(): Element {
   const listeners: Element['listeners'] = {};
   return {
     value: '', textContent: '', innerHTML: '', hidden: false, disabled: false, checked: false,
-    style: {}, listeners,
+    style: {}, listeners, options: [],
+    add(option) { this.options.push(option); },
     addEventListener(type, fn) { (listeners[type] ??= []).push(fn); },
     async click() { for (const fn of listeners.click ?? []) await fn(); },
     appendChild() {}, setAttribute() {},
@@ -158,5 +162,78 @@ describe('settings.html actions survive a dropped connection', () => {
     await el('rebuild').click();
     expect(el('rebuild').disabled).toBe(false);
     expect(el('out').textContent).not.toMatch(/Rebuilding|Rebuilt|failed/);
+  });
+});
+
+describe('settings.html shared review key lifecycle', () => {
+  function loadReview(fetch: (url: string, init?: { body?: string; method?: string }) => Promise<unknown>, confirm = async (_question: unknown) => true) {
+    const state = { ...defaultSettings(), aiProvider: 'openrouter', hasAiApiKey: true };
+    const page = loadPage('public/settings.html', {
+      LLM: { mixedContentWarning: () => '' },
+      Option: class { constructor(public text: string, public value: string) {} },
+      fetch,
+      AdminConfirm: { ask: confirm },
+    });
+    (page.ctx.fill as (state: unknown) => void)(state);
+    return { ...page, state };
+  }
+
+  it('leaves an untouched blank key out of the save and never sends a provider request', async () => {
+    const requests: { url: string; body?: Record<string, unknown> }[] = [];
+    const state = { ...defaultSettings(), aiProvider: 'openrouter', hasAiApiKey: true };
+    const { el } = loadReview(async (url, init) => {
+      requests.push({ url, body: init?.body ? JSON.parse(init.body) : undefined });
+      return { ok: true, status: 200, json: async () => state };
+    });
+    await el('saveReview').click();
+    expect(requests.map((r) => r.url)).toEqual(['/settings', '/settings']);
+    expect(requests[0]!.body).not.toHaveProperty('aiApiKey');
+    expect(el('aiKeyStatus').textContent).toBe('Configured');
+    expect(el('aiApiKey').value).toBe('');
+    expect(el('saveReview').disabled).toBe(false);
+  });
+
+  it('clears the entered secret and reloads the old destination after a partial failure', async () => {
+    const state = { ...defaultSettings(), aiProvider: 'openrouter', hasAiApiKey: true };
+    const { el } = loadReview(async (_url, init) => init?.method === 'POST'
+      ? { ok: false, status: 500, json: async () => ({ code: 'settings_partial_failure', error: 'API key change saved, but settings were not saved.' }) }
+      : { ok: true, status: 200, json: async () => state });
+    el('aiApiKey').value = 'disposable-ui-fixture';
+    el('aiProvider').value = 'deepseek';
+    await el('aiProvider').listeners.change![0]!();
+    expect(el('reviewKeyWarning').textContent).toContain('https://api.deepseek.com/v1');
+    await el('saveReview').click();
+    expect(el('aiApiKey').value).toBe('');
+    expect(el('aiProvider').value).toBe('openrouter');
+    expect(el('reviewOut').textContent).toContain('API key change saved');
+    expect(el('reviewOut').textContent).not.toContain('disposable-ui-fixture');
+    expect(el('removeAiKey').disabled).toBe(false);
+  });
+
+  it('requires removal confirmation, then sends null rather than erasing an untouched blank field', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    let approve = false;
+    const state = { ...defaultSettings(), hasAiApiKey: false };
+    const { el } = loadReview(async (_url, init) => {
+      if (init?.body) bodies.push(JSON.parse(init.body));
+      return { ok: true, status: 200, json: async () => state };
+    }, async () => approve);
+    await el('removeAiKey').click();
+    expect(bodies).toEqual([]);
+    approve = true;
+    await el('removeAiKey').click();
+    expect(bodies).toEqual([{ aiApiKey: null }]);
+    expect(el('aiKeyStatus').textContent).toBe('Not configured');
+    expect(el('removeAiKey').disabled).toBe(true);
+  });
+
+  it('names unknown outcome and failed reload without retaining the typed key', async () => {
+    const { el } = loadReview(async () => { throw NETWORK_DOWN; });
+    el('aiApiKey').value = 'disposable-ui-fixture';
+    await el('saveReview').click();
+    expect(el('aiApiKey').value).toBe('');
+    expect(el('reviewOut').textContent).toContain('outcome is unknown');
+    expect(el('reviewOut').textContent).toContain('Reload failed');
+    expect(el('aiKeyStatus').textContent).toBe('Unknown — reload');
   });
 });

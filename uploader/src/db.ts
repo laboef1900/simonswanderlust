@@ -242,6 +242,15 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS import_jobs_started_idx ON import_jobs (started_at DESC)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_secrets (
+      key TEXT PRIMARY KEY,
+      ciphertext TEXT NOT NULL,
+      iv TEXT NOT NULL,
+      tag TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
 
   // --- column migrations -----------------------------------------------------
   // @ai-note Schema evolution convention (issue #32): `CREATE TABLE IF NOT

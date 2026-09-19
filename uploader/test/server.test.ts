@@ -22,6 +22,7 @@ import { BacklogFullError, createEncodeQueue, type EncodeQueue } from '../src/en
 import { createWorkLock } from '../src/work-lock.js';
 import { fixedWindowLimiter, accountLockoutLimiter } from '../src/rate-limit.js';
 import type { SiteBuilder, BuildOutcome } from '../src/build.js';
+import { memorySecretsStore, SecretsError } from '../src/secrets.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -100,7 +101,7 @@ function build(extra: Partial<ServerConfig> = {}): Built {
   const pages = (extra.pages as PageStore) ?? memoryPageStore();
   const built = buildServer({
     storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
-    users, sessions, settings: fakeStore(),
+    users, sessions, settings: fakeStore(), secrets: memorySecretsStore(),
     posts, media, encodeQueue, importJobs, pages,
     imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'),
     builder: (extra.builder as SiteBuilder) ?? stubBuilder().builder,
@@ -703,7 +704,7 @@ describe('media library', () => {
 describe('buildServer config', () => {
   it('boots with a relative storageDir (resolves it to absolute)', async () => {
     const rel = relative(process.cwd(), dir);
-    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), posts: memoryPostStore(), pages: memoryPageStore(), media: memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' }), encodeQueue: stubQueue().queue, imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup, dbCheck: async () => {} });
+    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), secrets: memorySecretsStore(), posts: memoryPostStore(), pages: memoryPageStore(), media: memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' }), encodeQueue: stubQueue().queue, imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup, dbCheck: async () => {} });
     await expect(srv.ready()).resolves.toBeDefined();
     await srv.close();
   });
@@ -734,7 +735,7 @@ describe('settings endpoints', () => {
     const admin = await authed(b, { username: 'admin' });
     const res = await b.app.inject({ method: 'GET', url: '/settings', cookies: admin.cookie });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual(SETTINGS);
+    expect(res.json()).toEqual({ ...SETTINGS, hasAiApiKey: false });
   });
 
   it('POST /settings is admin-only: 403 for authors', async () => {
@@ -826,6 +827,151 @@ describe('GET /ai-config', () => {
     expect(body.captionPrompt).toBeTruthy();
     expect(body).not.toHaveProperty('backupSchedule');
     expect(body).not.toHaveProperty('backupRetention');
+  });
+});
+
+describe('AI credential boundaries', () => {
+  it('stores, preserves, replaces and removes a key without exposing it from admin settings', async () => {
+    const secrets = memorySecretsStore();
+    const b = build({ secrets });
+    const { cookie } = await authed(b);
+    const save = (payload: Record<string, unknown>) => b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload });
+    const first = await save({ aiProvider: 'openrouter', aiApiKey: 'fixture-first', aiModel: 'review-model' });
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ hasAiApiKey: true, aiProvider: 'openrouter' });
+    expect(first.body).not.toContain('fixture-first');
+    expect(first.json()).not.toHaveProperty('aiApiKey');
+    expect(first.headers['cache-control']).toBe('no-store');
+    const author = await authed(b, { isAdmin: false, username: 'review-author' });
+    const config = await b.app.inject({ url: '/ai-config', cookies: author.cookie });
+    expect(config.json()).toMatchObject({ aiBaseUrl: 'https://openrouter.ai/api/v1', aiApiKey: 'fixture-first', aiModel: 'review-model', lmModel: SETTINGS.lmModel });
+    expect(config.headers['cache-control']).toBe('no-store');
+    expect((await b.app.inject({ method: 'POST', url: '/settings', cookies: author.cookie, payload: { aiApiKey: 'forbidden' } })).statusCode).toBe(403);
+    await save({ reviewTimeoutMs: 5000 });
+    expect(await secrets.get('ai_api_key')).toBe('fixture-first');
+    await save({ aiApiKey: 'fixture-replacement' });
+    expect(await secrets.get('ai_api_key')).toBe('fixture-replacement');
+    for (const value of ['', null]) {
+      await secrets.set('ai_api_key', 'fixture');
+      expect((await save({ aiApiKey: value })).json().hasAiApiKey).toBe(false);
+      expect(await secrets.get('ai_api_key')).toBeNull();
+    }
+    const settings = await b.app.inject({ url: '/settings', cookies: cookie });
+    expect(settings.json()).not.toHaveProperty('aiApiKey');
+    expect(settings.headers['cache-control']).toBe('no-store');
+    await b.app.close();
+  });
+
+  it('validates the entire candidate before changing either store', async () => {
+    const secrets = memorySecretsStore();
+    await secrets.set('ai_api_key', 'original');
+    const b = build({ secrets });
+    const { cookie } = await authed(b);
+    for (const payload of [
+      { reviewTimeoutMs: 4999, aiApiKey: 'replacement' },
+      { aiModel: {}, aiApiKey: 'replacement' },
+      { aiApiKey: ['replacement'] },
+      { aiApiKey: 'header\r\ninjection' },
+    ]) {
+      expect((await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload })).statusCode).toBe(400);
+      expect(await secrets.get('ai_api_key')).toBe('original');
+    }
+    expect((await b.app.inject({ url: '/settings', cookies: cookie })).json().reviewTimeoutMs).toBe(SETTINGS.reviewTimeoutMs);
+    await b.app.close();
+  });
+
+  it('reports the committed secret when settings persistence fails, then permits recovery', async () => {
+    const settings = fakeStore();
+    const secrets = memorySecretsStore();
+    let fail = true;
+    const b = build({ secrets, settings: {
+      get: settings.get,
+      update(partial) { if (fail) throw new Error('disk fixture'); return settings.update(partial); },
+    } });
+    const { cookie } = await authed(b);
+    const result = await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload: { aiApiKey: 'new-fixture', aiProvider: 'deepseek' } });
+    expect(result.statusCode).toBe(500);
+    expect(result.json().code).toBe('settings_partial_failure');
+    expect(result.body).not.toContain('new-fixture');
+    expect(await secrets.get('ai_api_key')).toBe('new-fixture');
+    expect((await b.app.inject({ url: '/settings', cookies: cookie })).json()).toMatchObject({ aiProvider: 'lm-studio', hasAiApiKey: true });
+    fail = false;
+    expect((await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload: { aiProvider: 'deepseek' } })).statusCode).toBe(200);
+    await b.app.close();
+  });
+
+  it('never logs or returns raw secret failures and keeps caption config independent', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const secrets = memorySecretsStore();
+    secrets.get = async () => { throw new SecretsError('ai_secret_unavailable'); };
+    secrets.set = async () => { throw new Error('DO-NOT-LEAK driver fixture'); };
+    secrets.has = async () => { throw new Error('DO-NOT-LEAK row fixture'); };
+    const b = build({ secrets, settings: fakeStore({ ...SETTINGS, aiProvider: 'openrouter' }) });
+    try {
+      const { cookie } = await authed(b);
+      const remote = await b.app.inject({ url: '/ai-config', cookies: cookie });
+      expect(remote.statusCode).toBe(503);
+      expect(remote.json().code).toBe('ai_secret_unavailable');
+      const save = await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload: { aiApiKey: 'fixture', aiModel: 'changed' } });
+      expect(save.statusCode).toBe(503);
+      expect(save.body).not.toContain('DO-NOT-LEAK');
+      const caption = await b.app.inject({ url: '/ai-config?purpose=caption', cookies: cookie });
+      expect(caption.statusCode).toBe(200);
+      expect(caption.json()).toEqual({
+        lmBaseUrl: SETTINGS.lmBaseUrl, lmModel: SETTINGS.lmModel, captionPrompt: SETTINGS.captionPrompt,
+        captionTimeoutMs: SETTINGS.captionTimeoutMs, captionMaxEdge: SETTINGS.captionMaxEdge,
+      });
+      expect(caption.headers['cache-control']).toBe('no-store');
+      expect(log).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); await b.app.close(); }
+  });
+
+  it('resolves all providers while never decrypting the remote credential for local review', async () => {
+    const secrets = memorySecretsStore();
+    await secrets.set('ai_api_key', 'fixture');
+    const settings = fakeStore();
+    const b = build({ secrets, settings });
+    const { cookie } = await authed(b, { isAdmin: false });
+    for (const [provider, destination] of [
+      ['openrouter', 'https://openrouter.ai/api/v1'], ['deepseek', 'https://api.deepseek.com/v1'],
+      ['custom', 'https://custom.example/v1'],
+    ] as const) {
+      settings.update({ aiProvider: provider, aiCustomBaseUrl: 'https://custom.example/v1' });
+      const response = await b.app.inject({ url: '/ai-config', cookies: cookie });
+      expect(response.json()).toMatchObject({ aiProvider: provider, aiBaseUrl: destination, aiApiKey: 'fixture' });
+    }
+    await secrets.delete('ai_api_key');
+    expect((await b.app.inject({ url: '/ai-config', cookies: cookie })).json()).toMatchObject({ aiApiKey: null, hasAiApiKey: false });
+    secrets.get = async () => { throw new SecretsError('encryption_key_unconfigured'); };
+    expect((await b.app.inject({ url: '/ai-config', cookies: cookie })).json()).toMatchObject({ code: 'encryption_key_unconfigured', error: 'ENCRYPTION_KEY not configured in .env' });
+    settings.update({ aiProvider: 'lm-studio' });
+    expect((await b.app.inject({ url: '/ai-config', cookies: cookie })).json()).toMatchObject({ aiApiKey: null, aiBaseUrl: SETTINGS.lmBaseUrl });
+    for (const query of ['?purpose=unknown', '?purpose=caption&purpose=review']) {
+      expect((await b.app.inject({ url: '/ai-config' + query, cookies: cookie })).statusCode).toBe(400);
+    }
+    const anonymous = await b.app.inject({ url: '/ai-config?purpose=caption' });
+    expect(anonymous.statusCode).toBe(401);
+    expect(anonymous.headers['cache-control']).toBe('no-store');
+    await b.app.close();
+  });
+
+  it('keeps captions responsive while full config waits for a credential mutation', async () => {
+    const secrets = memorySecretsStore();
+    const originalSet = secrets.set;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    secrets.set = async (key, value) => { entered.resolve(); await release.promise; await originalSet(key, value); };
+    const b = build({ secrets });
+    const { cookie } = await authed(b);
+    const saving = b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload: { aiApiKey: 'fixture', aiProvider: 'deepseek' } }).then((r) => r);
+    await entered.promise;
+    const config = b.app.inject({ url: '/ai-config', cookies: cookie }).then((r) => r);
+    const caption = await b.app.inject({ url: '/ai-config?purpose=caption', cookies: cookie });
+    expect(caption.statusCode).toBe(200);
+    release.resolve();
+    expect((await saving).statusCode).toBe(200);
+    expect((await config).json()).toMatchObject({ aiProvider: 'deepseek', aiApiKey: 'fixture' });
+    await b.app.close();
   });
 });
 

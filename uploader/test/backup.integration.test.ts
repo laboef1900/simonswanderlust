@@ -113,12 +113,12 @@ maybe('backup round-trip (Postgres)', () => {
   });
 
   it('rejects an unsupported dump version without touching data', async () => {
-    // @ai-warning: the guard is an ALLOW-LIST (1, 2, 3, 4, 5), not a minimum —
+    // @ai-warning: the guard is an ALLOW-LIST (1–6), not a minimum —
     // so this probes the next UNRELEASED version. Bump it whenever
     // DUMP_VERSION is bumped, or this stops testing anything.
     // gzipSync/writeFileSync are imported statically at the top of the file.
     const bad = join(dir, 'db-20260101-000000.json.gz');
-    writeFileSync(bad, gzipSync(JSON.stringify({ version: 6, tables: { users: [], posts: [] } })));
+    writeFileSync(bad, gzipSync(JSON.stringify({ version: 7, tables: { users: [], posts: [] } })));
     await expect(restoreDatabase(pool, bad)).rejects.toThrow(/unsupported dump version/);
     expect((await pool.query('SELECT count(*) AS n FROM users')).rows[0].n).toBe('1');
   });
@@ -139,7 +139,7 @@ maybe('backup round-trip (Postgres)', () => {
     await posts.publish(created.translationKey);
 
     const file = join(dir, await dumpDatabase(pool, dir));
-    expect(readDump(file).version).toBe(5);
+    expect(readDump(file).version).toBe(6);
     await pool.query('DELETE FROM posts');
     await restoreDatabase(pool, file);
 
@@ -255,7 +255,7 @@ maybe('backup round-trip (Postgres)', () => {
     const dump = JSON.parse(
       (await import('node:zlib')).gunzipSync((await import('node:fs')).readFileSync(join(dir, name))).toString('utf8'),
     );
-    expect(dump.version).toBe(5);
+    expect(dump.version).toBe(6);
 
     await pool.query('DELETE FROM media');
     await pool.query('DELETE FROM media_folders');
@@ -440,10 +440,10 @@ maybe('backup round-trip (Postgres)', () => {
     it('refuses an unsupported dump version before writing a pre-dump', async () => {
       const { backupDir, env } = await seed();
       const bad = join(dir, 'db-20260102-000000.json.gz');
-      writeFileSync(bad, gzipSync(JSON.stringify({ version: 6, tables: { users: [], posts: [] } })));
+      writeFileSync(bad, gzipSync(JSON.stringify({ version: 7, tables: { users: [], posts: [] } })));
       const r = await runCli(['restore', '--yes', bad], env);
       expect(r.code).toBe(1);
-      expect(r.stderr).toContain('unsupported dump version 6');
+      expect(r.stderr).toContain('unsupported dump version 7');
       expect(await usernames()).toEqual(['alice', 'bob']);
       expect(preDumps(backupDir)).toEqual([]);
     }, 30_000);

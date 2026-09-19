@@ -14,6 +14,7 @@ import type { SiteBuilder } from '../src/build.js';
 import type { DbBackup } from '../src/backup.js';
 import { memoryMediaStore } from '../src/media-store.js';
 import type { EncodeQueue } from '../src/encode-queue.js';
+import { memorySecretsStore } from '../src/secrets.js';
 
 /** This suite only exercises host routing, so the queue never needs to run. */
 const noopQueue = (): EncodeQueue => ({
@@ -83,6 +84,7 @@ function build(extra: Partial<ServerConfig> = {}) {
 
     encodeQueue: noopQueue(),
     settings: fakeStore(), builder, backupDir, dbBackup: stubBackup(backupDir),
+    secrets: memorySecretsStore(),
     dbCheck: async () => {},
     ...extra,
   });

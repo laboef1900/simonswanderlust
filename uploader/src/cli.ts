@@ -115,6 +115,10 @@ async function restoreMain(args: string[]): Promise<void> {
     console.log(`target database: ${describeDatabase(databaseUrl)}`);
     console.log(`dump:            ${file} (v${dump.version}, created ${dump.createdAt}) — ${formatCounts(dumpCounts)}`);
     console.log(`about to REPLACE the live rows: ${formatCounts(live)} — and invalidate every session.`);
+    console.log(dump.tables.app_secrets === undefined
+      ? 'app_secrets preserved: absent from dump.'
+      : `app_secrets: replace ${Number((await pool.query('SELECT count(*) AS n FROM app_secrets')).rows[0].n)} live rows with ${dump.tables.app_secrets.length} encrypted rows from dump.`);
+    console.log('Encrypted credentials require their original master key; reconcile settings.json before using remote AI.');
     if (!yes) {
       const answer = await promptLine("type 'yes' to continue (or pass --yes): ");
       if (answer.trim() !== 'yes') {
@@ -140,6 +144,7 @@ async function restoreMain(args: string[]): Promise<void> {
     console.log(`pre-restore dump written: ${preDump}`);
     const counts = await restoreDatabase(pool, file);
     console.log(`restored ${counts.users} users, ${counts.posts} posts, ${counts.pages} pages, and ${counts.media} media rows (all sessions invalidated).`);
+    console.log(counts.appSecrets === null ? 'app_secrets preserved.' : `restored ${counts.appSecrets} encrypted app_secrets rows.`);
     console.log(`to undo: restore --yes ${preDump}`);
     console.log('now rebuild the site: /admin/settings.html → "Rebuild site now" (or POST /rebuild).');
   } finally {
