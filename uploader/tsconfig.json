@@ -1,9 +1,18 @@
 {
   "compilerOptions": {
-    // Node 26 is the only runtime this ships on (Dockerfile, engines), so the
-    // ES2022 floor was understating it by four years — `Promise.withResolvers`
-    // (ES2024) is available at runtime and was the first thing to notice.
-    "target": "ES2024",
+    // Pinned to the newest ratified edition Node 26 fully implements, not to
+    // whatever the last compile error demanded. `engines.node` is >=26.0.0 and
+    // the Dockerfile ships nothing else, so type-checking against an older
+    // library just hides APIs that are already there — `Promise.withResolvers`
+    // (ES2024) was simply the first one anybody happened to reach for.
+    //
+    // @ai-warning NOT `ESNext`, which tracks the TypeScript version rather than
+    // the runtime: a TS upgrade would start accepting stage-3 proposals V8 has
+    // not shipped, and since nothing here emits (`tsc --noEmit`, run under
+    // tsx), the first sign would be a crash in production. `test/runtime-
+    // target.test.ts` holds the two ends together — raise this and it fails
+    // until you prove Node provides the edition you claimed.
+    "target": "ES2025",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
