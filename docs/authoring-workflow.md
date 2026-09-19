@@ -82,6 +82,18 @@ text by hand.
 The in-admin editor at `/admin/posts.html` is the authoring interface — no GitHub or `curl`
 needed. Content is stored in **Postgres**; MDX files are generated automatically as backups.
 
+The editor opens on the title and story body. **Story details** beside the writing
+surface holds the active language's country, permalink, summary, key facts and hero
+image; expedition details and taxonomy are shared. Hide the inspector for more writing
+space, or use **Details** on a phone to open it as a drawer. Switching DE/EN preserves
+both languages' unsaved edits.
+
+**Save draft** and **Publish** stay in the top command bar. **More actions** (or
+**More** on phones) contains Preview, Review story and, for published posts,
+Unpublish. Missing-field links select the right language and reveal the field to fix.
+For an existing hero, use **Replace photo** to upload or choose from the library,
+and **Adjust framing** for focal-point controls.
+
 ### Create a new post
 
 1. Sign in and open **Posts** (`/admin/posts.html`).
@@ -97,7 +109,7 @@ needed. Content is stored in **Postgres**; MDX files are generated automatically
    | **Country code** | ISO-3166 alpha-2 (e.g. `GR`) |
    | **Region** | `europe` \| `north-america` \| `south-america` |
    | **Excerpt** | 1-2 sentence summary |
-   | **Hero image** | Paste the `src` URL, width, height, and alt text from the uploader; or use the inline **Upload** button next to the hero fields |
+   | **Hero image** | Open Story details → **Replace photo**, then **Upload hero** or **Choose from library**; edit alt text beside the preview and use **Adjust framing** for the focal point |
    | **Coordinates** | `lat`, `lng` decimal |
    | **Body** | Markdown (EasyMDE editor). Embed photos via the body toolbar's inline upload — it inserts a markdown image (`![alt](URL)`) and records the dimensions automatically. Pasted `<BodyImage …/>` tags (from an MDX backup or the upload page) also work: they're converted on save. |
 

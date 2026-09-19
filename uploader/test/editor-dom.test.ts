@@ -34,6 +34,7 @@ interface EditorOptions {
   fetch?: Fetch;
   review?: Review;
   isAdmin?: boolean;
+  mobile?: boolean;
 }
 interface EditorApi {
   populateForm(post: unknown): void;
@@ -109,6 +110,11 @@ function loadEditor(options: EditorOptions = {}) {
     alert() {},
     confirm: () => false,
     navigator: {},
+    matchMedia: () => ({
+      matches: options.mobile === true,
+      addEventListener() {},
+      addListener() {},
+    }),
     EasyMDE: class extends EasyMDE {
       constructor(settings: { element: Element }) {
         super();
@@ -120,14 +126,11 @@ function loadEditor(options: EditorOptions = {}) {
     AdminConfirm: { ask: async () => false, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     DraftGuard: { createDraftGuard: () => guard, tabScopedKey: (p: string) => p + ':test' },
     MediaPicker: { open() {} },
-    // Loaded by editor.html for thumbUrl(), which the hero focal-point
-    // control uses to show the frame an author is framing.
-    PostsFilter: { thumbUrl: () => null },
     AltSuggest: { wire() {} },
   };
   ctx.window = ctx;
   vm.createContext(ctx);
-  for (const file of ['gallery-fence.js', 'editor-linter.js', 'llm.js', 'tabs.js', 'editor-review.js']) {
+  for (const file of ['posts-filter.js', 'gallery-fence.js', 'editor-linter.js', 'llm.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
     vm.runInContext(readFileSync('public/' + file, 'utf8'), ctx, { filename: file });
   }
   if (options.review) (ctx.LLM as { reviewStory: Review }).reviewStory = options.review;
@@ -182,6 +185,88 @@ describe('editor.html inline script against its own markup', () => {
     expect(el('fmRegion').value).toBe('europe');
     expect(el('fmCategories').value).toBe('City, Culture');
     expect(el('fmTags').value).toBe('balkan, autumn');
+  });
+
+
+  it('syncs locale inspector visibility without changing either locale values', () => {
+    const { api, el, document } = loadEditor();
+    api.populateForm(fullPair());
+    const before = api.buildPayload();
+    expect(el('editorInspector').querySelector('[data-inspector-locale=\"de\"]')!.hidden).toBe(false);
+    expect(el('editorInspector').querySelector('[data-inspector-locale=\"en\"]')!.hidden).toBe(true);
+    el('tabbtn-en').click();
+    expect(el('editorInspector').querySelector('[data-inspector-locale=\"de\"]')!.hidden).toBe(true);
+    expect(el('editorInspector').querySelector('[data-inspector-locale=\"en\"]')!.hidden).toBe(false);
+    el('inspectorToggle').click();
+    expect(document.body!.classList.contains('editor-inspector-collapsed')).toBe(true);
+    expect(el('editorInspector').getAttribute('aria-hidden')).toBe('true');
+    el('inspectorToggle').click();
+    expect(document.body!.classList.contains('editor-inspector-collapsed')).toBe(false);
+    el('tabbtn-de').click();
+    expect(api.buildPayload()).toEqual(before);
+  });
+
+  it('opens a focus-managed mobile inspector and restores focus when it closes', () => {
+    const { el, document } = loadEditor({ mobile: true });
+    const toggle = el('inspectorToggle');
+    toggle.focus();
+    toggle.click();
+    expect(document.body!.classList.contains('editor-inspector-open')).toBe(true);
+    expect(el('editorInspector').getAttribute('role')).toBe('dialog');
+    expect(el('editorInspector').getAttribute('aria-modal')).toBe('true');
+    expect(el('inspectorScrim').hidden).toBe(false);
+    expect(el('editorWritingSurface').hasAttribute('inert')).toBe(true);
+    expect(document.activeElement).toBe(el('inspectorClose'));
+
+    el('taxonomyDetails').open = true;
+    el('fmTags').focus();
+    el('fmTags').fire('keydown', { key: 'Tab' });
+    expect(document.activeElement).toBe(el('inspectorClose'));
+    el('inspectorClose').fire('keydown', { key: 'Escape' });
+    expect(document.body!.classList.contains('editor-inspector-open')).toBe(false);
+    expect(el('inspectorScrim').hidden).toBe(true);
+    expect(el('editorWritingSurface').hasAttribute('inert')).toBe(false);
+    expect(document.activeElement).toBe(toggle);
+  });
+
+  it('reveals the correct locale and disclosure before focusing a missing inspector field', () => {
+    const { api, el, document } = loadEditor({ mobile: true });
+    const pair = fullPair();
+    pair.en.country = '';
+    api.populateForm(pair);
+    const jump = el('mobileLocaleChip').querySelectorAll('button')
+      .find((button) => button.textContent.startsWith('EN missing country'));
+    expect(jump).toBeTruthy();
+    el('editorActionsMenu').open = true;
+    jump!.click();
+    expect(el('editorActionsMenu').open).toBe(false);
+    expect(el('tab-en').hidden).toBe(false);
+    expect(el('editorInspector').querySelector('[data-inspector-locale="en"]')!.hidden).toBe(false);
+    expect(document.body!.classList.contains('editor-inspector-open')).toBe(true);
+    expect(document.activeElement).toBe(el('enCountry'));
+
+    el('inspectorClose').click();
+    expect(document.activeElement).toBe(el('inspectorToggle'));
+    pair.en.country = 'Romania';
+    pair.en.heroImage = { src: '', width: 0, height: 0, alt: '' };
+    api.populateForm(pair);
+    const heroJump = el('mobileLocaleChip').querySelectorAll('button')
+      .find((button) => button.textContent.includes('EN missing hero'));
+    el('editorActionsMenu').open = true;
+    heroJump!.click();
+    expect(el('editorActionsMenu').open).toBe(false);
+    expect(el('enHeroReplace').open).toBe(true);
+    expect(document.activeElement).toBe(el('enHeroFile'));
+  });
+
+  it('shows the compact hero preview and framing disclosure only for a usable hero', () => {
+    const { api, el } = loadEditor();
+    api.populateForm(fullPair());
+    expect(el('deHeroPreview').hidden).toBe(false);
+    expect(el('deHeroFocus').hidden).toBe(false);
+    api.populateForm(minimalPair());
+    expect(el('deHeroPreview').hidden).toBe(true);
+    expect(el('deHeroFocus').hidden).toBe(true);
   });
 
   it('names the CodeMirror inputs EasyMDE swaps in for the labelled body textareas (SC 4.1.2)', () => {
