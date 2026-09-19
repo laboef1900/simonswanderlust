@@ -95,7 +95,7 @@
       <section class="card" aria-labelledby="reviewHeading">
         <h2 id="reviewHeading" class="card-heading">Editorial review</h2>
         <p class="muted" id="reviewPrivacy">Reviews run from the author's browser. The selected provider receives the draft.
-          The server never calls a model. Local alt-text settings above are independent.</p>
+          The server never calls a model. Local review uses the saved LM Studio base URL above; caption settings are otherwise independent.</p>
         <label for="aiProvider">Review provider</label>
         <select id="aiProvider" aria-describedby="reviewPrivacy reviewDestination">
           <option value="lm-studio">Local LM Studio</option>
@@ -147,7 +147,7 @@
       function updateReviewWarnings() {
         const provider = $('aiProvider').value;
         const custom = $('aiCustomBaseUrl').value.trim();
-        const destination = reviewDestination(provider, custom, $('baseUrl').value.trim());
+        const destination = reviewDestination(provider, custom, savedReview?.lmBaseUrl || '');
         $('customReviewFields').hidden = provider !== 'custom';
         $('reviewDestination').textContent = 'Requests go to: ' + (destination || 'set a custom base URL');
         const why = provider === 'custom' && custom.startsWith('http:')
@@ -164,7 +164,6 @@
       }
       $('aiProvider').addEventListener('change', updateReviewWarnings);
       $('aiCustomBaseUrl').addEventListener('input', updateReviewWarnings);
-      $('baseUrl').addEventListener('input', updateReviewWarnings);
 
       // A plain-http model URL on an https page is blocked as mixed content and
       // surfaces only as "Failed to fetch"; say so next to the field (#140).
@@ -175,7 +174,7 @@
       }
       $('baseUrl').addEventListener('input', checkBaseUrl);
 
-      function fill(s) {
+      function fillGeneral(s) {
         $('baseUrl').value = s.lmBaseUrl || '';
         checkBaseUrl();
         $('timeout').value = s.captionTimeoutMs ?? '';
@@ -185,23 +184,35 @@
         $('backupRetention').value = s.backupRetention ?? 14;
         $('importDelayMs').value = s.importDelayMs ?? 1200;
         $('importRetries').value = s.importRetries ?? 3;
-        savedReview = {
-          aiProvider: s.aiProvider, aiCustomBaseUrl: s.aiCustomBaseUrl,
-          lmBaseUrl: s.lmBaseUrl, hasAiApiKey: s.hasAiApiKey,
-        };
-        $('aiProvider').value = s.aiProvider;
-        $('aiModel').value = s.aiModel;
-        $('aiCustomBaseUrl').value = s.aiCustomBaseUrl;
-        $('reviewPrompt').value = s.reviewPrompt;
-        $('reviewTimeoutMs').value = s.reviewTimeoutMs;
-        $('aiKeyStatus').textContent = s.hasAiApiKey ? 'Configured' : 'Not configured';
-        $('removeAiKey').disabled = !s.hasAiApiKey;
-        updateReviewWarnings();
         const sel = $('model');
         if (s.lmModel && ![...sel.options].some((o) => o.value === s.lmModel)) {
           sel.add(new Option(s.lmModel, s.lmModel));
         }
         if (s.lmModel) sel.value = s.lmModel;
+      }
+
+      function rememberReview(s) {
+        savedReview = {
+          aiProvider: s.aiProvider, aiCustomBaseUrl: s.aiCustomBaseUrl,
+          lmBaseUrl: s.lmBaseUrl, hasAiApiKey: s.hasAiApiKey,
+        };
+        $('aiKeyStatus').textContent = s.hasAiApiKey ? 'Configured' : 'Not configured';
+        $('removeAiKey').disabled = !s.hasAiApiKey;
+      }
+
+      function fillReview(s) {
+        rememberReview(s);
+        $('aiProvider').value = s.aiProvider;
+        $('aiModel').value = s.aiModel;
+        $('aiCustomBaseUrl').value = s.aiCustomBaseUrl;
+        $('reviewPrompt').value = s.reviewPrompt;
+        $('reviewTimeoutMs').value = s.reviewTimeoutMs;
+        updateReviewWarnings();
+      }
+
+      function fill(s) {
+        fillGeneral(s);
+        fillReview(s);
       }
 
       // Repopulate the dropdown from a live model list, preserving the current
@@ -280,7 +291,10 @@
         if (res.status === 401) { location.href = '/login'; return; }
         const r = await res.json().catch(() => ({}));
         if (!res.ok) { $('out').textContent = 'Not saved: ' + (r.error || res.status); return; }
-        fill(r);
+        // Refresh this section and persisted review metadata, not pending review edits.
+        fillGeneral(r);
+        rememberReview(r);
+        updateReviewWarnings();
         $('out').textContent = 'Saved.';
       }
       $('save').addEventListener('click', saveSettings);
@@ -325,7 +339,7 @@
           try {
             const res = await fetch('/settings');
             if (!res.ok) throw new Error('reload failed');
-            fill(await res.json());
+            fillReview(await res.json());
           } catch {
             message = (message || '') + ' Reload failed; refresh this page before trying again.';
             savedReview = null;

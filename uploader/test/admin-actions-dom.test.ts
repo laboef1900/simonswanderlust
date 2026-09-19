@@ -193,12 +193,47 @@ describe('settings.html shared review key lifecycle', () => {
     expect(el('saveReview').disabled).toBe(false);
   });
 
+  it('preserves a pending review destination and replacement key when caption settings are saved', async () => {
+    const state = { ...defaultSettings(), aiProvider: 'openrouter', hasAiApiKey: true };
+    const { el } = loadReview(async () => ({ ok: true, status: 200, json: async () => state }));
+    el('aiProvider').value = 'deepseek';
+    el('aiModel').value = 'pending-review-model';
+    el('aiApiKey').value = 'pending-provider-key';
+    await el('aiProvider').listeners.change![0]!();
+    await el('saveAi').click();
+    expect(el('aiProvider').value).toBe('deepseek');
+    expect(el('aiModel').value).toBe('pending-review-model');
+    expect(el('aiApiKey').value).toBe('pending-provider-key');
+    expect(el('reviewKeyWarning').hidden).toBe(false);
+  });
+
+  it('preserves pending caption edits when review settings are saved', async () => {
+    const state = { ...defaultSettings(), aiProvider: 'openrouter', hasAiApiKey: true };
+    const { el } = loadReview(async () => ({ ok: true, status: 200, json: async () => state }));
+    el('baseUrl').value = 'http://localhost:1235/v1';
+    el('prompt').value = 'Unsaved caption instructions';
+    await el('saveReview').click();
+    expect(el('baseUrl').value).toBe('http://localhost:1235/v1');
+    expect(el('prompt').value).toBe('Unsaved caption instructions');
+  });
+
+  it('shows the saved local review destination rather than an unsaved caption URL', async () => {
+    const state = { ...defaultSettings(), aiProvider: 'openrouter', hasAiApiKey: true };
+    const { el } = loadReview(async () => ({ ok: true, status: 200, json: async () => state }));
+    el('baseUrl').value = 'http://localhost:1235/v1';
+    el('aiProvider').value = 'lm-studio';
+    await el('aiProvider').listeners.change![0]!();
+    expect(el('reviewDestination').textContent).toContain(state.lmBaseUrl);
+    expect(el('reviewDestination').textContent).not.toContain('http://localhost:1235/v1');
+  });
+
   it('clears the entered secret and reloads the old destination after a partial failure', async () => {
     const state = { ...defaultSettings(), aiProvider: 'openrouter', hasAiApiKey: true };
     const { el } = loadReview(async (_url, init) => init?.method === 'POST'
       ? { ok: false, status: 500, json: async () => ({ code: 'settings_partial_failure', error: 'API key change saved, but settings were not saved.' }) }
       : { ok: true, status: 200, json: async () => state });
     el('aiApiKey').value = 'disposable-ui-fixture';
+    el('prompt').value = 'Unsaved caption instructions';
     el('aiProvider').value = 'deepseek';
     await el('aiProvider').listeners.change![0]!();
     expect(el('reviewKeyWarning').textContent).toContain('https://api.deepseek.com/v1');
@@ -208,6 +243,7 @@ describe('settings.html shared review key lifecycle', () => {
     expect(el('reviewOut').textContent).toContain('API key change saved');
     expect(el('reviewOut').textContent).not.toContain('disposable-ui-fixture');
     expect(el('removeAiKey').disabled).toBe(false);
+    expect(el('prompt').value).toBe('Unsaved caption instructions');
   });
 
   it('requires removal confirmation, then sends null rather than erasing an untouched blank field', async () => {

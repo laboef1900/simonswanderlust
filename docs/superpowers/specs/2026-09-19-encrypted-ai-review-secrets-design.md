@@ -2,8 +2,8 @@
 
 **Date:** 2026-09-19  
 **Risk:** HIGH — schema, credentials, authorization exposure, and backup/restore.  
-**Status:** **Human implementation approval APPROVED on 2026-09-19**; #213 dependency merged, implementation under verification.
-**Final-HEAD human merge approval:** **PENDING**, separately required after implementation, verification, and independent security review.  
+**Status:** **Human implementation approval APPROVED on 2026-09-19**; #213 dependency merged.
+**Final-HEAD human merge approval:** Separately required after verification and independent reviews; the exact-HEAD decision is recorded on [PR #224](https://github.com/laboef1900/simonswanderlust/pull/224), not inferred from this specification.
 **Branch:** `feature/214-encrypted-ai-secrets`  
 **Scope:** #214 implementation follows this approved contract. Verification and independent security review are required before the separate final-HEAD human merge decision.
 
@@ -219,17 +219,18 @@ Return the five existing caption fields plus:
 - A present unreadable row returns sanitized 503 `{ code: 'ai_secret_unavailable', error: 'AI API key is unavailable. Ask an administrator to check or replace it.' }`; no partial config/plaintext, raw crypto error, or process crash. Do not pretend the row is absent.
 - A failed store operation uses a fixed 503 category; no raw database error object is logged. The server never fetches the resolved URL, discovers models, checks CORS, or verifies credentials with a provider.
 
-## 7. Settings UI contract (implementation later)
+## 7. Settings UI contract
 
 Read the `impeccable` skill before actual UI work and follow the existing admin design conventions. Keep local captions visibly separate from editorial-review settings.
 
 - Provider presets: Local LM Studio, OpenRouter, DeepSeek, Custom. Show the resolved destination; enable custom base input only when appropriate without losing its saved value. Review model/prompt/timeout are independent from caption fields.
+- Saving one section must not overwrite another section's pending edits. In particular, caption/backup saves must preserve a pending review destination together with its typed replacement key and destination warning. Review save/recovery reloads only the review fields. The local review destination displays the persisted LM Studio base URL, not an unsaved caption edit.
 - API key input is `type=password`, empty on load, never populated from GET, with autocomplete disabled as appropriate. A text status chip says “Configured” or “Not configured”; masking is not encryption and the chip is not a connectivity test.
 - An untouched blank field means omission/preserve. Explicit removal is a separate confirmed action that sends `null`; it must not occur accidentally on a normal blank-form save. Replacement sends only the typed nonempty value.
 - Removal confirmation states that future remote requests lose the shared key but already-copied keys and encrypted backups are not revoked/deleted. Local captions are unaffected.
 - Explain that Postgres stores the key encrypted, all signed-in authors receive it in browser memory for direct provider calls, and the server never calls a model. Explain that the selected provider receives review content; do not describe encryption at rest as hiding the key from authors.
 - Warn on destination changes when a stored key exists, naming endpoints and explaining retain/replace/remove semantics. Warn on non-HTTPS custom endpoints; no automatic test request using the secret.
-- After success or any partial/ambiguous save failure, clear the typed secret input and reload settings plus presence. Display partial-failure/unknown-outcome instructions using text content; retain a clear error if reload itself fails. Never report “Not saved” as though neither store changed.
+- After success or any partial/ambiguous review save failure, clear the typed secret input and reload review settings plus presence, preserving pending caption/backup edits. Display partial-failure/unknown-outcome instructions using text content; retain a clear error if reload itself fails. Never report “Not saved” as though neither store changed.
 - Preserve keyboard access, labels/descriptions, visible focus, live status announcements, and the existing local caption connection test. No key/review content in screenshots or saved browser traces.
 
 ## 8. Backup v6 and restore contract
@@ -300,7 +301,7 @@ Self-review used the `critic` skill: challenge the confident claims first, then 
 | Is the master key isolated from the builder/host? | No: existing child env inheritance and same-container trust are explicit. At-rest protection is not process isolation. |
 | Does a future UI save implicitly send a draft or test key? | No. Settings only persists configuration. Intentional review is browser-direct and belongs to #215 integration after prerequisites. |
 
-These are resolved implementation choices or named residual risks covered by the implementation approval recorded in §1; no approval is inferred from this self-review. Independent security review has **not** yet occurred, and final-HEAD human merge approval remains **PENDING**.
+These are resolved implementation choices or named residual risks covered by the implementation approval recorded in §1; no approval is inferred from this self-review. Independent security review and explicit human approval of the final reviewed HEAD remain separate merge gates, recorded on PR #224.
 
 ## 12. Required verification and documentation before merge
 
