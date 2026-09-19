@@ -60,8 +60,10 @@ The same **`uploader/`** app also optimizes uploaded photos into responsive AVIF
 returns paste-ready `heroImage` / `<RemoteImage>` / `<BodyImage>` snippets. Access is gated by
 username/password accounts stored in Postgres, with HttpOnly session cookies. Everything runs on
 Simon's own server, in one container. AI inference remains **browser-direct**: local
-editor-integrated alt-text suggestions and the editorial-review client/configuration
-(#213/#214; drawer integration is #215). The server never contacts a model.
+editor-integrated alt-text suggestions and the **Review Story** drawer, which combines
+deterministic checks with optional provider-backed suggestions (#212–#215). It reviews
+unsaved active-locale content without autosaving or gating Publish. The server never
+contacts a model.
 See `docs/superpowers/specs/2026-07-05-ai-alt-text-editor-integration-design.md`. (An earlier
 standalone batch-uploader variant was removed in July 2026 and restored in this slimmer,
 editor-integrated form; the 2026-06-22 spec is historical.) See `uploader/README.md`,

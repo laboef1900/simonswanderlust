@@ -315,6 +315,7 @@
           <p id="actionError" class="err" role="alert" hidden style="color:#fca5a5; margin:0; font-size:0.85rem;"></p>
         </div>
         <div class="bar-actions">
+          <button id="reviewStory" type="button" class="btn-ghost-preview" aria-haspopup="dialog" aria-controls="storyReviewDialog">Review Story</button>
           <button id="saveDraft" type="button" class="btn-ghost-preview">Save draft</button>
           <button id="previewBtn" type="button" class="btn-ghost-preview">Preview</button>
           <button id="unpublishBtn" type="button" class="btn-ghost-preview" hidden>Unpublish</button>
@@ -322,6 +323,32 @@
         </div>
       </div>
     </main>
+
+    <dialog id="storyReviewDialog" class="story-review" aria-labelledby="storyReviewHeading" aria-describedby="reviewAdvisory">
+      <header class="story-review__header">
+        <div>
+          <h2 id="storyReviewHeading">Story review</h2>
+          <p id="reviewLocale" class="muted"></p>
+        </div>
+        <button id="closeReview" type="button" class="btn-secondary" autofocus>Close review</button>
+      </header>
+      <div class="story-review__body">
+        <p id="reviewAdvisory" class="story-review__advisory">A snapshot of this language’s unsaved draft. Suggestions are advisory: nothing is saved or published, and body text is never replaced.</p>
+        <section class="story-review__section" aria-labelledby="reviewInstantHeading">
+          <h3 id="reviewInstantHeading">Quick checks</h3>
+          <div id="reviewInstant" class="review-results"></div>
+        </section>
+        <section class="story-review__section" aria-labelledby="reviewSemanticHeading">
+          <h3 id="reviewSemanticHeading">Editorial suggestions</h3>
+          <div id="reviewStatus" class="review-status" role="status" aria-live="polite" aria-atomic="true"></div>
+          <div id="reviewSemantic" class="review-results"></div>
+        </section>
+      </div>
+      <footer class="story-review__footer">
+        <p class="muted">Check suggestions for accuracy before applying.</p>
+        <button id="runReview" type="button" class="btn-secondary">Review again</button>
+      </footer>
+    </dialog>
 
     <script src="/admin/auth.js"></script>
     <script src="/admin/admin-confirm.js"></script>
@@ -333,6 +360,8 @@
     <script src="/admin/picker-selection.js"></script>
     <script src="/admin/media-picker.js"></script>
     <script src="/admin/gallery-fence.js"></script>
+    <script src="/admin/editor-linter.js"></script>
+    <script src="/admin/editor-review.js"></script>
     <script src="/admin/image-markdown.js"></script>
     <!-- PostsFilter.thumbUrl(): the hero focal-point control needs the same
          never-upscale variant rule the posts list uses. -->
@@ -348,6 +377,8 @@
       // updatedAt of the pair as loaded/last saved in THIS tab. Echoed back on
       // every save so the server can 409 when another tab/user saved meanwhile.
       let loadedUpdatedAt = null;
+      let storyReview = null;
+      let reviewIsAdmin = false;
       const deImages = {};        // src → {width, height}
       const enImages = {};
 
@@ -397,17 +428,19 @@
       // Delegated listeners cover every static field plus dynamic key-fact rows;
       // the EasyMDE bodies live in CodeMirror and need their own change hooks.
       const mainEl = document.querySelector('main');
-      mainEl.addEventListener('input', () => guard.markDirty());
-      deMDE.codemirror.on('change', () => { guard.markDirty(); updateLocaleChip(); });
-      enMDE.codemirror.on('change', () => { guard.markDirty(); updateLocaleChip(); });
+      mainEl.addEventListener('input', () => { guard.markDirty(); storyReview?.invalidate(); });
+      deMDE.codemirror.on('change', () => { guard.markDirty(); storyReview?.invalidate(); updateLocaleChip(); });
+      enMDE.codemirror.on('change', () => { guard.markDirty(); storyReview?.invalidate(); updateLocaleChip(); });
 
       // ---- tabs ----
       let activeTab = 'de';
+      function activateLocale(tab) {
+        storyReview?.invalidate();
+        activeTab = tab;
+        (tab === 'en' ? enMDE : deMDE).codemirror.refresh();
+      }
       const tabsApi = Tabs.wire(document.querySelector('[role="tablist"]'), {
-        onChange: (tab) => {
-          activeTab = tab;
-          (tab === 'en' ? enMDE : deMDE).codemirror.refresh();
-        },
+        onChange: activateLocale,
       });
 
       // ---- slug derivation from locale titles ----
@@ -433,6 +466,39 @@
           slugAuto[locale] = slugFieldFor(locale).value.trim() === '';
         });
       }
+
+      // Capture the live CodeMirror value, not its hidden textarea or a save payload.
+      storyReview = EditorReview.create({
+        capture: () => ({
+          identity: currentTk,
+          story: {
+            locale: activeTab,
+            title: $(activeTab + 'Title').value,
+            excerpt: $(activeTab + 'Excerpt').value,
+            markdown: (activeTab === 'en' ? enMDE : deMDE).value(),
+            heroAlt: $(activeTab + 'HeroAlt').value,
+            heroSrc: $(activeTab + 'HeroSrc').value,
+          },
+        }),
+        isCurrent: (snapshot) => snapshot.identity === currentTk && snapshot.story.locale === activeTab,
+        apply: (locale, field, value) => {
+          const input = $(locale + (field === 'title' ? 'Title' : 'Excerpt'));
+          input.value = value;
+          // Reuse both dirty tracking and #122's loaded/manual/automatic slug rules.
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        },
+        jump: (locale, finding) => {
+          if (finding.target === 'hero') {
+            $(locale + 'HeroAlt').focus();
+          } else {
+            const cm = (locale === 'en' ? enMDE : deMDE).codemirror;
+            cm.setCursor({ line: finding.line - 1, ch: 0 });
+            cm.focus();
+          }
+        },
+        on401: () => guard.redirectToLogin(),
+        isAdmin: () => reviewIsAdmin,
+      });
 
       // ---- key facts (optional rows, per locale) ----
       function addKeyFactRow(locale, label = '', value = '') {
@@ -584,6 +650,7 @@
           const body = await res.json().catch(() => ({}));
           if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
 
+          storyReview?.invalidate();
           $(locale + 'HeroSrc').value = body.src;
           $(locale + 'HeroWidth').value = body.width;
           $(locale + 'HeroHeight').value = body.height;
@@ -817,6 +884,7 @@
         MediaPicker.open({
           onUnauthed: () => guard.redirectToLogin(),
           onPick: (item) => {
+            storyReview?.invalidate();
             $(locale + 'HeroSrc').value = item.src;
             $(locale + 'HeroWidth').value = item.width;
             $(locale + 'HeroHeight').value = item.height;
@@ -1014,6 +1082,7 @@
       function jumpToGap(kind, field) {
         if (kind === 'de' || kind === 'en') {
           if (tabsApi && tabsApi.select) tabsApi.select(kind);
+          activateLocale(kind);
           const ids = {
             title: kind + 'Title', slug: kind === 'de' ? 'slugFieldDe' : 'slugFieldEn',
             excerpt: kind + 'Excerpt', country: kind + 'Country', body: kind + 'Body',
@@ -1111,6 +1180,7 @@
       function jumpToPhoto(locale, kind) {
         if (kind === 'hero') { jumpToGap(locale, 'hero alt'); return; } // beside "Suggest alt text"
         if (tabsApi && tabsApi.select) tabsApi.select(locale);
+        activateLocale(locale);
         // A gallery photo's alt lives in the images map and is edited in the
         // picker; an inline body photo's alt is its Markdown label, so the
         // markdown editor itself is where that one is fixed.
@@ -1231,6 +1301,7 @@
           return false;
         }
         if (!currentTk && body.translationKey) {
+          storyReview?.invalidate();
           currentTk = body.translationKey;
           guard.setKey('swl:draft:' + currentTk);
           const url2 = new URL(location.href);
@@ -1413,6 +1484,7 @@
       // restored revision. Every field is overwritten (with '' when absent) so it
       // never merges with what was already on screen.
       function populateForm(post) {
+        storyReview?.invalidate();
         // Every shared field is written unconditionally (with '' fallbacks):
         // buildPayload() deletes cleared/empty keys from the stash, so applying
         // a restore over an already-loaded post must not resurrect values the
@@ -1473,6 +1545,7 @@
           setStatus('');
           return true;
         }
+        storyReview?.invalidate();
         currentTk = post.translationKey || tk;
         isPublished = post.status === 'published';
         loadedUpdatedAt = post.updatedAt || null;
@@ -1555,6 +1628,7 @@
       (async () => {
         const s = await Auth.ensureAuthed();
         if (!s) return;
+        reviewIsAdmin = s.isAdmin === true;
         Auth.renderHeader(s);
 
         const params = new URLSearchParams(location.search);
@@ -1578,6 +1652,7 @@
           });
           if (restore) {
             guard.adopt(stash);
+            storyReview?.invalidate();
             currentTk = stash.payload.translationKey || currentTk;
             populateForm(stash.payload);
             guard.markDirty();

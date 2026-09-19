@@ -242,9 +242,8 @@ without provider error text, draft content or keys. Redirects are refused, cooki
 omitted, and OpenRouter attribution is attached only for hostname `openrouter.ai`.
 Base URLs must be HTTP(S) with no credentials, query or fragment.
 
-This is the reusable client/contract slice, not a new editor action. The review drawer
-remains #215; #214 supplies provider settings and encrypted credential storage below.
-Existing `caption`, `listModels`, and `prepImage` behavior is unchanged.
+`public/editor-review.js` integrates this client with the editor's **Review Story**
+drawer (#215). Existing `caption`, `listModels`, and `prepImage` behavior is unchanged.
 
 ### Review providers and encrypted credentials (#214)
 
@@ -288,11 +287,39 @@ deliberately with non-sensitive content, and take a new backup. Changing only th
 key does not re-encrypt old rows. Lost master keys require reissued provider credentials.
 Full misuse cases and rollback: [approved design](../docs/superpowers/specs/2026-09-19-encrypted-ai-review-secrets-design.md).
 
+### Review Story in the editor (#215)
+
+Choose **Review Story** to review the active DE or EN tab's **unsaved** title, excerpt,
+hero alt text and Markdown. Five deterministic checks appear immediately; editorial
+suggestions arrive asynchronously from the provider selected in Settings. Opening the
+drawer starts that browser-direct request, sending the active-locale snapshot to that
+provider. Use only content you intend to share with it.
+
+**Apply suggested title** and **Apply suggested excerpt** change only that locale's form
+field and mark the draft dirty. Loaded or manually entered slugs stay unchanged; a new
+automatic slug still derives from the title. Body prose is never replaced. Save draft
+or Publish remains an explicit, separate action; warnings and provider failures do not
+gate either action or bypass their existing validation.
+
+Quick-check links jump to the actual Markdown line in EasyMDE, or the hero alt field.
+Escape/Close returns focus to Review Story; a jump instead focuses its editing target.
+The drawer traps keyboard focus, scrolls on narrow screens and respects reduced motion.
+
+Closing, changing locale/post, restoring a draft, or editing the reviewed fields cancels
+and invalidates that review. **Review again** captures a fresh snapshot. Cancellation
+cannot recall content already sent to a provider. Late responses cannot apply to a
+different draft. Results and credentials are not persisted by the drawer.
+
+If the provider is offline, refuses access, times out or returns malformed output, the
+quick checks remain available with recovery guidance. Admins can follow **Open AI
+settings** where appropriate; authors are directed to their administrator. Missing
+OpenRouter/DeepSeek keys refuse the request locally; a keyless custom endpoint is allowed.
+
 ## Deterministic editorial checks
 
 `public/editor-linter.js` exposes `window.EditorLinter` for one unsaved locale; load
 `gallery-fence.js` first. It is a pure, network-free advisory module, not a save/publish
-gate. The review drawer is integrated separately (#215).
+gate, and supplies the Review Story drawer's immediate quick checks.
 
 Call `lintStory({ title, excerpt, markdown, heroSrc, heroAlt })`, or the individual
 `lintTitle`, `lintExcerpt`, `lintHeadings`, `lintAltText`, and `lintInternalLinks` checks.
