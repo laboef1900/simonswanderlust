@@ -57,9 +57,9 @@ typography:
     letterSpacing: "0.18em"
   label-quiet:
     fontFamily: "IBM Plex Mono, ui-monospace, SFMono-Regular, monospace"
-    fontSize: "0.6875rem"
+    fontSize: "0.75rem"
     fontWeight: 400
-    lineHeight: 1.5
+    lineHeight: 1.3333
     letterSpacing: "0.18em"
   label-lg:
     fontFamily: "IBM Plex Mono, ui-monospace, SFMono-Regular, monospace"
@@ -103,7 +103,7 @@ components:
   card-caption-panel:
     backgroundColor: "{colors.navy}"
     textColor: "#ffffff"
-    padding: "2px 16px 16px"
+    padding: "16px"
   card-meta-line:
     textColor: "rgb(255 255 255 / 0.7)"
     typography: "{typography.label-quiet}"
@@ -319,12 +319,12 @@ allowed to speak.
   measure is set by the container, not by the prose.
 - **Body Small** (400, `14px`, line-height 1.43): excerpts, footer links, nav
   labels, the map CTA.
-- **Label** (600 mono, `11px`, `0.18em`, uppercase): the log register at full
-  strength — the hero's entry number and field line, coordinates, the footer
-  logline and gear line.
-- **Label Quiet** (400 mono, `11px`, `0.18em`, uppercase): the same register
-  demoted. Currently the story card's date line, where the type has to read as
-  a footnote to the heading above it rather than compete with it.
+- **Label** (600 mono, `11px`, `0.18em`, uppercase): the compact identity
+  register in the footer logline and gear line.
+- **Homepage metadata** (`12px` mono, `0.18em`): the hero entry number and
+  date/country field line use weight 600; coordinates use weight 400.
+- **Label Quiet** (400 mono, `12px`, `0.18em`, uppercase): story-card dates,
+  subordinate to the heading without reducing useful information to microprint.
 - **Label Large** (600 mono, `12px`, `0.18em`, uppercase): section eyebrows —
   Key Facts and TOC headings, footer column labels, the map band's stat line,
   the region page's trip count.
@@ -332,9 +332,9 @@ allowed to speak.
   links are actions rather than metadata; counts and arrows keep their meaning,
   and each link retains a `44px` minimum hit area.
 
-**One register, several jobs.** The 11px mono label carries entry numbers,
-field lines, coordinates and the footer identity line, with 12px section labels
-and 14px destination navigation, plus one weight step (400 against 600).
+**One register, several jobs.** The 11px mono label carries compact footer
+identity; useful homepage metadata and section labels use 12px, and destination
+navigation uses 14px, with a weight step (400 against 600).
 Extend those roles with a size or a weight when needed — never
 a tracking value, and never a coloured plate, which is what the card's date
 line used to be.
@@ -553,10 +553,14 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
   Below `640px`, the photograph is uncropped and followed by a solid navy caption
   with `16px` padding. Mobile titles are not clamped. The homepage's promoted
   cover alone becomes a thumbnail-and-title index row.
-  - *Desktop caption:* from `sm`, the photograph fills the fixed-height tile.
-    A **72px** ramp (`from-navy/92 to-transparent`, no type in it) meets a
-    `navy/92` base holding the heading and, below it, the date line.
-  - *Why 92 and not 100:* it is the floor, not a preference. White measures
+  - *Small and tablet captions:* from `sm`, a two-row grid separates the photo
+    from its solid navy caption (`16px` padding). The image row is
+    `minmax(6rem, 1fr)` and the caption row sizes to its text inside the unchanged
+    `280px` mosaic track. There is no fade or text over a small photograph.
+  - *Lead caption:* only the double-height lead at `lg` fills the tile with a
+    photograph and overlays its caption. A **72px** ramp
+    (`from-navy/92 to-transparent`, no type in it) meets the `navy/92` base.
+  - *Why the lead uses 92 and not 100:* it is the floor, not a preference. White measures
     **11.6:1** on it and `white/70` **6.57:1** over the brightest sky in the
     corpus; at `/80` that second figure is 4.66:1 and at `/75` it is 4.07:1,
     i.e. under AA. The caption could only be lighter by giving up the date
@@ -568,7 +572,7 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
     would differ per card.
   - *Date line:* the month and year, plus the country **only when the title
     does not already name it** — eight of nine live titles do, and printing it
-    twice within 30px made the index read as repeated. Weight 400 in
+    twice within 30px made the index read as repeated. Weight 400 at `12px` in
     `white/70`, below the heading, no box. It wraps rather than truncates:
     `truncate` here cut the destination country, the identity payload the card
     exists to deliver, on 3 of 9 cards at a 320px viewport.
@@ -585,7 +589,8 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
     than the ramp.
   - *Sizing:* mobile height follows the photo and caption, not fixed tracks.
     From `sm`, the tile is `280px` per row and `cardSizes` retains
-    `max(boxWidth, boxHeight × 1.5)` for the existing desktop landscape crops.
+    `max(boxWidth, boxHeight × 1.5)` as a conservative source hint: small photo
+    regions are shorter than their tracks, while the lead still uses its full height.
   - *Shadow strategy:* see Elevation — `shadow-sm` at rest, `shadow-xl` plus a
     `2px brand-red` ring on **hover and `active:`**, over `500ms`.
   - *Motion:* `transition-[transform,translate,box-shadow]`. `translate` is

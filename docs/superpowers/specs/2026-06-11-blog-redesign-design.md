@@ -70,6 +70,14 @@ existing `featured` choice remains authoritative, with newest-story fallback.
   Preserve chronology, all entries, and the desktop mosaic's no-empty-cell rule.
 - Region navigation uses 14px mono labels with counts, arrows and 44px targets.
   These remain links to region pages, not in-place filters.
+- From `640px`, small story tiles separate the photograph from a solid navy
+  caption using an image row of at least `6rem` plus a content-sized caption.
+  Keep the `280px` mosaic tracks and existing spans. Only the double-height lead
+  at `1024px` and above retains its full-photo overlay and contrast-safe ramp.
+- Homepage hero date/coordinates and card dates use the existing `12px` mono
+  role, retaining the shared tracking token, wrapping and established colours.
+- Teaser rewrites and genuine photographic alt descriptions are bilingual
+  author-approval proposals, not automatic changes to stored post content.
 - Preserve content, editorial flags, slugs, DE/EN parity, palettes and fonts.
   No database writes, publishing changes or new client-side interaction.
 

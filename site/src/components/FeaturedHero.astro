@@ -136,7 +136,7 @@ const HERO_SIZES = '(max-width: 639px) 100vw, max(100vw, min(120vh, 1080px), 720
           aria-labelledby={titleId}
           class="group/entry mt-4 block rounded-sm focus-visible:outline-brand-red"
         >
-          <p class="flex flex-wrap items-center gap-x-2 font-mono text-[11px] font-semibold tracking-log uppercase">
+          <p class="flex flex-wrap items-center gap-x-2 font-mono text-xs font-semibold tracking-log uppercase">
             {number !== undefined && <span class="text-brand-red">{entryLabel(number)}</span>}
             <span class="text-navy/70">{meta}</span>
           </p>
@@ -161,7 +161,7 @@ const HERO_SIZES = '(max-width: 639px) 100vw, max(100vw, min(120vh, 1080px), 720
           >
             {trip.data.title}
           </h2>
-          <p class="mt-2 font-mono text-[11px] tracking-log text-navy/70">
+          <p class="mt-2 font-mono text-xs tracking-log text-navy/70">
             {coordsLabel(trip.data.coordinates)}
           </p>
           {/*
