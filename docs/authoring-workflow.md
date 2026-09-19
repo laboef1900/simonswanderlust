@@ -118,17 +118,17 @@ the post is live at `/<slug>/` and `/en/<slug>/`.
 
 ### Edit an existing post
 
-Open **Posts**, find the post, click **Edit**. Saving a draft of a published post **never**
+Open **Posts**, find the post, click its title or **Edit**. Saving a draft of a published post **never**
 changes the live site — rebuilds of any kind (publishing another post, saving the About page,
 **Rebuild site now**) keep serving the published snapshot, not your in-progress edits. The Posts
-list marks such posts with an **edited** badge and the editor status line shows
+list marks such posts with an **Unpublished changes** badge and the editor status line shows
 *has unpublished changes*. Your edits go live only when you hit **Publish** again, which
 refreshes the snapshot.
 
 ### Duplicating a post ("New from this one")
 
 Trips in the same region repeat a lot of structure — key facts, stops, route, region, country
-code — so the Posts list has a **Duplicate** action per row.
+code — so each Posts row has **More actions → Duplicate**.
 
 It asks for the **DE and EN slugs up front**, before anything is created, and refuses if either
 is blank, malformed, or already taken (you get a plain "already in use" error rather than a
@@ -155,21 +155,32 @@ against the already-loaded list, so it is instant and never hits the server — 
 trade at this size and is documented to move server-side once the list grows to a few hundred
 posts. A post with no hero yet shows a dashed placeholder instead of a broken image.
 
+The status filter also offers **Unpublished changes** and **EN missing**. **X of Y posts**
+reports the current results; **More filters** indicates active refinements even when collapsed.
+Use **Clear filters** to return to the full inventory, including from an empty search.
+Filter and sort state is recorded in the URL and restored when returning from the editor.
+On narrow screens, rows stack into labeled groups without removing selection or actions.
+If loading fails, stale row actions are removed; **Retry** reloads the list.
+
 Tick the checkboxes to select posts (the header checkbox selects everything currently visible,
 i.e. it respects the filters), then use **Publish**, **Unpublish** or **Delete** in the bar that
-appears. Admin-only, like their single-post equivalents. Two things worth knowing:
+appears. Admin-only, like their single-post equivalents. Selections survive filter changes:
+the bar reports how many selected posts are outside the current view. **Review selection**
+lists every selected title; **Clear selection** deselects the entire set. Bulk confirmations
+name the affected stories. Important details:
 
 - **The whole batch triggers one rebuild**, at the end — not one per post. Bulk publish also
   writes each post's MDX backup, exactly like publishing one at a time.
 - **Failures are reported per post, and the rest of the batch still runs.** A post that fails
   validation (or a half-created pair with only one locale row) is listed by name in the status
-  box with its reason; everything else goes through.
+  box with its reason; everything else goes through. Failed stories remain selected for retry;
+  successfully processed stories are deselected.
 - **Bulk delete asks you to type `DELETE`.** There is no undo — revisions are per-save snapshots
   of a post, so deleting the post takes them with it.
 
 ### Export / backup
 
-The **Export all** button (Posts list) writes MDX backup files for all posts to
+The **Export MDX to server backup** button (Posts list) writes MDX backup files for all posts to
 `/data/backup` on the server. Exports contain the **working copies** (what you see in the
 editor) — including draft edits not yet published. These are reference copies — Postgres is the
 source of truth.

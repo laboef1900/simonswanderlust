@@ -6,7 +6,7 @@
     <title>Posts · Simon's Wanderlust</title>
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
-  <body>
+  <body class="posts-page">
     <header class="cms-page-meta">
       <h1>Posts</h1>
       <p class="lede">Manage DE/EN post pairs — create drafts, edit content, and publish to the live blog.</p>
@@ -15,8 +15,8 @@
     <main>
       <section class="card">
         <div class="posts-toolbar">
-          <a href="/admin/editor.html" class="btn-new">New post</a>
-          <button id="exportAll" type="button" class="btn-secondary">Export all</button>
+          <a id="newPost" href="/admin/editor.html" class="btn-new">New post</a>
+          <button id="exportAll" type="button" class="btn-secondary">Export MDX to server backup</button>
           <p id="out" class="page-status" role="status"></p>
         </div>
 
@@ -28,9 +28,11 @@
           <label class="filter-field">
             <span>Status</span>
             <select id="fStatus">
-              <option value="">All Statuses</option>
+              <option value="">All statuses</option>
               <option value="draft">Draft</option>
               <option value="published">Published</option>
+              <option value="unpublished">Unpublished changes</option>
+              <option value="missing-en">EN missing</option>
             </select>
           </label>
           <button type="button" id="fMore" class="btn-link filter-reset" aria-expanded="false" aria-controls="fExtra">More filters</button>
@@ -58,31 +60,44 @@
                 <option value="asc">Ascending</option>
               </select>
             </label>
-            <button id="fReset" class="btn-secondary filter-reset" type="button">Reset</button>
           </div>
+          <button id="fReset" class="btn-secondary filter-reset" type="button">Clear filters</button>
         </div>
+        <p id="resultsCount" class="posts-results" role="status"></p>
+
 
         <div class="bulk-bar" id="bulkBar" hidden>
           <span id="bulkCount" aria-live="polite"></span>
+          <details id="selectionReview" class="selection-review">
+            <summary>Review selection</summary>
+            <ul id="selectionList"></ul>
+          </details>
+          <button id="clearSelection" type="button" class="btn-link">Clear selection</button>
           <button id="bulkPublish" type="button" class="btn-primary">Publish</button>
           <button id="bulkUnpublish" type="button" class="btn-secondary">Unpublish</button>
           <button id="bulkDelete" type="button" class="btn-remove">Delete</button>
         </div>
 
-        <p id="loadMsg" class="muted">Loading…</p>
-        <table id="postsTable" class="posts-table" style="display:none">
-          <thead>
-            <tr>
-              <th class="col-select"><input id="selectAll" type="checkbox" aria-label="Select all posts" /></th>
-              <th class="col-thumb">Hero</th>
-              <th>Title (DE)</th>
-              <th>Trip</th>
-              <th>Status</th>
-              <th>Updated</th>
-              <th></th>
+        <p id="loadMsg" class="muted" role="status">Loading posts…</p>
+        <button id="retryLoad" type="button" class="btn-secondary" hidden>Retry</button>
+        <table id="postsTable" class="posts-table" role="table" hidden>
+          <thead role="rowgroup">
+            <tr role="row">
+              <th class="col-select" scope="col" role="columnheader">
+                <label id="selectAllControl" class="post-select-all">
+                  <input id="selectAll" type="checkbox" aria-label="Select all visible posts" />
+                  <span>Select visible</span>
+                </label>
+              </th>
+              <th class="col-thumb" scope="col" role="columnheader">Hero</th>
+              <th class="col-title" scope="col" role="columnheader">Title (DE)</th>
+              <th class="col-trip" scope="col" role="columnheader">Trip</th>
+              <th class="col-status" scope="col" role="columnheader">Status</th>
+              <th class="col-updated" scope="col" role="columnheader">Updated</th>
+              <th class="col-actions" scope="col" role="columnheader">Actions</th>
             </tr>
           </thead>
-          <tbody id="postsList"></tbody>
+          <tbody id="postsList" role="rowgroup"></tbody>
         </table>
       </section>
 
@@ -98,6 +113,9 @@
                      // non-admins, but the server enforces admin-only regardless.
       let allPosts = [];              // everything GET /posts returned
       const selected = new Set();     // translationKeys ticked in the list
+      let filtersInitialized = false;
+      let openMoreActions = null;
+
 
       function describeBuild(build) {
         if (!build) return '';
@@ -121,8 +139,63 @@
         };
       }
 
+      function setFilterControls(state) {
+        $('fSearch').value = state.q;
+        $('fStatus').value = state.status;
+        $('fRegion').value = state.region;
+        $('fCountry').value = state.country;
+        $('fSort').value = state.sort;
+        $('fOrder').value = state.order;
+      }
+
+      function initialFilterSearch() {
+        if (location.search) return location.search;
+        try {
+          const referrer = new URL(document.referrer);
+          if (referrer.origin !== location.origin || referrer.pathname !== '/admin/editor.html') return '';
+          const returnTo = new URL(referrer.searchParams.get('returnTo') || '', location.origin);
+          return returnTo.origin === location.origin && returnTo.pathname === '/admin/posts.html'
+            ? returnTo.search
+            : '';
+        } catch (_) {
+          return '';
+        }
+      }
+
+      function syncFilterUrl() {
+        const query = PostsFilter.toSearch(currentFilters());
+        const url = new URL(location.href);
+        url.search = query;
+        history.replaceState(null, '', url.toString());
+      }
+
+      function editorHref(translationKey) {
+        const editor = new URL('/admin/editor.html', location.origin);
+        if (translationKey) editor.searchParams.set('tk', translationKey);
+        const query = PostsFilter.toSearch(currentFilters());
+        editor.searchParams.set('returnTo', '/admin/posts.html' + (query ? '?' + query : ''));
+        return editor.pathname + editor.search;
+      }
+
       function visiblePosts() {
         return PostsFilter.apply(allPosts, currentFilters());
+      }
+
+      function updateFilterContext(posts) {
+        const filters = currentFilters();
+        const activeExtra = PostsFilter.extraFilterCount(filters);
+        const expanded = !$('fExtra').hidden;
+        $('fMore').textContent = (expanded ? 'Fewer filters' : 'More filters') +
+          (activeExtra ? ' (' + activeExtra + ' active)' : '');
+        $('resultsCount').textContent = allPosts.length
+          ? posts.length + ' of ' + allPosts.length + (allPosts.length === 1 ? ' post' : ' posts')
+          : '0 posts';
+      }
+
+      function resetFilters() {
+        setFilterControls({ q: '', status: '', region: '', country: '', sort: 'updated', order: 'desc' });
+        render(true);
+        $('fSearch').focus();
       }
 
       // Every action below disables its trigger while the request is in flight
@@ -225,33 +298,54 @@
           $('out').textContent = 'Duplicate failed: ' + (body.error || res.status);
           return;
         }
-        location.href = '/admin/editor.html?tk=' + encodeURIComponent(body.translationKey);
+        location.href = editorHref(body.translationKey);
       }
 
       // ---- bulk actions -------------------------------------------------
 
+      function postTitle(key) {
+        const post = allPosts.find((p) => p.translationKey === key);
+        return post && post.titleDe ? post.titleDe : '(untitled)';
+      }
+
       function refreshBulkBar() {
         const bar = $('bulkBar');
-        if (!me || !me.isAdmin) { bar.hidden = true; return; }
-        bar.hidden = selected.size === 0;
-        $('bulkCount').textContent = selected.size + ' selected';
+        if (!me || !me.isAdmin || selected.size === 0) {
+          bar.hidden = true;
+          $('selectionReview').open = false;
+          return;
+        }
+        const visibleKeys = new Set(visiblePosts().map((p) => p.translationKey));
+        const outsideView = [...selected].filter((key) => !visibleKeys.has(key)).length;
+        bar.hidden = false;
+        $('bulkCount').textContent = selected.size + ' selected · ' +
+          outsideView + ' outside current view';
+        const list = $('selectionList');
+        list.innerHTML = '';
+        for (const key of selected) {
+          const item = document.createElement('li');
+          item.textContent = postTitle(key);
+          list.appendChild(item);
+        }
       }
 
       // Bulk DELETE is irreversible and has no undo — revisions are per-save
       // snapshots and remove() hard-deletes both locale rows. So it gets a
-      // typed confirmation, distinct from the plain confirm() on the others.
+      // typed confirmation, distinct from the plain confirm on the others.
       async function confirmBulk(action, keys) {
-        const live = keys.filter((k) => {
-          const p = allPosts.find((x) => x.translationKey === k);
-          return p && p.status === 'published';
+        const selectedStories = keys.map((key) => '"' + postTitle(key) + '"').join('\n• ');
+        const storyList = '\n\nSelected stories:\n• ' + selectedStories;
+        const live = keys.filter((key) => {
+          const post = allPosts.find((p) => p.translationKey === key);
+          return post && post.status === 'published';
         }).length;
         if (action === 'delete') {
           const warning = live > 0
-            ? '\n\n' + live + ' of them ' + (live === 1 ? 'is' : 'are') + ' PUBLISHED and will be removed from the live site.'
+            ? '\n\n' + live + ' selected ' + (live === 1 ? 'story is' : 'stories are') + ' PUBLISHED and will be removed from the live site.'
             : '';
           return AdminConfirm.ask({
-            title: 'Delete ' + keys.length + ' post(s)?',
-            body: 'This CANNOT be undone.' + warning + '\n\nType DELETE to confirm:',
+            title: 'Delete ' + keys.length + ' selected ' + (keys.length === 1 ? 'story?' : 'stories?'),
+            body: 'This CANNOT be undone.' + warning + storyList + '\n\nType DELETE to confirm:',
             confirmLabel: 'Delete',
             danger: true,
             typed: 'DELETE',
@@ -259,11 +353,11 @@
         }
         const verb = action === 'publish' ? 'Publish' : 'Unpublish';
         const liveNote = live > 0
-          ? live + ' of them ' + (live === 1 ? 'is' : 'are') + ' already on the live site.'
-          : 'None of these are currently live.';
+          ? live + ' selected ' + (live === 1 ? 'story is' : 'stories are') + ' already on the live site.'
+          : 'None of the selected stories are currently live.';
         return AdminConfirm.ask({
-          title: verb + ' ' + keys.length + ' post(s)?',
-          body: liveNote,
+          title: verb + ' ' + keys.length + ' selected ' + (keys.length === 1 ? 'story?' : 'stories?'),
+          body: liveNote + storyList,
           confirmLabel: verb,
           danger: action === 'unpublish',
         });
@@ -280,7 +374,9 @@
       }
 
       async function runBulk(action) {
-        const keys = [...selected];
+        // Snapshot before the async confirmation: filter or checkbox changes
+        // while the dialog is open must never alter the confirmed request.
+        const keys = Object.freeze([...selected]);
         if (keys.length === 0) return;
         if (!(await confirmBulk(action, keys))) return;
         const buttons = [$('bulkPublish'), $('bulkUnpublish'), $('bulkDelete')];
@@ -296,7 +392,16 @@
           const body = await res.json().catch(() => ({}));
           if (!res.ok) { $('out').textContent = 'Bulk ' + action + ' failed: ' + (body.error || res.status); return; }
           const msg = summarizeBulk(action, body);
-          selected.clear();
+          // Keep failed stories selected so the visible failure report is also
+          // immediately actionable: the author can fix them and retry without
+          // reconstructing a cross-filter selection. A complete success may
+          // omit per-item results, so clear the confirmed snapshot in that case.
+          if (body.failed === 0) {
+            keys.forEach((key) => selected.delete(key));
+          } else {
+            const succeeded = new Set((body.results || []).filter((r) => r.ok).map((r) => r.key));
+            keys.forEach((key) => { if (succeeded.has(key)) selected.delete(key); });
+          }
           // load() re-renders and hides the bar; pass the summary so it survives
           // the reload (partial failures must stay on screen).
           await load(msg);
@@ -319,6 +424,8 @@
       function heroCell(p) {
         const td = document.createElement('td');
         td.className = 'col-thumb';
+        td.setAttribute('role', 'cell');
+        td.setAttribute('data-label', 'Hero');
         const url = PostsFilter.thumbUrl(p);
         if (!url) { td.appendChild(placeholderThumb()); return td; }
         const img = document.createElement('img');
@@ -335,28 +442,70 @@
         return td;
       }
 
+      function wirePostDisclosure(details, summary) {
+        details.addEventListener('toggle', () => {
+          if (!details.open) {
+            if (openMoreActions === details) openMoreActions = null;
+            return;
+          }
+          if (openMoreActions && openMoreActions !== details) openMoreActions.open = false;
+          openMoreActions = details;
+        });
+        details.addEventListener('keydown', (event) => {
+          if (event.key !== 'Escape' || !details.open) return;
+          event.preventDefault();
+          details.open = false;
+          if (openMoreActions === details) openMoreActions = null;
+          summary.focus();
+        });
+      }
+
       function renderRows(posts) {
         const tbody = $('postsList');
         tbody.innerHTML = '';
+        openMoreActions = null;
         if (!posts.length) {
           const tr = document.createElement('tr');
+          tr.setAttribute('role', 'row');
           const td = document.createElement('td');
           td.colSpan = 7;
-          td.textContent = allPosts.length
+          td.setAttribute('role', 'cell');
+          td.className = 'posts-empty';
+          const message = document.createElement('p');
+          message.textContent = allPosts.length
             ? 'No posts match these filters.'
-            : 'No posts yet. Create one with + New post.';
-          td.style.textAlign = 'center';
-          td.style.color = '#6b7280';
+            : 'No posts yet.';
+          td.appendChild(message);
+          if (allPosts.length) {
+            const clear = document.createElement('button');
+            clear.id = 'clearEmptyFilters';
+            clear.type = 'button';
+            clear.className = 'btn-link';
+            clear.textContent = 'Clear filters';
+            clear.addEventListener('click', resetFilters);
+            td.appendChild(clear);
+          } else {
+            const create = document.createElement('a');
+            create.href = editorHref();
+            create.className = 'action-link';
+            create.textContent = 'Create a new post';
+            td.appendChild(create);
+          }
           tr.appendChild(td);
           tbody.appendChild(tr);
           return;
         }
         for (const p of posts) {
           const tr = document.createElement('tr');
+          tr.setAttribute('role', 'row');
 
           const tdSel = document.createElement('td');
           tdSel.className = 'col-select';
+          tdSel.setAttribute('role', 'cell');
+          tdSel.setAttribute('data-label', 'Select');
           if (me && me.isAdmin) {
+            const selectLabel = document.createElement('label');
+            selectLabel.className = 'post-row-select';
             const cb = document.createElement('input');
             cb.type = 'checkbox';
             cb.checked = selected.has(p.translationKey);
@@ -366,84 +515,115 @@
               syncSelectAll();
               refreshBulkBar();
             });
-            tdSel.appendChild(cb);
+            selectLabel.appendChild(cb);
+            tdSel.appendChild(selectLabel);
           }
           tr.appendChild(tdSel);
 
           tr.appendChild(heroCell(p));
 
           const tdTitle = document.createElement('td');
-          tdTitle.textContent = p.titleDe || '(untitled)';
+          tdTitle.className = 'col-title';
+          tdTitle.setAttribute('role', 'cell');
+          tdTitle.setAttribute('data-label', 'Title');
+          const titleLink = document.createElement('a');
+          titleLink.href = editorHref(p.translationKey);
+          titleLink.className = 'post-title-link';
+          titleLink.setAttribute('aria-label', 'Edit ' + (p.titleDe || 'untitled post'));
+          titleLink.textContent = p.titleDe || '(untitled)';
+          tdTitle.appendChild(titleLink);
           if (p.hasEnBody === false) {
             const hint = document.createElement('span');
-            hint.textContent = ' · EN missing';
-            hint.style.color = '#6b7280';
-            hint.style.fontSize = '0.75rem';
+            hint.className = 'post-locale-state';
+            hint.textContent = 'EN missing';
             tdTitle.appendChild(hint);
           }
           tr.appendChild(tdTitle);
 
           const tdTrip = document.createElement('td');
-          tdTrip.className = 'posts-date';
+          tdTrip.className = 'col-trip posts-date';
+          tdTrip.setAttribute('role', 'cell');
+          tdTrip.setAttribute('data-label', 'Trip');
           tdTrip.textContent = [p.country, p.date].filter(Boolean).join(' · ');
           tr.appendChild(tdTrip);
 
           const tdStatus = document.createElement('td');
+          tdStatus.className = 'col-status';
+          tdStatus.setAttribute('role', 'cell');
+          tdStatus.setAttribute('data-label', 'Status');
           const badge = document.createElement('span');
           const safeStatus = p.status === 'published' ? 'published' : 'draft';
           badge.className = 'status-pill ' + safeStatus;
-          badge.textContent = p.status;
+          badge.textContent = safeStatus;
           tdStatus.appendChild(badge);
           if (p.status === 'published' && p.hasUnpublishedChanges) {
-            const edited = document.createElement('span');
-            edited.className = 'status-pill draft';
-            edited.style.marginLeft = '0.35rem';
-            edited.textContent = 'edited';
-            edited.title = 'Has unpublished changes — the live post is unchanged until you Publish.';
-            tdStatus.appendChild(edited);
+            const changed = document.createElement('span');
+            changed.className = 'status-pill draft';
+            changed.textContent = 'Unpublished changes';
+            changed.title = 'The live post is unchanged until you publish again.';
+            tdStatus.appendChild(changed);
           }
           tr.appendChild(tdStatus);
 
           const tdUpdated = document.createElement('td');
-          tdUpdated.className = 'posts-date';
+          tdUpdated.className = 'col-updated posts-date';
+          tdUpdated.setAttribute('role', 'cell');
+          tdUpdated.setAttribute('data-label', 'Updated');
           if (p.updatedAt) {
             tdUpdated.textContent = new Date(p.updatedAt).toLocaleDateString('en-GB', { year: 'numeric', month: 'short', day: 'numeric' });
           }
           tr.appendChild(tdUpdated);
 
           const tdActions = document.createElement('td');
+          tdActions.className = 'col-actions';
+          tdActions.setAttribute('role', 'cell');
+          tdActions.setAttribute('data-label', 'Actions');
+          const actions = document.createElement('div');
+          actions.className = 'post-actions';
           const editLink = document.createElement('a');
-          editLink.href = '/admin/editor.html?tk=' + encodeURIComponent(p.translationKey);
+          editLink.href = editorHref(p.translationKey);
           editLink.textContent = 'Edit';
           editLink.className = 'action-link';
-          tdActions.appendChild(editLink);
-          // Author-accessible: duplicating only ever creates a new draft, which
-          // POST /posts already allows any signed-in author to do.
+          editLink.setAttribute('aria-label', 'Edit ' + (p.titleDe || 'untitled post'));
+          actions.appendChild(editLink);
+
+          const more = document.createElement('details');
+          more.className = 'post-more';
+          const summary = document.createElement('summary');
+          summary.textContent = 'More actions';
+          summary.setAttribute('aria-label', 'More actions for ' + (p.titleDe || 'untitled post'));
+          more.appendChild(summary);
+          const moreActions = document.createElement('div');
+          moreActions.className = 'post-more-actions';
+
+          // Author-accessible: copying only creates a draft, which POST /posts
+          // already allows any signed-in author to do.
           const dupBtn = document.createElement('button');
-          dupBtn.textContent = 'Duplicate';
+          dupBtn.type = 'button';
+          dupBtn.textContent = 'New from this one';
           dupBtn.className = 'btn-secondary';
-          dupBtn.style.marginLeft = '0.75rem';
-          dupBtn.style.fontSize = '0.7rem';
           dupBtn.addEventListener('click', () => duplicatePost(p));
-          tdActions.appendChild(dupBtn);
+          moreActions.appendChild(dupBtn);
           if (me && me.isAdmin) {
             if (p.status === 'published') {
               const unpubBtn = document.createElement('button');
+              unpubBtn.type = 'button';
               unpubBtn.textContent = 'Unpublish';
               unpubBtn.className = 'btn-secondary';
-              unpubBtn.style.marginLeft = '0.75rem';
-              unpubBtn.style.fontSize = '0.7rem';
               unpubBtn.addEventListener('click', () => unpublishPost(p, unpubBtn));
-              tdActions.appendChild(unpubBtn);
+              moreActions.appendChild(unpubBtn);
             }
             const delBtn = document.createElement('button');
+            delBtn.type = 'button';
             delBtn.textContent = 'Delete';
             delBtn.className = 'btn-remove';
-            delBtn.style.marginLeft = '0.75rem';
-            delBtn.style.fontSize = '0.7rem';
             delBtn.addEventListener('click', () => deletePost(p, delBtn));
-            tdActions.appendChild(delBtn);
+            moreActions.appendChild(delBtn);
           }
+          more.appendChild(moreActions);
+          wirePostDisclosure(more, summary);
+          actions.appendChild(more);
+          tdActions.appendChild(actions);
           tr.appendChild(tdActions);
 
           tbody.appendChild(tr);
@@ -451,11 +631,10 @@
       }
 
       function syncSelectAll() {
-        // Hidden for non-admins, who get no per-row checkboxes either — the bulk
-        // bar stays hidden regardless, so leaving it visible was a control that
-        // silently filled `selected` and then did nothing.
+        // Non-admins get neither the visible control nor per-row checkboxes;
+        // the server still enforces the role on every bulk request.
         const isAdmin = Boolean(me && me.isAdmin);
-        $('selectAll').hidden = !isAdmin;
+        $('selectAllControl').hidden = !isAdmin;
         if (!isAdmin) return;
         const visible = visiblePosts();
         const all = visible.length > 0 && visible.every((p) => selected.has(p.translationKey));
@@ -464,10 +643,14 @@
         $('selectAll').indeterminate = !all && some;
       }
 
-      function render() {
-        renderRows(visiblePosts());
+      function render(updateUrl) {
+        const posts = visiblePosts();
+        renderRows(posts);
         syncSelectAll();
         refreshBulkBar();
+        updateFilterContext(posts);
+        $('newPost').href = editorHref();
+        if (updateUrl) syncFilterUrl();
       }
 
       function fillOptions(select, values) {
@@ -485,49 +668,72 @@
       }
 
       async function load(statusMsg) {
+        // Remove stale rows and destructive controls before every reload. A
+        // failed refresh must not leave old actions reachable, even briefly.
+        allPosts = [];
+        openMoreActions = null;
+        $('postsList').innerHTML = '';
+        $('postsTable').hidden = true;
+        $('filters').hidden = true;
+        $('bulkBar').hidden = true;
+        $('retryLoad').hidden = true;
+        $('loadMsg').hidden = false;
+        $('loadMsg').setAttribute('role', 'status');
+        $('loadMsg').textContent = 'Loading posts…';
+
         // A refresh failure must not hide the outcome the caller already
-        // reported (e.g. "Unpublished … Rebuild failed: …") — append to it.
+        // reported (e.g. a successful unpublish followed by a failed reload).
         const loadFailed = (why) => {
+          allPosts = [];
+          selected.clear();
+          $('postsList').innerHTML = '';
+          $('resultsCount').textContent = '';
+          $('loadMsg').setAttribute('role', 'alert');
+          $('loadMsg').textContent = 'Posts could not be loaded.';
+          $('retryLoad').hidden = false;
+          refreshBulkBar();
           $('out').textContent = (statusMsg != null ? statusMsg + '\n' : '') + 'Could not load posts: ' + why;
         };
         try {
           const res = await fetch('/posts');
           if (res.status === 401) { location.href = '/login'; return; }
           if (!res.ok) { loadFailed(res.status); return; }
-          allPosts = await res.json();
+          const loaded = await res.json();
+          if (!Array.isArray(loaded)) { loadFailed('invalid response'); return; }
+          allPosts = loaded;
         } catch (e) {
           loadFailed(e);
           return;
         }
         // Drop selections for posts that no longer exist (e.g. after a bulk delete).
-        for (const k of [...selected]) {
-          if (!allPosts.some((p) => p.translationKey === k)) selected.delete(k);
+        for (const key of [...selected]) {
+          if (!allPosts.some((post) => post.translationKey === key)) selected.delete(key);
         }
-        $('loadMsg').style.display = 'none';
-        $('filters').hidden = false;
+        const countryOptions = PostsFilter.countries(allPosts);
         fillOptions($('fRegion'), PostsFilter.REGIONS);
-        fillOptions($('fCountry'), PostsFilter.countries(allPosts));
-        render();
-        $('postsTable').style.display = 'table';
-        // Callers that already set a status (e.g. an unpublish/delete outcome, which
-        // may report a rebuild failure) pass it through so it survives the reload.
-        $('out').textContent = statusMsg != null ? statusMsg : allPosts.length + ' post(s) loaded.';
+        fillOptions($('fCountry'), countryOptions);
+        if (!filtersInitialized) {
+          setFilterControls(PostsFilter.fromSearch(initialFilterSearch(), countryOptions));
+          filtersInitialized = true;
+        }
+        $('loadMsg').hidden = true;
+        $('filters').hidden = false;
+        $('postsTable').hidden = false;
+        render(true);
+        // Callers that already set an outcome pass it through so rebuild and
+        // partial-failure details survive the reload.
+        $('out').textContent = statusMsg != null ? statusMsg : '';
       }
 
       for (const id of ['fSearch', 'fStatus', 'fRegion', 'fCountry', 'fSort', 'fOrder']) {
-        $(id).addEventListener('input', render);
+        $(id).addEventListener('input', () => render(true));
       }
-      $('fReset').addEventListener('click', () => {
-        for (const id of ['fSearch', 'fStatus', 'fRegion', 'fCountry']) $(id).value = '';
-        $('fSort').value = 'updated';
-        $('fOrder').value = 'desc';
-        render();
-      });
+      $('fReset').addEventListener('click', resetFilters);
       $('fMore').addEventListener('click', () => {
         const extra = $('fExtra');
         extra.hidden = !extra.hidden;
         $('fMore').setAttribute('aria-expanded', extra.hidden ? 'false' : 'true');
-        $('fMore').textContent = extra.hidden ? 'More filters' : 'Fewer filters';
+        updateFilterContext(visiblePosts());
       });
 
       $('selectAll').addEventListener('change', () => {
@@ -537,6 +743,13 @@
         else visible.forEach((p) => selected.delete(p.translationKey));
         render();
       });
+
+      $('clearSelection').addEventListener('click', () => {
+        selected.clear();
+        render();
+        $('selectAll').focus();
+      });
+      $('retryLoad').addEventListener('click', () => load());
 
       $('bulkPublish').addEventListener('click', () => runBulk('publish'));
       $('bulkUnpublish').addEventListener('click', () => runBulk('unpublish'));
@@ -551,7 +764,7 @@
           if (res.status === 401) { location.href = '/login'; return; }
           const body = await res.json().catch(() => ({}));
           $('out').textContent = res.ok
-            ? 'Export done: ' + body.count + ' files'
+            ? 'Exported ' + body.count + ' MDX file(s) to the configured server backup directory.'
             : 'Export failed: ' + (body.error || res.status);
         } catch (e) {
           $('out').textContent = 'Export failed: ' + e;
