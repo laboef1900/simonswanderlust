@@ -114,15 +114,39 @@ window.LLM = (function () {
     return value.slice(0, 10).map((item) => cleanReviewText(item, 200));
   }
 
+  // A transport timer cannot interrupt synchronous parsing. One traversal plus
+  // bounded nesting keeps candidate parsing linear; mirror the canonical limits.
+  const MAX_REVIEW_OUTPUT = 128 * 1024;
+  const MAX_REVIEW_DEPTH = 32;
+  const MAX_REVIEW_CANDIDATES = 128;
+
   function parseEditorialReview(content) {
-    if (typeof content !== 'string') throw new Error('Invalid editorial review response');
+    if (typeof content !== 'string' || content.length > MAX_REVIEW_OUTPUT) throw new Error('Invalid editorial review response');
     const text = content.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '');
+    const starts = [];
+    let inString = false;
+    let escaped = false;
+    let candidates = 0;
     for (let i = 0; i < text.length; i++) {
-      if (text[i] !== '{') continue;
-      const end = matchBrace(text, i);
-      if (end < 0) continue;
+      const char = text[i];
+      if (inString) {
+        if (char === '\n' || char === '\r') { inString = false; escaped = false; }
+        else if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"' && starts.length) { inString = true; continue; }
+      if (char === '{') {
+        if (starts.length === MAX_REVIEW_DEPTH) break;
+        starts.push(i);
+        continue;
+      }
+      if (char !== '}' || starts.length === 0) continue;
+      const start = starts.pop();
+      if (++candidates > MAX_REVIEW_CANDIDATES) break;
       let value;
-      try { value = JSON.parse(text.slice(i, end + 1)); } catch (_) { continue; }
+      try { value = JSON.parse(text.slice(start, i + 1)); } catch (_) { continue; }
       if (!isReview(value)) continue;
       return {
         title: {

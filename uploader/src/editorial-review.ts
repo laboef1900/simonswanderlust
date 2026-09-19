@@ -112,37 +112,46 @@ function cleanReview(value: EditorialReviewResult): EditorialReviewResult {
   };
 }
 
-// String-aware brace matching follows caption.ts, but an unmatched prose brace
-// must not prevent the scanner from trying a later, complete review object.
-function matchBrace(text: string, start: number): number {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i++) {
-    const char = text[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (char === '\\') escaped = true;
-      else if (char === '"') inString = false;
-    } else if (char === '"') inString = true;
-    else if (char === '{') depth++;
-    else if (char === '}' && --depth === 0) return i;
-  }
-  return -1;
-}
 
-/** Extract the first schema-valid review, not the first JSON-shaped thought.
+// Bound synchronous work independently of the transport's abort timer: that timer
+// cannot run while JavaScript is parsing. At depth <= 32 each character belongs
+// to at most 32 candidate slices, so JSON.parse work is linear in bounded input.
+const MAX_REVIEW_OUTPUT = 128 * 1024;
+const MAX_REVIEW_DEPTH = 32;
+const MAX_REVIEW_CANDIDATES = 128;
+
+/** Extract a schema-valid review, not the first JSON-shaped thought.
  * An unclosed think block is discarded to EOF: a truncated thought is not a review.
  * Errors never include model text (which may contain private draft content). */
 export function parseEditorialReview(content: string): EditorialReviewResult {
-  if (typeof content !== 'string') throw new Error('Invalid editorial review response');
+  if (typeof content !== 'string' || content.length > MAX_REVIEW_OUTPUT) throw new Error('Invalid editorial review response');
   const text = content.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '');
+  const starts: number[] = [];
+  let inString = false;
+  let escaped = false;
+  let candidates = 0;
   for (let i = 0; i < text.length; i++) {
-    if (text[i] !== '{') continue;
-    const end = matchBrace(text, i);
-    if (end < 0) continue;
+    const char = text[i];
+    if (inString) {
+      // Raw newlines cannot occur in JSON strings. Recover from an unfinished
+      // quoted prose prefix without rescanning the suffix from another brace.
+      if (char === '\n' || char === '\r') { inString = false; escaped = false; }
+      else if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"' && starts.length) { inString = true; continue; }
+    if (char === '{') {
+      if (starts.length === MAX_REVIEW_DEPTH) break;
+      starts.push(i);
+      continue;
+    }
+    if (char !== '}' || starts.length === 0) continue;
+    const start = starts.pop()!;
+    if (++candidates > MAX_REVIEW_CANDIDATES) break;
     let candidate: unknown;
-    try { candidate = JSON.parse(text.slice(i, end + 1)); } catch { continue; }
+    try { candidate = JSON.parse(text.slice(start, i + 1)); } catch { continue; }
     if (isReview(candidate)) return cleanReview(candidate);
   }
   throw new Error('Invalid editorial review response');

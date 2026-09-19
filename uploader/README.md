@@ -228,6 +228,11 @@ control characters, caps text at 1,000 UTF-16 units, and caps each list at 10 st
 of 200 units (without splitting surrogate pairs). Empty strings/lists are allowed;
 title suggestions and the suggested excerpt are optional. Alt-text observations use
 `practicalDetails`, because the agreed result contract has no separate alt-text section.
+Parsing also bounds synchronous work: raw output may contain at most 128 Ki UTF-16
+units, with at most 32 open objects and 128 completed object candidates. A single
+string-aware traversal still recovers a valid review after unmatched prose braces;
+it never repeatedly scans the same suffix. Exceeding a bound rejects the response,
+rather than blocking the browser before its deadline/cancellation handler can run.
 
 Review calls use a 60-second default deadline (positive values up to 600,000 ms),
 covering response reads and at most one fallback without `response_format` after an

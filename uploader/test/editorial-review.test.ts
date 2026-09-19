@@ -67,6 +67,8 @@ describe('editorial review parser and shipped browser mirror', () => {
       '<THINK>Unbalanced { and "reasoning</THINK>\n' + json,
       'Here {are notes}.\n' + json + '\nTrailing {note}',
       'An unmatched { before the answer:\n' + json,
+      'An unmatched { and another { before the answer:\n' + json,
+      'An unfinished { "quoted thought\n' + json,
       '{"status":"thinking"}\n' + json,
       '{"title":{"status":"warn"}}\n' + json,
       '{malformed: "prefix"}\n' + json,
@@ -90,6 +92,37 @@ describe('editorial review parser and shipped browser mirror', () => {
     ];
     for (const content of invalid) {
       for (const parse of parsers) expect(() => parse(content)).toThrow('Invalid editorial review response');
+    }
+  });
+
+  it('rejects adversarial output promptly in both parsers, without depending on an abort timer', () => {
+    const inputs = [
+      '{'.repeat(100_000),
+      '{"nested":'.repeat(10_000) + '0' + '}'.repeat(10_000),
+      '{}'.repeat(10_000),
+      json + ' '.repeat(128 * 1024),
+      '<think>' + 'x'.repeat(128 * 1024) + '</think>' + json,
+    ];
+    for (const parse of parsers) {
+      for (const input of inputs) {
+        // The VM watchdog can interrupt a synchronous regression; a JS timer or
+        // Vitest's async timeout cannot interrupt the old quadratic suffix scan.
+        expect(() => runInNewContext('parse(input)', { parse, input }, { timeout: 1000 }))
+          .toThrow('Invalid editorial review response');
+      }
+    }
+  });
+
+  it('preserves recovery within the raw-output, nesting and candidate bounds', () => {
+    const withinBounds = [
+      ' '.repeat(128 * 1024 - json.length) + json,
+      '{'.repeat(30) + json, // Review sections occupy the 32nd object level.
+      '{}'.repeat(122) + json, // Five sections plus the review finish candidate 128.
+    ];
+    const beyondBounds = ['{'.repeat(31) + json, '{}'.repeat(123) + json];
+    for (const parse of parsers) {
+      for (const input of withinBounds) expect(parse(input)).toEqual(review);
+      for (const input of beyondBounds) expect(() => parse(input)).toThrow('Invalid editorial review response');
     }
   });
 
