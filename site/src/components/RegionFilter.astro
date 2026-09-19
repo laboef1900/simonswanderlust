@@ -46,7 +46,7 @@ const counts = regionCounts(trips);
 const allHref = homePath(locale) + '#stories';
 
 const item =
-  'group/dest inline-flex min-h-[44px] items-center gap-1.5 rounded font-mono text-[11px] font-semibold tracking-log uppercase underline-offset-4 transition-[color]';
+  'group/dest inline-flex min-h-[44px] items-center gap-1.5 rounded font-mono text-sm font-semibold tracking-log uppercase underline-offset-4 transition-[color]';
 const link = `${item} text-navy hover:text-brand-red hover:underline hover:decoration-dashed active:text-brand-red`;
 /*
   @ai-note The current region is not a link to itself. It reads as the place
@@ -63,11 +63,33 @@ const count = 'tabular-nums text-brand-red';
 ---
 
 <nav aria-label={t('regions.navLabel')} class="flex flex-wrap items-center gap-x-5 gap-y-1">
-  {
-    active && (
-      <a href={allHref} class={link}>
-        <span>{t('home.filter.all')}</span>
-        <span class={count}>{trips.length}</span>
+  {active && (
+    <a href={allHref} class={link}>
+      <span>{t('home.filter.all')}</span>
+      <span class={count}>{trips.length}</span>
+      <svg
+        aria-hidden="true"
+        focusable="false"
+        class="h-3 w-3 text-navy/55 transition-[color,transform] duration-300 group-hover/dest:text-brand-red motion-safe:group-hover/dest:translate-x-0.5"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+      >
+        <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    </a>
+  )}
+  {regions.map((region) =>
+    active === region ? (
+      <span aria-current="true" class={current}>
+        <span>{t(`region.${region}` as UIKey)}</span>
+        <span class={count}>{counts[region]}</span>
+      </span>
+    ) : (
+      <a href={regionPath(region, locale)} class={link}>
+        <span>{t(`region.${region}` as UIKey)}</span>
+        <span class={count}>{counts[region]}</span>
         <svg
           aria-hidden="true"
           focusable="false"
@@ -80,32 +102,6 @@ const count = 'tabular-nums text-brand-red';
           <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </a>
-    )
-  }
-  {
-    regions.map((region) =>
-      active === region ? (
-        <span aria-current="true" class={current}>
-          <span>{t(`region.${region}` as UIKey)}</span>
-          <span class={count}>{counts[region]}</span>
-        </span>
-      ) : (
-        <a href={regionPath(region, locale)} class={link}>
-          <span>{t(`region.${region}` as UIKey)}</span>
-          <span class={count}>{counts[region]}</span>
-          <svg
-            aria-hidden="true"
-            focusable="false"
-            class="h-3 w-3 text-navy/55 transition-[color,transform] duration-300 group-hover/dest:text-brand-red motion-safe:group-hover/dest:translate-x-0.5"
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </a>
-      ),
-    )
-  }
+    ),
+  )}
 </nav>
