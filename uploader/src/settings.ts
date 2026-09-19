@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DEFAULT_PROMPT } from './caption.js';
+import { DEFAULT_REVIEW_PROMPT } from './editorial-review.js';
 
 export type BackupSchedule = 'off' | 'daily' | 'weekly';
 
@@ -10,6 +11,11 @@ export interface Settings {
   captionTimeoutMs: number;
   captionMaxEdge: number;
   captionPrompt: string;
+  aiProvider: 'lm-studio' | 'openrouter' | 'deepseek' | 'custom';
+  aiModel: string;
+  aiCustomBaseUrl: string;
+  reviewPrompt: string;
+  reviewTimeoutMs: number;
   backupSchedule: BackupSchedule;
   backupRetention: number;
   /**
@@ -36,6 +42,11 @@ export function defaultSettings(): Settings {
     captionTimeoutMs: 60000,
     captionMaxEdge: 768,
     captionPrompt: DEFAULT_PROMPT,
+    aiProvider: 'lm-studio',
+    aiModel: 'qwen2.5-7b-instruct',
+    aiCustomBaseUrl: '',
+    reviewPrompt: DEFAULT_REVIEW_PROMPT,
+    reviewTimeoutMs: 60000,
     backupSchedule: 'off',
     backupRetention: 14,
     // The spacing and retry count the 2026-07-29 migration actually completed
@@ -70,6 +81,22 @@ const FIELD_CHECKS: { [K in keyof Settings]: (v: unknown) => string | null } = {
   captionMaxEdge: (v) =>
     intInRange(v, 256, 4096) ? null : 'Max edge must be a whole number between 256 and 4096 pixels.',
   captionPrompt: (v) => (typeof v === 'string' && v.trim() !== '' ? null : 'Prompt is required.'),
+  aiProvider: (v) =>
+    v === 'lm-studio' || v === 'openrouter' || v === 'deepseek' || v === 'custom'
+      ? null : 'Review provider must be lm-studio, openrouter, deepseek, or custom.',
+  aiModel: (v) => typeof v === 'string' && v.length <= 100 ? null : 'Review model must be a string of at most 100 characters.',
+  aiCustomBaseUrl: (v) => {
+    if (v === '') return null;
+    try {
+      const url = new URL(typeof v === 'string' ? v : '');
+      if ((url.protocol === 'http:' || url.protocol === 'https:')
+        && !url.username && !url.password && !url.search && !url.hash) return null;
+    } catch { /* Return a fixed message, never the submitted URL. */ }
+    return 'Custom base URL must be HTTP(S), without credentials, query, or fragment.';
+  },
+  reviewPrompt: (v) => typeof v === 'string' ? null : 'Review prompt must be a string.',
+  reviewTimeoutMs: (v) =>
+    intInRange(v, 5000, 300000) ? null : 'Review timeout must be a whole number of milliseconds between 5000 and 300000.',
   backupSchedule: (v) =>
     v === 'off' || v === 'daily' || v === 'weekly' ? null : 'Backup schedule must be off, daily, or weekly.',
   backupRetention: (v) =>
@@ -114,8 +141,9 @@ function loadSettings(path: string, defaults: Settings, log: (msg: string) => vo
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch (e) {
-    log(`settings: ${path} is not valid JSON, using defaults: ${(e as Error).message}`);
+  } catch {
+    // JSON parser messages can quote a pasted credential from the invalid file.
+    log(`settings: ${path} is not valid JSON, using defaults`);
     return { ...defaults };
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {

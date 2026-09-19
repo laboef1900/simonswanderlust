@@ -267,3 +267,41 @@ describe('import settings', () => {
     expect(createSettingsStore({ path, defaults: DEFAULTS }).get().importDelayMs).toBe(2500);
   });
 });
+
+describe('editorial review settings', () => {
+  it('enforces provider, model, destination and integer timeout boundaries', () => {
+    const invalid: Record<string, unknown>[] = [
+      { aiProvider: 'other' }, { aiProvider: ['custom'] }, { aiModel: 'x'.repeat(101) }, { aiModel: {} },
+      { aiCustomBaseUrl: 'file:///private' }, { aiCustomBaseUrl: 'relative/path' },
+      { aiCustomBaseUrl: 'https://user:password@example.test/v1' },
+      { aiCustomBaseUrl: 'https://example.test/v1?key=fixture' }, { aiCustomBaseUrl: 'https://example.test/v1#fragment' },
+      { reviewTimeoutMs: 4999 }, { reviewTimeoutMs: 300001 }, { reviewTimeoutMs: 5000.5 }, { reviewTimeoutMs: '60000' },
+      { reviewPrompt: null },
+    ];
+    for (const partial of invalid) expect(() => validate({ ...DEFAULTS, ...partial })).toThrow(SettingsError);
+    for (const provider of ['lm-studio', 'openrouter', 'deepseek', 'custom'] as const) {
+      expect(validate({ ...DEFAULTS, aiProvider: provider, aiModel: 'x'.repeat(100), reviewTimeoutMs: 5000 }).aiProvider).toBe(provider);
+    }
+    expect(validate({ ...DEFAULTS, aiCustomBaseUrl: 'http://localhost:1234/v1', reviewTimeoutMs: 300000 }).reviewTimeoutMs).toBe(300000);
+  });
+
+  it('keeps prior caption and backup configuration while new review fields roundtrip without a secret', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ lmModel: 'local-caption', backupSchedule: 'daily', aiApiKey: 'must-not-persist' }));
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(store.get()).toMatchObject({ lmModel: 'local-caption', backupSchedule: 'daily', aiProvider: 'lm-studio' });
+    store.update({ aiProvider: 'custom', aiModel: 'review-model', aiCustomBaseUrl: 'https://custom.example/v1', reviewTimeoutMs: 300000, reviewPrompt: 'Review this story.' });
+    const loaded = createSettingsStore({ path, defaults: DEFAULTS }).get();
+    expect(loaded).toMatchObject({ aiProvider: 'custom', aiModel: 'review-model', lmModel: 'local-caption', backupSchedule: 'daily', reviewTimeoutMs: 300000 });
+    expect(await readFile(path, 'utf8')).not.toContain('must-not-persist');
+    expect(loaded).not.toHaveProperty('aiApiKey');
+  });
+
+  it('does not quote a malformed settings file into logs', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, '{ \"aiApiKey\": \"private-fixture\" BROKEN');
+    const log = vi.fn();
+    createSettingsStore({ path, defaults: DEFAULTS, log });
+    expect(log.mock.calls.flat().join(' ')).not.toContain('private-fixture');
+  });
+});

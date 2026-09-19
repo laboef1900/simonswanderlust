@@ -215,7 +215,7 @@ The post editor and photo uploader offer a "Suggest alt text" button per alt fie
 downscales the picked photo and calls the author's local LM Studio (`<lmBaseUrl>/chat/completions`)
 directly — the app server never contacts the model. LM config (`lmBaseUrl`, `lmModel`,
 `captionTimeoutMs`, `captionMaxEdge`, `captionPrompt`) lives in the JSON settings store, edited on
-the admin-only Settings page; authors read it read-only via `GET /ai-config`. No
+the admin-only Settings page; authors read it via `GET /ai-config?purpose=caption`. No
 `docker-compose`/`.env` LM variables are needed.
 
 ### Editorial-review client API (#213)
@@ -248,15 +248,84 @@ without provider error text, draft content or keys. Redirects are refused, cooki
 omitted, and OpenRouter attribution is attached only for hostname `openrouter.ai`.
 Base URLs must be HTTP(S) with no credentials, query or fragment.
 
-This is the reusable client/contract slice, not a new editor action. Settings/secrets
-and the review drawer remain separate issues #214/#215. Existing `caption`, `listModels`,
-`prepImage`, and alt-text workflows are unchanged.
+`public/editor-review.js` integrates this client with the editor's **Review Story**
+drawer (#215). Existing `caption`, `listModels`, and `prepImage` behavior is unchanged.
+
+### Review providers and encrypted credentials (#214)
+
+Settings → **Editorial review** selects Local LM Studio, OpenRouter, DeepSeek, or a custom
+HTTP(S) OpenAI-compatible API base. Review model/prompt/timeout are separate from captions.
+The default provider is local; remote review is optional. No inference occurs on save.
+
+For remote credentials, privately generate a master key with `openssl rand -hex 32`, store
+its 64 hex characters as `ENCRYPTION_KEY` in the untracked root `.env`, and recreate the
+app container so Compose injects it. Never share its output or `docker compose config`
+output containing it. Leave the variable **unset**, not empty, for local-only use.
+Malformed supplied keys refuse boot; missing keys permit local startup/captions but
+encrypted operations report `ENCRYPTION_KEY not configured in .env`.
+
+Enter the provider key in the masked field. Blank leaves an existing key untouched;
+**Remove stored key** explicitly deletes it after confirmation. The chip means stored,
+not tested. Postgres stores AES-256-GCM ciphertext; **every signed-in author receives the
+shared plaintext key in browser memory** for direct provider calls. The server never
+contacts a model. The chosen provider receives review content; use provider-side limits
+and revoke/reissue a credential after suspected exposure.
+
+One key follows the selected remote destination. Review the warning when changing
+providers/custom URL; replace/remove a key that belongs elsewhere. Prefer HTTPS for
+custom endpoints. Browser CORS/mixed-content failures are not bypassed by a server proxy.
+
+Settings and key saves are not atomic across disk/Postgres. If the key commits and
+settings fail, the new key can remain associated with the old endpoint. The UI clears the
+typed key and reloads on partial/unknown outcomes; inspect the destination and deliberately
+replace/remove the key before remote use. Local caption config never reads secrets.
+
+**Recovery:** v6 DB dumps include encrypted secrets, not the master key or settings.json.
+Escrow the master key separately offsite and keep historical keys for historical dumps.
+Absent secrets in legacy v1–v5 preserve live rows; an empty v6 array intentionally clears
+them. Restore is still CLI-only, confirmed, with a pre-restore undo dump. Pause AI/settings
+edits during restore and reconcile the provider in settings.json before resuming.
+
+To rotate a provider key, replace it in Settings then revoke the old one externally.
+To rotate the master key, back up DB/settings and escrow the old key, pause remote use,
+install a new generated key/recreate the app, re-enter the provider credential, verify
+deliberately with non-sensitive content, and take a new backup. Changing only the master
+key does not re-encrypt old rows. Lost master keys require reissued provider credentials.
+Full misuse cases and rollback: [approved design](../docs/superpowers/specs/2026-09-19-encrypted-ai-review-secrets-design.md).
+
+### Review Story in the editor (#215)
+
+Choose **Review Story** to review the active DE or EN tab's **unsaved** title, excerpt,
+hero alt text and Markdown. Five deterministic checks appear immediately; editorial
+suggestions arrive asynchronously from the provider selected in Settings. Opening the
+drawer starts that browser-direct request, sending the active-locale snapshot to that
+provider. Use only content you intend to share with it.
+
+**Apply suggested title** and **Apply suggested excerpt** change only that locale's form
+field and mark the draft dirty. Loaded or manually entered slugs stay unchanged; a new
+automatic slug still derives from the title. Body prose is never replaced. Save draft
+or Publish remains an explicit, separate action; warnings and provider failures do not
+gate either action or bypass their existing validation.
+
+Quick-check links jump to the actual Markdown line in EasyMDE, or the hero alt field.
+Escape/Close returns focus to Review Story; a jump instead focuses its editing target.
+The drawer traps keyboard focus, scrolls on narrow screens and respects reduced motion.
+
+Closing, changing locale/post, restoring a draft, or editing the reviewed fields cancels
+and invalidates that review. **Review again** captures a fresh snapshot. Cancellation
+cannot recall content already sent to a provider. Late responses cannot apply to a
+different draft. Results and credentials are not persisted by the drawer.
+
+If the provider is offline, refuses access, times out or returns malformed output, the
+quick checks remain available with recovery guidance. Admins can follow **Open AI
+settings** where appropriate; authors are directed to their administrator. Missing
+OpenRouter/DeepSeek keys refuse the request locally; a keyless custom endpoint is allowed.
 
 ## Deterministic editorial checks
 
 `public/editor-linter.js` exposes `window.EditorLinter` for one unsaved locale; load
 `gallery-fence.js` first. It is a pure, network-free advisory module, not a save/publish
-gate. The review drawer is integrated separately (#215).
+gate, and supplies the Review Story drawer's immediate quick checks.
 
 Call `lintStory({ title, excerpt, markdown, heroSrc, heroAlt })`, or the individual
 `lintTitle`, `lintExcerpt`, `lintHeadings`, `lintAltText`, and `lintInternalLinks` checks.

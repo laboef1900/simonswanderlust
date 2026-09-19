@@ -51,6 +51,15 @@ Either way, redeploying the image doesn't rebuild the blog itself — see
 [docs/authoring-workflow.md](docs/authoring-workflow.md) (Stage 3) for how the static output on
 `/data` gets regenerated.
 
+Optional AI review providers are configured in the admin Settings page. Credentials are
+encrypted in Postgres but delivered to signed-in authors for **browser-direct** calls;
+the server never runs inference. Local captions require no master key. Remote credentials
+need private `ENCRYPTION_KEY` setup and separate key escrow for recovery — see
+[uploader operations](uploader/README.md#review-providers-and-encrypted-credentials-214).
+The editor's **Review Story** drawer combines immediate checks with optional provider
+suggestions for the unsaved active locale. Applying a title/excerpt is explicit; review
+never saves, rewrites the body or blocks publishing.
+
 ### Hardened base image (Docker Hardened Images)
 
 The `app` image is *built* on **DHI** (minimal, low-CVE, non-root) `dhi.io/node` bases. Because

@@ -1,6 +1,6 @@
 /*
  * Wires a "Suggest alt text" button to browser-direct LM Studio captioning.
- * On click: read the picked file, fetch read-only LM config from GET /ai-config,
+ * On click: fetch caption-only config (never remote credentials) from GET /ai-config?purpose=caption,
  * caption locally via LLM (llm.js), and fill the alt input with the matching
  * language ('de' → altDe, 'en' → altEn). The model is reached from THIS browser
  * (see llm.js); nothing hits the server. Failures degrade to an inline message —
@@ -11,7 +11,7 @@ window.AltSuggest = (function () {
   // host page with a DraftGuard (editor.html) can stash the draft, clear its
   // dirty flag (no surprise beforeunload prompt), and carry a ?next= back here.
   async function loadConfig(on401) {
-    const res = await fetch('/ai-config');
+    const res = await fetch('/ai-config?purpose=caption');
     if (res.status === 401) {
       if (on401) on401(); else location.href = '/login';
       throw new Error('unauthorized');

@@ -214,7 +214,7 @@ The post editor and photo uploader offer a "Suggest alt text" button per alt fie
 downscales the picked photo and calls the author's local LM Studio (`<lmBaseUrl>/chat/completions`)
 directly — the app server never contacts the model. LM config (`lmBaseUrl`, `lmModel`,
 `captionTimeoutMs`, `captionMaxEdge`, `captionPrompt`) lives in the JSON settings store, edited on
-the admin-only Settings page; authors read it read-only via `GET /ai-config`. No
+the admin-only Settings page; authors read it via `GET /ai-config?purpose=caption`. No
 `docker-compose`/`.env` LM variables are needed.
 
 The editorial-review client (#213, part of #211) shares `public/llm.js` without changing
@@ -223,9 +223,34 @@ default prompt and parser; the browser parser is checked against the same corpus
 `LLM.reviewStory` sends an active-locale draft snapshot directly to an OpenAI-compatible
 provider with an optional request-local Bearer key. Its one deadline covers the initial
 request, the single unsupported-`response_format` HTTP 400 fallback, and body reads;
-an optional AbortSignal lets the future drawer cancel stale work.
-This client/contract change does not add settings, credential storage, server inference,
-or editor controls: provider/secrets integration is tracked in #214 and the drawer in #215.
+an optional AbortSignal lets the drawer cancel stale work.
+Provider/secrets integration (#214) adds non-sensitive review settings to `settings.json`,
+and one AES-256-GCM encrypted `ai_api_key` in Postgres. Default `GET /ai-config` returns
+resolved provider config and the shared key to authenticated authors for browser-direct
+review; settings responses expose only `hasAiApiKey`. Caption-only config never queries
+or decrypts secrets, so a broken remote credential cannot break local captions. Both
+config surfaces are `Cache-Control: no-store`.
+
+The master key is optional bootstrap `ENCRYPTION_KEY` (32 bytes / 64 hex characters),
+forwarded explicitly by Compose. Missing means local-only startup remains available;
+supplied malformed values fail before schema work. No secret is stored in settings.json.
+Settings POST operations serialize, validate first, commit the secret, then atomically
+rename settings.json. **This is not a transaction across both stores:** a file failure
+can leave a new key with the old endpoint. The API reports partial failure and the UI
+clears its input and reloads; saving never runs inference. One key intentionally follows
+admin-selected remote destinations; the UI warns before a destination change.
+See [the approved design](docs/superpowers/specs/2026-09-19-encrypted-ai-review-secrets-design.md)
+for trust boundaries, failure semantics, key escrow, rotation, and rollback.
+
+The editor's `public/editor-review.js` controller (#215) owns a native modal slide-over:
+`EditorLinter.lintStory` renders five immediate checks, then `LLM.reviewStory` resolves
+semantic suggestions from the same unsaved active-locale snapshot. A request epoch,
+AbortController and editor identity check reject late results after close, re-review,
+locale/post changes, restoration or edits. Applying a suggestion dispatches the normal
+field input event under an owned-apply guard, preserving dirty tracking and slug derivation
+without invalidating the other suggestion. No body rewrite, autosave or publish gate is
+introduced. Source jumps close before focusing EasyMDE's zero-indexed line or hero alt;
+normal close restores the trigger. Review output is rendered as text and is not persisted.
 
 ## Data model (Postgres)
 
@@ -233,6 +258,7 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 
 - **`users`** — `id`, `username` (unique, case-insensitive), `password_hash` (scrypt), `is_admin`, `created_at`.
 - **`sessions`** — `id` (SHA-256 of the random token), `user_id` (FK, cascade), `expires_at`. Expired rows are swept hourly.
+- **`app_secrets`** — `key` primary key, `ciphertext`, `iv`, `tag` (hex-encoded AES-256-GCM envelope), `updated_at`. The master key and plaintext credentials never enter this table.
 - **`posts`** — one row per (`translation_key`, `locale`); `slug`, `title`, `date`, `country`, `country_code`, `region`, `excerpt`, `hero_image` (jsonb), `coordinates` (jsonb), optional `stops`/`route`/`key_facts`, `body_markdown`, `images` (jsonb), `status` (`draft`/`published`), `featured` (boolean, "use as homepage cover" — a SHARED value written to both locale rows, deliberately not unique: the homepage takes the newest flagged story and falls back to the newest story). Unique on (`locale`, `slug`) **where `slug <> ''`** — an empty slug means "not set yet" (a DE-first draft without an EN title), so any number of such drafts may coexist; `validateForPublish` requires a real slug per locale (#119).
 - **`media`** — one row per storage key: `folder` (virtual, decoupled from the key), `title`,
   bilingual `alt_*`/`caption_*`, `tags` (`text[]`), dimensions, byte sizes, `status`
@@ -287,18 +313,19 @@ botched restore, accidental delete), **not** against disk failure or host loss.
 
 > **Offsite backup is required for real DR:** run a host-level backup (e.g. a restic / borg /
 > rsync cron job) of `./uploader/data`. That one directory contains the DB dumps, the image
-> archives, and the image originals, so copying it offsite is the complete disaster-recovery
-> story. The manual download buttons on the settings page are an escape hatch, not a strategy.
+> archives, image originals, and settings.json. Encrypted AI credentials additionally require
+> **separate offsite master-key escrow**; `/data` and a DB dump cannot recover a lost master key.
+> The manual download buttons on the settings page are an escape hatch, not a strategy.
 
 ### Database dumps
 
 `uploader/src/backup.ts` provides app-native logical dumps (no `pg_dump`, no sidecar container):
 
 - **Dump format** — one file per run, `/data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`, containing
-  `{ "version": 5, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […] } }`
+  `{ "version": 6, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […] } }`
   with full column fidelity — an integration test diffs the dumped `posts` keys against
   `information_schema.columns`, so a column added in `db.ts` without touching `backup.ts` fails
-  the suite instead of silently vanishing from every backup. The five table reads run on one
+  the suite instead of silently vanishing from every backup. The six table reads run on one
   client inside a single `REPEATABLE READ` snapshot, so a bulk delete during a backup can never
   produce a dump whose `posts` reference `media` rows that aren't in it. `sessions` are
   **never** dumped — they're disposable, and token hashes don't belong in a backup file. A dump
@@ -307,12 +334,18 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   the directory, so the finished temp file is published with `link(2)` (fails with `EEXIST`
   where `rename` would clobber) and a taken name advances to the next free second while
   `createdAt` keeps the real time (#114).
-  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 5), so
+  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 6), so
   every bump must widen it or newly written dumps become unrestorable. v1 predates `pages`, v2
   predates the media tables, v3 predates `posts.categories`/`tags`/`scheduled_at`, v4 predates
   `posts.featured` (the homepage-cover flag); all still restore and leave what they never
   captured alone (for media, `POST /media/rescan` rebuilds the rows from the files on disk; the
   older post columns come back at their defaults — `'{}'`, `'{}'`, `NULL`, `false`).
+  v5 predates `app_secrets`: an absent secrets field preserves live rows; a present empty
+  array clears them; present rows replace them in the content restore transaction.
+  Restore needs no master key, but subsequent decryption needs the original key.
+  The CLI names replacement versus preservation and its pre-restore undo dump includes
+  current encrypted secrets. Pause AI/settings edits during restore and reconcile the
+  provider in settings.json before resuming: that file is not part of a logical DB dump.
   Two ordering details the naive version gets wrong: `media` and `media_folders` are deleted
   **before** `users` (`media.uploaded_by` is `ON DELETE SET NULL`, so the other order silently
   nulls every attribution), and `tags` is `text[]`, which cannot round-trip through the
@@ -478,6 +511,7 @@ the `IMAGE_TAG` defaults (`docker-compose.yml`, `uploader/.env.example`), commit
 | Var | Used by | Purpose |
 | :-- | :-- | :-- |
 | `DATABASE_URL` | app | Postgres connection (content + auth) |
+| `ENCRYPTION_KEY` | app | Optional 64-hex master key for encrypted AI credentials; unset permits local workflows, malformed values refuse boot; escrow separately |
 | `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.simonswanderlust.com`) |
 | `IMG_HOST` | app | Hostname routed to the image-variant static handler (defaults to the host of `PUBLIC_BASE_URL`) |
 | `SITE_APP_DIR` | app | Path to the Astro project the builder spawns (`/app/site`) |

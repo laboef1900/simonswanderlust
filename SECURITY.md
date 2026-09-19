@@ -305,10 +305,14 @@ unsupported `response_format` permits one retry without that parameter.
 
 Model output is untrusted: both review parsers validate required fields, types and statuses,
 reject extra properties, strip Unicode controls, and cap text/list lengths. This is not
-HTML sanitization: consumers must render results through `textContent`/input values, never
-`innerHTML`. The prompt treats the draft as data and asks for missing facts to verify,
-not invented facts or links. Reviews grant no write/publish authority. Credential storage
-and the editor drawer are outside #213 and tracked separately in #214/#215.
+HTML sanitization: the editor drawer renders results through `textContent`/input values,
+never `innerHTML`. The prompt treats the draft as data and asks for missing facts to verify,
+not invented facts or links. Reviews grant no write/publish authority: only explicit
+title/excerpt application changes form fields, and saving/publishing remains separate.
+The drawer does not persist results or credentials. It aborts and invalidates work when
+the reviewed draft changes or the drawer closes; late results cannot mutate another
+locale/post. Cancellation does not retract a snapshot already received by the provider.
+Deterministic checks remain usable when remote review fails.
 
 ### Retry widened the per-URL window (issue #85, 2026-07-30; narrowed by #93, 2026-09-05)
 
@@ -500,6 +504,34 @@ preview even though the live site would load it.
 - The rebuild trigger (`POST /rebuild`) and the DB backup routes (`GET`/`POST /backups`,
   `GET /backups/:name`) are gated by `requireAdmin` — no separate shared secret; the retired
   `BUILD_SECRET` / `x-build-secret` mechanism no longer exists.
+- **AI review credentials (#214):** one `app_secrets.ai_api_key` slot uses AES-256-GCM,
+  random 12-byte IVs, and 16-byte authentication tags. Hex-encoded envelopes are stored in
+  Postgres; the 32-byte `ENCRYPTION_KEY` stays in private bootstrap configuration. Missing
+  encryption configuration leaves local workflows available; malformed supplied values
+  stop boot before schema work. Wrong keys/tampering fail closed with fixed sanitized
+  errors, without logging raw crypto/driver errors or credential-bearing request bodies.
+- **Author disclosure is deliberate:** admin-only settings writes manage the shared key,
+  while full authenticated `GET /ai-config` returns plaintext in browser memory for
+  browser-direct review. `GET/POST /settings` return presence only, never key/ciphertext.
+  Both endpoints use `Cache-Control: no-store`. Do not persist keys in browser storage,
+  draft backups, URLs, logs, or rendered output. TLS at the proxy remains required.
+  Every author can copy the returned key; session revocation cannot retract it. Revoke at
+  the provider after suspected exposure and use provider-side access/spend limits.
+- **No server AI egress:** the server never fetches provider URLs. The caption-only query
+  `GET /ai-config?purpose=caption` returns only existing LM settings and performs no secret
+  lookup, so remote crypto failures do not disable local alt text. Presets and custom
+  HTTP(S) destinations are admin authority; a retained key follows a destination change.
+  UI warnings do not bind keys to providers. Custom HTTP can expose key/content on the
+  network; prefer HTTPS and never add a proxy to work around CORS/mixed-content failures.
+- **Settings failure residual:** settings.json and Postgres cannot commit together. The
+  serialized save prevalidates everything, commits the secret first, then writes settings.
+  A subsequent failure can leave a new key with the old endpoint; responses explicitly
+  report partial or unknown outcomes. Reload and deliberately reconcile before inference.
+  The UI clears its typed key, reloads presence/settings, and never runs inference on save.
+- Encryption at rest does not isolate secrets from a compromised host/app/browser,
+  replay of an older valid DB row, Docker-inspection privileges, or the existing build
+  child's inherited environment. Explicit owner implementation approval and recovery:
+  `docs/superpowers/specs/2026-09-19-encrypted-ai-review-secrets-design.md`.
 
 ## Single app container
 
@@ -544,6 +576,15 @@ deliberate trade-off, not an oversight:
 - Backup dumps (`/data/backup/db/db-*.json.gz`) contain the `users` table **including scrypt
   password hashes** — treat backup files as sensitive, same as the database itself. `sessions` are
   **never** dumped (disposable, and token hashes don't belong in a backup).
+- Version 6 also captures encrypted `app_secrets` in the same repeatable-read snapshot,
+  never plaintext/master keys. Retain the matching master key separately for every backup
+  generation. An absent secrets field in v1–v5 (or v6) preserves live rows; a present array
+  replaces them, including an intentional empty array, inside the restore transaction.
+  The CLI's pre-dump includes secrets and its summary distinguishes preserve/replace.
+  Reconcile settings.json and the matching master key before resuming remote review:
+  logical dumps do not capture the settings file. A lost master key requires reissuing
+  the provider credential, not bypassing encryption. Removing a row does not revoke the
+  key externally or remove copies in old backups.
 - Image archives (`/data/backup/db/images-*.tar`) contain no password hashes — only the already
   publicly served image files — but their download route stays behind the same admin gate and
   strict filename validation as the dumps.

@@ -17,6 +17,8 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://img.simonswanderlust.com}
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-images}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-images}}
       IMG_HOST: ${IMG_HOST:-img.simonswanderlust.com}
+      # Optional passthrough: omitted stays absent, explicitly empty is invalid.
+      ENCRYPTION_KEY:
     # Memory ceiling (issue #71). Without one, a spike takes the whole `app`
     # container down — blog, admin, image host and any in-flight build together.
     #
