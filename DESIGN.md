@@ -312,9 +312,10 @@ allowed to speak.
   follow the mosaic, with a two-line clamp and a full `title` attribute.
 - **Body** (400, `16px`, line-height 1.5): the document default, `ink` on canvas.
 - **Body Long** (400, `18px`, line-height 1.778): the story article, via
-  `prose prose-lg`. The column is `768px` minus `20px` gutters = **728px** of
-  measure; `max-w-none` overrides the typography plugin's 65ch cap, so the
-  measure is set by the container, not by the prose.
+  `prose prose-lg`. Beside the rail the column is **728px** of measure; below
+  the opening spread the body runs **800px** (`--container-story-wide`).
+  `max-w-none` overrides the typography plugin's 65ch cap, so the measure is
+  set by the container, not by the prose.
 - **Body Small** (400, `14px`, line-height 1.43): excerpts, footer links, nav
   labels, the map CTA.
 - **Label** (600 mono, `11px`, `0.18em`, uppercase): the compact identity
@@ -338,10 +339,12 @@ a tracking value, and never a coloured plate, which is what the card's date
 line used to be.
 
 **Where the entry number belongs.** `N°09` is a signature mark and it earns
-its place where it says something: the hero's entry, and the story page. It was
-also on every grid card, nine of them down one index, restating an order the
-grid's own newest-first sequence already shows. Removing it there is not a
-retreat from the identity — it is spending the mark where it carries meaning.
+its place where it says something: the homepage hero's entry, where it
+introduces the latest story as one of a numbered series. It was also on every
+grid card, nine of them down one index, restating an order the grid's own
+newest-first sequence already shows, and on the story page, where the reader
+has already arrived and the number told them nothing they act on. Spending
+the mark where it carries meaning is not a retreat from the identity.
 
 ### Named Rules
 
@@ -365,27 +368,34 @@ so the content box locks at 1152px once the viewport passes **1192px** — the
 number `story-grid-layout.ts` calls `CONTENT_LOCKED_AT` and uses to emit exact
 pixel `sizes`.
 
-**The story spread.** From `lg` a story is a reading column beside a rail
-inside the 1112px content box: column `min(45.5rem, 100% − 21rem)`, a `3rem`
-gap, rail `clamp(18rem, 100% − 48.5rem, 21rem)` (`--container-story-column` /
-`--container-story-rail`). The column yields first — 648px at a 1024
-viewport, the full 728px from 1192 — and the rail grows once the column is
-full; the three always sum to exactly 100%. The rail holds the story's
-furniture — contents, key facts, the route map — open in a stack that stays
-`0.5rem` from the viewport top while the story is in view. The stack is capped
-at `calc(100dvh − 1rem)` and scrolls internally with contained overscroll, so
-short viewports do not make its later controls unreachable. Below `lg` the same
-three elements are collapsed disclosures stacked above the article. The outer
-wrapper remains a **float**, not a grid column, because the article is one
-rendered body that cannot be split around a sidebar, and a wide gallery near
-the top must not run under the rail: `clear: right` on the wide modes drops such
-a gallery below the rail and leaves every later one where it is.
-The title block widens with it, the text keeping the column's width so its
-left edge meets the article's, and the arrival stamp moves to the top-right
-corner above the rail — the same place it sits on the homepage hero. This is
-what the WordPress site's opening row was for (intro, facts, contents and a
-photograph in the first screen); what it got wrong was setting the body at the
-same 1140px, ~140 characters a line.
+**The story spread.** From `lg` a story opens as its first section beside a
+rail inside the 1112px content box: column `min(45.5rem, 100% − 21rem)`, a
+`3rem` gap, rail `clamp(18rem, 100% − 48.5rem, 21rem)`
+(`--container-story-column` / `--container-story-rail`). The column yields
+first — 648px at a 1024 viewport, the full 728px from 1192 — and the rail grows
+once the column is full; the three always sum to exactly 100%. The rail holds
+the story's furniture — contents, key facts, the route map — open in a stack
+that stays `0.5rem` from the viewport top while the *opening* is in view. The
+stack is capped at `calc(100dvh − 1rem)` and scrolls internally with contained
+overscroll, so short viewports do not make its later controls unreachable.
+The opening is the body's first section — everything before the first
+top-level heading that has content in front of it (`story-opening.ts`), so
+an intro heading, its paragraphs and its first photograph sit beside the
+rail. The rest of the story then runs **centred and wider**: `50rem`
+(`--container-story-wide`, ~82 characters of prose-lg), with the route
+divider and pagination on the same measure. The spread wrapper is a
+**float** container, not a grid, because the opening is one rendered section
+that is not split further, and a wide gallery in it must not run under the
+rail: `clear: right` on the wide modes drops such a gallery below the rail.
+Below `lg` the spread and rail wrappers are `display: contents`, so the same
+three disclosures stack above one continuous article and the sticky contents
+strip keeps the whole story as its containing block.
+The title block widens with the spread, the text keeping the column's width
+so its left edge meets the opening's, and the arrival stamp moves to the
+top-right corner above the rail — the same place it sits on the homepage
+hero. This is what the WordPress site's opening row was for (intro, facts,
+contents and a photograph in the first screen); what it got wrong was setting
+the body at the same 1140px, ~140 characters a line.
 
 **The story mosaic.** From `640px`, six columns, `280px` auto-rows and `16px`
 gaps. Spans of 3 give two cards per row, spans of 2 give three. Six
@@ -431,13 +441,13 @@ thumbnail reuses the photograph already requested by the eager hero.
 either side of the 728px column, and `100vw - 3.5rem` keeps it clear of the
 classic scrollbar. It is centred with `margin-inline`, never
 `transform: translateX(-50%)`, because a transform would make the gallery a
-containing block and trap the lightbox dialog inside it. From `lg` it spans the
-whole spread (`100cqw` of `.story-reading`) from the column's left edge instead
-— centred on a column that now sits left of centre, it would cross the
-viewport's left edge. Break-out is opt-in (`#layout: breakout`); the default
-gallery is `column`, aligned with the text as the WordPress galleries were.
-That flip cost nothing in photo size: the old galleries were ~1140px wide, and
-so is the break-out; what changed is that the text got narrower.
+containing block and trap the lightbox dialog inside it. From `lg` a wide
+gallery *in the opening* spans the whole spread (`100cqw` of `.story-spread`)
+from the column's left edge instead — centred on a column that sits left of
+centre, it would cross the viewport's left edge. In the centred body below
+the spread the default centring holds, and 800 + 24rem clips to the same
+1112px. Break-out is opt-in (`#layout: breakout`); the default gallery is
+`column`, aligned with the text as the WordPress galleries were.
 
 ### Named Rules
 
@@ -607,7 +617,7 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
   - *No entry number, no cover marker.* Nine `N°` labels down one index
     restated an order the newest-first grid already shows, and the cover marker
     put a second coloured object on the one card that least needed decorating.
-    The `N°` still leads the hero and every story page.
+    The `N°` now leads the homepage hero alone.
   - *No card-height scrim.* There used to be one (`from-navy/90 via-navy/35
     via-55%`) serving the title. It cannot serve it any more: with the date
     line below the heading the title's top sits around 46% of the card, where
@@ -655,19 +665,24 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
 
 ### Story Opening
 
-`StoryHero.astro` owns the photograph, title, entry/date/country line,
-coordinates, arrival stamp and optional translation link. The photograph leads;
-every word sits on canvas below it at every width. The translation link is a
-secondary action in the site's link register: 14px medium navy on canvas
-(**14.114:1**), with the red accent reserved for hover and active states; its
-44px hit box and arrow remain. Below `lg` the title and body share the `768px`
-container with `20px` gutters and the stamp sits beside the coordinate and
-translation group. From `lg` the block is the spread's grid: the text keeps the
-reading column's width, and the stamp is placed top-right above the rail — one
-element, two grid placements, no duplicate markup. Responsive source hints
-account for the photograph's actual aspect ratio when desktop cover cropping
-needs a wider source. Mobile retains the whole frame, including portrait
-photographs. No title clamp or photographic scrim.
+`StoryHero.astro` owns the photograph, title, field line, arrival stamp and
+optional translation link. The photograph leads; every word sits on canvas
+below it at every width. The field line is one mono log entry: date · country
+at weight 600, then the coordinates at weight 400 beside them — the measurement
+next to its label, both at `navy/70`. No entry number: on the story page it
+only ever said "sixth story published", which no reader navigates by, and
+with the coordinates on the same line it would have crowded the entry. The
+homepage hero keeps it. The translation link is a secondary action in the
+site's link register: 14px medium navy on canvas (**14.114:1**), with the red
+accent reserved for hover and active states; its 44px hit box and arrow
+remain. Below `lg` the title and body share the `768px` container with `20px`
+gutters and the stamp sits beside the translation link. From `lg` the block is
+the spread's grid: the text keeps the reading column's width, and the stamp is
+placed top-right above the rail — one element, two grid placements, no
+duplicate markup. Responsive source hints account for the photograph's actual
+aspect ratio when desktop cover cropping needs a wider source. Mobile retains
+the whole frame, including portrait photographs. No title clamp or
+photographic scrim.
 
 ### Navigation
 
@@ -757,11 +772,20 @@ Hand-written CSS classes, not utilities, because the draft preview inlines its
 own copy and the justified layout drives per-photo flex ratios from computed
 custom properties. Three modes: justified rows at break-out or column width, and
 a cropping slider. Photos take `8px` corners and captions are 12.8px at
-`#4a5563`. Row *membership* is fixed at build time for a 1112px or 728px
-container; only justification within a row is fluid. The last row is capped as a
-**percentage** of the container so the remainder keeps matching the row above
-it — a pixel cap computed at the design width left a 242px-tall remainder beside
-167px rows on a tablet.
+`#4a5563`. Row *membership* is fixed at build time for a 1112px or 800px
+container; only justification within a row is fluid.
+
+**A gallery is a square.** Rows are cut so the block stacks as close to as tall
+as it is wide as a contiguous, order-preserving split allows: the row count is
+whichever lands nearest the width, and within that count the rows are the most
+even (`gallery-layout.ts`, a small DP). Every row fills the width — there is no
+ragged remainder, and two landscapes stack rather than sit as a wide, short
+pair. The square yields to a floor: no row of two or more photos may be shorter
+than **168px** at design width (three landscapes a row in the column, four in
+the break-out), so a 37-photo gallery grows taller than it is wide instead of
+becoming a contact sheet. The one cap left is on a row that would stand taller
+than the square — a lone portrait — held at the square's own height as a
+**percentage** of the container so it scales with it.
 
 ## Do's and Don'ts
 

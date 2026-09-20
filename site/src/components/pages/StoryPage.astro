@@ -8,8 +8,9 @@ import StoryPagination from '../StoryPagination.astro';
 import Toc from '../Toc.astro';
 import StoryMiniMap from '../StoryMiniMap.astro';
 import GalleryIsland from '../GalleryIsland.astro';
-import { byLocale, entryNumberOf, localeOf, pathOf, translationOf, type Trip } from '../../lib/trips';
+import { byLocale, localeOf, pathOf, translationOf, type Trip } from '../../lib/trips';
 import { PROD_SITE, blogPostingJsonLd, serializeJsonLd } from '../../lib/seo';
+import { splitOpening } from '../../lib/story-opening';
 
 interface Props {
   trip: Trip;
@@ -17,15 +18,22 @@ interface Props {
 
 const { trip } = Astro.props;
 const locale = localeOf(trip);
-const { Content, headings } = await render(trip);
+const { headings } = await render(trip);
+// The body is one rendered HTML string (postgres-loader.ts renders and
+// sanitises it at sync time; <Content /> would print the same string). It is
+// split here, not in the loader, because the cut is a layout decision: the
+// first section sits beside the rail, the rest runs centred and wider.
+const { opening, rest } = splitOpening(trip.rendered?.html ?? '', headings);
 
 const all = await getCollection('trips');
-const number = entryNumberOf(trip, all);
 const other = translationOf(trip, all);
 const siblings = byLocale(all, locale);
 const index = siblings.findIndex((s) => s.id === trip.id);
 const newer = index > 0 ? siblings[index - 1] : undefined;
 const older = index < siblings.length - 1 ? siblings[index + 1] : undefined;
+
+const PROSE =
+  'story-body prose prose-lg max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-headings:break-words prose-p:break-words prose-li:break-words prose-a:font-semibold prose-a:text-brand-red prose-a:no-underline hover:prose-a:underline prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:bg-navy/[0.02] prose-blockquote:py-3 prose-blockquote:px-5 prose-blockquote:italic prose-blockquote:text-navy';
 
 const alternates = other
   ? locale === 'de'
@@ -57,70 +65,98 @@ const jsonLd = serializeJsonLd(
 >
   {/* serializeJsonLd escapes '<' — safe for set:html even with CMS-authored titles. */}
   <script type="application/ld+json" set:html={jsonLd} is:inline />
-  <StoryHero trip={trip} number={number} locale={locale} otherHref={other ? pathOf(other) : undefined} />
+  <StoryHero trip={trip} locale={locale} otherHref={other ? pathOf(other) : undefined} />
 
   <div class="mx-auto max-w-3xl px-5 pt-5 pb-10 sm:pt-6 lg:max-w-6xl">
     <div class="story-reading">
-      {/* The rail: contents, key facts and the route map. Below lg both
-          wrappers are `display: contents`, so these are the same three
-          disclosures stacked above the article they always were (and the
-          sticky strip's containing block stays .story-reading). From lg the
-          outer wrapper floats beside the reading column, the inner stack stays
-          in view, and the disclosures start open. */}
-      <div class="story-rail">
-        <div class="story-rail__stack">
-          <Toc headings={headings} locale={locale} />
-          {
-            trip.data.keyFacts && (
-              <KeyFacts facts={trip.data.keyFacts} country={trip.data.country} locale={locale} />
-            )
-          }
-          <StoryMiniMap trip={trip} locale={locale} />
+      {/* The opening spread: the first section beside the rail (contents, key
+          facts, route map). Below lg the spread and both rail wrappers are
+          `display: contents`, so these are the same three disclosures stacked
+          above the article they always were, and the sticky strip's
+          containing block stays .story-reading — the whole story. From lg the
+          rail floats beside the opening, its stack stays in view for the
+          spread's height, and the disclosures start open. */}
+      <div class="story-spread">
+        <div class="story-rail">
+          <div class="story-rail__stack">
+            <Toc headings={headings} locale={locale} />
+            {
+              trip.data.keyFacts && (
+                <KeyFacts facts={trip.data.keyFacts} country={trip.data.country} locale={locale} />
+              )
+            }
+            <StoryMiniMap trip={trip} locale={locale} />
+          </div>
         </div>
+        {/* Inline and synchronous, so the rail is open before first paint on a
+            desktop viewport. Without JavaScript the rail is still there, just
+            collapsed — the same disclosures the narrow layout ships. */}
+        <script is:inline>
+          if (matchMedia('(width >= 64rem)').matches) {
+            for (const d of document.querySelectorAll('.story-rail__stack > details')) d.open = true;
+          }
+        </script>
+        {/* `opening`/`rest` are the loader's own sanitised render, cut at a
+            heading boundary — the same string <Content /> would print. The
+            drop cap belongs to the story's first paragraph only. */}
+        <article
+          class:list={[
+            PROSE,
+            'lg:w-story-column prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red',
+          ]}
+          set:html={opening}
+        />
       </div>
-      {/* Inline and synchronous, so the rail is open before first paint on a
-          desktop viewport. Without JavaScript the rail is still there, just
-          collapsed — the same disclosures the narrow layout ships. */}
-      <script is:inline>
-        if (matchMedia('(width >= 64rem)').matches) {
-          for (const d of document.querySelectorAll('.story-rail__stack > details')) d.open = true;
-        }
-      </script>
-      <article id="story-body" class="prose prose-lg max-w-none lg:w-story-column prose-headings:font-extrabold prose-headings:text-navy prose-headings:break-words prose-p:break-words prose-li:break-words prose-a:font-semibold prose-a:text-brand-red prose-a:no-underline hover:prose-a:underline prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:bg-navy/[0.02] prose-blockquote:py-3 prose-blockquote:px-5 prose-blockquote:italic prose-blockquote:text-navy prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red">
-        <Content />
-      </article>
+      {/* The rest of the story: centred, and wider than the column beside the
+          rail (50rem against 45.5rem). Break-out galleries centre on it with
+          the default overhang; the spread's 100cqw rule does not reach here. */}
+      {rest !== '' && <article class:list={[PROSE, 'story-rest mx-auto lg:max-w-story-wide']} set:html={rest} />}
       <GalleryIsland locale={locale} />
     </div>
 
-    <div class="mt-12">
+    <div class="mx-auto mt-12 lg:max-w-story-wide">
       <RouteDivider />
+      <StoryPagination older={older} newer={newer} locale={locale} />
     </div>
-    <StoryPagination older={older} newer={newer} locale={locale} />
   </div>
 </Base>
 
 <style>
-  .story-rail {
-    display: contents;
-  }
+  .story-spread,
+  .story-rail,
   .story-rail__stack {
     display: contents;
   }
 
+  /* Below lg the two articles read as one: the rest's first heading carries
+   * the same clearance prose-lg gives an h2 mid-body (44px). From lg the gap
+   * marks the change of layout, spread → centred body. */
+  .story-rest {
+    margin-top: 2.75rem;
+  }
+
   /* The opening spread (≥ lg). A float rather than a grid on purpose: the
-   * reading column is one <Content /> we cannot split, and a wide gallery near
-   * the top must not run under the rail. `clear: right` on the wide modes does
-   * that with no script measuring anything — a gallery the rail would overlap
-   * moves below it; one further down is already clear and does not move.
-   * (Relying on the gallery's own formatting context to avoid the float does
-   * NOT work: the float sits outside the article's inline range, so the
-   * article's children never see it. Measured, not assumed.)
+   * opening is one rendered section we do not split further, and a wide
+   * gallery in it must not run under the rail. `clear: right` on the wide
+   * modes does that with no script measuring anything — a gallery the rail
+   * would overlap moves below it; one further down is already clear and does
+   * not move. (Relying on the gallery's own formatting context to avoid the
+   * float does NOT work: the float sits outside the article's inline range,
+   * so the article's children never see it. Measured, not assumed.)
    * Column-width galleries never meet the rail: the column, the 3rem gap and
-   * the rail sum to exactly 100% (see --container-story-* in global.css). */
+   * the rail sum to exactly 100% (see --container-story-* in global.css).
+   * The spread — not .story-reading — is the float's and the sticky rail's
+   * containing block, which is what keeps the rail beside the opening and
+   * off the centred body below. */
   @media (width >= 64rem) {
-    .story-reading {
+    .story-spread {
+      display: block;
       /* Contains the float, and makes 100cqw below mean "the whole spread". */
       container-type: inline-size;
+    }
+
+    .story-rest {
+      margin-top: 4rem;
     }
 
     .story-rail {
@@ -144,15 +180,15 @@ const jsonLd = serializeJsonLd(
       scrollbar-color: var(--color-navy) var(--color-canvas);
     }
 
-    /* A wide gallery spans the whole spread from the column's left edge,
-     * instead of centring on the column — which, with the column now left of
-     * centre, would push it past the viewport's left edge. Not mirrored into
-     * preview.ts (its parity test scrapes global.css only): the draft preview
-     * has no rail, so it keeps the centred break-out. The article must stay a
-     * plain block (no overflow/contain/flow-root) or the clearance stops
-     * seeing the rail. */
-    .story-reading :global(.jgal--breakout),
-    .story-reading :global(.jgal--slider) {
+    /* A wide gallery in the opening spans the whole spread from the column's
+     * left edge, instead of centring on the column — which, with the column
+     * left of centre, would push it past the viewport's left edge. Not
+     * mirrored into preview.ts (its parity test scrapes global.css only): the
+     * draft preview has no rail, so it keeps the centred break-out. The
+     * article must stay a plain block (no overflow/contain/flow-root) or the
+     * clearance stops seeing the rail. */
+    .story-spread :global(.jgal--breakout),
+    .story-spread :global(.jgal--slider) {
       --jgal-w: 100cqw;
       margin-inline: 0;
       clear: right;

@@ -2,17 +2,16 @@
 import RemoteImage from './RemoteImage.astro';
 import Stamp from './Stamp.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
-import { coordsLabel, dateLabel, entryLabel } from '../lib/format';
+import { coordsLabel, dateLabel } from '../lib/format';
 import { heroAltOf, type Trip } from '../lib/trips';
 
 interface Props {
   trip: Trip;
-  number: number;
   locale: Locale;
   otherHref?: string;
 }
 
-const { trip, number, locale, otherHref } = Astro.props;
+const { trip, locale, otherHref } = Astro.props;
 const t = useTranslations(locale);
 const otherLocale = locale === 'de' ? 'en' : 'de';
 const image = trip.data.heroImage;
@@ -33,30 +32,31 @@ const sizes = `(max-width: 639px) 100vw, max(100vw, clamp(${240 * aspect}px, ${3
   />
 
   {/* One grid, two placements. Below lg: field line and title span both
-      columns, then coordinates beside the stamp — the old two-cell row. From
-      lg the block widens to the site container and the stamp moves to the
-      top-right corner above the story rail, as on the homepage hero; the text
-      keeps the reading column's width (--container-story-column) so the
-      title's left edge lines up with the article below it. */}
+      columns, then the translation link beside the stamp — the old two-cell
+      row. From lg the block widens to the site container and the stamp moves
+      to the top-right corner above the story rail, as on the homepage hero;
+      the text keeps the reading column's width (--container-story-column) so
+      the title's left edge lines up with the article below it.
+      The field line is the story's log entry: date · country, then the
+      coordinates in the quiet weight — a measurement beside its label. No
+      entry number here: it only ever said "sixth story published", which no
+      reader navigates by; the homepage hero keeps it. */}
   <div class="mx-auto grid max-w-3xl grid-cols-[minmax(0,1fr)_auto] gap-x-4 px-5 pt-6 pb-4 sm:pt-8 lg:max-w-6xl lg:grid-cols-[var(--container-story-column)_minmax(0,1fr)] lg:gap-x-12">
-    <p class="col-span-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-xs font-semibold tracking-log uppercase lg:col-span-1">
-      <span class="text-brand-red">{entryLabel(number)}</span>
-      <span class="break-words text-navy/70">— {dateLabel(trip.data.date, locale)} · {trip.data.country}</span>
+    <p class="col-span-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 font-mono text-xs tracking-log text-navy/70 uppercase lg:col-span-1">
+      <span class="break-words font-semibold">{dateLabel(trip.data.date, locale)} · {trip.data.country}</span>
+      <span class="whitespace-nowrap">{coordsLabel(trip.data.coordinates)}</span>
     </p>
     <h1 class="col-span-2 mt-2 text-2xl leading-[1.12] font-extrabold text-balance break-words hyphens-auto text-navy sm:text-3xl sm:hyphens-none md:text-4xl lg:col-span-1">
       {trip.data.title}
     </h1>
     <div class="mt-4 min-w-0 self-center">
-      <p class="font-mono text-xs leading-relaxed tracking-log text-navy/70">
-        {coordsLabel(trip.data.coordinates)}
-      </p>
       {
         otherHref && (
           <a
             href={otherHref}
             lang={otherLocale}
             hreflang={otherLocale}
-            class="mt-1 inline-flex min-h-[44px] items-center gap-2 rounded-sm py-2 text-sm font-medium text-navy underline-offset-4 transition-[color] hover:text-brand-red hover:underline active:text-brand-red focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2"
+            class="inline-flex min-h-[44px] items-center gap-2 rounded-sm py-2 text-sm font-medium text-navy underline-offset-4 transition-[color] hover:text-brand-red hover:underline active:text-brand-red focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2"
           >
             <span>{t('story.otherLang')}</span>
             <svg aria-hidden="true" focusable="false" class="h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">

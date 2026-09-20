@@ -25,14 +25,16 @@
    * component should reach for; an arbitrary `tracking-[…]` in a component is
    * the drift this replaces. */
   --tracking-log: 0.18em;
-  /* Story spread (≥ lg, StoryHero + StoryPage): the reading column beside a
+  /* Story spread (≥ lg, StoryHero + StoryPage): the opening section beside a
    * rail, 3rem apart, inside the 1112px content box (max-w-6xl minus 2 × px-5).
    * The column yields first — 648px at a 1024 viewport, 728px from 1192 — and
    * the rail grows from 18rem to 21rem once the column is full. Their sum with
    * the gap is always exactly 100%, so a rail floated beside the column never
-   * intrudes into its line boxes. */
+   * intrudes into its line boxes. Below the spread the rest of the story runs
+   * centred at --container-story-wide (800px, ~82 characters of prose-lg). */
   --container-story-column: min(45.5rem, 100% - 21rem);
   --container-story-rail: clamp(18rem, 100% - 48.5rem, 21rem);
+  --container-story-wide: 50rem;
 }
 
 /* ── browser surfaces ────────────────────────────────────────────────────
@@ -102,18 +104,19 @@
 .jgal--breakout, .jgal--slider { --jgal-w: min(100% + 24rem, 100vw - 3.5rem, 1112px); width: var(--jgal-w); margin-inline: calc((100% - var(--jgal-w)) / 2); }
 
 /* ── justified rows (breakout + column) ──────────────────────────────────
- * @ai-note Row MEMBERSHIP is fixed at build time by gallery-layout.ts, for a
- * 1112px (breakout) or 728px (column) container. Only the justification WITHIN
- * a row is fluid: `--r` lets the browser redo that arithmetic at any width, so
- * between the stacking breakpoint and the design width the same rows simply get
- * shorter. This is an accepted trade-off — do not read the ratios as making the
- * layout fully responsive, and do not "fix" it by re-partitioning in CSS. */
+ * @ai-note Row MEMBERSHIP is fixed at build time by gallery-layout.ts, which
+ * cuts the photos into rows that stack to a square (every row fills the
+ * container; the row count is whichever lands the stacked height closest to
+ * the width). Only the justification WITHIN a row is fluid: `--r` lets the
+ * browser redo that arithmetic at any width, so between the stacking
+ * breakpoint and the design width the same square simply gets smaller. This
+ * is an accepted trade-off — do not read the ratios as making the layout
+ * fully responsive, and do not "fix" it by re-partitioning in CSS. */
 .jgal--breakout, .jgal--column { display: flex; flex-direction: column; gap: 0.75rem; }
-/* --jgal-maxw caps the LAST row so a short remainder is not stretched to full
- * width (a lone portrait would render 1112 wide and ~1668 tall). It is a
- * PERCENTAGE of the container, not a pixel value, so the remainder keeps
- * matching the height of the row above it as the container resizes — a px cap
- * computed at 1112 left a 242px-tall remainder beside 167px rows on a tablet. */
+/* --jgal-maxw caps the one row that would stand taller than the square is
+ * wide — a lone portrait, which justified to the full width would be 1112 ×
+ * ~1668 — at the square's own height. It is a PERCENTAGE of the container,
+ * not a pixel value, so the bound scales with the container. */
 .jgal__row { display: flex; flex-wrap: nowrap; gap: 0.75rem; max-width: var(--jgal-maxw, none); }
 /* The `* 100` is load-bearing: flex-grow values summing to less than 1
  * distribute only that fraction of the free space, so a lone portrait

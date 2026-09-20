@@ -174,7 +174,7 @@ describe('transformBodyImages — gallery fence', () => {
 });
 
 describe('transformBodyImages — gallery layout modes', () => {
-  // Seven landscapes partition into 3 + 3 + 1 at the break-out width.
+  // Seven landscapes stack to a near-square as 2 + 2 + 3 at either width.
   const many = Object.fromEntries(
     Array.from({ length: 7 }, (_, i) => [`${ORIGIN}/trips/x/p${i}`, { width: 3000, height: 2000, alt: `p${i}` }]),
   );
@@ -190,29 +190,30 @@ describe('transformBodyImages — gallery layout modes', () => {
     const out = transformBodyImages(manyFence('#layout: breakout'), many, ORIGIN);
     // flex-wrap: nowrap on one container would put all seven on one line —
     // the rows are the layout.
-    expect(out.match(/<div class="jgal__row/g) ?? []).toHaveLength(3); // 3 + 3 + 1
+    expect(out.match(/<div class="jgal__row/g) ?? []).toHaveLength(3); // 2 + 2 + 3
     expect(out).toContain('style="--r:1.5000"');
     expect(items(out)).toHaveLength(7);
   });
 
-  it('caps the last row instead of stretching it, as a container percentage', () => {
+  it('lets every row fill the container — no capped remainder', () => {
     const out = transformBodyImages(manyFence('#layout: breakout'), many, ORIGIN);
-    // The lone trailing landscape matches the 3-up row above it (~242 tall ×
-    // 1.5 = ~363 of 1112), not the full 1112 width. A percentage, not pixels,
-    // so it keeps matching as the container resizes.
-    expect(out).toContain('--jgal-maxw:32.61%');
-    // …and only there. Full rows fill their container.
-    expect(out.match(/--jgal-maxw/g) ?? []).toHaveLength(1);
+    expect(out).not.toContain('--jgal-maxw');
+  });
+
+  it('caps a lone portrait at the square, as a container percentage', () => {
+    const portrait = { [`${ORIGIN}/trips/x/tall`]: { width: 2000, height: 3000, alt: 'tall' } };
+    const out = transformBodyImages(fence(`${ORIGIN}/trips/x/tall`), portrait, ORIGIN);
+    // 800 tall × 2/3 = 533 wide of 800 — as wide as it is tall. A percentage,
+    // not pixels, so it stays square-bounded as the container resizes.
+    expect(out).toContain('--jgal-maxw:66.67%');
   });
 
   it('switches to the break-out width on #layout: breakout', () => {
     const wide = transformBodyImages(manyFence('#layout: breakout'), many, ORIGIN);
-    const column = transformBodyImages(manyFence(), many, ORIGIN);
     expect(wide).toContain('class="jgal jgal--breakout not-prose"');
-    // The wider container fits more photos per row than the column does.
-    const columnRows = column.match(/<div class="jgal__row/g) ?? [];
-    const wideRows = wide.match(/<div class="jgal__row/g) ?? [];
-    expect(columnRows.length).toBeGreaterThan(wideRows.length);
+    // The wider container asks the browser for a wider source per photo.
+    expect(wide).toContain('(min-width: 1112px) 550px');
+    expect(transformBodyImages(manyFence(), many, ORIGIN)).toContain('(min-width: 800px) 394px');
   });
 
   it('renders a keyboard-scrollable track with hidden controls on #layout: slider', () => {

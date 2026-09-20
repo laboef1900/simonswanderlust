@@ -25,7 +25,7 @@ export function initStoryContents(contents: HTMLDetailsElement, rail?: { matches
       return;
     }
     const target = contents.ownerDocument.getElementById(id);
-    if (!target || !target.closest('#story-body')) return;
+    if (!target || !target.closest('.story-body')) return;
 
     if (!rail?.matches) contents.open = false;
     // Headings need a temporary focus stop, not a place in the page's tab order.
