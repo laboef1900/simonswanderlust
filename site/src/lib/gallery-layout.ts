@@ -28,20 +28,20 @@ export type GalleryMode = (typeof GALLERY_MODES)[number];
 export const DEFAULT_GALLERY_MODE: GalleryMode = 'column';
 
 /**
- * Full-bleed break-out width, in CSS px. Derived, not chosen: `StoryPage.astro`
- * renders the story inside `mx-auto max-w-3xl px-5` → 768 − 40 = 728, and
- * 728 + 24rem = 1112 exactly — the site's content box.
+ * Full-bleed break-out width, in CSS px. Derived, not chosen: below `lg`
+ * `StoryPage.astro` renders the story inside `mx-auto max-w-3xl px-5` →
+ * 768 − 40 = 728, and 728 + 24rem = 1112 exactly — the site's content box.
  */
 export const BREAKOUT_WIDTH = 1112;
 
 /**
  * The design width a `column` gallery is partitioned and source-hinted for:
  * the centred story body below the opening spread (`--container-story-wide`,
- * 800px). In the 728px reading column beside the rail the same rows simply
- * render a tenth narrower — the partition is scale-invariant bar the 12px
- * gap, and a `sizes` hint sized for the wider of the two never under-fetches.
+ * 960px). In the 624px reading column beside the rail the same rows simply
+ * render narrower — the partition is scale-invariant bar the 12px gap, and a
+ * `sizes` hint sized for the wider of the two never under-fetches.
  */
-export const COLUMN_WIDTH = 800;
+export const COLUMN_WIDTH = 960;
 
 /** Gap between photos, in CSS px. MUST match the `gap` in global.css. */
 export const ROW_GAP = 12;
@@ -51,7 +51,7 @@ export const ROW_GAP = 12;
  * px. The square rule alone would cut a 37-photo gallery into 134px-tall
  * rows — a contact sheet — so a row is only admitted when it clears this, and
  * a big gallery grows taller than it is wide instead. At 168 the column
- * (800) takes three landscapes a row (172px) and the break-out (1112) four
+ * (960) takes three landscapes a row (208px) and the break-out (1112) four
  * (179px); a lone photo in its own row is always admitted, or a panorama
  * could have no legal partition at all.
  */
@@ -186,7 +186,7 @@ function evenestRows(ratios: readonly number[], width: number, k: number): numbe
  * is wide rather than shrinking its photos to thumbnails.
  *
  * The choice of row count is scale-invariant apart from the fixed gap and the
- * floor, so the same photos partition much the same way in the 728px column
+ * floor, so the same photos partition much the same way in the 960px column
  * and the 1112px break-out; what the width mainly changes is how large the
  * square is.
  *

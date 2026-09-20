@@ -36,12 +36,14 @@ const sizes = `(max-width: 639px) 100vw, max(100vw, clamp(${240 * aspect}px, ${3
       row. From lg the block widens to the site container and the stamp moves
       to the top-right corner above the story rail, as on the homepage hero;
       the text keeps the reading column's width (--container-story-column) so
-      the title's left edge lines up with the article below it.
+      the title's left edge lines up with the article below it; the grid is
+      the spread's own 60rem box (no gutters needed at lg — a 1024 viewport
+      leaves 32px either side).
       The field line is the story's log entry: date · country, then the
       coordinates in the quiet weight — a measurement beside its label. No
       entry number here: it only ever said "sixth story published", which no
       reader navigates by; the homepage hero keeps it. */}
-  <div class="mx-auto grid max-w-3xl grid-cols-[minmax(0,1fr)_auto] gap-x-4 px-5 pt-6 pb-4 sm:pt-8 lg:max-w-6xl lg:grid-cols-[var(--container-story-column)_minmax(0,1fr)] lg:gap-x-12">
+  <div class="mx-auto grid max-w-3xl grid-cols-[minmax(0,1fr)_auto] gap-x-4 px-5 pt-6 pb-4 sm:pt-8 lg:max-w-story-wide lg:grid-cols-[var(--container-story-column)_minmax(0,1fr)] lg:gap-x-12 lg:px-0">
     <p class="col-span-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 font-mono text-xs tracking-log text-navy/70 uppercase lg:col-span-1">
       <span class="break-words font-semibold">{dateLabel(trip.data.date, locale)} · {trip.data.country}</span>
       <span class="whitespace-nowrap">{coordsLabel(trip.data.coordinates)}</span>

@@ -962,6 +962,14 @@ blog/
   while `validateForPublish` refuses real body H1s (but ignores fenced examples). Published
   snapshots remain unchanged until the author publishes each story. See
   `docs/superpowers/specs/2026-09-20-imported-content-semantics-design.md`.
+- **Done:** One measure for the story spread and body (2026-09-20) — the opening spread
+  (column + rail, 1112px) and the centred body below it (800px) now share `--container-story-wide`
+  = `60rem` (960px): the spread shrank, the body grew, and their edges meet. Inside the spread
+  the rail is a fixed `18rem` and the column the remainder (`39rem`, 624px); the hero title grid
+  is the same 960px box. The rail's inner `max-height` + `overflow-y: auto` is gone — it put a
+  second scrollbar beside the page's — so a rail taller than the opening simply sets the spread's
+  height. `COLUMN_WIDTH` in `gallery-layout.ts` is 960 (three landscapes a row still clear the
+  168px floor: 208px). Published pages change on the next rebuild. See `DESIGN.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

@@ -107,9 +107,10 @@ const jsonLd = serializeJsonLd(
           set:html={opening}
         />
       </div>
-      {/* The rest of the story: centred, and wider than the column beside the
-          rail (50rem against 45.5rem). Break-out galleries centre on it with
-          the default overhang; the spread's 100cqw rule does not reach here. */}
+      {/* The rest of the story: centred on the same measure as the spread
+          (60rem), so the body's edges meet the opening's. Break-out galleries
+          centre on it with the default overhang; the spread's 100cqw rule does
+          not reach here. */}
       {rest !== '' && <article class:list={[PROSE, 'story-rest mx-auto lg:max-w-story-wide']} set:html={rest} />}
       <GalleryIsland locale={locale} />
     </div>
@@ -144,13 +145,16 @@ const jsonLd = serializeJsonLd(
    * float does NOT work: the float sits outside the article's inline range,
    * so the article's children never see it. Measured, not assumed.)
    * Column-width galleries never meet the rail: the column, the 3rem gap and
-   * the rail sum to exactly 100% (see --container-story-* in global.css).
-   * The spread — not .story-reading — is the float's and the sticky rail's
-   * containing block, which is what keeps the rail beside the opening and
-   * off the centred body below. */
+   * the rail sum to exactly the spread (see --container-story-* in global.css).
+   * The spread is centred on --container-story-wide, the body's own measure,
+   * so the opening and the rest share both edges. It — not .story-reading —
+   * is the float's and the sticky rail's containing block, which is what
+   * keeps the rail beside the opening and off the centred body below. */
   @media (width >= 64rem) {
     .story-spread {
       display: block;
+      max-width: var(--container-story-wide);
+      margin-inline: auto;
       /* Contains the float, and makes 100cqw below mean "the whole spread". */
       container-type: inline-size;
     }
@@ -159,6 +163,12 @@ const jsonLd = serializeJsonLd(
       margin-top: 4rem;
     }
 
+    /* The rail is one sticky float; its stack is a plain block. It never
+     * scrolls internally: a rail taller than the viewport simply stays where
+     * the opening puts it (the sticky offset can only hold it while the
+     * spread is taller than the rail, and then the rail fits). An inner
+     * `overflow-y: auto` used to clip it to the viewport and put a second
+     * scrollbar beside the page's — the owner asked for it gone (2026-09-20). */
     .story-rail {
       display: block;
       position: sticky;
@@ -171,13 +181,6 @@ const jsonLd = serializeJsonLd(
 
     .story-rail__stack {
       display: block;
-      position: sticky;
-      top: 0.5rem;
-      max-height: calc(100dvh - 1rem);
-      overflow-y: auto;
-      overscroll-behavior: contain;
-      scrollbar-width: thin;
-      scrollbar-color: var(--color-navy) var(--color-canvas);
     }
 
     /* A wide gallery in the opening spans the whole spread from the column's
