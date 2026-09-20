@@ -205,7 +205,7 @@ describe('renderPreviewHtml', () => {
     p.de.bodyMarkdown = `\`\`\`gallery\n${a}\n\`\`\``;
     p.de.images = { [a]: { width: 3000, height: 2000, alt: 'Altstadt bei Nacht', caption: 'Tag 2' } };
     const html = await renderPreviewHtml(p, 'de', ORIGIN);
-    expect(html).toContain('class="jgal jgal--breakout not-prose"');
+    expect(html).toContain('class="jgal jgal--column not-prose"');
     expect(html).toContain('alt="Altstadt bei Nacht"');
     expect(html).toContain('Tag 2');
   });

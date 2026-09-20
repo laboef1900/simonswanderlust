@@ -357,12 +357,35 @@ prevent. Sans uppercase wordmarks are a separate register and keep
 ## Layout
 
 **Containers.** Three widths, and only three. `max-w-6xl` (**1152px**) is the
-site container — nav, footer, home sections, region pages, the map band.
-`max-w-3xl` (**768px**) is the story column. `max-w-2xl` (**672px**) caps the
-hero's entry panel so it never spans a desktop photograph. Every container
-carries a `20px` gutter (`px-5`), so the content box locks at 1152px once the
-viewport passes **1192px** — the number `story-grid-layout.ts` calls
-`CONTENT_LOCKED_AT` and uses to emit exact pixel `sizes`.
+site container — nav, footer, home sections, region pages, the map band, and
+from `lg` the story page too. `max-w-3xl` (**768px**) is the story column
+below `lg`. `max-w-2xl` (**672px**) caps the hero's entry panel so it never
+spans a desktop photograph. Every container carries a `20px` gutter (`px-5`),
+so the content box locks at 1152px once the viewport passes **1192px** — the
+number `story-grid-layout.ts` calls `CONTENT_LOCKED_AT` and uses to emit exact
+pixel `sizes`.
+
+**The story spread.** From `lg` a story is a reading column beside a rail
+inside the 1112px content box: column `min(45.5rem, 100% − 21rem)`, a `3rem`
+gap, rail `clamp(18rem, 100% − 48.5rem, 21rem)` (`--container-story-column` /
+`--container-story-rail`). The column yields first — 648px at a 1024
+viewport, the full 728px from 1192 — and the rail grows once the column is
+full; the three always sum to exactly 100%. The rail holds the story's
+furniture — contents, key facts, the route map — open in a stack that stays
+`0.5rem` from the viewport top while the story is in view. The stack is capped
+at `calc(100dvh − 1rem)` and scrolls internally with contained overscroll, so
+short viewports do not make its later controls unreachable. Below `lg` the same
+three elements are collapsed disclosures stacked above the article. The outer
+wrapper remains a **float**, not a grid column, because the article is one
+rendered body that cannot be split around a sidebar, and a wide gallery near
+the top must not run under the rail: `clear: right` on the wide modes drops such
+a gallery below the rail and leaves every later one where it is.
+The title block widens with it, the text keeping the column's width so its
+left edge meets the article's, and the arrival stamp moves to the top-right
+corner above the rail — the same place it sits on the homepage hero. This is
+what the WordPress site's opening row was for (intro, facts, contents and a
+photograph in the first screen); what it got wrong was setting the body at the
+same 1140px, ~140 characters a line.
 
 **The story mosaic.** From `640px`, six columns, `280px` auto-rows and `16px`
 gaps. Spans of 3 give two cards per row, spans of 2 give three. Six
@@ -403,12 +426,18 @@ respectively; a fixed-height correction would over-fetch them. Desktop retains
 the existing cover crops and their height-aware source hints. The compact cover
 thumbnail reuses the photograph already requested by the eager hero.
 
-**Break-out.** A gallery may exceed the story column to
+**Break-out.** Below `lg` a wide gallery may exceed the story column to
 `min(100% + 24rem, 100vw - 3.5rem, 1112px)` — 24rem is the measured overhang
 either side of the 728px column, and `100vw - 3.5rem` keeps it clear of the
 classic scrollbar. It is centred with `margin-inline`, never
 `transform: translateX(-50%)`, because a transform would make the gallery a
-containing block and trap the lightbox dialog inside it.
+containing block and trap the lightbox dialog inside it. From `lg` it spans the
+whole spread (`100cqw` of `.story-reading`) from the column's left edge instead
+— centred on a column that now sits left of centre, it would cross the
+viewport's left edge. Break-out is opt-in (`#layout: breakout`); the default
+gallery is `column`, aligned with the text as the WordPress galleries were.
+That flip cost nothing in photo size: the old galleries were ~1140px wide, and
+so is the break-out; what changed is that the text got narrower.
 
 ### Named Rules
 
@@ -601,16 +630,24 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
     photograph and lifted it only on `group-hover` — a state a touch device
     cannot enter.
 - **Grid empty state:** a canvas panel with a navy hairline and shallow corners.
-- **Story contents:** a native, initially collapsed disclosure with an opaque
-  canvas background and horizontal rules. It stays `8px` from the viewport top
-  while the article is in view, then leaves with the reading section. Summary
-  and links have at least `44px` targets; the expanded list scrolls internally.
-  Selecting a section closes the list, focuses the heading and preserves native
-  fragment/history navigation. Escape returns focus to the summary. Without
-  JavaScript the links still work and heading margins clear the expanded list.
+- **Story contents:** a native disclosure with an opaque canvas background and
+  horizontal rules. Below `lg` it starts collapsed and stays `8px` from the
+  viewport top while the article is in view, then leaves with the reading
+  section; the expanded list scrolls internally; selecting a section closes
+  the list, focuses the heading and preserves native fragment/history
+  navigation, and Escape returns focus to the summary. In the rail (`lg`) it
+  starts open, is static and fully expanded, flush with the disclosures under
+  it, and a section link focuses the heading without closing anything. Summary
+  and links have at least `44px` targets. Without JavaScript the links still
+  work and heading margins clear the expanded strip; the rail simply starts
+  collapsed.
 - **Key Facts:** an optional native disclosure with a bottom rule, not a
-  bordered-and-shadowed card. Full key/value pairs wrap in one mobile column
-  and two columns from `640px`; no facts are removed or rewritten.
+  bordered-and-shadowed card. Full key/value pairs wrap in one mobile column,
+  two columns from `640px`, and one again in the rail; no facts are removed or
+  rewritten.
+- **Route map:** the story's mini-map is the third disclosure, in the same
+  dress as Key Facts. It mounts lazily on intersection, which a closed
+  disclosure never reports — opening it is what mounts the map.
 - **Story pagination:** chronological links with `80px` square, lazy-loaded
   photo thumbnails and full wrapped titles. A sole link spans the reading
   column; two split from `768px`. No empty placeholder cell, border or shadow;
@@ -620,12 +657,17 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
 
 `StoryHero.astro` owns the photograph, title, entry/date/country line,
 coordinates, arrival stamp and optional translation link. The photograph leads;
-every word sits on canvas below it at every width. The title and body share the
-`768px` container with `20px` gutters. The stamp sits beside the coordinate and
-translation group, replacing the old standalone stamp/language row.
-Responsive source hints account for the photograph's actual aspect ratio when
-desktop cover cropping needs a wider source. Mobile retains the whole frame,
-including portrait photographs. No title clamp or photographic scrim.
+every word sits on canvas below it at every width. The translation link is a
+secondary action in the site's link register: 14px medium navy on canvas
+(**14.114:1**), with the red accent reserved for hover and active states; its
+44px hit box and arrow remain. Below `lg` the title and body share the `768px`
+container with `20px` gutters and the stamp sits beside the coordinate and
+translation group. From `lg` the block is the spread's grid: the text keeps the
+reading column's width, and the stamp is placed top-right above the rail — one
+element, two grid placements, no duplicate markup. Responsive source hints
+account for the photograph's actual aspect ratio when desktop cover cropping
+needs a wider source. Mobile retains the whole frame, including portrait
+photographs. No title clamp or photographic scrim.
 
 ### Navigation
 

@@ -81,6 +81,15 @@ describe('brand token contrast', () => {
     expect(contrast(fg as string, bg as string), name as string).toBeGreaterThanOrEqual(7);
   });
 
+  it('navy keeps the story translation link quiet without sacrificing AA', () => {
+    const ratio = contrast(navy, canvas);
+    expect(ratio).toBeGreaterThanOrEqual(4.5);
+    expect(
+      Number(ratio.toFixed(3)),
+      'navy on canvas moved off the translation link’s recorded 14.114:1',
+    ).toBe(14.114);
+  });
+
   it('records why brand-red is never used for text on navy', () => {
     // 3.1:1 — below AA for text, which is why every dark band switches to
     // brand-red-light. Asserted so nobody "simplifies" the two accents into one.

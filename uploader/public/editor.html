@@ -841,10 +841,10 @@
 
       // Layout modes (#66). The labels are the admin's; the VALUES must match
       // GALLERY_MODES in site/src/lib/gallery-layout.ts, which is what the
-      // renderer accepts — an unknown value silently falls back to break-out.
+      // renderer accepts — an unknown value silently falls back to the column.
       const GALLERY_LAYOUTS = [
-        { value: 'breakout', label: 'Break-out (wide)' },
         { value: 'column', label: 'Column (text width)' },
+        { value: 'breakout', label: 'Break-out (wide)' },
         { value: 'slider', label: 'Slider (carousel)' },
       ];
 
@@ -1249,13 +1249,17 @@
       }
 
       // ---- alt-text audit (advisory; server: src/alt-audit.ts) ----
-      // A photo whose alt is empty — or only repeats the post title, which the
-      // site renders as alt="" because the heading already says those words —
-      // reaches a screen-reader user as nothing at all. This names those
-      // photos. It NEVER gates anything: publishBtn.disabled is not touched
-      // here, and the copy tells the author the post publishes either way.
+      // A photo whose alt is empty, only repeats the post title (which the site
+      // renders as alt="" because the heading already says those words), or is
+      // only its WordPress filename needs editorial attention. This names
+      // those photos. It NEVER gates anything: publishBtn.disabled is not
+      // touched here, and the copy says the post publishes either way.
       const ALT_AUDIT_WHERE = { hero: 'hero photo', body: 'body photo', gallery: 'gallery photo' };
-      const ALT_AUDIT_WHY = { empty: 'no alt text', 'repeats-title': 'alt text that only repeats the title' };
+      const ALT_AUDIT_WHY = {
+        empty: 'no alt text',
+        'repeats-title': 'alt text that only repeats the title',
+        filename: 'a filename instead of a description',
+      };
 
       // Variant URLs are long and all share a prefix; the file name is what the
       // author recognises in a list.

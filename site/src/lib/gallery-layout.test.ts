@@ -30,8 +30,8 @@ const capPx = (row: { maxWidthFraction: number | null }, width = BREAKOUT_WIDTH)
 const repeat = (n: number, r: number) => Array.from({ length: n }, () => r);
 
 describe('readLayoutMode', () => {
-  it('defaults to breakout when the fence carries no directive', () => {
-    expect(readLayoutMode('https://img/a\nhttps://img/b')).toBe('breakout');
+  it('defaults to the column when the fence carries no directive', () => {
+    expect(readLayoutMode('https://img/a\nhttps://img/b')).toBe('column');
   });
 
   it('reads each of the three modes', () => {
@@ -49,16 +49,16 @@ describe('readLayoutMode', () => {
 
   // The whole point of the fallback: a typo degrades to the default rather
   // than breaking a gallery that would otherwise render.
-  it('falls back to breakout on an unknown, empty or malformed value', () => {
-    expect(readLayoutMode('#layout: carousel')).toBe('breakout');
-    expect(readLayoutMode('#layout:')).toBe('breakout');
-    expect(readLayoutMode('#layout')).toBe('breakout');
-    expect(readLayoutMode('#layout: slider extra')).toBe('breakout');
-    expect(readLayoutMode('')).toBe('breakout');
+  it('falls back to the column on an unknown, empty or malformed value', () => {
+    expect(readLayoutMode('#layout: carousel')).toBe('column');
+    expect(readLayoutMode('#layout:')).toBe('column');
+    expect(readLayoutMode('#layout')).toBe('column');
+    expect(readLayoutMode('#layout: slider extra')).toBe('column');
+    expect(readLayoutMode('')).toBe('column');
   });
 
   it('ignores a directive-looking string that is not a whole line', () => {
-    expect(readLayoutMode('https://img/a | alt="#layout: slider"')).toBe('breakout');
+    expect(readLayoutMode('https://img/a | alt="#layout: slider"')).toBe('column');
   });
 
   // First wins, so a stray duplicate can't silently override the author's

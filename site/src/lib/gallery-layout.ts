@@ -13,11 +13,19 @@
  */
 
 /** The layout modes a gallery may select with a `#layout:` directive. */
-export const GALLERY_MODES = ['breakout', 'column', 'slider'] as const;
+export const GALLERY_MODES = ['column', 'breakout', 'slider'] as const;
 export type GalleryMode = (typeof GALLERY_MODES)[number];
 
-/** Applied when the directive is absent, unknown or malformed. */
-export const DEFAULT_GALLERY_MODE: GalleryMode = 'breakout';
+/**
+ * Applied when the directive is absent, unknown or malformed.
+ *
+ * @ai-note `column` since 2026-09-20 (it was `breakout` from #66 until then):
+ * galleries align with the text column by default, as they did on the
+ * WordPress site. The picker writes no directive for the default, so every
+ * fence authored without one flips with this constant — that is the intent.
+ * A gallery that should stay wide carries an explicit `#layout: breakout`.
+ */
+export const DEFAULT_GALLERY_MODE: GalleryMode = 'column';
 
 /**
  * Full-bleed break-out width, in CSS px. Derived, not chosen: `StoryPage.astro`
@@ -78,7 +86,7 @@ const MODES = new Set<string>(GALLERY_MODES);
 const LAYOUT_DIRECTIVE_RE = /^\s*#\s*layout\s*:\s*(\S*)\s*$/i;
 
 /**
- * The layout mode a fence selects, defaulting to `breakout`.
+ * The layout mode a fence selects, defaulting to `DEFAULT_GALLERY_MODE`.
  *
  * The directive lives INSIDE the fence rather than on its opener because an
  * info-string argument is unimplementable here: ```` ```gallery layout=slider ````

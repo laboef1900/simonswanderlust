@@ -35,6 +35,12 @@ among landscapes leaves roughly a third of the block as dead background.
 | `column` | Justified rows constrained to the **728 px** story column, aligned with body text |
 | `slider` | Carousel; slides per view adapts to the viewport (3 desktop / 2 tablet / 1 mobile), uniform tiles |
 
+> **Superseded 2026-09-20:** the default is now `column`; `breakout` is opt-in. The story page
+> gained a desktop reading column + rail ("story spread", see `DESIGN.md` → Layout), and the
+> owner chose text-aligned galleries as the default to match the WordPress site. A break-out
+> gallery on a desktop now spans the whole spread from the column's left edge (`100cqw`), and is
+> cleared below the rail when it would overlap it. Everything else in this spec stands.
+
 The justified modes preserve each photo's aspect ratio; the last row is capped rather than
 stretched. **The slider deliberately does not preserve aspect ratio** — uniform tiles mean
 cropping. That is a knowing trade-off for a conventional carousel feel, and it is the reason the

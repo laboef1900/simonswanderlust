@@ -71,12 +71,12 @@ Plus the **`pgdata`** volume — Postgres data.
    Markdown → HTML, **sanitized**, and body images become responsive `<picture>`
    (`site/src/lib/body-images.ts`). A ` ```gallery ` fence (one image URL per line) becomes a
    photo gallery in the same pass, in one of three layout modes selected by a `#layout:` line
-   inside the fence — `breakout` (default; justified rows in a 1112px full-bleed break-out),
-   `column` (the same rows at the 728px story width) or `slider` (a scroll-snap carousel).
-   The row partition is computed at build time by `site/src/lib/gallery-layout.ts`, which is
-   kept pure and dependency-free because draft preview runs it under `tsx` too. An unknown or
-   missing mode falls back to `breakout`, so every gallery authored before the modes existed
-   still renders. `site/src/scripts/gallery-lightbox.ts` adds a `<dialog>` lightbox and the
+   inside the fence — `column` (default; justified rows at the 728px story width), `breakout`
+   (the same rows in a 1112px break-out — centred below `lg`, the whole story spread above it)
+   or `slider` (a scroll-snap carousel). The row partition is computed at build time by
+   `site/src/lib/gallery-layout.ts`, which is kept pure and dependency-free because draft
+   preview runs it under `tsx` too. An unknown or missing mode falls back to `column` (it was
+   `breakout` until 2026-09-20). `site/src/scripts/gallery-lightbox.ts` adds a `<dialog>` lightbox and the
    slider's controls as progressive enhancement — every photo is a real `<a>` to its largest
    variant, so the gallery works with JavaScript off. Gallery URLs are allow-listed against
    the image host's origin, because that markup is injected *after* the sanitizer runs (see

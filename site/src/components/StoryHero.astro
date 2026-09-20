@@ -32,44 +32,48 @@ const sizes = `(max-width: 639px) 100vw, max(100vw, clamp(${240 * aspect}px, ${3
     class="block h-auto w-full object-cover sm:h-[36vh] sm:max-h-[400px] sm:min-h-[240px]"
   />
 
-  <div class="mx-auto max-w-3xl px-5 pt-6 pb-4 sm:pt-8">
-    <p class="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-xs font-semibold tracking-log uppercase">
+  {/* One grid, two placements. Below lg: field line and title span both
+      columns, then coordinates beside the stamp — the old two-cell row. From
+      lg the block widens to the site container and the stamp moves to the
+      top-right corner above the story rail, as on the homepage hero; the text
+      keeps the reading column's width (--container-story-column) so the
+      title's left edge lines up with the article below it. */}
+  <div class="mx-auto grid max-w-3xl grid-cols-[minmax(0,1fr)_auto] gap-x-4 px-5 pt-6 pb-4 sm:pt-8 lg:max-w-6xl lg:grid-cols-[var(--container-story-column)_minmax(0,1fr)] lg:gap-x-12">
+    <p class="col-span-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-xs font-semibold tracking-log uppercase lg:col-span-1">
       <span class="text-brand-red">{entryLabel(number)}</span>
       <span class="break-words text-navy/70">— {dateLabel(trip.data.date, locale)} · {trip.data.country}</span>
     </p>
-    <h1 class="mt-2 text-2xl leading-[1.12] font-extrabold text-balance break-words hyphens-auto text-navy sm:text-3xl sm:hyphens-none md:text-4xl">
+    <h1 class="col-span-2 mt-2 text-2xl leading-[1.12] font-extrabold text-balance break-words hyphens-auto text-navy sm:text-3xl sm:hyphens-none md:text-4xl lg:col-span-1">
       {trip.data.title}
     </h1>
-    <div class="mt-4 flex items-center justify-between gap-4">
-      <div class="min-w-0">
-        <p class="font-mono text-xs leading-relaxed tracking-log text-navy/70">
-          {coordsLabel(trip.data.coordinates)}
-        </p>
-        {
-          otherHref && (
-            <a
-              href={otherHref}
-              lang={otherLocale}
-              hreflang={otherLocale}
-              class="mt-1 inline-flex min-h-[44px] items-center gap-2 rounded-sm py-2 text-sm font-medium text-brand-red underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2"
-            >
-              <span>{t('story.otherLang')}</span>
-              <svg aria-hidden="true" focusable="false" class="h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </a>
-          )
-        }
-      </div>
-      <div class="shrink-0 p-2">
-        <Stamp
-          countryCode={trip.data.countryCode}
-          country={trip.data.country}
-          date={trip.data.date}
-          region={trip.data.region}
-          locale={locale}
-        />
-      </div>
+    <div class="mt-4 min-w-0 self-center">
+      <p class="font-mono text-xs leading-relaxed tracking-log text-navy/70">
+        {coordsLabel(trip.data.coordinates)}
+      </p>
+      {
+        otherHref && (
+          <a
+            href={otherHref}
+            lang={otherLocale}
+            hreflang={otherLocale}
+            class="mt-1 inline-flex min-h-[44px] items-center gap-2 rounded-sm py-2 text-sm font-medium text-navy underline-offset-4 transition-[color] hover:text-brand-red hover:underline active:text-brand-red focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2"
+          >
+            <span>{t('story.otherLang')}</span>
+            <svg aria-hidden="true" focusable="false" class="h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </a>
+        )
+      }
+    </div>
+    <div class="mt-4 shrink-0 self-center p-2 lg:col-start-2 lg:row-start-1 lg:row-span-3 lg:mt-0 lg:self-start lg:justify-self-end">
+      <Stamp
+        countryCode={trip.data.countryCode}
+        country={trip.data.country}
+        date={trip.data.date}
+        region={trip.data.region}
+        locale={locale}
+      />
     </div>
   </div>
 </header>

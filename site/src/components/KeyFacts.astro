@@ -15,7 +15,7 @@ const t = useTranslations(locale);
   <summary class="min-h-[44px] cursor-pointer py-3 text-sm font-semibold text-navy marker:text-brand-red hover:text-brand-red focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2 [overflow-wrap:anywhere]">
     {t('story.keyFactsAbout')} {country}
   </summary>
-  <dl class="grid gap-x-8 gap-y-4 pt-2 pb-5 text-sm leading-6 sm:grid-cols-2">
+  <dl class="grid gap-x-8 gap-y-4 pt-2 pb-5 text-sm leading-6 sm:grid-cols-2 lg:grid-cols-1">
     {
       Object.entries(facts).map(([key, value]) => (
         <div class="min-w-0 [overflow-wrap:anywhere]">

@@ -50,6 +50,32 @@ describe('htmlToMarkdown', () => {
     expect(md).not.toContain('```gallery');
   });
 
+  it('merges an Elementor colon heading and br-joined subtitle into one outline entry', () => {
+    const md = htmlToMarkdown('<h2>Santa Cruz:<br>Between Lava Fields and Sea Lions</h2>');
+    expect(md).toBe('## Santa Cruz — Between Lava Fields and Sea Lions');
+  });
+
+  it('turns hard breaks in the opening copy into paragraphs without splitting fact rows', () => {
+    const md = htmlToMarkdown(
+      '<h2>Opening</h2><p>First thought.<br>Second thought.<br>Third thought.</p>' +
+        '<h3>Key data</h3><p>Population:<br>10,000</p>',
+    );
+    expect(md).toContain('First thought.\n\nSecond thought.\n\nThird thought.');
+    expect(md).toContain('### Key data\n\nPopulation:  \n10,000');
+  });
+
+  it('drops an empty legacy TOC slot but preserves a real authored contents section', () => {
+    const empty = htmlToMarkdown(
+      '<h3>Table of Contents</h3><img src="https://wp/lead.jpg" alt=""><h2>Story</h2>',
+    );
+    expect(empty).not.toContain('Table of Contents');
+    expect(empty).toContain('![](https://wp/lead.jpg)');
+
+    const authored = htmlToMarkdown('<h3>Contents</h3><ul><li><a href="#one">One</a></li></ul>');
+    expect(authored).toContain('### Contents');
+    expect(authored).toContain('[One](#one)');
+  });
+
   // Issue #143: the gallery marker is a NUL-delimited line. Elementor sources
   // the lightbox title from the attachment caption (a textarea), and Turndown
   // prefixes blockquote/list lines — either used to leave U+0000 in the body,
