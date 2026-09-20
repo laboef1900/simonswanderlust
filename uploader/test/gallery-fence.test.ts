@@ -611,13 +611,19 @@ describe('#layout: directive — the picker\'s half of the rule (#66)', () => {
     expect(gf.layoutOf(lines)).toBe('slider');
   });
 
-  it('defaults to break-out for a fence with no directive at all', () => {
-    expect(gf.layoutOf([])).toBe('breakout');
+  it('defaults to the column for a fence with no directive at all', () => {
+    expect(gf.layoutOf([])).toBe('column');
   });
 
   it('writes no directive for the default, so an untouched gallery is unchanged', () => {
-    expect(gf.withLayout([], 'breakout')).toEqual([]);
-    expect(gf.withLayout(['#layout: slider'], 'breakout')).toEqual([]);
+    expect(gf.withLayout([], 'column')).toEqual([]);
+    expect(gf.withLayout(['#layout: slider'], 'column')).toEqual([]);
+  });
+
+  // The default flipped from break-out to column on 2026-09-20; a gallery
+  // that should stay wide now has to say so.
+  it('writes the directive for break-out, which is no longer the default', () => {
+    expect(gf.withLayout([], 'breakout')).toEqual(['#layout: breakout']);
   });
 
   it('replaces the layout directive and keeps every other comment line', () => {
@@ -665,12 +671,12 @@ describe('#layout: directive — the picker\'s half of the rule (#66)', () => {
     const switched = gf.serialize(
       parsed.lines.map((l) => ({ src: l.src, width: l.width!, height: l.height! })),
       'de',
-      gf.withLayout(parsed.directives, 'breakout'),
+      gf.withLayout(parsed.directives, 'column'),
       {},
     );
     expect(switched).not.toContain('#layout');
     expect(switched).toContain('# a note the picker knows nothing about');
-    expect(readLayoutMode(switched)).toBe('breakout');
+    expect(readLayoutMode(switched)).toBe('column');
   });
 
   it('survives normalizeGalleryFences — the directive is not mistaken for a photo', () => {

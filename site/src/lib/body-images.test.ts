@@ -118,7 +118,7 @@ const gallery = {
 describe('transformBodyImages — gallery fence', () => {
   it('turns a fence into a grid of figures', () => {
     const out = transformBodyImages(fence(`${A}\n${B}`), gallery, ORIGIN);
-    expect(out).toContain('<div class="jgal jgal--breakout not-prose">');
+    expect(out).toContain('<div class="jgal jgal--column not-prose">');
     expect(out).not.toContain('<pre>');
     expect(items(out)).toHaveLength(2);
     expect(out).toContain(`href="${A}-3000.webp"`); // largest variant, no-JS target
@@ -156,7 +156,7 @@ describe('transformBodyImages — gallery fence', () => {
 
   it('tolerates leftover per-line metadata (a body that never hit the save chokepoint)', () => {
     const out = transformBodyImages(fence(`${A} | 3000x2000 | alt="x"`), gallery, ORIGIN);
-    expect(out).toContain('<div class="jgal jgal--breakout not-prose">');
+    expect(out).toContain('<div class="jgal jgal--column not-prose">');
     // Metadata comes from the images map, not the line.
     expect(out).toContain('alt="Sunrise over the towers"');
   });
@@ -181,13 +181,13 @@ describe('transformBodyImages — gallery layout modes', () => {
   const manyFence = (directive = '') =>
     fence([directive, ...Object.keys(many)].filter(Boolean).join('\n'));
 
-  it('defaults to breakout when the fence carries no directive', () => {
+  it('defaults to the column width when the fence carries no directive', () => {
     const out = transformBodyImages(fence(A), gallery, ORIGIN);
-    expect(out).toContain('class="jgal jgal--breakout not-prose"');
+    expect(out).toContain('class="jgal jgal--column not-prose"');
   });
 
   it('nests photos in rows and emits a ratio per photo', () => {
-    const out = transformBodyImages(manyFence(), many, ORIGIN);
+    const out = transformBodyImages(manyFence('#layout: breakout'), many, ORIGIN);
     // flex-wrap: nowrap on one container would put all seven on one line —
     // the rows are the layout.
     expect(out.match(/<div class="jgal__row/g) ?? []).toHaveLength(3); // 3 + 3 + 1
@@ -196,7 +196,7 @@ describe('transformBodyImages — gallery layout modes', () => {
   });
 
   it('caps the last row instead of stretching it, as a container percentage', () => {
-    const out = transformBodyImages(manyFence(), many, ORIGIN);
+    const out = transformBodyImages(manyFence('#layout: breakout'), many, ORIGIN);
     // The lone trailing landscape matches the 3-up row above it (~242 tall ×
     // 1.5 = ~363 of 1112), not the full 1112 width. A percentage, not pixels,
     // so it keeps matching as the container resizes.
@@ -205,11 +205,14 @@ describe('transformBodyImages — gallery layout modes', () => {
     expect(out.match(/--jgal-maxw/g) ?? []).toHaveLength(1);
   });
 
-  it('switches to the column width on #layout: column', () => {
-    const out = transformBodyImages(manyFence('#layout: column'), many, ORIGIN);
-    expect(out).toContain('class="jgal jgal--column not-prose"');
-    // The narrower container fits fewer photos per row than break-out does.
-    expect((out.match(/<div class="jgal__row/g) ?? []).length).toBeGreaterThan(3);
+  it('switches to the break-out width on #layout: breakout', () => {
+    const wide = transformBodyImages(manyFence('#layout: breakout'), many, ORIGIN);
+    const column = transformBodyImages(manyFence(), many, ORIGIN);
+    expect(wide).toContain('class="jgal jgal--breakout not-prose"');
+    // The wider container fits more photos per row than the column does.
+    const columnRows = column.match(/<div class="jgal__row/g) ?? [];
+    const wideRows = wide.match(/<div class="jgal__row/g) ?? [];
+    expect(columnRows.length).toBeGreaterThan(wideRows.length);
   });
 
   it('renders a keyboard-scrollable track with hidden controls on #layout: slider', () => {
@@ -223,9 +226,9 @@ describe('transformBodyImages — gallery layout modes', () => {
     expect(out).toContain('hidden data-jgal-nav="next"');
   });
 
-  it('falls back to breakout on an unknown mode rather than dropping the gallery', () => {
+  it('falls back to the column on an unknown mode rather than dropping the gallery', () => {
     const out = transformBodyImages(manyFence('#layout: carousel'), many, ORIGIN);
-    expect(out).toContain('class="jgal jgal--breakout not-prose"');
+    expect(out).toContain('class="jgal jgal--column not-prose"');
     expect(items(out)).toHaveLength(7);
   });
 
@@ -237,8 +240,8 @@ describe('transformBodyImages — gallery layout modes', () => {
 
   it('derives sizes per photo, so a full-width panorama is not served a thumbnail', () => {
     const pano = `${ORIGIN}/trips/x/pano`;
-    const out = transformBodyImages(fence(pano), { [pano]: { width: 4000, height: 1000, alt: 'p' } }, ORIGIN);
-    // Alone on its row at 4:1 it renders 1112 wide — the hint must say so.
+    const out = transformBodyImages(fence(`#layout: breakout\n${pano}`), { [pano]: { width: 4000, height: 1000, alt: 'p' } }, ORIGIN);
+    // Alone on its row at 4:1 it renders 1112 wide in break-out — the hint must say so.
     expect(out).toContain('sizes="(min-width: 1112px) 1112px');
   });
 });

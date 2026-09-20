@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { initStoryContents } from './story-contents';
 
-function mount(href = '#%C3%BCber-den-fluss'): {
+function mount(href = '#%C3%BCber-den-fluss', rail?: { matches: boolean }): {
   contents: HTMLDetailsElement;
   anchor: HTMLAnchorElement;
   heading: HTMLHeadingElement;
@@ -17,7 +17,7 @@ function mount(href = '#%C3%BCber-den-fluss'): {
       <article id="story-body"><h2 id="über-den-fluss">Über den Fluss</h2></article>
     </div>`;
   const contents = document.querySelector<HTMLDetailsElement>('details')!;
-  initStoryContents(contents);
+  initStoryContents(contents, rail);
   return {
     contents,
     anchor: document.querySelector<HTMLAnchorElement>('a')!,
@@ -73,5 +73,16 @@ describe('story contents navigation', () => {
     anchor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     expect(contents.open).toBe(false);
     expect(document.activeElement).toBe(summary);
+  });
+
+  it('keeps the rail list open on a section link and ignores Escape there', () => {
+    const { contents, anchor, heading } = mount(undefined, { matches: true });
+    anchor.focus();
+    const event = activate(anchor);
+    expect(contents.open).toBe(true);
+    expect(document.activeElement).toBe(heading);
+    expect(event.defaultPrevented).toBe(false);
+    anchor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    expect(contents.open).toBe(true);
   });
 });

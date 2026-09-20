@@ -841,10 +841,10 @@
 
       // Layout modes (#66). The labels are the admin's; the VALUES must match
       // GALLERY_MODES in site/src/lib/gallery-layout.ts, which is what the
-      // renderer accepts — an unknown value silently falls back to break-out.
+      // renderer accepts — an unknown value silently falls back to the column.
       const GALLERY_LAYOUTS = [
-        { value: 'breakout', label: 'Break-out (wide)' },
         { value: 'column', label: 'Column (text width)' },
+        { value: 'breakout', label: 'Break-out (wide)' },
         { value: 'slider', label: 'Slider (carousel)' },
       ];
 

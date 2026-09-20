@@ -216,11 +216,12 @@ multi-select mode with an ordering strip; the button writes exactly the text a p
 hand. Per-line `| WxH | alt="…" | caption="…"` metadata is lifted into the post's `images` map at
 the store chokepoint (`normalizeGalleryFences`), leaving the body as bare URLs.
 
-Three layout modes, selected by a `#layout:` line **inside** the fence — `breakout` (default,
-justified rows wider than the story column), `column` (justified rows aligned to body text), and
+Three layout modes, selected by a `#layout:` line **inside** the fence — `column` (default,
+justified rows aligned to body text), `breakout` (justified rows wider than the story column), and
 `slider`. All three get a `<dialog>` lightbox. An unknown or absent directive falls back to
-`breakout`. The directive lives inside the fence rather than on the opener because an info-string
-argument is discarded before the renderer ever sees it.
+`column` (the default was `breakout` until 2026-09-20; the picker writes `#layout: breakout` for
+a gallery that should stay wide). The directive lives inside the fence rather than on the opener
+because an info-string argument is discarded before the renderer ever sees it.
 
 Author-facing detail is in [`../docs/authoring-workflow.md`](../docs/authoring-workflow.md).
 

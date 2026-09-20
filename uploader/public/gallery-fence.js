@@ -53,8 +53,8 @@ window.GalleryFence = (function () {
   // are known, or the picker shows "Break-out" for a gallery the site renders
   // as a slider — a silent lie about the author's own choice, only visible
   // after publishing. test/gallery-fence.test.ts runs both over one corpus.
-  var LAYOUTS = ['breakout', 'column', 'slider'];
-  var DEFAULT_LAYOUT = 'breakout';
+  var LAYOUTS = ['column', 'breakout', 'slider'];
+  var DEFAULT_LAYOUT = 'column';
   var LAYOUT_RE = /^\s*#\s*layout\s*:\s*(\S*)\s*$/i;
 
   /** The mode a fence's directives select. First wins; unknown ⇒ the default. */

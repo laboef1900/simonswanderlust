@@ -25,6 +25,14 @@
    * component should reach for; an arbitrary `tracking-[…]` in a component is
    * the drift this replaces. */
   --tracking-log: 0.18em;
+  /* Story spread (≥ lg, StoryHero + StoryPage): the reading column beside a
+   * rail, 3rem apart, inside the 1112px content box (max-w-6xl minus 2 × px-5).
+   * The column yields first — 648px at a 1024 viewport, 728px from 1192 — and
+   * the rail grows from 18rem to 21rem once the column is full. Their sum with
+   * the gap is always exactly 100%, so a rail floated beside the column never
+   * intrudes into its line boxes. */
+  --container-story-column: min(45.5rem, 100% - 21rem);
+  --container-story-rail: clamp(18rem, 100% - 48.5rem, 21rem);
 }
 
 /* ── browser surfaces ────────────────────────────────────────────────────

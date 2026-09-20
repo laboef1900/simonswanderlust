@@ -33,7 +33,7 @@ const items = headings.filter((h) => h.depth === 2);
   import { initStoryContents } from '../scripts/story-contents';
 
   const contents = document.querySelector<HTMLDetailsElement>('#story-contents');
-  if (contents) initStoryContents(contents);
+  if (contents) initStoryContents(contents, matchMedia('(width >= 64rem)'));
 </script>
 
 <style>
@@ -118,9 +118,46 @@ const items = headings.filter((h) => h.depth === 2);
     outline-offset: 0.25rem;
   }
 
-  /* Without scripting, native anchor jumps still clear the expanded strip. */
-  .story-contents[open] ~ :global(#story-body :is(h2, h3, h4, h5, h6)) {
+  /* Without scripting, native anchor jumps still clear the expanded strip.
+   * `:has()` because the strip sits inside the rail wrapper (StoryPage.astro),
+   * which is `display: contents` below lg, so #story-body is the wrapper's
+   * sibling, not the strip's. */
+  :global(.story-rail:has(.story-contents[open])) ~ :global(#story-body :is(h2, h3, h4, h5, h6)) {
     scroll-margin-top: calc(min(60vh, 24rem) + 5rem);
+  }
+
+  /* In the rail (≥ lg) the list is static and fully expanded: nothing sticks
+   * above the article, so headings need no clearance beyond a breath. The
+   * strip's inset padding goes too, so its text lines up with the Key Facts
+   * and map disclosures stacked under it; links keep a hair of padding for
+   * the inset focus ring and pull it back with a negative margin. */
+  @media (width >= 64rem) {
+    .story-contents {
+      position: static;
+      z-index: auto;
+    }
+
+    summary {
+      padding-inline: 0;
+    }
+
+    nav {
+      /* No internal scrolling in the rail — and the links' negative margin
+       * would otherwise turn `overflow-y: auto` into a horizontal scrollbar. */
+      max-height: none;
+      overflow: visible;
+      padding-inline: 0;
+    }
+
+    a {
+      padding-inline: 0.25rem;
+      margin-inline: -0.25rem;
+    }
+
+    :global(#story-body :is(h2, h3, h4, h5, h6)),
+    :global(.story-rail:has(.story-contents[open])) ~ :global(#story-body :is(h2, h3, h4, h5, h6)) {
+      scroll-margin-top: 2rem;
+    }
   }
 
   @media print {

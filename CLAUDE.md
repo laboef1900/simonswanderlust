@@ -627,7 +627,8 @@ blog/
   is discarded before `body-images.ts` ever sees it), plus a `<dialog>` lightbox on all three.
   `site/src/lib/gallery-layout.ts` holds the justified-row partition and the directive reader,
   pure and `astro:`-free because draft preview runs it under `tsx`. An unknown or missing mode
-  falls back to `breakout`, so pre-#66 galleries render unchanged. The last row is capped at the
+  falls back to the default — `breakout` at the time, `column` since 2026-09-20 (see the story
+  spread entry below). The last row is capped at the
   height of the row **above** it, emitted as a container percentage — a fixed-pixel cap computed
   at the design width left the remainder 450px tall beside 210px rows on a tablet. The mode is
   chosen in #75's picker (`layouts`/`layout` options; `GalleryFence.layoutOf`/`withLayout`), whose
@@ -910,6 +911,27 @@ blog/
   route stays a 500, never "anonymous". When this lands on `dev`, `/health` (#132: disk figure for
   admins only) must declare `optionalAuth` — its own test fails otherwise. See
   `docs/superpowers/specs/2026-09-06-lazy-session-resolution-design.md` and `SECURITY.md`.
+- **Done:** Story spread + column galleries by default (2026-09-20) — the owner asked whether
+  the WordPress post layout (an opening row of intro / facts / contents / photo, and galleries
+  the same width as the text) should carry over. The spread was rebuilt rather than ported:
+  from `lg` the story page is the 1112px content box split into a reading column
+  (`--container-story-column`, 648–728px) and a **floated rail** (`--container-story-rail`,
+  18–21rem) holding Contents, Key Facts and the route map open, with the arrival stamp moved
+  to the top-right corner above it; below `lg` the same three are collapsed disclosures stacked
+  above the article, exactly as before, plus the map, which used to sit after the body. A float
+  and not a grid because the article is one rendered body that cannot be split around a
+  sidebar, and `clear: right` on the wide gallery modes keeps them from running under the rail
+  (a gallery's own formatting context does **not** avoid the float — it sits outside the
+  article's inline range; measured). The WordPress body width itself (1140px, ~140 characters a
+  line) was deliberately not copied. `DEFAULT_GALLERY_MODE` flipped `breakout` → `column` in
+  both trees (`gallery-layout.ts`, `gallery-fence.js`, the picker's option order), so every
+  fence without a directive flips on the next rebuild — that is the intent, and the picker now
+  writes `#layout: breakout` for a gallery that should stay wide. On a desktop a break-out spans
+  the whole spread from the column's left edge (`100cqw`) instead of centring on a column that no
+  longer sits at the centre. The rail's disclosures are opened by a synchronous inline script on
+  a `≥ 64rem` viewport (no-JS desktop: collapsed but working), and `initStoryContents` takes the
+  same media query so a section link in the rail focuses the heading without collapsing the list.
+  See `DESIGN.md` (Layout → The story spread; Break-out; Story contents; Story Opening).
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

@@ -9,12 +9,19 @@ const { trip, locale } = Astro.props;
 const t = useTranslations(locale);
 const geometry = tripGeometry(trip);
 ---
-<section class="my-8">
-  <h2 class="text-sm font-bold text-navy">{t('map.miniLabel')}</h2>
-  <div id="mini-map" class="mt-2 h-64 w-full rounded-lg bg-navy/5" data-geometry={JSON.stringify(geometry)}>
+{/* A disclosure like Key Facts, so it can sit in the story rail (open there,
+    collapsed on narrow screens ahead of the body). The map mounts lazily on
+    intersection, which a closed <details> never reports — so opening it is
+    what triggers the mount, and MapLibre's own ResizeObserver handles a later
+    close/re-open. */}
+<details class="mb-6 border-b border-navy/15 bg-canvas">
+  <summary class="min-h-[44px] cursor-pointer py-3 text-sm font-semibold text-navy marker:text-brand-red hover:text-brand-red focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2">
+    {t('map.miniLabel')}
+  </summary>
+  <div id="mini-map" class="mt-2 mb-5 h-64 w-full rounded-lg bg-navy/5" data-geometry={JSON.stringify(geometry)}>
     <a class="block p-4 text-brand-red hover:underline" href={mapPath(locale)}>{t('map.viewOnMap')}</a>
   </div>
-</section>
+</details>
 <script>
   import { initMiniMap } from '../scripts/travel-map';
   import type { TripGeometry } from '../lib/map-data';

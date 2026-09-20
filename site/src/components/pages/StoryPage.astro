@@ -59,21 +59,35 @@ const jsonLd = serializeJsonLd(
   <script type="application/ld+json" set:html={jsonLd} is:inline />
   <StoryHero trip={trip} number={number} locale={locale} otherHref={other ? pathOf(other) : undefined} />
 
-  <div class="mx-auto max-w-3xl px-5 pt-5 pb-10 sm:pt-6">
+  <div class="mx-auto max-w-3xl px-5 pt-5 pb-10 sm:pt-6 lg:max-w-6xl">
     <div class="story-reading">
-      <Toc headings={headings} locale={locale} />
-      {
-        trip.data.keyFacts && (
-          <KeyFacts facts={trip.data.keyFacts} country={trip.data.country} locale={locale} />
-        )
-      }
-      <article id="story-body" class="prose prose-lg max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-headings:break-words prose-p:break-words prose-li:break-words prose-a:font-semibold prose-a:text-brand-red prose-a:no-underline hover:prose-a:underline prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:bg-navy/[0.02] prose-blockquote:py-3 prose-blockquote:px-5 prose-blockquote:italic prose-blockquote:text-navy prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red">
+      {/* The rail: contents, key facts and the route map. Below lg the wrapper
+          is `display: contents`, so these are the same three disclosures
+          stacked above the article they always were (and the sticky strip's
+          containing block stays .story-reading). From lg the wrapper floats
+          beside the reading column, and the disclosures start open. */}
+      <div class="story-rail">
+        <Toc headings={headings} locale={locale} />
+        {
+          trip.data.keyFacts && (
+            <KeyFacts facts={trip.data.keyFacts} country={trip.data.country} locale={locale} />
+          )
+        }
+        <StoryMiniMap trip={trip} locale={locale} />
+      </div>
+      {/* Inline and synchronous, so the rail is open before first paint on a
+          desktop viewport. Without JavaScript the rail is still there, just
+          collapsed — the same disclosures the narrow layout ships. */}
+      <script is:inline>
+        if (matchMedia('(width >= 64rem)').matches) {
+          for (const d of document.querySelectorAll('.story-rail > details')) d.open = true;
+        }
+      </script>
+      <article id="story-body" class="prose prose-lg max-w-none lg:w-story-column prose-headings:font-extrabold prose-headings:text-navy prose-headings:break-words prose-p:break-words prose-li:break-words prose-a:font-semibold prose-a:text-brand-red prose-a:no-underline hover:prose-a:underline prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:bg-navy/[0.02] prose-blockquote:py-3 prose-blockquote:px-5 prose-blockquote:italic prose-blockquote:text-navy prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red">
         <Content />
       </article>
       <GalleryIsland locale={locale} />
     </div>
-
-    <StoryMiniMap trip={trip} locale={locale} />
 
     <div class="mt-12">
       <RouteDivider />
@@ -81,3 +95,48 @@ const jsonLd = serializeJsonLd(
     <StoryPagination older={older} newer={newer} locale={locale} />
   </div>
 </Base>
+
+<style>
+  .story-rail {
+    display: contents;
+  }
+
+  /* The opening spread (≥ lg). A float rather than a grid on purpose: the
+   * reading column is one <Content /> we cannot split, and a wide gallery near
+   * the top must not run under the rail. `clear: right` on the wide modes does
+   * that with no script measuring anything — a gallery the rail would overlap
+   * moves below it; one further down is already clear and does not move.
+   * (Relying on the gallery's own formatting context to avoid the float does
+   * NOT work: the float sits outside the article's inline range, so the
+   * article's children never see it. Measured, not assumed.)
+   * Column-width galleries never meet the rail: the column, the 3rem gap and
+   * the rail sum to exactly 100% (see --container-story-* in global.css). */
+  @media (width >= 64rem) {
+    .story-reading {
+      /* Contains the float, and makes 100cqw below mean "the whole spread". */
+      container-type: inline-size;
+    }
+
+    .story-rail {
+      display: block;
+      float: right;
+      clear: right;
+      width: var(--container-story-rail);
+      margin-left: 3rem;
+    }
+
+    /* A wide gallery spans the whole spread from the column's left edge,
+     * instead of centring on the column — which, with the column now left of
+     * centre, would push it past the viewport's left edge. Not mirrored into
+     * preview.ts (its parity test scrapes global.css only): the draft preview
+     * has no rail, so it keeps the centred break-out. The article must stay a
+     * plain block (no overflow/contain/flow-root) or the clearance stops
+     * seeing the rail. */
+    .story-reading :global(.jgal--breakout),
+    .story-reading :global(.jgal--slider) {
+      --jgal-w: 100cqw;
+      margin-inline: 0;
+      clear: right;
+    }
+  }
+</style>
