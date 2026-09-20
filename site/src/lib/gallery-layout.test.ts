@@ -3,29 +3,46 @@ import {
   BREAKOUT_WIDTH,
   COLUMN_WIDTH,
   GALLERY_MODES,
-  MAX_LAST_ROW_HEIGHT,
+  MIN_ROW_HEIGHT,
   ROW_GAP,
-  TARGET_ROW_HEIGHT,
   containerWidthFor,
+  galleryHeightAt,
   partitionRows,
   readLayoutMode,
+  rowHeightAt,
 } from './gallery-layout.js';
 
 const LANDSCAPE = 3000 / 2000; // 1.5
 const PORTRAIT = 2000 / 3000; // 0.667
 const PANORAMA = 4; // a 4:1 strip
 
-/** The rendered height of a row justified to fill `width`. */
-const rowHeight = (ratios: number[], width: number) =>
-  (width - (ratios.length - 1) * ROW_GAP) / ratios.reduce((a, r) => a + r, 0);
-
 /** Row sizes, the shape most assertions care about. */
 const sizes = (ratios: number[], width = BREAKOUT_WIDTH) =>
   partitionRows(ratios, width).map((row) => row.ratios.length);
 
-/** The cap expressed back in CSS px, for readable assertions. */
-const capPx = (row: { maxWidthFraction: number | null }, width = BREAKOUT_WIDTH) =>
-  row.maxWidthFraction === null ? null : row.maxWidthFraction * width;
+/** Stacked height of a partition as a fraction of its width — 1 is a square. */
+const squareness = (ratios: number[], width = BREAKOUT_WIDTH) =>
+  galleryHeightAt(partitionRows(ratios, width).map((row) => row.ratios), width) / width;
+
+/**
+ * Every contiguous partition of `ratios`, for brute-force comparison against
+ * the DP. 2^(n−1) of them, so keep n small.
+ */
+function* everyPartition(ratios: number[]): Generator<number[][]> {
+  const n = ratios.length;
+  for (let mask = 0; mask < 1 << (n - 1); mask++) {
+    const rows: number[][] = [];
+    let row: number[] = [];
+    ratios.forEach((r, i) => {
+      row.push(r);
+      if (i === n - 1 || mask & (1 << i)) {
+        rows.push(row);
+        row = [];
+      }
+    });
+    yield rows;
+  }
+}
 
 const repeat = (n: number, r: number) => Array.from({ length: n }, () => r);
 
@@ -89,38 +106,27 @@ describe('partitionRows — row membership', () => {
     expect(sizes([PORTRAIT])).toEqual([1]);
   });
 
-  it('keeps two and three landscapes on one row in the break-out width', () => {
-    expect(sizes(repeat(2, LANDSCAPE))).toEqual([2]);
-    expect(sizes(repeat(3, LANDSCAPE))).toEqual([3]);
+  it('stacks two landscapes rather than leaving a wide, short pair', () => {
+    // Side by side they are 1112 × 366; stacked, 1112 × 1494 — closer to square.
+    expect(sizes(repeat(2, LANDSCAPE))).toEqual([1, 1]);
   });
 
-  it('breaks seven landscapes into full rows plus a remainder', () => {
-    expect(sizes(repeat(7, LANDSCAPE))).toEqual([3, 3, 1]);
+  it('pairs three landscapes and a portrait into two even rows', () => {
+    const rows = partitionRows([LANDSCAPE, LANDSCAPE, LANDSCAPE, PORTRAIT], BREAKOUT_WIDTH);
+    expect(rows.map((row) => row.ratios)).toEqual([[LANDSCAPE, LANDSCAPE], [LANDSCAPE, PORTRAIT]]);
   });
 
-  it('breaks thirteen landscapes the same way, all the way down', () => {
-    const rows = sizes(repeat(13, LANDSCAPE));
-    expect(rows).toEqual([3, 3, 3, 3, 1]);
-    expect(rows.reduce((a, n) => a + n, 0)).toBe(13);
-  });
-
-  it('fits more portraits per row than landscapes', () => {
-    // Five portraits are narrow enough to justify as one row.
-    expect(sizes(repeat(5, PORTRAIT))).toEqual([5]);
+  it('never leaves a lone landscape as a full-width finale beside short rows', () => {
+    // 3 + 3 + 1 stacks to 1249, marginally closer to 1112 than 2 + 2 + 3 at
+    // 1366 — but its last photo would be three times the height of the rows
+    // above it. Evenness within the row count decides, not the square alone.
+    const rows = partitionRows(repeat(7, LANDSCAPE), BREAKOUT_WIDTH);
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => row.ratios.length).sort()).toEqual([2, 2, 3]);
   });
 
   it('gives a lone panorama its own row rather than squashing a mixed row', () => {
     expect(sizes([PANORAMA, LANDSCAPE, LANDSCAPE])).toEqual([1, 2]);
-  });
-
-  it('handles a panorama in the middle of a mix', () => {
-    const rows = partitionRows([LANDSCAPE, LANDSCAPE, PANORAMA, PORTRAIT, LANDSCAPE], BREAKOUT_WIDTH);
-    expect(rows.flatMap((row) => row.ratios)).toEqual([
-      LANDSCAPE, LANDSCAPE, PANORAMA, PORTRAIT, LANDSCAPE,
-    ]);
-    // The panorama must not share a row with the two landscapes before it —
-    // that row would be far shorter than the target.
-    expect(rows[0]?.ratios).toEqual([LANDSCAPE, LANDSCAPE]);
   });
 
   it('preserves order and count across a nine-photo mix', () => {
@@ -136,95 +142,106 @@ describe('partitionRows — row membership', () => {
     expect(rows.flatMap((row) => row.ratios)).toEqual(mix);
   });
 
-  it('packs fewer photos per row in the narrower column width', () => {
-    expect(sizes(repeat(6, LANDSCAPE), COLUMN_WIDTH)).toEqual([2, 2, 2]);
+  it('partitions the same photos the same way in the column and the break-out', () => {
+    // The square is scale-invariant apart from the 12px gap, so — until the
+    // floor binds — the container changes how large the square is, not how
+    // it is cut.
+    expect(sizes(repeat(7, LANDSCAPE), COLUMN_WIDTH)).toEqual(sizes(repeat(7, LANDSCAPE), BREAKOUT_WIDTH));
+    const mix = [LANDSCAPE, PORTRAIT, LANDSCAPE, LANDSCAPE, PORTRAIT, LANDSCAPE];
+    expect(sizes(mix, COLUMN_WIDTH)).toEqual(sizes(mix, BREAKOUT_WIDTH));
   });
 });
 
-describe('partitionRows — row heights', () => {
-  it('keeps every full row within a sane band around the target height', () => {
+describe('partitionRows — the gallery is a square', () => {
+  it('chooses the row count whose stack lands closest to the width', () => {
+    for (const gallery of [
+      repeat(7, LANDSCAPE),
+      [LANDSCAPE, LANDSCAPE, LANDSCAPE, PORTRAIT],
+      [LANDSCAPE, PORTRAIT, PANORAMA, LANDSCAPE, PORTRAIT, LANDSCAPE, LANDSCAPE],
+      repeat(5, PORTRAIT),
+    ]) {
+      const chosen = partitionRows(gallery, BREAKOUT_WIDTH).map((row) => row.ratios);
+      const distance = Math.abs(galleryHeightAt(chosen, BREAKOUT_WIDTH) - BREAKOUT_WIDTH);
+      // No partition with a DIFFERENT row count does better. (Within the
+      // chosen count the evenest split wins, and that can sit a hair further
+      // from the square than a lopsided split with the same count would.)
+      for (const other of everyPartition(gallery)) {
+        if (other.length === chosen.length) continue;
+        expect(Math.abs(galleryHeightAt(other, BREAKOUT_WIDTH) - BREAKOUT_WIDTH)).toBeGreaterThanOrEqual(distance);
+      }
+    }
+  });
+
+  it('lands near square for the galleries a story actually carries', () => {
+    // A contiguous split of 3:2 frames cannot always hit 1:1 — four landscapes
+    // are 2 + 2 at 0.67 or 1 + 2 + 1 at 1.68 — so this is a band, not a point.
+    for (const gallery of [
+      repeat(4, LANDSCAPE),
+      repeat(7, LANDSCAPE),
+      repeat(13, LANDSCAPE),
+      [LANDSCAPE, LANDSCAPE, LANDSCAPE, PORTRAIT],
+      [LANDSCAPE, PORTRAIT, LANDSCAPE, LANDSCAPE, PORTRAIT, PANORAMA, LANDSCAPE, PORTRAIT, LANDSCAPE],
+      [...repeat(4, LANDSCAPE), ...repeat(3, PORTRAIT), PANORAMA, ...repeat(5, LANDSCAPE)],
+    ]) {
+      expect(squareness(gallery)).toBeGreaterThan(0.6);
+      expect(squareness(gallery)).toBeLessThan(1.35);
+    }
+  });
+
+  it('keeps the rows of one gallery within a band of each other', () => {
     const rows = partitionRows(repeat(13, LANDSCAPE), BREAKOUT_WIDTH);
-    // The last row is capped, not justified — it is asserted separately below.
-    for (const row of rows.slice(0, -1)) {
-      const h = rowHeight(row.ratios, BREAKOUT_WIDTH);
-      expect(h).toBeGreaterThan(TARGET_ROW_HEIGHT * 0.5);
-      expect(h).toBeLessThan(TARGET_ROW_HEIGHT * 1.5);
-    }
-  });
-
-  it('never chooses a partition that a different break would bring closer to target', () => {
-    // A row is closed only when adding the next photo would move its height
-    // FURTHER from the target — the greedy invariant, stated as a property.
-    const mix = [LANDSCAPE, PORTRAIT, PANORAMA, LANDSCAPE, PORTRAIT, LANDSCAPE, LANDSCAPE];
-    const rows = partitionRows(mix, BREAKOUT_WIDTH);
-    for (let i = 0; i < rows.length - 1; i++) {
-      const row = rows[i]!.ratios;
-      const next = rows[i + 1]!.ratios[0]!;
-      const asIs = Math.abs(rowHeight(row, BREAKOUT_WIDTH) - TARGET_ROW_HEIGHT);
-      const extended = Math.abs(rowHeight([...row, next], BREAKOUT_WIDTH) - TARGET_ROW_HEIGHT);
-      expect(extended).toBeGreaterThan(asIs);
-    }
+    const heights = rows.map((row) => rowHeightAt(row.ratios, BREAKOUT_WIDTH));
+    expect(Math.max(...heights) / Math.min(...heights)).toBeLessThan(1.6);
   });
 });
 
-describe('partitionRows — the last row is capped, not stretched', () => {
-  it('caps a lone photo at the fallback height when there is no row above it', () => {
+describe('partitionRows — photos never shrink below the floor', () => {
+  it('grows a big gallery taller than square rather than cutting rows under MIN_ROW_HEIGHT', () => {
+    // 37 landscapes as a square would be seven rows of ~134px.
+    const rows = partitionRows(repeat(37, LANDSCAPE), BREAKOUT_WIDTH);
+    for (const row of rows) expect(rowHeightAt(row.ratios, BREAKOUT_WIDTH)).toBeGreaterThanOrEqual(MIN_ROW_HEIGHT);
+    expect(squareness(repeat(37, LANDSCAPE))).toBeGreaterThan(1.35);
+    // And no shorter than it must be: four a row clears the floor at 1112.
+    expect(Math.max(...rows.map((row) => row.ratios.length))).toBe(4);
+  });
+
+  it('takes three landscapes a row in the column and four in the break-out', () => {
+    expect(Math.max(...sizes(repeat(27, LANDSCAPE), COLUMN_WIDTH))).toBe(3);
+    expect(Math.max(...sizes(repeat(27, LANDSCAPE), BREAKOUT_WIDTH))).toBe(4);
+  });
+
+  it('still admits a lone panorama that is under the floor on its own', () => {
+    // A 10:1 strip is 80px tall at 800 — there is no legal row for it but its
+    // own, and refusing it would drop the photo.
+    const rows = partitionRows([LANDSCAPE, 10, LANDSCAPE], COLUMN_WIDTH);
+    expect(rows.flatMap((row) => row.ratios)).toEqual([LANDSCAPE, 10, LANDSCAPE]);
+    expect(rows.some((row) => row.ratios.length === 1 && row.ratios[0] === 10)).toBe(true);
+  });
+});
+
+describe('partitionRows — rows fill the width', () => {
+  it('leaves the cap off every row that fits under the square', () => {
+    for (const row of partitionRows(repeat(7, LANDSCAPE), BREAKOUT_WIDTH)) expect(row.maxWidthFraction).toBeNull();
+    for (const row of partitionRows(repeat(2, LANDSCAPE), BREAKOUT_WIDTH)) expect(row.maxWidthFraction).toBeNull();
+  });
+
+  it('caps a lone portrait at the height of the square instead of stretching it', () => {
     const [row] = partitionRows([PORTRAIT], BREAKOUT_WIDTH);
-    // Justified it would be 1112 wide and ~1668 tall. Capped it is ~300×450.
-    expect(capPx(row!)).toBeCloseTo(MAX_LAST_ROW_HEIGHT * PORTRAIT, 5);
-  });
-
-  it('matches the row above instead, so a remainder reads as a partial row', () => {
-    const rows = partitionRows(repeat(7, LANDSCAPE), BREAKOUT_WIDTH);
-    const last = rows[rows.length - 1]!;
-    const above = rows[rows.length - 2]!;
-    expect(last.ratios).toEqual([LANDSCAPE]);
-    // Its capped height equals the height of the row above it — not the 450
-    // fallback, which would have made the final photo the biggest on the page.
-    const cappedHeight = capPx(last)! / LANDSCAPE;
-    expect(cappedHeight).toBeCloseTo(rowHeight(above.ratios, BREAKOUT_WIDTH), 5);
-    expect(cappedHeight).toBeLessThan(MAX_LAST_ROW_HEIGHT);
-  });
-
-  it('keeps the remainder matching the row above at OTHER rendered widths too', () => {
-    // This is what the fraction buys. Row membership is fixed at the design
-    // width, but the gallery renders at every width down to the stacking
-    // breakpoint — and a pixel cap computed at 1112 left a 242px-tall
-    // remainder beside 167px rows on a tablet.
-    const rows = partitionRows(repeat(7, LANDSCAPE), BREAKOUT_WIDTH);
-    const last = rows[rows.length - 1]!;
-    const above = rows[rows.length - 2]!;
-    expect(last.maxWidthFraction).not.toBeNull();
+    // Justified it would be 1112 wide and ~1668 tall. Capped it is 741 × 1112.
+    expect(row!.maxWidthFraction).toBeCloseTo(PORTRAIT, 5);
     for (const rendered of [BREAKOUT_WIDTH, 950, 780, 640]) {
-      const width = last.maxWidthFraction! * rendered;
-      const sum = last.ratios.reduce((a, r) => a + r, 0);
-      const lastHeight = (width - (last.ratios.length - 1) * ROW_GAP) / sum;
-      const aboveHeight = rowHeight(above.ratios, rendered);
-      const drift = Math.abs(lastHeight - aboveHeight) / aboveHeight;
-      expect(drift, `at ${rendered}px`).toBeLessThan(0.05);
+      const width = row!.maxWidthFraction! * rendered;
+      expect(width / PORTRAIT, `at ${rendered}px`).toBeCloseTo(rendered, 5);
     }
   });
 
-  it('leaves the cap off when it would not bind — the row fills the width', () => {
-    // Three landscapes justify to ~242px tall, well under the fallback, so a
-    // max-width would only get in the way.
-    const [row] = partitionRows(repeat(3, LANDSCAPE), BREAKOUT_WIDTH);
-    expect(row?.maxWidthFraction).toBeNull();
-  });
-
-  it('never caps a row that is not the last one', () => {
-    const rows = partitionRows(repeat(7, LANDSCAPE), BREAKOUT_WIDTH);
-    for (const row of rows.slice(0, -1)) expect(row.maxWidthFraction).toBeNull();
-  });
-
-  it('accounts for the gaps when capping a multi-photo last row', () => {
-    const rows = partitionRows([...repeat(3, LANDSCAPE), PORTRAIT, PORTRAIT], BREAKOUT_WIDTH);
-    const last = rows[rows.length - 1]!;
-    const above = rows[rows.length - 2]!;
-    expect(last.ratios.length).toBeGreaterThan(1);
-    const sum = last.ratios.reduce((a, r) => a + r, 0);
-    const capHeight = rowHeight(above.ratios, BREAKOUT_WIDTH);
-    expect(capPx(last)).toBeCloseTo(capHeight * sum + (last.ratios.length - 1) * ROW_GAP, 5);
+  it('accounts for the gaps when capping a multi-photo row', () => {
+    // Two slivers taller than they are wide, stacked would be 2 × 4448; side
+    // by side 4400 tall — still over the square, so the row is capped.
+    const sliver = 0.125;
+    const [row] = partitionRows([sliver, sliver], BREAKOUT_WIDTH);
+    expect(row!.ratios).toHaveLength(2);
+    expect(row!.maxWidthFraction! * BREAKOUT_WIDTH).toBeCloseTo(BREAKOUT_WIDTH * 2 * sliver + ROW_GAP, 5);
   });
 });
 

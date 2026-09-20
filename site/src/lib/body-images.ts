@@ -233,7 +233,7 @@ function itemNode(
   ]);
 }
 
-/** `breakout` / `column`: photos partitioned into justified rows at build time. */
+/** `breakout` / `column`: photos partitioned into justified rows that stack to a square, at build time. */
 function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 'slider'>) {
   const width = containerWidthFor(mode);
   const rows = partitionRows(photos.map((p) => p.image.width / p.image.height), width);
@@ -250,8 +250,8 @@ function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 'slide
     const rowWidth = (row.maxWidthFraction ?? 1) * width;
     const gaps = (row.ratios.length - 1) * ROW_GAP;
     const height = (rowWidth - gaps) / row.ratios.reduce((a, r) => a + r, 0);
-    // A PERCENTAGE, not pixels: the cap tracks the row above it as the
-    // container resizes. See GalleryRow.maxWidthFraction.
+    // A PERCENTAGE, not pixels, and only on a row that would stand taller
+    // than the square is wide. See GalleryRow.maxWidthFraction.
     const cap = row.maxWidthFraction;
     return h(
       'div',

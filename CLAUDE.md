@@ -932,6 +932,23 @@ blog/
   a `≥ 64rem` viewport (no-JS desktop: collapsed but working), and `initStoryContents` takes the
   same media query so a section link in the rail focuses the heading without collapsing the list.
   See `DESIGN.md` (Layout → The story spread; Break-out; Story contents; Story Opening).
+- **Done:** Opening spread only, centred body, square galleries (2026-09-20) — the rail now
+  sits beside the story's **first section** alone (`site/src/lib/story-opening.ts` cuts the
+  loader's rendered HTML at the first top-level heading that has content before it, so an
+  intro heading + paragraphs + first photo make the opening, and the Cuyabeno double-`##`
+  start is one opening rather than an empty one); the rest of the story runs **centred at
+  50rem** (`--container-story-wide`) with the divider and pagination on the same measure.
+  `.story-spread` (float container, `display: contents` below `lg`) is the rail's containing
+  block, so it stays off the centred body while the mobile contents strip still spans the
+  whole story; `#story-body` became the class `.story-body` on both articles. The story
+  hero lost the `N°` (homepage hero keeps it) and carries the coordinates on the field line
+  beside date · country. Galleries are partitioned to a **square** (`partitionRows`: row
+  count nearest the width, evenest rows within it by DP, every row fills, order preserved)
+  with a **168px floor** on multi-photo rows so a 37-photo gallery grows tall rather than
+  becoming a contact sheet; the only remaining `--jgal-maxw` cap holds a lone portrait at the
+  square's height. `COLUMN_WIDTH` is now 800 (the wider column), so column `sizes` hints never
+  under-fetch. Published pages change on the next rebuild. See `DESIGN.md` (The story spread;
+  Story Opening; Galleries).
 - **Done:** Imported story semantics + import/publish guards (2026-09-20) — all 18 locale rows
   from the nine WordPress story pairs were normalized in the working copy after a database dump:
   per-locale facts moved from `Eckdaten` / `Key data` body blocks into `keyFacts`, empty legacy

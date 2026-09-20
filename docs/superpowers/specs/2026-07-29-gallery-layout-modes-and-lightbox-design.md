@@ -8,6 +8,16 @@
 layout and stored no mode; this one replaces it with three selectable modes and the storage
 mechanism for choosing between them. Everything else in the 07-26 spec stands.
 **Builds on:** #65 (the ```gallery fence, `galleryNode`, the URL defences) and #75 (the picker).
+**Amended 2026-09-20 (partition rule):** the greedy target-height partition and the capped last
+row described under §Modules were replaced. `partitionRows` now cuts the photos so the gallery
+stacks to a **square** — the row count nearest the container width, the evenest rows within that
+count (a small DP), every row filling the width, order preserved — subject to a **168px floor**
+on any row of two or more photos (`MIN_ROW_HEIGHT`), so large galleries grow taller than they are
+wide instead of shrinking to thumbnails. `TARGET_ROW_HEIGHT` and `MAX_LAST_ROW_HEIGHT` are gone;
+the only remaining `--jgal-maxw` cap holds a row that would stand taller than the square (a lone
+portrait) at the square's height. `COLUMN_WIDTH` is 800, the centred story body (the opening
+column beside the rail is 728 and renders the same rows a tenth narrower). Owner decision, with
+the floor chosen over a strict square after seeing the 37-photo case. See `DESIGN.md` → Galleries.
 
 ## Why this exists
 

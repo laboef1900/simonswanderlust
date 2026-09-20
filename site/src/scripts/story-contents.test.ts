@@ -14,7 +14,7 @@ function mount(href = '#%C3%BCber-den-fluss', rail?: { matches: boolean }): {
         <summary>Contents</summary>
         <nav><a href="${href}"><span>Über den Fluss</span></a></nav>
       </details>
-      <article id="story-body"><h2 id="über-den-fluss">Über den Fluss</h2></article>
+      <article class="story-body"><h2 id="über-den-fluss">Über den Fluss</h2></article>
     </div>`;
   const contents = document.querySelector<HTMLDetailsElement>('details')!;
   initStoryContents(contents, rail);

@@ -109,7 +109,7 @@ const items = headings.filter((h) => h.depth === 2);
     }
   }
 
-  :global(#story-body :is(h2, h3, h4, h5, h6)) {
+  :global(.story-body :is(h2, h3, h4, h5, h6)) {
     scroll-margin-top: 5rem;
   }
 
@@ -122,16 +122,16 @@ const items = headings.filter((h) => h.depth === 2);
     scroll-margin-top: 4rem;
   }
 
-  :global(#story-body :is(h2, h3, h4, h5, h6):focus-visible) {
+  :global(.story-body :is(h2, h3, h4, h5, h6):focus-visible) {
     outline: 2px solid var(--color-brand-red);
     outline-offset: 0.25rem;
   }
 
   /* Without scripting, native anchor jumps still clear the expanded strip.
-   * `:has()` because the strip sits inside the rail wrapper (StoryPage.astro),
-   * which is `display: contents` below lg, so #story-body is the wrapper's
-   * sibling, not the strip's. */
-  :global(.story-rail:has(.story-contents[open])) ~ :global(#story-body :is(h2, h3, h4, h5, h6)) {
+   * `:has()` on .story-reading (StoryPage.astro), the one ancestor common to
+   * the strip and both story articles — the opening beside the rail and the
+   * centred rest; the rail wrappers are `display: contents` below lg. */
+  :global(.story-reading:has(.story-contents[open]) .story-body :is(h2, h3, h4, h5, h6)) {
     scroll-margin-top: calc(min(60vh, 24rem) + 5rem);
   }
 
@@ -163,8 +163,8 @@ const items = headings.filter((h) => h.depth === 2);
       margin-inline: -0.25rem;
     }
 
-    :global(#story-body :is(h2, h3, h4, h5, h6)),
-    :global(.story-rail:has(.story-contents[open])) ~ :global(#story-body :is(h2, h3, h4, h5, h6)),
+    :global(.story-body :is(h2, h3, h4, h5, h6)),
+    :global(.story-reading:has(.story-contents[open]) .story-body :is(h2, h3, h4, h5, h6)),
     :global(.story-rail details:not(.story-contents)),
     :global(.story-rail details:not(.story-contents) > summary) {
       scroll-margin-top: 2rem;
