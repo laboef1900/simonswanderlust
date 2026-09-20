@@ -932,6 +932,19 @@ blog/
   a `≥ 64rem` viewport (no-JS desktop: collapsed but working), and `initStoryContents` takes the
   same media query so a section link in the rail focuses the heading without collapsing the list.
   See `DESIGN.md` (Layout → The story spread; Break-out; Story contents; Story Opening).
+- **Done:** Imported story semantics + import/publish guards (2026-09-20) — all 18 locale rows
+  from the nine WordPress story pairs were normalized in the working copy after a database dump:
+  per-locale facts moved from `Eckdaten` / `Key data` body blocks into `keyFacts`, empty legacy
+  TOC headings disappeared, 43 Elementor `Heading:` + subtitle pairs became one
+  `Heading — Subtitle`, Galápagos opening hard breaks became paragraphs, and both Cuyabeno body
+  H1s became H2s. The filename-pattern alts on 1,047 unique captionless gallery photos were
+  cleared to explicit decorative alts rather than replaced with invented descriptions; the
+  warning-only alt audit now reports future filename alts. Hero focus was set for the two portrait
+  heroes and the Galápagos iguana, and four curator-selected Galápagos/Cuyabeno fences opt into
+  `#layout: breakout` without removing photos. `htmlToMarkdown` now repairs the imported structure,
+  while `validateForPublish` refuses real body H1s (but ignores fenced examples). Published
+  snapshots remain unchanged until the author publishes each story. See
+  `docs/superpowers/specs/2026-09-20-imported-content-semantics-design.md`.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

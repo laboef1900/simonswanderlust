@@ -28,6 +28,8 @@ const isAbout = pathname.startsWith(aboutPath(locale));
 //       was too small to earn the spacing exception.
 // Re-measure `scrollWidth === clientWidth` at 320/360/375/390 in BOTH locales
 // after touching this file; `flex-wrap` on the nav is what makes 320 survive.
+// Mobile has no vertical shell padding: its two 44px target rows are the
+// irreducible height without overlapping controls.
 const link = 'inline-flex min-h-[44px] items-center rounded px-2 transition-[color]';
 const active = 'font-semibold text-brand-red';
 const idle = 'text-ink/80 hover:text-brand-red';
@@ -35,7 +37,7 @@ const idle = 'text-ink/80 hover:text-brand-red';
 
 <header class="border-b border-navy/10 bg-canvas">
   <div
-    class="mx-auto flex max-w-6xl flex-col px-5 py-1 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:py-2"
+    class="mx-auto flex max-w-6xl flex-col px-5 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:py-2"
   >
     <a
       href={homePath(locale)}

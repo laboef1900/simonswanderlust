@@ -371,12 +371,15 @@ gap, rail `clamp(18rem, 100% − 48.5rem, 21rem)` (`--container-story-column` /
 `--container-story-rail`). The column yields first — 648px at a 1024
 viewport, the full 728px from 1192 — and the rail grows once the column is
 full; the three always sum to exactly 100%. The rail holds the story's
-furniture — contents, key facts, the route map — open, top-aligned, not
-sticky; below `lg` the same three elements are collapsed disclosures stacked
-above the article. It is a **float**, not a grid column, because the article
-is one rendered body that cannot be split around a sidebar, and a wide gallery
-near the top must not run under the rail: `clear: right` on the wide modes
-drops such a gallery below the rail and leaves every later one where it is.
+furniture — contents, key facts, the route map — open in a stack that stays
+`0.5rem` from the viewport top while the story is in view. The stack is capped
+at `calc(100dvh − 1rem)` and scrolls internally with contained overscroll, so
+short viewports do not make its later controls unreachable. Below `lg` the same
+three elements are collapsed disclosures stacked above the article. The outer
+wrapper remains a **float**, not a grid column, because the article is one
+rendered body that cannot be split around a sidebar, and a wide gallery near
+the top must not run under the rail: `clear: right` on the wide modes drops such
+a gallery below the rail and leaves every later one where it is.
 The title block widens with it, the text keeping the column's width so its
 left edge meets the article's, and the arrival stamp moves to the top-right
 corner above the rail — the same place it sits on the homepage hero. This is
@@ -654,15 +657,17 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
 
 `StoryHero.astro` owns the photograph, title, entry/date/country line,
 coordinates, arrival stamp and optional translation link. The photograph leads;
-every word sits on canvas below it at every width. Below `lg` the title and
-body share the `768px` container with `20px` gutters and the stamp sits beside
-the coordinate and translation group. From `lg` the block is the spread's
-grid: the text keeps the reading column's width, and the stamp is placed
-top-right above the rail — one element, two grid placements, no duplicate
-markup. Responsive source hints account for the photograph's actual aspect
-ratio when desktop cover cropping needs a wider source. Mobile retains the
-whole frame, including portrait photographs. No title clamp or photographic
-scrim.
+every word sits on canvas below it at every width. The translation link is a
+secondary action in the site's link register: 14px medium navy on canvas
+(**14.114:1**), with the red accent reserved for hover and active states; its
+44px hit box and arrow remain. Below `lg` the title and body share the `768px`
+container with `20px` gutters and the stamp sits beside the coordinate and
+translation group. From `lg` the block is the spread's grid: the text keeps the
+reading column's width, and the stamp is placed top-right above the rail — one
+element, two grid placements, no duplicate markup. Responsive source hints
+account for the photograph's actual aspect ratio when desktop cover cropping
+needs a wider source. Mobile retains the whole frame, including portrait
+photographs. No title clamp or photographic scrim.
 
 ### Navigation
 

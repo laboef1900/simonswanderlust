@@ -167,14 +167,67 @@ export function markdownImages(md: string): MarkdownImage[] {
   return out;
 }
 
+const EMPTY_TOC_HEADING = /^#{2,4}\s+(?:inhalt|contents|table of contents)\s*$/i;
+const FACTS_HEADING = /^#{2,4}\s+(?:eckdaten|key data|key facts)\b/i;
+
+/**
+ * Repair the two structural artefacts produced by the Elementor story template:
+ *
+ *  • `<h2>Place:<br>Subtitle</h2>` becomes one useful outline entry instead of
+ *    a colon-ended heading followed by an orphan paragraph;
+ *  • the empty WordPress TOC slot disappears when the next real node is media
+ *    or another heading (a real authored contents section is preserved).
+ *
+ * Before the facts block, hard breaks came from one Elementor intro paragraph.
+ * They are paragraph boundaries, not line-break typography.
+ */
+function cleanImportedSemantics(md: string): string {
+  const lines = md.split('\n');
+  const out: string[] = [];
+  let beforeFacts = true;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? '';
+    const trimmed = line.trim();
+    if (FACTS_HEADING.test(trimmed)) beforeFacts = false;
+
+    const heading = /^(##\s+)(.+?):\s{2,}$/.exec(line);
+    const subtitle = lines[i + 1]?.trim() ?? '';
+    if (
+      heading &&
+      subtitle !== '' &&
+      !/^(?:#{1,6}\s|```|!\[|[-*+]\s|\d+\.\s)/.test(subtitle)
+    ) {
+      out.push(`${heading[1]}${heading[2]} — ${subtitle}`);
+      i += 1;
+      continue;
+    }
+
+    if (EMPTY_TOC_HEADING.test(trimmed)) {
+      const next = lines.slice(i + 1).find((candidate) => candidate.trim() !== '')?.trim() ?? '';
+      if (next === '' || /^(?:!\[|```gallery\b|#{1,6}\s)/.test(next)) continue;
+    }
+
+    if (beforeFacts && !trimmed.startsWith('#') && / {2,}$/.test(line)) {
+      out.push(line.replace(/ {2,}$/, ''), '');
+      continue;
+    }
+    out.push(line);
+  }
+
+  return out.join('\n').replace(/\n{3,}/g, '\n\n');
+}
+
+
 /** Convert post HTML to clean Markdown — turndown keeps the content tags
  *  (headings/paragraphs/lists/links/images) and drops wrapper divs/styles.
  *  `attachments` (WXR attachment id → URL) enables classic-shortcode expansion. */
 export function htmlToMarkdown(html: string, attachments?: ReadonlyMap<string, string>): string {
-  return foldGalleries(
+  const markdown = foldGalleries(
     td
       .turndown(attachments ? expandShortcodes(html, attachments) : html)
       .replace(/^(-|\*|\+)\s{2,}/gm, '$1 ')  // normalise bullet indent: "- ·· item" → "- item"
       .replace(/\n{3,}/g, '\n\n'),
-  ).trim();
+  );
+  return cleanImportedSemantics(markdown).trim();
 }

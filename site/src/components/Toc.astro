@@ -113,6 +113,15 @@ const items = headings.filter((h) => h.depth === 2);
     scroll-margin-top: 5rem;
   }
 
+  /* The closed strip is 44px tall and sits 0.5rem below the viewport edge.
+   * Give the disclosures immediately after it the same anchor clearance as
+   * story headings, so opening/focusing one near the top cannot leave its
+   * summary hidden behind the sticky contents control. */
+  :global(.story-rail details:not(.story-contents)),
+  :global(.story-rail details:not(.story-contents) > summary) {
+    scroll-margin-top: 4rem;
+  }
+
   :global(#story-body :is(h2, h3, h4, h5, h6):focus-visible) {
     outline: 2px solid var(--color-brand-red);
     outline-offset: 0.25rem;
@@ -155,7 +164,9 @@ const items = headings.filter((h) => h.depth === 2);
     }
 
     :global(#story-body :is(h2, h3, h4, h5, h6)),
-    :global(.story-rail:has(.story-contents[open])) ~ :global(#story-body :is(h2, h3, h4, h5, h6)) {
+    :global(.story-rail:has(.story-contents[open])) ~ :global(#story-body :is(h2, h3, h4, h5, h6)),
+    :global(.story-rail details:not(.story-contents)),
+    :global(.story-rail details:not(.story-contents) > summary) {
       scroll-margin-top: 2rem;
     }
   }

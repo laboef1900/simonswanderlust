@@ -70,6 +70,21 @@ describe('auditAltText — body and gallery photos', () => {
     ]);
   });
 
+  it('warns when a WordPress attachment filename is used as alt text', () => {
+    const body = '```gallery\n' + `${IMG}/trips/rhodos/g1\n` + `${IMG}/trips/rhodos/g2\n` + '```';
+    const audit = auditAltText(post({
+      title: 'Rhodos',
+      bodyMarkdown: body,
+      images: {
+        [`${IMG}/trips/rhodos/g1`]: { ...dims, alt: 'Ecuador-Quito - 8.10.2023 171833' },
+        [`${IMG}/trips/rhodos/g2`]: { ...dims, alt: 'Fischerboote am frühen Morgen' },
+      },
+    }));
+    expect(audit.images).toEqual([
+      { locale: 'de', kind: 'gallery', src: `${IMG}/trips/rhodos/g1`, reason: 'filename' },
+    ]);
+  });
+
   it('reports a gallery photo the map carries no alt for', () => {
     const body = '```gallery\n' + `${IMG}/trips/rhodos/g1\n` + '```';
     const audit = auditAltText(post({

@@ -110,6 +110,27 @@ describe('initGalleries — lightbox', () => {
     expect(liveText()).toBe('Photo 2 of 3');
   });
 
+  it('shows the decoded grid candidate until the larger image loads', () => {
+    mountJustified(1);
+    const gridImage = photos()[0]!.querySelector('img')!;
+    Object.defineProperty(gridImage, 'currentSrc', {
+      configurable: true,
+      value: 'https://img.test/p0-640.webp',
+    });
+    initGalleries(document, labels);
+    click(photos()[0]!);
+
+    const frame = dialog()?.querySelector('.jgal__lb-frame');
+    const thumbnail = frame?.querySelector<HTMLImageElement>('.jgal__lb-thumb');
+    const large = frame?.querySelector<HTMLImageElement>('.jgal__lb-img');
+    expect(thumbnail?.getAttribute('src')).toBe('https://img.test/p0-640.webp');
+    expect(large?.getAttribute('src')).toBe('https://img.test/p0-1280.webp');
+    expect(frame?.classList.contains('is-ready')).toBe(false);
+
+    large?.dispatchEvent(new Event('load'));
+    expect(frame?.classList.contains('is-ready')).toBe(true);
+  });
+
   it('carries alt and caption across, and hides an empty caption', () => {
     mountJustified(3);
     initGalleries(document, labels);

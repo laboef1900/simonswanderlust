@@ -61,26 +61,29 @@ const jsonLd = serializeJsonLd(
 
   <div class="mx-auto max-w-3xl px-5 pt-5 pb-10 sm:pt-6 lg:max-w-6xl">
     <div class="story-reading">
-      {/* The rail: contents, key facts and the route map. Below lg the wrapper
-          is `display: contents`, so these are the same three disclosures
-          stacked above the article they always were (and the sticky strip's
-          containing block stays .story-reading). From lg the wrapper floats
-          beside the reading column, and the disclosures start open. */}
+      {/* The rail: contents, key facts and the route map. Below lg both
+          wrappers are `display: contents`, so these are the same three
+          disclosures stacked above the article they always were (and the
+          sticky strip's containing block stays .story-reading). From lg the
+          outer wrapper floats beside the reading column, the inner stack stays
+          in view, and the disclosures start open. */}
       <div class="story-rail">
-        <Toc headings={headings} locale={locale} />
-        {
-          trip.data.keyFacts && (
-            <KeyFacts facts={trip.data.keyFacts} country={trip.data.country} locale={locale} />
-          )
-        }
-        <StoryMiniMap trip={trip} locale={locale} />
+        <div class="story-rail__stack">
+          <Toc headings={headings} locale={locale} />
+          {
+            trip.data.keyFacts && (
+              <KeyFacts facts={trip.data.keyFacts} country={trip.data.country} locale={locale} />
+            )
+          }
+          <StoryMiniMap trip={trip} locale={locale} />
+        </div>
       </div>
       {/* Inline and synchronous, so the rail is open before first paint on a
           desktop viewport. Without JavaScript the rail is still there, just
           collapsed — the same disclosures the narrow layout ships. */}
       <script is:inline>
         if (matchMedia('(width >= 64rem)').matches) {
-          for (const d of document.querySelectorAll('.story-rail > details')) d.open = true;
+          for (const d of document.querySelectorAll('.story-rail__stack > details')) d.open = true;
         }
       </script>
       <article id="story-body" class="prose prose-lg max-w-none lg:w-story-column prose-headings:font-extrabold prose-headings:text-navy prose-headings:break-words prose-p:break-words prose-li:break-words prose-a:font-semibold prose-a:text-brand-red prose-a:no-underline hover:prose-a:underline prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:bg-navy/[0.02] prose-blockquote:py-3 prose-blockquote:px-5 prose-blockquote:italic prose-blockquote:text-navy prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red">
@@ -98,6 +101,9 @@ const jsonLd = serializeJsonLd(
 
 <style>
   .story-rail {
+    display: contents;
+  }
+  .story-rail__stack {
     display: contents;
   }
 
@@ -119,10 +125,23 @@ const jsonLd = serializeJsonLd(
 
     .story-rail {
       display: block;
+      position: sticky;
+      top: 0.5rem;
       float: right;
       clear: right;
       width: var(--container-story-rail);
       margin-left: 3rem;
+    }
+
+    .story-rail__stack {
+      display: block;
+      position: sticky;
+      top: 0.5rem;
+      max-height: calc(100dvh - 1rem);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-width: thin;
+      scrollbar-color: var(--color-navy) var(--color-canvas);
     }
 
     /* A wide gallery spans the whole spread from the column's left edge,

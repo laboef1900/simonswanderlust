@@ -40,6 +40,8 @@ interface Slide {
   /** `[type, srcset]` pairs lifted off the item's <picture>, best format first. */
   sources: [string, string][];
   fallback: string;
+  /** Already-decoded candidate displayed by the grid at the moment of opening. */
+  thumbnail: string;
 }
 
 const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
@@ -77,6 +79,7 @@ function slidesOf(gallery: Element): Slide[] {
       height: Number(img.getAttribute('height')) || 0,
       sources,
       fallback: img.getAttribute('src') ?? '',
+      thumbnail: img.currentSrc || img.getAttribute('src') || '',
     });
   }
   return slides;
@@ -96,6 +99,7 @@ function createLightbox(labels: GalleryLabels): Lightbox | null {
   const figure = document.createElement('figure');
   figure.className = 'jgal__lb-fig';
   const frame = document.createElement('div');
+  frame.className = 'jgal__lb-frame';
   const caption = document.createElement('figcaption');
   caption.className = 'jgal__lb-cap';
   figure.append(frame, caption);
@@ -128,9 +132,17 @@ function createLightbox(labels: GalleryLabels): Lightbox | null {
     const slide = slides[index];
     if (!slide) return;
 
-    // Rebuilt rather than mutated: changing a <source>'s srcset in place does
-    // not reliably re-run the browser's format selection.
+    // Keep the already-decoded grid candidate visible while the larger
+    // responsive source decodes. Rebuilt rather than mutated: changing a
+    // <source>'s srcset in place does not reliably re-run format selection.
+    const thumbnail = document.createElement('img');
+    thumbnail.className = 'jgal__lb-thumb';
+    thumbnail.src = slide.thumbnail;
+    thumbnail.alt = '';
+    thumbnail.setAttribute('aria-hidden', 'true');
+
     const picture = document.createElement('picture');
+    picture.className = 'jgal__lb-picture';
     for (const [type, srcset] of slide.sources) {
       const source = document.createElement('source');
       source.type = type;
@@ -143,11 +155,22 @@ function createLightbox(labels: GalleryLabels): Lightbox | null {
     img.src = slide.fallback;
     img.alt = slide.alt;
     if (slide.width && slide.height) {
+      thumbnail.width = slide.width;
+      thumbnail.height = slide.height;
       img.width = slide.width;
       img.height = slide.height;
     }
+    const reveal = () => {
+      if (!frame.contains(picture)) return;
+      frame.classList.add('is-ready');
+      picture.classList.add('is-ready');
+    };
+    img.addEventListener('load', reveal, { once: true });
     picture.append(img);
-    frame.replaceChildren(picture);
+    frame.classList.remove('is-ready');
+    frame.replaceChildren(thumbnail, picture);
+    if (img.complete && img.naturalWidth > 0) reveal();
+    else if (typeof img.decode === 'function') void img.decode().then(reveal).catch(() => {});
 
     caption.textContent = slide.caption;
     caption.hidden = slide.caption === '';
