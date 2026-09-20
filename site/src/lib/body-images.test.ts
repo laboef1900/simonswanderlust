@@ -203,7 +203,7 @@ describe('transformBodyImages — gallery layout modes', () => {
   it('caps a lone portrait at the square, as a container percentage', () => {
     const portrait = { [`${ORIGIN}/trips/x/tall`]: { width: 2000, height: 3000, alt: 'tall' } };
     const out = transformBodyImages(fence(`${ORIGIN}/trips/x/tall`), portrait, ORIGIN);
-    // 800 tall × 2/3 = 533 wide of 800 — as wide as it is tall. A percentage,
+    // 960 tall × 2/3 = 640 wide of 960 — as wide as it is tall. A percentage,
     // not pixels, so it stays square-bounded as the container resizes.
     expect(out).toContain('--jgal-maxw:66.67%');
   });
@@ -213,7 +213,7 @@ describe('transformBodyImages — gallery layout modes', () => {
     expect(wide).toContain('class="jgal jgal--breakout not-prose"');
     // The wider container asks the browser for a wider source per photo.
     expect(wide).toContain('(min-width: 1112px) 550px');
-    expect(transformBodyImages(manyFence(), many, ORIGIN)).toContain('(min-width: 800px) 394px');
+    expect(transformBodyImages(manyFence(), many, ORIGIN)).toContain('(min-width: 960px) 312px');
   });
 
   it('renders a keyboard-scrollable track with hidden controls on #layout: slider', () => {

@@ -71,8 +71,8 @@ Plus the **`pgdata`** volume — Postgres data.
    Markdown → HTML, **sanitized**, and body images become responsive `<picture>`
    (`site/src/lib/body-images.ts`). A ` ```gallery ` fence (one image URL per line) becomes a
    photo gallery in the same pass, in one of three layout modes selected by a `#layout:` line
-   inside the fence — `column` (default; justified rows at the 728px story width), `breakout`
-   (the same rows in a 1112px break-out — centred below `lg`, the whole story spread above it)
+   inside the fence — `column` (default; justified rows at the 960px story width), `breakout`
+   (the same rows in a 1112px break-out — centred below `lg`, the whole 960px story spread above it)
    or `slider` (a scroll-snap carousel). The row partition is computed at build time by
    `site/src/lib/gallery-layout.ts`, which is kept pure and dependency-free because draft
    preview runs it under `tsx` too. An unknown or missing mode falls back to `column` (it was
