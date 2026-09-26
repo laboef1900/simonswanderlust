@@ -970,6 +970,9 @@ blog/
   second scrollbar beside the page's — so a rail taller than the opening simply sets the spread's
   height. `COLUMN_WIDTH` in `gallery-layout.ts` is 960 (three landscapes a row still clear the
   168px floor: 208px). Published pages change on the next rebuild. See `DESIGN.md`.
+- **Remaining:** Reader comments — design spec landed 2026-09-14
+  (`docs/superpowers/specs/2026-09-14-comments-design.md`, incl. an ASVS L1 exception record);
+  **awaiting owner approval**, implementation phases not started.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**
