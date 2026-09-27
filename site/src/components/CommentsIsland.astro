@@ -1,0 +1,94 @@
+---
+/**
+ * Reader comments on a story page (SPEC-UI-001). Comments load at runtime
+ * from the same-origin relative `/comments` endpoint — never astro:content —
+ * and are painted by `paintComments` with text nodes only. The form starts
+ * hidden and is revealed only when the server says comments are enabled.
+ *
+ * @ai-context docs/superpowers/specs/2026-09-14-comments-design.md
+ */
+import { useTranslations, type Locale } from '../i18n/ui';
+
+interface Props {
+  locale: Locale;
+  translationKey: string;
+}
+
+const { locale, translationKey } = Astro.props;
+const t = useTranslations(locale);
+---
+
+<section
+  class="comments mx-auto mt-12 lg:max-w-story-wide"
+  id="comments"
+  aria-labelledby="comments-heading"
+  data-comments-root
+  data-translation-key={translationKey}
+  data-locale={locale}
+  data-empty={t('comments.empty')}
+  data-unavailable={t('comments.unavailable')}
+  data-moderated={t('comments.moderated')}
+  data-name={t('comments.name')}
+  data-email={t('comments.email')}
+  data-body={t('comments.body')}
+  data-submit={t('comments.submit')}
+  data-sending={t('comments.sending')}
+  data-thanks={t('comments.thanks')}
+  data-error={t('comments.error')}
+  data-by={t('comments.by')}
+>
+  <h2 id="comments-heading" class="text-2xl font-extrabold text-navy">{t('comments.heading')}</h2>
+  <p class="mt-2 text-sm text-ink/70">{t('comments.moderated')}</p>
+  <div data-comments-list class="mt-4"></div>
+  <form data-comments-form hidden class="mt-6 grid gap-3">
+    <label class="grid gap-1">
+      <span>{t('comments.name')}</span>
+      <input name="name" required maxlength="80" autocomplete="name" class="rounded border px-3 py-2" />
+    </label>
+    <label class="grid gap-1">
+      <span>{t('comments.email')}</span>
+      <input name="email" type="email" maxlength="254" autocomplete="email" class="rounded border px-3 py-2" />
+    </label>
+    <label class="grid gap-1">
+      <span>{t('comments.body')}</span>
+      <textarea name="body" required maxlength="2000" rows="5" class="rounded border px-3 py-2"></textarea>
+    </label>
+    <div aria-hidden="true" class="hidden">
+      <label>
+        <span>{t('comments.honeypot')}</span>
+        <input name="website" tabindex="-1" autocomplete="off" />
+      </label>
+    </div>
+    <button type="submit" class="justify-self-start rounded bg-brand-red px-4 py-2 font-semibold text-white">
+      {t('comments.submit')}
+    </button>
+    <p data-comments-status role="status" aria-live="polite"></p>
+  </form>
+</section>
+
+<script>
+  import { initComments } from '../scripts/comments';
+
+  const root = document.querySelector<HTMLElement>('[data-comments-root]');
+  if (root) {
+    const d = root.dataset;
+    void initComments(root, {
+      translationKey: d.translationKey ?? '',
+      locale: d.locale ?? 'de',
+      labels: {
+        heading: '',
+        empty: d.empty ?? '',
+        unavailable: d.unavailable ?? '',
+        moderated: d.moderated ?? '',
+        name: d.name ?? '',
+        email: d.email ?? '',
+        body: d.body ?? '',
+        submit: d.submit ?? '',
+        sending: d.sending ?? '',
+        thanks: d.thanks ?? '',
+        error: d.error ?? '',
+        by: d.by ?? '',
+      },
+    });
+  }
+</script>
