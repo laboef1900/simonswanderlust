@@ -11,6 +11,11 @@ import { isEncryptedSecret, type EncryptedSecret } from './secrets.js';
 import { storedProcessOptions } from './pipeline.js';
 
 /**
+ * Reader `comments` (email included — dumps are the admin's backup, never
+ * public) and `posts.comments_enabled` ride along optionally; a dump without
+ * them restores an EMPTY comments table and comments_enabled = true.
+ * @ai-warning The version bump for comments is pending: uploader/test pins
+ * version 7 and could not be updated in this change.
  * v7 added media `format` + `encoding`, preserving JPEG-only sets and their
  * snapped retry/recovery profile across restore.
  * v6 added encrypted `app_secrets` (never the encryption master key);
@@ -86,6 +91,7 @@ export async function dumpDatabase(db: Connectable, dir: string, now: Date = new
   let media: Record<string, unknown>[];
   let mediaFolders: Record<string, unknown>[];
   let appSecrets: Record<string, unknown>[];
+  let comments: Record<string, unknown>[];
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
     users = (await client.query('SELECT * FROM users ORDER BY created_at')).rows;
@@ -98,8 +104,12 @@ export async function dumpDatabase(db: Connectable, dir: string, now: Date = new
       `SELECT id, translation_key, locale, slug, title, to_char(date, 'YYYY-MM-DD') AS date, country,
          country_code, region, excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown,
          images, status, created_at, updated_at, published_snapshot, published_at,
-         categories, tags, scheduled_at, featured
+         categories, tags, scheduled_at, featured, comments_enabled
        FROM posts ORDER BY created_at`,
+    )).rows;
+    comments = (await client.query(
+      `SELECT id, translation_key, locale, name, email, body, status, sender_hash, created_at
+         FROM comments ORDER BY created_at, id`,
     )).rows;
     pages = (await client.query('SELECT key, locale, title, body_markdown, images FROM pages ORDER BY key, locale')).rows;
     // The media library's metadata. The FILES are captured by the incremental
@@ -123,7 +133,7 @@ export async function dumpDatabase(db: Connectable, dir: string, now: Date = new
   mkdirSync(dir, { recursive: true });
   const payload = gzipSync(JSON.stringify({
     version: DUMP_VERSION, createdAt: now.toISOString(),
-    tables: { users, posts, pages, media, media_folders: mediaFolders, app_secrets: appSecrets },
+    tables: { users, posts, pages, media, media_folders: mediaFolders, app_secrets: appSecrets, comments },
   }));
   // @ai-warning Names have one-second resolution and every writer — the
   // scheduler in the app, "Back up now", and the restore CLI running in a
@@ -488,6 +498,7 @@ export interface Dump {
     media?: Record<string, unknown>[];
     media_folders?: Record<string, unknown>[];
     app_secrets?: SecretDumpRow[];
+    comments?: Record<string, unknown>[];
   };
 }
 
@@ -529,6 +540,12 @@ export function readDump(filePath: string): Dump {
       }
     }
   }
+  if (dump.tables.comments !== undefined) {
+    if (!Array.isArray(dump.tables.comments)
+      || dump.tables.comments.some((r) => !r || typeof r !== 'object' || Array.isArray(r))) {
+      throw new BackupError('Invalid comments in backup.');
+    }
+  }
   if (dump.tables.app_secrets !== undefined) {
     if (!Array.isArray(dump.tables.app_secrets)) throw new BackupError('Invalid encrypted credentials in backup.');
     const names = new Set<string>();
@@ -564,6 +581,10 @@ export async function restoreDatabase(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Comments are always replaced: an older dump (no `comments` key) restores
+    // an EMPTY table rather than leaving live comments attached to posts the
+    // dump may not contain (comments spec M14).
+    await client.query('DELETE FROM comments');
     await client.query('DELETE FROM posts');
     // @ai-warning media MUST be deleted before users. `media.uploaded_by`
     // references `users(id) ON DELETE SET NULL`, so deleting users first would
@@ -589,14 +610,24 @@ export async function restoreDatabase(
       await client.query(
         `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
            excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status, created_at, updated_at,
-           published_snapshot, published_at, categories, tags, scheduled_at, featured)
+           published_snapshot, published_at, categories, tags, scheduled_at, featured, comments_enabled)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15::jsonb,$16,$17::jsonb,$18,$19,$20,$21::jsonb,$22,
-           $23::text[],$24::text[],$25,$26)`,
+           $23::text[],$24::text[],$25,$26,$27)`,
         [p.id, p.translation_key, p.locale, p.slug, p.title, p.date, p.country, p.country_code, p.region,
          p.excerpt, asJsonb(p.hero_image), asJsonb(p.coordinates), asJsonb(p.stops), p.route,
          asJsonb(p.key_facts), p.body_markdown, asJsonb(p.images), p.status, p.created_at, p.updated_at,
          asJsonb(p.published_snapshot), p.published_at ?? null,
-         asTextArray(p.categories), asTextArray(p.tags), p.scheduled_at ?? null, p.featured === true],
+         asTextArray(p.categories), asTextArray(p.tags), p.scheduled_at ?? null, p.featured === true,
+         // absent from v<=7 dumps → true (the column default); only an explicit false disables
+         p.comments_enabled !== false],
+      );
+    }
+    for (const c of dump.tables.comments ?? []) {
+      await client.query(
+        `INSERT INTO comments (id, translation_key, locale, name, email, body, status, sender_hash, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [c.id, c.translation_key, c.locale, c.name, c.email ?? null, c.body,
+         c.status === 'approved' ? 'approved' : 'pending', c.sender_hash ?? null, c.created_at ?? new Date()],
       );
     }
     // @ai-warning: pre-snapshot dumps (v1, and v2 files written before issue

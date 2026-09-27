@@ -69,6 +69,7 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       stops jsonb, route text, key_facts jsonb, body_markdown text NOT NULL,
       images jsonb NOT NULL DEFAULT '{}', status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
       featured boolean NOT NULL DEFAULT false,
+      comments_enabled boolean NOT NULL DEFAULT true,
       created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())
   `);
   // @ai-note Partial: '' means "no slug yet" (a DE-first draft without an EN
@@ -340,4 +341,32 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       END IF;
     END $$;
   `);
+
+  // @ai-note Reader comments (spec 2026-09-14-comments-design.md, phase 1).
+  // Per-post toggle is SHARED across the pair (written to both locale rows by
+  // upsertDraft); NOT NULL DEFAULT true so existing rows need no rewrite. The
+  // site-wide gate is settings.commentsEnabled (default false).
+  await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS comments_enabled boolean NOT NULL DEFAULT true`);
+  // Keyed by (translation_key, locale) like posts; no FK because posts has no
+  // single-column key for a pair. pgPostStore.remove deletes a post's comments
+  // in the same transaction, and the sweep below removes orphans at boot.
+  // Status CHECK is write-once (see the media note): widening it needs an
+  // explicit constraint swap appended below.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS comments (
+      id              uuid PRIMARY KEY,
+      translation_key text NOT NULL,
+      locale          text NOT NULL CHECK (locale IN ('de','en')),
+      name            text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 80),
+      email           text,
+      body            text NOT NULL CHECK (char_length(body) BETWEEN 1 AND 2000),
+      status          text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved')),
+      sender_hash     text,
+      created_at      timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS comments_post_idx ON comments (translation_key, locale, status, created_at)`);
+  // Orphan sweep (M13): comments whose post is gone — e.g. a dump restored
+  // over a database whose posts it no longer contains. No-op when consistent.
+  await pool.query(`DELETE FROM comments c WHERE NOT EXISTS (SELECT 1 FROM posts p WHERE p.translation_key = c.translation_key)`);
 }

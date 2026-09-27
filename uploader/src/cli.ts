@@ -48,7 +48,7 @@ function describeDatabase(databaseUrl: string): string {
   }
 }
 
-const RESTORE_TABLES = ['users', 'posts', 'pages', 'media', 'media_folders'] as const;
+const RESTORE_TABLES = ['users', 'posts', 'pages', 'media', 'media_folders', 'comments'] as const;
 type RowCounts = Record<(typeof RESTORE_TABLES)[number], number>;
 
 /** `users 3, posts 12, …` — the same shape for the dump and for the live rows,
@@ -107,6 +107,7 @@ async function restoreMain(args: string[]): Promise<void> {
     users: dump.tables.users.length, posts: dump.tables.posts.length,
     pages: dump.tables.pages?.length ?? 0, media: dump.tables.media?.length ?? 0,
     media_folders: dump.tables.media_folders?.length ?? 0,
+    comments: dump.tables.comments?.length ?? 0,
   };
   const { createPool } = await import('./db.js');
   const pool = createPool(databaseUrl);
