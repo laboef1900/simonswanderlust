@@ -82,6 +82,19 @@ export function fixedWindowLimiter({ max, windowMs, maxKeys = DEFAULT_MAX_KEYS, 
   };
 }
 
+/**
+ * Limiters for the public POST /comments route (comments spec decision 6):
+ * 5 per IP per 15 min and 200 per hour process-wide. Each call builds FRESH
+ * maps — never share them with the login limiter, or a comment flood would
+ * lock the admin out of /login (and vice versa).
+ */
+export function commentLimiters(now?: () => number): { ip: RateLimiter; global: RateLimiter } {
+  return {
+    ip: fixedWindowLimiter({ max: 5, windowMs: 900_000, ...(now ? { now } : {}) }),
+    global: fixedWindowLimiter({ max: 200, windowMs: 3_600_000, maxKeys: 1, ...(now ? { now } : {}) }),
+  };
+}
+
 /** Fastify preHandler that 429s when the per-IP limiter is exhausted. */
 export function rateLimitPreHandler(limiter: RateLimiter) {
   return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {

@@ -37,7 +37,9 @@ import { prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, type 
 import { WxrParseError } from './wxr-parse.js';
 import { createImportRunner, memoryImportJobStore, ImportBusyError, type ImportRunner, type ImportJob } from './import-jobs.js';
 import { createRehostResume } from './wp-images.js';
-import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, type RateLimiter, type AccountLimiter } from './rate-limit.js';
+import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, commentLimiters, type RateLimiter, type AccountLimiter } from './rate-limit.js';
+import type { CommentStore } from './comments.js';
+import { registerPublicComments } from './comments-public.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
 import { compressionHook } from './compress.js';
@@ -100,6 +102,18 @@ export interface ServerConfig {
    * authz first and then answer 503.
    */
   commentsAdmin?: CommentAdminStore;
+  /** Public reader comments (SPEC-API-001); absent → GET/POST /comments answer 503 after their checks. */
+  comments?: CommentStore;
+  /** Site-wide comments switch. Defaults to OFF (fail closed): POST answers 409. */
+  commentsEnabled?: () => boolean;
+  /**
+   * Exact Origin a browser POST /comments must carry. Defaults to the origin
+   * of `baseUrl` (PUBLIC_BASE_URL). Compared by equality, never prefix.
+   */
+  commentsOrigin?: string;
+  /** Injectable for tests; defaults to fresh `commentLimiters()` maps. */
+  commentIpLimiter?: RateLimiter;
+  commentGlobalLimiter?: RateLimiter;
 }
 
 const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
@@ -1418,6 +1432,21 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       return reply.code(503).send({ ok: false, db: false, release, ...(disk ? { disk } : {}) });
     }
   });
+
+  // --- Public reader comments (SPEC-API-001) --------------------------------
+  // @ai-warning No session preHandler on purpose (#129): see comments-public.ts.
+  // The limiter maps are the comment route's own, never `loginLimiter`.
+  {
+    const fresh = commentLimiters();
+    registerPublicComments(app, {
+      comments: cfg.comments,
+      posts: cfg.posts,
+      allowedOrigin: cfg.commentsOrigin ?? new URL(cfg.baseUrl).origin,
+      commentsEnabled: cfg.commentsEnabled ?? (() => false),
+      ipLimiter: cfg.commentIpLimiter ?? fresh.ip,
+      globalLimiter: cfg.commentGlobalLimiter ?? fresh.global,
+    });
+  }
 
   // --- Admin comment moderation (SPEC-ADM-001) ------------------------------
   // @ai-warning Every route here is requireAdmin (401 anonymous, 403 author)
