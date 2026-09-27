@@ -760,6 +760,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       ...captionConfig(s), backupSchedule: s.backupSchedule, backupRetention: s.backupRetention,
       convertJpeg: s.convertJpeg, webpQuality: s.webpQuality, avifQuality: s.avifQuality,
       importDelayMs: s.importDelayMs, importRetries: s.importRetries,
+    commentsEnabled: s.commentsEnabled,
       aiProvider: s.aiProvider, aiModel: s.aiModel, aiCustomBaseUrl: s.aiCustomBaseUrl,
       reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs, hasAiApiKey,
     };
@@ -795,6 +796,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (b.importDelayMs !== undefined) partial.importDelayMs = Number(b.importDelayMs);
     if (b.importRetries !== undefined) partial.importRetries = Number(b.importRetries);
     if (b.convertJpeg !== undefined) partial.convertJpeg = b.convertJpeg;
+    // SPEC-FLAG-002: global comments switch. Persisted only; never builds or takes workLock.
+    if (b.commentsEnabled !== undefined) partial.commentsEnabled = b.commentsEnabled;
     if (b.webpQuality !== undefined) partial.webpQuality = Number(b.webpQuality);
     if (b.avifQuality !== undefined) partial.avifQuality = Number(b.avifQuality);
     for (const field of ['aiProvider', 'aiModel', 'aiCustomBaseUrl', 'reviewPrompt', 'reviewTimeoutMs'] as const) {
@@ -1442,7 +1445,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       comments: cfg.comments,
       posts: cfg.posts,
       allowedOrigin: cfg.commentsOrigin ?? new URL(cfg.baseUrl).origin,
-      commentsEnabled: cfg.commentsEnabled ?? (() => false),
+      // Falls back to the persisted global switch (default false = fail closed).
+      commentsEnabled: cfg.commentsEnabled ?? (() => cfg.settings.get().commentsEnabled === true),
       ipLimiter: cfg.commentIpLimiter ?? fresh.ip,
       globalLimiter: cfg.commentGlobalLimiter ?? fresh.global,
     });

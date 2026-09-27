@@ -328,6 +328,14 @@
               story is used.
             </p>
 
+            <label class="check-field" for="fmCommentsEnabled">
+              <input type="checkbox" id="fmCommentsEnabled" checked aria-describedby="fmCommentsHint" />
+              Allow reader comments
+            </label>
+            <p class="muted" id="fmCommentsHint">
+              Comments appear only when an admin has also switched them on in Settings. Saved with the draft; no rebuild.
+            </p>
+
             <div id="stopsContainer">
               <p class="section-label">Waypoints / stops</p>
               <div id="stopsList"></div>
@@ -1065,6 +1073,7 @@
           // and an omitted key would only ever mean "leave it alone" once the
           // server started merging. Shared, so it reaches both locale rows.
           featured: $('fmFeatured').checked,
+            commentsEnabled: $('fmCommentsEnabled').checked,
         };
 
         // Remove undefined keys for a clean payload
@@ -1599,6 +1608,8 @@
         // Unconditional, like every other shared field above: a restore payload
         // without the key must untick the box, not keep the previous post's.
         $('fmFeatured').checked = shared.featured === true;
+        // Absent = enabled per post (matches the server's draftWithDefaults).
+        $('fmCommentsEnabled').checked = shared.commentsEnabled !== false;
         populateStops(shared.stops);
 
         populateLocale('de', post.de);

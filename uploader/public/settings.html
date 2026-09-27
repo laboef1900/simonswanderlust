@@ -61,6 +61,22 @@
         </p>
       </section>
 
+      <section class="card" aria-labelledby="commentsHeading">
+        <h2 id="commentsHeading" class="card-heading">Reader comments</h2>
+        <label class="check-field" for="commentsEnabled">
+          <input id="commentsEnabled" type="checkbox" aria-describedby="commentsHelp" />
+          Accept reader comments site-wide
+        </label>
+        <p id="commentsHelp" class="muted">
+          Master switch. A post also needs its own "Allow comments" box ticked in the editor.
+          Every comment is held for moderation. Saving this does not rebuild the site.
+        </p>
+        <div class="settings-actions">
+          <button id="saveComments" type="button" class="btn-secondary">Save comment setting</button>
+        </div>
+        <p id="commentsOut" class="page-status" role="status"></p>
+      </section>
+
       <section class="card" aria-labelledby="imageHeading">
         <h2 id="imageHeading" class="card-heading">Image conversion</h2>
         <form id="imageSettings">
@@ -248,11 +264,37 @@
         updateReviewWarnings();
       }
 
+      function fillComments(s) {
+        $('commentsEnabled').checked = s.commentsEnabled === true;
+      }
+
       function fill(s) {
         fillGeneral(s);
         fillImages(s);
+        fillComments(s);
         fillReview(s);
       }
+
+      $('saveComments').addEventListener('click', async () => {
+        const btn = $('saveComments');
+        btn.disabled = true;
+        $('commentsOut').textContent = 'Saving…';
+        try {
+          const res = await fetch('/settings', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ commentsEnabled: $('commentsEnabled').checked }),
+          });
+          if (res.status === 401) { location.href = '/login'; return; }
+          const r = await res.json().catch(() => ({}));
+          if (!res.ok) { $('commentsOut').textContent = 'Not saved: ' + (r.error || res.status); return; }
+          fillComments(r);
+          $('commentsOut').textContent = r.commentsEnabled ? 'Comments are on.' : 'Comments are off.';
+        } catch {
+          $('commentsOut').textContent = 'Could not save. Check your connection and try again.';
+        } finally {
+          btn.disabled = false;
+        }
+      });
 
       // Repopulate the dropdown from a live model list, preserving the current
       // selection even if LM Studio isn't serving it (so a saved/manual id survives).
