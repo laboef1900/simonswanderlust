@@ -41,6 +41,7 @@ import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, type Ra
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
 import { compressionHook } from './compress.js';
+import { CommentError, isCommentStatus, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -93,6 +94,12 @@ export interface ServerConfig {
    * no database; `main.ts` passes the Postgres-backed instance.
    */
   importJobs?: ImportRunner;
+  /**
+   * Admin comment moderation (SPEC-ADM-001). Optional so route tests that do
+   * not exercise comments need none; when absent the routes still enforce
+   * authz first and then answer 503.
+   */
+  commentsAdmin?: CommentAdminStore;
 }
 
 const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
@@ -1409,6 +1416,60 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       return { ok: true, db: true, release, ...(disk ? { disk } : {}) };
     } catch {
       return reply.code(503).send({ ok: false, db: false, release, ...(disk ? { disk } : {}) });
+    }
+  });
+
+  // --- Admin comment moderation (SPEC-ADM-001) ------------------------------
+  // @ai-warning Every route here is requireAdmin (401 anonymous, 403 author)
+  // and the preHandler runs BEFORE any id validation, so an unauthenticated
+  // caller never learns whether an id is well-formed. Ids that are not UUIDs
+  // are a 400 (never reach Postgres as a 22P02). Responses carry reader email:
+  // admin only, and admin UI paints every field with textContent.
+  const commentsAdmin = cfg.commentsAdmin;
+  const commentId = (req: { params: unknown }, reply: FastifyReply): string | null => {
+    const id = (req.params as { id?: string }).id ?? '';
+    if (!COMMENT_ID_RE.test(id)) { void reply.code(400).send({ error: 'invalid comment id' }); return null; }
+    return id;
+  };
+  const noStore = (reply: FastifyReply) => { void reply.code(503).send({ error: 'comments are not available' }); };
+
+  app.get('/moderation/comments', { preHandler: requireAdmin }, async (req, reply) => {
+    const status = (req.query as { status?: string }).status ?? 'pending';
+    if (!isCommentStatus(status)) return reply.code(400).send({ error: 'status must be pending or approved' });
+    if (!commentsAdmin) return noStore(reply);
+    return reply.header('cache-control', 'no-store').send({ comments: await commentsAdmin.list(status) });
+  });
+
+  app.post('/moderation/comments/:id/status', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = commentId(req, reply);
+    if (!id) return reply;
+    const status = ((req.body ?? {}) as { status?: unknown }).status;
+    if (!isCommentStatus(status)) return reply.code(400).send({ error: 'status must be pending or approved' });
+    if (!commentsAdmin) return noStore(reply);
+    if (!(await commentsAdmin.setStatus(id, status))) return reply.code(404).send({ error: 'comment not found' });
+    return reply.send({ id, status });
+  });
+
+  app.delete('/moderation/comments/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = commentId(req, reply);
+    if (!id) return reply;
+    if (!commentsAdmin) return noStore(reply);
+    if (!(await commentsAdmin.remove(id))) return reply.code(404).send({ error: 'comment not found' });
+    return reply.send({ deleted: true });
+  });
+
+  app.post('/moderation/comments/:id/reply', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = commentId(req, reply);
+    if (!id) return reply;
+    if (!commentsAdmin) return noStore(reply);
+    const body = ((req.body ?? {}) as { body?: unknown }).body;
+    try {
+      const created = await commentsAdmin.replyAsAuthor(id, req.authUser?.username ?? 'Author', body);
+      if (!created) return reply.code(404).send({ error: 'comment not found' });
+      return reply.code(201).send(created);
+    } catch (e) {
+      if (e instanceof CommentError) return reply.code(400).send({ error: e.message });
+      throw e;
     }
   });
 
