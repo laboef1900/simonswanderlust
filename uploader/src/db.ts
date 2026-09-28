@@ -350,8 +350,14 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   // Keyed by (translation_key, locale) like posts; no FK because posts has no
   // single-column key for a pair. pgPostStore.remove deletes a post's comments
   // in the same transaction, and the sweep below removes orphans at boot.
-  // Status CHECK is write-once (see the media note): widening it needs an
-  // explicit constraint swap appended below.
+  // Columns map onto the spec's names: `locale` = posted_locale, `name` =
+  // author_name (kept under the names the public/admin routes already bind).
+  // `email` is legacy and always NULL — the store never writes it; `sender_hash`
+  // is a keyed HMAC of the IP (never the raw IP) for rate limiting only.
+  // @ai-warning The status CHECK is WRITE-ONCE (see the media note): the first
+  // deployment of this table carried IN ('pending','approved'), so the
+  // 4-value constraint is installed by the named-constraint swap below, and
+  // any later widening must go through the same swap, not this CREATE TABLE.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS comments (
       id              uuid PRIMARY KEY,
@@ -360,12 +366,36 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       name            text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 80),
       email           text,
       body            text NOT NULL CHECK (char_length(body) BETWEEN 1 AND 2000),
-      status          text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved')),
+      status          text NOT NULL DEFAULT 'pending',
+      is_author       boolean NOT NULL DEFAULT false,
       sender_hash     text,
-      created_at      timestamptz NOT NULL DEFAULT now()
+      created_at      timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT comments_status_check CHECK (status IN ('pending','approved','rejected','spam'))
     )
   `);
+  // Legacy table shape (first cut of #204): no is_author, a two-value inline
+  // status CHECK (auto-named comments_status_check by Postgres). Both are
+  // brought up to date idempotently; the swap runs in one transaction so a
+  // crash can never leave the table without a status constraint.
+  await pool.query(`ALTER TABLE comments ADD COLUMN IF NOT EXISTS is_author boolean NOT NULL DEFAULT false`);
+  await pool.query(`
+    DO $$
+    DECLARE def text;
+    BEGIN
+      SELECT pg_get_constraintdef(oid) INTO def FROM pg_constraint
+       WHERE conrelid = 'comments'::regclass AND conname = 'comments_status_check';
+      IF def IS NULL OR def NOT LIKE '%rejected%' OR def NOT LIKE '%spam%' THEN
+        IF def IS NOT NULL THEN
+          ALTER TABLE comments DROP CONSTRAINT comments_status_check;
+        END IF;
+        ALTER TABLE comments ADD CONSTRAINT comments_status_check
+          CHECK (status IN ('pending','approved','rejected','spam'));
+      END IF;
+    END $$;
+  `);
   await pool.query(`CREATE INDEX IF NOT EXISTS comments_post_idx ON comments (translation_key, locale, status, created_at)`);
+  // Moderation queue: "all pending, newest first" across every post.
+  await pool.query(`CREATE INDEX IF NOT EXISTS comments_status_idx ON comments (status, created_at)`);
   // Orphan sweep (M13): comments whose post is gone — e.g. a dump restored
   // over a database whose posts it no longer contains. No-op when consistent.
   await pool.query(`DELETE FROM comments c WHERE NOT EXISTS (SELECT 1 FROM posts p WHERE p.translation_key = c.translation_key)`);

@@ -65,7 +65,7 @@ maybe('encrypted secrets and current backups (Postgres)', () => {
     const before = (await pool.query('SELECT * FROM app_secrets ORDER BY key')).rows;
     const file = join(dir, await dumpDatabase(pool, dir));
     const dump = readDump(file);
-    expect(dump.version).toBe(7);
+    expect(dump.version).toBe(8);
     const raw = gunzipSync(await readFile(file)).toString('utf8');
     expect(raw).not.toContain('roundtrip-fixture');
     expect(raw).not.toContain(key.toString('hex'));
@@ -98,7 +98,7 @@ maybe('encrypted secrets and current backups (Postgres)', () => {
     expect(await store.get('ai_api_key')).toBe('snapshot-fixture');
   });
 
-  it.each([1, 2, 3, 4, 5, 6, 7])('preserves existing secrets when version %i omits the table', async (version) => {
+  it.each([1, 2, 3, 4, 5, 6, 7, 8])('preserves existing secrets when version %i omits the table', async (version) => {
     const store = pgSecretsStore(pool, key);
     await store.set('ai_api_key', 'keep-fixture');
     const before = (await pool.query('SELECT * FROM app_secrets')).rows;

@@ -496,7 +496,17 @@ function draftWithDefaults(pair: PostPair): PostPair {
   };
 }
 
-export function memoryPostStore(): PostStore {
+/**
+ * Delete-with-post hook for the memory store. pgPostStore deletes a post's
+ * comments inside its own transaction; the memory store has no table to reach,
+ * so a comment store (or anything with `removeByTranslationKey`) can be linked
+ * in to keep the two stores' semantics identical in server tests.
+ */
+export interface MemoryPostStoreOptions {
+  comments?: { removeByTranslationKey(translationKey: string): Promise<unknown> | unknown };
+}
+
+export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
   const byKey = new Map<string, Stored>();
   // Revisions per translation_key, oldest first (append order) — mirrors the
   // pg store's post_revisions table so server tests exercise the same semantics.
@@ -590,6 +600,7 @@ export function memoryPostStore(): PostStore {
     async remove(tk) {
       if (!byKey.delete(tk)) throw new PostError('post not found');
       revisionsByKey.delete(tk); // #137: snapshots must not outlive their post
+      await opts.comments?.removeByTranslationKey(tk); // comments spec M13: the thread goes with the post
     },
     async listRevisions(tk) {
       return (revisionsByKey.get(tk) ?? [])

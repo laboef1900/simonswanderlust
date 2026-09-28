@@ -147,7 +147,7 @@ async function restoreMain(args: string[]): Promise<void> {
     }
     console.log(`pre-restore dump written: ${preDump}`);
     const counts = await restoreDatabase(pool, file);
-    console.log(`restored ${counts.users} users, ${counts.posts} posts, ${counts.pages} pages, and ${counts.media} media rows (all sessions invalidated).`);
+    console.log(`restored ${counts.users} users, ${counts.posts} posts, ${counts.pages} pages, ${counts.media} media rows, and ${counts.comments} comments (all sessions invalidated).`);
     console.log(counts.appSecrets === null ? 'app_secrets preserved.' : `restored ${counts.appSecrets} encrypted app_secrets rows.`);
     console.log(`to undo: restore --yes ${preDump}`);
     console.log('now rebuild the site: /admin/settings.html → "Rebuild site now" (or POST /rebuild).');

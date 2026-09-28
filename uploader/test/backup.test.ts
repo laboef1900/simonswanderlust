@@ -19,6 +19,7 @@ const fakeDb = (
   pages: Record<string, unknown>[] = [],
   media: Record<string, unknown>[] = [],
   mediaFolders: Record<string, unknown>[] = [],
+  comments: Record<string, unknown>[] = [],
 ): Connectable => {
   // Order matters: 'FROM media_folders' also contains 'FROM media'.
   const query = async (sql: string) => ({
@@ -27,6 +28,7 @@ const fakeDb = (
       : sql.includes('FROM media_folders') ? mediaFolders
       : sql.includes('FROM media') ? media
       : sql.includes('FROM app_secrets') ? []
+      : sql.includes('FROM comments') ? comments
       : posts,
   });
   return { query, connect: async () => ({ query, release() {} }) };
@@ -55,6 +57,7 @@ describe('dumpDatabase', () => {
         [{ key: 'about', locale: 'de', title: 'X', body_markdown: 'B', images: {} }],
         [{ key: 'library/2025/a', folder: 'Island', tags: ['sunrise'] }],
         [{ path: 'Island' }],
+        [{ id: 'c1', translation_key: 'p1', locale: 'de', name: 'R', body: 'hi', status: 'pending', is_author: false }],
       ),
       dir,
       now,
@@ -62,7 +65,8 @@ describe('dumpDatabase', () => {
     expect(name).toBe('db-20260703-143005.json.gz');
     expect(BACKUP_FILE_RE.test(name)).toBe(true);
     const dump = JSON.parse(gunzipSync(await readFile(join(dir, name))).toString('utf8'));
-    expect(dump.version).toBe(7);
+    expect(dump.version).toBe(8);
+    expect(dump.tables.comments).toEqual([{ id: 'c1', translation_key: 'p1', locale: 'de', name: 'R', body: 'hi', status: 'pending', is_author: false }]);
     expect(dump.tables.users).toEqual([{ id: 'u1', username: 'simon' }]);
     expect(dump.tables.posts).toEqual([{ id: 'p1', slug: 's' }]);
     expect(dump.tables.pages).toEqual([{ key: 'about', locale: 'de', title: 'X', body_markdown: 'B', images: {} }]);

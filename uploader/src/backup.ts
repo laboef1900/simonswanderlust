@@ -11,11 +11,11 @@ import { isEncryptedSecret, type EncryptedSecret } from './secrets.js';
 import { storedProcessOptions } from './pipeline.js';
 
 /**
- * Reader `comments` (email included — dumps are the admin's backup, never
- * public) and `posts.comments_enabled` ride along optionally; a dump without
- * them restores an EMPTY comments table and comments_enabled = true.
- * @ai-warning The version bump for comments is pending: uploader/test pins
- * version 7 and could not be updated in this change.
+ * v8 (issue #204) added reader `comments` (no email — the spec stores none;
+ * `sender_hash` is a keyed IP HMAC) and `posts.comments_enabled`. A v<=7 dump
+ * has neither key: restoring it leaves an EMPTY comments table (comments
+ * cannot outlive posts the dump may not contain) and comments_enabled = true
+ * (the column default; the site-wide setting is the real off switch).
  * v7 added media `format` + `encoding`, preserving JPEG-only sets and their
  * snapped retry/recovery profile across restore.
  * v6 added encrypted `app_secrets` (never the encryption master key);
@@ -23,7 +23,9 @@ import { storedProcessOptions } from './pipeline.js';
  * v3 added `media` + `media_folders`; v2 added `pages`.
  * @ai-warning Bumping this ALSO requires widening the allow-list guard below.
  */
-export const DUMP_VERSION = 7;
+export const DUMP_VERSION = 8;
+/** Every version `readDump` accepts — an allow-list, not a minimum. */
+export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8];
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
 export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 /**
@@ -108,7 +110,7 @@ export async function dumpDatabase(db: Connectable, dir: string, now: Date = new
        FROM posts ORDER BY created_at`,
     )).rows;
     comments = (await client.query(
-      `SELECT id, translation_key, locale, name, email, body, status, sender_hash, created_at
+      `SELECT id, translation_key, locale, name, body, status, is_author, sender_hash, created_at
          FROM comments ORDER BY created_at, id`,
     )).rows;
     pages = (await client.query('SELECT key, locale, title, body_markdown, images FROM pages ORDER BY key, locale')).rows;
@@ -515,7 +517,7 @@ export function readDump(filePath: string): Dump {
     // JSON errors may quote secret-bearing file contents.
     throw new BackupError('Cannot read backup dump.');
   }
-  if (!dump || ![1, 2, 3, 4, 5, 6, 7].includes(dump.version)) {
+  if (!dump || !SUPPORTED_DUMP_VERSIONS.includes(dump.version)) {
     throw new BackupError(`unsupported dump version ${typeof dump?.version === 'number' ? dump.version : '(invalid)'}`);
   }
   if (!dump.tables || !Array.isArray(dump.tables.users) || !Array.isArray(dump.tables.posts)) {
@@ -571,12 +573,16 @@ const asJsonb = (v: unknown): string | null => (v == null ? null : JSON.stringif
  */
 const asTextArray = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
 
+/** Mirrors the `comments_status_check` constraint in db.ts (kept local so
+ * this module never imports the store). */
+const COMMENT_STATUS_ALLOW: readonly string[] = ['pending', 'approved', 'rejected', 'spam'];
+
 /** Restore a dump inside one transaction. Deleting users cascades to sessions
  * (FK ON DELETE CASCADE), so every login is invalidated. */
 export async function restoreDatabase(
   pool: DbPool,
   filePath: string,
-): Promise<{ users: number; posts: number; pages: number; media: number; appSecrets: number | null }> {
+): Promise<{ users: number; posts: number; pages: number; media: number; comments: number; appSecrets: number | null }> {
   const dump = readDump(filePath);
   const client = await pool.connect();
   try {
@@ -622,12 +628,19 @@ export async function restoreDatabase(
          p.comments_enabled !== false],
       );
     }
+    // @ai-warning A dump is a file the operator hands us, not a trusted row
+    // set: `status` is mapped onto the moderation allow-list (anything else
+    // becomes `pending`, never `approved`) and `is_author` must be the literal
+    // boolean true — a truthy string can not mint an author-flagged row. The
+    // legacy `email` column of a v8 dump written before the spec alignment is
+    // deliberately dropped (the store never persists one).
     for (const c of dump.tables.comments ?? []) {
       await client.query(
-        `INSERT INTO comments (id, translation_key, locale, name, email, body, status, sender_hash, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [c.id, c.translation_key, c.locale, c.name, c.email ?? null, c.body,
-         c.status === 'approved' ? 'approved' : 'pending', c.sender_hash ?? null, c.created_at ?? new Date()],
+        `INSERT INTO comments (id, translation_key, locale, name, email, body, status, is_author, sender_hash, created_at)
+         VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,$9)`,
+        [c.id, c.translation_key, c.locale, c.name, c.body,
+         COMMENT_STATUS_ALLOW.includes(c.status as string) ? c.status : 'pending',
+         c.is_author === true, typeof c.sender_hash === 'string' ? c.sender_hash : null, c.created_at ?? new Date()],
       );
     }
     // @ai-warning: pre-snapshot dumps (v1, and v2 files written before issue
@@ -699,6 +712,7 @@ export async function restoreDatabase(
     return {
       users: dump.tables.users.length, posts: dump.tables.posts.length,
       pages: dump.tables.pages?.length ?? 0, media: dump.tables.media?.length ?? 0,
+      comments: dump.tables.comments?.length ?? 0,
       appSecrets: dump.tables.app_secrets?.length ?? null,
     };
   } catch (e) {
