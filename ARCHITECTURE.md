@@ -268,7 +268,8 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 - **`users`** — `id`, `username` (unique, case-insensitive), `password_hash` (scrypt), `is_admin`, `created_at`.
 - **`sessions`** — `id` (SHA-256 of the random token), `user_id` (FK, cascade), `expires_at`. Expired rows are swept hourly.
 - **`app_secrets`** — `key` primary key, `ciphertext`, `iv`, `tag` (hex-encoded AES-256-GCM envelope), `updated_at`. The master key and plaintext credentials never enter this table.
-- **`posts`** — one row per (`translation_key`, `locale`); `slug`, `title`, `date`, `country`, `country_code`, `region`, `excerpt`, `hero_image` (jsonb), `coordinates` (jsonb), optional `stops`/`route`/`key_facts`, `body_markdown`, `images` (jsonb), `status` (`draft`/`published`), `featured` (boolean, "use as homepage cover" — a SHARED value written to both locale rows, deliberately not unique: the homepage takes the newest flagged story and falls back to the newest story). Unique on (`locale`, `slug`) **where `slug <> ''`** — an empty slug means "not set yet" (a DE-first draft without an EN title), so any number of such drafts may coexist; `validateForPublish` requires a real slug per locale (#119).
+- **`posts`** — one row per (`translation_key`, `locale`); `slug`, `title`, `date`, `country`, `country_code`, `region`, `excerpt`, `hero_image` (jsonb), `coordinates` (jsonb), optional `stops`/`route`/`key_facts`, `body_markdown`, `images` (jsonb), `status` (`draft`/`published`), `featured` (boolean, "use as homepage cover" — a SHARED value written to both locale rows, deliberately not unique: the homepage takes the newest flagged story and falls back to the newest story), `comments_enabled` (boolean, SHARED, default `true` — the per-post switch; the site-wide `settings.commentsEnabled`, default `false`, is the real gate). Unique on (`locale`, `slug`) **where `slug <> ''`** — an empty slug means "not set yet" (a DE-first draft without an EN title), so any number of such drafts may coexist; `validateForPublish` requires a real slug per locale (#119).
+- **`comments`** — reader comments (#204, [spec](docs/superpowers/specs/2026-09-14-comments-design.md)): `id`, `translation_key` (one flat thread per post pair, no FK — `posts` has no single-column pair key), `locale` (the locale the reader posted from), `name`, `body` (plain text, 1–2000 chars, control characters stripped), `status` (`pending`/`approved`/`rejected`/`spam`; every reader row is born `pending`), `is_author` (an admin reply — born `approved`), `sender_hash` (keyed HMAC of the IP for rate limiting, never the raw IP), `created_at`. The legacy `email` column is always `NULL` — no email is collected. `pgPostStore.remove` deletes the thread in the same transaction as the post, and `ensureSchema` sweeps orphans on boot. **Runtime data, not build input:** the Astro build never reads this table — the blog fetches approved comments from `GET /comments?tk=…` at page load, so approving a comment needs no rebuild.
 - **`media`** — one row per storage key: `folder` (virtual, decoupled from the key), `title`,
   bilingual `alt_*`/`caption_*`, `tags` (`text[]`), dimensions, byte sizes, `status`
   (`processing`/`ready`/`failed`/`missing`), EXIF (`taken_at`, `camera`, `lens`, `lat`, `lng`)
@@ -331,7 +332,7 @@ botched restore, accidental delete), **not** against disk failure or host loss.
 `uploader/src/backup.ts` provides app-native logical dumps (no `pg_dump`, no sidecar container):
 
 - **Dump format** — one file per run, `/data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`, containing
-  `{ "version": 7, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […] } }`
+  `{ "version": 8, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […], "comments": […] } }`
   with full column fidelity — an integration test diffs the dumped `posts` keys against
   `information_schema.columns`, so a column added in `db.ts` without touching `backup.ts` fails
   the suite instead of silently vanishing from every backup. The six table reads run on one
@@ -343,7 +344,7 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   the directory, so the finished temp file is published with `link(2)` (fails with `EEXIST`
   where `rename` would clobber) and a taken name advances to the next free second while
   `createdAt` keeps the real time (#114).
-  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 7), so
+  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 8), so
   every bump must widen it or newly written dumps become unrestorable. v1 predates `pages`, v2
   predates the media tables, v3 predates `posts.categories`/`tags`/`scheduled_at`, v4 predates
   `posts.featured` (the homepage-cover flag); all still restore and leave what they never
@@ -354,6 +355,12 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   Restore needs no master key, but subsequent decryption needs the original key.
   v6 predates media `format`/`encoding`; v7 preserves both so JPEG-only files and queued
   encoding profiles survive restore. Older dumps restore media with legacy modern defaults.
+  v8 (#204) added `comments` and `posts.comments_enabled`. A v≤7 dump has neither: the
+  restore **always** replaces the comments table (a thread must not outlive posts the dump may
+  not contain), so restoring an older dump leaves it empty, and `comments_enabled` comes back
+  `true` (its column default). Comment rows from a dump are not trusted verbatim: `status`
+  outside the moderation allow-list restores as `pending`, `is_author` only as the literal
+  boolean `true`, and a legacy `email` field is dropped. The restore summary counts comments.
   The CLI names replacement versus preservation and its pre-restore undo dump includes
   current encrypted secrets. Pause AI/settings edits during restore and reconcile the
   provider in settings.json before resuming: that file is not part of a logical DB dump.

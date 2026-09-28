@@ -1,0 +1,236 @@
+---
+/**
+ * Reader comments on a story page (SPEC-UI-001). Comments load at runtime
+ * from the same-origin relative `/comments` endpoint — never astro:content —
+ * and are painted by `paintComments` with text nodes only. The form starts
+ * hidden and is revealed only when the server says comments are enabled.
+ *
+ * Identity is display name + body only (epic #202): no email, no website URL.
+ * The `website` input is the honeypot — in the DOM for bots, out of the tab
+ * order and unannounced for people.
+ *
+ * @ai-context docs/superpowers/specs/2026-09-14-comments-design.md
+ */
+import { useTranslations, type Locale } from '../i18n/ui';
+
+interface Props {
+  locale: Locale;
+  translationKey: string;
+}
+
+const { locale, translationKey } = Astro.props;
+const t = useTranslations(locale);
+---
+
+<section
+  class="comments not-prose mx-auto mt-12 lg:max-w-story-wide"
+  id="comments"
+  aria-labelledby="comments-heading"
+  data-comments-root
+  data-translation-key={translationKey}
+  data-locale={locale}
+  data-comments-url="/comments"
+  data-heading={t('comments.heading')}
+  data-empty={t('comments.empty')}
+  data-closed={t('comments.closed')}
+  data-unavailable={t('comments.unavailable')}
+  data-name-label={t('comments.nameLabel')}
+  data-body-label={t('comments.bodyLabel')}
+  data-submit={t('comments.submit')}
+  data-submitting={t('comments.submitting')}
+  data-submitted={t('comments.submitted')}
+  data-invalid={t('comments.invalid')}
+  data-rate-limited={t('comments.rateLimited')}
+  data-author-badge={t('comments.authorBadge')}
+  data-privacy={t('comments.privacy')}
+  data-count={t('comments.count')}
+>
+  <p class="comments__kicker">{t('comments.heading')}</p>
+  <h2 id="comments-heading" class="comments__heading">{t('comments.heading')}</h2>
+  <noscript><p class="comments__notice">{t('comments.noscript')}</p></noscript>
+  <div data-comments-list class="comments__thread"></div>
+  <p data-comments-closed class="comments__notice" hidden role="status" aria-live="polite"></p>
+  <form data-comments-form hidden class="comments__form">
+    <div class="comments__field">
+      <label for="comments-author-name">{t('comments.nameLabel')}</label>
+      <input id="comments-author-name" name="authorName" type="text" required maxlength="80" autocomplete="name" />
+    </div>
+    <div class="comments__field">
+      <label for="comments-body">{t('comments.bodyLabel')}</label>
+      <textarea id="comments-body" name="body" required maxlength="2000" rows="5"></textarea>
+    </div>
+    <div class="comments__hp" aria-hidden="true">
+      <label for="comments-website">Website</label>
+      <input id="comments-website" name="website" type="text" tabindex="-1" autocomplete="off" />
+    </div>
+    <p class="comments__privacy">{t('comments.privacy')}</p>
+    <button type="submit" class="comments__submit">{t('comments.submit')}</button>
+    <p data-comments-status role="status" aria-live="polite" class="comments__status"></p>
+  </form>
+</section>
+
+<style>
+  /* Editorial magazine, expedition-log flavour — not admin chrome. */
+  .comments {
+    border-top: 2px solid var(--color-navy);
+    padding-top: 1.5rem;
+  }
+  .comments__kicker {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--color-brand-red);
+    margin: 0;
+  }
+  .comments__heading {
+    font-family: var(--font-sans);
+    font-weight: 800;
+    font-size: 1.5rem;
+    color: var(--color-navy);
+    margin: 0.25rem 0 1rem;
+  }
+  .comments__notice,
+  .comments__privacy,
+  .comments__status {
+    font-size: 0.9rem;
+    color: var(--color-ink);
+    margin: 0.75rem 0 0;
+  }
+  .comments__status:empty {
+    display: none;
+  }
+  .comments :global(.comments__count) {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-ink);
+    margin: 0 0 0.75rem;
+  }
+  .comments :global(.comments__list) {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .comments :global(.comments__item) {
+    border-top: 1px solid color-mix(in srgb, var(--color-navy) 15%, transparent);
+    padding: 1rem 0;
+  }
+  .comments :global(.comments__item--author) {
+    border-left: 3px solid var(--color-brand-red);
+    padding-left: 1rem;
+  }
+  .comments :global(.comments__meta) {
+    font-size: 0.85rem;
+    color: var(--color-ink);
+    margin: 0 0 0.5rem;
+  }
+  .comments :global(.comments__name) {
+    font-weight: 700;
+    color: var(--color-navy);
+  }
+  /* Text label plus outline: not colour-only. Navy on canvas keeps AA contrast. */
+  .comments :global(.comments__badge) {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-navy);
+    border: 1px solid var(--color-navy);
+    padding: 0.05rem 0.4rem;
+    margin-left: 0.25rem;
+    vertical-align: middle;
+  }
+  .comments :global(.comments__body p) {
+    margin: 0 0 0.5rem;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+    color: var(--color-ink);
+  }
+  .comments__form {
+    display: grid;
+    gap: 1rem;
+    margin-top: 1.5rem;
+  }
+  .comments__field {
+    display: grid;
+    gap: 0.25rem;
+  }
+  .comments__field label {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-navy);
+  }
+  .comments__field input,
+  .comments__field textarea {
+    font: inherit;
+    color: var(--color-ink);
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--color-navy);
+    padding: 0.5rem 0;
+  }
+  .comments__field input:focus-visible,
+  .comments__field textarea:focus-visible,
+  .comments__submit:focus-visible {
+    outline: 2px solid var(--color-brand-red);
+    outline-offset: 3px;
+  }
+  /* Honeypot: present in the DOM, invisible, unannounced, out of the tab order. */
+  .comments__hp {
+    position: absolute;
+    left: -10000px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+  }
+  .comments__submit {
+    justify-self: start;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-canvas, #fff);
+    background: var(--color-navy);
+    border: 0;
+    padding: 0.7rem 1.25rem;
+    cursor: pointer;
+  }
+  .comments__submit:disabled {
+    opacity: 0.6;
+    cursor: wait;
+  }
+</style>
+
+<script>
+  import { initComments } from '../scripts/comments';
+
+  const root = document.querySelector<HTMLElement>('[data-comments-root]');
+  if (root) {
+    const d = root.dataset;
+    void initComments(root, {
+      translationKey: d.translationKey ?? '',
+      locale: d.locale ?? 'de',
+      labels: {
+        heading: d.heading ?? '',
+        empty: d.empty ?? '',
+        closed: d.closed ?? '',
+        unavailable: d.unavailable ?? '',
+        nameLabel: d.nameLabel ?? '',
+        bodyLabel: d.bodyLabel ?? '',
+        submit: d.submit ?? '',
+        submitting: d.submitting ?? '',
+        submitted: d.submitted ?? '',
+        invalid: d.invalid ?? '',
+        rateLimited: d.rateLimited ?? '',
+        authorBadge: d.authorBadge ?? '',
+        privacy: d.privacy ?? '',
+        count: d.count ?? '',
+      },
+    });
+  }
+</script>

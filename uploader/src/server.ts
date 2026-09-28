@@ -37,10 +37,13 @@ import { prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, type 
 import { WxrParseError } from './wxr-parse.js';
 import { createImportRunner, memoryImportJobStore, ImportBusyError, type ImportRunner, type ImportJob } from './import-jobs.js';
 import { createRehostResume } from './wp-images.js';
-import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, type RateLimiter, type AccountLimiter } from './rate-limit.js';
+import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, commentLimiters, type RateLimiter, type AccountLimiter } from './rate-limit.js';
+import type { CommentStore } from './comments.js';
+import { registerPublicComments } from './comments-public.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
 import { compressionHook } from './compress.js';
+import { CommentError, isCommentStatus, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -93,6 +96,24 @@ export interface ServerConfig {
    * no database; `main.ts` passes the Postgres-backed instance.
    */
   importJobs?: ImportRunner;
+  /**
+   * Admin comment moderation (SPEC-ADM-001). Optional so route tests that do
+   * not exercise comments need none; when absent the routes still enforce
+   * authz first and then answer 503.
+   */
+  commentsAdmin?: CommentAdminStore;
+  /** Public reader comments (SPEC-API-001); absent → GET/POST /comments answer 503 after their checks. */
+  comments?: CommentStore;
+  /** Site-wide comments switch. Defaults to OFF (fail closed): POST answers 409. */
+  commentsEnabled?: () => boolean;
+  /**
+   * Exact Origin a browser POST /comments must carry. Defaults to the origin
+   * of `baseUrl` (PUBLIC_BASE_URL). Compared by equality, never prefix.
+   */
+  commentsOrigin?: string;
+  /** Injectable for tests; defaults to fresh `commentLimiters()` maps. */
+  commentIpLimiter?: RateLimiter;
+  commentGlobalLimiter?: RateLimiter;
 }
 
 const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
@@ -739,6 +760,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       ...captionConfig(s), backupSchedule: s.backupSchedule, backupRetention: s.backupRetention,
       convertJpeg: s.convertJpeg, webpQuality: s.webpQuality, avifQuality: s.avifQuality,
       importDelayMs: s.importDelayMs, importRetries: s.importRetries,
+    commentsEnabled: s.commentsEnabled,
       aiProvider: s.aiProvider, aiModel: s.aiModel, aiCustomBaseUrl: s.aiCustomBaseUrl,
       reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs, hasAiApiKey,
     };
@@ -774,6 +796,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (b.importDelayMs !== undefined) partial.importDelayMs = Number(b.importDelayMs);
     if (b.importRetries !== undefined) partial.importRetries = Number(b.importRetries);
     if (b.convertJpeg !== undefined) partial.convertJpeg = b.convertJpeg;
+    // SPEC-FLAG-002: global comments switch. Persisted only; never builds or takes workLock.
+    if (b.commentsEnabled !== undefined) partial.commentsEnabled = b.commentsEnabled;
     if (b.webpQuality !== undefined) partial.webpQuality = Number(b.webpQuality);
     if (b.avifQuality !== undefined) partial.avifQuality = Number(b.avifQuality);
     for (const field of ['aiProvider', 'aiModel', 'aiCustomBaseUrl', 'reviewPrompt', 'reviewTimeoutMs'] as const) {
@@ -1409,6 +1433,86 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       return { ok: true, db: true, release, ...(disk ? { disk } : {}) };
     } catch {
       return reply.code(503).send({ ok: false, db: false, release, ...(disk ? { disk } : {}) });
+    }
+  });
+
+  // --- Public reader comments (SPEC-API-001) --------------------------------
+  // @ai-warning No session preHandler on purpose (#129): see comments-public.ts.
+  // The limiter maps are the comment route's own, never `loginLimiter`.
+  {
+    const fresh = commentLimiters();
+    registerPublicComments(app, {
+      comments: cfg.comments,
+      posts: cfg.posts,
+      allowedOrigin: cfg.commentsOrigin ?? new URL(cfg.baseUrl).origin,
+      // Falls back to the persisted global switch (default false = fail closed).
+      commentsEnabled: cfg.commentsEnabled ?? (() => cfg.settings.get().commentsEnabled === true),
+      ipLimiter: cfg.commentIpLimiter ?? fresh.ip,
+      globalLimiter: cfg.commentGlobalLimiter ?? fresh.global,
+      // Author replies (#205) are `approved` + `is_author`; the public store's
+      // shape has no flag, so the id set comes from the admin store's approved
+      // list — a read of approved rows only, never pending ones.
+      ...(cfg.commentsAdmin ? {
+        isAuthorIds: async (tk: string) => new Set(
+          (await cfg.commentsAdmin!.list('approved'))
+            .filter((c) => c.translationKey === tk && c.isAuthor)
+            .map((c) => c.id),
+        ),
+      } : {}),
+    });
+  }
+
+  // --- Admin comment moderation (SPEC-ADM-001) ------------------------------
+  // @ai-warning Every route here is requireAdmin (401 anonymous, 403 author)
+  // and the preHandler runs BEFORE any id validation, so an unauthenticated
+  // caller never learns whether an id is well-formed. Ids that are not UUIDs
+  // are a 400 (never reach Postgres as a 22P02). Responses carry reader email:
+  // admin only, and admin UI paints every field with textContent.
+  const commentsAdmin = cfg.commentsAdmin;
+  const commentId = (req: { params: unknown }, reply: FastifyReply): string | null => {
+    const id = (req.params as { id?: string }).id ?? '';
+    if (!COMMENT_ID_RE.test(id)) { void reply.code(400).send({ error: 'invalid comment id' }); return null; }
+    return id;
+  };
+  const noStore = (reply: FastifyReply) => { void reply.code(503).send({ error: 'comments are not available' }); };
+
+  app.get('/moderation/comments', { preHandler: requireAdmin }, async (req, reply) => {
+    const status = (req.query as { status?: string }).status ?? 'pending';
+    if (!isCommentStatus(status)) return reply.code(400).send({ error: 'status must be pending or approved' });
+    if (!commentsAdmin) return noStore(reply);
+    return reply.header('cache-control', 'no-store').send({ comments: await commentsAdmin.list(status) });
+  });
+
+  app.post('/moderation/comments/:id/status', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = commentId(req, reply);
+    if (!id) return reply;
+    const status = ((req.body ?? {}) as { status?: unknown }).status;
+    if (!isCommentStatus(status)) return reply.code(400).send({ error: 'status must be pending or approved' });
+    if (!commentsAdmin) return noStore(reply);
+    if (!(await commentsAdmin.setStatus(id, status))) return reply.code(404).send({ error: 'comment not found' });
+    return reply.send({ id, status });
+  });
+
+  app.delete('/moderation/comments/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = commentId(req, reply);
+    if (!id) return reply;
+    if (!commentsAdmin) return noStore(reply);
+    if (!(await commentsAdmin.remove(id))) return reply.code(404).send({ error: 'comment not found' });
+    return reply.send({ deleted: true });
+  });
+
+  app.post('/moderation/comments/:id/reply', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = commentId(req, reply);
+    if (!id) return reply;
+    if (!commentsAdmin) return noStore(reply);
+    const body = ((req.body ?? {}) as { body?: unknown }).body;
+    try {
+      const created = await commentsAdmin.replyAsAuthor(id, req.authUser?.username ?? 'Author', body);
+      if (!created) return reply.code(404).send({ error: 'comment not found' });
+      return reply.code(201).send(created);
+    } catch (e) {
+      if (e instanceof CommentError) return reply.code(400).send({ error: e.message });
+      throw e;
     }
   });
 

@@ -30,6 +30,12 @@ export interface Settings {
    */
   importDelayMs: number;
   importRetries: number;
+  /**
+   * Site-wide reader-comments switch (SPEC-FLAG-002). Admin-only via
+   * POST /settings; defaults OFF (fail closed). Toggling it persists the flag
+   * only — it never enqueues a build and never takes workLock.
+   */
+  commentsEnabled: boolean;
 }
 
 export class SettingsError extends Error {}
@@ -58,6 +64,7 @@ export function defaultSettings(): Settings {
     // 665 photos with; at zero spacing the source host cut us off after 37.
     importDelayMs: 1200,
     importRetries: 3,
+    commentsEnabled: false,
   };
 }
 
@@ -115,6 +122,7 @@ const FIELD_CHECKS: { [K in keyof Settings]: (v: unknown) => string | null } = {
     intInRange(v, 0, 10000) ? null : 'Import delay must be a whole number of milliseconds between 0 and 10000.',
   importRetries: (v) =>
     intInRange(v, 0, 5) ? null : 'Import retries must be a whole number between 0 and 5.',
+  commentsEnabled: (v) => typeof v === 'boolean' ? null : 'Comments must be on or off.',
 };
 
 const SETTINGS_KEYS = Object.keys(FIELD_CHECKS) as (keyof Settings)[];

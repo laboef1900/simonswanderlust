@@ -48,7 +48,7 @@ function describeDatabase(databaseUrl: string): string {
   }
 }
 
-const RESTORE_TABLES = ['users', 'posts', 'pages', 'media', 'media_folders'] as const;
+const RESTORE_TABLES = ['users', 'posts', 'pages', 'media', 'media_folders', 'comments'] as const;
 type RowCounts = Record<(typeof RESTORE_TABLES)[number], number>;
 
 /** `users 3, posts 12, …` — the same shape for the dump and for the live rows,
@@ -107,6 +107,7 @@ async function restoreMain(args: string[]): Promise<void> {
     users: dump.tables.users.length, posts: dump.tables.posts.length,
     pages: dump.tables.pages?.length ?? 0, media: dump.tables.media?.length ?? 0,
     media_folders: dump.tables.media_folders?.length ?? 0,
+    comments: dump.tables.comments?.length ?? 0,
   };
   const { createPool } = await import('./db.js');
   const pool = createPool(databaseUrl);
@@ -146,7 +147,7 @@ async function restoreMain(args: string[]): Promise<void> {
     }
     console.log(`pre-restore dump written: ${preDump}`);
     const counts = await restoreDatabase(pool, file);
-    console.log(`restored ${counts.users} users, ${counts.posts} posts, ${counts.pages} pages, and ${counts.media} media rows (all sessions invalidated).`);
+    console.log(`restored ${counts.users} users, ${counts.posts} posts, ${counts.pages} pages, ${counts.media} media rows, and ${counts.comments} comments (all sessions invalidated).`);
     console.log(counts.appSecrets === null ? 'app_secrets preserved.' : `restored ${counts.appSecrets} encrypted app_secrets rows.`);
     console.log(`to undo: restore --yes ${preDump}`);
     console.log('now rebuild the site: /admin/settings.html → "Rebuild site now" (or POST /rebuild).');

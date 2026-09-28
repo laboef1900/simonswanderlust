@@ -11,7 +11,8 @@ import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgUserStore } from '../src/users.js';
 import { pgPostStore } from '../src/posts.js';
 import { pgSessionStore } from '../src/sessions.js';
-import { dumpDatabase, readDump, restoreDatabase, BACKUP_FILE_RE } from '../src/backup.js';
+import { dumpDatabase, readDump, restoreDatabase, BACKUP_FILE_RE, DUMP_VERSION } from '../src/backup.js';
+import { pgCommentStore } from '../src/comments.js';
 import { pgMediaStore } from '../src/media-store.js';
 import { runCli } from './run-cli.js';
 
@@ -113,12 +114,12 @@ maybe('backup round-trip (Postgres)', () => {
   });
 
   it('rejects an unsupported dump version without touching data', async () => {
-    // @ai-warning: the guard is an ALLOW-LIST (1–7), not a minimum —
+    // @ai-warning: the guard is an ALLOW-LIST (1–8), not a minimum —
     // so this probes the next UNRELEASED version. Bump it whenever
     // DUMP_VERSION is bumped, or this stops testing anything.
     // gzipSync/writeFileSync are imported statically at the top of the file.
     const bad = join(dir, 'db-20260101-000000.json.gz');
-    writeFileSync(bad, gzipSync(JSON.stringify({ version: 8, tables: { users: [], posts: [] } })));
+    writeFileSync(bad, gzipSync(JSON.stringify({ version: DUMP_VERSION + 1, tables: { users: [], posts: [] } })));
     await expect(restoreDatabase(pool, bad)).rejects.toThrow(/unsupported dump version/);
     expect((await pool.query('SELECT count(*) AS n FROM users')).rows[0].n).toBe('1');
   });
@@ -176,7 +177,7 @@ maybe('backup round-trip (Postgres)', () => {
     await posts.publish(created.translationKey);
 
     const file = join(dir, await dumpDatabase(pool, dir));
-    expect(readDump(file).version).toBe(7);
+    expect(readDump(file).version).toBe(DUMP_VERSION);
     await pool.query('DELETE FROM posts');
     await restoreDatabase(pool, file);
 
@@ -293,7 +294,7 @@ maybe('backup round-trip (Postgres)', () => {
     const dump = JSON.parse(
       (await import('node:zlib')).gunzipSync((await import('node:fs')).readFileSync(join(dir, name))).toString('utf8'),
     );
-    expect(dump.version).toBe(7);
+    expect(dump.version).toBe(DUMP_VERSION);
 
     await pool.query('DELETE FROM media');
     await pool.query('DELETE FROM media_folders');
@@ -380,6 +381,156 @@ maybe('backup round-trip (Postgres)', () => {
     )).rows.map((r) => r.column_name as string).sort();
     expect(dump.tables.posts).toHaveLength(2);
     expect(Object.keys(dump.tables.posts[0] ?? {}).sort()).toEqual(schemaCols);
+  });
+
+  // Reader comments (#204): schema migration, store, delete-with-post, dump v8.
+  describe('comments', () => {
+    const pair = (slug: string) => ({
+      translationKey: '', status: 'draft' as const,
+      shared: { date: '2026-03-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 45, lng: 25 } },
+      de: { locale: 'de' as const, slug: `${slug}-de`, title: 'C', excerpt: 'x', country: 'X', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'b', images: {} },
+      en: { locale: 'en' as const, slug: `${slug}-en`, title: 'C', excerpt: 'x', country: 'X', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'b', images: {} },
+    });
+    const count = async (tk?: string) => Number((await pool.query(
+      tk ? `SELECT count(*) AS n FROM comments WHERE translation_key=$1` : `SELECT count(*) AS n FROM comments`, tk ? [tk] : [],
+    )).rows[0].n);
+
+    it('ensureSchema migrates the legacy two-status table shape: is_author column, 4-value CHECK, moderation index', async () => {
+      await pool.query('DELETE FROM comments');
+      await pool.query('DROP INDEX IF EXISTS comments_status_idx');
+      await pool.query('ALTER TABLE comments DROP COLUMN is_author');
+      await pool.query('ALTER TABLE comments DROP CONSTRAINT comments_status_check');
+      await pool.query(`ALTER TABLE comments ADD CONSTRAINT comments_status_check CHECK (status IN ('pending','approved'))`);
+      await ensureSchema(pool);
+      await ensureSchema(pool); // idempotent
+      const cols = (await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name='comments'`)).rows.map((r) => r.column_name);
+      expect(cols).toContain('is_author');
+      const def = (await pool.query(`SELECT pg_get_constraintdef(oid) AS d FROM pg_constraint WHERE conname='comments_status_check'`)).rows[0].d as string;
+      expect(def).toContain('rejected');
+      expect(def).toContain('spam');
+      const idx = (await pool.query(`SELECT indexname FROM pg_indexes WHERE tablename='comments'`)).rows.map((r) => r.indexname);
+      expect(idx).toEqual(expect.arrayContaining(['comments_post_idx', 'comments_status_idx']));
+      await expect(pool.query(
+        `INSERT INTO comments (id, translation_key, locale, name, body, status) VALUES ($1,'x','de','n','b','bogus')`, [randomUUID()],
+      )).rejects.toMatchObject({ code: '23514' });
+    });
+
+    it('pg store: create is always pending with no email; moderation, author reply, listApproved order', async () => {
+      const posts = pgPostStore(pool);
+      const comments = pgCommentStore(pool);
+      await pool.query('DELETE FROM posts');
+      const p = await posts.upsertDraft(pair('cmt'));
+      const tk = p.translationKey;
+      const a = await comments.create({ translationKey: tk, locale: 'de', name: ' Reader\u200b ', body: 'first\r\nline', email: 'r@example.com', ...({ status: 'approved' } as object) });
+      expect(a).toMatchObject({ status: 'pending', isAuthor: false, email: null, name: 'Reader', body: 'first\nline', locale: 'de' });
+      const row = (await pool.query(`SELECT email, status, is_author FROM comments WHERE id=$1`, [a.id])).rows[0];
+      expect(row).toEqual({ email: null, status: 'pending', is_author: false });
+      expect(await comments.listApproved(tk)).toEqual([]);
+      const b = await comments.create({ translationKey: tk, locale: 'en', name: 'B', body: 'second' });
+      expect(await comments.setStatus(b.id, 'spam')).toBe(true);
+      expect((await comments.listForAdmin({ status: 'spam' })).map((c) => c.id)).toEqual([b.id]);
+      expect((await comments.listForAdmin()).map((c) => c.id)).toEqual([a.id]);
+      expect(await comments.approve(a.id)).toBe(true);
+      const reply = await comments.replyAsAuthor({ translationKey: tk, body: 'Thanks!', postedLocale: 'en' });
+      expect(reply).toMatchObject({ status: 'approved', isAuthor: true, name: 'Simon', locale: 'en' });
+      expect((await comments.listApproved(tk)).map((c) => [c.name, c.isAuthor])).toEqual([['Reader', false], ['Simon', true]]);
+      expect((await comments.listApproved(tk, 'en')).map((c) => c.name)).toEqual(['Simon']);
+      expect(await comments.setStatus('not-a-uuid', 'approved')).toBe(false);
+      await expect(comments.setStatus(a.id, 'bogus' as never)).rejects.toThrow(/invalid status/);
+      expect(await comments.remove(b.id)).toBe(true);
+      expect(await comments.remove(b.id)).toBe(false);
+    });
+
+    it('pgPostStore.remove deletes the thread with the post; ensureSchema sweeps orphans', async () => {
+      const posts = pgPostStore(pool);
+      const comments = pgCommentStore(pool);
+      await pool.query('DELETE FROM posts');
+      await pool.query('DELETE FROM comments');
+      const doomed = await posts.upsertDraft(pair('doomed'));
+      const kept = await posts.upsertDraft(pair('kept'));
+      await comments.create({ translationKey: doomed.translationKey, locale: 'de', name: 'A', body: 'x' });
+      await comments.create({ translationKey: kept.translationKey, locale: 'de', name: 'A', body: 'x' });
+      await posts.remove(doomed.translationKey);
+      expect(await count(doomed.translationKey)).toBe(0);
+      expect(await count(kept.translationKey)).toBe(1);
+      await pool.query(
+        `INSERT INTO comments (id, translation_key, locale, name, body) VALUES ($1,'ghost-post','de','n','b')`, [randomUUID()],
+      );
+      await ensureSchema(pool);
+      expect(await count('ghost-post')).toBe(0);
+      expect(await count(kept.translationKey)).toBe(1);
+      expect(await comments.removeByTranslationKey(kept.translationKey)).toBe(1);
+    });
+
+    it('a v8 dump round-trips comments (status, is_author, comments_enabled) and never carries an email', async () => {
+      const posts = pgPostStore(pool);
+      const comments = pgCommentStore(pool);
+      await pool.query('DELETE FROM posts');
+      await pool.query('DELETE FROM comments');
+      const p = await posts.upsertDraft({ ...pair('v8'), shared: { ...pair('v8').shared, commentsEnabled: false } });
+      const tk = p.translationKey;
+      const a = await comments.create({ translationKey: tk, locale: 'de', name: 'A', body: 'x', senderHash: 'h1' });
+      await comments.setStatus(a.id, 'rejected');
+      const r = await comments.replyAsAuthor({ translationKey: tk, body: 'reply' });
+      const file = join(dir, await dumpDatabase(pool, dir));
+      const dump = readDump(file);
+      expect(dump.version).toBe(8);
+      expect(dump.tables.comments).toHaveLength(2);
+      for (const c of dump.tables.comments!) expect(c).not.toHaveProperty('email');
+      const schemaCols = (await pool.query(
+        `SELECT column_name FROM information_schema.columns WHERE table_name = 'comments' AND column_name <> 'email'`,
+      )).rows.map((x) => x.column_name as string).sort();
+      expect(Object.keys(dump.tables.comments![0]!).sort()).toEqual(schemaCols);
+
+      await pool.query('DELETE FROM posts');
+      await pool.query('DELETE FROM comments');
+      const counts = await restoreDatabase(pool, file);
+      expect(counts.comments).toBe(2);
+      const back = (await pool.query(`SELECT id, status, is_author, sender_hash, email FROM comments ORDER BY created_at`)).rows;
+      expect(back).toEqual([
+        { id: a.id, status: 'rejected', is_author: false, sender_hash: 'h1', email: null },
+        { id: r.id, status: 'approved', is_author: true, sender_hash: null, email: null },
+      ]);
+      expect((await posts.get(tk))?.shared.commentsEnabled).toBe(false);
+    });
+
+    it('restore does not trust comment rows: unknown status → pending, non-boolean is_author → false, email dropped', async () => {
+      const now = new Date().toISOString();
+      const post = {
+        id: randomUUID(), translation_key: 'untrusted', locale: 'de', slug: 'untrusted-de', title: 'U', date: '2026-02-02',
+        country: 'X', country_code: 'RO', region: 'europe', excerpt: 'x',
+        hero_image: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' },
+        coordinates: { lat: 45, lng: 25 }, body_markdown: 'b', images: {}, status: 'draft', created_at: now, updated_at: now,
+      };
+      const cid = randomUUID();
+      const f = join(dir, 'db-20260801-000000.json.gz');
+      writeFileSync(f, gzipSync(JSON.stringify({
+        version: 8, createdAt: now,
+        tables: {
+          users: [], posts: [post],
+          comments: [{ id: cid, translation_key: 'untrusted', locale: 'de', name: 'n', body: 'b', status: 'published', is_author: 'true', email: 'x@example.com', sender_hash: 42, created_at: now }],
+        },
+      })));
+      await restoreDatabase(pool, f);
+      const row = (await pool.query(`SELECT status, is_author, email, sender_hash FROM comments WHERE id=$1`, [cid])).rows[0];
+      expect(row).toEqual({ status: 'pending', is_author: false, email: null, sender_hash: null });
+      // comments_enabled absent from the row → the column default (true).
+      expect((await pool.query(`SELECT comments_enabled FROM posts WHERE translation_key='untrusted'`)).rows[0].comments_enabled).toBe(true);
+    });
+
+    it('restoring a v<=7 dump (no comments key) empties the comments table', async () => {
+      const posts = pgPostStore(pool);
+      const comments = pgCommentStore(pool);
+      await pool.query('DELETE FROM posts');
+      const p = await posts.upsertDraft(pair('old'));
+      await comments.create({ translationKey: p.translationKey, locale: 'de', name: 'A', body: 'x' });
+      expect(await count()).toBeGreaterThan(0);
+      const v7 = join(dir, 'db-20260701-000000.json.gz');
+      writeFileSync(v7, gzipSync(JSON.stringify({ version: 7, createdAt: new Date().toISOString(), tables: { users: [], posts: [] } })));
+      const counts = await restoreDatabase(pool, v7);
+      expect(counts.comments).toBe(0);
+      expect(await count()).toBe(0);
+    });
   });
 
   // The restore CLI (issue #114): spawned exactly as production runs it. Each
@@ -480,10 +631,10 @@ maybe('backup round-trip (Postgres)', () => {
     it('refuses an unsupported dump version before writing a pre-dump', async () => {
       const { backupDir, env } = await seed();
       const bad = join(dir, 'db-20260102-000000.json.gz');
-      writeFileSync(bad, gzipSync(JSON.stringify({ version: 8, tables: { users: [], posts: [] } })));
+      writeFileSync(bad, gzipSync(JSON.stringify({ version: DUMP_VERSION + 1, tables: { users: [], posts: [] } })));
       const r = await runCli(['restore', '--yes', bad], env);
       expect(r.code).toBe(1);
-      expect(r.stderr).toContain('unsupported dump version 8');
+      expect(r.stderr).toContain(`unsupported dump version ${DUMP_VERSION + 1}`);
       expect(await usernames()).toEqual(['alice', 'bob']);
       expect(preDumps(backupDir)).toEqual([]);
     }, 30_000);

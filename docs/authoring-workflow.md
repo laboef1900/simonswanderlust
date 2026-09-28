@@ -338,6 +338,25 @@ Galleries work in **page** bodies (the About page) on the same terms. Clicking a
 lightbox, in all three modes. The draft preview renders galleries but **not** the lightbox — it is
 a separate island that only runs on the built site.
 
+### Comments
+
+Reader comments are stored in Postgres and served at request time — they are **never** baked
+into the static site, so none of the switches below need a Publish or a rebuild.
+
+1. **Global switch** — on the admin-only Settings page (`/admin/settings.html`), *Enable comments
+   on the site*. **Default off.** While it is off the form is hidden on every story and
+   `POST /comments` answers 409; approved comments already visible stay visible, and the per-post
+   checkbox has no effect. Turning it off is the rollback for the whole feature and deletes nothing.
+2. **Per-post checkbox** — *Allow comments on this trip* under **Expedition details** in the
+   editor (shared between DE and EN). **Default on**; untick it to close one thread. Authors can
+   close a trip, but only an admin can open the site to comments.
+3. **Moderation** — a reader's comment lands in `/admin/comments.html` as **pending** and is not
+   public until an admin clicks **Approve**. Author replies are auto-approved and marked as such.
+4. **No rebuild** — closing or opening comments (either switch) takes effect on the next request.
+   It does not require **Publish** and never triggers a site build.
+5. **Deleting a post deletes its comments** — the thread is removed in the same transaction as the
+   post and its revisions; there is no undo.
+
 ---
 
 ## Stage 3 — How the rebuild works

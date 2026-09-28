@@ -57,6 +57,13 @@ export interface PostShared {
    * always return a real boolean, so no reader has to handle undefined.
    */
   featured?: boolean;
+  /**
+   * Per-post comments toggle (comments spec, phase 1). SHARED: written to both
+   * locale rows. Optional on the way in; `draftWithDefaults` normalizes an
+   * absent value to true (the site-wide `settings.commentsEnabled`, default
+   * false, is the real off switch).
+   */
+  commentsEnabled?: boolean;
 }
 export interface PostPair {
   translationKey: string; status: PostStatus;
@@ -272,6 +279,7 @@ export function validateDraft(pair: unknown): asserts pair is PostPair {
   // Rejected, never coerced: a truthy string ('false', 'off') from a hand-made
   // payload must not silently promote a post to the homepage cover.
   if (shared.featured !== undefined && typeof shared.featured !== 'boolean') throw new PostError('shared.featured must be a boolean');
+  if (shared.commentsEnabled !== undefined && typeof shared.commentsEnabled !== 'boolean') throw new PostError('shared.commentsEnabled must be a boolean');
   for (const locale of ['de', 'en'] as Locale[]) {
     const l = pair[locale];
     if (!isPlainObject(l)) throw new PostError(`${locale} must be an object`);
@@ -480,13 +488,25 @@ function draftWithDefaults(pair: PostPair): PostPair {
       // stores and the WXR importer pass through, so every stored pair carries
       // a real boolean and `featured boolean NOT NULL` is never bound undefined.
       featured: s.featured ?? false,
+      // Absent = enabled per post; the site-wide setting is the default-off gate.
+      commentsEnabled: s.commentsEnabled ?? true,
     },
     de: fillLocale(pair.de, 'de'),
     en: fillLocale(pair.en, 'en'),
   };
 }
 
-export function memoryPostStore(): PostStore {
+/**
+ * Delete-with-post hook for the memory store. pgPostStore deletes a post's
+ * comments inside its own transaction; the memory store has no table to reach,
+ * so a comment store (or anything with `removeByTranslationKey`) can be linked
+ * in to keep the two stores' semantics identical in server tests.
+ */
+export interface MemoryPostStoreOptions {
+  comments?: { removeByTranslationKey(translationKey: string): Promise<unknown> | unknown };
+}
+
+export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
   const byKey = new Map<string, Stored>();
   // Revisions per translation_key, oldest first (append order) — mirrors the
   // pg store's post_revisions table so server tests exercise the same semantics.
@@ -580,6 +600,7 @@ export function memoryPostStore(): PostStore {
     async remove(tk) {
       if (!byKey.delete(tk)) throw new PostError('post not found');
       revisionsByKey.delete(tk); // #137: snapshots must not outlive their post
+      await opts.comments?.removeByTranslationKey(tk); // comments spec M13: the thread goes with the post
     },
     async listRevisions(tk) {
       return (revisionsByKey.get(tk) ?? [])
@@ -641,6 +662,7 @@ interface PostRow {
   tags: string[] | null;
   scheduled_at: Date | string | null;
   featured: boolean;
+  comments_enabled: boolean;
 }
 
 interface PostListRow {
@@ -684,6 +706,7 @@ function rowShared(r: PostRow): PostShared {
     // NOT NULL DEFAULT false in the schema, so both locale rows always answer
     // with the same real boolean — no `?? false` fallback to hide a bad write.
     featured: r.featured,
+    commentsEnabled: r.comments_enabled,
   };
 }
 
@@ -706,7 +729,7 @@ function localeParams(tk: string, status: string, shared: PostShared, p: PostLoc
     shared.stops?.length ? JSON.stringify(shared.stops) : null, shared.route ?? null, p.keyFacts ? JSON.stringify(p.keyFacts) : null,
     p.bodyMarkdown, JSON.stringify(p.images), status,
     shared.categories ?? [], shared.tags ?? [], shared.scheduledAt ? new Date(shared.scheduledAt) : null,
-    shared.featured ?? false];
+    shared.featured ?? false, shared.commentsEnabled ?? true];
 }
 
 export function pgPostStore(pool: DbPool): PostStore {
@@ -717,8 +740,8 @@ export function pgPostStore(pool: DbPool): PostStore {
     await client.query(
       `INSERT INTO posts (translation_key, locale, slug, title, date, country, country_code, region,
          excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status,
-         categories, tags, scheduled_at, featured, id, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22, now())`,
+         categories, tags, scheduled_at, featured, comments_enabled, id, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23, now())`,
       [...localeParams(tk, status, shared, p), randomUUID()],
     );
   }
@@ -729,7 +752,7 @@ export function pgPostStore(pool: DbPool): PostStore {
     const res = await client.query(
       `UPDATE posts SET slug=$3, title=$4, date=$5, country=$6, country_code=$7, region=$8, excerpt=$9,
          hero_image=$10, coordinates=$11, stops=$12, route=$13, key_facts=$14, body_markdown=$15, images=$16,
-         status=$17, categories=$18, tags=$19, scheduled_at=$20, featured=$21, updated_at=now()
+         status=$17, categories=$18, tags=$19, scheduled_at=$20, featured=$21, comments_enabled=$22, updated_at=now()
        WHERE translation_key=$1 AND locale=$2`,
       localeParams(tk, status, shared, p),
     );
@@ -889,6 +912,9 @@ export function pgPostStore(pool: DbPool): PostStore {
         const gone = await client.query(`DELETE FROM posts WHERE translation_key = $1`, [tk]);
         if (gone.rowCount === 0) throw new PostError('post not found');
         await client.query(`DELETE FROM post_revisions WHERE translation_key = $1`, [tk]);
+        // Reader comments go with the post (comments spec M13) — a separate
+        // statement for the same snapshot reason as the revisions DELETE.
+        await client.query(`DELETE FROM comments WHERE translation_key = $1`, [tk]);
         await client.query('COMMIT');
       } catch (e) {
         await client.query('ROLLBACK');

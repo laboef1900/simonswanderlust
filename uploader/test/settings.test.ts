@@ -306,6 +306,40 @@ describe('editorial review settings', () => {
   });
 });
 
+describe('comments switch (#207)', () => {
+  it('defaults off — fail closed', () => {
+    expect(defaultSettings().commentsEnabled).toBe(false);
+  });
+
+  it('round-trips through update() and the file, and survives an older settings.json without the key', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ backupSchedule: 'daily' }));
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(store.get().commentsEnabled).toBe(false);
+    expect(store.update({ commentsEnabled: true }).commentsEnabled).toBe(true);
+    expect(JSON.parse(await readFile(path, 'utf8')).commentsEnabled).toBe(true);
+    expect(createSettingsStore({ path, defaults: DEFAULTS }).get()).toMatchObject({ commentsEnabled: true, backupSchedule: 'daily' });
+  });
+
+  it('rejects a non-boolean in update() without touching backupSchedule (#112)', async () => {
+    const path = join(dir, 'settings.json');
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    store.update({ backupSchedule: 'daily' });
+    for (const bad of ['true', 1, null]) {
+      expect(() => store.update({ commentsEnabled: bad as unknown as boolean })).toThrow(SettingsError);
+    }
+    expect(store.get()).toMatchObject({ backupSchedule: 'daily', commentsEnabled: false });
+  });
+
+  it('an invalid on-disk value falls back to off and keeps the other fields', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ commentsEnabled: 'yes', backupSchedule: 'weekly' }));
+    const log = vi.fn();
+    expect(createSettingsStore({ path, defaults: DEFAULTS, log }).get()).toMatchObject({ commentsEnabled: false, backupSchedule: 'weekly' });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('"commentsEnabled"'));
+  });
+});
+
 describe('image conversion settings', () => {
   it('loads legacy settings without changing image behavior and persists an independent image update', async () => {
     const path = join(dir, 'settings.json');

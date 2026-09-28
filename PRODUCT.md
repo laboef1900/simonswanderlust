@@ -27,7 +27,8 @@ Self-hosted, single-author travel CMS with a custom bilingual editor, automatic 
 
 ## Capabilities and Constraints
 
-- **Pages:** Login, Photo Upload (index), Posts list, Post Editor, Media Library, About Page editor, Import (WordPress WXR), Settings, Users management.
+- **Pages:** Login, Photo Upload (index), Posts list, Post Editor, Media Library, About Page editor, Comments moderation queue, Import (WordPress WXR), Settings, Users management.
+- **Comment moderation queue:** Reader comments on trip reports are held until an admin approves them (`/admin/comments.html`). Admins approve, unapprove, delete (erasure, with confirmation) and reply as the author; author replies publish immediately. Comments are self-hosted in Postgres — Principle 4 still holds, no third-party comment service.
 - **Auth:** Cookie-based sessions with admin/non-admin roles; rate-limited login.
 - **Editor:** Bilingual DE/EN tabs, slug preview, hero image picker, body markdown with EasyMDE, key facts and stops editors, revision history, preview, publish/unpublish.
 - **Media library:** One browsable store for every hosted photo — bulk drag-and-drop upload, virtual folders, search, per-item alt text. Encoding runs asynchronously behind a queue that a site build preempts; publishing is refused while a referenced photo is still encoding. GPS and uploader identity are redacted for non-admin authors.

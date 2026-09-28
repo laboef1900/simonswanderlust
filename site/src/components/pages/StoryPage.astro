@@ -8,6 +8,7 @@ import StoryPagination from '../StoryPagination.astro';
 import Toc from '../Toc.astro';
 import StoryMiniMap from '../StoryMiniMap.astro';
 import GalleryIsland from '../GalleryIsland.astro';
+import CommentsIsland from '../CommentsIsland.astro';
 import { byLocale, localeOf, pathOf, translationOf, type Trip } from '../../lib/trips';
 import { PROD_SITE, blogPostingJsonLd, serializeJsonLd } from '../../lib/seo';
 import { splitOpening } from '../../lib/story-opening';
@@ -114,6 +115,10 @@ const jsonLd = serializeJsonLd(
       {rest !== '' && <article class:list={[PROSE, 'story-rest mx-auto lg:max-w-story-wide']} set:html={rest} />}
       <GalleryIsland locale={locale} />
     </div>
+
+    {/* Reader comments (#208): after the story and its mini-map, before the
+        divider and prev/next nav, outside the prose articles. Trip reports only. */}
+    <CommentsIsland locale={locale} translationKey={trip.data.translationKey} />
 
     <div class="mx-auto mt-12 lg:max-w-story-wide">
       <RouteDivider />
