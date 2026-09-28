@@ -26,11 +26,16 @@ This repo is the **Astro 7 static-site rebuild** of the current WordPress + Elem
   UI is Astro components + Tailwind 4.
 - **Primary users:** One admin/author (the owner). Public readers consume only the static blog
   output; they never reach an authenticated surface.
-- **Risk level:** **Normal.** No third-party accounts, no payments, no customer PII. Elevated only
-  where the uploader touches remote fetches (WXR import), untrusted markup (body HTML), and photo
-  metadata (EXIF/GPS).
+- **Risk level:** **Normal.** No third-party accounts, no payments. The only reader data is
+  **reader comments** (a self-chosen display name + a plain-text body, submitted for
+  publication); no email is collected and no IP is persisted. Elevated where the uploader
+  touches remote fetches (WXR import), untrusted markup (body HTML), photo metadata (EXIF/GPS),
+  and the **public comment routes** (`GET`/`POST /comments`, the one unauthenticated write
+  surface besides `/login`/`/setup`).
 - **Sensitive data:** Admin account credentials (scrypt hashes) and session records in Postgres;
-  photo EXIF including GPS coordinates in the media library. Everything else is public content.
+  photo EXIF including GPS coordinates in the media library; reader comments (display name +
+  body — email is not collected, IP is not stored) in the `comments` table and in DB dumps.
+  Everything else is public content.
 - **Enabled profiles:** Web/API · Frontend · Database · Containers · AI (one narrow feature).
 - **Authoritative product documentation:** `docs/superpowers/specs/` (design specs) and
   `docs/superpowers/plans/` (phase plans) are the source of truth for scope.
@@ -130,7 +135,9 @@ Classify a change before implementing it:
 
 - **Low risk:** Documentation, formatting, comments, or a behavior-preserving mechanical change.
 - **Normal risk:** Ordinary features, bug fixes, refactors, dependency updates.
-- **High risk (in this repo):** Anything touching authn/authz or sessions, the `images`-map and
+- **High risk (in this repo):** Anything touching authn/authz or sessions, the **public comment
+  routes** (`uploader/src/comments-public.ts` — unauthenticated write surface, Origin check,
+  honeypot, comment limiter, the public JSON shape), the `images`-map and
   body-HTML render path, gallery URL allow-listing, `safeFetch`/WXR import, path-traversal guards,
   EXIF/GPS handling, the schema in `uploader/src/db.ts`, backup/restore, the build/publish
   pipeline, `/data` layout, or **any slug or route change**.
@@ -243,8 +250,11 @@ the `/data` volume and only changes via Publish, **Rebuild site now**, or `POST 
 Full security model: `SECURITY.md`. These patterns MUST be preserved when changing `uploader/`.
 
 - **Security verification target:** **OWASP ASVS 5.0, Level 1.** L1 matches the risk profile
-  (single admin, no third-party users, no payments, no customer PII). Raise to L2 if the app ever
-  gains multi-tenant accounts or stores reader data.
+  (single admin, no third-party users, no payments). The app **does** store reader data since
+  #206 (comment display name + body), which this rule says should raise the target to L2; that is
+  covered by a **recorded exception** (waived rule, reason, risk, compensating controls, approver,
+  review by 2027-03-14) in `docs/superpowers/specs/2026-09-14-comments-design.md`. Raise to L2 at
+  the first of: reader accounts, email/notifications, or comments on a non-trip surface.
 - **RASP:** deliberately **not enabled**. In-process attack detection/blocking was considered and
   declined — it adds a dependency and runtime overhead to a single-container, single-admin
   deployment whose exposure is already narrowed by session auth, rate limiting, and one published
@@ -253,9 +263,11 @@ Full security model: `SECURITY.md`. These patterns MUST be preserved when changi
 ### 1. API and Configuration (secure by default)
 
 - **Authentication** — All mutating uploader endpoints require a valid session (HttpOnly cookie;
-  username/password accounts in Postgres). The only exceptions are `POST /login` and first-run
-  `POST /setup` (guarded by a zero-users check, a setup lock, and the login rate limiter). Never
-  infer safety from the HTTP method.
+  username/password accounts in Postgres). The only exceptions are `POST /login`, first-run
+  `POST /setup` (guarded by a zero-users check, a setup lock, and the login rate limiter), and
+  the public `GET`/`POST /comments` (#206: no session preHandler by design, Origin equality,
+  honeypot 204, its own rate limiter, hold-for-moderation — see `SECURITY.md` *Public comments*).
+  Never infer safety from the HTTP method.
 - **Authorization** — Authorize the exact action and resource in every handler, reads included.
   Publish, rebuild, page edits, settings, backups, user management, and the irreversible media
   operations (`DELETE /media/items/*`, `PATCH`/`DELETE /media/folders`, `POST /media/rescan`) are
@@ -978,8 +990,13 @@ blog/
   separate from `PublicComment` — and the `/moderation/comments*` routes registered in
   `server.ts`, all `requireAdmin`; author replies are inserted `approved` + `is_author` as flat
   siblings). Route tests: `uploader/test/comments-admin.test.ts`.
-  The high-risk bullet, the "no customer PII" sentence and the ASVS target sentence above are
-  updated in Phase 2 (#206), the PR that makes them true.
+  #206 public API landed: `uploader/src/comments-public.ts` — `GET /comments?tk=` (approved
+  only, both locales merged oldest-first, `{ enabled, comments[] }` with the pinned public key
+  set) and `POST /comments` (rate limit → honeypot 204 → Origin/Referer equality 403 →
+  `invalid_comment` 400 → 404 → `comments_disabled` 409 → pending 201 `{ ok: true }`), no session
+  preHandler, its own limiter maps, no email accepted, no comment field logged. Route tests:
+  `uploader/test/comments-public.test.ts`. The high-risk bullet, the PII sentence and the ASVS
+  target sentence above were updated in that phase.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

@@ -89,6 +89,47 @@ change about the security posture.
   is gone, exactly like the list route. See
   `docs/superpowers/specs/2026-09-06-delete-post-revisions-design.md`.
 
+### Public comments
+
+`GET /comments?tk=<translation_key>` and `POST /comments` (`uploader/src/comments-public.ts`,
+issue #206) are the app's first **unauthenticated write surface** besides `/login` and first-run
+`/setup`, and the first routes that store reader-authored data. Design, misuse cases and the
+ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`.
+
+- **No session preHandler on either route** (#129). Not even `optionalAuth`: a forged or real
+  `sid` cookie on a public comment request costs no session lookup and cannot 500 the story page
+  when Postgres is down. Pinned by a route test that spies on `sessions.find`.
+- **What the public JSON contains — and nothing else.** `GET` answers
+  `{ enabled, comments[] }` where each item is exactly `{ id, authorName, body, createdAt,
+  isAuthor, postedLocale }`, **approved rows only**, oldest first, capped at 500. Never `status`,
+  never a pending/rejected row, never an email (none is collected), never an IP. The key set is
+  pinned by a test, not the wording. `enabled` is `settings.commentsEnabled && post
+  comments_enabled`; when false the approved thread is still readable (closed, not hidden) and
+  `POST` answers 409 `comments_disabled`. `GET` 404s for an unknown key and for a draft-only
+  key with the same body, so it cannot enumerate unpublished posts. Response is `no-store`.
+- **`POST` order of checks is load-bearing** and pinned by tests: (1) per-IP rate limit → 429,
+  no insert; (2) **honeypot** — a non-blank `website` field answers **204 with an empty body**,
+  no row, no log line (a 400 would train the bot; 204 does not look like the real 201);
+  (3) **Origin check** — the `Origin` header, else the origin of `Referer`, must equal
+  `new URL(PUBLIC_BASE_URL).origin` by **origin equality, never a prefix match** (the gallery
+  allow-list lesson: `https://simonswanderlust.com.evil.example` must fail); missing both,
+  unparsable, or mismatched → 403; (4) validation → 400 with the generic code `invalid_comment`,
+  never the store's wording; (5) published pair → 404; (6) global or per-post flag off → 409;
+  (7) insert as **`pending`** → 201 `{ ok: true }` — the new id is not echoed, so a caller cannot
+  probe moderation. JSON body capped at 4 KiB; unknown fields (`email`, `parentId`, `status`)
+  are ignored, never stored.
+- **Hold-for-moderation.** Every accepted comment is `pending`; nothing is public until an admin
+  approves it on `/admin/comments.html` (`requireAdmin`, see below). Deletion is erasure.
+- **Rate limit:** 5 `POST`s per address per 15 minutes plus a process-wide 200 per hour, keyed on
+  `req.ip` under `trustProxy: 1` — never on the reader-chosen name, which would let anyone DoS a
+  name. See *Rate limiting* for why these maps are separate from the login limiter.
+- **Nothing on the public comment path logs a comment field** — not the name, body, honeypot
+  value or translation key (spec invariant 11). A store failure is caught in the route and logged
+  as the driver message only, because the global error handler logs `req.url`, which on `GET`
+  carries the key. The client still gets the sanitized 500.
+- **Not done by design:** no `workLock`, no rebuild (comments are runtime, never baked), no
+  `safeFetch` or any outbound call, no markdown/HTML, no `parentId`.
+
 ### Media metadata redaction
 
 `GET /media` and `GET /media/items/*` strip **`exif.lat`, `exif.lng` and `uploadedBy`** for
@@ -172,6 +213,12 @@ after the last failure, and `docker compose restart app` clears it. Design and a
 `POST /users/me/password` has its own per-account failure limiter (5 per 15 minutes) keyed on the
 session's user id, so a hijacked session cannot brute-force the current password across many
 addresses — and only the caller can ever fill that bucket.
+
+`POST /comments` (#206) is a **third bucket, not shared with `/login`**: `commentLimiters()`
+builds its own per-IP map (5 per address per 15 minutes) and its own single-key process-wide map
+(200 per hour), both bounded like the rest. Separate maps are the point — a comment flood must
+not lock the owner out of the admin, and a login brute-force must not take comments down. The
+key is `req.ip`, never the reader-chosen `authorName`. A route test proves the maps are distinct.
 
 Every limiter map is **bounded**: at most 10 000 tracked keys, with expired windows swept first and
 the earliest-expiring live window evicted at the cap (amortised O(1) — there is no full sweep an
@@ -446,6 +493,18 @@ clamp and the hostile-input case.
 
 > We deliberately use a maintained, allow-list sanitizer rather than hand-rolled escaping — the
 > cardinal rule of XSS defense.
+
+### Reader comments are plain text, never markup
+
+Comment bodies and display names (#206) are **untrusted reader text**, a stricter class than the
+author's Markdown: their allow-list is *none*. They are `\p{C}`-stripped, trimmed and
+length-capped at the store boundary (`cleanName` / `cleanBody`, name 1–80, body 1–2000) and
+stored and returned as plain text — the public API contract is already text, not HTML. No
+markdown, no autolink, no `set:html`. Every surface that paints them must use `textContent` /
+`document.createTextNode`: the admin moderation page already does; the story-page island (#208)
+must, and its tests pin it. `rehype-sanitize` is deliberately **not** reused for reader input —
+that path is load-bearing for the author's body (#124, #91), and feeding it anonymous text would
+double its attack surface.
 
 ### Content injected *after* sanitize (body images and galleries)
 
