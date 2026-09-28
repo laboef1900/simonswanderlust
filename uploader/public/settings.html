@@ -65,11 +65,14 @@
         <h2 id="commentsHeading" class="card-heading">Reader comments</h2>
         <label class="check-field" for="commentsEnabled">
           <input id="commentsEnabled" type="checkbox" aria-describedby="commentsHelp" />
-          Accept reader comments site-wide
+          Enable comments on the site
         </label>
         <p id="commentsHelp" class="muted">
-          Master switch. A post also needs its own "Allow comments" box ticked in the editor.
-          Every comment is held for moderation. Saving this does not rebuild the site.
+          Off (default): the comment form is hidden on every story and <code>POST /comments</code>
+          returns 409. Approved comments already visible stay visible. Per-post "Allow comments"
+          has no effect while this is off. Turning it off does not delete any comments — it is the
+          reversible rollback for the whole comments feature. Every new comment is held for
+          moderation. Saving this does not rebuild the site.
         </p>
         <div class="settings-actions">
           <button id="saveComments" type="button" class="btn-secondary">Save comment setting</button>
