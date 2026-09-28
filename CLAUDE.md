@@ -970,9 +970,14 @@ blog/
   second scrollbar beside the page's — so a rail taller than the opening simply sets the spread's
   height. `COLUMN_WIDTH` in `gallery-layout.ts` is 960 (three landscapes a row still clear the
   168px floor: 208px). Published pages change on the next rebuild. See `DESIGN.md`.
-- **Remaining:** Reader comments (epic #202, spec #203) — design spec landed 2026-09-14
-  (`docs/superpowers/specs/2026-09-14-comments-design.md`, incl. an ASVS L1 exception record);
-  **awaiting owner approval** (`needs-human`), siblings #204/#206/#205/#208/#207 not started.
+- **In progress:** Reader comments (epic #202, spec #203) — design spec landed 2026-09-14
+  (`docs/superpowers/specs/2026-09-14-comments-design.md`, incl. an ASVS L1 exception record).
+  #205 admin moderation queue landed: `uploader/public/comments.html` (served at
+  `/admin/comments.html`, admin-only, rows painted with `textContent`, Delete/Spam confirm via
+  `admin-confirm.js`) and `uploader/src/comments-admin.ts` (`AdminComment` — a type kept
+  separate from `PublicComment` — and the `/moderation/comments*` routes registered in
+  `server.ts`, all `requireAdmin`; author replies are inserted `approved` + `is_author` as flat
+  siblings). Route tests: `uploader/test/comments-admin.test.ts`.
   The high-risk bullet, the "no customer PII" sentence and the ASVS target sentence above are
   updated in Phase 2 (#206), the PR that makes them true.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not

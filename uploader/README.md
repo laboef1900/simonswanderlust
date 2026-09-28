@@ -208,6 +208,19 @@ Three consequences worth knowing:
 Irreversible operations (`DELETE /media/items/*`, `PATCH`/`DELETE /media/folders`,
 `POST /media/rescan`) are admin-only.
 
+## Comment moderation
+
+`/admin/comments.html` (admin-only, like Settings) is the queue for reader comments on trip
+reports. Every reader comment lands `pending` and is invisible to the public until approved.
+The page lists pending (default) or approved comments with name, body, post key, locale and
+time — all painted as text, never markup — and offers **Approve** / **Unapprove**, **Delete**
+and **Spam** (both permanent, both confirm the scope), and **Reply as author**, which inserts an
+approved, author-flagged sibling on the same thread without passing through the queue. The
+routes behind it (`GET /moderation/comments`, `POST /moderation/comments/:id/status`,
+`DELETE /moderation/comments/:id`, `POST /moderation/comments/:id/reply`) are all
+`requireAdmin`: unauthenticated callers get 401, authors 403, and a non-UUID id is a 400.
+Approving does not rebuild the site — comments are runtime data, never baked by `astro build`.
+
 ## Galleries
 
 Several photos render as one grid from a fenced ```` ```gallery ```` block, one image URL per line.
