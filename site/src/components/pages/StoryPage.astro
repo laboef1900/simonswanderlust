@@ -116,11 +116,14 @@ const jsonLd = serializeJsonLd(
       <GalleryIsland locale={locale} />
     </div>
 
+    {/* Reader comments (#208): after the story and its mini-map, before the
+        divider and prev/next nav, outside the prose articles. Trip reports only. */}
+    <CommentsIsland locale={locale} translationKey={trip.data.translationKey} />
+
     <div class="mx-auto mt-12 lg:max-w-story-wide">
       <RouteDivider />
       <StoryPagination older={older} newer={newer} locale={locale} />
     </div>
-    <CommentsIsland locale={locale} translationKey={trip.data.translationKey} />
   </div>
 </Base>
 
