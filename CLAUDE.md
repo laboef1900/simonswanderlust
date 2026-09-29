@@ -997,6 +997,11 @@ blog/
   preHandler, its own limiter maps, no email accepted, no comment field logged. Route tests:
   `uploader/test/comments-public.test.ts`. The high-risk bullet, the PII sentence and the ASVS
   target sentence above were updated in that phase.
+  **Owner approval recorded 2026-09-29**, together with the production wiring the phases had
+  missed: `main.ts` never passed `pgCommentStore`/`pgCommentAdminStore` to `buildServer`, so a
+  deployed container answered 503 on every comment route while every suite (which injects stores
+  directly) stayed green. `uploader/test/main-boot.integration.test.ts` now boots the real
+  `src/main.ts` against Postgres and walks a comment from `POST` to moderation to public list.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

@@ -2,9 +2,9 @@
 
 **Date:** 2026-09-14 · **Risk:** high (first public write surface, first reader-authored durable
 data, untrusted text on public and admin pages, schema + dump change) · **Size:** large ·
-**Status:** design only — **awaiting explicit owner approval** (`needs-human` on #203).
-No schema, route, UI or `DUMP_VERSION` change lands with this document. Implementation of every
-sibling (#204, #206, #205, #208, #207) is blocked until the owner records approval below.
+**Status:** approved by the owner (Simon) on 2026-09-29, after phases 1–4 had merged. The
+production composition root (`uploader/src/main.ts`) was wired to the Postgres comment stores in
+the same change; until then every comment route answered 503 in a deployed container.
 
 ## Problem
 
@@ -100,7 +100,7 @@ recorded next to decision 2 per *Requirement Language and Exceptions*.
 | **Reason** | The only reader data is a self-chosen display name and a comment body, both voluntarily submitted for publication. No accounts, credentials, sessions, email, IP or device data exist for readers, so the L2 delta (authentication, session management, credential storage for a second user population) has nothing to apply to. |
 | **Risk** | Stored XSS through reader text on the public page or in the admin UI (admin-session impact); spam/abuse volume filling the moderation queue or disk; a pending comment leaking before moderation; reader data in `/data/backup/db` dumps outliving its purpose; CSRF-driven posting from a third-party page. |
 | **Compensating controls** | No accounts, no email, no persisted IP (D3); hold-for-moderation, nothing public until an admin approves (D5); `Origin`/`Referer` origin-equality check (D8); bounded in-memory per-IP limiter plus honeypot (misuse 1); plain text at rest and `textContent` on every surface (D9); no session lookup on public routes (D10); admin deletion as erasure (`delete` removes the row; the next dump no longer contains it); global kill switch off by default (D7). |
-| **Approver** | Simon (owner). **Not yet approved** — this spec is not effective and no sibling starts until the owner records approval here (name + date) or removes `needs-human` on #203. |
+| **Approver** | Simon (owner), approved 2026-09-29. |
 | **Review / expiry** | Review by **2027-03-14** (six months) or earlier at the first of: reader accounts, email/notifications, any comment data returned to a non-admin beyond `approved` rows, or a non-trip surface gaining comments. Each re-opens the L2 question. |
 
 ## Trust boundaries
