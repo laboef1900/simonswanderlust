@@ -110,6 +110,15 @@ describe('host routing', () => {
     expect(res.body).toContain('blog');
   });
 
+  it('301s bare /admin to /admin/ on the main and a one-hostname local host, keeping the query', async () => {
+    await release('r1', { 'index.html': 'home', '404.html': 'nf' });
+    for (const [app, host] of [[build(), MAIN], [build({ imgHost: LOCAL }), LOCAL]] as const) {
+      const res = await app.inject({ method: 'GET', url: '/admin?next=x', headers: { host } });
+      expect(res.statusCode).toBe(301);
+      expect(res.headers.location).toBe('/admin/?next=x');
+    }
+  });
+
   it('301-redirects a directory URL missing its trailing slash', async () => {
     await release('r1', { 'index.html': 'home', '404.html': 'nf', 'rumaenien/index.html': 'trip' });
     const app = build();
