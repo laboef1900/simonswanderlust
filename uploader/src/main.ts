@@ -16,6 +16,8 @@ import { pgMediaStore } from './media-store.js';
 import { createEncodeQueue } from './encode-queue.js';
 import { createMediaSync, createReconciler } from './media-sync.js';
 import { parseEncryptionKey, pgSecretsStore } from './secrets.js';
+import { pgCommentStore } from './comments.js';
+import { pgCommentAdminStore } from './comments-admin.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -110,6 +112,10 @@ const app = buildServer({
   secrets: pgSecretsStore(pool, encryptionKey),
   posts,
   pages,
+  // Optional in ServerConfig so tests can omit them; omitted here, every
+  // public and moderation comment route answers 503 in production.
+  comments: pgCommentStore(pool),
+  commentsAdmin: pgCommentAdminStore(pool),
   importJobs,
   media,
   encodeQueue,
