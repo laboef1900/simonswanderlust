@@ -266,7 +266,10 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   const { optionalAuth, requireAuth, requireAdmin } = createAuthn(users, sessions);
 
   const here = dirname(fileURLToPath(import.meta.url));
-  app.register(fastifyStatic, { root: join(here, '..', 'public'), prefix: '/admin/' });
+  // Prefix WITHOUT the trailing slash plus `redirect: true`: @fastify/static
+  // still mounts `/admin/*`, and only then registers GET /admin → 301 /admin/
+  // (query kept). public/ has no subdirectories, so nothing else changes.
+  app.register(fastifyStatic, { root: join(here, '..', 'public'), prefix: '/admin', redirect: true });
   // /upload and the CLI append a content hash to every key (contentHashKey),
   // so a given variant URL's bytes never change: replacing a photo mints a new
   // URL and previously published URLs keep serving — which is what makes a
