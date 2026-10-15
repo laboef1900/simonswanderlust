@@ -14,20 +14,166 @@ const items = headings.filter((h) => h.depth === 2);
 
 {
   items.length > 1 && (
-    <nav aria-label={t('story.toc')} class="my-8 rounded-md border border-navy/10 bg-canvas p-5 text-sm">
-      <p class="font-mono text-xs font-bold tracking-[0.2em] text-navy uppercase">{t('story.toc')}</p>
-      <ul class="mt-3 space-y-1.5">
-        {items.map((h) => (
-          <li>
-            <a
-              href={`#${h.slug}`}
-              class="line-clamp-2 text-ink/80 transition-colors hover:text-brand-red focus-visible:rounded focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2"
-            >
-              {h.text}
-            </a>
-          </li>
-        ))}
-      </ul>
-    </nav>
+    <details id="story-contents" class="story-contents">
+      <summary>{t('story.toc')}</summary>
+      <nav aria-label={t('story.toc')}>
+        <ul>
+          {items.map((h) => (
+            <li>
+              <a href={`#${encodeURIComponent(h.slug)}`}>{h.text}</a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+    </details>
   )
 }
+
+<script>
+  import { initStoryContents } from '../scripts/story-contents';
+
+  const contents = document.querySelector<HTMLDetailsElement>('#story-contents');
+  if (contents) initStoryContents(contents, matchMedia('(width >= 64rem)'));
+</script>
+
+<style>
+  .story-contents {
+    position: sticky;
+    top: 0.5rem;
+    z-index: 20;
+    margin-bottom: 1.5rem;
+    border-block: 1px solid color-mix(in srgb, var(--color-navy) 15%, transparent);
+    background: var(--color-canvas);
+    color: var(--color-navy);
+  }
+
+  summary {
+    min-height: 44px;
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    line-height: 1.5;
+    cursor: pointer;
+  }
+
+  summary::marker {
+    color: var(--color-brand-red);
+  }
+
+  nav {
+    max-height: min(60vh, 24rem);
+    max-height: min(60dvh, 24rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-navy) var(--color-canvas);
+    padding: 0 0.5rem 0.5rem;
+  }
+
+  ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  a {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0.625rem 0.5rem;
+    color: var(--color-ink);
+    font-size: 1rem;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--color-navy) 25%, transparent);
+    text-underline-offset: 0.2em;
+  }
+
+  summary:focus-visible,
+  a:focus-visible {
+    outline: 2px solid var(--color-brand-red);
+    outline-offset: -2px;
+  }
+
+  summary:active,
+  a:active {
+    background: color-mix(in srgb, var(--color-navy) 7%, var(--color-canvas));
+    color: var(--color-brand-red);
+  }
+
+  @media (hover: hover) {
+    summary:hover,
+    a:hover {
+      color: var(--color-brand-red);
+    }
+  }
+
+  :global(.story-body :is(h2, h3, h4, h5, h6)) {
+    scroll-margin-top: 5rem;
+  }
+
+  /* The closed strip is 44px tall and sits 0.5rem below the viewport edge.
+   * Give the disclosures immediately after it the same anchor clearance as
+   * story headings, so opening/focusing one near the top cannot leave its
+   * summary hidden behind the sticky contents control. */
+  :global(.story-rail details:not(.story-contents)),
+  :global(.story-rail details:not(.story-contents) > summary) {
+    scroll-margin-top: 4rem;
+  }
+
+  :global(.story-body :is(h2, h3, h4, h5, h6):focus-visible) {
+    outline: 2px solid var(--color-brand-red);
+    outline-offset: 0.25rem;
+  }
+
+  /* Without scripting, native anchor jumps still clear the expanded strip.
+   * `:has()` on .story-reading (StoryPage.astro), the one ancestor common to
+   * the strip and both story articles — the opening beside the rail and the
+   * centred rest; the rail wrappers are `display: contents` below lg. */
+  :global(.story-reading:has(.story-contents[open]) .story-body :is(h2, h3, h4, h5, h6)) {
+    scroll-margin-top: calc(min(60vh, 24rem) + 5rem);
+  }
+
+  /* In the rail (≥ lg) the list is static and fully expanded: nothing sticks
+   * above the article, so headings need no clearance beyond a breath. The
+   * strip's inset padding goes too, so its text lines up with the Key Facts
+   * and map disclosures stacked under it; links keep a hair of padding for
+   * the inset focus ring and pull it back with a negative margin. */
+  @media (width >= 64rem) {
+    .story-contents {
+      position: static;
+      z-index: auto;
+    }
+
+    summary {
+      padding-inline: 0;
+    }
+
+    nav {
+      /* No internal scrolling in the rail — and the links' negative margin
+       * would otherwise turn `overflow-y: auto` into a horizontal scrollbar. */
+      max-height: none;
+      overflow: visible;
+      padding-inline: 0;
+    }
+
+    a {
+      padding-inline: 0.25rem;
+      margin-inline: -0.25rem;
+    }
+
+    :global(.story-body :is(h2, h3, h4, h5, h6)),
+    :global(.story-reading:has(.story-contents[open]) .story-body :is(h2, h3, h4, h5, h6)),
+    :global(.story-rail details:not(.story-contents)),
+    :global(.story-rail details:not(.story-contents) > summary) {
+      scroll-margin-top: 2rem;
+    }
+  }
+
+  @media print {
+    .story-contents {
+      display: none;
+    }
+  }
+</style>

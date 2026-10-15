@@ -11,7 +11,8 @@
 // so typecheck/tests here need `npm ci` in site/ too (CI does this).
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
 import { transformBodyImages } from '../../site/src/lib/body-images.js';
-import { srcset, fallbackSrc } from '../../site/src/lib/images.js';
+import { SHIKI_CSS } from '../../site/src/lib/shiki-classes.js';
+import { focusPosition, sourceFormats, srcset, fallbackSrc } from '../../site/src/lib/images.js';
 import { coordsLabel, dateLabel } from '../../site/src/lib/format.js';
 import type { HeroImage, Locale, PostPair } from './posts.js';
 
@@ -43,11 +44,23 @@ function heroHtml(hero: HeroImage | undefined): string {
   const width = Number.isInteger(hero.width) && hero.width > 0 ? hero.width : 0;
   const height = Number.isInteger(hero.height) && hero.height > 0 ? hero.height : 0;
   if (width === 0 || height === 0) return '';
+  if (hero.format !== undefined && hero.format !== 'jpeg') return '';
   const safeHero: HeroImage = { ...hero, width, height };
+  // `.hero img` crops with `object-fit: cover` under a `max-height`, so the
+  // focal point changes what the author sees here too. `focusPosition` does
+  // its own clamping and returns undefined for an untouched centre, so
+  // nothing untrusted reaches the attribute and pre-focus posts emit none —
+  // but the CSP on this reply (#124) allows inline styles, so this is the
+  // one style attribute the preview ships and it must stay derived, never
+  // pass-through.
+  const focus = focusPosition(safeHero);
+  const style = focus ? ` style="${escapeHtml(focus)}"` : '';
+  const sources = sourceFormats(safeHero)
+    .map((format) => `    <source type="image/${format}" srcset="${escapeHtml(srcset(safeHero, format))}" sizes="100vw">`)
+    .join('\n');
   return `<div class="hero"><picture>
-    <source type="image/avif" srcset="${escapeHtml(srcset(safeHero, 'avif'))}" sizes="100vw">
-    <source type="image/webp" srcset="${escapeHtml(srcset(safeHero, 'webp'))}" sizes="100vw">
-    <img src="${escapeHtml(fallbackSrc(safeHero))}" alt="${escapeHtml(hero.alt)}" width="${width}" height="${height}">
+${sources}
+    <img src="${escapeHtml(fallbackSrc(safeHero))}" alt="${escapeHtml(hero.alt)}" width="${width}" height="${height}"${style}>
   </picture></div>`;
 }
 
@@ -86,12 +99,68 @@ const STYLE = `
      these rules a gallery renders as a stacked column of full-width images.
      preview.test.ts asserts every .jgal selector in global.css appears here —
      change the two together. */
-  .jgal { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.75rem; margin: 2rem 0; }
-  .jgal__item { margin: 0; }
+  .jgal { margin-block: 2rem; container-type: inline-size; }
+  .jgal__item { margin: 0; min-width: 0; }
   .jgal__item a { display: block; }
   .jgal__item img { display: block; width: 100%; height: auto; border-radius: 0.5rem; }
   .jgal__cap { margin-top: 0.4rem; font-size: 0.8rem; line-height: 1.4; color: #4a5563; }
+  .jgal__item a:focus-visible, .jgal__track:focus-visible { outline: 3px solid #d23b30; outline-offset: 3px; }
+  .jgal--breakout, .jgal--slider { --jgal-w: min(100% + 24rem, 100vw - 3.5rem, 1112px); width: var(--jgal-w); margin-inline: calc((100% - var(--jgal-w)) / 2); }
+  .jgal--breakout, .jgal--column { display: flex; flex-direction: column; gap: 0.75rem; }
+  .jgal__row { display: flex; flex-wrap: nowrap; gap: 0.75rem; max-width: var(--jgal-maxw, none); }
+  .jgal__row > .jgal__item { flex: calc(var(--r) * 100) 1 0; }
+  .jgal--slider { position: relative; }
+  .jgal__track { display: flex; flex-wrap: nowrap; gap: 0.75rem; overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth; scrollbar-width: thin; padding-bottom: 0.5rem; }
+  .jgal__track > .jgal__item { flex: 0 0 calc((100% - 1.5rem) / 3); scroll-snap-align: start; }
+  .jgal__track > .jgal__item img { aspect-ratio: 3 / 2; object-fit: cover; }
+  /* The nav buttons stay hidden here for real: the preview page loads no JS,
+     so nothing would ever reveal them. The rules are mirrored anyway, because
+     the parity test compares selector sets, not what the preview uses. */
+  .jgal__nav { position: absolute; top: calc(50% - 1.75rem); z-index: 1; display: flex; align-items: center; justify-content: center; width: 2.75rem; height: 2.75rem; padding: 0; border: 0; border-radius: 999px; background: rgb(20 42 66 / 0.82); color: #fff; font-size: 1.5rem; line-height: 1; cursor: pointer; }
+  .jgal__nav[hidden] { display: none; }
+  .jgal__nav--prev { left: 0.5rem; }
+  .jgal__nav--next { right: 0.5rem; }
+  .jgal__nav:disabled { opacity: 0.3; cursor: default; }
+  .jgal__nav:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+  @container (max-width: 900px) {
+    .jgal__track > .jgal__item { flex-basis: calc((100% - 0.75rem) / 2); }
+  }
+  @container (max-width: 600px) {
+    .jgal__row { flex-wrap: wrap; max-width: none; }
+    .jgal__row > .jgal__item { flex: 1 0 100%; }
+    .jgal__track > .jgal__item { flex-basis: 100%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .jgal__track { scroll-behavior: auto; }
+  }
+  /* Code-block palette, generated from the Shiki theme (#124): the sanitizer
+     allows no inline style, so highlighting arrives as classes. */
+  ${SHIKI_CSS}
 `;
+
+/**
+ * Content-Security-Policy for the preview reply. The page is static markup
+ * with one inline <style> and inline `style` attributes on gallery items (the
+ * `--r` ratios body-images.ts computes) — nothing else is needed, so
+ * everything else is denied: a future sanitizer regression that lets a
+ * `<script>` through lands on the author's admin origin as a no-op instead of
+ * as session XSS. Images come from the app's own image base (plus 'self',
+ * which is the same origin in production).
+ *
+ * @ai-note The preview therefore refuses images from any OTHER origin, where
+ * the live site would still load them — a foreign hero shows as a broken image
+ * here. That is the intended trade: the admin session is what a CSP protects.
+ */
+export function previewCsp(imageOrigin: string): string {
+  return [
+    "default-src 'none'",
+    `img-src 'self' ${new URL(imageOrigin).origin}`,
+    "style-src 'unsafe-inline'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join('; ');
+}
 
 /**
  * Full standalone HTML page for one locale of a post pair. All frontmatter
@@ -114,7 +183,7 @@ export async function renderPreviewHtml(pair: PostPair, locale: Locale, imageOri
   const parsedDate = shared.date ? new Date(shared.date) : undefined;
   const metaParts = [
     parsedDate && !Number.isNaN(parsedDate.getTime()) ? dateLabel(parsedDate, locale) : '',
-    shared.country,
+    post.country,
   ].filter((part) => part.trim() !== '');
   // {lat:0,lng:0} is the incomplete-draft placeholder (see draftWithDefaults
   // in posts.ts) — don't render a bogus "0.0000° N" line for it.
@@ -139,7 +208,7 @@ ${heroHtml(post.heroImage)}
   <h1>${escapeHtml(title)}</h1>
   ${hasCoords ? `<p class="coords">${escapeHtml(coordsLabel(shared.coordinates))}</p>` : ''}
   ${post.excerpt.trim() !== '' ? `<p class="lede">${escapeHtml(post.excerpt)}</p>` : ''}
-  ${keyFactsHtml(shared.keyFacts)}
+  ${keyFactsHtml(post.keyFacts)}
   <article>
 ${body}
   </article>

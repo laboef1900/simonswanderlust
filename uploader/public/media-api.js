@@ -79,6 +79,20 @@ window.MediaApi = (function () {
     return 'failed: ' + (item.error || 'unknown');
   }
 
+  /**
+   * State label for one upload-queue row. A duplicate names the folder the
+   * photo already lives in: the server keeps a curated folder on re-upload
+   * (#135), so "done" alone would suggest it landed where the author dropped it.
+   */
+  function queueState(item) {
+    if (item.state === 'uploading') return Math.round(item.progress * 100) + '%';
+    if (item.state === 'failed') return item.error || 'failed';
+    if (item.state === 'done' && item.result && item.result.duplicate) {
+      return 'already in ' + (item.result.folder || 'root');
+    }
+    return item.state;
+  }
+
   /** Query string for GET /media from a filter state object. */
   function listQuery(state) {
     var s = state || {};
@@ -101,6 +115,34 @@ window.MediaApi = (function () {
     put('page', s.page);
     put('pageSize', s.pageSize);
     return parts.length ? '?' + parts.join('&') : '';
+  }
+
+  /**
+   * Trailing-edge debounce: `fn` runs once, `ms` after the LAST call in a
+   * burst. Used for search-as-you-type so a word costs one request, not one
+   * per keystroke.
+   */
+  function debounce(fn, ms) {
+    var timer = null;
+    return function () {
+      var args = arguments;
+      clearTimeout(timer);
+      timer = setTimeout(function () { timer = null; fn.apply(null, args); }, ms);
+    };
+  }
+
+  /**
+   * Monotonic tickets for in-flight loads. Responses arrive in any order —
+   * "no" can answer after "norw" — so a loader takes a ticket before it
+   * fetches and applies the response only while that ticket is still the
+   * newest. Superseded responses are dropped, never merged.
+   */
+  function makeSequence() {
+    var current = 0;
+    return {
+      next: function () { return ++current; },
+      isCurrent: function (ticket) { return ticket === current; },
+    };
   }
 
   // ---- transport ----------------------------------------------------------
@@ -265,7 +307,10 @@ window.MediaApi = (function () {
     folderTree: folderTree,
     parentOf: parentOf,
     statusLabel: statusLabel,
+    queueState: queueState,
     listQuery: listQuery,
+    debounce: debounce,
+    makeSequence: makeSequence,
     makeClient: makeClient,
     createUploadQueue: createUploadQueue,
   };

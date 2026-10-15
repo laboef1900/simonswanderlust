@@ -5,7 +5,7 @@ import { postgresTripsLoader, rowToEntryInput } from './postgres-loader';
 // Shared fake-DB state for the mocked `pg` module (hoisted with the mock).
 const db = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[], sql: [] as string[] }));
 
-// The loader creates its own `new pg.Pool(DATABASE_URL)`, so mock `pg` and act
+// The loader creates its own pool (`loaderPool`, over `pg`), so mock `pg` and act
 // like Postgres for exactly the predicates under test: the loader only receives
 // rows its own WHERE clause actually selects. Reverting the loader to build
 // from the working columns would return the draft-edited/unbackfilled rows
@@ -31,7 +31,7 @@ vi.mock('pg', () => ({
 
 // pg parses the `date` column to LOCAL midnight — mirror that in the fixture.
 const row = {
-  translation_key: 'bucharest-2024', locale: 'de', slug: 'reisebericht-4-tage-bukarest',
+  translation_key: 'bucharest-2024', locale: 'de' as const, slug: 'reisebericht-4-tage-bukarest',
   title: 'T', date: new Date(2024, 9, 3), country: 'Rumänien', country_code: 'RO', region: 'europe',
   excerpt: 'E', hero_image: { src: 'https://img/h', width: 768, height: 512, alt: 'a' },
   coordinates: { lat: 44.4, lng: 26.1 }, stops: null, route: null, key_facts: { K: 'V' },
@@ -40,7 +40,7 @@ const row = {
 
 describe('rowToEntryInput', () => {
   it('builds id as `${locale}/${slug}` and camelCase data matching the schema', () => {
-    const e = rowToEntryInput(row as never);
+    const e = rowToEntryInput(row as never, 'https://img');
     expect(e.id).toBe('de/reisebericht-4-tage-bukarest');
     expect(e.data.translationKey).toBe('bucharest-2024');
     expect(e.data.countryCode).toBe('RO');
@@ -49,13 +49,24 @@ describe('rowToEntryInput', () => {
     expect(e.body).toBe('## Hi');
   });
 
+  it('preserves JPEG-only markers on hero and body metadata', () => {
+    const jpegRow = {
+      ...row,
+      hero_image: { ...row.hero_image, format: 'jpeg' as const },
+      images: { 'http://localhost:3000/trips/x/body': { width: 1600, height: 1067, format: 'jpeg' as const } },
+    };
+    const entry = rowToEntryInput(jpegRow, 'https://img.example.com');
+    expect(entry.data.heroImage).toMatchObject({ src: 'https://img.example.com/h', format: 'jpeg' });
+    expect(entry.images['https://img.example.com/trips/x/body']).toMatchObject({ format: 'jpeg' });
+  });
+
   // The loader now builds from the `published_snapshot` jsonb (issue #20),
   // where `date` arrives as a 'YYYY-MM-DD' string and every value is a plain
   // JSON round-tripped object — the mapping must be identical to a live row.
   it('maps a jsonb published-snapshot shape identically to a live-row shape', () => {
     const snapshot = { ...row, date: '2024-10-03' };
-    const live = rowToEntryInput(row as never);
-    const snap = rowToEntryInput(snapshot as never);
+    const live = rowToEntryInput(row as never, 'https://img');
+    const snap = rowToEntryInput(snapshot as never, 'https://img');
     expect(snap.id).toBe(live.id);
     expect(snap.data).toEqual(live.data);
     expect(snap.body).toBe(live.body);
@@ -67,6 +78,16 @@ describe('rowToEntryInput', () => {
     // instant pg produces for a `date` column — so dateLabel (toLocaleDateString
     // without a timeZone) renders the same month in every build timezone.
     expect(snap.data.date).toEqual(new Date(2024, 9, 3));
+  });
+
+  // `featured` is `z.boolean().optional()` in content.config.ts with NO
+  // default, so a false/absent flag must produce no key at all — that is what
+  // keeps every pre-flag snapshot valid and every unflagged entry unchanged.
+  // A snapshot written before the column existed carries no key either.
+  it('emits featured only when the snapshot says true', () => {
+    expect('featured' in rowToEntryInput(row as never, 'https://img').data).toBe(false);
+    expect('featured' in rowToEntryInput({ ...row, featured: false } as never, 'https://img').data).toBe(false);
+    expect(rowToEntryInput({ ...row, featured: true } as never, 'https://img').data.featured).toBe(true);
   });
 });
 

@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { galleryFencesToMdx } from './body-content.js';
+import { galleryFencesToMdx, unescapeAltText } from './body-content.js';
+import { markdownImages } from './wp-content.js';
 import type { Locale, PostLocale, PostPair } from './posts.js';
 
 // YAML single-quoted scalar: a literal quote is escaped by doubling it ('' ),
@@ -15,15 +16,22 @@ const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
  * renderer skips entirely. Exact inverse of posts.ts `normalizeBodyImages`.
  */
 function bodyToMdx(p: PostLocale): string {
-  return galleryFencesToMdx(p.bodyMarkdown, p.images).replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt: string, src: string) => {
-    const dims = p.images[src];
-    if (!dims) return `![${alt}](${src})`;
+  let out = galleryFencesToMdx(p.bodyMarkdown, p.images);
+  // `markdownImages` reads the label with its backslash escapes (posts.ts
+  // writes `\[`/`\]` via `imageMarkdown`); a naive `[^\]]*` stopped at the
+  // first escaped bracket and exported the photo without its dimensions.
+  for (const img of markdownImages(out)) {
+    const dims = p.images[img.url];
+    if (!dims) continue;
     // Escape &, ", <, > (& first) so posts.ts normalizeBodyImages can decode the exact
     // inverse — a raw '>' in alt would otherwise defeat its tag regex on paste-back.
-    const escapedAlt = alt
+    const escapedAlt = unescapeAltText(img.alt)
       .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return `<BodyImage src="${src}" width={${dims.width}} height={${dims.height}} alt="${escapedAlt}" />`;
-  });
+    const tag = `<BodyImage src="${img.url}" width={${dims.width}} height={${dims.height}} alt="${escapedAlt}"${dims.format === 'jpeg' ? ' format="jpeg"' : ''} />`;
+    // Callback form: a string replacement would read `$&`/`$1` in the alt as tokens.
+    out = out.replaceAll(img.full, () => tag);
+  }
+  return out;
 }
 
 export function renderPostToMdx(pair: PostPair, locale: Locale): string {
@@ -33,7 +41,7 @@ export function renderPostToMdx(pair: PostPair, locale: Locale): string {
     '---',
     `title: ${q(p.title)}`,
     `date: ${s.date}`,
-    `country: ${q(s.country)}`,
+    `country: ${q(p.country)}`,
     `countryCode: ${q(s.countryCode)}`,
     `region: ${q(s.region)}`,
     `translationKey: ${q(pair.translationKey)}`,
@@ -43,13 +51,24 @@ export function renderPostToMdx(pair: PostPair, locale: Locale): string {
     `  width: ${p.heroImage.width}`,
     `  height: ${p.heroImage.height}`,
     `  alt: ${q(p.heroImage.alt)}`,
+    ...(p.heroImage.format === 'jpeg' ? ['  format: jpeg'] : []),
+    // The MDX files are the recovery path, so an author's focal point has to
+    // survive them. Nested under heroImage, matching the Zod schema in
+    // site/src/content.config.ts.
+    ...(p.heroImage.focus
+      ? [`  focus: { x: ${p.heroImage.focus.x}, y: ${p.heroImage.focus.y} }`]
+      : []),
     `coordinates: { lat: ${s.coordinates.lat}, lng: ${s.coordinates.lng} }`,
   ];
   if (s.route) lines.push(`route: ${q(s.route)}`);
   if (s.stops?.length) lines.push(`stops: ${JSON.stringify(s.stops)}`);
-  if (s.keyFacts && Object.keys(s.keyFacts).length) {
+  // Zod has it as `featured: z.boolean().optional()` (site/src/content.config.ts):
+  // absent = not the cover. Writing `featured: false` would be valid but would
+  // change every existing backup file, so the key is omitted when unset.
+  if (s.featured) lines.push('featured: true');
+  if (p.keyFacts && Object.keys(p.keyFacts).length) {
     lines.push('keyFacts:');
-    for (const [k, v] of Object.entries(s.keyFacts)) lines.push(`  ${q(k)}: ${q(v)}`);
+    for (const [k, v] of Object.entries(p.keyFacts)) lines.push(`  ${q(k)}: ${q(v)}`);
   }
   lines.push('---', '', bodyToMdx(p).trim(), '');
   return lines.join('\n');
@@ -58,9 +77,12 @@ export function renderPostToMdx(pair: PostPair, locale: Locale): string {
 export async function exportPost(pair: PostPair, baseDir: string): Promise<string[]> {
   const out: string[] = [];
   for (const locale of ['de', 'en'] as Locale[]) {
+    const slug = pair[locale].slug;
+    // An unset slug (DE-first draft without an EN title, issue #119) has no
+    // filename — writing `trips/en/.mdx` would just be a hidden file.
+    if (slug === '') continue;
     const dir = join(baseDir, 'trips', locale);
     await mkdir(dir, { recursive: true });
-    const slug = locale === 'de' ? pair.de.slug : pair.en.slug;
     const path = join(dir, `${slug}.mdx`);
     await writeFile(path, renderPostToMdx(pair, locale), 'utf8');
     out.push(path);

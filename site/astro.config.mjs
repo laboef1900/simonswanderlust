@@ -3,6 +3,7 @@ import { defineConfig } from 'astro/config';
 import mdx from '@astrojs/mdx';
 import sitemap from '@astrojs/sitemap';
 import tailwindcss from '@tailwindcss/vite';
+import { SHIKI_THEME, shikiStyleToClass } from './src/lib/shiki-classes.js';
 
 export default defineConfig({
   site: 'https://simonswanderlust.com',
@@ -25,9 +26,11 @@ export default defineConfig({
   // 'gallery' must stay excluded from syntax highlighting: it is how the
   // ```gallery fence keeps its `language-gallery` class through
   // rehype-sanitize so body-images.ts can turn it into a photo grid.
+  // shikiStyleToClass turns Shiki's inline colours into classes so the
+  // sanitizer can drop `style` from author markup altogether (#124).
   markdown: {
     syntaxHighlight: { type: 'shiki', excludeLangs: ['math', 'gallery'] },
-    shikiConfig: { theme: 'github-dark' },
+    shikiConfig: { theme: SHIKI_THEME, transformers: [shikiStyleToClass] },
   },
   integrations: [mdx(), sitemap()],
   vite: { plugins: [tailwindcss()] },

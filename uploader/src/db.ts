@@ -2,6 +2,8 @@ import pg from 'pg';
 
 const { Pool } = pg;
 export type DbPool = pg.Pool;
+/** A checked-out connection (`pool.connect()`), for multi-statement transactions. */
+export type DbClient = pg.PoolClient;
 
 const ABOUT_SEED = {
   de: {
@@ -32,7 +34,9 @@ export const POST_SNAPSHOT_SQL = `jsonb_build_object(
   'date', to_char(date, 'YYYY-MM-DD'), 'country', country, 'country_code', country_code,
   'region', region, 'excerpt', excerpt, 'hero_image', hero_image, 'coordinates', coordinates,
   'stops', stops, 'route', route, 'key_facts', key_facts,
-  'body_markdown', body_markdown, 'images', images
+  'body_markdown', body_markdown, 'images', images,
+  'categories', categories, 'tags', tags, 'scheduled_at', scheduled_at,
+  'featured', featured
 )`;
 
 export async function ensureSchema(pool: DbPool): Promise<void> {
@@ -64,9 +68,14 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       excerpt text NOT NULL, hero_image jsonb NOT NULL, coordinates jsonb NOT NULL,
       stops jsonb, route text, key_facts jsonb, body_markdown text NOT NULL,
       images jsonb NOT NULL DEFAULT '{}', status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
+      featured boolean NOT NULL DEFAULT false,
+      comments_enabled boolean NOT NULL DEFAULT true,
       created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())
   `);
-  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS posts_locale_slug_idx ON posts (locale, slug)`);
+  // @ai-note Partial: '' means "no slug yet" (a DE-first draft without an EN
+  // title), and any number of such drafts may coexist (issue #119). Existing
+  // databases carry the older non-partial form and are migrated below.
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS posts_locale_slug_idx ON posts (locale, slug) WHERE slug <> ''`);
   await pool.query(`CREATE INDEX IF NOT EXISTS posts_translation_key_idx ON posts (translation_key)`);
   // @ai-note published_snapshot separates the LIVE content from the working
   // copy: publish() copies the row's working columns into it, and the site
@@ -75,6 +84,23 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   // an unrelated rebuild (issue #20). Additive, idempotent migration.
   await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS published_snapshot jsonb`);
   await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS published_at timestamptz`);
+  await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS categories text[] NOT NULL DEFAULT '{}'`);
+  await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}'`);
+  await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS scheduled_at timestamptz`);
+  // @ai-note "Use as homepage cover" (the homepage picks the NEWEST flagged
+  // published entry and falls back to the newest entry overall). Deliberately
+  // NOT unique: several posts may carry the flag, so setting it on one post
+  // never mutates another — no cross-post write, no race. false is the
+  // fail-safe default, so every pre-existing row stays "not the cover".
+  // @ai-warning This ALTER must stay ABOVE the published_snapshot backfill
+  // below: that UPDATE expands POST_SNAPSHOT_SQL, which names `featured`, and
+  // Postgres rejects the statement at analysis time on a database that does
+  // not have the column yet — even when no row matches its WHERE. Same reason
+  // categories/tags/scheduled_at are migrated here rather than in the column
+  // migrations section at the bottom of this function.
+  await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS featured boolean NOT NULL DEFAULT false`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS posts_categories_idx ON posts USING gin (categories)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS posts_tags_idx ON posts USING gin (tags)`);
   // One-time backfill for rows published before the column existed. The
   // `published_snapshot IS NULL` guard makes re-runs no-ops, so a working copy
   // edited after the first backfill is never promoted into the snapshot.
@@ -100,6 +126,12 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS post_revisions_tk_saved_idx ON post_revisions (translation_key, saved_at DESC)`);
+  // #137: revisions must not outlive their post. pgPostStore.remove now deletes
+  // them with the post, but rows deleted before that change (and a dump restored
+  // over a database that still holds revisions — dumps carry none) left
+  // full-body snapshots readable forever. Sweep orphans once per boot; a no-op
+  // on a consistent database, indexed on translation_key.
+  await pool.query(`DELETE FROM post_revisions r WHERE NOT EXISTS (SELECT 1 FROM posts p WHERE p.translation_key = r.translation_key)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pages (
       key           text NOT NULL,
@@ -119,6 +151,21 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
      ON CONFLICT (key, locale) DO NOTHING`,
     [ABOUT_SEED.de.title, ABOUT_SEED.de.body, ABOUT_SEED.en.title, ABOUT_SEED.en.body],
   );
+  // @ai-note page_revisions mirrors post_revisions for pages (issue #141):
+  // whole-pair {de, en} snapshots taken just before a save overwrites the
+  // stored page, capped at REVISION_CAP per key by pgPageStore.save, and
+  // likewise excluded from the scheduled dumps (backup.ts keeps its fixed table
+  // list). Pages are never deleted, so no orphan sweep is needed. Additive,
+  // idempotent migration.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS page_revisions (
+      id       uuid PRIMARY KEY,
+      key      text NOT NULL,
+      snapshot jsonb NOT NULL,
+      saved_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS page_revisions_key_saved_idx ON page_revisions (key, saved_at DESC)`);
 
   // @ai-note The media library (issue #64). A `media` row is metadata ABOUT a
   // file under STORAGE_DIR — the filesystem stays the source of truth for a
@@ -158,6 +205,10 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       lens          text,
       lat           double precision,
       lng           double precision,
+      format        text CHECK (format IS NULL OR format = 'jpeg'),
+      encoding      jsonb,
+      CONSTRAINT media_encoding_check
+        CHECK (format IS NULL OR COALESCE(encoding ->> 'convertJpeg' = 'false', false)),
       uploaded_at   timestamptz NOT NULL DEFAULT now(),
       uploaded_by   uuid REFERENCES users(id) ON DELETE SET NULL
     )
@@ -178,6 +229,33 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       created_at timestamptz NOT NULL DEFAULT now()
     )
   `);
+  // @ai-note import_jobs (issue #92) is OPERATIONAL state, not content: the
+  // progress and outcome of WordPress imports, so GET /import/status can tell
+  // the truth across a restart. Deliberately excluded from the DB backup and
+  // untouched by restore; pruned to the newest rows on insert (import-jobs.ts).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS import_jobs (
+      id          uuid PRIMARY KEY,
+      status      text NOT NULL CHECK (status IN ('running','done','failed','interrupted')),
+      started_by  text NOT NULL,
+      started_at  timestamptz NOT NULL DEFAULT now(),
+      updated_at  timestamptz NOT NULL DEFAULT now(),
+      finished_at timestamptz,
+      progress    jsonb NOT NULL,
+      summary     jsonb,
+      error       text
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS import_jobs_started_idx ON import_jobs (started_at DESC)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_secrets (
+      key TEXT PRIMARY KEY,
+      ciphertext TEXT NOT NULL,
+      iv TEXT NOT NULL,
+      tag TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
 
   // --- column migrations -----------------------------------------------------
   // @ai-note Schema evolution convention (issue #32): `CREATE TABLE IF NOT
@@ -194,4 +272,131 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   // the ALTER fails on populated tables. Never edit or reorder past
   // migrations; only append. No migration framework / schema_version table
   // by design — see ARCHITECTURE.md "Data model (Postgres)".
+
+  // @ai-note Identity invariant (issue #106): a post pair is exactly one row
+  // per (translation_key, locale). pgPostStore.upsertDraft writes by that key
+  // (UPDATE ... WHERE translation_key AND locale), so a slug rename can no
+  // longer leave the old-slug row behind; this unique index makes the
+  // invariant hold at the schema level too. Databases written before #106 may
+  // already carry duplicate rows — CREATE UNIQUE INDEX would fail the whole
+  // boot on them, and deleting rows here is out of the question (Golden Rule
+  // 3: never wipe data automatically). So: report and skip, never delete.
+  const dupes = await pool.query<{ translation_key: string; locale: string; n: number }>(
+    `SELECT translation_key, locale, count(*)::int AS n FROM posts GROUP BY translation_key, locale HAVING count(*) > 1`,
+  );
+  if (dupes.rows.length > 0) {
+    for (const d of dupes.rows) {
+      console.error(`[db] posts has ${d.n} rows for (translation_key=${d.translation_key}, locale=${d.locale})`);
+    }
+    console.error(
+      '[db] posts_tk_locale_idx was NOT created: duplicate (translation_key, locale) rows exist. ' +
+      'Resolve them first — DELETE /posts/:tk drops every row for a key, or by hand keep the row with the newest updated_at per pair — then restart.',
+    );
+  } else {
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS posts_tk_locale_idx ON posts (translation_key, locale)`);
+  }
+
+  // @ai-note Empty slug = unset (issue #119). posts_locale_slug_idx predates
+  // the WHERE clause on databases created before #119; the non-partial form
+  // treats '' as a real slug and rejects the second DE-first draft. Swap it in
+  // one transaction so a crash between DROP and CREATE cannot leave the slug
+  // backstop missing. Idempotent: a partial index is left alone. Nothing to
+  // reconcile — the old index already guaranteed at most one '' row per locale.
+  const slugIdx = await pool.query<{ indexdef: string }>(
+    `SELECT indexdef FROM pg_indexes WHERE tablename = 'posts' AND indexname = 'posts_locale_slug_idx'`,
+  );
+  if (slugIdx.rows[0] && !/\bWHERE\b/i.test(slugIdx.rows[0].indexdef)) {
+    await pool.query(
+      `BEGIN;
+       DROP INDEX posts_locale_slug_idx;
+       CREATE UNIQUE INDEX posts_locale_slug_idx ON posts (locale, slug) WHERE slug <> '';
+       COMMIT`,
+    );
+  }
+
+  // Image conversion profiles are snapped per media row. NULL is the legacy
+  // AVIF+WebP/default-quality state, so existing rows need no rewrite.
+  await pool.query(`ALTER TABLE media ADD COLUMN IF NOT EXISTS format text`);
+  await pool.query(`ALTER TABLE media ADD COLUMN IF NOT EXISTS encoding jsonb`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = 'media'::regclass AND conname = 'media_format_check'
+      ) THEN
+        ALTER TABLE media ADD CONSTRAINT media_format_check CHECK (format IS NULL OR format = 'jpeg');
+      END IF;
+    END $$;
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = 'media'::regclass AND conname = 'media_encoding_check'
+      ) THEN
+        ALTER TABLE media ADD CONSTRAINT media_encoding_check
+          CHECK (format IS NULL OR COALESCE(encoding ->> 'convertJpeg' = 'false', false));
+      END IF;
+    END $$;
+  `);
+
+  // @ai-note Reader comments (spec 2026-09-14-comments-design.md, phase 1).
+  // Per-post toggle is SHARED across the pair (written to both locale rows by
+  // upsertDraft); NOT NULL DEFAULT true so existing rows need no rewrite. The
+  // site-wide gate is settings.commentsEnabled (default false).
+  await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS comments_enabled boolean NOT NULL DEFAULT true`);
+  // Keyed by (translation_key, locale) like posts; no FK because posts has no
+  // single-column key for a pair. pgPostStore.remove deletes a post's comments
+  // in the same transaction, and the sweep below removes orphans at boot.
+  // Columns map onto the spec's names: `locale` = posted_locale, `name` =
+  // author_name (kept under the names the public/admin routes already bind).
+  // `email` is legacy and always NULL — the store never writes it; `sender_hash`
+  // is a keyed HMAC of the IP (never the raw IP) for rate limiting only.
+  // @ai-warning The status CHECK is WRITE-ONCE (see the media note): the first
+  // deployment of this table carried IN ('pending','approved'), so the
+  // 4-value constraint is installed by the named-constraint swap below, and
+  // any later widening must go through the same swap, not this CREATE TABLE.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS comments (
+      id              uuid PRIMARY KEY,
+      translation_key text NOT NULL,
+      locale          text NOT NULL CHECK (locale IN ('de','en')),
+      name            text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 80),
+      email           text,
+      body            text NOT NULL CHECK (char_length(body) BETWEEN 1 AND 2000),
+      status          text NOT NULL DEFAULT 'pending',
+      is_author       boolean NOT NULL DEFAULT false,
+      sender_hash     text,
+      created_at      timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT comments_status_check CHECK (status IN ('pending','approved','rejected','spam'))
+    )
+  `);
+  // Legacy table shape (first cut of #204): no is_author, a two-value inline
+  // status CHECK (auto-named comments_status_check by Postgres). Both are
+  // brought up to date idempotently; the swap runs in one transaction so a
+  // crash can never leave the table without a status constraint.
+  await pool.query(`ALTER TABLE comments ADD COLUMN IF NOT EXISTS is_author boolean NOT NULL DEFAULT false`);
+  await pool.query(`
+    DO $$
+    DECLARE def text;
+    BEGIN
+      SELECT pg_get_constraintdef(oid) INTO def FROM pg_constraint
+       WHERE conrelid = 'comments'::regclass AND conname = 'comments_status_check';
+      IF def IS NULL OR def NOT LIKE '%rejected%' OR def NOT LIKE '%spam%' THEN
+        IF def IS NOT NULL THEN
+          ALTER TABLE comments DROP CONSTRAINT comments_status_check;
+        END IF;
+        ALTER TABLE comments ADD CONSTRAINT comments_status_check
+          CHECK (status IN ('pending','approved','rejected','spam'));
+      END IF;
+    END $$;
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS comments_post_idx ON comments (translation_key, locale, status, created_at)`);
+  // Moderation queue: "all pending, newest first" across every post.
+  await pool.query(`CREATE INDEX IF NOT EXISTS comments_status_idx ON comments (status, created_at)`);
+  // Orphan sweep (M13): comments whose post is gone — e.g. a dump restored
+  // over a database whose posts it no longer contains. No-op when consistent.
+  await pool.query(`DELETE FROM comments c WHERE NOT EXISTS (SELECT 1 FROM posts p WHERE p.translation_key = c.translation_key)`);
 }

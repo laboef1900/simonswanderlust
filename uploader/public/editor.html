@@ -7,185 +7,404 @@
     <link rel="stylesheet" href="/admin/admin.css" />
     <link rel="stylesheet" href="/admin/vendor/easymde.min.css" />
   </head>
-  <body>
-    <header class="masthead">
-      <div class="masthead-inner">
-        <nav id="mainnav" aria-label="Admin"></nav>
-        <p class="eyebrow">Expedition Log · Image Station</p>
-        <h1 id="pageTitle">New post</h1>
-        <p class="muted" id="whoami"></p>
-      </div>
+  <body class="editor-page">
+    <header class="cms-page-meta">
+      <h1 id="pageTitle">New post</h1>
     </header>
 
     <main>
-      <!-- Slug / URL preview -->
-      <section class="card">
-        <label for="slugFieldDe">DE slug (auto-derived from DE title · locked once published)</label>
-        <div class="slug-preview">
-          <span class="slug-base">simonswanderlust.com/</span><input id="slugFieldDe" type="text" placeholder="derived-from-de-title" />
-        </div>
-        <label for="slugFieldEn" style="margin-top:0.75rem">EN slug (auto-derived from EN title · locked once published)</label>
-        <div class="slug-preview">
-          <span class="slug-base">simonswanderlust.com/en/</span><input id="slugFieldEn" type="text" placeholder="derived-from-en-title" />
-        </div>
-        <p id="slugError" class="err" style="display:none"></p>
-      </section>
-
-      <!-- Shared frontmatter -->
-      <section class="card">
-        <h2 class="card-heading">Shared frontmatter</h2>
-
-        <label for="fmDate">Date</label>
-        <input id="fmDate" type="date" />
-
-        <label for="fmCountry">Country</label>
-        <input id="fmCountry" type="text" placeholder="e.g. Greece" />
-
-        <label for="fmCountryCode">Country code (2 letters)</label>
-        <input id="fmCountryCode" type="text" maxlength="2" placeholder="GR" style="text-transform:uppercase" />
-
-        <label for="fmRegion">Region</label>
-        <select id="fmRegion">
-          <option value="">— select —</option>
-          <option value="europe">Europe</option>
-          <option value="north-america">North America</option>
-          <option value="south-america">South America</option>
-        </select>
-
-        <div class="form-row-2">
-          <div>
-            <label for="fmLat">Latitude</label>
-            <input id="fmLat" type="number" step="any" placeholder="37.9755" />
-          </div>
-          <div>
-            <label for="fmLng">Longitude</label>
-            <input id="fmLng" type="number" step="any" placeholder="23.7348" />
+      <div class="editor-commandbar" id="editorCommandbar">
+        <div class="editor-commandbar__nav">
+          <a href="/admin/posts.html" class="action-link">Back to Posts</a>
+          <div class="lang-switch-bar" role="tablist" aria-label="Post language">
+            <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">
+              Deutsch <span class="lang-code" aria-hidden="true">DE</span>
+            </button>
+            <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">
+              English <span class="lang-code" aria-hidden="true">EN</span>
+            </button>
           </div>
         </div>
 
-        <label for="fmRoute">Route (optional)</label>
-        <input id="fmRoute" type="text" placeholder="e.g. Athens → Rhodes" />
-
-        <div id="stopsContainer">
-          <p class="section-label" style="margin-top:1.25rem">Stops (optional · mini-map waypoints)</p>
-          <div id="stopsList"></div>
-          <button type="button" id="addStop" class="btn-secondary">+ Add stop</button>
+        <div class="editor-commandbar__status">
+          <p id="localeChip" class="locale-chip" role="status"></p>
+          <p id="actionStatus" class="muted" role="status"></p>
+          <p id="actionError" class="err" role="alert" hidden></p>
         </div>
 
-        <div id="keyFactsContainer">
-          <p class="section-label" style="margin-top:1.25rem">Key facts (optional)</p>
-          <div id="keyFactsList"></div>
-          <button type="button" id="addKeyFact" class="btn-secondary">+ Add key fact</button>
+        <div class="editor-commandbar__actions">
+          <button id="saveDraft" type="button" class="btn-secondary">Save draft</button>
+          <button id="publishBtn" type="button" class="btn-primary-publish">Publish</button>
+          <button
+            id="inspectorToggle"
+            type="button"
+            class="btn-secondary editor-inspector-toggle"
+            aria-controls="editorInspector"
+            aria-expanded="true"
+          >Story details</button>
+          <details class="editor-actions-menu" id="editorActionsMenu">
+            <summary class="btn-secondary editor-actions-menu__trigger">More actions</summary>
+            <div class="editor-actions-menu__panel">
+              <div class="editor-actions-menu__readiness">
+                <p class="section-label">Publish readiness</p>
+                <p id="mobileLocaleChip" class="locale-chip"></p>
+              </div>
+              <button id="reviewStory" type="button" class="btn-secondary" aria-haspopup="dialog" aria-controls="storyReviewDialog">Review story</button>
+              <button id="previewBtn" type="button" class="btn-secondary">Preview</button>
+              <button id="unpublishBtn" type="button" class="btn-secondary" hidden>Unpublish</button>
+            </div>
+          </details>
         </div>
-      </section>
-
-      <!-- DE/EN tabs -->
-      <div class="tabs-bar">
-        <button type="button" class="tab-btn active" data-tab="de">Deutsch (DE)</button>
-        <button type="button" class="tab-btn" data-tab="en">English (EN)</button>
       </div>
 
-      <!-- DE locale -->
-      <section id="tab-de" class="card locale-tab">
-        <h2 class="card-heading">Deutsch</h2>
-
-        <label for="deTitle">Title</label>
-        <input id="deTitle" type="text" placeholder="Reiseberichte aus …" />
-
-        <label for="deExcerpt">Excerpt</label>
-        <textarea id="deExcerpt" rows="3" placeholder="Eine kurze Zusammenfassung…"></textarea>
-
-        <label>Hero image</label>
-        <div class="hero-picker">
-          <input id="deHeroFile" type="file" accept="image/*" />
-          <input id="deHeroAlt" type="text" placeholder="Alt text (DE)" />
-          <button type="button" id="deHeroUpload" class="btn-secondary">Upload hero</button>
-          <button type="button" id="deHeroLibrary" class="btn-secondary">Choose from library</button>
-          <button type="button" id="deHeroSuggest" class="btn-secondary">Suggest alt text</button>
-          <p id="deHeroStatus" class="muted"></p>
-          <input id="deHeroSrc" type="hidden" />
-          <input id="deHeroWidth" type="hidden" />
-          <input id="deHeroHeight" type="hidden" />
-        </div>
-
-        <label>Body (Markdown)</label>
-        <textarea id="deBody"></textarea>
-
-        <div class="body-img-row">
-          <input id="deBodyImgFile" type="file" accept="image/*" />
-          <input id="deBodyImgAlt" type="text" placeholder="Alt text (DE)" />
-          <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert body image</button>
-          <button type="button" id="deBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
-          <p id="deBodyImgStatus" class="muted"></p>
-        </div>
-      </section>
-
-      <!-- EN locale -->
-      <section id="tab-en" class="card locale-tab" style="display:none">
-        <h2 class="card-heading">English</h2>
-
-        <label for="enTitle">Title</label>
-        <input id="enTitle" type="text" placeholder="Travel stories from …" />
-
-        <label for="enExcerpt">Excerpt</label>
-        <textarea id="enExcerpt" rows="3" placeholder="A short summary…"></textarea>
-
-        <label>Hero image</label>
-        <div class="hero-picker">
-          <input id="enHeroFile" type="file" accept="image/*" />
-          <input id="enHeroAlt" type="text" placeholder="Alt text (EN)" />
-          <button type="button" id="enHeroUpload" class="btn-secondary">Upload hero</button>
-          <button type="button" id="enHeroLibrary" class="btn-secondary">Choose from library</button>
-          <button type="button" id="enHeroSuggest" class="btn-secondary">Suggest alt text</button>
-          <p id="enHeroStatus" class="muted"></p>
-          <input id="enHeroSrc" type="hidden" />
-          <input id="enHeroWidth" type="hidden" />
-          <input id="enHeroHeight" type="hidden" />
-        </div>
-
-        <label>Body (Markdown)</label>
-        <textarea id="enBody"></textarea>
-
-        <div class="body-img-row">
-          <input id="enBodyImgFile" type="file" accept="image/*" />
-          <input id="enBodyImgAlt" type="text" placeholder="Alt text (EN)" />
-          <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert body image</button>
-          <button type="button" id="enBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
-          <p id="enBodyImgStatus" class="muted"></p>
-        </div>
-      </section>
-
-      <!-- Actions -->
-      <div class="editor-actions card">
-        <button id="saveDraft">Save draft</button>
-        <button id="previewBtn" type="button" class="btn-secondary">Open preview</button>
-        <button id="publishBtn" class="btn-publish">Publish</button>
-        <p id="actionStatus" class="muted"></p>
-        <p id="actionError" class="err" style="display:none"></p>
+      <!-- Alt-text audit (advisory) — photos that reach a reader with no
+           description, per src/alt-audit.ts. It is a WARNING: nothing here
+           disables Publish, and the copy says so. Each entry is a real button
+           that jumps to the control which fixes that photo, next to its
+           "Suggest alt text" button. -->
+      <div id="altAudit" class="notice-warn alt-audit" hidden>
+        <p id="altAuditSummary" role="status"></p>
+        <ul id="altAuditList" class="alt-audit-list"></ul>
       </div>
 
-      <!-- Revisions (issue #28): snapshots of what each save overwrote -->
-      <section class="card" id="revisionsCard" style="display:none">
-        <h2 class="card-heading">Revisions</h2>
-        <p class="muted">Each save keeps a snapshot of what it overwrote (newest first, last 20 kept). Restoring only fills the editor — review, then Save draft to keep it.</p>
-        <ul id="revisionsList" class="revisions-list"></ul>
-        <p id="revisionsEmpty" class="muted" style="display:none">No revisions yet — one appears each time a save overwrites this post.</p>
-      </section>
+      <div class="editor-workspace" id="editorWorkspace">
+        <div class="editor-canvas editor-writing-surface" id="editorWritingSurface">
+          <section id="tab-de" class="locale-tab" role="tabpanel" aria-labelledby="tabbtn-de">
+            <div class="editor-card editor-writing-surface__title">
+              <label for="deTitle">Article title (Deutsch)</label>
+              <input id="deTitle" type="text" class="editor-title-input" placeholder="Titel des Reiseberichts…" />
+            </div>
 
-      <div class="route" aria-hidden="true">
-        <span class="dot"></span><span class="seg"></span>
-        <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14 L14 2 M14 2 h-5 M14 2 v5" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>
-        <span class="seg"></span><span class="ring"></span>
+            <div class="editor-card editor-writing-surface__body">
+              <div class="editor-card-header">
+                <h2 class="editor-card-title">Story (Deutsch)</h2>
+              </div>
+              <label for="deBody" hidden>Body (Markdown)</label>
+              <textarea id="deBody" aria-label="Body (Markdown, DE)"></textarea>
+              <div class="body-img-row editor-media-toolbar">
+                <input id="deBodyImgFile" type="file" accept="image/*" aria-label="Body image file (DE)" />
+                <input id="deBodyImgAlt" type="text" placeholder="Alt text for body image (DE)" aria-label="Alt text for body image (DE)" />
+                <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert image</button>
+                <button type="button" id="deBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
+                <button type="button" id="deGallery" class="btn-secondary">Insert / edit gallery</button>
+                <p id="deBodyImgStatus" class="muted" role="status"></p>
+              </div>
+            </div>
+          </section>
+
+          <section id="tab-en" class="locale-tab" role="tabpanel" aria-labelledby="tabbtn-en" hidden>
+            <div class="editor-card editor-writing-surface__title">
+              <label for="enTitle">Article title (English)</label>
+              <input id="enTitle" type="text" class="editor-title-input" placeholder="Trip report title…" />
+            </div>
+
+            <div class="editor-card editor-writing-surface__body">
+              <div class="editor-card-header">
+                <h2 class="editor-card-title">Story (English)</h2>
+              </div>
+              <label for="enBody" hidden>Body (Markdown)</label>
+              <textarea id="enBody" aria-label="Body (Markdown, EN)"></textarea>
+              <div class="body-img-row editor-media-toolbar">
+                <input id="enBodyImgFile" type="file" accept="image/*" aria-label="Body image file (EN)" />
+                <input id="enBodyImgAlt" type="text" placeholder="Alt text for body image (EN)" aria-label="Alt text for body image (EN)" />
+                <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert image</button>
+                <button type="button" id="enBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
+                <button type="button" id="enGallery" class="btn-secondary">Insert / edit gallery</button>
+                <p id="enBodyImgStatus" class="muted" role="status"></p>
+              </div>
+            </div>
+          </section>
+
+          <p id="slugError" class="err" hidden></p>
+        </div>
+
+        <button
+          type="button"
+          class="editor-inspector-scrim"
+          id="inspectorScrim"
+          aria-label="Close story details"
+          hidden
+        ></button>
+
+        <aside
+          class="editor-sidebar editor-inspector"
+          id="editorInspector"
+          aria-labelledby="inspectorHeading"
+        >
+          <header class="editor-inspector__header">
+            <h2 id="inspectorHeading">Story details</h2>
+            <button type="button" class="btn-secondary editor-inspector-close" id="inspectorClose">Close</button>
+          </header>
+
+          <section class="editor-inspector-locale" data-inspector-locale="de" aria-labelledby="deStoryDetailsHeading">
+            <div class="editor-inspector-group" id="deStoryDetails">
+              <h3 class="editor-card-title" id="deStoryDetailsHeading">German story details</h3>
+              <label for="deCountry">Country (Deutsch)</label>
+              <input id="deCountry" type="text" placeholder="z. B. Griechenland" />
+
+              <label for="slugFieldDe">DE permalink</label>
+              <div class="slug-preview">
+                <span class="slug-base">simonswanderlust.com/</span>
+                <input id="slugFieldDe" type="text" placeholder="derived-from-de-title" />
+              </div>
+
+              <label for="deExcerpt">Excerpt / summary (DE)</label>
+              <textarea id="deExcerpt" rows="3" placeholder="Eine kurze Zusammenfassung des Reiseberichts…"></textarea>
+
+              <div id="deKeyFactsContainer" class="keyfacts-editor">
+                <p class="section-label">Key facts (DE)</p>
+                <div id="deKeyFactsList"></div>
+                <button type="button" id="deAddKeyFact" class="btn-secondary">Add key fact</button>
+              </div>
+            </div>
+
+            <section class="editor-inspector-group" id="deHeroDetails" aria-labelledby="deHeroLabel">
+              <h3 class="editor-card-title" id="deHeroLabel">Hero image (DE)</h3>
+              <div class="hero-picker hero-banner-zone">
+                <div class="hero-compact-preview" id="deHeroPreview" hidden>
+                  <img id="deHeroPreviewImg" alt="" />
+                </div>
+                <label for="deHeroAlt">Hero alt text (DE)</label>
+                <div class="hero-alt-row">
+                  <input id="deHeroAlt" type="text" maxlength="1000" placeholder="Describe the hero image in German" />
+                  <button type="button" id="deHeroSuggest" class="btn-secondary">Suggest alt text</button>
+                </div>
+                <p id="deHeroStatus" class="muted" role="status"></p>
+
+                <details class="editor-disclosure hero-replace" id="deHeroReplace">
+                  <summary>Replace photo</summary>
+                  <label class="hero-drop" for="deHeroFile">
+                    <span class="hero-drop-copy">Drop a photo or browse</span>
+                    <input id="deHeroFile" type="file" accept="image/*" class="hero-drop-input" />
+                  </label>
+                  <div class="hero-actions-row">
+                    <button type="button" id="deHeroUpload" class="btn-secondary">Upload hero</button>
+                    <button type="button" id="deHeroLibrary" class="btn-secondary">Choose from library</button>
+                  </div>
+                </details>
+
+                <details class="editor-disclosure hero-focus" id="deHeroFocus" hidden>
+                  <summary>Adjust framing</summary>
+                  <div class="hero-focus-frame" id="deHeroFocusFrame">
+                    <img id="deHeroFocusImg" alt="" />
+                    <span class="hero-focus-crop" id="deHeroFocusCrop" aria-hidden="true"></span>
+                    <span class="hero-focus-dot" id="deHeroFocusDot" aria-hidden="true"></span>
+                  </div>
+                  <p class="muted">
+                    The reader's phone crops this photo to a tall box and keeps barely half its
+                    width. Choose what stays in frame; the outline shows the phone crop.
+                  </p>
+                  <label for="deHeroFocusX">Horizontal <output id="deHeroFocusXOut" for="deHeroFocusX">50%</output></label>
+                  <input id="deHeroFocusX" type="range" min="0" max="100" step="1" value="50" />
+                  <label for="deHeroFocusY">Vertical <output id="deHeroFocusYOut" for="deHeroFocusY">50%</output></label>
+                  <input id="deHeroFocusY" type="range" min="0" max="100" step="1" value="50" />
+                  <div class="hero-actions-row">
+                    <button type="button" id="deHeroFocusReset" class="btn-secondary">Reset to centre</button>
+                  </div>
+                </details>
+                <input id="deHeroSrc" type="hidden" />
+                <input id="deHeroWidth" type="hidden" />
+                <input id="deHeroHeight" type="hidden" />
+                <input id="deHeroFormat" type="hidden" />
+              </div>
+            </section>
+          </section>
+
+          <section class="editor-inspector-locale" data-inspector-locale="en" aria-labelledby="enStoryDetailsHeading" hidden>
+            <div class="editor-inspector-group" id="enStoryDetails">
+              <h3 class="editor-card-title" id="enStoryDetailsHeading">English story details</h3>
+              <label for="enCountry">Country (English)</label>
+              <input id="enCountry" type="text" placeholder="e.g. Greece" />
+
+              <label for="slugFieldEn">EN permalink</label>
+              <div class="slug-preview">
+                <span class="slug-base">simonswanderlust.com/en/</span>
+                <input id="slugFieldEn" type="text" placeholder="derived-from-en-title" />
+              </div>
+
+              <label for="enExcerpt">Excerpt / summary (EN)</label>
+              <textarea id="enExcerpt" rows="3" placeholder="A short summary of the trip report…"></textarea>
+
+              <div id="enKeyFactsContainer" class="keyfacts-editor">
+                <p class="section-label">Key facts (EN)</p>
+                <div id="enKeyFactsList"></div>
+                <button type="button" id="enAddKeyFact" class="btn-secondary">Add key fact</button>
+              </div>
+            </div>
+
+            <section class="editor-inspector-group" id="enHeroDetails" aria-labelledby="enHeroLabel">
+              <h3 class="editor-card-title" id="enHeroLabel">Hero image (EN)</h3>
+              <div class="hero-picker hero-banner-zone">
+                <div class="hero-compact-preview" id="enHeroPreview" hidden>
+                  <img id="enHeroPreviewImg" alt="" />
+                </div>
+                <label for="enHeroAlt">Hero alt text (EN)</label>
+                <div class="hero-alt-row">
+                  <input id="enHeroAlt" type="text" maxlength="1000" placeholder="Describe the hero image in English" />
+                  <button type="button" id="enHeroSuggest" class="btn-secondary">Suggest alt text</button>
+                </div>
+                <p id="enHeroStatus" class="muted" role="status"></p>
+
+                <details class="editor-disclosure hero-replace" id="enHeroReplace">
+                  <summary>Replace photo</summary>
+                  <label class="hero-drop" for="enHeroFile">
+                    <span class="hero-drop-copy">Drop a photo or browse</span>
+                    <input id="enHeroFile" type="file" accept="image/*" class="hero-drop-input" />
+                  </label>
+                  <div class="hero-actions-row">
+                    <button type="button" id="enHeroUpload" class="btn-secondary">Upload hero</button>
+                    <button type="button" id="enHeroLibrary" class="btn-secondary">Choose from library</button>
+                  </div>
+                </details>
+
+                <details class="editor-disclosure hero-focus" id="enHeroFocus" hidden>
+                  <summary>Adjust framing</summary>
+                  <div class="hero-focus-frame" id="enHeroFocusFrame">
+                    <img id="enHeroFocusImg" alt="" />
+                    <span class="hero-focus-crop" id="enHeroFocusCrop" aria-hidden="true"></span>
+                    <span class="hero-focus-dot" id="enHeroFocusDot" aria-hidden="true"></span>
+                  </div>
+                  <p class="muted">
+                    The reader's phone crops this photo to a tall box and keeps barely half its
+                    width. Choose what stays in frame; the outline shows the phone crop.
+                  </p>
+                  <label for="enHeroFocusX">Horizontal <output id="enHeroFocusXOut" for="enHeroFocusX">50%</output></label>
+                  <input id="enHeroFocusX" type="range" min="0" max="100" step="1" value="50" />
+                  <label for="enHeroFocusY">Vertical <output id="enHeroFocusYOut" for="enHeroFocusY">50%</output></label>
+                  <input id="enHeroFocusY" type="range" min="0" max="100" step="1" value="50" />
+                  <div class="hero-actions-row">
+                    <button type="button" id="enHeroFocusReset" class="btn-secondary">Reset to centre</button>
+                  </div>
+                </details>
+                <input id="enHeroSrc" type="hidden" />
+                <input id="enHeroWidth" type="hidden" />
+                <input id="enHeroHeight" type="hidden" />
+                <input id="enHeroFormat" type="hidden" />
+              </div>
+            </section>
+          </section>
+
+          <details class="editor-inspector-group" id="expeditionDetails">
+            <summary class="editor-card-title">Expedition details</summary>
+            <label for="fmDate">Trip date</label>
+            <input id="fmDate" type="date" />
+
+            <div class="form-row-2">
+              <div>
+                <label for="fmCountryCode">Country (ISO)</label>
+                <input id="fmCountryCode" type="text" maxlength="2" placeholder="GR" />
+              </div>
+              <div>
+                <label for="fmRegion">Region</label>
+                <select id="fmRegion">
+                  <option value="">— Select —</option>
+                  <option value="europe">Europe</option>
+                  <option value="north-america">North America</option>
+                  <option value="south-america">South America</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row-2">
+              <div>
+                <label for="fmLat">Latitude</label>
+                <input id="fmLat" type="number" step="any" placeholder="37.9755" />
+              </div>
+              <div>
+                <label for="fmLng">Longitude</label>
+                <input id="fmLng" type="number" step="any" placeholder="23.7348" />
+              </div>
+            </div>
+
+            <label for="fmRoute">Route</label>
+            <input id="fmRoute" type="text" placeholder="e.g. Athens → Rhodes" />
+
+            <label class="check-field" for="fmFeatured">
+              <input type="checkbox" id="fmFeatured" aria-describedby="fmFeaturedHint" />
+              Use as homepage cover
+            </label>
+            <p class="muted" id="fmFeaturedHint">
+              The newest flagged story becomes the homepage cover. With nothing flagged, the newest
+              story is used.
+            </p>
+
+            <label class="check-field" for="fmCommentsEnabled">
+              <input type="checkbox" id="fmCommentsEnabled" checked aria-describedby="fmCommentsHint" />
+              Allow comments on this trip
+            </label>
+            <p class="muted" id="fmCommentsHint">
+              Comments appear only when an admin has also switched them on in Settings. Saved with the draft; no rebuild.
+            </p>
+
+            <div id="stopsContainer">
+              <p class="section-label">Waypoints / stops</p>
+              <div id="stopsList"></div>
+              <button type="button" id="addStop" class="btn-secondary">Add stop</button>
+            </div>
+          </details>
+
+          <details class="editor-inspector-group" id="taxonomyDetails">
+            <summary class="editor-card-title">Taxonomy</summary>
+            <label for="fmCategories">Categories</label>
+            <input id="fmCategories" type="text" placeholder="Expedition, Photography" />
+            <label for="fmTags">Tags</label>
+            <input id="fmTags" type="text" placeholder="Leica Q2, Greece" />
+          </details>
+
+          <details class="editor-inspector-group" id="revisionsCard" hidden>
+            <summary class="editor-card-title">Revisions</summary>
+            <p class="muted">Snapshots overwritten on save (last 20 kept).</p>
+            <ul id="revisionsList" class="revisions-list"></ul>
+            <p id="revisionsEmpty" class="muted" hidden>No revisions yet.</p>
+          </details>
+        </aside>
       </div>
     </main>
 
+    <dialog id="storyReviewDialog" class="story-review" aria-labelledby="storyReviewHeading" aria-describedby="reviewAdvisory">
+      <header class="story-review__header">
+        <div>
+          <h2 id="storyReviewHeading">Story review</h2>
+          <p id="reviewLocale" class="muted"></p>
+        </div>
+        <button id="closeReview" type="button" class="btn-secondary" autofocus>Close review</button>
+      </header>
+      <div class="story-review__body">
+        <p id="reviewAdvisory" class="story-review__advisory">A snapshot of this language’s unsaved draft. Suggestions are advisory: nothing is saved or published, and body text is never replaced.</p>
+        <section class="story-review__section" aria-labelledby="reviewInstantHeading">
+          <h3 id="reviewInstantHeading">Quick checks</h3>
+          <div id="reviewInstant" class="review-results"></div>
+        </section>
+        <section class="story-review__section" aria-labelledby="reviewSemanticHeading">
+          <h3 id="reviewSemanticHeading">Editorial suggestions</h3>
+          <div id="reviewStatus" class="review-status" role="status" aria-live="polite" aria-atomic="true"></div>
+          <div id="reviewSemantic" class="review-results"></div>
+        </section>
+      </div>
+      <footer class="story-review__footer">
+        <p class="muted">Check suggestions for accuracy before applying.</p>
+        <button id="runReview" type="button" class="btn-secondary">Review again</button>
+      </footer>
+    </dialog>
+
     <script src="/admin/auth.js"></script>
+    <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/draft-guard.js"></script>
     <script src="/admin/vendor/easymde.min.js"></script>
     <script src="/admin/llm.js"></script>
     <script src="/admin/alt-suggest.js"></script>
     <script src="/admin/media-api.js"></script>
+    <script src="/admin/picker-selection.js"></script>
     <script src="/admin/media-picker.js"></script>
+    <script src="/admin/gallery-fence.js"></script>
+    <script src="/admin/editor-linter.js"></script>
+    <script src="/admin/editor-review.js"></script>
+    <script src="/admin/image-markdown.js"></script>
+    <!-- PostsFilter.thumbUrl(): the hero focal-point control needs the same
+         never-upscale variant rule the posts list uses. -->
+    <script src="/admin/posts-filter.js"></script>
+    <script src="/admin/tabs.js"></script>
+    <script src="/admin/editor-inspector.js"></script>
     <script>
       'use strict';
       const $ = (id) => document.getElementById(id);
@@ -196,6 +415,8 @@
       // updatedAt of the pair as loaded/last saved in THIS tab. Echoed back on
       // every save so the server can 409 when another tab/user saved meanwhile.
       let loadedUpdatedAt = null;
+      let storyReview = null;
+      let reviewIsAdmin = false;
       const deImages = {};        // src → {width, height}
       const enImages = {};
 
@@ -228,60 +449,138 @@
         autosave: { enabled: false },
         toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'],
       });
+      // EasyMDE hides the labelled <textarea> and types into CodeMirror's own
+      // input, which starts nameless — a screen reader would hear "edit text".
+      deMDE.codemirror.getInputField().setAttribute('aria-label', 'Body (Markdown, DE)');
+      enMDE.codemirror.getInputField().setAttribute('aria-label', 'Body (Markdown, EN)');
 
       // ---- draft guard: dirty tracking, beforeunload warning, local autosave ----
+      const initialTk = new URLSearchParams(location.search).get('tk');
       const guard = DraftGuard.createDraftGuard({
-        storageKey: 'swl:draft:' + (new URLSearchParams(location.search).get('tk') || 'new'),
+        // A new post stashes under a per-tab key; otherwise two new-post tabs
+        // share one and the first save deletes the other's work (#138).
+        storageKey: initialTk ? 'swl:draft:' + initialTk : DraftGuard.tabScopedKey('swl:draft:new'),
+        ...(initialTk ? {} : { orphanPrefix: 'swl:draft:new' }),
         collect: () => buildPayload(),
       });
       // Delegated listeners cover every static field plus dynamic key-fact rows;
       // the EasyMDE bodies live in CodeMirror and need their own change hooks.
       const mainEl = document.querySelector('main');
-      mainEl.addEventListener('input', () => guard.markDirty());
-      mainEl.addEventListener('change', () => guard.markDirty());
-      deMDE.codemirror.on('change', () => guard.markDirty());
-      enMDE.codemirror.on('change', () => guard.markDirty());
+      mainEl.addEventListener('input', () => { guard.markDirty(); storyReview?.invalidate(); });
+      deMDE.codemirror.on('change', () => { guard.markDirty(); storyReview?.invalidate(); updateLocaleChip(); });
+      enMDE.codemirror.on('change', () => { guard.markDirty(); storyReview?.invalidate(); updateLocaleChip(); });
+
+      // ---- responsive story inspector ----
+      const inspectorApi = EditorInspector.wire({
+        body: document.body,
+        inspector: $('editorInspector'),
+        toggle: $('inspectorToggle'),
+        closeButton: $('inspectorClose'),
+        scrim: $('inspectorScrim'),
+        writingSurface: $('editorWritingSurface'),
+        commandbar: $('editorCommandbar'),
+      });
+      $('editorActionsMenu').addEventListener('click', (event) => {
+        const action = event.target.closest('button');
+        // Review restores focus to its trigger when the modal closes. Keep the
+        // disclosure open so that return target stays visible and keyboard-safe.
+        if (action && action.id !== 'reviewStory') $('editorActionsMenu').open = false;
+      });
 
       // ---- tabs ----
-      let activeTab = 'de'; // which locale "Open preview" shows
-      document.querySelectorAll('.tab-btn').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
-          btn.classList.add('active');
-          const tab = btn.dataset.tab;
-          activeTab = tab;
-          $('tab-de').style.display = tab === 'de' ? '' : 'none';
-          $('tab-en').style.display = tab === 'en' ? '' : 'none';
-          // CodeMirror can't measure width when the panel is hidden; refresh on reveal
-          if (tab === 'en') enMDE.codemirror.refresh();
-          if (tab === 'de') deMDE.codemirror.refresh();
+      let activeTab = 'de';
+      function syncInspectorLocale(tab) {
+        document.querySelectorAll('[data-inspector-locale]').forEach((panel) => {
+          panel.hidden = panel.dataset.inspectorLocale !== tab;
         });
+      }
+      function activateLocale(tab) {
+        storyReview?.invalidate();
+        activeTab = tab;
+        syncInspectorLocale(tab);
+        (tab === 'en' ? enMDE : deMDE).codemirror.refresh();
+      }
+      const tabsApi = Tabs.wire(document.querySelector('[role="tablist"]'), {
+        onChange: activateLocale,
       });
+      syncInspectorLocale(activeTab);
 
       // ---- slug derivation from locale titles ----
-      $('deTitle').addEventListener('input', () => {
-        if (isPublished) return;
-        $('slugFieldDe').value = slugify($('deTitle').value);
-      });
-      $('enTitle').addEventListener('input', () => {
-        if (isPublished) return;
-        $('slugFieldEn').value = slugify($('enTitle').value);
+      // @ai-warning Golden Rule 2 (SEO slug contract). A slug is derived from
+      // the title ONLY while it is still automatic: a new post starts
+      // automatic, typing into the slug field makes it manual, clearing the
+      // field makes it automatic again — and populateForm() marks any loaded
+      // slug (server post, revision, local stash) manual. Before #122 every
+      // title keystroke overwrote the slug of an unpublished post, so fixing a
+      // typo in an imported draft's title silently replaced its live
+      // WordPress slug.
+      const slugAuto = { de: true, en: true };
+      // Slugs as loaded from the server for the current post ('' = none yet);
+      // a save that changes one of these asks for confirmation (see doSaveDraft).
+      const loadedSlugs = { de: '', en: '' };
+      const slugFieldFor = (locale) => $(locale === 'de' ? 'slugFieldDe' : 'slugFieldEn');
+      for (const locale of ['de', 'en']) {
+        $(locale + 'Title').addEventListener('input', () => {
+          if (isPublished || !slugAuto[locale]) return;
+          slugFieldFor(locale).value = slugify($(locale + 'Title').value);
+        });
+        slugFieldFor(locale).addEventListener('input', () => {
+          slugAuto[locale] = slugFieldFor(locale).value.trim() === '';
+        });
+      }
+
+      // Capture the live CodeMirror value, not its hidden textarea or a save payload.
+      storyReview = EditorReview.create({
+        capture: () => ({
+          identity: currentTk,
+          story: {
+            locale: activeTab,
+            title: $(activeTab + 'Title').value,
+            excerpt: $(activeTab + 'Excerpt').value,
+            markdown: (activeTab === 'en' ? enMDE : deMDE).value(),
+            heroAlt: $(activeTab + 'HeroAlt').value,
+            heroSrc: $(activeTab + 'HeroSrc').value,
+          },
+        }),
+        isCurrent: (snapshot) => snapshot.identity === currentTk && snapshot.story.locale === activeTab,
+        apply: (locale, field, value) => {
+          const input = $(locale + (field === 'title' ? 'Title' : 'Excerpt'));
+          input.value = value;
+          // Reuse both dirty tracking and #122's loaded/manual/automatic slug rules.
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        },
+        jump: (locale, finding) => {
+          if (finding.target === 'hero') {
+            jumpToGap(locale, 'hero alt');
+          } else {
+            if (tabsApi && tabsApi.select) tabsApi.select(locale);
+            activateLocale(locale);
+            inspectorApi.close();
+            const cm = (locale === 'en' ? enMDE : deMDE).codemirror;
+            cm.setCursor({ line: finding.line - 1, ch: 0 });
+            cm.focus();
+          }
+        },
+        on401: () => guard.redirectToLogin(),
+        isAdmin: () => reviewIsAdmin,
       });
 
-      // ---- key facts (optional rows) ----
-      function addKeyFactRow(label = '', value = '') {
+      // ---- key facts (optional rows, per locale) ----
+      function addKeyFactRow(locale, label = '', value = '') {
         const row = document.createElement('div');
         row.className = 'keyfact-row';
 
         const lInput = document.createElement('input');
         lInput.type = 'text';
         lInput.placeholder = 'Label';
+        lInput.setAttribute('aria-label', 'Key fact label (' + locale.toUpperCase() + ')');
         lInput.className = 'keyfact-label';
         lInput.value = label;
 
         const vInput = document.createElement('input');
         vInput.type = 'text';
         vInput.placeholder = 'Value';
+        vInput.setAttribute('aria-label', 'Key fact value (' + locale.toUpperCase() + ')');
         vInput.className = 'keyfact-value';
         vInput.value = value;
 
@@ -289,18 +588,22 @@
         remove.type = 'button';
         remove.className = 'btn-remove';
         remove.textContent = '×';
-        remove.addEventListener('click', () => row.remove());
+        remove.setAttribute('aria-label', 'Remove key fact');
+        // A click fires neither input nor change, so the delegated listeners
+        // on <main> never see a removal (#138).
+        remove.addEventListener('click', () => { row.remove(); guard.markDirty(); });
 
         row.appendChild(lInput);
         row.appendChild(vInput);
         row.appendChild(remove);
-        $('keyFactsList').appendChild(row);
+        $(locale + 'KeyFactsList').appendChild(row);
       }
 
-      $('addKeyFact').addEventListener('click', () => addKeyFactRow());
+      $('deAddKeyFact').addEventListener('click', () => addKeyFactRow('de'));
+      $('enAddKeyFact').addEventListener('click', () => addKeyFactRow('en'));
 
-      function collectKeyFacts() {
-        const rows = $('keyFactsList').querySelectorAll('.keyfact-row');
+      function collectKeyFacts(locale) {
+        const rows = $(locale + 'KeyFactsList').querySelectorAll('.keyfact-row');
         if (!rows.length) return undefined;
         const obj = {};
         rows.forEach((r) => {
@@ -319,6 +622,7 @@
         const nameInput = document.createElement('input');
         nameInput.type = 'text';
         nameInput.placeholder = 'Name';
+        nameInput.setAttribute('aria-label', 'Stop name');
         nameInput.className = 'stop-name';
         nameInput.value = name;
 
@@ -328,6 +632,7 @@
         latInput.min = '-90';
         latInput.max = '90';
         latInput.placeholder = 'Lat';
+        latInput.setAttribute('aria-label', 'Stop latitude');
         latInput.className = 'stop-lat';
         latInput.value = lat;
 
@@ -337,6 +642,7 @@
         lngInput.min = '-180';
         lngInput.max = '180';
         lngInput.placeholder = 'Lng';
+        lngInput.setAttribute('aria-label', 'Stop longitude');
         lngInput.className = 'stop-lng';
         lngInput.value = lng;
 
@@ -344,7 +650,8 @@
         remove.type = 'button';
         remove.className = 'btn-remove';
         remove.textContent = '×';
-        remove.addEventListener('click', () => row.remove());
+        remove.setAttribute('aria-label', 'Remove stop');
+        remove.addEventListener('click', () => { row.remove(); guard.markDirty(); });
 
         row.appendChild(nameInput);
         row.appendChild(latInput);
@@ -408,10 +715,16 @@
           const body = await res.json().catch(() => ({}));
           if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
 
+          storyReview?.invalidate();
           $(locale + 'HeroSrc').value = body.src;
           $(locale + 'HeroWidth').value = body.width;
           $(locale + 'HeroHeight').value = body.height;
+          $(locale + 'HeroFormat').value = body.format || '';
           // Hidden inputs are set programmatically — no input event fires.
+          // A new photo invalidates the old focal point, so recentre before
+          // showing the control for the new frame.
+          HeroFocus.set(locale, 50, 50);
+          HeroFocus.sync(locale);
           guard.markDirty();
           // Encoding is asynchronous now (see server.ts POST /upload): the URL
           // and dimensions are final, but the variants land a few seconds later
@@ -427,6 +740,223 @@
       $('deHeroUpload').addEventListener('click', () => uploadHero('de'));
       $('enHeroUpload').addEventListener('click', () => uploadHero('en'));
 
+      // ---- hero focal point ----
+      // @ai-note The reader's hero is a full-bleed `object-fit: cover` box, so
+      // a phone keeps ~44% of a 3:2 frame's width and the default centre crop
+      // decapitated the subject of both portrait-format heroes in the corpus.
+      // The value round-trips as `heroImage.focus = { x, y }` (percentages);
+      // `heroImageError` in src/body-content.ts validates it and
+      // site/src/lib/images.ts turns it into `object-position`.
+      //
+      // @ai-warning 50/50 is the "unset" value, deliberately: `buildPayload`
+      // omits `focus` when the point is centred, so a post nobody has touched
+      // ships no field and renders exactly as before. Do not add a separate
+      // "has focus" flag — two sources of truth for one state.
+      var HeroFocus = (function () {
+        /** Aspect ratio of the phone hero box (390 × 591), the tightest crop a reader sees. */
+        var CROP_ASPECT = 390 / 591;
+
+        function read(locale) {
+          return {
+            x: parseInt($(locale + 'HeroFocusX').value, 10) || 0,
+            y: parseInt($(locale + 'HeroFocusY').value, 10) || 0,
+          };
+        }
+
+        function paint(locale) {
+          var p = read(locale);
+          $(locale + 'HeroFocusXOut').textContent = p.x + '%';
+          $(locale + 'HeroFocusYOut').textContent = p.y + '%';
+          var dot = $(locale + 'HeroFocusDot');
+          dot.style.left = p.x + '%';
+          dot.style.top = p.y + '%';
+
+          // Where `object-position: x% y%` puts the phone window over the
+          // frame. Expressed as PERCENTAGES of the frame rather than pixels,
+          // so it needs no layout measurement and no resize listener: the
+          // frame's aspect ratio is the photo's, which the hidden dimension
+          // fields already carry. Vertical focus does not move this outline —
+          // the phone crop is height-full on any landscape photo, which is
+          // exactly why it throws away width.
+          var crop = $(locale + 'HeroFocusCrop');
+          var w = parseInt($(locale + 'HeroWidth').value, 10);
+          var h = parseInt($(locale + 'HeroHeight').value, 10);
+          if (!(w > 0) || !(h > 0)) { crop.hidden = true; return; }
+          var widthPct = Math.min(100, (CROP_ASPECT * h * 100) / w);
+          crop.hidden = false;
+          crop.style.width = widthPct + '%';
+          crop.style.left = ((p.x / 100) * (100 - widthPct)) + '%';
+        }
+
+        function set(locale, x, y) {
+          var clamp = function (n) { return Math.max(0, Math.min(100, Math.round(n))); };
+          $(locale + 'HeroFocusX').value = clamp(x);
+          $(locale + 'HeroFocusY').value = clamp(y);
+          paint(locale);
+          guard.markDirty();
+        }
+
+        /** Sync both the compact preview and framing disclosure to the stored hero. */
+        function sync(locale) {
+          var wrap = $(locale + 'HeroFocus');
+          var img = $(locale + 'HeroFocusImg');
+          var preview = $(locale + 'HeroPreview');
+          var previewImg = $(locale + 'HeroPreviewImg');
+          var url = PostsFilter.thumbUrl({
+            heroSrc: $(locale + 'HeroSrc').value,
+            heroWidth: parseInt($(locale + 'HeroWidth').value, 10),
+            heroFormat: $(locale + 'HeroFormat').value || undefined,
+          });
+          if (!url) {
+            wrap.hidden = true;
+            preview.hidden = true;
+            img.removeAttribute('src');
+            previewImg.removeAttribute('src');
+            return;
+          }
+          // A wrong-but-plausible stored width still 404s (see thumbUrl's own
+          // note), so both views hide rather than showing a broken photo.
+          var hideBroken = function () { wrap.hidden = true; preview.hidden = true; };
+          img.onerror = hideBroken;
+          previewImg.onerror = hideBroken;
+          img.onload = function () { paint(locale); };
+          if (img.getAttribute('src') !== url) img.src = url;
+          if (previewImg.getAttribute('src') !== url) previewImg.src = url;
+          wrap.hidden = false;
+          preview.hidden = false;
+          paint(locale);
+        }
+
+        function wire(locale) {
+          ['X', 'Y'].forEach(function (axis) {
+            $(locale + 'HeroFocus' + axis).addEventListener('input', function () {
+              paint(locale);
+              guard.markDirty();
+            });
+          });
+          $(locale + 'HeroFocusFrame').addEventListener('click', function (e) {
+            var box = this.getBoundingClientRect();
+            if (!box.width || !box.height) return;
+            set(locale, ((e.clientX - box.left) / box.width) * 100, ((e.clientY - box.top) / box.height) * 100);
+          });
+          $(locale + 'HeroFocusReset').addEventListener('click', function () { set(locale, 50, 50); });
+        }
+
+        return { wire: wire, sync: sync, read: read, set: set };
+      })();
+
+      ['de', 'en'].forEach(HeroFocus.wire);
+
+      // Layout modes (#66). The labels are the admin's; the VALUES must match
+      // GALLERY_MODES in site/src/lib/gallery-layout.ts, which is what the
+      // renderer accepts — an unknown value silently falls back to the column.
+      const GALLERY_LAYOUTS = [
+        { value: 'column', label: 'Column (text width)' },
+        { value: 'breakout', label: 'Break-out (wide)' },
+        { value: 'slider', label: 'Slider (carousel)' },
+      ];
+
+      // ---- insert or edit a ```gallery block (#75) ----
+      // The picker writes the same line format an author would type by hand;
+      // normalizeGalleryFences lifts it into `images` at save. Nothing here
+      // touches the images map directly — see public/gallery-fence.js.
+      function galleryFor(locale) {
+        const mde = locale === 'de' ? deMDE : enMDE;
+        const cm = mde.codemirror;
+        const body = mde.value();
+        const cursor = cm.indexFromPos(cm.getCursor());
+        const existing = GalleryFence.fenceAt(body, cursor);
+        const current = existing ? GalleryFence.parse(existing.text) : { directives: [], lines: [] };
+
+        // What this post already says about each photo, which must survive a
+        // re-serialize: the fence's own metadata if the author typed some and
+        // has not saved yet, otherwise the `images` entry it was lifted into.
+        // Without this, post-specific alt/caption and the JPEG-only marker can
+        // be overwritten or dropped when the picker refreshes from the library.
+        const images = locale === 'de' ? deImages : enImages;
+        const status = $(locale + 'BodyImgStatus');
+        const postMeta = {};
+        current.lines.forEach((line) => {
+          const stored = images[line.src] || {};
+          const alt = line.alt !== undefined ? line.alt : stored.alt;
+          const caption = line.caption !== undefined ? line.caption : stored.caption;
+          const format = line.format !== undefined ? line.format : stored.format;
+          if (typeof alt !== 'string' && typeof caption !== 'string' && format !== 'jpeg') return;
+          postMeta[line.src] = {};
+          if (typeof alt === 'string') postMeta[line.src].alt = alt;
+          if (typeof caption === 'string') postMeta[line.src].caption = caption;
+          if (format === 'jpeg') postMeta[line.src].format = format;
+        });
+
+        // An unterminated fence's extent runs to end-of-post, so there is no
+        // safe range to replace. Say so instead of eating the rest of the body.
+        if (existing && existing.unterminated) {
+          status.textContent = 'This gallery block has no closing ``` — close it, then try again.';
+          return;
+        }
+
+        // Seed the picker with the gallery's CURRENT photos as full items, built
+        // from the fence plus the post's images map. The library pages 40 at a
+        // time by upload date, so an older post's photos are typically on no page
+        // the author visits — seeding from the post is what keeps them in the
+        // selection (and therefore in the fence) regardless. `fromPost` also tells
+        // serialize to preserve a photo whose dimensions we cannot resolve rather
+        // than dropping it. See the @ai-warning in picker-selection.js.
+        const preselect = current.lines.map((line) => {
+          const stored = images[line.src] || {};
+          return {
+            src: line.src,
+            width: line.width ?? stored.width,
+            height: line.height ?? stored.height,
+            fromPost: true,
+            format: line.format ?? stored.format,
+          };
+        });
+
+        MediaPicker.open({
+          multiple: true,
+          preselect,
+          layouts: GALLERY_LAYOUTS,
+          layout: GalleryFence.layoutOf(current.directives),
+          confirmLabel: existing ? 'Update gallery' : 'Insert gallery',
+          emptyHint: existing
+            ? 'Nothing selected — confirming now removes this gallery.'
+            : 'Nothing selected yet — click photos above.',
+          onUnauthed: () => guard.redirectToLogin(),
+          onPick: (items, opts) => {
+            // Only the LAYOUT directive is rewritten; every other `#` line the
+            // author typed is carried through verbatim, and a gallery whose
+            // layout was not touched comes back byte-identical (withLayout
+            // writes nothing for the default mode).
+            const directives = GalleryFence.withLayout(current.directives, (opts || {}).layout);
+            // An empty selection means "remove the block", so emit no fence.
+            const fence = items.length
+              ? GalleryFence.serialize(items, locale, directives, postMeta)
+              : '';
+            const out = GalleryFence.replaceFenceAt(body, cursor, fence);
+            if (out.blocked === 'unterminated') {
+              status.textContent = 'The block around the cursor has no closing ``` — close it, then try again.';
+              return;
+            }
+            if (out.start === out.end && out.text === '') return;
+            // A range edit, not mde.value(): replaceRange keeps CodeMirror's undo
+            // history (and fires a change event, which marks the guard dirty).
+            cm.replaceRange(out.text, cm.posFromIndex(out.start), cm.posFromIndex(out.end));
+            guard.markDirty();
+            // Count the lines actually written, not the photos picked: serialize
+            // drops a newly picked photo whose dimensions are unusable.
+            const written = GalleryFence.parse(fence).lines.length;
+            status.textContent = !items.length
+              ? 'Gallery removed'
+              : (out.replaced ? 'Gallery updated: ' : 'Gallery inserted: ') + written + ' photo(s)'
+                + (written < items.length ? ` (${items.length - written} skipped — no usable dimensions)` : '');
+          },
+        });
+      }
+
+      $('deGallery').addEventListener('click', () => galleryFor('de'));
+      $('enGallery').addEventListener('click', () => galleryFor('en'));
+
       // ---- pick an existing hero from the media library ----
       // The library is the other half of "upload": most heroes already exist,
       // and re-uploading one would mint a second copy of the same photo under
@@ -435,15 +965,20 @@
         MediaPicker.open({
           onUnauthed: () => guard.redirectToLogin(),
           onPick: (item) => {
+            storyReview?.invalidate();
             $(locale + 'HeroSrc').value = item.src;
             $(locale + 'HeroWidth').value = item.width;
             $(locale + 'HeroHeight').value = item.height;
+            $(locale + 'HeroFormat').value = item.format || '';
             // Alt travels with the photo when the field is still empty — the
             // library is where alt text is maintained.
             const altInput = $(locale + 'HeroAlt');
             const libraryAlt = item.alt && item.alt[locale];
             if (libraryAlt && !altInput.value.trim()) altInput.value = libraryAlt;
             // Hidden inputs are set programmatically — no input event fires.
+            // A different photo means a different focal point (see uploadHero).
+            HeroFocus.set(locale, 50, 50);
+            HeroFocus.sync(locale);
             guard.markDirty();
             $(locale + 'HeroStatus').textContent = 'Hero from library: ' + item.src;
           },
@@ -479,12 +1014,16 @@
 
           // Record dims into the locale-specific images map
           const imagesMap = locale === 'de' ? deImages : enImages;
-          imagesMap[body.src] = { width: body.width, height: body.height };
+          imagesMap[body.src] = {
+            width: body.width,
+            height: body.height,
+            ...(body.format === 'jpeg' ? { format: body.format } : {}),
+          };
 
           // Insert markdown at cursor in the matching EasyMDE instance
           // (replaceSelection fires a CodeMirror change → marks the guard dirty)
           const mde = locale === 'de' ? deMDE : enMDE;
-          const md = '![' + (altInput.value || '') + '](' + body.src + ')';
+          const md = ImageMarkdown.image(altInput.value, body.src);
           mde.codemirror.replaceSelection(md);
 
           statusEl.textContent = 'Inserted: ' + body.src
@@ -509,10 +1048,18 @@
       AltSuggest.wire({ button: $('enBodyImgSuggest'), fileInput: $('enBodyImgFile'), altInput: $('enBodyImgAlt'), statusEl: $('enBodyImgStatus'), lang: 'en', on401: suggestOn401 });
 
       // ---- assemble PostPair payload ----
+      // Deliberately no `status` or `scheduledAt`: the store decides status
+      // (existing?.status ?? 'draft' — Publish is a separate admin-only route)
+      // and nothing consumes scheduled_at, so a control for either would be
+      // inert (#121).
       function buildPayload() {
+        const categoriesRaw = $('fmCategories') ? $('fmCategories').value.trim() : '';
+        const tagsRaw = $('fmTags') ? $('fmTags').value.trim() : '';
+        const categories = categoriesRaw ? categoriesRaw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+        const tags = tagsRaw ? tagsRaw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+
         const shared = {
           date: $('fmDate').value || undefined,
-          country: $('fmCountry').value.trim() || undefined,
           countryCode: $('fmCountryCode').value.trim().toUpperCase() || undefined,
           region: $('fmRegion').value || undefined,
           coordinates: ($('fmLat').value && $('fmLng').value)
@@ -520,7 +1067,13 @@
             : undefined,
           stops: collectStops(),
           route: $('fmRoute').value.trim() || undefined,
-          keyFacts: collectKeyFacts(),
+          categories,
+          tags,
+          // Always sent, false included: unticking the box must clear the flag,
+          // and an omitted key would only ever mean "leave it alone" once the
+          // server started merging. Shared, so it reaches both locale rows.
+          featured: $('fmFeatured').checked,
+            commentsEnabled: $('fmCommentsEnabled').checked,
         };
 
         // Remove undefined keys for a clean payload
@@ -531,18 +1084,34 @@
           const heroSrc = $(loc + 'HeroSrc').value;
           const heroW = parseInt($(loc + 'HeroWidth').value, 10);
           const heroH = parseInt($(loc + 'HeroHeight').value, 10);
+          const heroFormat = $(loc + 'HeroFormat').value;
           const heroAlt = $(loc + 'HeroAlt').value.trim();
+          // 50/50 is the unset value: omitting `focus` there keeps a post
+          // nobody has framed byte-identical to what it was before the field
+          // existed, and makes "Reset to centre" a real removal rather than a
+          // stored no-op. See the @ai-warning on HeroFocus.
+          const focus = HeroFocus.read(loc);
+          const framed = focus.x !== 50 || focus.y !== 50;
           const mde = loc === 'de' ? deMDE : enMDE;
           return {
             locale: loc,
             slug: $(slugFieldId).value.trim(),
             title: $(loc + 'Title').value.trim(),
             excerpt: $(loc + 'Excerpt').value.trim(),
+            country: $(loc + 'Country').value.trim(),
             heroImage: heroSrc
-              ? { src: heroSrc, width: heroW || 0, height: heroH || 0, alt: heroAlt }
+              ? {
+                  src: heroSrc,
+                  width: heroW || 0,
+                  height: heroH || 0,
+                  alt: heroAlt,
+                  ...(heroFormat === 'jpeg' ? { format: heroFormat } : {}),
+                  ...(framed ? { focus: focus } : {}),
+                }
               : undefined,
             bodyMarkdown: mde.value(),
             images: loc === 'de' ? { ...deImages } : { ...enImages },
+            keyFacts: collectKeyFacts(loc),
           };
         }
 
@@ -553,7 +1122,6 @@
 
         return {
           translationKey: currentTk || undefined,
-          status: isPublished ? 'published' : 'draft',
           // Concurrency echo — JSON.stringify drops it when undefined (new post).
           updatedAt: loadedUpdatedAt || undefined,
           shared,
@@ -566,10 +1134,215 @@
       function showErr(msg) {
         const el = $('actionError');
         el.textContent = msg;
-        el.style.display = msg ? '' : 'none';
+        el.hidden = !msg;
       }
 
-      function setStatus(msg) { $('actionStatus').textContent = msg; }
+      function setStatus(msg) {
+        const el = $('actionStatus');
+        el.textContent = msg;
+      }
+      function localeGaps(loc) {
+        const missing = [];
+        if (!$(loc + 'Title').value.trim()) missing.push('title');
+        if (!$(loc === 'de' ? 'slugFieldDe' : 'slugFieldEn').value.trim()) missing.push('slug');
+        if (!$(loc + 'Excerpt').value.trim()) missing.push('excerpt');
+        if (!$(loc + 'Country').value.trim()) missing.push('country');
+        const mde = loc === 'de' ? deMDE : enMDE;
+        const body = (mde && mde.value ? mde.value() : $(loc + 'Body').value).trim();
+        if (!body) missing.push('body');
+        if (!$(loc + 'HeroSrc').value.trim()) missing.push('hero');
+        if ($(loc + 'HeroSrc').value.trim() && !$(loc + 'HeroAlt').value.trim()) missing.push('hero alt');
+        return missing;
+      }
+      function tripGaps() {
+        const missing = [];
+        if (!$('fmDate').value.trim()) missing.push('date');
+        if ($('fmCountryCode').value.trim().length !== 2) missing.push('ISO');
+        if (!$('fmRegion').value) missing.push('region');
+        const lat = $('fmLat').value;
+        const lng = $('fmLng').value;
+        if (lat === '' || lng === '') missing.push('coordinates');
+        return missing;
+      }
+      function allPublishGaps() {
+        return { de: localeGaps('de'), en: localeGaps('en'), trip: tripGaps() };
+      }
+      function gapCount(g) { return g.de.length + g.en.length + g.trip.length; }
+      function jumpToGap(kind, field) {
+        if (kind === 'de' || kind === 'en') {
+          if (tabsApi && tabsApi.select) tabsApi.select(kind);
+          activateLocale(kind);
+          const ids = {
+            title: kind + 'Title', slug: kind === 'de' ? 'slugFieldDe' : 'slugFieldEn',
+            excerpt: kind + 'Excerpt', country: kind + 'Country', body: kind + 'Body',
+            hero: kind + 'HeroFile', 'hero alt': kind + 'HeroAlt',
+          };
+          const el = $(ids[field] || ids.title);
+          const inInspector = ['slug', 'excerpt', 'country', 'hero', 'hero alt'].includes(field);
+          if (inInspector) inspectorApi.reveal(el);
+          else {
+            inspectorApi.close();
+            if (el && el.focus) el.focus();
+          }
+          return;
+        }
+        const details = $('expeditionDetails');
+        if (details) details.open = true;
+        const tripIds = { date: 'fmDate', ISO: 'fmCountryCode', region: 'fmRegion', coordinates: 'fmLat' };
+        inspectorApi.reveal($(tripIds[field] || 'fmDate'));
+      }
+      function chipPart(label, kind, miss) {
+        if (!miss.length) {
+          const span = document.createElement('span');
+          span.textContent = label + ' ready';
+          return span;
+        }
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'locale-chip-link';
+        btn.textContent = label + ' missing ' + miss.join(', ');
+        btn.addEventListener('click', () => jumpToGap(kind, miss[0]));
+        return btn;
+      }
+      function renderLocaleChip(chip, g) {
+        chip.replaceChildren();
+        chip.appendChild(chipPart('DE', 'de', g.de));
+        chip.appendChild(document.createTextNode(' · '));
+        chip.appendChild(chipPart('EN', 'en', g.en));
+        chip.appendChild(document.createTextNode(' · '));
+        chip.appendChild(chipPart('Trip', 'trip', g.trip));
+        chip.classList.toggle('is-incomplete', gapCount(g) > 0);
+      }
+      function updateLocaleChip() {
+        const chip = $('localeChip');
+        const mobileChip = $('mobileLocaleChip');
+        if (!chip || !mobileChip) return;
+        const g = allPublishGaps();
+        renderLocaleChip(chip, g);
+        renderLocaleChip(mobileChip, g);
+        const details = $('expeditionDetails');
+        if (details && g.trip.length) details.open = true;
+        const pub = $('publishBtn');
+        if (pub) {
+          const blocked = gapCount(g) > 0;
+          pub.disabled = blocked;
+          pub.title = blocked ? 'Fill the missing fields before publishing.' : '';
+        }
+        const unpub = $('unpublishBtn');
+        if (unpub) unpub.hidden = !isPublished;
+      }
+
+      function setPublishedLive(slugs, release) {
+        const el = $('actionStatus');
+        el.textContent = '';
+        const urls = AdminConfirm.liveUrls(slugs);
+        el.appendChild(document.createTextNode(
+          'Published' + (release ? ' (release ' + release + ')' : '') + '. Live: '
+        ));
+        const links = [];
+        if (urls.de) links.push({ href: urls.de, label: 'DE' });
+        if (urls.en) links.push({ href: urls.en, label: 'EN' });
+        if (!links.length) {
+          el.appendChild(document.createTextNode('open the site from View site.'));
+          return;
+        }
+        links.forEach((u, i) => {
+          if (i) el.appendChild(document.createTextNode(' · '));
+          const a = document.createElement('a');
+          a.href = u.href;
+          a.textContent = u.label;
+          a.target = '_blank';
+          a.rel = 'noopener';
+          el.appendChild(a);
+        });
+      }
+
+      // ---- alt-text audit (advisory; server: src/alt-audit.ts) ----
+      // A photo whose alt is empty, only repeats the post title (which the site
+      // renders as alt="" because the heading already says those words), or is
+      // only its WordPress filename needs editorial attention. This names
+      // those photos. It NEVER gates anything: publishBtn.disabled is not
+      // touched here, and the copy says the post publishes either way.
+      const ALT_AUDIT_WHERE = { hero: 'hero photo', body: 'body photo', gallery: 'gallery photo' };
+      const ALT_AUDIT_WHY = {
+        empty: 'no alt text',
+        'repeats-title': 'alt text that only repeats the title',
+        filename: 'a filename instead of a description',
+      };
+
+      // Variant URLs are long and all share a prefix; the file name is what the
+      // author recognises in a list.
+      function photoName(src) {
+        const clean = String(src).split('?')[0].split('#')[0];
+        const parts = clean.split('/');
+        return parts[parts.length - 1] || clean;
+      }
+
+      // Reachability: each kind is fixed in a different control.
+      function jumpToPhoto(locale, kind) {
+        if (kind === 'hero') { jumpToGap(locale, 'hero alt'); return; } // beside "Suggest alt text"
+        if (tabsApi && tabsApi.select) tabsApi.select(locale);
+        activateLocale(locale);
+        inspectorApi.close();
+        // A gallery photo's alt lives in the images map and is edited in the
+        // picker; an inline body photo's alt is its Markdown label, so the
+        // markdown editor itself is where that one is fixed.
+        if (kind === 'gallery') {
+          const gallery = $(locale + 'Gallery');
+          if (gallery && gallery.focus) gallery.focus();
+          return;
+        }
+        const mde = locale === 'de' ? deMDE : enMDE;
+        if (mde && mde.codemirror && mde.codemirror.focus) { mde.codemirror.focus(); return; }
+        const body = $(locale + 'Body');
+        if (body && body.focus) body.focus();
+      }
+
+      function renderAltAudit(audit, published) {
+        const box = $('altAudit');
+        const summary = $('altAuditSummary');
+        const list = $('altAuditList');
+        if (!box || !summary || !list) return;
+        const images = (audit && audit.images) || [];
+        list.replaceChildren();
+        if (!images.length) {
+          box.hidden = true;
+          summary.textContent = '';
+          return;
+        }
+        // Unhide BEFORE writing the text: a live region that is not rendered
+        // when its content changes is not announced. Nothing calls focus() —
+        // the author keeps the caret wherever they were typing.
+        box.hidden = false;
+        summary.textContent = (published
+          ? 'Warning: the post published, but ' + images.length + ' photo(s) went live with no description.'
+          : 'Warning: ' + images.length + ' photo(s) have no description. They publish either way — this does not block Publish.')
+          + ' Alt text that only repeats the title counts as none, because the heading beside the photo already says it.'
+          + ' Choose a photo to fix it:';
+        images.forEach((img) => {
+          const li = document.createElement('li');
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn-link';
+          btn.textContent = img.locale.toUpperCase() + ' ' + (ALT_AUDIT_WHERE[img.kind] || 'photo')
+            + ' · ' + (ALT_AUDIT_WHY[img.reason] || 'no description')
+            + ' — ' + photoName(img.src);
+          btn.addEventListener('click', () => jumpToPhoto(img.locale, img.kind));
+          li.appendChild(btn);
+          list.appendChild(li);
+        });
+      }
+
+      // Advisory, so every failure path is silent: a 401/500 here must never
+      // interrupt a save or a publish, it just leaves the last rendering up.
+      async function refreshAltAudit() {
+        if (!currentTk) { renderAltAudit(null, false); return; }
+        try {
+          const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/alt-audit');
+          if (!res.ok) return;
+          renderAltAudit(await res.json(), false);
+        } catch (e) { /* advisory only */ }
+      }
 
       // ---- save draft ----
       // Persists the current on-screen form. Returns true on success so Publish
@@ -581,6 +1354,25 @@
         const payload = buildPayload();
         const url = currentTk ? '/posts/' + encodeURIComponent(currentTk) : '/posts';
         const method = currentTk ? 'PUT' : 'POST';
+        // A slug change on an existing draft is deliberate or it does not happen
+        // (#122): name the locale and both slugs, and only send the consent flag
+        // the server requires (409 slug_change_unconfirmed otherwise) after OK.
+        const renamed = ['de', 'en'].filter((l) => currentTk && !isPublished && loadedSlugs[l] && payload[l].slug !== loadedSlugs[l]);
+        if (renamed.length) {
+          const lines = renamed.map((l) => '  ' + l.toUpperCase() + ': /' + (l === 'en' ? 'en/' : '') + loadedSlugs[l] + '/  →  /' + (l === 'en' ? 'en/' : '') + payload[l].slug + '/');
+          const ok = await AdminConfirm.ask({
+            title: 'Change this post’s URL?',
+            body: 'This save changes the post\'s URL:\n\n' + lines.join('\n') + '\n\nIf the old slug is a live WordPress URL, links and search rankings break.',
+            confirmLabel: 'Change URL',
+            danger: true,
+          });
+          if (!ok) {
+            setStatus('');
+            showErr('Not saved — the slug change was cancelled. Set the slug back to keep the URL.');
+            return false;
+          }
+          payload.confirmSlugChange = true;
+        }
         let body;
         try {
           const res = await fetch(url, {
@@ -594,12 +1386,12 @@
             setStatus('');
             if (res.status === 409 && body.code === 'conflict') {
               showErr(body.error || 'This post was modified since you opened it — nothing was saved.');
-              const reload = confirm(
-                'This post was changed elsewhere (another tab or user) since you opened it, '
-                + 'so saving would overwrite those changes. Nothing was saved.\n\n'
-                + 'OK — reload the latest version into the editor (your edits in this tab are lost).\n'
-                + 'Cancel — keep your edits on screen so you can copy them out first.'
-              );
+              const reload = await AdminConfirm.ask({
+                title: 'Reload the latest version?',
+                body: 'This post was changed elsewhere (another tab or user) since you opened it, so saving would overwrite those changes. Nothing was saved.\n\nConfirm — reload the latest version (your edits in this tab are lost).\nCancel — keep your edits on screen so you can copy them out first.',
+                confirmLabel: 'Reload',
+                danger: true,
+              });
               if (reload) await loadPost(currentTk);
               return false;
             }
@@ -611,23 +1403,24 @@
           setStatus('');
           return false;
         }
-        // On first save, capture the new translationKey and update the URL
         if (!currentTk && body.translationKey) {
+          storyReview?.invalidate();
           currentTk = body.translationKey;
-          guard.setKey('swl:draft:' + currentTk); // re-key any stash to the real tk
+          guard.setKey('swl:draft:' + currentTk);
           const url2 = new URL(location.href);
           url2.searchParams.set('tk', currentTk);
           history.replaceState(null, '', url2.toString());
           $('pageTitle').textContent = 'Edit post';
         }
-        guard.markClean(snap); // saved server-side — no-op if edits landed mid-save
-        // Re-sync the concurrency echo with what this save just wrote, and
-        // refresh the revisions list (this save snapshotted the previous state).
+        guard.markClean(snap);
         if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
+        loadedSlugs.de = (body.de && body.de.slug) || '';
+        loadedSlugs.en = (body.en && body.en.slug) || '';
         loadRevisions().catch(() => {});
+        // What was just stored is what the audit judges — refresh from the
+        // server rather than re-deriving the rule in the browser.
+        refreshAltAudit().catch(() => {});
         const skipped = partialStopCount();
-        // A draft save never touches the live site — published posts keep
-        // serving their published snapshot until the next Publish.
         const savedMsg = isPublished ? 'Saved draft. The live post is unchanged until you Publish.' : 'Saved draft.';
         setStatus(skipped
           ? savedMsg + ' Note: ' + skipped + ' incomplete stop row(s) were skipped (each needs a name, latitude and longitude).'
@@ -636,28 +1429,48 @@
       }
       $('saveDraft').addEventListener('click', () => { doSaveDraft(); });
 
-      // ---- open preview ----
       $('previewBtn').addEventListener('click', async () => {
-        // Save the on-screen form FIRST (same pattern as Publish) so the
-        // server-rendered preview shows exactly what's on screen.
         const saved = await doSaveDraft();
         if (!saved) return;
         window.open('/posts/' + encodeURIComponent(currentTk) + '/preview?locale=' + activeTab, '_blank');
       });
 
-      // ---- publish ----
       $('publishBtn').addEventListener('click', async () => {
-        // Save the on-screen form FIRST so publish validates what's on screen
-        // (not a stale last-saved value) — e.g. a country just typed in.
+        const g = allPublishGaps();
+        if (gapCount(g) > 0) {
+          showErr('Not ready to publish. Use the bar above to jump to the missing fields.');
+          updateLocaleChip();
+          return;
+        }
+        const titleDe = $('deTitle').value.trim() || '(untitled)';
+        const titleEn = $('enTitle').value.trim() || '(untitled)';
+        const slugs = { de: $('slugFieldDe').value.trim(), en: $('slugFieldEn').value.trim() };
+        const urlBlock = AdminConfirm.urlsPlain(slugs);
+        const ok = await AdminConfirm.ask({
+          title: 'Publish to the live site?',
+          body: titleDe + ' / ' + titleEn + '\n\n'
+            + (urlBlock ? urlBlock + '\n\n' : '')
+            + 'This rebuilds the public journal. It can take several minutes. The live pages stay unchanged until the rebuild finishes.',
+          confirmLabel: 'Publish',
+        });
+        if (!ok) return;
         const saved = await doSaveDraft();
         if (!saved) return;
+        const btn = $('publishBtn');
+        btn.disabled = true;
+        const started = Date.now();
         setStatus('Building…');
+        const tick = setInterval(() => {
+          setStatus('Building… ' + Math.round((Date.now() - started) / 1000) + 's');
+        }, 1000);
         try {
           const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/publish', { method: 'POST' });
           if (res.status === 401) { guard.redirectToLogin(); return; }
           const body = await res.json().catch(() => ({}));
           if (!res.ok) {
-            showErr(body.error || ('Publish failed: ' + res.status));
+            const examples = Array.isArray(body.foreignImages) && body.foreignImages.length
+              ? ' Examples: ' + body.foreignImages.join(', ') : '';
+            showErr((body.error || ('Publish failed: ' + res.status)) + examples);
             setStatus('');
             return;
           }
@@ -666,25 +1479,67 @@
             setStatus('');
             return;
           }
-          const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
-          setStatus('Published ✓' + release);
+          const release = (body.build && body.build.release) ? body.build.release : '';
+          setPublishedLive(slugs, release);
           isPublished = true;
-          // Publish bumps the stored updated_at — re-sync the concurrency echo
-          // or the very next Save in this tab would falsely report a conflict.
           if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
           $('slugFieldDe').disabled = true;
           $('slugFieldEn').disabled = true;
+          // The publish reply carries the audit of what actually went live.
+          renderAltAudit(body.altAudit, true);
+          updateLocaleChip();
         } catch (e) {
           showErr('Publish failed: ' + e);
           setStatus('');
+        } finally {
+          clearInterval(tick);
+          btn.disabled = false;
+          updateLocaleChip();
+        }
+      });
+
+      $('unpublishBtn').addEventListener('click', async () => {
+        const title = $('deTitle').value.trim() || '(untitled)';
+        const ok = await AdminConfirm.ask({
+          title: 'Unpublish this trip?',
+          body: '"' + title + '" will leave the live site on the next build and revert to a draft.',
+          confirmLabel: 'Unpublish',
+          danger: true,
+        });
+        if (!ok) return;
+        const btn = $('unpublishBtn');
+        btn.disabled = true;
+        setStatus('Unpublishing…');
+        try {
+          const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/unpublish', { method: 'POST' });
+          if (res.status === 401) { guard.redirectToLogin(); return; }
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) { showErr('Unpublish failed: ' + (body.error || res.status)); setStatus(''); return; }
+          isPublished = false;
+          $('slugFieldDe').disabled = false;
+          $('slugFieldEn').disabled = false;
+          setStatus('Unpublished "' + title + '".');
+          updateLocaleChip();
+        } catch (e) {
+          showErr('Unpublish failed: ' + e);
+          setStatus('');
+        } finally {
+          btn.disabled = false;
+        }
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
+          e.preventDefault();
+          doSaveDraft();
         }
       });
 
       // ---- load existing post ----
-      function populateKeyFacts(facts) {
-        $('keyFactsList').innerHTML = '';
+      function populateKeyFacts(locale, facts) {
+        $(locale + 'KeyFactsList').innerHTML = '';
         if (!facts || typeof facts !== 'object') return;
-        Object.entries(facts).forEach(([l, v]) => addKeyFactRow(l, v));
+        Object.entries(facts).forEach(([l, v]) => addKeyFactRow(locale, l, v));
       }
 
       function populateStops(stops) {
@@ -698,7 +1553,9 @@
       function populateLocale(loc, data) {
         if (!data) return;
         $(loc + 'Title').value = data.title || '';
+        $(loc + 'Country').value = data.country || '';
         $(loc + 'Excerpt').value = data.excerpt || '';
+        populateKeyFacts(loc, data.keyFacts);
         const mde = loc === 'de' ? deMDE : enMDE;
         mde.value(data.bodyMarkdown || '');
         // Written unconditionally: buildPayload() omits heroImage when unset, so
@@ -708,8 +1565,15 @@
         $(loc + 'HeroSrc').value = hero.src || '';
         $(loc + 'HeroWidth').value = hero.width || '';
         $(loc + 'HeroHeight').value = hero.height || '';
+        $(loc + 'HeroFormat').value = hero.format || '';
         $(loc + 'HeroAlt').value = hero.alt || '';
         $(loc + 'HeroStatus').textContent = hero.src ? 'Hero: ' + hero.src : '';
+        // Same no-field-resurrection rule as the fields above: a payload with
+        // no `focus` must recentre, not keep whatever was last on screen.
+        const focus = hero.focus && typeof hero.focus === 'object' ? hero.focus : {};
+        $(loc + 'HeroFocusX').value = Number.isFinite(focus.x) ? focus.x : 50;
+        $(loc + 'HeroFocusY').value = Number.isFinite(focus.y) ? focus.y : 50;
+        HeroFocus.sync(loc);
         // Reset the dimension map before filling it — merging would persist
         // stale entries from the pre-restore state on the next Save.
         const map = loc === 'de' ? deImages : enImages;
@@ -724,36 +1588,48 @@
       // restored revision. Every field is overwritten (with '' when absent) so it
       // never merges with what was already on screen.
       function populateForm(post) {
+        storyReview?.invalidate();
         // Every shared field is written unconditionally (with '' fallbacks):
         // buildPayload() deletes cleared/empty keys from the stash, so applying
         // a restore over an already-loaded post must not resurrect values the
         // user had deliberately deleted (e.g. a cleared Route surviving a 401
         // round-trip because the stash simply omits the key).
         const shared = post.shared || {};
+        if ($('fmCategories')) $('fmCategories').value = Array.isArray(shared.categories) ? shared.categories.join(', ') : '';
+        if ($('fmTags')) $('fmTags').value = Array.isArray(shared.tags) ? shared.tags.join(', ') : '';
+
         $('fmDate').value = shared.date || '';
-        $('fmCountry').value = shared.country || '';
         $('fmCountryCode').value = shared.countryCode || '';
         $('fmRegion').value = shared.region || '';
         const coords = shared.coordinates || {};
         $('fmLat').value = coords.lat ?? '';
         $('fmLng').value = coords.lng ?? '';
         $('fmRoute').value = shared.route || '';
+        // Unconditional, like every other shared field above: a restore payload
+        // without the key must untick the box, not keep the previous post's.
+        $('fmFeatured').checked = shared.featured === true;
+        // Absent = enabled per post (matches the server's draftWithDefaults).
+        $('fmCommentsEnabled').checked = shared.commentsEnabled !== false;
         populateStops(shared.stops);
-        populateKeyFacts(shared.keyFacts);
 
         populateLocale('de', post.de);
         populateLocale('en', post.en);
         // EN tab is hidden on load; refresh its CodeMirror so it renders at full width when shown
         enMDE.codemirror.refresh();
 
-        // Populate each locale's slug from the loaded data (never re-derive over a stored value)
-        if (post.de && post.de.slug) $('slugFieldDe').value = post.de.slug;
-        if (post.en && post.en.slug) $('slugFieldEn').value = post.en.slug;
+        // Populate each locale's slug from the loaded data (never re-derive over
+        // a stored value): a loaded slug turns derivation off for that locale
+        // until the author clears the field (#122).
+        for (const locale of ['de', 'en']) {
+          const slug = post[locale] && post[locale].slug;
+          if (slug) { slugFieldFor(locale).value = slug; slugAuto[locale] = false; }
+        }
 
         if (isPublished) {
           $('slugFieldDe').disabled = true;
           $('slugFieldEn').disabled = true;
         }
+        updateLocaleChip();
       }
 
       // Returns false only when it redirected to /login (callers must stop);
@@ -775,14 +1651,20 @@
           setStatus('');
           return true;
         }
+        storyReview?.invalidate();
         currentTk = post.translationKey || tk;
         isPublished = post.status === 'published';
         loadedUpdatedAt = post.updatedAt || null;
+        loadedSlugs.de = (post.de && post.de.slug) || '';
+        loadedSlugs.en = (post.en && post.en.slug) || '';
 
         $('pageTitle').textContent = 'Edit post';
         populateForm(post);
 
         loadRevisions().catch(() => {});
+        // Visible before publishing, not only after it: an imported draft is
+        // undescribed the moment it is opened.
+        refreshAltAudit().catch(() => {});
 
         let state = '';
         if (isPublished) {
@@ -800,8 +1682,8 @@
         const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/revisions');
         if (!res.ok) return; // non-fatal: the card just stays as-is
         const revs = await res.json();
-        $('revisionsCard').style.display = '';
-        $('revisionsEmpty').style.display = revs.length ? 'none' : '';
+        $('revisionsCard').hidden = false;
+        $('revisionsEmpty').hidden = revs.length > 0;
         const ul = $('revisionsList');
         ul.innerHTML = '';
         revs.forEach((rev) => {
@@ -852,6 +1734,7 @@
       (async () => {
         const s = await Auth.ensureAuthed();
         if (!s) return;
+        reviewIsAdmin = s.isAdmin === true;
         Auth.renderHeader(s);
 
         const params = new URLSearchParams(location.search);
@@ -867,20 +1750,29 @@
         // 401 mid-edit). Populating above fired CodeMirror change events, so settle
         // the guard's dirty state here either way.
         const stash = guard.tryRestore();
-        if (stash && !guard.wasDismissed(stash)
-            && confirm('Found an unsaved local draft from ' + new Date(stash.savedAt).toLocaleString() + '. Restore it into the editor?')) {
-          currentTk = stash.payload.translationKey || currentTk;
-          populateForm(stash.payload);
-          guard.markDirty();
-          setStatus('Restored unsaved draft — remember to Save draft.');
+        if (stash && !guard.wasDismissed(stash)) {
+          const restore = await AdminConfirm.ask({
+            title: 'Restore unsaved draft?',
+            body: 'Found an unsaved local draft from ' + new Date(stash.savedAt).toLocaleString() + '.',
+            confirmLabel: 'Restore',
+          });
+          if (restore) {
+            guard.adopt(stash);
+            storyReview?.invalidate();
+            currentTk = stash.payload.translationKey || currentTk;
+            populateForm(stash.payload);
+            guard.markDirty();
+            setStatus('Restored unsaved draft — remember to Save draft.');
+          } else {
+            guard.dismissRestore(stash);
+          }
         } else if (stash) {
-          // Declined (or already dismissed this session): keep the stash so a
-          // misclicked Cancel can't destroy unsaved work — just disarm dirty and
-          // remember the dismissal so it isn't re-offered on every reload.
           guard.dismissRestore(stash);
         } else {
           guard.markClean();
         }
+        document.querySelector('main').addEventListener('input', updateLocaleChip);
+        updateLocaleChip();
       })();
     </script>
   </body>

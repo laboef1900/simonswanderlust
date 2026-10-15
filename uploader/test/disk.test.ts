@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { tmpdir } from 'node:os';
 import {
-  diskSpace, formatBytes, insufficientSpace, UPLOAD_HEADROOM_BYTES, UPLOAD_SIZE_FACTOR,
+  diskSpace, formatBytes, insufficientSpace, insufficientSpaceForImport, IMPORT_PHOTO_BYTES,
+  UPLOAD_HEADROOM_BYTES, UPLOAD_SIZE_FACTOR,
 } from '../src/disk.js';
 
 const GiB = 1024 ** 3;
@@ -48,6 +49,32 @@ describe('insufficientSpace', () => {
 
   it('does not leak absolute paths or exact capacity internals into the message', () => {
     const msg = insufficientSpace(space(0), 1) ?? '';
+    expect(msg).not.toContain('/data');
+    expect(msg).not.toContain('statfs');
+  });
+});
+
+describe('insufficientSpaceForImport', () => {
+  const space = (free: number) => ({ free, total: 100 * GiB });
+
+  it('requires the floor plus the measured per-photo cost, per photo to fetch', () => {
+    const needed = UPLOAD_HEADROOM_BYTES + 665 * IMPORT_PHOTO_BYTES;
+    expect(insufficientSpaceForImport(space(needed), 665)).toBeNull();
+    expect(insufficientSpaceForImport(space(needed - 1), 665)).toMatch(/not enough free disk space for this import/);
+  });
+
+  it('a fully resumed import (0 photos) still needs the floor, so the build and backups keep running', () => {
+    expect(insufficientSpaceForImport(space(UPLOAD_HEADROOM_BYTES), 0)).toBeNull();
+    expect(insufficientSpaceForImport(space(UPLOAD_HEADROOM_BYTES - 1), 0)).toMatch(/not enough/);
+  });
+
+  it('treats a negative count as zero rather than shrinking the requirement', () => {
+    expect(insufficientSpaceForImport(space(0), -1_000)).toMatch(/not enough/);
+  });
+
+  it('names the count but no absolute path or statfs internals', () => {
+    const msg = insufficientSpaceForImport(space(0), 12) ?? '';
+    expect(msg).toMatch(/for 12 photos/);
     expect(msg).not.toContain('/data');
     expect(msg).not.toContain('statfs');
   });

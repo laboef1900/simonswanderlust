@@ -6,13 +6,83 @@ const R = 8;
 const P = 1;
 const KEYLEN = 64;
 
+export const MAX_PASSWORD_LENGTH = 1024;
+export const MIN_PASSWORD_LENGTH = 12;
+/**
+ * Usernames are also rate-limiter keys and `lower(username)` lookup inputs;
+ * capping them bounds both (#109). 64 is generous for a login name.
+ */
+export const MAX_USERNAME_LENGTH = 64;
+/**
+ * Plain ASCII identifiers only (#131): no markup, no whitespace, no homoglyphs
+ * that `lower()` would fold onto another account. Length is checked
+ * separately so the message can name the cap.
+ */
+const USERNAME_RE = /^[a-z0-9._-]+$/i;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export class PasswordPolicyError extends Error {}
+
+/**
+ * The one password rule (length only — ASVS 5.0 §6.2.5 forbids composition
+ * rules). Returns the user-facing violation, or null when the password is
+ * acceptable; the routes turn it into a 400 and the CLI into an exit 1.
+ */
+export function passwordPolicyViolation(password: string): string | null {
+  if (password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
+    return `password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} characters`;
+  }
+  return null;
+}
+
+export class UsernamePolicyError extends Error {}
+
+/**
+ * The one username rule for NEW accounts. Returns the user-facing violation,
+ * or null. Enforced by both stores' `create` (so any future creation path —
+ * a CLI `add-user`, say — inherits it) and checked up front by `/setup` and
+ * `POST /users` for the 400. Deliberately NOT applied to `/login`,
+ * `findByUsername` or `setPassword`: an account created before the rule may
+ * carry a longer or stranger name and must keep signing in (#109).
+ */
+export function usernamePolicyViolation(username: string): string | null {
+  if (username.length === 0 || username.length > MAX_USERNAME_LENGTH) {
+    return `username must be between 1 and ${MAX_USERNAME_LENGTH} characters`;
+  }
+  if (!USERNAME_RE.test(username)) {
+    return 'username may only contain letters, digits, ".", "_" and "-"';
+  }
+  return null;
+}
+
+/** @throws UsernamePolicyError */
+export function assertUsernamePolicy(username: string): void {
+  const violation = usernamePolicyViolation(username);
+  if (violation) throw new UsernamePolicyError(violation);
+}
+
+/**
+ * @throws PasswordPolicyError — enforced inside `hashPassword`, so every
+ * creation and reset path (routes, both stores, the CLI) shares it (#109).
+ */
+export function assertPasswordPolicy(password: string): void {
+  const violation = passwordPolicyViolation(password);
+  if (violation) throw new PasswordPolicyError(violation);
+}
+
 export function hashPassword(password: string): string {
+  assertPasswordPolicy(password);
   const salt = randomBytes(16);
   const hash = scryptSync(password, salt, KEYLEN, { N, r: R, p: P });
   return `scrypt$${N}$${R}$${P}$${salt.toString('hex')}$${hash.toString('hex')}`;
 }
 
+// Precomputed dummy hash for constant-time password verification when username is missing (CWE-208 mitigation)
+export const DUMMY_STORED_HASH = hashPassword('dummy_password_for_constant_time_verification_safety');
+
 export function verifyPassword(password: string, stored: string): boolean {
+  if (password.length > MAX_PASSWORD_LENGTH) return false;
   const parts = stored.split('$');
   if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
   const ns = parts[1];
@@ -71,6 +141,7 @@ export function memoryUserStore(): UserStore {
       return [...byId.values()].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
     },
     async create({ username, password, isAdmin }) {
+      assertUsernamePolicy(username);
       if ([...byId.values()].some((u) => sameName(u.username, username))) {
         throw new UserExistsError('username already exists');
       }
@@ -111,6 +182,10 @@ export function pgUserStore(pool: DbPool): UserStore {
       return rows[0] ? rowToUser(rows[0]) : null;
     },
     async findById(id) {
+      // Reject non-UUID ids before querying: `DELETE /users/:id` passes the raw
+      // route param through here, and a malformed uuid parameter raises
+      // Postgres 22P02 (a logged 500) instead of the 404 the route wants.
+      if (!UUID_RE.test(id)) return null;
       const { rows } = await pool.query<UserRow>('SELECT * FROM users WHERE id = $1', [id]);
       return rows[0] ? rowToUser(rows[0]) : null;
     },
@@ -119,6 +194,7 @@ export function pgUserStore(pool: DbPool): UserStore {
       return rows.map(rowToUser);
     },
     async create({ username, password, isAdmin }) {
+      assertUsernamePolicy(username);
       const id = randomUUID();
       try {
         const { rows } = await pool.query<UserRow>(

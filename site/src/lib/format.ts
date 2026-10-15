@@ -23,3 +23,24 @@ export function coordsLabel(coords: { lat: number; lng: number }): string {
 export function entryLabel(n: number): string {
   return `N°${String(n).padStart(2, '0')}`;
 }
+
+/**
+ * The date line under a story-card title: "OKT 2024", or "OKT 2024 · RUMÄNIEN"
+ * when the country is news.
+ *
+ * @ai-note Eight of nine live titles open with the country ("Ungarn:
+ * Sehenswürdigkeiten in Budapest", "Griechenland: Sonne und Abenteuer
+ * Rhodos"), and the card printed it a second time directly beside the
+ * heading — so the index read as duplicated at a glance and the meta line was
+ * wider than it had any reason to be, which is most of why it out-shouted the
+ * title. Suppressing the repeat is a substring test on purpose: it can only
+ * ever HIDE a country the title already contains verbatim, so a declined or
+ * translated mention ("niederländisch" against "Niederlande") simply keeps
+ * the country, which is the safe direction to be wrong in.
+ */
+export function cardMetaLabel(date: Date, country: string, title: string, locale: Locale): string {
+  const when = dateLabel(date, locale);
+  const name = country.trim();
+  if (!name || title.toLowerCase().includes(name.toLowerCase())) return when;
+  return `${when} · ${name}`;
+}

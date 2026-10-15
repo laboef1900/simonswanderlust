@@ -1,12 +1,13 @@
-# Automated Verification Loop on every PR and push to main (see CLAUDE.md):
-# type-check + tests for both apps. A throwaway Postgres service container
-# backs the integration suites and the site's Content Layer loader.
+# Automated Verification Loop on every PR and every push to an integration or
+# release branch (see CLAUDE.md): type-check + tests for both apps. A throwaway
+# Postgres service container backs the integration suites and the site's
+# Content Layer loader.
 name: ci
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [dev, main]
 
 jobs:
   uploader:

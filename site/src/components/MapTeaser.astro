@@ -1,8 +1,8 @@
 ---
 import { getCollection } from 'astro:content';
-import Contours from './Contours.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
 import { byLocale, statsLine, tripStats } from '../lib/trips';
+import { mapChart } from '../lib/map-chart';
 import { mapPath } from '../lib/paths';
 
 interface Props {
@@ -13,29 +13,208 @@ const { locale } = Astro.props;
 const t = useTranslations(locale);
 const trips = byLocale(await getCollection('trips'), locale);
 const stats = statsLine(tripStats(trips), t);
+const chart = mapChart(
+  trips.map((trip) => ({
+    lng: trip.data.coordinates.lng,
+    lat: trip.data.coordinates.lat,
+    title: trip.data.title,
+  })),
+);
+
+// Degree labels on the frame edges would be half-clipped; anchor them inward.
+const anchorFor = (at: number, width: number) =>
+  at < width * 0.06 ? 'start' : at > width * 0.94 ? 'end' : 'middle';
 ---
 
+{/*
+  @ai-context site/src/lib/map-chart.ts carries the projection and the two
+  rules this band must not break (no invented coastlines, no route line
+  through unrelated trips).
+
+  @ai-note `Contours` used to render here as well, under a second decorative
+  dashed grid. Both are gone: the graticule below is a real one, and a
+  contour texture layered over a coordinate chart is two competing
+  cartographic fictions in one band. Contours still belong in the footer,
+  which has no data of its own to draw.
+*/}
 <section class="relative overflow-hidden bg-navy text-white">
-  <Contours />
-  <div class="relative mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-10">
+  {/*
+    @ai-warning The two-column split is `lg`, not `md`, and the chart is
+    width-capped while stacked. Both exist to keep the chart's RENDERED scale
+    in a narrow band, because an SVG `font-size` is in viewBox units: at `md`
+    the 768px viewport gave the chart column ~312px, so the axis labels
+    rendered at 7px and the chart was a postage stamp beside the heading.
+    Capped stacked (350–480px) and side-by-side (616–784px), the labels land
+    between 10.5px and 15.7px everywhere. Re-measure a label's
+    `getBoundingClientRect().height` at 320/390/768/1024/1440 after touching
+    either number, and keep the `@media` breakpoint below equal to this one.
+  */}
+  {/*
+    Padding and gap are tighter while stacked than side by side: the band
+    measured 365px at a 390×844 viewport — 43% of the first scroll — and every
+    row of it pushes the story grid further down. The chart itself cannot
+    shrink (the cap above is what keeps its labels ~11px), so the slack came
+    out of the whitespace around it.
+  */}
+  <div
+    class="relative mx-auto grid max-w-6xl items-center gap-6 px-5 py-8 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)] lg:gap-12 lg:py-11"
+  >
     <div>
-      <div class="flex items-center gap-2">
-        <span class="relative flex h-2 w-2">
-          <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-red opacity-75 motion-reduce:hidden"></span>
-          <span class="relative inline-flex h-2 w-2 rounded-full bg-brand-red"></span>
-        </span>
-        <h2 class="text-2xl font-extrabold">{t('home.mapTeaser.title')}</h2>
-      </div>
-      <p class="mt-1 font-mono text-xs tracking-[0.15em] text-brand-red-light">{stats}</p>
+      {/*
+        No pin glyph beside the heading any more. It was a map-marker icon
+        standing in for the cartography the band did not have; there are nine
+        real ones in the chart to the right, and the 30px it occupied was what
+        pushed this heading onto a second line.
+      */}
+      {/*
+        `text-2xl` at base, not `text-3xl`: below `sm` this was 30px while the
+        featured story's own heading in the hero was 24px, so the closing band
+        shouted louder than the entry the page exists to get opened. It matches
+        the "Alle Reiseberichte" heading at every width now.
+      */}
+      <h2 class="text-2xl font-extrabold text-balance sm:text-3xl">{t('home.mapTeaser.title')}</h2>
+      <p class="mt-1 font-mono text-xs tracking-log text-brand-red-light">{stats}</p>
+      <a
+        href={mapPath(locale)}
+        class="group mt-5 inline-flex min-h-[44px] items-center gap-2 rounded border border-white/50 px-4 py-2 text-sm text-white transition-[color,background-color,border-color,translate] hover:border-brand-red-light hover:bg-brand-red/15 focus-visible:outline-brand-red-light motion-safe:hover:-translate-y-0.5"
+      >
+        {/*
+          @ai-warning `border-white/30` here measured 2.64:1 against navy and
+          was the ONLY thing identifying this control — non-text contrast under
+          WCAG 2.2 SC 1.4.11, which wants 3:1. `/50` composites to ≈3.9:1.
+        */}
+        <span>{t('home.mapTeaser.cta')}</span>
+        <svg aria-hidden="true" focusable="false" class="h-4 w-4 transition-transform duration-300 motion-safe:group-hover:translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </a>
     </div>
-    <a
-      href={mapPath(locale)}
-      class="group inline-flex items-center gap-2 rounded border border-white/30 px-4 py-2 text-sm text-white/90 transition-all hover:border-brand-red hover:bg-brand-red/10 hover:text-white motion-safe:hover:-translate-y-0.5"
-    >
-      <span>{t('home.mapTeaser.cta')}</span>
-      <svg aria-hidden="true" focusable="false" class="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
-    </a>
+
+    {
+      chart && (
+        <svg
+          class="h-auto w-full max-w-[30rem] lg:max-w-none"
+          viewBox={chart.viewBox}
+          preserveAspectRatio="xMidYMid meet"
+          role="img"
+          aria-label={t('home.mapTeaser.chartLabel')}
+        >
+          {/*
+            @ai-warning Land goes UNDER the graticule and the pins, and stays
+            a silhouette: `fill-rule="evenodd"` (the source layer has a hole),
+            no stroke heavier than the gridlines, no gradient, no shadow. The
+            band's claim is that the grid is a measuring tool and the pins are
+            measured against it — a coastline drawn heavier than the parallels
+            it sits under inverts that, and a styled one starts to read as a
+            picture of a map. `map-chart.ts` emits '' when no ring intersects
+            the window, so a future single-pin window degrades to the bare
+            graticule instead of `d=""`.
+          */}
+          {chart.land && (
+            <path
+              d={chart.land}
+              fill="currentColor"
+              fill-rule="evenodd"
+              fill-opacity="0.14"
+              stroke="currentColor"
+              stroke-opacity="0.32"
+              stroke-width="1.5"
+              class="text-white"
+            />
+          )}
+          <g stroke="currentColor" fill="none" class="text-white">
+            {chart.meridians.map((m) => (
+              <line
+                x1={m.at}
+                y1="0"
+                x2={m.at}
+                y2={chart.height}
+                stroke-width={m.primary ? 2 : 1.25}
+                opacity={m.primary ? 0.34 : 0.14}
+                stroke-dasharray={m.primary ? undefined : '4 6'}
+              />
+            ))}
+            {chart.parallels.map((p) => (
+              <line
+                x1="0"
+                y1={p.at}
+                x2={chart.width}
+                y2={p.at}
+                stroke-width={p.primary ? 2 : 1.25}
+                opacity={p.primary ? 0.34 : 0.14}
+                stroke-dasharray={p.primary ? undefined : '4 6'}
+              />
+            ))}
+          </g>
+          <g class="chart-label" fill="currentColor">
+            {chart.meridians.map((m) => (
+              <text x={m.labelAt} y={chart.labelBaseline} text-anchor={anchorFor(m.labelAt, chart.width)}>
+                {m.label}
+              </text>
+            ))}
+            {chart.parallels.map((p) => (
+              <text x="6" y={p.labelAt} text-anchor="start">
+                {p.label}
+              </text>
+            ))}
+          </g>
+          {chart.pins.map((pin) => (
+            <g class="text-brand-red-light">
+              <circle cx={pin.x} cy={pin.y} r="15" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4" />
+              <circle cx={pin.x} cy={pin.y} r="6" fill="currentColor" />
+            </g>
+          ))}
+        </svg>
+      )
+    }
   </div>
 </section>
+
+<style>
+  /* @ai-warning These degree labels are the chart's scale — the only thing
+   * that makes the graticule a measuring tool rather than the decorative grid
+   * it replaced — so they are informative text and must be readable. Three
+   * things were wrong at `opacity: 0.45` / `font-size: 18` / weight 400:
+   * white at 0.45 over --color-navy is 3.0:1, below AA; an SVG `font-size` is
+   * in viewBox units, so one value rendered ~13px beside the chart's desktop
+   * width and ~6px once the band stacked and the chart halved; and 400-weight
+   * mono at that size is hairline, which measured a 2.3:1 median pixel
+   * contrast even where the colour contrast was fine.
+   * The size pair lands between ~11px and ~14px at every width, and weight
+   * 600 (loaded — see Base.astro) matches every other mono log label on the
+   * site. Never dim these back toward the gridlines, never set one size for
+   * both layouts, and keep the breakpoint equal to the `lg:` grid split above.
+   *
+   * @ai-warning `fill` is OPAQUE and the halo is not decoration. This used to
+   * be `opacity: 0.8`, i.e. white let through by 20% of whatever sat behind
+   * the glyph — fine over bare navy (9.8:1) and not fine once the band drew
+   * land: measured at a 390px viewport, a label over the silhouette fell to a
+   * 6.70 median, and the worst pixel where a coastline stroke ran behind a
+   * glyph was 2.40:1. #d0d4d9 IS white-at-0.8-over-navy, so nothing looks
+   * different over open water, but the ink no longer samples its backdrop;
+   * `paint-order: stroke fill` then casts the glyph onto its own navy plate,
+   * so the measured ratio is 9.8:1 wherever the label lands — coast, gridline
+   * crossing or open sea. This is the same opaque-plate rule the hero and the
+   * story cards use, and it is the reason the silhouette could be drawn at
+   * all. Do not swap the fill back to white + alpha, and do not drop the
+   * stroke: both make legibility a function of whatever coastline or gridline
+   * happens to pass behind the glyph. Keep the halo width proportional to the
+   * font size (both layouts below). */
+  .chart-label text {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-weight: 600;
+    font-size: 30px;
+    letter-spacing: 0.12em;
+    fill: #d0d4d9;
+    paint-order: stroke fill;
+    stroke: var(--color-navy, #142a42);
+    stroke-width: 4px;
+    stroke-linejoin: round;
+  }
+  @media (min-width: 1024px) {
+    .chart-label text {
+      font-size: 20px;
+      stroke-width: 3px;
+    }
+  }
+</style>

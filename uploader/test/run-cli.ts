@@ -11,11 +11,12 @@ export interface CliResult {
 
 /**
  * Spawn `node --import tsx src/cli.ts <args>` exactly the way production runs it
- * (docker compose exec app node --import tsx src/cli.ts …). stdin is closed
- * immediately, so any prompt sees EOF — tests for the interactive path rely on that.
- * Not a .test.ts file: shared by cli.test.ts and pg.integration.test.ts.
+ * (docker compose exec app node --import tsx src/cli.ts …). stdin receives
+ * `input` (default none) and is then closed, so a prompt either reads that line
+ * or sees EOF — tests for the interactive paths rely on both.
+ * Not a .test.ts file: shared by cli.test.ts and the integration suites.
  */
-export function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<CliResult> {
+export function runCli(args: string[], env: NodeJS.ProcessEnv, input = ''): Promise<CliResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--import', 'tsx', 'src/cli.ts', ...args], {
       cwd: uploaderRoot,
@@ -27,7 +28,7 @@ export function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<CliResul
     child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
     child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('error', reject);
-    child.stdin.end();
+    child.stdin.end(input);
     child.on('close', (code) => resolve({ code, stdout, stderr }));
   });
 }

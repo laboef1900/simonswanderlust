@@ -23,6 +23,18 @@ export interface Caption {
   altDe: string;
 }
 
+/** Longest alt text a suggestion may fill in — model output is untrusted input
+ *  (CLAUDE.md §AI); the prompt asks for ~120 chars and a runaway 2 kB reply
+ *  used to land in the field verbatim (#140). */
+export const MAX_ALT = 300;
+
+/** One line, single-spaced, at most MAX_ALT UTF-16 units — and never ending
+ *  on a lone high surrogate, which jsonb would refuse at save time. */
+function cleanAlt(v: unknown): string {
+  const s = String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_ALT);
+  return /[\uD800-\uDBFF]$/.test(s) ? s.slice(0, -1) : s;
+}
+
 /** Index of the `}` that balances the `{` at `start`, or -1 if unbalanced.
  *  String-aware: braces inside string literals don't affect depth, so a `}`
  *  in a value (e.g. "a sign reading {closed}") won't end the object early. */
@@ -61,8 +73,8 @@ export function parseCaption(content: string): Caption {
       continue; // not valid JSON from this `{`; try the next one
     }
     sawJson = true;
-    const altEn = String(obj.altEn ?? '').trim();
-    const altDe = String(obj.altDe ?? '').trim();
+    const altEn = cleanAlt(obj.altEn);
+    const altDe = cleanAlt(obj.altDe);
     if (altEn && altDe) return { altEn, altDe };
   }
   throw new CaptionError(

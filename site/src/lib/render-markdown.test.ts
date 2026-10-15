@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MARKDOWN_OPTIONS, renderMarkdown } from './render-markdown';
+import { SHIKI_CSS } from './shiki-classes';
 import astroConfig from '../../astro.config.mjs';
 
 describe('MARKDOWN_OPTIONS parity with astro.config.mjs', () => {
@@ -27,6 +28,27 @@ describe('renderMarkdown', () => {
   it('still syntax-highlights a known language', async () => {
     const html = await renderMarkdown('```js\nconst a = 1;\n```');
     expect(html).toContain('astro-code');
+  });
+
+  // Issue #124: the sanitizer drops every `style`, so highlighting has to
+  // survive as classes — and every class must have a rule, or code blocks
+  // silently lose their colours on the live site and in previews.
+  it('highlights with classes SHIKI_CSS defines and no inline style at all', async () => {
+    // js (tokens), diff (Astro's user-select:none marker spans), ansi (the
+    // terminal palette as foreground AND background, plus a truecolor escape
+    // no stylesheet can cover — it must inherit, not dangle a rule-less class).
+    const html = await renderMarkdown(
+      '```js\nconst a = 1; // hi\nfunction f() { return `x${a}` }\n```\n\n' +
+        '```diff\n+ added\n- removed\n```\n\n' +
+        '```ansi\n\x1b[31mERROR\x1b[0m \x1b[1;44mbg\x1b[0m \x1b[38;2;12;34;56mtrue\x1b[0m\n```',
+    );
+    expect(html).not.toContain('style=');
+    const classes = [...new Set(html.match(/\bsh-[a-z0-9-]+/g))];
+    expect(classes).toContain('sh-bg-24292e'); // the <pre> background moved off `style` too
+    expect(classes).toContain('sh-c-ea4a5a'); // terminal.ansiRed
+    expect(classes).toContain('sh-bg-2188ff'); // terminal.ansiBlue as background
+    expect(html).toContain('<span> true</span>'); // truecolor: dropped, inherits
+    for (const cls of classes) expect(SHIKI_CSS).toContain(`.${cls}{`);
   });
 
   it('renders GFM tables', async () => {

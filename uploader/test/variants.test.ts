@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { variantWidths, WIDTHS, FORMATS } from '../src/variants.js';
+import { DEFAULT_PROCESS_OPTIONS, formatsFor, variantWidths, WIDTHS, FORMATS } from '../src/variants.js';
 
 describe('variantWidths', () => {
   it('keeps standard widths below the source and appends the intrinsic width', () => {
@@ -17,5 +17,10 @@ describe('contract constants', () => {
   it('matches the blog-side contract', () => {
     expect(WIDTHS).toEqual([640, 1280, 1920]);
     expect(FORMATS).toEqual(['avif', 'webp']);
+    expect(DEFAULT_PROCESS_OPTIONS).toEqual({ convertJpeg: true, webpQuality: 75, avifQuality: 55 });
+  });
+  it('selects the recorded image contract', () => {
+    expect(formatsFor()).toEqual(['avif', 'webp']);
+    expect(formatsFor('jpeg')).toEqual(['jpeg']);
   });
 });

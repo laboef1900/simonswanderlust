@@ -2,37 +2,48 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
-import { probeImage } from './pipeline.js';
-import { contentHashKey, storeOriginal, heroSnippet, isOriginalFile, assertSafeKey } from './storage.js';
-import { deleteMedia, imageUsage } from './media-files.js';
+import { normalizeProcessOptions, outputFormatForExtension, probeImage } from './pipeline.js';
+import { contentHashKey, storeOriginal, heroSnippet, assertSafeKey } from './storage.js';
+import { deleteMedia, imageUsage, VARIANT_FILE_RE } from './media-files.js';
 import {
-  libraryKey, redactForNonAdmin, MediaStoreError,
+  libraryKey, redactForNonAdmin, MediaStoreError, assertSafeFolder,
   type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
 } from './media-store.js';
 import { BacklogFullError, type EncodeQueue } from './encode-queue.js';
+import type { WorkLock } from './work-lock.js';
 import { parseExif } from './exif.js';
 import { diskSpace, insufficientSpace, formatBytes } from './disk.js';
-import type { SyncReport } from './media-sync.js';
-import { verifyPassword, type UserStore, UserExistsError } from './users.js';
+import type { ReconcileReport } from './media-sync.js';
+import { verifyPassword, type UserStore, UserExistsError, DUMMY_STORED_HASH, MAX_PASSWORD_LENGTH, passwordPolicyViolation, usernamePolicyViolation } from './users.js';
 import type { SessionStore } from './sessions.js';
 import {
-  SESSION_TTL_MS, loadUser, requireAuth, requireAdmin,
+  SESSION_TTL_MS, createAuthn,
   setSessionCookie, clearSessionCookie, isSecureRequest, SESSION_COOKIE,
 } from './authn.js';
-import { SettingsError, type SettingsStore } from './settings.js';
-import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow } from './posts.js';
-import { renderPreviewHtml } from './preview.js';
+import { SettingsError, validate as validateSettings, type Settings, type SettingsStore } from './settings.js';
+import { SecretsError, type SecretsStore } from './secrets.js';
+import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale } from './posts.js';
+import { foreignImageUrls } from './publish-gate.js';
+import { auditAltText } from './alt-audit.js';
+import { renderPreviewHtml, previewCsp } from './preview.js';
 import { type PageStore, type PagePair, type PageContent, type ImageDims, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
-import { importWxr } from './wp-import.js';
-import { fixedWindowLimiter, rateLimitPreHandler, type RateLimiter } from './rate-limit.js';
+import { prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type PreparedImport } from './wp-import.js';
+import { WxrParseError } from './wxr-parse.js';
+import { createImportRunner, memoryImportJobStore, ImportBusyError, type ImportRunner, type ImportJob } from './import-jobs.js';
+import { createRehostResume } from './wp-images.js';
+import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, commentLimiters, type RateLimiter, type AccountLimiter } from './rate-limit.js';
+import type { CommentStore } from './comments.js';
+import { registerPublicComments } from './comments-public.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
+import { compressionHook } from './compress.js';
+import { CommentError, isCommentStatus, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -40,6 +51,7 @@ export interface ServerConfig {
   users: UserStore;
   sessions: SessionStore;
   settings: SettingsStore;
+  secrets: SecretsStore;
   posts: PostStore;
   pages: PageStore;
   imgHost: string;   // Host header that serves image variants (img subdomain)
@@ -50,10 +62,58 @@ export interface ServerConfig {
   dbBackup: DbBackup;
   dbCheck: () => Promise<void>; // resolves iff the DB answers — probed by GET /health
   loginLimiter?: RateLimiter;
+  accountLimiter?: AccountLimiter;
+  /** Per-account failure limiter for POST /users/me/password, keyed on the session's user id. */
+  passwordLimiter?: AccountLimiter;
   media: MediaStore;
   encodeQueue: EncodeQueue;
-  /** Disk↔database reconciliation, triggered by POST /media/rescan. */
-  mediaSync?: { run: () => Promise<SyncReport> };
+  /**
+   * Disk↔database reconciliation + encode re-seed (`createReconciler`),
+   * triggered by POST /media/rescan. The route MUST NOT call the sync alone —
+   * see the @ai-warning on `createReconciler` (#117).
+   */
+  reconciler?: { run: () => Promise<ReconcileReport> };
+  /**
+   * The ONE process-wide build/encode mutex (issue #95), so the WordPress
+   * importer's encodes never overlap `astro build`. The same instance the
+   * builder and the encode queue were constructed with — a second lock would
+   * silently remove the protection. Optional only so route tests that never
+   * encode need not build one.
+   */
+  workLock?: WorkLock;
+  /**
+   * The WXR pre-flight (parse, validate, cap, free space) that returns the
+   * `run()` the job executes. Injectable for the same reason as `loginLimiter`
+   * and `reconciler`: the real one's pacing and retry behaviour cannot be
+   * observed from a route test, because every failure mode reachable without a
+   * network (the SSRF guard, an unresolvable host) is classified NON-retryable
+   * by design, and the retryable ones cost 15 s each.
+   */
+  prepareImport?: (xml: string, deps: ImportDeps) => Promise<PreparedImport>;
+  /**
+   * The background import runner (issue #92) — owns single-flight and the
+   * `import_jobs` rows. Defaults to a memory-backed one so a route test needs
+   * no database; `main.ts` passes the Postgres-backed instance.
+   */
+  importJobs?: ImportRunner;
+  /**
+   * Admin comment moderation (SPEC-ADM-001). Optional so route tests that do
+   * not exercise comments need none; when absent the routes still enforce
+   * authz first and then answer 503.
+   */
+  commentsAdmin?: CommentAdminStore;
+  /** Public reader comments (SPEC-API-001); absent → GET/POST /comments answer 503 after their checks. */
+  comments?: CommentStore;
+  /** Site-wide comments switch. Defaults to OFF (fail closed): POST answers 409. */
+  commentsEnabled?: () => boolean;
+  /**
+   * Exact Origin a browser POST /comments must carry. Defaults to the origin
+   * of `baseUrl` (PUBLIC_BASE_URL). Compared by equality, never prefix.
+   */
+  commentsOrigin?: string;
+  /** Injectable for tests; defaults to fresh `commentLimiters()` maps. */
+  commentIpLimiter?: RateLimiter;
+  commentGlobalLimiter?: RateLimiter;
 }
 
 const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
@@ -89,9 +149,14 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // (e.g. ./data/images from env) by resolving against the process cwd.
   const storageDir = resolve(cfg.storageDir);
   // @ai-warning: trustProxy makes Fastify read X-Forwarded-* (so req.ip and the
-  // cookie `secure` flag reflect the real client). This is correct ONLY behind a
-  // trusted reverse proxy that sets X-Forwarded-Proto; if the container is ever
-  // exposed directly, clients could spoof those headers.
+  // cookie `secure` flag reflect the real client). `trustProxy: 1` trusts exactly
+  // ONE hop — the reverse proxy in front of the container — so req.ip is the
+  // RIGHTMOST X-Forwarded-For entry, the one that proxy appended; any leftmost,
+  // client-supplied entries are ignored. `true` trusted every hop, which made
+  // req.ip (and with it the per-IP auth limiter) spoofable by a client that
+  // rotates the header (#108). A second proxy layer needs `2`, never `true`.
+  // The compose file publishes port 3000 on loopback only, so the host proxy
+  // is the sole ingress and the one hop this trusts.
   // @ai-note: http.Server#requestTimeout bounds how long the server waits to
   // fully RECEIVE a request (headers + body) — it does not bound how long a
   // handler then takes to process it (e.g. encoding an upload). Fastify sets
@@ -99,23 +164,28 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // default, so without an explicit value a stalled request would never time
   // out at this layer. 120s is generous for even a large multipart upload
   // over a slow connection while still bounding one that stalls outright.
-  const app = Fastify({ logger: false, trustProxy: true, requestTimeout: 120_000 });
+  const app = Fastify({ logger: false, trustProxy: 1, requestTimeout: 120_000 });
   const { users, sessions } = cfg;
 
-  // nosniff everywhere; clickjacking/referrer policies only on the admin/API
-  // surface (blog pages keep parity with the old nginx: no admin headers).
-  const ADMIN_PREFIXES = [
-    '/admin', '/login', '/logout', '/auth', '/setup', '/settings', '/users',
-    '/posts', '/upload', '/import', '/export', '/backups', '/rebuild', '/health', '/pages', '/images',
-    // Without '/media' here the whole media API would lose X-Frame-Options and
-    // Referrer-Policy — it is admin surface, not public.
-    '/media', '/ai-config',
-  ];
+  // nosniff everywhere; clickjacking/referrer policies on every route that is
+  // not the public blog / image / basemap surface (blog pages keep parity with
+  // the old nginx: no admin headers). The rule is derived from the MATCHED
+  // ROUTE, not from a hand-kept prefix list: that list had drifted in both
+  // directions (#130 — it still named a `/images` that no longer existed and
+  // omitted `/api`, so `/api/cms/stats` shipped without the headers), and the
+  // next admin route under a new prefix would have done the same. The public
+  // surface is exactly the wildcard routes the three static mounts below
+  // register; everything else Fastify matches is admin or API. A request no
+  // route matches (`routeOptions.url` undefined) falls to setNotFoundHandler,
+  // which is public surface too: the blog's 404 page, legacy 301s, the 503
+  // "building" page and, in the one-hostname dev setup, the blog itself.
+  const PUBLIC_ROUTES: Record<string, true> = { '/*': true, '/map/*': true };
   app.addHook('onSend', async (req, reply) => {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
-    const admin = ADMIN_PREFIXES.some((p) => url === p || url.startsWith(`${p}/`) || url.startsWith(`${p}?`));
-    if (admin) {
+    const route = req.routeOptions.url;
+    if (route === '/settings' || route === '/ai-config') reply.header('Cache-Control', 'no-store');
+    if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
       reply.header('Referrer-Policy', 'no-referrer');
     }
@@ -127,10 +197,42 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       if (path.endsWith('.pmtiles')) reply.header('content-type', 'application/octet-stream');
       else if (path.endsWith('.pbf')) reply.header('content-type', 'application/x-protobuf');
     }
+    // Fingerprinted blog assets get a real cache lifetime; the HTML document
+    // and every other path keep @fastify/send's `public, max-age=0`
+    // (revalidate-always). Astro hashes the content into the filename under
+    // build.assets = '_astro' (Base.CREtK3y4.css), so these bytes are
+    // immutable by construction — while `${siteDir}/current` is a symlink a
+    // publish repoints, which is exactly why the DOCUMENT must not be cached:
+    // it is what points at the new asset names.
+    // @ai-note Set here rather than via the mount's `setHeaders`, which
+    // @fastify/static overwrites with its own cacheControl value (see the
+    // image mount below); an onSend `reply.header` is the last writer.
+    if (path.startsWith('/_astro/') && reply.statusCode < 400) {
+      reply.header('cache-control', 'public, max-age=31536000, immutable');
+    }
   });
+
+  // @ai-warning Registered AFTER the hook above ON PURPOSE: onSend hooks run in
+  // registration order, and the compressor's allow-list judges the FINAL
+  // content-type — including the /map/ overrides that hook assigns, since
+  // @fastify/static's setHeaders never fires for a 206. /map/ is additionally
+  // excluded by prefix so a range read of the basemap stays identity bytes.
+  app.addHook('onSend', compressionHook({ skipPrefixes: ['/map/'] }));
 
   // Per-IP throttle for the unauthenticated auth endpoints (brute-force defense).
   const loginLimiter = cfg.loginLimiter ?? fixedWindowLimiter({ max: 10, windowMs: 900_000 });
+  // @ai-note The /login account budget counts failures from EVERY source and
+  // is deliberately 10x the per-IP budget: one address is cut off at 10 by
+  // limitAuth long before it can lock the account, so locking the admin out
+  // needs a sustained, distributed attack — yet 100 guesses / 15 min is still
+  // no threat to a 12+ character password (NIST SP 800-63B §5.2.2 allows up
+  // to 100). The old max of 5 let anyone lock the admin out with 5 requests
+  // (#109). See docs/superpowers/specs/2026-09-05-login-lockout-design.md.
+  const accountLimiter = cfg.accountLimiter ?? accountLockoutLimiter({ max: 100 });
+  const passwordLimiter = cfg.passwordLimiter ?? accountLockoutLimiter();
+  // issue #92: memory-backed by default so route tests need no database;
+  // main.ts passes the Postgres-backed runner whose rows survive a restart.
+  const importJobs = cfg.importJobs ?? createImportRunner({ store: memoryImportJobStore() });
   const limitAuth = rateLimitPreHandler(loginLimiter);
 
   // Unexpected errors (DB failures, bugs) must not leak internals to clients:
@@ -157,11 +259,17 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   app.register(multipart, {
     limits: { fileSize: 25 * 1024 * 1024, files: 1, parts: 8 },
   });
+  // No global session hook (#129): the blog, image host, basemap and admin
+  // static pages never read a session, so they never query for one. Only
+  // routes that declare one of these preHandlers resolve `req.authUser`.
   app.decorateRequest('authUser', null);
-  app.addHook('onRequest', async (req) => { req.authUser = await loadUser(req, users, sessions); });
+  const { optionalAuth, requireAuth, requireAdmin } = createAuthn(users, sessions);
 
   const here = dirname(fileURLToPath(import.meta.url));
-  app.register(fastifyStatic, { root: join(here, '..', 'public'), prefix: '/admin/' });
+  // Prefix WITHOUT the trailing slash plus `redirect: true`: @fastify/static
+  // still mounts `/admin/*`, and only then registers GET /admin → 301 /admin/
+  // (query kept). public/ has no subdirectories, so nothing else changes.
+  app.register(fastifyStatic, { root: join(here, '..', 'public'), prefix: '/admin', redirect: true });
   // /upload and the CLI append a content hash to every key (contentHashKey),
   // so a given variant URL's bytes never change: replacing a photo mints a new
   // URL and previously published URLs keep serving — which is what makes a
@@ -179,12 +287,14 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     maxAge: '365d',
     immutable: true,
     constraints: { host: cfg.imgHost },
+    // Only finished variants (`<key>-<width>.<avif|webp|jpeg>`) are web assets.
     // Untouched full-resolution originals (`<key>-orig.<ext>`) live in
     // storageDir so the incremental backup tar captures them, but they are a
-    // private DR archive — never a web asset. Keep them off the public image
-    // host (404) so a visitor can't guess `.../hero-orig.jpg` next to the
-    // published `.../hero-640.avif`.
-    allowedPath: (pathName) => !isOriginalFile(pathName),
+    // private DR archive; storage.ts's `.part-<hex>` temps (#118) are
+    // half-written files that may be an original — GPS included. An
+    // allow-list keeps both off the public host (404), where the old
+    // originals-only deny-list would have served a crash leftover.
+    allowedPath: (pathName) => VARIANT_FILE_RE.test(pathName),
   });
 
   // The public blog: static output of the last release. `current` is a symlink
@@ -212,6 +322,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   // Declared before the upload route, which builds `src` from it.
   const imageBase = cfg.baseUrl.replace(/\/+$/, '');
+  // Built once: an unparseable base URL should fail here, at boot, not 500 a
+  // preview request later.
+  const previewPolicy = previewCsp(imageBase);
 
   /** Cap on any `keys[]` batch: an unbounded array is an authenticated
    *  N-round-trip amplifier against the process that also serves the blog. */
@@ -227,7 +340,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
    * immediately because the storage key is a pure function of the content hash
    * and a metadata-only probe reads orientation-corrected dimensions in
    * ~0.0002 s (vs ~0.467 s for the re-encode probe it replaced). What callers
-   * lose is that `${src}-640.webp` 404s until the encode lands — the media
+   * lose is that the first selected thumbnail (`${src}-640.webp` for modern,
+   * `${src}-640.jpeg` for JPEG-only) 404s until the encode lands — the media
    * library shows a processing badge, and `POST /posts/:tk/publish` refuses to
    * publish a post referencing a photo that is not `ready`.
    */
@@ -265,6 +379,26 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (!KEY_RE.test(key)) {
       return reply.code(400).send({ error: 'invalid key (use lowercase a-z, 0-9, / _ -)' });
     }
+    // Snapshot the full encoding profile before deriving the identity. A
+    // settings change after this point cannot redirect the queued job.
+    const currentSettings = cfg.settings.get();
+    const encoding = normalizeProcessOptions({
+      convertJpeg: currentSettings.convertJpeg,
+      webpQuality: currentSettings.webpQuality,
+      avifQuality: currentSettings.avifQuality,
+    });
+    const versionedKey = contentHashKey(key, buf, encoding);
+    const src = `${imageBase}/${versionedKey}`;
+    // #133: every input check precedes every write. The store validates the
+    // folder again in upsert(), but that ran AFTER storeOriginal, so a bad
+    // folder left an orphan original for the reconcile to adopt; and KEY_RE
+    // alone admits a key too long or too deep for the filesystem.
+    try {
+      assertSafeFolder(folder);
+      assertSafeKey(versionedKey);
+    } catch (e) {
+      return reply.code(400).send({ error: (e as Error).message });
+    }
 
     // #73: refuse before writing rather than failing mid-pipeline. A full
     // /data takes out uploads, publishing AND backups at once, and a partial
@@ -281,13 +415,6 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       console.error('could not read free disk space; accepting the upload anyway:', e);
     }
 
-    // Version the key by content hash (issue #26): a re-upload mints a fresh
-    // URL instead of overwriting variants cached as immutable; old URLs keep
-    // serving because nothing on disk is touched. Clients use the returned
-    // src/snippet, never the key they sent.
-    const versionedKey = contentHashKey(key, buf);
-    const src = `${imageBase}/${versionedKey}`;
-
     let probe;
     try {
       probe = await probeImage(buf);
@@ -298,47 +425,65 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (!probe.width || !probe.height) {
       return reply.code(400).send({ error: 'could not read that image' });
     }
+    const format = outputFormatForExtension(probe.ext, encoding);
 
     // Re-uploading identical bytes is the NORMAL case when a folder is dropped
     // twice, so all three states of an existing row are handled explicitly.
     const existing = await cfg.media.get(versionedKey);
     if (existing && existing.status === 'ready') {
       // Metadata the caller supplied still applies — it is not silently
-      // discarded — but the STORED values win for the returned snippet.
-      if (alt || title || folder) {
-        await cfg.media.patch(versionedKey, {
-          ...(title ? { title } : {}), ...(folder ? { folder } : {}),
+      // discarded — but the STORED values win: alt fills only a blank slot,
+      // and the folder only if the photo is still in the root (#135). The
+      // browser always sends the folder that is currently open, so a second
+      // drop of the same camera export must not relocate a curated photo.
+      const fillFolder = folder !== '' && existing.folder === '';
+      let stored = existing;
+      if (alt || title || fillFolder) {
+        // Best-effort on a duplicate — but the response reports what was
+        // PERSISTED, so a failed patch cannot claim a folder the photo is not in.
+        stored = await cfg.media.patch(versionedKey, {
+          ...(title ? { title } : {}), ...(fillFolder ? { folder } : {}),
           ...(alt ? { alt: { de: existing.alt.de || alt, en: existing.alt.en || alt } } : {}),
-        }).catch(() => { /* metadata update is best-effort on a duplicate */ });
+        }).catch(() => existing);
       }
       return reply.send({
         src, key: versionedKey, width: existing.width, height: existing.height,
-        status: existing.status, duplicate: true,
-        snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt),
+        status: existing.status, duplicate: true, folder: stored.folder,
+        ...(existing.format ? { format: existing.format } : {}),
+        snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt, existing.format),
       });
     }
     if (existing && existing.status === 'processing') {
       // Do NOT re-enqueue: the job is already in the queue.
       return reply.send({
         src, key: versionedKey, width: existing.width, height: existing.height,
-        status: 'processing', duplicate: true,
-        snippet: heroSnippet(src, existing.width, existing.height, alt),
+        status: 'processing', duplicate: true, folder: existing.folder,
+        ...(existing.format ? { format: existing.format } : {}),
+        snippet: heroSnippet(src, existing.width, existing.height, alt, existing.format),
       });
     }
 
     const exif = parseExif(probe.exif);
-    try {
-      await storeOriginal(versionedKey, buf, probe.ext, { storageDir });
-    } catch (e) {
-      console.error(`could not store the original for ${versionedKey}:`, e);
-      return reply.code(500).send({ error: 'internal server error' });
-    }
+    // Persist the immutable profile before the original becomes recoverable
+    // from disk. A crash after this point leaves a deterministic processing
+    // row for boot recovery instead of an origin-only orphan that has lost the
+    // setting snapshot.
     await cfg.media.upsert({
       key: versionedKey, folder, title,
       alt: { de: alt, en: alt },
       width: probe.width, height: probe.height, origBytes: buf.length,
       status: 'processing', exif, uploadedBy: req.authUser?.id ?? null,
+      ...(format ? { format } : {}),
+      encoding,
     });
+    try {
+      await storeOriginal(versionedKey, buf, probe.ext, { storageDir });
+    } catch (e) {
+      if (existing) await cfg.media.setStatus(versionedKey, 'failed', 'write_failed').catch(() => {});
+      else await cfg.media.remove(versionedKey).catch(() => {});
+      console.error(`could not store the original for ${versionedKey}:`, e);
+      return reply.code(500).send({ error: 'internal server error' });
+    }
     try {
       cfg.encodeQueue.enqueue(versionedKey);
     } catch (e) {
@@ -348,7 +493,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send({
       src, key: versionedKey, width: probe.width, height: probe.height,
       status: 'processing',
-      snippet: heroSnippet(src, probe.width, probe.height, alt),
+      ...(format ? { format } : {}),
+      snippet: heroSnippet(src, probe.width, probe.height, alt, format),
     });
   });
 
@@ -481,8 +627,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // `processing` and then hitting a full backlog strands the key: the row says
   // `processing` with nothing queued, and nothing recovers it — this route
   // skips `processing` (below), the UI only offers Retry for `failed`, and the
-  // publish gate blocks every post referencing it until the next restart runs
-  // encodeQueue.recover().
+  // publish gate blocks every post referencing it until the next reconcile
+  // pass (a restart or POST /media/rescan) runs encodeQueue.recover().
   // The flip has to come FIRST despite that, not after a successful enqueue:
   // the queue can start the job immediately, and a fast encode would then
   // write `ready` before our write landed, leaving the row stuck at
@@ -511,8 +657,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   app.post('/media/rescan', { preHandler: requireAdmin }, async (_req, reply) => {
-    if (!cfg.mediaSync) return reply.code(503).send({ error: 'reconciliation is not configured' });
-    return reply.send(await cfg.mediaSync.run());
+    if (!cfg.reconciler) return reply.code(503).send({ error: 'reconciliation is not configured' });
+    return reply.send(await cfg.reconciler.run());
   });
 
   app.get('/media/queue', { preHandler: requireAuth }, async (_req, reply) =>
@@ -561,7 +707,10 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   // Deletion stays ADMIN-only and still refuses when a post or page references
-  // the photo.
+  // the photo — in its working copy OR in the published snapshot the blog is
+  // built from (#115: a draft save that swapped the photo out must not make it
+  // deletable while the live site, and every rebuild until a republish, still
+  // renders it; deleteMedia also removes the original, so nothing re-encodes).
   // @ai-note: usage only sees Postgres content — the last built release may
   // still reference a deleted image until the next rebuild.
   app.delete('/media/items/*', { preHandler: requireAdmin }, async (req, reply) => {
@@ -574,23 +723,71 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const corpus = await usageCorpus();
     const usedIn = imageUsage(`${imageBase}/${key}`, corpus.posts, corpus.pages);
     if (usedIn.length > 0) {
-      return reply.code(409).send({ error: 'image is referenced by existing content — remove those references first', usedIn });
+      const error = usedIn.some((u) => u.published && !u.working)
+        ? 'image is still part of a published version — republish (or unpublish) that post first'
+        : 'image is referenced by existing content — remove those references first';
+      return reply.code(409).send({ error, usedIn });
+    }
+    // Refuse while the encoder may still write under this key (#116): the
+    // running job holds the original in memory, `storeVariantFiles` recreates
+    // the directory, and the next rescan would backfill the orphaned variants
+    // as a zombie `ready` row with no original. Both signals are needed —
+    // the row says `processing` from upload until the encoder's final write,
+    // and the queue knows about a key the row no longer describes.
+    const item = await cfg.media.get(key);
+    if (item?.status === 'processing' || cfg.encodeQueue.isActive(key)) {
+      return reply.code(409).send({ error: 'photo is still being encoded — wait for it to finish (or fail), then delete it' });
     }
     const deleted = await deleteMedia(storageDir, key);
-    const hadRow = (await cfg.media.get(key)) !== null;
     await cfg.media.remove(key);
-    if (deleted === 0 && !hadRow) return reply.code(404).send({ error: 'image not found' });
+    if (deleted === 0 && item === null) return reply.code(404).send({ error: 'image not found' });
     return reply.send({ ok: true, deleted });
   });
 
-  // Settings govern backups (what gets written to disk and retained) — same
-  // trust boundary as /rebuild and /backups, so the whole surface is admin-only.
-  app.get('/settings', { preHandler: requireAdmin }, async (_req, reply) => {
-    return reply.send(cfg.settings.get());
-  });
+  // Serialize config reads and writes: JSON settings and Postgres cannot commit
+  // together. Caption-only reads deliberately bypass this optional secret path.
+  let settingsTail = Promise.resolve();
+  function settingsOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = settingsTail.then(operation);
+    settingsTail = result.then(() => {}, () => {});
+    return result;
+  }
+  function captionConfig(s: Settings) {
+    return {
+      lmBaseUrl: s.lmBaseUrl, lmModel: s.lmModel, captionPrompt: s.captionPrompt,
+      captionTimeoutMs: s.captionTimeoutMs, captionMaxEdge: s.captionMaxEdge,
+    };
+  }
+  function settingsResponse(s: Settings, hasAiApiKey: boolean) {
+    return {
+      ...captionConfig(s), backupSchedule: s.backupSchedule, backupRetention: s.backupRetention,
+      convertJpeg: s.convertJpeg, webpQuality: s.webpQuality, avifQuality: s.avifQuality,
+      importDelayMs: s.importDelayMs, importRetries: s.importRetries,
+    commentsEnabled: s.commentsEnabled,
+      aiProvider: s.aiProvider, aiModel: s.aiModel, aiCustomBaseUrl: s.aiCustomBaseUrl,
+      reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs, hasAiApiKey,
+    };
+  }
+  // No raw database/crypto error reaches the global logger (driver detail can
+  // contain credential material). Unknown failures have the same fixed boundary.
+  function secretFailure(error: unknown) {
+    const safe = error instanceof SecretsError ? error : new SecretsError('ai_secret_store_unavailable');
+    return { error: safe.message, code: safe.code };
+  }
 
-  app.post('/settings', { preHandler: requireAdmin }, async (req, reply) => {
-    const b = (req.body ?? {}) as Record<string, unknown>;
+  app.get('/settings', { preHandler: requireAdmin }, async (_req, reply) => settingsOperation(async () => {
+    try {
+      return reply.send(settingsResponse(cfg.settings.get(), await cfg.secrets.has('ai_api_key')));
+    } catch (e) {
+      return reply.code(503).send(secretFailure(e));
+    }
+  }));
+
+  app.post('/settings', { preHandler: requireAdmin }, async (req, reply) => settingsOperation(async () => {
+    if (typeof req.body !== 'object' || req.body === null || Array.isArray(req.body)) {
+      return reply.code(400).send({ error: 'Settings must be a JSON object.' });
+    }
+    const b = req.body as Record<string, unknown>;
     const partial: Record<string, unknown> = {};
     if (b.lmBaseUrl !== undefined) partial.lmBaseUrl = String(b.lmBaseUrl).trim();
     if (b.lmModel !== undefined) partial.lmModel = String(b.lmModel).trim();
@@ -599,31 +796,84 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (b.captionPrompt !== undefined) partial.captionPrompt = String(b.captionPrompt);
     if (b.backupSchedule !== undefined) partial.backupSchedule = String(b.backupSchedule);
     if (b.backupRetention !== undefined) partial.backupRetention = Number(b.backupRetention);
+    if (b.importDelayMs !== undefined) partial.importDelayMs = Number(b.importDelayMs);
+    if (b.importRetries !== undefined) partial.importRetries = Number(b.importRetries);
+    if (b.convertJpeg !== undefined) partial.convertJpeg = b.convertJpeg;
+    // SPEC-FLAG-002: global comments switch. Persisted only; never builds or takes workLock.
+    if (b.commentsEnabled !== undefined) partial.commentsEnabled = b.commentsEnabled;
+    if (b.webpQuality !== undefined) partial.webpQuality = Number(b.webpQuality);
+    if (b.avifQuality !== undefined) partial.avifQuality = Number(b.avifQuality);
+    for (const field of ['aiProvider', 'aiModel', 'aiCustomBaseUrl', 'reviewPrompt', 'reviewTimeoutMs'] as const) {
+      if (Object.hasOwn(b, field)) partial[field] = b[field];
+    }
+    const changesSecret = Object.hasOwn(b, 'aiApiKey');
+    const key = b.aiApiKey;
+    if (changesSecret && key !== null && (typeof key !== 'string' || /[\p{C}]/u.test(key))) {
+      return reply.code(400).send({ error: 'API key must be a string without control characters, or null.' });
+    }
+    let next: Settings;
     try {
-      return reply.send(cfg.settings.update(partial));
+      next = validateSettings({ ...cfg.settings.get(), ...partial });
     } catch (e) {
       if (e instanceof SettingsError) return reply.code(400).send({ error: e.message });
-      throw e;
+      return reply.code(500).send({ error: 'Settings could not be read.' });
     }
-  });
+    let hasAiApiKey: boolean;
+    try {
+      if (changesSecret) {
+        if (typeof key === 'string' && key !== '') {
+          await cfg.secrets.set('ai_api_key', key);
+          hasAiApiKey = true;
+        } else {
+          await cfg.secrets.delete('ai_api_key');
+          hasAiApiKey = false;
+        }
+      } else {
+        hasAiApiKey = await cfg.secrets.has('ai_api_key');
+      }
+    } catch (e) {
+      return reply.code(503).send(secretFailure(e));
+    }
+    try {
+      if (Object.keys(partial).length) next = cfg.settings.update(partial);
+    } catch {
+      // @ai-warning Secret commit already succeeded. Do not pretend rollback or
+      // send "nothing saved"; a replacement key can now meet the OLD endpoint.
+      return reply.code(500).send(changesSecret
+        ? { code: 'settings_partial_failure', error: 'API key change saved, but settings were not saved. Reload settings before retrying.' }
+        : { code: 'settings_write_failed', error: 'Settings were not saved. Reload settings before retrying.' });
+    }
+    return reply.send(settingsResponse(next, hasAiApiKey));
+  }));
 
-  // Read-only LM config for the browser-direct alt-text suggester. Any signed-in
-  // author may READ it (to run a suggestion); CHANGING it stays admin-only via
-  // POST /settings. Deliberately excludes backup settings.
-  app.get('/ai-config', { preHandler: requireAuth }, async (_req, reply) => {
-    const s = cfg.settings.get();
-    return reply.send({
-      lmBaseUrl: s.lmBaseUrl,
-      lmModel: s.lmModel,
-      captionPrompt: s.captionPrompt,
-      captionTimeoutMs: s.captionTimeoutMs,
-      captionMaxEdge: s.captionMaxEdge,
+  app.get('/ai-config', { preHandler: requireAuth }, async (req, reply) => {
+    const purpose = (req.query as Record<string, unknown>).purpose;
+    if (purpose === 'caption') return reply.send(captionConfig(cfg.settings.get()));
+    if (purpose !== undefined) return reply.code(400).send({ error: 'Unknown AI configuration purpose.' });
+    return settingsOperation(async () => {
+      const s = cfg.settings.get();
+      const aiBaseUrl = s.aiProvider === 'lm-studio' ? s.lmBaseUrl
+        : s.aiProvider === 'openrouter' ? 'https://openrouter.ai/api/v1'
+          : s.aiProvider === 'deepseek' ? 'https://api.deepseek.com/v1' : s.aiCustomBaseUrl;
+      if (!aiBaseUrl) return reply.code(400).send({ code: 'invalid_review_configuration', error: 'Configure a custom review base URL first.' });
+      try {
+        // get() checks encryption availability even when no row exists. Local
+        // captions/review never decrypt or receive a remotely configured key.
+        const aiApiKey = s.aiProvider === 'lm-studio' ? null : await cfg.secrets.get('ai_api_key');
+        const hasAiApiKey = s.aiProvider === 'lm-studio' ? await cfg.secrets.has('ai_api_key') : aiApiKey !== null;
+        return reply.send({
+          ...captionConfig(s), aiProvider: s.aiProvider, aiBaseUrl, aiModel: s.aiModel,
+          reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs, hasAiApiKey, aiApiKey,
+        });
+      } catch (e) {
+        return reply.code(503).send(secretFailure(e));
+      }
     });
   });
 
   app.get('/login', (_req, reply) => reply.sendFile('login.html'));
 
-  app.get('/auth/status', async (req) => {
+  app.get('/auth/status', { preHandler: optionalAuth }, async (req) => {
     if (req.authUser) {
       return { authenticated: true, username: req.authUser.username, isAdmin: req.authUser.isAdmin, needsSetup: false };
     }
@@ -645,6 +895,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const username = String(b.username ?? '').trim();
     const password = String(b.password ?? '');
     if (!username || !password) return reply.code(400).send({ error: 'username and password are required' });
+    const violation = usernamePolicyViolation(username) ?? passwordPolicyViolation(password);
+    if (violation) return reply.code(400).send({ error: violation });
     const user = await users.create({ username, password, isAdmin: true });
     const token = await sessions.create(user.id, SESSION_TTL_MS);
     setSessionCookie(reply, token, isSecureRequest(req));
@@ -655,10 +907,29 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const b = (req.body ?? {}) as { username?: unknown; password?: unknown };
     const username = String(b.username ?? '').trim();
     const password = String(b.password ?? '');
+    // Looked up whatever its length: accounts created before #109 capped new
+    // usernames at 64 may be longer, and must keep signing in. The limiter
+    // hashes over-long keys, so the length costs the map nothing.
     const user = await users.findByUsername(username);
-    if (!user || !verifyPassword(password, user.passwordHash)) {
+    // A locked account is refused BEFORE scrypt runs, so a client that already
+    // tripped the lockout cannot keep driving ~16 MiB / tens-of-ms hashes on
+    // the container that also serves the blog (#108). The lock only exists
+    // for usernames that have failed before, so this early return does not
+    // leak whether an unknown username exists.
+    if (accountLimiter.isLocked(username)) {
+      return reply.code(429).send({ error: 'account is temporarily locked due to excessive failed login attempts' });
+    }
+    // Constant-time execution: when username is missing, execute verifyPassword with DUMMY_STORED_HASH
+    // so response timing does not leak whether a username exists (CWE-208 mitigation).
+    const storedHash = user ? user.passwordHash : DUMMY_STORED_HASH;
+    const isValid = verifyPassword(password, storedHash);
+
+    if (!user || !isValid) {
+      accountLimiter.recordFailure(username);
       return reply.code(401).send({ error: 'invalid username or password' });
     }
+
+    accountLimiter.recordSuccess(username);
     const token = await sessions.create(user.id, SESSION_TTL_MS);
     setSessionCookie(reply, token, isSecureRequest(req));
     return reply.send({ username: user.username, isAdmin: user.isAdmin });
@@ -682,6 +953,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const password = String(b.password ?? '');
     const isAdmin = Boolean(b.isAdmin);
     if (!username || !password) return reply.code(400).send({ error: 'username and password are required' });
+    const violation = usernamePolicyViolation(username) ?? passwordPolicyViolation(password);
+    if (violation) return reply.code(400).send({ error: violation });
     try {
       const user = await users.create({ username, password, isAdmin });
       return reply.send({ id: user.id, username: user.username, isAdmin: user.isAdmin, createdAt: user.createdAt });
@@ -704,8 +977,10 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   // Self-service password change (any authenticated user, own account only).
-  // Rate-limited like the other password-verifying endpoints: a hijacked
-  // session must not be able to brute-force the current password.
+  // Rate-limited like the other password-verifying endpoints (per-IP limitAuth)
+  // AND per account via passwordLimiter, keyed on the session's user id: a
+  // hijacked session must not be able to brute-force the current password,
+  // and the per-IP bucket alone is no bound on a client with many addresses.
   app.post('/users/me/password', { preHandler: [limitAuth, requireAuth] }, async (req, reply) => {
     const b = (req.body ?? {}) as { currentPassword?: unknown; newPassword?: unknown };
     const currentPassword = String(b.currentPassword ?? '');
@@ -713,13 +988,21 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (!currentPassword || !newPassword) {
       return reply.code(400).send({ error: 'current and new password are required' });
     }
+    const violation = passwordPolicyViolation(newPassword);
+    if (violation) return reply.code(400).send({ error: `new ${violation}` });
+    if (currentPassword.length > MAX_PASSWORD_LENGTH) return reply.code(400).send({ error: 'current password is incorrect' });
     const user = req.authUser ? await users.findById(req.authUser.id) : null;
     if (!user) return reply.code(401).send({ error: 'unauthorized' });
+    if (passwordLimiter.isLocked(user.id)) {
+      return reply.code(429).send({ error: 'too many failed attempts, please wait and try again' });
+    }
     // @ai-note: a wrong current password is a 400, NOT a 401 — the admin-page
     // fetch handlers redirect to /login on 401, which would boot the user mid-form.
     if (!verifyPassword(currentPassword, user.passwordHash)) {
+      passwordLimiter.recordFailure(user.id);
       return reply.code(400).send({ error: 'current password is incorrect' });
     }
+    passwordLimiter.recordSuccess(user.id);
     await users.setPassword(user.id, newPassword);
     await sessions.destroyAllForUser(user.id);
     // destroyAllForUser also killed the caller's own session — mint a fresh one
@@ -745,7 +1028,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     // Origin equality, never a prefix match — same rule as the gallery
     // allow-list (see site/src/lib/body-images.ts).
     if (u.origin !== base.origin || !src.startsWith(prefix)) return null;
-    return src.slice(prefix.length).replace(/-\d+\.(?:avif|webp)$/, '');
+    return src.slice(prefix.length).replace(/-\d+\.(?:avif|webp|jpeg)$/, '');
   }
 
   /**
@@ -786,6 +1069,25 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return [...notReady];
   }
 
+  /**
+   * The publish gate's second check (#91): every image URL the rendered body
+   * of either locale would put on the page whose origin is not the image
+   * host. Store-free, so it runs BEFORE `notReadyPhotos` — a foreign URL has
+   * no media row to look up, and it is the more fundamental problem to report.
+   */
+  async function foreignBodyImages(pair: StoredPostPair): Promise<string[]> {
+    const out = new Set<string>();
+    for (const locale of ['de', 'en'] as const) {
+      for (const url of await foreignImageUrls(pair[locale].bodyMarkdown, imageBase)) out.add(url);
+    }
+    return [...out];
+  }
+
+  const FOREIGN_EXAMPLES = 5;
+  function foreignImagesMessage(n: number): string {
+    return `${n} image(s) in the body still point at another host — re-run the WordPress import to re-host them, or replace them with library photos, then publish again`;
+  }
+
   app.get('/posts', { preHandler: requireAuth }, async () => posts.list());
 
   app.get('/posts/:tk', { preHandler: requireAuth }, async (req, reply) => {
@@ -794,9 +1096,26 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send(pair);
   });
 
+  /**
+   * The alt-text audit (see src/alt-audit.ts): the photos of this post that
+   * reach a reader undescribed. Author-level, like every other read here.
+   *
+   * @ai-warning Advisory ONLY. Nothing in this route, and nothing that reads
+   * it, may refuse a publish — the imported corpus is in exactly this state.
+   * The reply is the audit's own explicit shape, never a stored row.
+   */
+  app.get('/posts/:tk/alt-audit', { preHandler: requireAuth }, async (req, reply) => {
+    const pair = await posts.get((req.params as { tk: string }).tk);
+    if (!pair) return reply.code(404).send({ error: 'post not found' });
+    const audit = auditAltText(pair);
+    return reply.send({ count: audit.count, images: audit.images });
+  });
+
   // Server-side preview of a draft (or published) post, rendered through the
   // same markdown pipeline the site build uses (see src/preview.ts). Drafts
-  // are author territory, so requireAuth — publishing stays admin-only.
+  // are author territory, so requireAuth — publishing stays admin-only. The
+  // reply carries a deny-by-default CSP (#124): author markup renders here on
+  // the admin origin, so nothing but images and the page's own styles may load.
   app.get('/posts/:tk/preview', { preHandler: requireAuth }, async (req, reply) => {
     const q = (req.query ?? {}) as { locale?: unknown };
     const locale = q.locale === undefined ? 'de' : String(q.locale);
@@ -808,22 +1127,54 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply
       .type('text/html; charset=utf-8')
       .header('cache-control', 'no-store')
+      .header('content-security-policy', previewPolicy)
       .send(await renderPreviewHtml(pair, locale, imageBase));
   });
 
-  const upsert = async (req: { body: unknown }, reply: import('fastify').FastifyReply, tk: string) => {
-    // `updatedAt` is the optimistic-concurrency echo (the value the editor
-    // loaded), not part of the pair itself — strip it before storing. It is
-    // optional: callers without it (new posts, WP importer) skip the check.
-    const { updatedAt, ...body } = (req.body ?? {}) as PostPair & { updatedAt?: unknown };
-    const pair: PostPair = { ...body, translationKey: tk };
-    let baseUpdatedAt: Date | undefined;
-    if (updatedAt !== undefined && updatedAt !== null) {
-      baseUpdatedAt = new Date(String(updatedAt));
-      if (Number.isNaN(baseUpdatedAt.getTime())) return reply.code(400).send({ error: 'invalid updatedAt' });
-    }
+  const upsert = async (req: { body: unknown }, reply: FastifyReply, tk: string) => {
     try {
-      validateDraft(pair);
+      // Shape first (issue #120): a non-object body, a missing `de`, a
+      // non-string title etc. are 400s naming the field, never a TypeError or
+      // a Postgres 22P02/23502 surfacing as a sanitized 500.
+      const raw = req.body ?? {};
+      validateDraft(raw);
+      // `updatedAt` is the optimistic-concurrency echo (the value the editor
+      // loaded), not part of the pair itself — strip it before storing. It is
+      // optional: callers without it (new posts, WP importer) skip the check.
+      // `confirmSlugChange` is the author's explicit consent to rename a draft
+      // slug (issue #122) — likewise stripped.
+      const { updatedAt, confirmSlugChange, ...body } = raw as PostPair & { updatedAt?: unknown; confirmSlugChange?: boolean };
+      const pair: PostPair = { ...body, translationKey: tk };
+      // PUT must never create: a stale tab saving a post an admin deleted must get
+      // a 404, not resurrect it (issue #106). POST passes tk='' and skips this.
+      const existing = tk ? await posts.get(tk) : null;
+      if (tk && !existing) return reply.code(404).send({ error: 'post not found' });
+      let baseUpdatedAt: Date | undefined;
+      if (updatedAt !== undefined && updatedAt !== null) {
+        baseUpdatedAt = new Date(String(updatedAt));
+        if (Number.isNaN(baseUpdatedAt.getTime())) return reply.code(400).send({ error: 'invalid updatedAt' });
+      }
+      // Staleness first: a second tab saving after another tab's confirmed
+      // rename must get 'conflict' (which the editor can recover from), not a
+      // consent error for a slug change it never made.
+      if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
+      // @ai-warning Golden Rule 2. A draft's slug may be the live WordPress URL
+      // (the importer creates drafts under the real slugs), so renaming one is
+      // never implicit: an existing non-empty slug only changes when the client
+      // says it meant to. Filling an unset ('') slug needs no consent; published
+      // posts are still refused outright by the store (slug_locked).
+      if (existing && existing.status !== 'published' && !confirmSlugChange) {
+        for (const locale of ['de', 'en'] as const) {
+          const from = existing[locale].slug;
+          const to = pair[locale].slug ?? '';
+          if (from !== '' && to !== from) {
+            return reply.code(409).send({
+              error: `changing the ${locale.toUpperCase()} slug from "${from}" to "${to}" changes the post's URL — confirm the change to save`,
+              code: 'slug_change_unconfirmed',
+            });
+          }
+        }
+      }
       return reply.send(await posts.upsertDraft(pair, baseUpdatedAt));
     } catch (e) {
       if (e instanceof PostError) {
@@ -849,9 +1200,30 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   app.get('/posts/:tk/revisions/:id', { preHandler: requireAuth }, async (req, reply) => {
     const { tk, id } = req.params as { tk: string; id: string };
+    // Same rule as the list route (#137): a deleted post's snapshots are not
+    // readable even if a store still holds them.
+    if (!(await posts.get(tk))) return reply.code(404).send({ error: 'post not found' });
     const rev = await posts.getRevision(tk, id);
     if (!rev) return reply.code(404).send({ error: 'revision not found' });
     return reply.send(rev);
+  });
+
+  app.get('/api/categories', { preHandler: requireAuth }, async () => {
+    if (posts.listCategories) return posts.listCategories();
+    return [];
+  });
+
+  app.get('/api/tags', { preHandler: requireAuth }, async () => {
+    if (posts.listTags) return posts.listTags();
+    return [];
+  });
+
+  app.get('/api/cms/stats', { preHandler: requireAuth }, async () => {
+    const postStats = posts.getCmsStats ? await posts.getCmsStats() : { totalPosts: 0, draftPosts: 0, publishedPosts: 0, totalCategories: 0, totalTags: 0 };
+    // `total` is the store's count over the whole library; `items.length` was
+    // the page size (#130 — the dashboard read "50" for 665 photos).
+    const { total } = await cfg.media.list({ pageSize: 1 });
+    return { ...postStats, mediaCount: total };
   });
 
   // @ai-warning: publishing pushes content to the PUBLIC static site, so it is
@@ -864,6 +1236,14 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       if (e instanceof PostError) return reply.code(400).send({ error: e.message });
       throw e;
     }
+    const foreign = await foreignBodyImages(pair);
+    if (foreign.length > 0) {
+      return reply.code(409).send({
+        error: foreignImagesMessage(foreign.length),
+        foreignImages: foreign.slice(0, FOREIGN_EXAMPLES),
+        foreignImageCount: foreign.length,
+      });
+    }
     const notReady = await notReadyPhotos(pair);
     if (notReady.length > 0) {
       return reply.code(409).send({
@@ -874,10 +1254,22 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     await posts.publish(tk);
     const published = await posts.get(tk);
     const build = await cfg.builder.build();
-    if (published) await exportPost(published, cfg.backupDir).catch(() => { /* best-effort backup */ });
+    // Best-effort: a failed MDX backup must not undo a publish that is already
+    // live, but it must not be silent either (#145) — a bare-dev BACKUP_DIR
+    // pointing at /data used to fail every publish's export without a trace.
+    if (published) await exportPost(published, cfg.backupDir).catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
     // updatedAt: publish bumps the stored timestamp, so the editor must re-sync
     // its concurrency echo or its very next Save would falsely 409.
-    return reply.send({ published: true, build, updatedAt: published?.updatedAt });
+    // altAudit rides along so the editor can name the photos that went live
+    // undescribed (src/alt-audit.ts) without a second round trip. It is
+    // reported AFTER the publish succeeded, on purpose: it never gates one.
+    const audit = auditAltText(published ?? pair);
+    return reply.send({
+      published: true,
+      build,
+      updatedAt: published?.updatedAt,
+      altAudit: { count: audit.count, images: audit.images },
+    });
   });
 
   // Bulk publish / unpublish / delete from the posts list. Admin-only for the
@@ -933,13 +1325,15 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         if (!pair) throw new PostError('post not found');
         if (action === 'publish') {
           validateForPublish(pair);
+          const foreign = await foreignBodyImages(pair);
+          if (foreign.length > 0) throw new PostError(foreignImagesMessage(foreign.length));
           const notReady = await notReadyPhotos(pair);
           if (notReady.length > 0) {
             throw new PostError(`${notReady.length} photo(s) are still processing or failed to encode`);
           }
           await posts.publish(tk);
           const published = await posts.get(tk);
-          if (published) await exportPost(published, cfg.backupDir).catch(() => { /* best-effort backup */ });
+          if (published) await exportPost(published, cfg.backupDir).catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
           liveChanged = true;
         } else if (action === 'unpublish') {
           if (pair.status !== 'published') throw new PostError('post is not published');
@@ -1014,21 +1408,114 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // per-poll logging. Blog serving stays DB-independent (static files from the
   // current release), so a down Postgres flips the container unhealthy without
   // taking the blog offline.
-  app.get('/health', async (_req, reply) => {
-    // @ai-warning: free space is REPORTED, never a health verdict (#73). A low
-    // -space warning that flipped the container unhealthy would trigger a
-    // restart loop, which makes a full disk strictly worse. The probe is
-    // best-effort for the same reason: an unreadable statfs must not 503.
+  // `optionalAuth` (#129): the route is public — the compose healthcheck polls
+  // it without a session — but it reads `req.authUser` for the admin-only disk
+  // report below, and since #129 only a declared preHandler resolves it.
+  app.get('/health', { preHandler: optionalAuth }, async (req, reply) => {
+    // @ai-warning: free space and `release` are REPORTED, never a health
+    // verdict (#73, #110). A low-space warning that flipped the container
+    // unhealthy would trigger a restart loop, which makes a full disk strictly
+    // worse; a missing release is normal on a fresh volume and is healed by a
+    // publish, not a restart. The probe is best-effort for the same reason: an
+    // unreadable statfs must not 503.
+    //
+    // `disk` is admin-only (#132): the route itself is public because the
+    // compose healthcheck polls it without a session, but watching `/data`
+    // fill up is reconnaissance for timing a disk-exhaustion attempt on
+    // `/upload`, so anonymous and author callers get the verdict only.
     let disk: { free: number; total: number; freeLabel: string } | undefined;
-    try {
-      const space = await diskSpace(storageDir);
-      disk = { ...space, freeLabel: formatBytes(space.free) };
-    } catch { /* reported as absent */ }
+    if (req.authUser?.isAdmin) {
+      try {
+        const space = await diskSpace(storageDir);
+        disk = { ...space, freeLabel: formatBytes(space.free) };
+      } catch { /* reported as absent */ }
+    }
+    const release = cfg.builder.hasRelease();
     try {
       await cfg.dbCheck();
-      return { ok: true, db: true, ...(disk ? { disk } : {}) };
+      return { ok: true, db: true, release, ...(disk ? { disk } : {}) };
     } catch {
-      return reply.code(503).send({ ok: false, db: false, ...(disk ? { disk } : {}) });
+      return reply.code(503).send({ ok: false, db: false, release, ...(disk ? { disk } : {}) });
+    }
+  });
+
+  // --- Public reader comments (SPEC-API-001) --------------------------------
+  // @ai-warning No session preHandler on purpose (#129): see comments-public.ts.
+  // The limiter maps are the comment route's own, never `loginLimiter`.
+  {
+    const fresh = commentLimiters();
+    registerPublicComments(app, {
+      comments: cfg.comments,
+      posts: cfg.posts,
+      allowedOrigin: cfg.commentsOrigin ?? new URL(cfg.baseUrl).origin,
+      // Falls back to the persisted global switch (default false = fail closed).
+      commentsEnabled: cfg.commentsEnabled ?? (() => cfg.settings.get().commentsEnabled === true),
+      ipLimiter: cfg.commentIpLimiter ?? fresh.ip,
+      globalLimiter: cfg.commentGlobalLimiter ?? fresh.global,
+      // Author replies (#205) are `approved` + `is_author`; the public store's
+      // shape has no flag, so the id set comes from the admin store's approved
+      // list — a read of approved rows only, never pending ones.
+      ...(cfg.commentsAdmin ? {
+        isAuthorIds: async (tk: string) => new Set(
+          (await cfg.commentsAdmin!.list('approved'))
+            .filter((c) => c.translationKey === tk && c.isAuthor)
+            .map((c) => c.id),
+        ),
+      } : {}),
+    });
+  }
+
+  // --- Admin comment moderation (SPEC-ADM-001) ------------------------------
+  // @ai-warning Every route here is requireAdmin (401 anonymous, 403 author)
+  // and the preHandler runs BEFORE any id validation, so an unauthenticated
+  // caller never learns whether an id is well-formed. Ids that are not UUIDs
+  // are a 400 (never reach Postgres as a 22P02). Responses carry reader email:
+  // admin only, and admin UI paints every field with textContent.
+  const commentsAdmin = cfg.commentsAdmin;
+  const commentId = (req: { params: unknown }, reply: FastifyReply): string | null => {
+    const id = (req.params as { id?: string }).id ?? '';
+    if (!COMMENT_ID_RE.test(id)) { void reply.code(400).send({ error: 'invalid comment id' }); return null; }
+    return id;
+  };
+  const noStore = (reply: FastifyReply) => { void reply.code(503).send({ error: 'comments are not available' }); };
+
+  app.get('/moderation/comments', { preHandler: requireAdmin }, async (req, reply) => {
+    const status = (req.query as { status?: string }).status ?? 'pending';
+    if (!isCommentStatus(status)) return reply.code(400).send({ error: 'status must be pending or approved' });
+    if (!commentsAdmin) return noStore(reply);
+    return reply.header('cache-control', 'no-store').send({ comments: await commentsAdmin.list(status) });
+  });
+
+  app.post('/moderation/comments/:id/status', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = commentId(req, reply);
+    if (!id) return reply;
+    const status = ((req.body ?? {}) as { status?: unknown }).status;
+    if (!isCommentStatus(status)) return reply.code(400).send({ error: 'status must be pending or approved' });
+    if (!commentsAdmin) return noStore(reply);
+    if (!(await commentsAdmin.setStatus(id, status))) return reply.code(404).send({ error: 'comment not found' });
+    return reply.send({ id, status });
+  });
+
+  app.delete('/moderation/comments/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = commentId(req, reply);
+    if (!id) return reply;
+    if (!commentsAdmin) return noStore(reply);
+    if (!(await commentsAdmin.remove(id))) return reply.code(404).send({ error: 'comment not found' });
+    return reply.send({ deleted: true });
+  });
+
+  app.post('/moderation/comments/:id/reply', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = commentId(req, reply);
+    if (!id) return reply;
+    if (!commentsAdmin) return noStore(reply);
+    const body = ((req.body ?? {}) as { body?: unknown }).body;
+    try {
+      const created = await commentsAdmin.replyAsAuthor(id, req.authUser?.username ?? 'Author', body);
+      if (!created) return reply.code(404).send({ error: 'comment not found' });
+      return reply.code(201).send(created);
+    } catch (e) {
+      if (e instanceof CommentError) return reply.code(400).send({ error: e.message });
+      throw e;
     }
   });
 
@@ -1043,7 +1530,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // Admin-only: writing a page rebuilds the public site (like publishing a post).
   app.put('/pages/:key', { preHandler: requireAdmin }, async (req, reply) => {
     const key = (req.params as { key: string }).key;
-    const b = (req.body ?? {}) as Partial<Record<'de' | 'en', Partial<PageContent>>>;
+    const b = (req.body ?? {}) as Partial<Record<'de' | 'en', Partial<PageContent>>> & { updatedAt?: unknown };
     const mkLocale = (loc: 'de' | 'en'): PageContent => {
       const src = b[loc] ?? {};
       return {
@@ -1058,23 +1545,55 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       };
     };
     const pair: PagePair = { key, de: mkLocale('de'), en: mkLocale('en') };
+    // `updatedAt` is the optimistic-concurrency echo (issue #141), same
+    // contract as posts: optional, and only ever able to make a save fail.
+    let baseUpdatedAt: Date | undefined;
+    if (b.updatedAt !== undefined && b.updatedAt !== null) {
+      baseUpdatedAt = new Date(String(b.updatedAt));
+      if (Number.isNaN(baseUpdatedAt.getTime())) return reply.code(400).send({ error: 'invalid updatedAt' });
+    }
     try {
-      const saved = await cfg.pages.save(pair);
+      const saved = await cfg.pages.save(pair, baseUpdatedAt);
       const build = await cfg.builder.build();
       return reply.send({ saved, build });
     } catch (e) {
-      if (e instanceof PageError) return reply.code(400).send({ error: e.message });
+      if (e instanceof PageError) {
+        // A stale-tab 409 carries `code` so the page can offer a reload; a
+        // conflict rebuilds nothing.
+        return reply.code(e.code === 'conflict' ? 409 : 400).send({ error: e.message, ...(e.code ? { code: e.code } : {}) });
+      }
       throw e;
     }
   });
 
+  // Revision history — read-only for any authed user (same trust boundary as
+  // GET /pages/:key); restoring goes through the normal PUT save, so validation
+  // applies and the clobbered state is itself snapshotted.
+  app.get('/pages/:key/revisions', { preHandler: requireAuth }, async (req, reply) => {
+    const key = (req.params as { key: string }).key;
+    return reply.send(await cfg.pages.listRevisions(key));
+  });
+
+  app.get('/pages/:key/revisions/:id', { preHandler: requireAuth }, async (req, reply) => {
+    const { key, id } = req.params as { key: string; id: string };
+    const rev = await cfg.pages.getRevision(key, id);
+    if (!rev) return reply.code(404).send({ error: 'revision not found' });
+    return reply.send(rev);
+  });
+
   app.get('/backups', { preHandler: requireAdmin }, async () => ({
     state: cfg.dbBackup.state(),
+    running: cfg.dbBackup.running(),
     files: cfg.dbBackup.list(),
     imageArchives: cfg.dbBackup.listImageArchives(),
   }));
 
-  app.post('/backups', { preHandler: requireAdmin }, async () => cfg.dbBackup.runNow());
+  // One run at a time (#113): while a backup is in flight, `runNow()` would
+  // hand back the PREVIOUS run's state as if this click had done nothing.
+  app.post('/backups', { preHandler: requireAdmin }, async (_req, reply) => {
+    if (cfg.dbBackup.running()) return reply.code(409).send({ error: 'a backup is already running' });
+    return cfg.dbBackup.runNow();
+  });
 
   // Filename is validated against the strict backup patterns (db dump OR images
   // archive) — nothing else in the directory (state.json!) and no traversal can
@@ -1099,20 +1618,102 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return reply.send({ ok: true, count: files.length });
   });
 
-  app.post('/import', { preHandler: requireAuth }, async (req, reply) => {
+  // Admin-only (issue #97): an import creates/overwrites drafts, writes gigabytes
+  // under /data and makes hundreds of outbound fetches to a host chosen by the
+  // export — the same trust boundary as /rebuild, /settings and /backups, whose
+  // importDelayMs/importRetries knobs govern this run.
+  //
+  // issue #92: the multi-minute part runs OFF the request path. Everything that
+  // can refuse the export (not WXR, no groups, over the image cap, no space, an
+  // import already running) still happens here and keeps its status code; on
+  // success the answer is a 202 with the job id and import.html polls
+  // GET /import/status.
+  //
+  // @ai-warning ONE import at a time, as before. Resumability (issue #85)
+  // makes "run the import again" the documented recovery path, so concurrent
+  // runs are a real scenario: two of them would each see a mostly-empty
+  // resume index and re-fetch everything, hit the source host at twice the
+  // configured rate — the pacing gate is per-run state — race
+  // storeVariantFiles' non-atomic writes and run two sharp pipelines in one
+  // mem_limit'd container. The runner owns that rule (`start` throws
+  // ImportBusyError); the per-image ENCODES inside the run take `cfg.workLock`
+  // as shared holders (issue #95), so a Publish preempts the import at the
+  // next photo boundary rather than the run holding the lock for its duration.
+  app.post('/import', { preHandler: requireAdmin }, async (req, reply) => {
+    if (importJobs.current()) {
+      return reply.code(409).send({ error: 'an import is already running; wait for it to finish' });
+    }
     let xml = '';
+    let overwriteDrafts = false;
     for await (const part of req.parts()) {
       if (part.type === 'file') xml = (await part.toBuffer()).toString('utf8');
+      // Opt-in rebuild of existing drafts from the export (issue #126); the
+      // default re-run merges and keeps the author's edits.
+      else if (part.fieldname === 'overwriteDrafts') overwriteDrafts = String(part.value) === 'true';
     }
     if (!xml.includes('<rss') || !xml.includes('wordpress.org/export')) {
       return reply.code(400).send({ error: 'not a WordPress export (.xml) file' });
     }
-    const summary = await importWxr(xml, { postStore: cfg.posts, storageDir: cfg.storageDir, baseUrl: cfg.baseUrl });
-    if (summary.imported === 0 && summary.updated === 0 && summary.skipped === 0) {
+    const {
+      importDelayMs, importRetries, convertJpeg, webpQuality, avifQuality,
+    } = cfg.settings.get();
+    let prepared: PreparedImport;
+    try {
+      prepared = await (cfg.prepareImport ?? prepareImport)(xml, {
+        postStore: cfg.posts, storageDir: cfg.storageDir, baseUrl: cfg.baseUrl,
+        delayMs: importDelayMs,
+        retries: importRetries,
+        encoding: { convertJpeg, webpQuality, avifQuality },
+        // A FRESH disk walk per import, which is why this is built here rather
+        // than injected once at boot like `settings` or `dbBackup`.
+        resume: await createRehostResume({ storageDir: cfg.storageDir, baseUrl: cfg.baseUrl }),
+        // issue #94: the same precondition /upload has, judged on the photos
+        // this run will fetch (see prepareImport) rather than a known byte count.
+        diskSpace: () => diskSpace(cfg.storageDir),
+        // issue #95: encodes under the shared mutex, so they never overlap a build.
+        lock: cfg.workLock,
+        log: (msg) => console.log(msg),
+        overwriteDrafts,
+      });
+    } catch (e) {
+      // issue #143: a truncated download or otherwise malformed file passes
+      // the sniff above but not the parser — the author's mistake, a 400; the
+      // parser's offset and context go to the log, not the client.
+      if (e instanceof WxrParseError) {
+        console.log(`import: ${e.message}: ${e.detail}`);
+        return reply.code(400).send({ error: e.message });
+      }
+      // issue #96: an export whose distinct-image count exceeds the cap is
+      // rejected BEFORE any fetch — a 400 naming the count, not a 500.
+      if (e instanceof ImportTooLargeError) return reply.code(400).send({ error: e.message });
+      // issue #94: the volume cannot hold what this run would fetch — 507 like
+      // /upload; the numbers went to stdout from prepareImport, the client gets
+      // the sanitized message.
+      if (e instanceof ImportInsufficientSpaceError) return reply.code(507).send({ error: e.message });
+      throw e;
+    }
+    // 400 only when the export yielded no groups at all. Every group lands in exactly
+    // one bucket (issue #100), so an all-published or all-rejected export is a job
+    // with an honest summary — a 400 cannot say WHICH groups were rejected and why.
+    if (prepared.groups === 0) {
       return reply.code(400).send({ error: 'no importable posts found in export' });
     }
-    return reply.send(summary);
+    let job: ImportJob;
+    try {
+      job = await importJobs.start({ startedBy: req.authUser?.username ?? '', planned: prepared.planned, run: prepared.run });
+    } catch (e) {
+      // Two pre-flights raced; the loser's prepared import is dropped unrun.
+      if (e instanceof ImportBusyError) return reply.code(409).send({ error: e.message });
+      throw e;
+    }
+    return reply.code(202).send({ id: job.id, status: job.status, planned: job.progress });
   });
+
+  // The running job's live counters, else the most recent job — including one
+  // the previous process left `interrupted`, so the page can say "run it
+  // again" instead of silently showing nothing. Same trust boundary as the
+  // import itself; the summary is exactly what the old 200 carried.
+  app.get('/import/status', { preHandler: requireAdmin }, async () => ({ job: await importJobs.latest() }));
 
   // @ai-note: the image host doubles as a blog host so that LOCAL DEV works, and
   // ONLY for local dev. uploader/.env.example tells you to set IMG_HOST=localhost:3000

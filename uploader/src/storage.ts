@@ -1,7 +1,8 @@
-import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { ProcessResult, Variant } from './pipeline.js';
+import { normalizeProcessOptions, type ProcessOptions, type ProcessResult, type Variant } from './pipeline.js';
+import type { ImageOutputFormat } from './variants.js';
 
 export interface StorageOptions {
   storageDir: string;
@@ -14,6 +15,7 @@ export interface StoredImage {
   height: number;
   files: string[];
   snippet: string;
+  format?: ImageOutputFormat;
 }
 
 // Central chokepoint for every write path (direct /upload AND the WordPress
@@ -22,9 +24,31 @@ export interface StoredImage {
 // @ai-warning: do not loosen this to allow '.' — it is what blocks `../` traversal.
 const SAFE_KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
 
+/**
+ * Bounds on a FINAL key (after `contentHashKey` appended `-<hash8>`, for
+ * uploads). `storeOriginal` does `mkdir -p` on the key's directories, so an
+ * unbounded key is a 1000-deep tree per upload or an `ENAMETOOLONG` 500 that
+ * the regex alone lets through (#133).
+ *
+ * @ai-warning Cross-lane contract: every producer of keys must fit inside
+ * these — the WordPress importer's un-hashed `trips/<slug>/<name>` (whose
+ * resume-from-disk depends on the key being a pure function of the URL) and a
+ * client key on `/upload` (at most `MAX_KEY_LEN - 9`). See
+ * docs/superpowers/specs/2026-09-06-media-store-input-hardening-design.md.
+ */
+export const MAX_KEY_LEN = 200;
+export const MAX_KEY_DEPTH = 8;
+
 export function assertSafeKey(key: string): void {
+  // Checked first so the messages below never echo an attacker-sized key.
+  if (typeof key !== 'string' || key.length > MAX_KEY_LEN) {
+    throw new Error(`unsafe storage key (longer than ${MAX_KEY_LEN} characters)`);
+  }
   if (!SAFE_KEY_RE.test(key) || key.includes('..') || key.includes('//')) {
     throw new Error(`unsafe storage key "${key}" (lowercase a-z, 0-9, / _ - only; no traversal)`);
+  }
+  if (key.split('/').length > MAX_KEY_DEPTH) {
+    throw new Error(`unsafe storage key "${key}" (more than ${MAX_KEY_DEPTH} path segments)`);
   }
 }
 
@@ -45,21 +69,39 @@ export function isOriginalFile(pathName: string): boolean {
   return ORIGINAL_FILE_RE.test(pathName);
 }
 
-// Append a short content hash to a key so the resulting variant URLs are truly
-// immutable: replacing a photo mints a new URL, while previously published
-// URLs keep serving from disk untouched (nothing is overwritten or deleted).
-// Deterministic over the ORIGINAL upload bytes, so re-uploading the identical
-// file reuses the same key — a harmless identical overwrite. Hex output stays
-// within SAFE_KEY_RE.
-// @ai-note: hashing the original (not the encoded variants) means a future
-// sharp upgrade could write slightly different encoded bytes under an
-// unchanged URL if the same original is re-uploaded — visually identical,
-// accepted trade-off.
+// Append a short hash of the original bytes AND the snapped encoding profile so
+// a settings change always mints a new immutable URL. Legacy byte-only keys are
+// intentionally left untouched on disk; the first upload after this feature
+// gets a new key even when it uses the historical default profile.
 // @ai-warning: the WP-import rehost path (wp-images.ts) deliberately does NOT
-// use this — its keys must stay deterministic so re-imports are idempotent.
-export function contentHashKey(key: string, data: Buffer): string {
-  const hash = createHash('sha256').update(data).digest('hex').slice(0, 8);
+// use this — its keys must stay deterministic so disk-derived resume works.
+export function contentHashKey(key: string, data: Buffer, options: ProcessOptions = {}): string {
+  const profile = normalizeProcessOptions(options);
+  const identity = `\0convertJpeg=${profile.convertJpeg};webpQuality=${profile.webpQuality};avifQuality=${profile.avifQuality}`;
+  const hash = createHash('sha256').update(data).update(identity).digest('hex').slice(0, 8);
   return `${key}-${hash}`;
+}
+
+/**
+ * Write `data` to `abs` atomically: a sibling `<abs>.part-<hex>` is written in
+ * full and then renamed into place, so a file carrying a final variant or
+ * original name is always complete (#118). A SIGKILL / ENOSPC mid-write used
+ * to leave a non-empty truncated file under the final name — indistinguishable
+ * from a good one for every "is it present and non-empty" check (media-sync's
+ * backfill, the WXR resume lookup). The temp suffix ends in neither
+ * `.avif`/`.webp`/`.jpeg` nor `-orig.<ext>`, so a leftover from a crash is invisible to
+ * `VARIANT_FILE_RE` / `ORIGINAL_FILE_RE` and every walk built on them.
+ */
+async function writeAtomic(abs: string, data: Buffer): Promise<void> {
+  await mkdir(dirname(abs), { recursive: true });
+  const tmp = `${abs}.part-${randomBytes(4).toString('hex')}`;
+  try {
+    await writeFile(tmp, data);
+    await rename(tmp, abs);
+  } catch (err) {
+    await unlink(tmp).catch(() => { /* best-effort; nothing else to do with it */ });
+    throw err;
+  }
 }
 
 /**
@@ -86,9 +128,7 @@ export async function storeOriginal(
   assertSafeKey(key);
   if (!SAFE_EXT_RE.test(ext)) throw new Error(`unsafe original extension "${ext}"`);
   const rel = `${key}-orig.${ext}`;
-  const abs = join(storageDir, rel);
-  await mkdir(dirname(abs), { recursive: true });
-  await writeFile(abs, data);
+  await writeAtomic(join(storageDir, rel), data);
   return rel;
 }
 
@@ -98,6 +138,8 @@ export async function storeOriginal(
  *
  * Re-running this for the same key overwrites the same deterministic
  * filenames, which is what makes a crashed mid-encode self-heal on retry.
+ * Each file lands atomically (see writeAtomic), so a crash leaves at most one
+ * `.part-*` temp and never a truncated variant.
  */
 export async function storeVariantFiles(
   key: string,
@@ -109,9 +151,7 @@ export async function storeVariantFiles(
   let bytes = 0;
   for (const v of variants) {
     const rel = `${key}-${v.width}.${v.format}`;
-    const abs = join(storageDir, rel);
-    await mkdir(dirname(abs), { recursive: true });
-    await writeFile(abs, v.data);
+    await writeAtomic(join(storageDir, rel), v.data);
     files.push(rel);
     bytes += v.data.length;
   }
@@ -119,13 +159,20 @@ export async function storeVariantFiles(
 }
 
 /** The paste-ready `heroImage:` YAML block returned by the upload routes. */
-export function heroSnippet(src: string, width: number, height: number, alt: string): string {
+export function heroSnippet(
+  src: string,
+  width: number,
+  height: number,
+  alt: string,
+  format?: ImageOutputFormat,
+): string {
   return [
     'heroImage:',
     `  src: '${src}'`,
     `  width: ${width}`,
     `  height: ${height}`,
     `  alt: '${alt.replace(/'/g, "''")}'`, // YAML single-quote escaping
+    ...(format ? [`  format: '${format}'`] : []),
   ].join('\n');
 }
 
@@ -154,6 +201,7 @@ export async function storeVariants(
   const src = `${baseUrl.replace(/\/+$/, '')}/${key}`;
   return {
     src, width: result.width, height: result.height, files,
-    snippet: heroSnippet(src, result.width, result.height, alt),
+    ...(result.format ? { format: result.format } : {}),
+    snippet: heroSnippet(src, result.width, result.height, alt, result.format),
   };
 }

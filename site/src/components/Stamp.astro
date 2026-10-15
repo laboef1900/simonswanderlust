@@ -24,6 +24,12 @@ const dash = border === 'dashed' ? '5 3' : undefined;
 const styleVars = `--ink:${ink};--rot:${rotation}deg`;
 const topId = `stamp-top-${code}`;
 const botId = `stamp-bot-${code}`;
+// Drawn, not the ✈ character: a unicode glyph rendering at whatever the
+// platform's emoji/symbol font decides is not an icon system, and it came out
+// a different weight from every stroke around it. Authored in a 24×24 box and
+// transformed into each stamp's own viewBox below.
+const PLANE =
+  'M12 2.2 14 9.2 22 13.2 22 15.1 14 13.6 13.1 19.8 16 21.9 16 22.9 12 21.9 8 22.9 8 21.9 10.9 19.8 10 13.6 2 15.1 2 13.2 10 9.2 Z';
 ---
 
 {/* Decorative: country + date are in the page's visible text already. */}
@@ -42,7 +48,7 @@ const botId = `stamp-bot-${code}`;
       <text font-size="6.5" letter-spacing="2" fill="currentColor">
         <textPath href={`#${botId}`} startOffset="50%" text-anchor="middle">★ {status} ★</textPath>
       </text>
-      <text x="50" y="40" text-anchor="middle" font-size="11" fill="currentColor">✈</text>
+      <path d={PLANE} fill="currentColor" transform="translate(43 28.5) scale(0.583)" />
       <text x="50" y="60" text-anchor="middle" font-size="12" font-weight="800" fill="currentColor">{when}</text>
     </svg>
   ) : (
@@ -51,7 +57,7 @@ const botId = `stamp-bot-${code}`;
       {border === 'double' && <rect x="7" y="7" width="110" height="58" fill="none" stroke="currentColor" stroke-width="1" />}
       <circle cx="20" cy="19" r="10" fill="none" stroke="currentColor" stroke-width="1" />
       <text x="20" y="22" text-anchor="middle" font-size="8" font-weight="800" fill="currentColor">{code}</text>
-      <text x="104" y="23" text-anchor="middle" font-size="12" fill="currentColor">✈</text>
+      <path d={PLANE} fill="currentColor" transform="translate(97 11.5) scale(0.583)" />
       <text x="64" y="42" text-anchor="middle" font-size="8.5" letter-spacing="1.2" fill="currentColor">{name}</text>
       <text x="64" y="60" text-anchor="middle" font-size="13" font-weight="800" fill="currentColor">{when}</text>
     </svg>
@@ -61,7 +67,14 @@ const botId = `stamp-bot-${code}`;
 <style>
   .stamp {
     color: var(--ink);
-    opacity: 0.82;
+    /* Was 0.82. The chip behind the stamp is opaque canvas now (see the
+     * @ai-warning in FeaturedHero.astro), and fading dark ink toward that
+     * near-white took the lightest of the five inks from 5.49:1 to ~4.3:1 —
+     * the alpha was paying for legibility the old translucent plate never
+     * delivered anyway. `multiply` stays: it is what makes the ink sit IN the
+     * paper rather than on top of it, and it is a no-op on an opaque light
+     * surface. */
+    opacity: 1;
     mix-blend-mode: multiply;
     transform: rotate(var(--rot));
   }

@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -49,20 +49,87 @@ describe('createSettingsStore', () => {
     expect(onDisk.lmModel).toBe('my/local-vlm');
   });
 
-  it('falls back to defaults on a corrupt file', async () => {
+  it('falls back to defaults on a corrupt file and says so', async () => {
     const path = join(dir, 'settings.json');
     await writeFile(path, 'not json{');
-    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    const log = vi.fn();
+    const store = createSettingsStore({ path, defaults: DEFAULTS, log });
     expect(store.get()).toEqual(DEFAULTS);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/not valid JSON/));
   });
 
-  it('falls back to defaults when an on-disk value is out of range', async () => {
-    // A hand-edited/partially-written settings.json must not serve invalid values
-    // (e.g. a negative timeout reaching the browser abort timer) — validate on load.
+  it('falls back to defaults when the file is JSON but not an object', async () => {
     const path = join(dir, 'settings.json');
-    await writeFile(path, JSON.stringify({ captionTimeoutMs: -100, lmModel: 'my/vlm' }));
-    const store = createSettingsStore({ path, defaults: DEFAULTS });
-    expect(store.get()).toEqual(DEFAULTS); // whole file rejected, not partially trusted
+    await writeFile(path, '[1,2]');
+    const log = vi.fn();
+    expect(createSettingsStore({ path, defaults: DEFAULTS, log }).get()).toEqual(DEFAULTS);
+    expect(log).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not log when the file simply does not exist yet', () => {
+    const log = vi.fn();
+    createSettingsStore({ path: join(dir, 'settings.json'), defaults: DEFAULTS, log });
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  // Issue #112: one out-of-range LM field used to reject the WHOLE file back to
+  // defaults — flipping `backupSchedule` to 'off' with no log line, so daily
+  // backups silently stopped until someone opened the Settings page.
+  it('keeps every valid field when one on-disk value is invalid, and logs which one', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({
+      captionTimeoutMs: -100,          // invalid → its own default
+      lmModel: 'my/vlm',
+      backupSchedule: 'daily',
+      backupRetention: 30,
+      importDelayMs: 0,
+    }));
+    const log = vi.fn();
+    const store = createSettingsStore({ path, defaults: DEFAULTS, log });
+    const s = store.get();
+    expect(s.captionTimeoutMs).toBe(DEFAULTS.captionTimeoutMs); // the bad one is not served
+    expect(s.lmModel).toBe('my/vlm');
+    expect(s.backupSchedule).toBe('daily');
+    expect(s.backupRetention).toBe(30);
+    expect(s.importDelayMs).toBe(0);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('"captionTimeoutMs"'));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('between 1000 and 600000'));
+  });
+
+  it('rejects a wrong JSON type per field rather than trusting the type annotation', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({
+      lmModel: 42,                     // number where a string is expected
+      backupRetention: '7',            // string where a number is expected
+      captionPrompt: null,
+      backupSchedule: 'weekly',
+    }));
+    const log = vi.fn();
+    const s = createSettingsStore({ path, defaults: DEFAULTS, log }).get();
+    expect(s.lmModel).toBe(DEFAULTS.lmModel);
+    expect(s.backupRetention).toBe(DEFAULTS.backupRetention);
+    expect(s.captionPrompt).toBe(DEFAULTS.captionPrompt);
+    expect(s.backupSchedule).toBe('weekly');
+    expect(log.mock.calls.map((c) => c[0])).toEqual([
+      expect.stringContaining('"lmModel"'),
+      expect.stringContaining('"captionPrompt"'),
+      expect.stringContaining('"backupRetention"'),
+    ]);
+  });
+
+  it('logs to console.error by default', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ importRetries: 99 }));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(createSettingsStore({ path, defaults: DEFAULTS }).get().importRetries).toBe(DEFAULTS.importRetries);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining('"importRetries"'));
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('update validates, persists, and updates the cache', async () => {
@@ -140,5 +207,176 @@ describe('LM settings validation', () => {
     expect(updated.captionMaxEdge).toBe(1024);
     const onDisk = JSON.parse(await readFile(path, 'utf8'));
     expect(onDisk.lmModel).toBe('my/vlm');
+  });
+});
+
+/**
+ * Issue #85: the WordPress importer's pacing knobs. Not `.env` — CLAUDE.md
+ * reserves that for bootstrap values and puts app settings here.
+ */
+describe('import settings', () => {
+  it('defaults to the spacing the 2026-07-29 migration actually completed with', () => {
+    const d = defaultSettings();
+    expect(d.importDelayMs).toBe(1200);
+    expect(d.importRetries).toBe(3);
+  });
+
+  // @ai-warning A default that failed its own validator would make every
+  // update() that leaves that field untouched throw, so the owner could never
+  // save the Settings page again.
+  it('has defaults that pass its own validator', () => {
+    expect(() => validate(defaultSettings())).not.toThrow();
+  });
+
+  it('accepts both ends of each range', () => {
+    for (const importDelayMs of [0, 10000]) {
+      expect(() => validate({ ...DEFAULTS, importDelayMs })).not.toThrow();
+    }
+    for (const importRetries of [0, 5]) {
+      expect(() => validate({ ...DEFAULTS, importRetries })).not.toThrow();
+    }
+  });
+
+  it('rejects out-of-range, fractional, and non-numeric values', () => {
+    for (const bad of [-1, 10001, 1.5, Number.NaN]) {
+      expect(() => validate({ ...DEFAULTS, importDelayMs: bad }), `delay ${bad}`).toThrow(SettingsError);
+    }
+    for (const bad of [-1, 6, 1.5, Number.NaN]) {
+      expect(() => validate({ ...DEFAULTS, importRetries: bad }), `retries ${bad}`).toThrow(SettingsError);
+    }
+  });
+
+  // 0 restores pre-#85 behaviour on purpose: importing from a WordPress on the
+  // LAN has no reason to pace. Blast radius is bounded by the retry budget and
+  // the per-host breaker, not by this lower bound.
+  it('allows a zero delay, which disables pacing', () => {
+    const store = createSettingsStore({ path: join(dir, 'settings.json'), defaults: DEFAULTS });
+    expect(store.update({ importDelayMs: 0 }).importDelayMs).toBe(0);
+  });
+
+  it('round-trips through the file and survives an older settings.json without the keys', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ backupSchedule: 'daily', lmModel: 'my/vlm' }));
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(store.get().importDelayMs).toBe(1200);        // merged from defaults
+    expect(store.get().backupSchedule).toBe('daily');    // and nothing else was lost
+    store.update({ importDelayMs: 2500, importRetries: 1 });
+    const onDisk = JSON.parse(await readFile(path, 'utf8'));
+    expect(onDisk.importDelayMs).toBe(2500);
+    expect(onDisk.importRetries).toBe(1);
+    expect(createSettingsStore({ path, defaults: DEFAULTS }).get().importDelayMs).toBe(2500);
+  });
+});
+
+describe('editorial review settings', () => {
+  it('enforces provider, model, destination and integer timeout boundaries', () => {
+    const invalid: Record<string, unknown>[] = [
+      { aiProvider: 'other' }, { aiProvider: ['custom'] }, { aiModel: 'x'.repeat(101) }, { aiModel: {} },
+      { aiCustomBaseUrl: 'file:///private' }, { aiCustomBaseUrl: 'relative/path' },
+      { aiCustomBaseUrl: 'https://user:password@example.test/v1' },
+      { aiCustomBaseUrl: 'https://example.test/v1?key=fixture' }, { aiCustomBaseUrl: 'https://example.test/v1#fragment' },
+      { reviewTimeoutMs: 4999 }, { reviewTimeoutMs: 300001 }, { reviewTimeoutMs: 5000.5 }, { reviewTimeoutMs: '60000' },
+      { reviewPrompt: null },
+    ];
+    for (const partial of invalid) expect(() => validate({ ...DEFAULTS, ...partial })).toThrow(SettingsError);
+    for (const provider of ['lm-studio', 'openrouter', 'deepseek', 'custom'] as const) {
+      expect(validate({ ...DEFAULTS, aiProvider: provider, aiModel: 'x'.repeat(100), reviewTimeoutMs: 5000 }).aiProvider).toBe(provider);
+    }
+    expect(validate({ ...DEFAULTS, aiCustomBaseUrl: 'http://localhost:1234/v1', reviewTimeoutMs: 300000 }).reviewTimeoutMs).toBe(300000);
+  });
+
+  it('keeps prior caption and backup configuration while new review fields roundtrip without a secret', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ lmModel: 'local-caption', backupSchedule: 'daily', aiApiKey: 'must-not-persist' }));
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(store.get()).toMatchObject({ lmModel: 'local-caption', backupSchedule: 'daily', aiProvider: 'lm-studio' });
+    store.update({ aiProvider: 'custom', aiModel: 'review-model', aiCustomBaseUrl: 'https://custom.example/v1', reviewTimeoutMs: 300000, reviewPrompt: 'Review this story.' });
+    const loaded = createSettingsStore({ path, defaults: DEFAULTS }).get();
+    expect(loaded).toMatchObject({ aiProvider: 'custom', aiModel: 'review-model', lmModel: 'local-caption', backupSchedule: 'daily', reviewTimeoutMs: 300000 });
+    expect(await readFile(path, 'utf8')).not.toContain('must-not-persist');
+    expect(loaded).not.toHaveProperty('aiApiKey');
+  });
+
+  it('does not quote a malformed settings file into logs', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, '{ \"aiApiKey\": \"private-fixture\" BROKEN');
+    const log = vi.fn();
+    createSettingsStore({ path, defaults: DEFAULTS, log });
+    expect(log.mock.calls.flat().join(' ')).not.toContain('private-fixture');
+  });
+});
+
+describe('comments switch (#207)', () => {
+  it('defaults off — fail closed', () => {
+    expect(defaultSettings().commentsEnabled).toBe(false);
+  });
+
+  it('round-trips through update() and the file, and survives an older settings.json without the key', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ backupSchedule: 'daily' }));
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(store.get().commentsEnabled).toBe(false);
+    expect(store.update({ commentsEnabled: true }).commentsEnabled).toBe(true);
+    expect(JSON.parse(await readFile(path, 'utf8')).commentsEnabled).toBe(true);
+    expect(createSettingsStore({ path, defaults: DEFAULTS }).get()).toMatchObject({ commentsEnabled: true, backupSchedule: 'daily' });
+  });
+
+  it('rejects a non-boolean in update() without touching backupSchedule (#112)', async () => {
+    const path = join(dir, 'settings.json');
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    store.update({ backupSchedule: 'daily' });
+    for (const bad of ['true', 1, null]) {
+      expect(() => store.update({ commentsEnabled: bad as unknown as boolean })).toThrow(SettingsError);
+    }
+    expect(store.get()).toMatchObject({ backupSchedule: 'daily', commentsEnabled: false });
+  });
+
+  it('an invalid on-disk value falls back to off and keeps the other fields', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ commentsEnabled: 'yes', backupSchedule: 'weekly' }));
+    const log = vi.fn();
+    expect(createSettingsStore({ path, defaults: DEFAULTS, log }).get()).toMatchObject({ commentsEnabled: false, backupSchedule: 'weekly' });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('"commentsEnabled"'));
+  });
+});
+
+describe('image conversion settings', () => {
+  it('loads legacy settings without changing image behavior and persists an independent image update', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ backupSchedule: 'daily', lmModel: 'local-caption' }));
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(store.get()).toMatchObject({ convertJpeg: true, webpQuality: 75, avifQuality: 55 });
+    store.update({ convertJpeg: false, webpQuality: 100, avifQuality: 1 });
+    expect(createSettingsStore({ path, defaults: DEFAULTS }).get()).toMatchObject({
+      convertJpeg: false, webpQuality: 100, avifQuality: 1,
+      backupSchedule: 'daily', lmModel: 'local-caption',
+    });
+  });
+
+  it('rejects malformed image settings without changing memory or disk', async () => {
+    const path = join(dir, 'settings.json');
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    store.update({ convertJpeg: false, webpQuality: 80, avifQuality: 60 });
+    const before = await readFile(path, 'utf8');
+    const invalid: Record<string, unknown>[] = [
+      { convertJpeg: 'false' }, { convertJpeg: 0 }, { convertJpeg: null },
+      { webpQuality: 0 }, { avifQuality: 101 }, { webpQuality: 75.5 },
+      { avifQuality: '55' }, { webpQuality: Number.NaN },
+    ];
+    for (const partial of invalid) {
+      expect(() => store.update(partial)).toThrow(SettingsError);
+      expect(store.get()).toMatchObject({ convertJpeg: false, webpQuality: 80, avifQuality: 60 });
+      expect(await readFile(path, 'utf8')).toBe(before);
+    }
+  });
+
+  it('recovers invalid on-disk quality without re-enabling a disabled conversion preference', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ convertJpeg: false, webpQuality: 0, avifQuality: 64 }));
+    const log = vi.fn();
+    expect(createSettingsStore({ path, defaults: DEFAULTS, log }).get()).toMatchObject({
+      convertJpeg: false, webpQuality: 75, avifQuality: 64,
+    });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('"webpQuality"'));
   });
 });

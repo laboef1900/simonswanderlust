@@ -17,6 +17,23 @@ describe('transformBodyImages — sanitization', () => {
     expect(out).not.toContain('onerror');
     expect(out.toLowerCase()).not.toContain('javascript:');
   });
+
+  // Issue #124: an author-typed style could overlay every reader page and
+  // fire a third-party request per view. No element gets to keep one.
+  it('strips inline style from every element, including the ones Shiki used to need it on', () => {
+    const out = transformBodyImages(
+      '<p style="position:fixed;inset:0;background:url(https://evil.example/px.png)">x</p>' +
+        '<img src="https://img/x" style="width:100vw">' +
+        '<span style="color:#abc">y</span>' +
+        '<pre style="color:red"><code style="font-weight:bold">z</code></pre>',
+      {},
+      ORIGIN,
+    );
+    expect(out).not.toContain('style=');
+    expect(out).not.toContain('evil.example');
+    expect(out).toContain('<p>x</p>');
+    expect(out).toContain('<span>y</span>');
+  });
 });
 
 describe('transformBodyImages — responsive images', () => {
@@ -39,10 +56,14 @@ describe('transformBodyImages — responsive images', () => {
     expect(out).not.toContain('user-content-');
   });
 
-  it('keeps Shiki inline styles/classes on code spans', () => {
-    const out = transformBodyImages('<pre class="astro-code"><span style="color:#abc">x</span></pre>', {}, ORIGIN);
-    expect(out).toContain('class="astro-code"');
-    expect(out).toContain('style="color:#abc"');
+  it('keeps the classes a Shiki block carries in place of inline styles', () => {
+    const out = transformBodyImages(
+      '<pre class="astro-code github-dark sh-bg-24292e sh-c-e1e4e8"><code><span class="line"><span class="sh-c-f97583">const</span></span></code></pre>',
+      {},
+      ORIGIN,
+    );
+    expect(out).toContain('class="astro-code github-dark sh-bg-24292e sh-c-e1e4e8"');
+    expect(out).toContain('<span class="sh-c-f97583">const</span>');
   });
 });
 
@@ -60,6 +81,18 @@ describe('transformBodyImages — responsive <picture>', () => {
     expect(out).toContain('alt="A caption"');
     expect(out).toContain('class="block w-full rounded-lg"');
   });
+  it('renders JPEG-only body images without inventing AVIF or WebP URLs', () => {
+    const src = 'https://img/x/jpeg-only';
+    const out = transformBodyImages(
+      `<p><img src="${src}" alt="JPEG"></p>`,
+      { [src]: { width: 1600, height: 1067, format: 'jpeg' } },
+      ORIGIN,
+    );
+    expect(out).toContain('<source type="image/jpeg"');
+    expect(out).toContain(`${src}-1280.jpeg`);
+    expect(out).not.toContain(`${src}-640.avif`);
+    expect(out).not.toContain(`${src}-640.webp`);
+  });
   it('unwraps the <p> when a known <img> is its sole meaningful child', () => {
     const out = transformBodyImages('<p><img src="https://img/x/y" alt="A caption"></p>', images, ORIGIN);
     expect(out).toContain('<figure');
@@ -75,6 +108,8 @@ describe('transformBodyImages — responsive <picture>', () => {
 
 const A = `${ORIGIN}/trips/patagonia/a-1a2b3c4d`;
 const B = `${ORIGIN}/trips/patagonia/b-9f8e7d6c`;
+/** Gallery items, however the active layout mode styles them. */
+const items = (html: string) => html.match(/<figure class="jgal__item"/g) ?? [];
 const gallery = {
   [A]: { width: 3000, height: 2000, alt: 'Sunrise over the towers', caption: 'Day 3' },
   [B]: { width: 2000, height: 3000, alt: 'The pass' },
@@ -83,14 +118,28 @@ const gallery = {
 describe('transformBodyImages — gallery fence', () => {
   it('turns a fence into a grid of figures', () => {
     const out = transformBodyImages(fence(`${A}\n${B}`), gallery, ORIGIN);
-    expect(out).toContain('<div class="jgal not-prose">');
+    expect(out).toContain('<div class="jgal jgal--column not-prose">');
     expect(out).not.toContain('<pre>');
-    expect(out.match(/<figure class="jgal__item">/g)).toHaveLength(2);
+    expect(items(out)).toHaveLength(2);
     expect(out).toContain(`href="${A}-3000.webp"`); // largest variant, no-JS target
     expect(out).toContain('alt="Sunrise over the towers"');
     expect(out).toContain('<figcaption class="jgal__cap">Day 3</figcaption>');
     expect(out).toContain('width="2000"');
     expect(out).toContain('height="3000"');
+  });
+
+  it('keeps JPEG-only and modern gallery photos on their own generated formats', () => {
+    const mixed = {
+      ...gallery,
+      [A]: { ...gallery[A], format: 'jpeg' as const },
+    };
+    const out = transformBodyImages(fence(`${A}\n${B}`), mixed, ORIGIN);
+    expect(out).toContain(`href="${A}-3000.jpeg"`);
+    expect(out).toContain(`${A}-1280.jpeg`);
+    expect(out).not.toContain(`${A}-640.avif`);
+    expect(out).not.toContain(`${A}-640.webp`);
+    expect(out).toContain(`${B}-1280.webp`);
+    expect(out).toContain(`${B}-640.avif`);
   });
 
   it('omits the figcaption when the photo has no caption', () => {
@@ -107,20 +156,94 @@ describe('transformBodyImages — gallery fence', () => {
 
   it('tolerates leftover per-line metadata (a body that never hit the save chokepoint)', () => {
     const out = transformBodyImages(fence(`${A} | 3000x2000 | alt="x"`), gallery, ORIGIN);
-    expect(out).toContain('<div class="jgal not-prose">');
+    expect(out).toContain('<div class="jgal jgal--column not-prose">');
     // Metadata comes from the images map, not the line.
     expect(out).toContain('alt="Sunrise over the towers"');
   });
 
   it('skips a URL with no images entry', () => {
     const out = transformBodyImages(fence(`${A}\n${ORIGIN}/unknown`), gallery, ORIGIN);
-    expect(out.match(/<figure class="jgal__item">/g)).toHaveLength(1);
+    expect(items(out)).toHaveLength(1);
   });
 
   it('leaves the <pre> in place when nothing in the fence resolves', () => {
     const out = transformBodyImages(fence(`${ORIGIN}/unknown`), gallery, ORIGIN);
     expect(out).toContain('language-gallery');
     expect(out).not.toContain('jgal');
+  });
+});
+
+describe('transformBodyImages — gallery layout modes', () => {
+  // Seven landscapes stack to a near-square as 2 + 2 + 3 at either width.
+  const many = Object.fromEntries(
+    Array.from({ length: 7 }, (_, i) => [`${ORIGIN}/trips/x/p${i}`, { width: 3000, height: 2000, alt: `p${i}` }]),
+  );
+  const manyFence = (directive = '') =>
+    fence([directive, ...Object.keys(many)].filter(Boolean).join('\n'));
+
+  it('defaults to the column width when the fence carries no directive', () => {
+    const out = transformBodyImages(fence(A), gallery, ORIGIN);
+    expect(out).toContain('class="jgal jgal--column not-prose"');
+  });
+
+  it('nests photos in rows and emits a ratio per photo', () => {
+    const out = transformBodyImages(manyFence('#layout: breakout'), many, ORIGIN);
+    // flex-wrap: nowrap on one container would put all seven on one line —
+    // the rows are the layout.
+    expect(out.match(/<div class="jgal__row/g) ?? []).toHaveLength(3); // 2 + 2 + 3
+    expect(out).toContain('style="--r:1.5000"');
+    expect(items(out)).toHaveLength(7);
+  });
+
+  it('lets every row fill the container — no capped remainder', () => {
+    const out = transformBodyImages(manyFence('#layout: breakout'), many, ORIGIN);
+    expect(out).not.toContain('--jgal-maxw');
+  });
+
+  it('caps a lone portrait at the square, as a container percentage', () => {
+    const portrait = { [`${ORIGIN}/trips/x/tall`]: { width: 2000, height: 3000, alt: 'tall' } };
+    const out = transformBodyImages(fence(`${ORIGIN}/trips/x/tall`), portrait, ORIGIN);
+    // 960 tall × 2/3 = 640 wide of 960 — as wide as it is tall. A percentage,
+    // not pixels, so it stays square-bounded as the container resizes.
+    expect(out).toContain('--jgal-maxw:66.67%');
+  });
+
+  it('switches to the break-out width on #layout: breakout', () => {
+    const wide = transformBodyImages(manyFence('#layout: breakout'), many, ORIGIN);
+    expect(wide).toContain('class="jgal jgal--breakout not-prose"');
+    // The wider container asks the browser for a wider source per photo.
+    expect(wide).toContain('(min-width: 1112px) 550px');
+    expect(transformBodyImages(manyFence(), many, ORIGIN)).toContain('(min-width: 960px) 312px');
+  });
+
+  it('renders a keyboard-scrollable track with hidden controls on #layout: slider', () => {
+    const out = transformBodyImages(manyFence('#layout: slider'), many, ORIGIN);
+    expect(out).toContain('class="jgal jgal--slider not-prose"');
+    expect(out).toContain('<div class="jgal__track" tabindex="0">');
+    expect(out).not.toContain('jgal__row');
+    // The buttons must ship hidden: with JS off they would do nothing, and the
+    // track scrolls on its own.
+    expect(out).toContain('hidden data-jgal-nav="prev"');
+    expect(out).toContain('hidden data-jgal-nav="next"');
+  });
+
+  it('falls back to the column on an unknown mode rather than dropping the gallery', () => {
+    const out = transformBodyImages(manyFence('#layout: carousel'), many, ORIGIN);
+    expect(out).toContain('class="jgal jgal--column not-prose"');
+    expect(items(out)).toHaveLength(7);
+  });
+
+  it('never renders the directive as a photo or as text', () => {
+    const out = transformBodyImages(fence(`#layout: slider\n${A}`), gallery, ORIGIN);
+    expect(out).not.toContain('#layout');
+    expect(items(out)).toHaveLength(1);
+  });
+
+  it('derives sizes per photo, so a full-width panorama is not served a thumbnail', () => {
+    const pano = `${ORIGIN}/trips/x/pano`;
+    const out = transformBodyImages(fence(`#layout: breakout\n${pano}`), { [pano]: { width: 4000, height: 1000, alt: 'p' } }, ORIGIN);
+    // Alone on its row at 4:1 it renders 1112 wide in break-out — the hint must say so.
+    expect(out).toContain('sizes="(min-width: 1112px) 1112px');
   });
 });
 
@@ -200,5 +323,23 @@ describe('transformBodyImages — gallery value coercion', () => {
       expect(out).not.toContain('jgal');
       expect(out).toContain('language-gallery');
     }
+  });
+});
+
+describe('bodyImageSources — what the sanitized body would load (#91 publish gate)', () => {
+  it('reads img/source src+srcset and gallery lines from the sanitized tree, in every shape galleryCode accepts', async () => {
+    const { bodyImageSources } = await import('./body-images.js');
+    const html = [
+      '<img alt="x > y" src="https://old.example/a.jpg">',
+      '<picture><source srcset="https://old.example/b.jpg 1x, https://old.example/c.jpg 2x"><img src="https://img.example.com/own"></picture>',
+      '<img src="javascript:alert(1)">',
+      '<pre id="g">\n<code class="language-gallery" id="c">#layout: grid\n\nhttps://img.example.com/one | 10x10\nhttps://old.example/g.jpg | alt="x"</code>\n</pre>',
+      '<pre><code class="language-js">https://old.example/not-a-gallery</code></pre>',
+      '<p>src="https://old.example/text-not-attr"</p>',
+    ].join('\n');
+    expect(bodyImageSources(html)).toEqual({
+      sources: ['https://old.example/a.jpg', 'https://old.example/b.jpg', 'https://old.example/c.jpg', 'https://img.example.com/own'],
+      galleryLines: ['https://img.example.com/one', 'https://old.example/g.jpg'],
+    });
   });
 });

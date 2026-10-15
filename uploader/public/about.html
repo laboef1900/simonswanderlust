@@ -8,63 +8,77 @@
     <link rel="stylesheet" href="/admin/vendor/easymde.min.css" />
   </head>
   <body>
-    <header class="masthead">
-      <div class="masthead-inner">
-        <nav id="mainnav" aria-label="Admin"></nav>
-        <p class="eyebrow">Expedition Log · Image Station</p>
-        <h1>About page</h1>
-        <p class="muted" id="whoami"></p>
-      </div>
+    <header class="cms-page-meta">
+      <h1>About page</h1>
     </header>
     <main>
-      <div class="tabs-bar">
-        <button type="button" class="tab-btn active" data-tab="de">Deutsch (DE)</button>
-        <button type="button" class="tab-btn" data-tab="en">English (EN)</button>
+      <div class="editor-topbar">
+        <div class="lang-switch-bar" role="tablist" aria-label="Page language">
+          <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">Deutsch <span class="lang-code" aria-hidden="true">DE</span></button>
+          <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">English <span class="lang-code" aria-hidden="true">EN</span></button>
+        </div>
       </div>
 
-      <section id="tab-de" class="card locale-tab">
+      <section id="tab-de" class="card locale-tab" role="tabpanel" aria-labelledby="tabbtn-de">
         <h2 class="card-heading">Deutsch</h2>
         <label for="deTitle">Heading</label>
         <input id="deTitle" type="text" placeholder="Über mich" />
-        <label>Body (Markdown)</label>
+        <label for="deBody">Body (Markdown)</label>
         <textarea id="deBody"></textarea>
         <div class="body-img-row">
-          <input id="deBodyImgFile" type="file" accept="image/*" />
-          <input id="deBodyImgAlt" type="text" placeholder="Alt text (DE)" />
+          <input id="deBodyImgFile" type="file" accept="image/*" aria-label="Body image file (DE)" />
+          <input id="deBodyImgAlt" type="text" placeholder="Alt text (DE)" aria-label="Alt text for body image (DE)" />
           <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert body image</button>
-          <p id="deBodyImgStatus" class="muted"></p>
+          <p id="deBodyImgStatus" class="muted" role="status"></p>
         </div>
       </section>
 
-      <section id="tab-en" class="card locale-tab" style="display:none">
+      <section id="tab-en" class="card locale-tab" role="tabpanel" aria-labelledby="tabbtn-en" hidden>
         <h2 class="card-heading">English</h2>
         <label for="enTitle">Heading</label>
         <input id="enTitle" type="text" placeholder="About me" />
-        <label>Body (Markdown)</label>
+        <label for="enBody">Body (Markdown)</label>
         <textarea id="enBody"></textarea>
         <div class="body-img-row">
-          <input id="enBodyImgFile" type="file" accept="image/*" />
-          <input id="enBodyImgAlt" type="text" placeholder="Alt text (EN)" />
+          <input id="enBodyImgFile" type="file" accept="image/*" aria-label="Body image file (EN)" />
+          <input id="enBodyImgAlt" type="text" placeholder="Alt text (EN)" aria-label="Alt text for body image (EN)" />
           <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert body image</button>
-          <p id="enBodyImgStatus" class="muted"></p>
+          <p id="enBodyImgStatus" class="muted" role="status"></p>
         </div>
       </section>
 
-      <div class="editor-actions card">
-        <button id="saveBtn" class="btn-publish">Save &amp; rebuild</button>
-        <p id="actionStatus" class="muted"></p>
-        <p id="actionError" class="err" style="display:none"></p>
+      <div class="editor-sticky-bar">
+        <div class="bar-left">
+          <p id="actionStatus" class="muted" role="status" style="color:#ffffff; margin:0; font-size:0.85rem;"></p>
+          <p id="actionError" class="err" role="alert" hidden style="color:#fca5a5; margin:0; font-size:0.85rem;"></p>
+        </div>
+        <div class="bar-actions">
+          <button id="saveBtn" type="button" class="btn-primary-publish">Publish</button>
+        </div>
       </div>
+
+      <section class="card" id="revisionsCard" hidden aria-labelledby="revisionsHeading">
+        <h2 class="card-heading" id="revisionsHeading">Revisions</h2>
+        <p class="muted">The page as it was before each save (last 20 kept). Restoring fills the editor; nothing changes on the site until you save.</p>
+        <ul id="revisionsList" class="revisions-list"></ul>
+        <p id="revisionsEmpty" class="muted" hidden>No revisions yet.</p>
+      </section>
     </main>
 
     <script src="/admin/auth.js"></script>
+    <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/draft-guard.js"></script>
     <script src="/admin/vendor/easymde.min.js"></script>
+    <script src="/admin/tabs.js"></script>
+    <script src="/admin/image-markdown.js"></script>
     <script>
       'use strict';
       const $ = (id) => document.getElementById(id);
       const KEY = 'about';
       const deImages = {}, enImages = {};
+      // updatedAt of the page as loaded/last saved in THIS tab. Echoed back on
+      // every save so the server can 409 when another tab saved meanwhile (#141).
+      let loadedUpdatedAt = null;
 
       // EasyMDE's built-in autosave stays disabled — DraftGuard below stashes the
       // full form (both locales) instead.
@@ -72,6 +86,10 @@
         toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'] });
       const enMDE = new EasyMDE({ element: $('enBody'), spellChecker: false, autosave: { enabled: false },
         toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'] });
+      // EasyMDE hides the labelled <textarea> and types into CodeMirror's own
+      // input, which starts nameless — a screen reader would hear "edit text".
+      deMDE.codemirror.getInputField().setAttribute('aria-label', 'Body (Markdown, DE)');
+      enMDE.codemirror.getInputField().setAttribute('aria-label', 'Body (Markdown, EN)');
 
       // ---- draft guard: dirty tracking, beforeunload warning, local autosave ----
       const guard = DraftGuard.createDraftGuard({
@@ -84,16 +102,11 @@
       deMDE.codemirror.on('change', () => guard.markDirty());
       enMDE.codemirror.on('change', () => guard.markDirty());
 
-      document.querySelectorAll('.tab-btn').forEach((btn) => btn.addEventListener('click', () => {
-        document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
-        btn.classList.add('active');
-        const tab = btn.dataset.tab;
-        $('tab-de').style.display = tab === 'de' ? '' : 'none';
-        $('tab-en').style.display = tab === 'en' ? '' : 'none';
-        (tab === 'en' ? enMDE : deMDE).codemirror.refresh();
-      }));
+      Tabs.wire(document.querySelector('[role="tablist"]'), {
+        onChange: (tab) => { (tab === 'en' ? enMDE : deMDE).codemirror.refresh(); },
+      });
 
-      function showErr(msg) { const el = $('actionError'); el.textContent = msg; el.style.display = msg ? '' : 'none'; }
+      function showErr(msg) { const el = $('actionError'); el.textContent = msg; el.hidden = !msg; }
       function setStatus(msg) { $('actionStatus').textContent = msg; }
 
       async function uploadBodyImg(locale) {
@@ -111,9 +124,13 @@
           if (res.status === 401) { guard.redirectToLogin(); return; }
           const body = await res.json().catch(() => ({}));
           if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
-          (locale === 'de' ? deImages : enImages)[body.src] = { width: body.width, height: body.height };
+          (locale === 'de' ? deImages : enImages)[body.src] = {
+            width: body.width,
+            height: body.height,
+            ...(body.format === 'jpeg' ? { format: body.format } : {}),
+          };
           // replaceSelection fires a CodeMirror change → marks the guard dirty
-          (locale === 'de' ? deMDE : enMDE).codemirror.replaceSelection('![' + (altInput.value || '') + '](' + body.src + ')');
+          (locale === 'de' ? deMDE : enMDE).codemirror.replaceSelection(ImageMarkdown.image(altInput.value, body.src));
           statusEl.textContent = 'Inserted: ' + body.src;
           fileInput.value = ''; altInput.value = '';
         } catch (e) {
@@ -129,26 +146,103 @@
       }
 
       $('saveBtn').addEventListener('click', async () => {
-        showErr(''); setStatus('Saving & rebuilding…');
-        // The synchronous astro rebuild makes this request slow (tens of
-        // seconds); snapshot first so text typed mid-save survives markClean.
+        const ok = await AdminConfirm.ask({
+          title: 'Publish the About page?',
+          body: 'The About page is saved, then the public journal rebuilds. This can take several minutes. Live pages stay unchanged until the rebuild finishes.',
+          confirmLabel: 'Publish',
+        });
+        if (!ok) return;
+        showErr(''); setStatus('Publishing…');
         const snap = guard.snapshot();
-        const payload = { de: localeObj('de'), en: localeObj('en') };
+        const payload = { updatedAt: loadedUpdatedAt || undefined, de: localeObj('de'), en: localeObj('en') };
+        const btn = $('saveBtn');
+        btn.disabled = true;
         try {
           const res = await fetch('/pages/' + KEY, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
           if (res.status === 401) { guard.redirectToLogin(); return; }
           if (res.status === 403) { showErr('Only admins can save the About page.'); setStatus(''); return; }
           const body = await res.json().catch(() => ({}));
+          if (res.status === 409 && body.code === 'conflict') {
+            setStatus('');
+            showErr(body.error || 'The About page was modified since you opened it — nothing was saved.');
+            const reload = await AdminConfirm.ask({
+              title: 'Reload the latest About page?',
+              body: 'The About page was changed elsewhere (another tab or user) since you opened it, so saving would overwrite those changes. Nothing was saved and the site was not rebuilt.\n\nConfirm — reload the latest version (your edits in this tab are lost).\nCancel — keep your edits on screen so you can copy them out first.',
+              confirmLabel: 'Reload',
+              danger: true,
+            });
+            if (reload) { await loadPage(); guard.markClean(guard.snapshot()); showErr(''); }
+            return;
+          }
           if (!res.ok) { showErr(body.error || ('Save failed: ' + res.status)); setStatus(''); return; }
           if (body.build && !body.build.ok) { showErr('Build error: ' + (body.build.error || 'unknown')); setStatus(''); return; }
           const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
-          guard.markClean(snap); // saved server-side — no-op if edits landed mid-save
-          setStatus('Saved & rebuilt ✓' + release);
+          guard.markClean(snap);
+          if (body.saved && body.saved.updatedAt) loadedUpdatedAt = body.saved.updatedAt;
+          loadRevisions().catch(() => {});
+          setStatus('Saved & rebuilt. Live: ' + location.origin + '/uber-mich/ · ' + location.origin + '/en/about-me/' + release);
         } catch (e) {
           showErr('Save failed: ' + e);
           setStatus('');
+        } finally {
+          btn.disabled = false;
         }
       });
+
+      // ---- revisions (#141): same shape as the post editor's card ----
+      async function loadRevisions() {
+        const res = await fetch('/pages/' + KEY + '/revisions');
+        if (!res.ok) return; // non-fatal: the card just stays as-is
+        const revs = await res.json();
+        $('revisionsCard').hidden = false;
+        $('revisionsEmpty').hidden = revs.length > 0;
+        const ul = $('revisionsList');
+        ul.textContent = '';
+        revs.forEach((rev) => {
+          const li = document.createElement('li');
+          li.className = 'revision-row';
+          const label = document.createElement('span');
+          const when = new Date(rev.savedAt).toLocaleString();
+          label.textContent = when + ' — ' + (rev.titleDe || '(untitled)');
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn-secondary';
+          btn.textContent = 'Restore into editor';
+          btn.setAttribute('aria-label', 'Restore the revision from ' + when + ' into the editor');
+          btn.addEventListener('click', () => { restoreRevision(rev.id); });
+          li.appendChild(label);
+          li.appendChild(btn);
+          ul.appendChild(li);
+        });
+      }
+
+      // Fills the form from a snapshot; persisting still goes through the
+      // normal Save (validation applies, and the overwritten state gets its
+      // own revision) — there is no direct server-side restore.
+      async function restoreRevision(id) {
+        showErr('');
+        const res = await fetch('/pages/' + KEY + '/revisions/' + encodeURIComponent(id));
+        if (res.status === 401) { guard.redirectToLogin(); return; }
+        if (!res.ok) { showErr('Could not load revision: ' + res.status); return; }
+        const rev = await res.json();
+        fill('de', rev.snapshot.de); fill('en', rev.snapshot.en);
+        enMDE.codemirror.refresh();
+        guard.markDirty();
+        setStatus('Restored the revision from ' + new Date(rev.savedAt).toLocaleString()
+          + ' into the editor — review it, then Save & rebuild to keep it.');
+      }
+
+      async function loadPage() {
+        const res = await fetch('/pages/' + KEY);
+        if (res.status === 401) { guard.redirectToLogin(); return; }
+        if (!res.ok) { setStatus('Could not load: ' + res.status); return; }
+        const p = await res.json();
+        fill('de', p.de); fill('en', p.en);
+        loadedUpdatedAt = p.updatedAt || null;
+        enMDE.codemirror.refresh();
+        setStatus('Loaded.');
+        loadRevisions().catch(() => {});
+      }
 
       function fill(loc, data) {
         if (!data) return;
@@ -163,26 +257,28 @@
         Auth.renderHeader(s);
         if (!s.isAdmin) { showErr('You are signed in as an author; only admins can edit the About page.'); $('saveBtn').disabled = true; }
         try {
-          const res = await fetch('/pages/' + KEY);
-          if (res.status === 401) { guard.redirectToLogin(); return; }
-          if (res.ok) { const p = await res.json(); fill('de', p.de); fill('en', p.en); enMDE.codemirror.refresh(); setStatus('Loaded.'); }
-          else setStatus('Could not load: ' + res.status);
+          await loadPage();
         } catch (e) {
           setStatus('Could not load: ' + e);
         }
         // Offer to restore locally stashed changes; filling above fired CodeMirror
         // change events, so settle the guard's dirty state here either way.
         const stash = guard.tryRestore();
-        if (stash && !guard.wasDismissed(stash)
-            && confirm('Found unsaved About-page changes from ' + new Date(stash.savedAt).toLocaleString() + '. Restore them?')) {
-          fill('de', stash.payload.de); fill('en', stash.payload.en);
-          enMDE.codemirror.refresh();
-          guard.markDirty();
-          setStatus('Restored unsaved changes — remember to Save.');
+        if (stash && !guard.wasDismissed(stash)) {
+          const restore = await AdminConfirm.ask({
+            title: 'Restore unsaved About-page changes?',
+            body: 'Found unsaved changes from ' + new Date(stash.savedAt).toLocaleString() + '.',
+            confirmLabel: 'Restore',
+          });
+          if (restore) {
+            fill('de', stash.payload.de); fill('en', stash.payload.en);
+            enMDE.codemirror.refresh();
+            guard.markDirty();
+            setStatus('Restored unsaved changes — remember to Save.');
+          } else {
+            guard.dismissRestore(stash);
+          }
         } else if (stash) {
-          // Declined (or already dismissed this session): keep the stash so a
-          // misclicked Cancel can't destroy unsaved work — just disarm dirty and
-          // remember the dismissal so it isn't re-offered on every reload.
           guard.dismissRestore(stash);
         } else {
           guard.markClean();

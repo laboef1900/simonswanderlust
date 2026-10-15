@@ -2,8 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import sharp from 'sharp';
-import { listMedia, deleteMedia, imageUsage, VARIANT_FILE_RE } from '../src/media-files.js';
+import { deleteMedia, imageUsage, VARIANT_FILE_RE } from '../src/media-files.js';
 import type { PostUsageRow } from '../src/posts.js';
 import type { PagePair } from '../src/pages.js';
 
@@ -18,82 +17,14 @@ async function put(rel: string, data: Buffer | string = 'x'): Promise<void> {
   await writeFile(abs, data);
 }
 
-async function webp(width: number, height: number): Promise<Buffer> {
-  return sharp({ create: { width, height, channels: 3, background: '#345' } }).webp().toBuffer();
-}
-
 describe('VARIANT_FILE_RE', () => {
   it('matches the {key}-{width}.{fmt} contract only', () => {
     expect(VARIANT_FILE_RE.test('hero-640.webp')).toBe(true);
     expect(VARIANT_FILE_RE.test('hero-1280.avif')).toBe(true);
+    expect(VARIANT_FILE_RE.test('hero-1280.jpeg')).toBe(true);
     expect(VARIANT_FILE_RE.test('hero.webp')).toBe(false);
     expect(VARIANT_FILE_RE.test('hero-640.jpg')).toBe(false);
     expect(VARIANT_FILE_RE.test('notes.txt')).toBe(false);
-  });
-});
-
-describe('listMedia', () => {
-  it('groups variant files by key, including nested keys, ignoring non-variant files', async () => {
-    await put('trips/x/hero-640.webp');
-    await put('trips/x/hero-640.avif');
-    await put('trips/x/hero-1280.webp');
-    await put('trips/x/hero-1280.avif');
-    await put('standalone-800.webp');
-    await put('trips/x/notes.txt');
-    await put('trips/x/plain.webp'); // no width suffix — not a variant
-    const items = await listMedia(dir);
-    expect(items.map((i) => i.key)).toEqual(['standalone', 'trips/x/hero']);
-    const hero = items.find((i) => i.key === 'trips/x/hero')!;
-    expect(hero.files).toEqual([
-      'trips/x/hero-640.avif',
-      'trips/x/hero-640.webp',
-      'trips/x/hero-1280.avif',
-      'trips/x/hero-1280.webp',
-    ]);
-    expect(hero.widths).toEqual([640, 1280]);
-  });
-
-  it('keeps sibling keys sharing a prefix separate (hero vs hero-2)', async () => {
-    await put('trips/x/hero-640.webp');
-    await put('trips/x/hero-2-640.webp');
-    const items = await listMedia(dir);
-    expect(items.map((i) => i.key).sort()).toEqual(['trips/x/hero', 'trips/x/hero-2']);
-  });
-
-  it('uses the smallest webp as thumbnail and probes dims from the largest webp', async () => {
-    // Small image (no 640 variant exists — variantWidths never upscales).
-    await put('pic-300.webp', await webp(300, 200));
-    const items = await listMedia(dir);
-    expect(items).toHaveLength(1);
-    expect(items[0]!.thumbFile).toBe('pic-300.webp');
-    expect(items[0]!.width).toBe(300);
-    expect(items[0]!.height).toBe(200);
-  });
-
-  it('picks the smallest webp among several and reads dims from the largest', async () => {
-    await put('pic-640.webp', await webp(640, 480));
-    await put('pic-1000.webp', await webp(1000, 750));
-    await put('pic-640.avif');
-    const items = await listMedia(dir);
-    expect(items[0]!.thumbFile).toBe('pic-640.webp');
-    expect(items[0]!.width).toBe(1000);
-    expect(items[0]!.height).toBe(750);
-  });
-
-  it('reports null dims when the file is unreadable and null thumb without a webp', async () => {
-    await put('junk-640.webp', 'not a real webp');
-    await put('avifonly-640.avif');
-    const items = await listMedia(dir);
-    const junk = items.find((i) => i.key === 'junk')!;
-    expect(junk.width).toBeNull();
-    expect(junk.height).toBeNull();
-    const avifonly = items.find((i) => i.key === 'avifonly')!;
-    expect(avifonly.thumbFile).toBeNull();
-    expect(avifonly.width).toBeNull();
-  });
-
-  it('returns [] for a storage dir that does not exist yet', async () => {
-    expect(await listMedia(join(dir, 'nope'))).toEqual([]);
   });
 });
 
@@ -102,10 +33,12 @@ const SRC = 'https://img.example/trips/x/hero';
 // Both locale rows of one post, as PostStore.usageRows() would report them.
 function post(over: {
   tk?: string; title?: string; heroSrc?: string; body?: string; images?: Record<string, { width: number; height: number }>;
+  source?: PostUsageRow['source'];
 }): PostUsageRow[] {
   return (['de', 'en'] as const).map((locale) => ({
     translationKey: over.tk ?? 'p1',
     locale,
+    source: over.source ?? 'working',
     title: over.title ?? 'Titel',
     heroImage: { src: over.heroSrc ?? 'https://img.example/other/hero', width: 9, height: 9, alt: 'a' },
     bodyMarkdown: over.body ?? '## body',
@@ -126,7 +59,22 @@ function page(over: { key?: string; title?: string; body?: string; images?: Reco
 describe('imageUsage', () => {
   it('finds heroImage.src usage by exact match', () => {
     const refs = imageUsage(SRC, post({ tk: 'p1', title: 'Trip', heroSrc: SRC }), []);
-    expect(refs).toEqual([{ kind: 'post', key: 'p1', title: 'Trip' }]);
+    expect(refs).toEqual([{ kind: 'post', key: 'p1', title: 'Trip', published: false, working: true }]);
+  });
+
+  // #115: the snapshot rows are what the blog serves. A photo only the
+  // published version still renders is reported as `published` and not
+  // `working`, so the caller can say "republish first" instead of "remove
+  // the reference" (the draft already did that).
+  it('flags usage that survives only in the published snapshot', () => {
+    const rows = [
+      ...post({ tk: 'p1', title: 'Trip', heroSrc: 'https://img.example/other/new' }),
+      ...post({ tk: 'p1', title: 'Trip', heroSrc: SRC, source: 'published' }),
+    ];
+    expect(imageUsage(SRC, rows, [])).toEqual([{ kind: 'post', key: 'p1', title: 'Trip', published: true, working: false }]);
+    // Both copies referencing it: one ref, both flags — still one post.
+    const both = [...post({ tk: 'p1', heroSrc: SRC }), ...post({ tk: 'p1', heroSrc: SRC, source: 'published' })];
+    expect(imageUsage(SRC, both, [])).toEqual([expect.objectContaining({ key: 'p1', published: true, working: true })]);
   });
 
   it('counts a direct variant URL pasted as heroImage.src (copy-image-address)', () => {
@@ -152,11 +100,12 @@ describe('imageUsage', () => {
 
   it('counts a hand-written direct variant URL as usage', () => {
     expect(imageUsage(SRC, post({ body: `<img src="${SRC}-640.webp">` }), [])).toHaveLength(1);
+    expect(imageUsage(SRC, post({ body: `<img src="${SRC}-640.jpeg">` }), [])).toHaveLength(1);
   });
 
   it('finds page usage too', () => {
     const refs = imageUsage(SRC, [], [page({ key: 'about', title: 'Über mich', body: `![x](${SRC})` })]);
-    expect(refs).toEqual([{ kind: 'page', key: 'about', title: 'Über mich' }]);
+    expect(refs).toEqual([{ kind: 'page', key: 'about', title: 'Über mich', published: true, working: true }]);
   });
 
   it('reports each post once even when both locales use the image', () => {
@@ -167,7 +116,7 @@ describe('imageUsage', () => {
     // A crash between upsertDraft's two locale INSERTs leaves one row; the
     // row-based corpus must still report it (get() would return null).
     const deOnly = post({ tk: 'half', title: 'Halb', heroSrc: SRC }).slice(0, 1);
-    expect(imageUsage(SRC, deOnly, [])).toEqual([{ kind: 'post', key: 'half', title: 'Halb' }]);
+    expect(imageUsage(SRC, deOnly, [])).toEqual([{ kind: 'post', key: 'half', title: 'Halb', published: false, working: true }]);
   });
 
   it('returns [] when nothing references the src', () => {
@@ -180,10 +129,11 @@ describe('deleteMedia', () => {
     await put('trips/x/hero-640.webp');
     await put('trips/x/hero-640.avif');
     await put('trips/x/hero-1280.webp');
+    await put('trips/x/hero-1280.jpeg');
     await put('trips/x/hero-2-640.webp');
     await put('trips/x/notes.txt');
     const removed = await deleteMedia(dir, 'trips/x/hero');
-    expect(removed).toBe(3);
+    expect(removed).toBe(4);
     const left = await readdir(join(dir, 'trips/x'));
     expect(left.sort()).toEqual(['hero-2-640.webp', 'notes.txt']);
   });

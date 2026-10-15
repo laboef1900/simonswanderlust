@@ -21,23 +21,26 @@ function load(): Api {
 const source: PostPair = {
   translationKey: 'source-key', status: 'published',
   shared: {
-    date: '2024-10-03', country: 'Norwegen', countryCode: 'NO', region: 'europe',
+    date: '2024-10-03', countryCode: 'NO', region: 'europe',
     coordinates: { lat: 63.43, lng: 10.39 },
     stops: [{ name: 'Trondheim', lat: 63.43, lng: 10.39 }],
     route: 'Oslo → Trondheim',
-    keyFacts: { Währung: 'NOK', Sprache: 'Norwegisch' },
   },
   de: {
     locale: 'de', slug: 'norwegen-2024', title: 'Norwegen im Herbst', excerpt: 'Ein Roadtrip.',
+    country: 'Norwegen',
     heroImage: { src: 'https://img/h', width: 1600, height: 900, alt: 'Fjord' },
     bodyMarkdown: '## Anreise\n\n![Fjord](https://img/x/y)',
     images: { 'https://img/x/y': { width: 1600, height: 1067, alt: 'Fjord', caption: 'Tag 1' } },
+    keyFacts: { Währung: 'NOK', Sprache: 'Norwegisch' },
   },
   en: {
     locale: 'en', slug: 'norway-2024', title: 'Norway in autumn', excerpt: 'A road trip.',
+    country: 'Norway',
     heroImage: { src: 'https://img/h', width: 1600, height: 900, alt: 'Fjord' },
     bodyMarkdown: '## Arrival',
     images: {},
+    keyFacts: { Currency: 'NOK', Language: 'Norwegian' },
   },
 };
 
@@ -49,12 +52,14 @@ describe('PostsDuplicate.duplicatePayload — structure copies', () => {
   const copy = api.duplicatePayload(source, slugs, TODAY);
 
   it('carries the repeating structure this feature exists for', () => {
-    expect(copy.shared.country).toBe('Norwegen');
+    expect(copy.de.country).toBe('Norwegen');
+    expect(copy.en.country).toBe('Norway');
     expect(copy.shared.countryCode).toBe('NO');
     expect(copy.shared.region).toBe('europe');
     expect(copy.shared.route).toBe('Oslo → Trondheim');
     expect(copy.shared.stops).toEqual(source.shared.stops);
-    expect(copy.shared.keyFacts).toEqual(source.shared.keyFacts);
+    expect(copy.de.keyFacts).toEqual(source.de.keyFacts);
+    expect(copy.en.keyFacts).toEqual(source.en.keyFacts);
   });
 
   it('carries titles, excerpts, bodies and heroes', () => {
@@ -73,14 +78,16 @@ describe('PostsDuplicate.duplicatePayload — structure copies', () => {
   });
 
   it('omits optional shared fields the source never had', () => {
-    const bare: PostPair = { ...source, shared: { ...source.shared } };
+    const bare: PostPair = { ...source, shared: { ...source.shared }, de: { ...source.de }, en: { ...source.en } };
     delete bare.shared.route;
     delete bare.shared.stops;
-    delete bare.shared.keyFacts;
+    delete bare.de.keyFacts;
+    delete bare.en.keyFacts;
     const out = api.duplicatePayload(bare, slugs, TODAY);
     expect(out.shared).not.toHaveProperty('route');
     expect(out.shared).not.toHaveProperty('stops');
-    expect(out.shared).not.toHaveProperty('keyFacts');
+    expect(out.de).not.toHaveProperty('keyFacts');
+    expect(out.en).not.toHaveProperty('keyFacts');
   });
 });
 
@@ -131,8 +138,8 @@ describe('PostsDuplicate.duplicatePayload — identity resets', () => {
     c.shared.stops![0]!.name = 'mutated';
     expect(source.shared.stops![0]!.name).toBe('Trondheim');
 
-    c.shared.keyFacts!['Währung'] = 'mutated';
-    expect(source.shared.keyFacts!['Währung']).toBe('NOK');
+    c.de.keyFacts!['Währung'] = 'mutated';
+    expect(source.de.keyFacts!['Währung']).toBe('NOK');
   });
 
   it('carries structures by value, not by reference', () => {
@@ -140,7 +147,7 @@ describe('PostsDuplicate.duplicatePayload — identity resets', () => {
     expect(c.de.images).toEqual(source.de.images);
     expect(c.de.images).not.toBe(source.de.images);
     expect(c.shared.stops).not.toBe(source.shared.stops);
-    expect(c.shared.keyFacts).not.toBe(source.shared.keyFacts);
+    expect(c.de.keyFacts).not.toBe(source.de.keyFacts);
     expect(c.de.heroImage).not.toBe(source.de.heroImage);
   });
 });

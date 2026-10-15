@@ -21,7 +21,10 @@ interface Api {
   folderTree(paths: string[]): { path: string; name: string; depth: number }[];
   parentOf(path: string): string;
   statusLabel(item: unknown): string;
+  queueState(item: Record<string, unknown>): string;
   listQuery(state: Record<string, unknown>): string;
+  debounce(fn: (...args: unknown[]) => void, ms: number): (...args: unknown[]) => void;
+  makeSequence(): { next(): number; isCurrent(ticket: number): boolean };
   makeClient(opts: Record<string, unknown>): Record<string, (...args: never[]) => Promise<unknown>>;
   createUploadQueue(client: unknown, opts?: Record<string, unknown>): {
     add(files: unknown[], fields?: Record<string, string>): void;
@@ -94,6 +97,14 @@ describe('MediaApi pure helpers', () => {
     expect(api.statusLabel({ status: 'missing' })).toBe('file missing');
     // `error` is a fixed server-side enum, never a libvips message.
     expect(api.statusLabel({ status: 'failed', error: 'decode_failed' })).toBe('failed: decode_failed');
+  });
+
+  it('names the folder a duplicate already lives in instead of a bare "done"', () => {
+    expect(api.queueState({ state: 'uploading', progress: 0.5 })).toBe('50%');
+    expect(api.queueState({ state: 'failed', error: 'too large' })).toBe('too large');
+    expect(api.queueState({ state: 'done', result: { duplicate: false } })).toBe('done');
+    expect(api.queueState({ state: 'done', result: { duplicate: true, folder: 'Iceland/South' } })).toBe('already in Iceland/South');
+    expect(api.queueState({ state: 'done', result: { duplicate: true, folder: '' } })).toBe('already in root');
   });
 
   it('builds a list query, omitting empty values but keeping an explicit root folder', () => {
@@ -248,6 +259,37 @@ describe('MediaApi fetch client', () => {
     expect(calls[0]!.url).toBe('/media/items/trips/x/hero');
     expect(calls[0]!.init.method).toBe('PATCH');
     expect(JSON.parse(calls[0]!.init.body!)).toEqual({ title: 'T' });
+  });
+});
+
+describe('MediaApi search helpers', () => {
+  it('debounce runs once per burst, with the last call\'s arguments', () => {
+    // Timers are injected so the vm context shares the (fake) host clock.
+    const timers: { fn: () => void; ms: number; id: number; cleared: boolean }[] = [];
+    let nextId = 1;
+    const api = load({
+      setTimeout: (fn: () => void, ms: number) => { const id = nextId++; timers.push({ fn, ms, id, cleared: false }); return id; },
+      clearTimeout: (id: number) => { const t = timers.find((x) => x.id === id); if (t) t.cleared = true; },
+    });
+    const calls: unknown[][] = [];
+    const search = api.debounce((...args) => { calls.push(args); }, 200);
+    search('n'); search('no'); search('nor'); search('norw');
+    expect(calls).toEqual([]);
+    const live = timers.filter((t) => !t.cleared);
+    expect(live).toHaveLength(1);
+    expect(live[0]!.ms).toBe(200);
+    live[0]!.fn();
+    expect(calls).toEqual([['norw']]);
+  });
+
+  it('makeSequence marks a ticket stale once a newer one is issued', () => {
+    const api = load();
+    const seq = api.makeSequence();
+    const first = seq.next();
+    expect(seq.isCurrent(first)).toBe(true);
+    const second = seq.next();
+    expect(seq.isCurrent(first)).toBe(false);
+    expect(seq.isCurrent(second)).toBe(true);
   });
 });
 

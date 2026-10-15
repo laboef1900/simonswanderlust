@@ -58,6 +58,29 @@ export function insufficientSpace(space: DiskSpace, incomingBytes: number): stri
   return `not enough free disk space to accept this upload (${formatBytes(space.free)} available, ${formatBytes(needed)} required)`;
 }
 
+/**
+ * Measured whole cost of one re-hosted photo: 6.9 MB of variants plus the
+ * 10.7 MB retained original (the 2026-07-29 import, 665 photos ≈ 11 GB).
+ */
+export const IMPORT_PHOTO_BYTES = Math.round(17.5 * 1024 * 1024);
+
+/**
+ * Would re-hosting `photos` more images leave the volume too tight (issue #94)?
+ * Same floor as an upload, but sized from a COUNT rather than incoming bytes:
+ * a WXR declares URLs, not sizes, so the per-photo measurement above is the
+ * estimate. Returns null when there is room, or a sanitized, client-safe message.
+ *
+ * @ai-note `photos` should be the images the run will actually FETCH, not the
+ * export's total — after an ENOSPC the already-hosted majority is resumed from
+ * disk and costs nothing, and counting it would refuse the very re-run that is
+ * the documented recovery path.
+ */
+export function insufficientSpaceForImport(space: DiskSpace, photos: number): string | null {
+  const needed = UPLOAD_HEADROOM_BYTES + Math.max(0, photos) * IMPORT_PHOTO_BYTES;
+  if (space.free >= needed) return null;
+  return `not enough free disk space for this import (${formatBytes(space.free)} available, about ${formatBytes(needed)} required for ${Math.max(0, photos)} photos)`;
+}
+
 /** Human-readable byte size for logs and the settings page. */
 export function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n < 0) return '0 B';

@@ -9,9 +9,49 @@ export interface RemoteHeroImage {
   width: number;
   height: number;
   alt: string;
+  /** JPEG-only variants; absent means the existing AVIF + WebP pair. */
+  format?: 'jpeg';
+  /**
+   * Author-chosen subject position as percentages of the frame, fed to
+   * `object-position`. Every surface that shows a hero crops it with
+   * `object-fit: cover` into a box whose aspect ratio it does not control —
+   * the 70vh phone hero keeps ~44% of a 3:2 frame's width — and the default
+   * centre crop decapitated the subject of the two portrait-format heroes in
+   * the corpus. Optional: absent means `50% 50%`, which is what every post
+   * predating this field renders as.
+   */
+  focus?: { x: number; y: number };
 }
 
-export type ImageFormat = 'avif' | 'webp';
+/**
+ * `object-position` for a hero, or `undefined` when the author never moved it
+ * (so no attribute ships and the CSS default applies).
+ *
+ * @ai-warning This value lands in a `style` attribute. The numbers are clamped
+ * and rounded HERE rather than trusted from the database: `heroImage` is a
+ * `jsonb` column and a draft save only runs the shape check in
+ * `uploader/src/body-content.ts`, so treat anything inside it as untrusted at
+ * the render boundary — the same rule `uploader/src/preview.ts` applies to
+ * `width`/`height`.
+ */
+export function focusPosition(image: RemoteHeroImage): string | undefined {
+  const f = image.focus;
+  if (!f) return undefined;
+  const pct = (n: unknown): number => {
+    const v = typeof n === 'number' && Number.isFinite(n) ? n : 50;
+    return Math.round(Math.min(100, Math.max(0, v)));
+  };
+  const x = pct(f.x);
+  const y = pct(f.y);
+  return x === 50 && y === 50 ? undefined : `object-position:${x}% ${y}%`;
+}
+
+export type ImageFormat = 'avif' | 'webp' | 'jpeg';
+
+/** Formats that actually exist for an image reference, best choice first. */
+export function sourceFormats(image: RemoteHeroImage): readonly ImageFormat[] {
+  return image.format === 'jpeg' ? ['jpeg'] : ['avif', 'webp'];
+}
 
 /**
  * Origin the hero images are served from when the build has no configured base
@@ -59,6 +99,54 @@ export function variantWidths(
   return [...smaller, intrinsicWidth];
 }
 
+/**
+ * Re-point a post's own image URLs at `origin`, so one database renders
+ * correctly in every environment.
+ *
+ * The uploader stamps its `PUBLIC_BASE_URL` into content at upload/import time
+ * — the hero `src`, every key of the `images` map, and every URL written into
+ * the body. Nothing downstream swaps it: `srcset()` below concatenates onto the
+ * stored string, and the gallery allow-list in `body-images.ts` compares the
+ * stored origin by EXACT EQUALITY. So content imported against
+ * `http://localhost:3000` renders broken images on a server, and its galleries
+ * fail the allow-list and fall back to a code block. This makes the stored
+ * origin advisory instead of binding.
+ *
+ * @ai-warning Only URLs the post REGISTERED as images are rewritten — the
+ * `images` map keys plus the hero. A blanket origin replace over the body would
+ * also rewrite ordinary prose links (these posts link to Wikipedia and to other
+ * posts on this blog), and locally the blog and the image host are the SAME
+ * origin, so there is no origin test that separates them.
+ *
+ * Replacement runs longest-key-first: `…/a` is a prefix of `…/a-2`, and
+ * rewriting the short one first would corrupt the long one.
+ */
+export function retargetImageOrigins<V>(
+  content: { heroSrc: string; images: Record<string, V>; body: string },
+  origin: string,
+): { heroSrc: string; images: Record<string, V>; body: string } {
+  const retarget = (url: string): string => {
+    let u: URL;
+    try { u = new URL(url); } catch { return url; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return url;
+    return `${origin}${u.pathname}${u.search}${u.hash}`;
+  };
+
+  const images: Record<string, V> = {};
+  const renames: [string, string][] = [];
+  for (const [key, value] of Object.entries(content.images)) {
+    const next = retarget(key);
+    images[next] = value;
+    if (next !== key) renames.push([key, next]);
+  }
+
+  renames.sort((a, b) => b[0].length - a[0].length);
+  let body = content.body;
+  for (const [from, to] of renames) body = body.split(from).join(to);
+
+  return { heroSrc: content.heroSrc === '' ? '' : retarget(content.heroSrc), images, body };
+}
+
 /** Responsive srcset string for one format. */
 export function srcset(image: RemoteHeroImage, format: ImageFormat): string {
   return variantWidths(image.width)
@@ -66,9 +154,22 @@ export function srcset(image: RemoteHeroImage, format: ImageFormat): string {
     .join(', ');
 }
 
-/** Plain <img src> fallback — prefers the 1280 webp, else the largest available. */
+/**
+ * The largest variant that exists for a photo.
+ *
+ * Two callers, which is why it lives here rather than inline: the gallery's
+ * `<a href>` (the no-JS "open full size" target) and SEO/social images.
+ * The optional override is for callers that intentionally select one of the
+ * image's generated formats; normal consumers use the recorded format.
+ */
+export function largestVariant(image: RemoteHeroImage, format: ImageFormat = image.format ?? 'webp'): string {
+  const widths = variantWidths(image.width);
+  return `${image.src}-${widths[widths.length - 1]}.${format}`;
+}
+
+/** Plain <img src> fallback — prefers 1280, using only a generated format. */
 export function fallbackSrc(image: RemoteHeroImage): string {
   const widths = variantWidths(image.width);
   const w = widths.includes(FALLBACK_WIDTH) ? FALLBACK_WIDTH : widths[widths.length - 1];
-  return `${image.src}-${w}.webp`;
+  return `${image.src}-${w}.${image.format ?? 'webp'}`;
 }

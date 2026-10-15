@@ -6,20 +6,28 @@ import { pgUserStore } from './users.js';
 import { pgSessionStore } from './sessions.js';
 import { pgPostStore } from './posts.js';
 import { pgPageStore } from './pages.js';
-import { createSiteBuilder } from './build.js';
-import { createDbBackup, isBackupDue } from './backup.js';
+import { bootstrapRelease, createSiteBuilder } from './build.js';
+import { createDbBackup, isBackupDue, resolveBackupDir } from './backup.js';
+import { createImportRunner, pgImportJobStore } from './import-jobs.js';
 import { createShutdown } from './shutdown.js';
 import { makeDbCheck } from './health.js';
 import { createWorkLock } from './work-lock.js';
 import { pgMediaStore } from './media-store.js';
 import { createEncodeQueue } from './encode-queue.js';
-import { createMediaSync } from './media-sync.js';
+import { createMediaSync, createReconciler } from './media-sync.js';
+import { parseEncryptionKey, pgSecretsStore } from './secrets.js';
+import { pgCommentStore } from './comments.js';
+import { pgCommentAdminStore } from './comments-admin.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
   console.error('DATABASE_URL is required; refusing to start without it.');
   process.exit(1);
 }
+
+// Validate before connecting/migrating. Absence disables only optional remote AI.
+const encryptionKey = parseEncryptionKey(process.env.ENCRYPTION_KEY);
+if (encryptionKey === undefined) console.info('ENCRYPTION_KEY not configured in .env; encrypted remote AI credentials are unavailable.');
 
 const storageDir = process.env.STORAGE_DIR ?? '/data/images';
 const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(storageDir), 'settings.json');
@@ -31,6 +39,10 @@ const users = pgUserStore(pool);
 const sessions = pgSessionStore(pool);
 const posts = pgPostStore(pool);
 const pages = pgPageStore(pool);
+// issue #92: a job the previous process left `running` is marked interrupted
+// BEFORE listen(), so no request can observe a stale row as "busy".
+const importJobs = createImportRunner({ store: pgImportJobStore(pool) });
+await importJobs.recover();
 
 const baseUrl = process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com';
 let imgHost: string;
@@ -56,22 +68,28 @@ const builder = createSiteBuilder({
 });
 const media = pgMediaStore(pool, { baseUrl });
 const encodeQueue = createEncodeQueue({ store: media, storageDir, lock: workLock });
-const mediaSync = createMediaSync({
-  store: media,
-  storageDir,
-  baseUrl,
-  corpus: async () => {
-    const [postRows, pageKeys] = await Promise.all([posts.usageRows(), pages.keys()]);
-    return { posts: postRows, pages: await Promise.all(pageKeys.map((k) => pages.get(k))) };
-  },
+const reconciler = createReconciler({
+  sync: createMediaSync({
+    store: media,
+    storageDir,
+    baseUrl,
+    corpus: async () => {
+      const [postRows, pageKeys] = await Promise.all([posts.usageRows(), pages.keys()]);
+      return { posts: postRows, pages: await Promise.all(pageKeys.map((k) => pages.get(k))) };
+    },
+  }),
+  queue: encodeQueue,
 });
-const backupDir = process.env.BACKUP_DIR ?? '/data/backup';
+const backupDir = resolveBackupDir();
 const dbBackup = createDbBackup({
   db: pool,
   dir: join(backupDir, 'db'),
   retention: () => settings.get().backupRetention,
   storageDir, // scheduled/on-demand runs also write the incremental images tar
 });
+// A SIGKILLed archive leaves its multi-GB .tmp behind; reclaim it before the
+// first run can stack another on top (#113).
+dbBackup.sweepTempFiles();
 
 // Hourly housekeeping: sweep expired sessions and run a due scheduled backup.
 const housekeeping = () => {
@@ -91,11 +109,18 @@ const app = buildServer({
   users,
   sessions,
   settings,
+  secrets: pgSecretsStore(pool, encryptionKey),
   posts,
   pages,
+  // Optional in ServerConfig so tests can omit them; omitted here, every
+  // public and moderation comment route answers 503 in production.
+  comments: pgCommentStore(pool),
+  commentsAdmin: pgCommentAdminStore(pool),
+  importJobs,
   media,
   encodeQueue,
-  mediaSync,
+  workLock,
+  reconciler,
   builder,
   dbBackup,
   backupDir,
@@ -124,28 +149,15 @@ app
   .then(() => {
     console.log(`app listening on :${port}`);
     // First boot on a fresh volume: populate the site in the background
-    // (blog routes 503 until the release lands). Restarts skip this.
-    if (!builder.hasRelease()) {
-      void builder.build().then((r) =>
-        console.log(r.ok ? `initial build released ${r.release}` : `initial build failed: ${r.error}`));
-    }
+    // (blog routes 503 until the release lands), retrying a failed build with
+    // backoff (#110). Restarts against an existing release skip this.
+    if (!builder.hasRelease()) void bootstrapRelease(builder, { log: (msg) => console.log(msg) });
     housekeeping();
     // Reconcile disk ↔ database, THEN resume anything left half-encoded. Runs
     // AFTER listen() and never blocks boot; a failure is logged, not fatal.
-    //
-    // @ai-warning The order is load-bearing — these must not run concurrently.
-    // mediaSync inserts a backfilled crashed upload (an `-orig.*` on disk with
-    // no variants) as `processing`, and recover() re-seeds the queue from
-    // `status = 'processing'`. Fired in parallel, recover() — a single query —
-    // always finishes before the sync's disk walk, so it never sees those rows;
-    // POST /media/retry skips `processing` and the UI only offers Retry for
-    // `failed`, so nothing could un-stick them until the next restart, while
-    // the publish gate blocked every post referencing them.
-    void mediaSync
-      .run()
-      .catch((e) => console.error('media reconciliation failed:', e))
-      .then(() => encodeQueue.recover())
-      .catch((e) => console.error('encode queue recovery failed:', e));
+    // The sync/recover ordering lives in createReconciler — the same pass
+    // POST /media/rescan runs (#117).
+    void reconciler.run().catch((e) => console.error('media reconciliation failed:', e));
   })
   .catch((err) => {
     console.error(err);

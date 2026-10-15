@@ -44,7 +44,7 @@ WORKDIR /app/uploader
 COPY uploader/package.json uploader/package-lock.json ./
 RUN npm ci --omit=dev
 COPY uploader/ .
-RUN node scripts/copy-fonts.mjs && node scripts/copy-easymde.mjs
+RUN node scripts/copy-fonts.mjs && node scripts/copy-easymde.mjs && node scripts/copy-vendor.mjs
 
 # --- site deps (full install: Astro build needs devDependencies at runtime) ---
 FROM ${NODE_BUILD} AS site-build

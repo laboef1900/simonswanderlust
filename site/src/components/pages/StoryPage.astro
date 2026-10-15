@@ -1,16 +1,17 @@
 ---
-import RemoteImage from '../RemoteImage.astro';
 import { getCollection, render } from 'astro:content';
 import Base from '../../layouts/Base.astro';
 import KeyFacts from '../KeyFacts.astro';
 import RouteDivider from '../RouteDivider.astro';
-import Stamp from '../Stamp.astro';
+import StoryHero from '../StoryHero.astro';
+import StoryPagination from '../StoryPagination.astro';
 import Toc from '../Toc.astro';
 import StoryMiniMap from '../StoryMiniMap.astro';
-import { useTranslations } from '../../i18n/ui';
-import { coordsLabel, dateLabel, entryLabel } from '../../lib/format';
-import { byLocale, entryNumberOf, localeOf, pathOf, translationOf, type Trip } from '../../lib/trips';
+import GalleryIsland from '../GalleryIsland.astro';
+import CommentsIsland from '../CommentsIsland.astro';
+import { byLocale, localeOf, pathOf, translationOf, type Trip } from '../../lib/trips';
 import { PROD_SITE, blogPostingJsonLd, serializeJsonLd } from '../../lib/seo';
+import { splitOpening } from '../../lib/story-opening';
 
 interface Props {
   trip: Trip;
@@ -18,23 +19,28 @@ interface Props {
 
 const { trip } = Astro.props;
 const locale = localeOf(trip);
-const t = useTranslations(locale);
-const { Content, headings } = await render(trip);
+const { headings } = await render(trip);
+// The body is one rendered HTML string (postgres-loader.ts renders and
+// sanitises it at sync time; <Content /> would print the same string). It is
+// split here, not in the loader, because the cut is a layout decision: the
+// first section sits beside the rail, the rest runs centred and wider.
+const { opening, rest } = splitOpening(trip.rendered?.html ?? '', headings);
 
 const all = await getCollection('trips');
-const number = entryNumberOf(trip, all);
 const other = translationOf(trip, all);
 const siblings = byLocale(all, locale);
 const index = siblings.findIndex((s) => s.id === trip.id);
 const newer = index > 0 ? siblings[index - 1] : undefined;
 const older = index < siblings.length - 1 ? siblings[index + 1] : undefined;
 
+const PROSE =
+  'story-body prose prose-lg max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-headings:break-words prose-p:break-words prose-li:break-words prose-a:font-semibold prose-a:text-brand-red prose-a:no-underline hover:prose-a:underline prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:bg-navy/[0.02] prose-blockquote:py-3 prose-blockquote:px-5 prose-blockquote:italic prose-blockquote:text-navy';
+
 const alternates = other
   ? locale === 'de'
     ? { de: pathOf(trip), en: pathOf(other) }
     : { de: pathOf(other), en: pathOf(trip) }
   : undefined;
-const label = `${entryLabel(number)} — ${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
 
 // Same production fallback as Base.astro's canonical URL.
 const site = Astro.site ?? PROD_SITE;
@@ -60,94 +66,140 @@ const jsonLd = serializeJsonLd(
 >
   {/* serializeJsonLd escapes '<' — safe for set:html even with CMS-authored titles. */}
   <script type="application/ld+json" set:html={jsonLd} is:inline />
-  <section class="relative h-[55vh] min-h-[360px]">
-    <RemoteImage
-      image={trip.data.heroImage}
-      sizes="100vw"
-      loading="eager"
-      fetchpriority="high"
-      class="absolute inset-0 h-full w-full object-cover"
-    />
-    <div class="absolute inset-0 bg-gradient-to-t from-navy/85 via-transparent to-navy/20"></div>
-    <div class="absolute right-0 bottom-0 left-0">
-      <div class="mx-auto max-w-3xl px-5 pb-10 text-white">
-        <p class="font-mono text-xs font-semibold tracking-[0.25em] text-brand-red-light uppercase">{label}</p>
-        <h1 class="mt-2 text-3xl font-extrabold md:text-4xl break-words">{trip.data.title}</h1>
-        <p class="mt-2 font-mono text-xs tracking-[0.2em] text-white/60">
-          {coordsLabel(trip.data.coordinates)}
-        </p>
+  <StoryHero trip={trip} locale={locale} otherHref={other ? pathOf(other) : undefined} />
+
+  <div class="mx-auto max-w-3xl px-5 pt-5 pb-10 sm:pt-6 lg:max-w-6xl">
+    <div class="story-reading">
+      {/* The opening spread: the first section beside the rail (contents, key
+          facts, route map). Below lg the spread and both rail wrappers are
+          `display: contents`, so these are the same three disclosures stacked
+          above the article they always were, and the sticky strip's
+          containing block stays .story-reading — the whole story. From lg the
+          rail floats beside the opening, its stack stays in view for the
+          spread's height, and the disclosures start open. */}
+      <div class="story-spread">
+        <div class="story-rail">
+          <div class="story-rail__stack">
+            <Toc headings={headings} locale={locale} />
+            {
+              trip.data.keyFacts && (
+                <KeyFacts facts={trip.data.keyFacts} country={trip.data.country} locale={locale} />
+              )
+            }
+            <StoryMiniMap trip={trip} locale={locale} />
+          </div>
+        </div>
+        {/* Inline and synchronous, so the rail is open before first paint on a
+            desktop viewport. Without JavaScript the rail is still there, just
+            collapsed — the same disclosures the narrow layout ships. */}
+        <script is:inline>
+          if (matchMedia('(width >= 64rem)').matches) {
+            for (const d of document.querySelectorAll('.story-rail__stack > details')) d.open = true;
+          }
+        </script>
+        {/* `opening`/`rest` are the loader's own sanitised render, cut at a
+            heading boundary — the same string <Content /> would print. The
+            drop cap belongs to the story's first paragraph only. */}
+        <article
+          class:list={[
+            PROSE,
+            'lg:w-story-column prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red',
+          ]}
+          set:html={opening}
+        />
       </div>
+      {/* The rest of the story: centred on the same measure as the spread
+          (60rem), so the body's edges meet the opening's. Break-out galleries
+          centre on it with the default overhang; the spread's 100cqw rule does
+          not reach here. */}
+      {rest !== '' && <article class:list={[PROSE, 'story-rest mx-auto lg:max-w-story-wide']} set:html={rest} />}
+      <GalleryIsland locale={locale} />
     </div>
-  </section>
 
-  <div class="mx-auto max-w-3xl px-5 py-10">
-    <div class="flex flex-wrap items-start justify-between gap-4">
-      <p class="text-sm">
-        {
-          other && (
-            <a href={pathOf(other)} class="font-medium text-brand-red hover:underline focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2">
-              {t('story.otherLang')} →
-            </a>
-          )
-        }
-      </p>
-      <Stamp countryCode={trip.data.countryCode} country={trip.data.country} date={trip.data.date} region={trip.data.region} locale={locale} />
-    </div>
-    <Toc headings={headings} locale={locale} />
-    {
-      trip.data.keyFacts && (
-        <KeyFacts facts={trip.data.keyFacts} country={trip.data.country} locale={locale} />
-      )
-    }
-    <article class="prose prose-lg max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-headings:break-words prose-p:break-words prose-a:font-semibold prose-a:text-brand-red prose-a:no-underline hover:prose-a:underline prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:bg-navy/[0.02] prose-blockquote:py-3 prose-blockquote:px-5 prose-blockquote:italic prose-blockquote:text-navy prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red">
-      <Content />
-    </article>
+    {/* Reader comments (#208): after the story and its mini-map, before the
+        divider and prev/next nav, outside the prose articles. Trip reports only. */}
+    <CommentsIsland locale={locale} translationKey={trip.data.translationKey} />
 
-    <StoryMiniMap trip={trip} locale={locale} />
-
-    <div class="mt-12">
+    <div class="mx-auto mt-12 lg:max-w-story-wide">
       <RouteDivider />
+      <StoryPagination older={older} newer={newer} locale={locale} />
     </div>
-    <nav
-      aria-label={t('story.pagination')}
-      class="mt-12 grid gap-4 sm:grid-cols-2"
-    >
-      {
-        older ? (
-          <a
-            href={pathOf(older)}
-            class="group flex min-w-0 flex-col justify-between rounded-md border border-navy/10 bg-canvas p-4 transition-all duration-300 hover:-translate-y-0.5 hover:border-brand-red/40 hover:shadow-md focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2"
-          >
-            <span class="inline-flex items-center gap-1 font-mono text-[11px] font-semibold tracking-wider text-navy/60 uppercase group-hover:text-brand-red">
-              <svg aria-hidden="true" focusable="false" class="h-3.5 w-3.5 transition-transform duration-300 group-hover:-translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M13 8H3M7 4L3 8l4 4" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-              {t('story.prev')}
-            </span>
-            <span class="mt-2 font-bold text-navy line-clamp-1 break-words group-hover:text-brand-red">
-              {older.data.title}
-            </span>
-          </a>
-        ) : <div />
-      }
-      {
-        newer ? (
-          <a
-            href={pathOf(newer)}
-            class="group flex min-w-0 flex-col justify-between rounded-md border border-navy/10 bg-canvas p-4 text-right transition-all duration-300 hover:-translate-y-0.5 hover:border-brand-red/40 hover:shadow-md focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2"
-          >
-            <span class="inline-flex items-center justify-end gap-1 font-mono text-[11px] font-semibold tracking-wider text-navy/60 uppercase group-hover:text-brand-red">
-              {t('story.next')}
-              <svg aria-hidden="true" focusable="false" class="h-3.5 w-3.5 transition-transform duration-300 group-hover:translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </span>
-            <span class="mt-2 font-bold text-navy line-clamp-1 break-words group-hover:text-brand-red">
-              {newer.data.title}
-            </span>
-          </a>
-        ) : <div />
-      }
-    </nav>
   </div>
 </Base>
+
+<style>
+  .story-spread,
+  .story-rail,
+  .story-rail__stack {
+    display: contents;
+  }
+
+  /* Below lg the two articles read as one: the rest's first heading carries
+   * the same clearance prose-lg gives an h2 mid-body (44px). From lg the gap
+   * marks the change of layout, spread → centred body. */
+  .story-rest {
+    margin-top: 2.75rem;
+  }
+
+  /* The opening spread (≥ lg). A float rather than a grid on purpose: the
+   * opening is one rendered section we do not split further, and a wide
+   * gallery in it must not run under the rail. `clear: right` on the wide
+   * modes does that with no script measuring anything — a gallery the rail
+   * would overlap moves below it; one further down is already clear and does
+   * not move. (Relying on the gallery's own formatting context to avoid the
+   * float does NOT work: the float sits outside the article's inline range,
+   * so the article's children never see it. Measured, not assumed.)
+   * Column-width galleries never meet the rail: the column, the 3rem gap and
+   * the rail sum to exactly the spread (see --container-story-* in global.css).
+   * The spread is centred on --container-story-wide, the body's own measure,
+   * so the opening and the rest share both edges. It — not .story-reading —
+   * is the float's and the sticky rail's containing block, which is what
+   * keeps the rail beside the opening and off the centred body below. */
+  @media (width >= 64rem) {
+    .story-spread {
+      display: block;
+      max-width: var(--container-story-wide);
+      margin-inline: auto;
+      /* Contains the float, and makes 100cqw below mean "the whole spread". */
+      container-type: inline-size;
+    }
+
+    .story-rest {
+      margin-top: 4rem;
+    }
+
+    /* The rail is one sticky float; its stack is a plain block. It never
+     * scrolls internally: a rail taller than the viewport simply stays where
+     * the opening puts it (the sticky offset can only hold it while the
+     * spread is taller than the rail, and then the rail fits). An inner
+     * `overflow-y: auto` used to clip it to the viewport and put a second
+     * scrollbar beside the page's — the owner asked for it gone (2026-09-20). */
+    .story-rail {
+      display: block;
+      position: sticky;
+      top: 0.5rem;
+      float: right;
+      clear: right;
+      width: var(--container-story-rail);
+      margin-left: 3rem;
+    }
+
+    .story-rail__stack {
+      display: block;
+    }
+
+    /* A wide gallery in the opening spans the whole spread from the column's
+     * left edge, instead of centring on the column — which, with the column
+     * left of centre, would push it past the viewport's left edge. Not
+     * mirrored into preview.ts (its parity test scrapes global.css only): the
+     * draft preview has no rail, so it keeps the centred break-out. The
+     * article must stay a plain block (no overflow/contain/flow-root) or the
+     * clearance stops seeing the rail. */
+    .story-spread :global(.jgal--breakout),
+    .story-spread :global(.jgal--slider) {
+      --jgal-w: 100cqw;
+      margin-inline: 0;
+      clear: right;
+    }
+  }
+</style>

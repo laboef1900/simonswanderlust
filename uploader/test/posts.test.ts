@@ -3,15 +3,15 @@ import { memoryPostStore, normalizeBodyImages, PostError, REVISION_CAP, validate
 import { renderPostToMdx } from '../src/export.js';
 
 function pair(overrides: Partial<PostPair> = {}): PostPair {
-  const loc = (locale: 'de' | 'en', slug: string, title: string) => ({
-    locale, slug, title, excerpt: 'x',
+  const loc = (locale: 'de' | 'en', slug: string, title: string, country: string) => ({
+    locale, slug, title, excerpt: 'x', country,
     heroImage: { src: 'https://img/h', width: 768, height: 512, alt: 'a' },
     bodyMarkdown: '## Hi', images: {},
   });
   return {
     translationKey: '', status: 'draft',
-    shared: { date: '2024-10-03', country: 'Rumänien', countryCode: 'RO', region: 'europe', coordinates: { lat: 44.4, lng: 26.1 } },
-    de: loc('de', 'bukarest', 'Bukarest'), en: loc('en', 'bucharest', 'Bucharest'),
+    shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 44.4, lng: 26.1 } },
+    de: loc('de', 'bukarest', 'Bukarest', 'Rumänien'), en: loc('en', 'bucharest', 'Bucharest', 'Romania'),
     ...overrides,
   };
 }
@@ -37,6 +37,18 @@ describe('memoryPostStore', () => {
     });
   });
 
+  it('list summaries preserve a JPEG-only hero marker for admin thumbnails', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.de.heroImage = { ...p.de.heroImage, format: 'jpeg' };
+    await s.upsertDraft(p);
+    expect((await s.list())[0]).toMatchObject({
+      heroSrc: 'https://img/h',
+      heroWidth: 768,
+      heroFormat: 'jpeg',
+    });
+  });
+
   it('list falls back to the EN hero when the DE row still has the empty-src placeholder', async () => {
     const s = memoryPostStore();
     const p = pair();
@@ -59,6 +71,24 @@ describe('memoryPostStore', () => {
     const c = await s.upsertDraft(pair());
     await s.publish(c.translationKey);
     expect((await s.get(c.translationKey))?.status).toBe('published');
+  });
+
+  // Issue #119: the write-DE-first workflow saves with en.slug '' — the second
+  // such draft used to fail with duplicate_slug because '' counted as taken.
+  it('two DE-first drafts with an unset EN slug coexist; a real EN slug is still unique', async () => {
+    const s = memoryPostStore();
+    const enUnset = (title: string, deSlug: string) => pair({
+      de: { ...pair().de, slug: deSlug, title }, en: { ...pair().en, slug: '', title: '', bodyMarkdown: '' },
+    });
+    const a = await s.upsertDraft(enUnset('A', 'a'));
+    const b = await s.upsertDraft(enUnset('B', 'b'));
+    expect(a.translationKey).not.toBe(b.translationKey);
+    expect((await s.list()).map((p) => p.slugEn)).toEqual(['', '']);
+    // filling in the EN slug on one draft still collides with an existing real slug
+    await s.upsertDraft({ ...a, en: { ...a.en, slug: 'shared' } });
+    await expect(s.upsertDraft({ ...b, en: { ...b.en, slug: 'shared' } })).rejects.toMatchObject({ code: 'duplicate_slug' });
+    // publishing a draft whose EN slug is still unset is refused
+    expect(() => validateForPublish(enUnset('C', 'c'))).toThrow(PostError);
   });
 
   it('a new draft and a fresh publish report no unpublished changes', async () => {
@@ -145,6 +175,19 @@ describe('memoryPostStore', () => {
     expect(renamed.de.slug).toBe('renamed');
   });
 
+  it('renaming a draft slug frees the old slug for another pair', async () => {
+    const s = memoryPostStore();
+    const c = await s.upsertDraft(pair());
+    const renamed = await s.upsertDraft({ ...c, de: { ...c.de, slug: 'renamed-de' } });
+    expect(renamed.de.slug).toBe('renamed-de');
+    expect((await s.get(c.translationKey))?.de.slug).toBe('renamed-de');
+    expect(await s.list()).toHaveLength(1);
+    // the abandoned slug is no longer squatted by the renamed pair
+    const other = await s.upsertDraft(pair({ en: { ...pair().en, slug: 'other-en' } }));
+    expect(other.de.slug).toBe('bukarest');
+    expect(other.translationKey).not.toBe(c.translationKey);
+  });
+
   it('remove deletes the pair and frees its slugs for reuse', async () => {
     const s = memoryPostStore();
     const c = await s.upsertDraft(pair());
@@ -161,6 +204,17 @@ describe('memoryPostStore', () => {
     const s = memoryPostStore();
     await expect(s.remove('nope')).rejects.toBeInstanceOf(PostError);
     await expect(s.unpublish('nope')).rejects.toBeInstanceOf(PostError);
+  });
+
+  // #121: a post is a draft or published — nothing else exists, so the stats
+  // carry exactly those two buckets (a "scheduled" count that can never be
+  // non-zero is a lie to the dashboard).
+  it('getCmsStats counts pairs as draft or published and nothing else', async () => {
+    const s = memoryPostStore();
+    const a = await s.upsertDraft(pair());
+    await s.publish(a.translationKey);
+    await s.upsertDraft(pair({ de: { ...pair().de, slug: 'b-de' }, en: { ...pair().en, slug: 'b-en' }, shared: { ...pair().shared, categories: ['City'], tags: ['x', 'y'] } }));
+    expect(await s.getCmsStats!()).toEqual({ totalPosts: 2, draftPosts: 1, publishedPosts: 1, totalCategories: 1, totalTags: 2 });
   });
 
   it('list reports hasEnBody (blank EN body → false)', async () => {
@@ -182,11 +236,131 @@ describe('memoryPostStore', () => {
     expect(rows).toHaveLength(2);
     expect(rows.map((r) => r.translationKey)).toEqual([created.translationKey, created.translationKey]);
     expect(rows[0]).toMatchObject({
+      source: 'working',
       title: 'Bukarest',
       heroImage: { src: 'https://img/h' },
       bodyMarkdown: '## Hi',
       images: {},
     });
+  });
+
+  // #115: the published snapshot is what the blog serves, so it must count as
+  // usage even after a draft save replaced the photo in the working copy.
+  it('usageRows adds published-snapshot rows that keep referencing a swapped-out photo', async () => {
+    const s = memoryPostStore();
+    const created = await s.upsertDraft(pair());
+    expect((await s.usageRows()).filter((r) => r.source === 'published')).toHaveLength(0);
+    await s.publish(created.translationKey);
+    await s.upsertDraft({
+      ...pair(), translationKey: created.translationKey, status: 'published',
+      de: { ...pair().de, heroImage: { src: 'https://img/new', width: 1, height: 1, alt: 'n' } },
+    });
+    const rows = await s.usageRows();
+    expect(rows).toHaveLength(4);
+    const de = rows.filter((r) => r.locale === 'de').map((r) => [r.source, r.heroImage.src]);
+    expect(de).toEqual([['working', 'https://img/new'], ['published', 'https://img/h']]);
+    // Unpublishing drops the snapshot rows: nothing serves the post any more.
+    await s.unpublish(created.translationKey);
+    expect((await s.usageRows()).filter((r) => r.source === 'published')).toHaveLength(0);
+  });
+});
+
+// Issue #87: country and keyFacts are per-locale prose (the DB column was
+// always per-row), but the app layer used to funnel both through one
+// PostShared.country/.keyFacts value — so the second writeLocale() call in
+// upsertDraft silently overwrote the first locale's value with the second's,
+// and a save always left both rows holding whichever locale saved last. This
+// suite pins the fix: PostLocale carries its own country/keyFacts, and a save
+// followed by a reload must return each locale's OWN value, not the other's.
+describe('country and keyFacts are per-locale (issue #87)', () => {
+  it('round-trips different DE and EN country through save and reload', async () => {
+    const s = memoryPostStore();
+    const created = await s.upsertDraft(pair({
+      de: { ...pair().de, country: 'Rumänien' },
+      en: { ...pair().en, country: 'Romania' },
+    }));
+    const reloaded = await s.get(created.translationKey);
+    expect(reloaded?.de.country).toBe('Rumänien');
+    expect(reloaded?.en.country).toBe('Romania');
+  });
+
+  it('round-trips different DE and EN key facts through save and reload', async () => {
+    const s = memoryPostStore();
+    const created = await s.upsertDraft(pair({
+      de: { ...pair().de, keyFacts: { Einwohner: '19 Millionen' } },
+      en: { ...pair().en, keyFacts: { Population: '19 million' } },
+    }));
+    const reloaded = await s.get(created.translationKey);
+    expect(reloaded?.de.keyFacts).toEqual({ Einwohner: '19 Millionen' });
+    expect(reloaded?.en.keyFacts).toEqual({ Population: '19 million' });
+  });
+
+  it('list summary prefers the DE country, falling back to EN when DE is blank', async () => {
+    const s = memoryPostStore();
+    const withDe = await s.upsertDraft(pair({
+      de: { ...pair().de, country: 'Rumänien' }, en: { ...pair().en, country: 'Romania' },
+    }));
+    const deBlank = await s.upsertDraft(pair({
+      de: { ...pair().de, slug: 'other-de', country: '' }, en: { ...pair().en, slug: 'other-en', country: 'Iceland' },
+    }));
+    const list = await s.list();
+    expect(list.find((p) => p.translationKey === withDe.translationKey)?.country).toBe('Rumänien');
+    expect(list.find((p) => p.translationKey === deBlank.translationKey)?.country).toBe('Iceland');
+  });
+
+  it('re-saving one locale does not clobber the other locale\'s country (the original bug)', async () => {
+    const s = memoryPostStore();
+    const created = await s.upsertDraft(pair({
+      de: { ...pair().de, country: 'Rumänien' }, en: { ...pair().en, country: 'Romania' },
+    }));
+    // A second save that only touches the DE body must not disturb EN's country.
+    const resaved = await s.upsertDraft({ ...created, de: { ...created.de, bodyMarkdown: '## edited' } });
+    expect(resaved.de.country).toBe('Rumänien');
+    expect(resaved.en.country).toBe('Romania');
+  });
+});
+
+// The homepage cover flag is SHARED (not per-locale, #87's rule) and optional
+// on the way in: the WXR importer and any pre-flag client send a `shared`
+// without it. What the stores must agree on is the value a reader sees back —
+// a real boolean, false when the payload omitted the key. The pg half of this
+// contract (both locale rows, and the published snapshot) lives in
+// pg.integration.test.ts, which skips without TEST_DATABASE_URL.
+describe('featured: the homepage cover flag', () => {
+  it('defaults to false when the payload omits it (the importer/older-client path)', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    expect('featured' in p.shared).toBe(false);
+    const created = await s.upsertDraft(p);
+    expect(created.shared.featured).toBe(false);
+    expect((await s.get(created.translationKey))?.shared.featured).toBe(false);
+  });
+
+  it('round-trips true and can be cleared again by a later save', async () => {
+    const s = memoryPostStore();
+    const created = await s.upsertDraft(pair({ shared: { ...pair().shared, featured: true } }));
+    expect((await s.get(created.translationKey))?.shared.featured).toBe(true);
+    const cleared = await s.upsertDraft({ ...created, shared: { ...created.shared, featured: false } });
+    expect(cleared.shared.featured).toBe(false);
+    expect((await s.get(created.translationKey))?.shared.featured).toBe(false);
+  });
+
+  it('flagging one post leaves another flagged post alone (no uniqueness, no cross-post write)', async () => {
+    const s = memoryPostStore();
+    const first = await s.upsertDraft(pair({ shared: { ...pair().shared, featured: true } }));
+    const second = await s.upsertDraft(pair({
+      de: { ...pair().de, slug: 'other-de' }, en: { ...pair().en, slug: 'other-en' },
+      shared: { ...pair().shared, featured: true },
+    }));
+    expect((await s.get(first.translationKey))?.shared.featured).toBe(true);
+    expect((await s.get(second.translationKey))?.shared.featured).toBe(true);
+  });
+
+  it('validateDraft rejects a non-boolean instead of coercing it', () => {
+    const draft = { shared: { featured: 'true' }, de: { title: 'T' }, en: {} };
+    expect(() => validateDraft(draft)).toThrow(/shared.featured must be a boolean/);
+    expect(() => validateDraft({ ...draft, shared: { featured: true } })).not.toThrow();
+    expect(() => validateDraft({ ...draft, shared: {} })).not.toThrow();
   });
 });
 
@@ -280,10 +454,30 @@ describe('memoryPostStore revisions', () => {
 });
 
 describe('post validation', () => {
-  it('draft requires only a DE title and valid slugs', () => {
+  it('draft requires only a DE title and valid slugs; an empty slug is unset, not invalid', () => {
     expect(() => validateDraft(pair({ de: { ...pair().de, title: '' } }))).toThrow(PostError);
     expect(() => validateDraft(pair({ de: { ...pair().de, slug: 'Bad Slug' } }))).toThrow(PostError);
+    expect(() => validateDraft(pair({ en: { ...pair().en, slug: ' ' } }))).toThrow(PostError);
+    expect(() => validateDraft(pair({ en: { ...pair().en, slug: '' } }))).not.toThrow();
     expect(() => validateDraft(pair())).not.toThrow();
+  });
+  // Issue #120: validateDraft is the HTTP boundary; shape errors must be
+  // PostErrors naming the field, not TypeErrors from dereferencing the body.
+  it('draft validation rejects malformed shapes by field and accepts a title-only draft', () => {
+    const bad: [unknown, RegExp][] = [
+      [null, /must be an object/],
+      [{ shared: {}, en: {} }, /^de must be an object/],
+      [{ shared: {}, de: { title: ['x'] }, en: {} }, /de\.title must be a string/],
+      [{ shared: {}, de: { title: 'T', keyFacts: { a: 1 } }, en: {} }, /de\.keyFacts/],
+      [{ shared: {}, de: { title: 'T' }, en: { images: [] } }, /en\.images must be an object/],
+      [{ shared: { tags: [1] }, de: { title: 'T' }, en: {} }, /shared\.tags/],
+      [{ shared: { date: '2024-13-45' }, de: { title: 'T' }, en: {} }, /shared\.date/],
+      [{ shared: { scheduledAt: 5 }, de: { title: 'T' }, en: {} }, /shared\.scheduledAt/],
+    ];
+    for (const [payload, msg] of bad) expect(() => validateDraft(payload), JSON.stringify(payload)).toThrow(msg);
+    expect(() => validateDraft({ shared: {}, de: { title: 'T' }, en: {} })).not.toThrow();
+    // blank shared fields (the editor omits or sends '') and a null scheduledAt are fine
+    expect(() => validateDraft({ shared: { date: '', countryCode: '', region: '', scheduledAt: null }, de: { title: 'T' }, en: {} })).not.toThrow();
   });
   it('publish requires both locales complete and schema-valid', () => {
     expect(() => validateForPublish(pair())).not.toThrow();
@@ -291,6 +485,25 @@ describe('post validation', () => {
     expect(() => validateForPublish(pair({ shared: { ...pair().shared, region: 'mars' as never } }))).toThrow(PostError);
     expect(() => validateForPublish(pair({ en: { ...pair().en, excerpt: '' } }))).toThrow(PostError);
     expect(() => validateForPublish(pair({ de: { ...pair().de, heroImage: { ...pair().de.heroImage, alt: '' } } }))).toThrow(PostError);
+    // country is per-locale (issue #87) — each locale needs its own to publish.
+    expect(() => validateForPublish(pair({ de: { ...pair().de, country: '' } }))).toThrow(/de: country required/);
+    expect(() => validateForPublish(pair({ en: { ...pair().en, country: '' } }))).toThrow(/en: country required/);
+  });
+  it('publish rejects Markdown and raw-HTML body H1s with the locale named', () => {
+    expect(() => validateForPublish(pair({
+      de: { ...pair().de, bodyMarkdown: '# Duplicate document title\n\nCopy' },
+    }))).toThrow(/de: body must not contain an H1; the story hero provides the page H1/);
+    expect(() => validateForPublish(pair({
+      en: { ...pair().en, bodyMarkdown: '<h1 class="legacy">Legacy title</h1>\n\nCopy' },
+    }))).toThrow(/en: body must not contain an H1/);
+  });
+
+  it('publish permits H1 examples inside fenced code blocks', () => {
+    const bodyMarkdown = '````markdown\n# Example heading\n<h1>Example HTML</h1>\n````\n\n## Real section';
+    expect(() => validateForPublish(pair({
+      de: { ...pair().de, bodyMarkdown },
+      en: { ...pair().en, bodyMarkdown },
+    }))).not.toThrow();
   });
   it('publish rejects out-of-range coordinates', () => {
     expect(() => validateForPublish(pair({ shared: { ...pair().shared, coordinates: { lat: 91, lng: 0 } } }))).toThrow(/lat/);
@@ -366,6 +579,22 @@ describe('images-map validation at the store chokepoint', () => {
     const saved = await s.upsertDraft(p);
     expect(saved.de.images['https://img/x/y']).toEqual({ width: 8, height: 6, alt: 'a', caption: 'c' });
   });
+
+  it('caps the hero alt at the same chokepoint — a 2 kB suggestion is refused, not saved (#140)', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.en.heroImage = { src: 'https://img/h', width: 800, height: 600, alt: 'x'.repeat(1001) };
+    await expect(s.upsertDraft(p)).rejects.toThrow(/en: heroImage.alt must be at most 1000/);
+    p.en.heroImage.alt = 'x'.repeat(1000);
+    await expect(s.upsertDraft(p)).resolves.toBeTruthy();
+  });
+
+  it('rejects a node-shaped hero alt', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.de.heroImage = { src: 'https://img/h', width: 1, height: 1, alt: { type: 'raw', value: '<script>' } } as unknown as PostPair['de']['heroImage'];
+    await expect(s.upsertDraft(p)).rejects.toThrow(/de: heroImage.alt must be a string/);
+  });
 });
 
 describe('gallery fences at the store chokepoint', () => {
@@ -397,6 +626,14 @@ describe('normalizeBodyImages', () => {
     const out = normalizeBodyImages(body, {});
     expect(out.bodyMarkdown).toBe('Intro\n\n![Gasse](https://img/x/y)\n\nMore');
     expect(out.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
+  });
+
+  it('preserves JPEG format through BodyImage normalization', () => {
+    const src = 'https://img/x/jpeg';
+    const body = `<BodyImage src="${src}" width={1600} height={1067} alt="Gasse" format="jpeg" />`;
+    const out = normalizeBodyImages(body, {});
+    expect(out.bodyMarkdown).toBe(`![Gasse](${src})`);
+    expect(out.images).toEqual({ [src]: { width: 1600, height: 1067, format: 'jpeg' } });
   });
 
   it('accepts quoted numeric attrs and decodes &quot; in alt (inverse of export escaping)', () => {
@@ -452,6 +689,15 @@ describe('normalizeBodyImages', () => {
     const saved = await s.upsertDraft(p);
     const mdx = renderPostToMdx(saved, 'de');
     expect(mdx).toContain('<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />');
+  });
+
+  it('escapes brackets when a pasted <BodyImage> alt becomes a Markdown label (#140)', async () => {
+    const s = memoryPostStore();
+    const p = pair();
+    p.de.bodyMarkdown = '<BodyImage src="https://img/x/y" width={16} height={10} alt="Blick [Norwegen]" />';
+    const saved = await s.upsertDraft(p);
+    expect(saved.de.bodyMarkdown).toBe('![Blick \\[Norwegen\\]](https://img/x/y)');
+    expect(renderPostToMdx(saved, 'de')).toContain('alt="Blick [Norwegen]"');
   });
 
   it('converts a tag whose quoted alt contains ">" (legacy exports escaped only quotes)', () => {
@@ -517,7 +763,7 @@ describe('upsertDraft fills NOT-NULL defaults on a partial draft', () => {
     const partial = {
       translationKey: '',
       status: 'draft',
-      shared: { date: '2024-09-29', country: '', countryCode: 'XX', region: 'europe' },
+      shared: { date: '2024-09-29', countryCode: 'XX', region: 'europe' },
       de: { locale: 'de', slug: 'partial-de', title: 'X', excerpt: '', bodyMarkdown: '', images: {} },
       en: { locale: 'en', slug: 'partial-en', title: 'Y', excerpt: '', bodyMarkdown: '', images: {} },
     } as unknown as PostPair;
@@ -525,5 +771,9 @@ describe('upsertDraft fills NOT-NULL defaults on a partial draft', () => {
     expect(saved.shared.coordinates).toEqual({ lat: 0, lng: 0 });
     expect(saved.de.heroImage).toEqual({ src: '', width: 0, height: 0, alt: '' });
     expect(saved.en.heroImage).toEqual({ src: '', width: 0, height: 0, alt: '' });
+    // country is a required PostLocale column (NOT NULL) — a partial payload
+    // omitting it entirely must default to '' rather than write undefined.
+    expect(saved.de.country).toBe('');
+    expect(saved.en.country).toBe('');
   });
 });

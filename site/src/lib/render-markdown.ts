@@ -1,4 +1,5 @@
 import { satteri } from '@astrojs/markdown-satteri';
+import { SHIKI_THEME, shikiStyleToClass } from './shiki-classes.js';
 
 /**
  * Standalone Markdown → HTML renderer that reproduces what the Astro Content
@@ -29,10 +30,13 @@ type MarkdownOptions = Parameters<ReturnType<typeof satteri>['createRenderer']>[
  * which the sanitizer allow-lists on `code`/`pre`.
  * (`math` is Astro's own default exclusion — repeating it here is for clarity,
  * not load-bearing: satteri ORs the configured list with its defaults.)
+ *
+ * `shikiStyleToClass` is what lets `body-images.ts` strip every inline
+ * `style` (#124): Shiki's colours arrive as classes backed by `SHIKI_CSS`.
  */
 export const MARKDOWN_OPTIONS: Pick<MarkdownOptions, 'syntaxHighlight' | 'shikiConfig'> = {
   syntaxHighlight: { type: 'shiki', excludeLangs: ['math', 'gallery'] },
-  shikiConfig: { theme: 'github-dark' },
+  shikiConfig: { theme: SHIKI_THEME, transformers: [shikiStyleToClass] },
 };
 
 let rendererPromise: Promise<Renderer> | undefined;

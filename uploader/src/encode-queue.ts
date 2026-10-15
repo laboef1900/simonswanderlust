@@ -21,7 +21,8 @@ import { readdir, readFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { processImage } from './pipeline.js';
 import { assertSafeKey, storeVariantFiles } from './storage.js';
-import type { MediaError, MediaStore } from './media-store.js';
+import { deleteMedia } from './media-files.js';
+import type { MediaError, MediaItem, MediaStore } from './media-store.js';
 import type { WorkLock } from './work-lock.js';
 
 /**
@@ -36,10 +37,29 @@ export const MAX_BACKLOG = 200;
 export interface EncodeQueue {
   /** Enqueue a stored key for encoding. Throws when the backlog is full. */
   enqueue(key: string): void;
-  /** Re-seed from `media WHERE status = 'processing'` (boot recovery). */
+  /**
+   * True while `key` is queued or encoding. `DELETE /media/items/*` refuses
+   * such a key: the job holds the original in memory and would write its
+   * variants under the just-deleted key, which the next rescan then backfills
+   * as a zombie `ready` row with no retained original (#116).
+   */
+  isActive(key: string): boolean;
+  /**
+   * Re-seed from `media WHERE status = 'processing'`. Only `createReconciler`
+   * (media-sync.ts) calls this — boot and POST /media/rescan — and it MUST run
+   * after the disk sync, which is what inserts the rows it looks for.
+   */
   recover(): Promise<number>;
-  /** Resolves when nothing is queued or in flight — the shutdown drain hook. */
+  /**
+   * The shutdown hook: stop dequeuing and resolve once the in-flight jobs have
+   * finished. The backlog is left for `recover()` on the next boot — starting
+   * more ~19 s jobs while Docker's grace period runs out would only manufacture
+   * the partial writes the drain exists to avoid. One-way: the queue never
+   * pumps again afterwards.
+   */
   drain(): Promise<void>;
+  /** Resolves when nothing is queued or in flight. Test seam — production only drains. */
+  idle(): Promise<void>;
   stats(): { pending: number; running: number };
 }
 
@@ -54,8 +74,8 @@ export interface EncodeQueueOptions {
   lock: WorkLock;
   concurrency?: number;
   maxBacklog?: number;
-  /** Injected for tests; defaults to reading the stored original and encoding it. */
-  encodeOne?: (key: string) => Promise<{ bytes: number }>;
+  /** Injected for tests; production passes the row's persisted encoding snapshot. */
+  encodeOne?: (key: string, profile: Pick<MediaItem, 'format' | 'encoding'>) => Promise<{ bytes: number }>;
   log?: (msg: string) => void;
   error?: (msg: string, err: unknown) => void;
 }
@@ -94,16 +114,23 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
   const pending: string[] = [];
   const inFlight = new Set<string>();
   let idleWaiters: (() => void)[] = [];
+  /** Set by drain(): pump() stops dequeuing; only in-flight jobs finish. */
+  let draining = false;
 
-  const encodeOne = opts.encodeOne ?? (async (key: string) => {
+  const encodeOne = opts.encodeOne ?? (async (key: string, profile: Pick<MediaItem, 'format' | 'encoding'>) => {
     const buf = await readOriginal(opts.storageDir, key);
-    const result = await processImage(buf);
+    const result = await processImage(buf, profile.encoding);
+    if (result.format !== profile.format) throw new Error('stored image encoding profile does not match its format');
     const { bytes } = await storeVariantFiles(key, result.variants, { storageDir: opts.storageDir });
     return { bytes };
   });
 
+  // Once draining, the backlog is not going to shrink — it is `recover()`'s
+  // on the next boot — so "idle" means only that nothing is in flight.
+  const isIdle = () => inFlight.size === 0 && (draining || pending.length === 0);
+
   function settleIfIdle(): void {
-    if (pending.length === 0 && inFlight.size === 0 && idleWaiters.length > 0) {
+    if (isIdle() && idleWaiters.length > 0) {
       const waiters = idleWaiters;
       idleWaiters = [];
       waiters.forEach((w) => w());
@@ -127,8 +154,26 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
 
   async function runJob(key: string): Promise<void> {
     try {
+      const item = await opts.store.get(key);
+      if (!item) return;
       // Shared: several encodes may run together, but never during a build.
-      const { bytes } = await opts.lock.runShared(() => encodeOne(key));
+      // The immutable row snapshot, not mutable global settings, drives retries
+      // and boot recovery.
+      const { bytes } = await opts.lock.runShared(() => encodeOne(key, {
+        ...(item.format ? { format: item.format } : {}),
+        ...(item.encoding ? { encoding: item.encoding } : {}),
+      }));
+      // The row can vanish during the encode — a delete that slipped
+      // past the `processing` gate, or a rescan-inserted row removed out of
+      // band. Anything written for a deleted key is a time bomb: media-sync
+      // backfills every key with a variant as `ready` on the next pass, so
+      // the delete would silently undo itself (#116). Unlink and walk away;
+      // the bare UPDATEs below would affect 0 rows and hide that.
+      if (!(await opts.store.get(key))) {
+        const removed = await deleteMedia(opts.storageDir, key);
+        log(`encode discarded for ${key}: row deleted mid-encode (${removed} file(s) removed)`);
+        return;
+      }
       await opts.store.setVariantBytes(key, bytes);
       await opts.store.setStatus(key, 'ready');
     } catch (err) {
@@ -145,7 +190,7 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
   }
 
   function pump(): void {
-    while (inFlight.size < concurrency && pending.length > 0) {
+    while (!draining && inFlight.size < concurrency && pending.length > 0) {
       const key = pending.shift();
       if (key === undefined) break;
       if (inFlight.has(key)) continue; // already encoding — drop the duplicate
@@ -179,15 +224,26 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
       }
       if (n > 0) log(`encode queue: recovered ${n} unfinished upload(s)`);
       // No silent truncation: say so when the cap left work behind. The rest
-      // is picked up by the next recover() (POST /media/retry or a restart).
+      // is picked up by the next reconcile pass (POST /media/rescan or a
+      // restart) — NOT by POST /media/retry, which skips `processing` rows.
       if (total > n) log(`encode queue: ${total - n} more still pending — re-run recovery after this batch`);
       pump();
       return n;
     },
     async drain() {
-      if (pending.length === 0 && inFlight.size === 0) return;
+      // Stop pulling from the backlog: every job started DURING the drain is
+      // exactly the mid-write case the drain exists to avoid (#134). What is
+      // still pending stays `processing` in the database and recover()
+      // re-seeds it on the next boot.
+      draining = true;
+      if (isIdle()) return;
+      await new Promise<void>((resolve) => { idleWaiters.push(resolve); });
+    },
+    async idle() {
+      if (isIdle()) return;
       await new Promise<void>((resolve) => { idleWaiters.push(resolve); });
     },
     stats: () => ({ pending: pending.length, running: inFlight.size }),
+    isActive: (key) => inFlight.has(key) || pending.includes(key),
   };
 }

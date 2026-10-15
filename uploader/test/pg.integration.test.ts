@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { scheduler } from 'node:timers/promises';
+import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
-import { pgUserStore, verifyPassword, UserExistsError } from '../src/users.js';
+import { pgUserStore, verifyPassword, UserExistsError, UsernamePolicyError } from '../src/users.js';
 import { pgSessionStore } from '../src/sessions.js';
 import { pgPostStore, PostError, REVISION_CAP } from '../src/posts.js';
 
@@ -25,15 +26,23 @@ maybe('postgres stores (integration)', () => {
 
   it('round-trips a user and enforces unique username', async () => {
     const users = pgUserStore(pool);
-    const u = await users.create({ username: 'Simon', password: 'pw', isAdmin: true });
+    const u = await users.create({ username: 'Simon', password: 'password123456', isAdmin: true });
     expect((await users.findByUsername('simon'))?.id).toBe(u.id);
-    await expect(users.create({ username: 'simon', password: 'x', isAdmin: false })).rejects.toBeInstanceOf(UserExistsError);
+    await expect(users.create({ username: 'simon', password: 'password-x-1234', isAdmin: false })).rejects.toBeInstanceOf(UserExistsError);
+    // #131: the store, not just the route, refuses a policy-violating name.
+    await expect(users.create({ username: `${Date.now()} spaced`, password: 'password123456', isAdmin: false })).rejects.toBeInstanceOf(UsernamePolicyError);
+  });
+
+  it('findById returns null for malformed (no 22P02) and unknown ids', async () => {
+    const users = pgUserStore(pool);
+    await expect(users.findById('not-a-uuid')).resolves.toBeNull();
+    await expect(users.findById(randomUUID())).resolves.toBeNull();
   });
 
   it('creates and finds a session, and expires it', async () => {
     const users = pgUserStore(pool);
     const sessions = pgSessionStore(pool);
-    const u = await users.create({ username: `u${Date.now()}`, password: 'pw', isAdmin: false });
+    const u = await users.create({ username: `u${Date.now()}`, password: 'password123456', isAdmin: false });
     const token = await sessions.create(u.id, 60_000);
     expect((await sessions.find(token))?.userId).toBe(u.id);
     const expired = await sessions.create(u.id, -1);
@@ -42,27 +51,27 @@ maybe('postgres stores (integration)', () => {
 
   it('setPassword round-trips (new verifies, old does not) and throws for an unknown id', async () => {
     const users = pgUserStore(pool);
-    const u = await users.create({ username: `pw${Date.now()}`, password: 'old-pw', isAdmin: false });
-    await users.setPassword(u.id, 'new-pw');
+    const u = await users.create({ username: `pw${Date.now()}`, password: 'old-password-1', isAdmin: false });
+    await users.setPassword(u.id, 'new-password-1');
     const after = await users.findByUsername(u.username);
-    expect(verifyPassword('new-pw', after!.passwordHash)).toBe(true);
-    expect(verifyPassword('old-pw', after!.passwordHash)).toBe(false);
-    await expect(users.setPassword(randomUUID(), 'x')).rejects.toThrow('user not found');
+    expect(verifyPassword('new-password-1', after!.passwordHash)).toBe(true);
+    expect(verifyPassword('old-password-1', after!.passwordHash)).toBe(false);
+    await expect(users.setPassword(randomUUID(), 'password-x-1234')).rejects.toThrow('user not found');
   });
 
   it('set-password CLI end-to-end: argv path updates the hash; unknown user exits 1 with a clean one-liner', async () => {
     const { runCli } = await import('./run-cli.js');
     const users = pgUserStore(pool);
     const name = `cli${Date.now()}`;
-    await users.create({ username: name, password: 'old-pw', isAdmin: false });
-    const ok = await runCli(['set-password', name, 'cli-new-pw'], { ...process.env, DATABASE_URL: url! });
+    await users.create({ username: name, password: 'old-password-1', isAdmin: false });
+    const ok = await runCli(['set-password', name, 'cli-new-password'], { ...process.env, DATABASE_URL: url! });
     expect(ok.code).toBe(0);
     expect(ok.stdout).toContain(`password updated for ${name}`);
     const after = await users.findByUsername(name);
-    expect(verifyPassword('cli-new-pw', after!.passwordHash)).toBe(true);
-    expect(verifyPassword('old-pw', after!.passwordHash)).toBe(false);
+    expect(verifyPassword('cli-new-password', after!.passwordHash)).toBe(true);
+    expect(verifyPassword('old-password-1', after!.passwordHash)).toBe(false);
     const ghost = `ghost-${Date.now()}`;
-    const bad = await runCli(['set-password', ghost, 'x'], { ...process.env, DATABASE_URL: url! });
+    const bad = await runCli(['set-password', ghost, 'ghost-password-1'], { ...process.env, DATABASE_URL: url! });
     expect(bad.code).toBe(1);
     expect(bad.stderr.trim()).toBe(`user not found: ${ghost}`); // clean message, no stack trace
   }, 30_000);
@@ -70,8 +79,8 @@ maybe('postgres stores (integration)', () => {
   it('destroyAllForUser removes only that user\'s sessions', async () => {
     const users = pgUserStore(pool);
     const sessions = pgSessionStore(pool);
-    const u1 = await users.create({ username: `da1-${Date.now()}`, password: 'pw', isAdmin: false });
-    const u2 = await users.create({ username: `da2-${Date.now()}`, password: 'pw', isAdmin: false });
+    const u1 = await users.create({ username: `da1-${Date.now()}`, password: 'password123456', isAdmin: false });
+    const u2 = await users.create({ username: `da2-${Date.now()}`, password: 'password123456', isAdmin: false });
     const t1a = await sessions.create(u1.id, 60_000);
     const t1b = await sessions.create(u1.id, 60_000);
     const t2 = await sessions.create(u2.id, 60_000);
@@ -96,7 +105,7 @@ maybe('postgres stores (integration)', () => {
   // contract the column-migrations section in db.ts relies on.
   it('ensureSchema is re-runnable against a populated database', async () => {
     const users = pgUserStore(pool);
-    const u = await users.create({ username: `rerun-${Date.now()}`, password: 'pw', isAdmin: false });
+    const u = await users.create({ username: `rerun-${Date.now()}`, password: 'password123456', isAdmin: false });
     await pool.query(`UPDATE pages SET title='Edited by author' WHERE key='about' AND locale='de'`);
     // Populate posts too: future appended ALTERs (e.g. a NOT NULL column
     // missing its DEFAULT) only fail on tables that HAVE rows, and posts is
@@ -104,9 +113,9 @@ maybe('postgres stores (integration)', () => {
     const stamp = Date.now();
     const post = await pgPostStore(pool).upsertDraft({
       translationKey: '', status: 'draft',
-      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de', slug: `rerun-de-${stamp}`, title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-      en: { locale: 'en', slug: `rerun-en-${stamp}`, title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de', slug: `rerun-de-${stamp}`, title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en', slug: `rerun-en-${stamp}`, title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     });
 
     await expect(ensureSchema(pool)).resolves.toBeUndefined();
@@ -123,9 +132,9 @@ maybe('postgres stores (integration)', () => {
 maybe('pgPostStore (integration)', () => {
   const base = {
     translationKey: '', status: 'draft' as const,
-    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-    de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-    en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   };
 
   it('round-trips a pair, publishes, and enforces slug immutability', async () => {
@@ -137,8 +146,8 @@ maybe('pgPostStore (integration)', () => {
     const base = {
       translationKey: '', status: 'draft' as const,
       shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 }, stops },
-      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b\n\n<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />', images: {} },
-      en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b\n\n<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />', images: {} },
+      en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     };
     const created = await store.upsertDraft(base);
     const fetched = await store.get(created.translationKey);
@@ -165,9 +174,9 @@ maybe('pgPostStore (integration)', () => {
     const store = pgPostStore(pool);
     const base = {
       translationKey: '', status: 'draft' as const,
-      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de' as const, slug: 'snap-de', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## live', images: {} },
-      en: { locale: 'en' as const, slug: 'snap-en', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## live', images: {} },
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de' as const, slug: 'snap-de', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## live', images: {} },
+      en: { locale: 'en' as const, slug: 'snap-en', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## live', images: {} },
     };
     const created = await store.upsertDraft(base);
     const tk = created.translationKey;
@@ -203,6 +212,51 @@ maybe('pgPostStore (integration)', () => {
     await pool.end();
   });
 
+  // The homepage cover flag is SHARED — ONE value written to BOTH locale rows.
+  // That is issue #87's bug class (a shared field written per-locale), and it
+  // only reproduces on Postgres, where the pair really is two rows. The site
+  // is built from published_snapshot, so the flag has to ride in there too
+  // (POST_SNAPSHOT_SQL in db.ts) or it never reaches the blog.
+  it('writes featured to both locale rows and carries it into the published snapshot', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    const created = await store.upsertDraft({ ...base, shared: { ...base.shared, featured: true } });
+    const tk = created.translationKey;
+    const flags = async () => (await pool.query<{ locale: string; featured: boolean }>(
+      `SELECT locale, featured FROM posts WHERE translation_key=$1 ORDER BY locale`, [tk],
+    )).rows;
+    expect(await flags()).toEqual([{ locale: 'de', featured: true }, { locale: 'en', featured: true }]);
+    expect((await store.get(tk))?.shared.featured).toBe(true);
+
+    await store.publish(tk);
+    const snapshots = (await pool.query<{ s: { featured?: boolean } }>(
+      `SELECT published_snapshot AS s FROM posts WHERE translation_key=$1 ORDER BY locale`, [tk],
+    )).rows;
+    expect(snapshots.map((r) => r.s.featured)).toEqual([true, true]);
+
+    // Unticking the box clears both rows (the update path, not just the insert).
+    await store.upsertDraft({ ...created, shared: { ...created.shared, featured: false } });
+    expect(await flags()).toEqual([{ locale: 'de', featured: false }, { locale: 'en', featured: false }]);
+    expect((await store.get(tk))?.shared.featured).toBe(false);
+    await pool.end();
+  });
+
+  // Same answer as memoryPostStore: a payload without the key (the WXR
+  // importer, any pre-flag client) stores false instead of failing NOT NULL.
+  it('defaults featured to false for a payload that omits it', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    expect('featured' in base.shared).toBe(false);
+    const created = await store.upsertDraft(base);
+    expect(created.shared.featured).toBe(false);
+    expect((await store.get(created.translationKey))?.shared.featured).toBe(false);
+    await pool.end();
+  });
+
   it('ensureSchema backfills published_snapshot for pre-migration published rows, idempotently', async () => {
     const pool = createPool(url!);
     await ensureSchema(pool);
@@ -233,6 +287,36 @@ maybe('pgPostStore (integration)', () => {
     await pool.end();
   });
 
+  // The additive `featured` migration must run BEFORE the published_snapshot
+  // backfill in the same ensureSchema call: that UPDATE expands
+  // POST_SNAPSHOT_SQL, which names `featured`, and Postgres rejects the
+  // statement at analysis time when the column is missing — even though no row
+  // would match its WHERE. Simulate a pre-#featured database by dropping the
+  // column from a populated table and re-running the whole bootstrap.
+  it('adds featured to an existing posts table before the snapshot backfill runs', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    await pool.query(
+      `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
+         excerpt, hero_image, coordinates, body_markdown, status)
+       VALUES (gen_random_uuid(), 'pre-featured', 'de', 'pre-featured-de', 'T', '2024-10-03', 'X', 'RO', 'europe',
+         'e', '{"src":"https://i/h","width":10,"height":10,"alt":"a"}', '{"lat":1,"lng":2}', '## legacy', 'published')`,
+    );
+    await pool.query('ALTER TABLE posts DROP COLUMN featured');
+
+    await ensureSchema(pool);
+
+    const row = (await pool.query<{ featured: boolean; s: { featured?: boolean } }>(
+      `SELECT featured, published_snapshot AS s FROM posts WHERE slug='pre-featured-de'`,
+    )).rows[0];
+    // NOT NULL DEFAULT false: an existing post is simply not the cover.
+    expect(row?.featured).toBe(false);
+    expect(row?.s.featured).toBe(false);
+    await pool.query('DELETE FROM posts');
+    await pool.end();
+  });
+
   it('unpublishes back to draft; remove deletes both rows and frees the slugs', async () => {
     const pool = createPool(url!);
     await ensureSchema(pool);
@@ -240,9 +324,9 @@ maybe('pgPostStore (integration)', () => {
     const store = pgPostStore(pool);
     const base = {
       translationKey: '', status: 'draft' as const,
-      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-      en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     };
     const created = await store.upsertDraft(base);
     expect((await store.list()).find((p) => p.translationKey === created.translationKey)?.hasEnBody).toBe(true);
@@ -270,13 +354,13 @@ maybe('pgPostStore (integration)', () => {
     const store = pgPostStore(pool);
     const base = {
       translationKey: '', status: 'draft' as const,
-      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-      en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de' as const, slug: 'de-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     };
     const created = await store.upsertDraft(base);
-    // Simulate a crash between upsertDraft's two non-transactional locale
-    // INSERTs: only the de row survives.
+    // Simulate a stranded single-locale row from legacy pre-#106 data or a
+    // manual database repair. Current upsertDraft writes both rows atomically.
     await pool.query(`DELETE FROM posts WHERE translation_key = $1 AND locale = 'en'`, [created.translationKey]);
     expect(await store.get(created.translationKey)).toBeNull();
     const rows = await store.usageRows();
@@ -290,15 +374,183 @@ maybe('pgPostStore (integration)', () => {
     });
     await pool.end();
   });
+
+  // #115: the site loader builds from `published_snapshot` (status = 'published'
+  // AND snapshot IS NOT NULL), so usageRows must report the snapshot's image
+  // references alongside the working copy's — the same filter, in SQL.
+  it('usageRows adds published-snapshot rows that keep referencing a swapped-out photo', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    const loc = (l: 'de' | 'en', src: string) => ({
+      locale: l, slug: `${l}-snap`, title: 'T', excerpt: 'e', country: 'X',
+      heroImage: { src, width: 10, height: 10, alt: 'a' }, bodyMarkdown: `![b](${src})`, images: { [src]: { width: 10, height: 10 } },
+    });
+    const base = {
+      translationKey: '', status: 'draft' as const,
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: loc('de', 'https://i/old'), en: loc('en', 'https://i/old'),
+    };
+    const created = await store.upsertDraft(base);
+    expect((await store.usageRows()).map((r) => r.source)).toEqual(['working', 'working']);
+
+    await store.publish(created.translationKey);
+    await store.upsertDraft({
+      ...base, translationKey: created.translationKey, status: 'published',
+      de: loc('de', 'https://i/new'), en: loc('en', 'https://i/new'),
+    });
+    const rows = await store.usageRows();
+    expect(rows.map((r) => [r.locale, r.source, r.heroImage.src])).toEqual([
+      ['de', 'working', 'https://i/new'], ['de', 'published', 'https://i/old'],
+      ['en', 'working', 'https://i/new'], ['en', 'published', 'https://i/old'],
+    ]);
+    // The snapshot's jsonb columns round-trip as the same shapes as the working columns.
+    expect(rows[1]).toMatchObject({ title: 'T', bodyMarkdown: '![b](https://i/old)', images: { 'https://i/old': { width: 10, height: 10 } } });
+
+    await store.unpublish(created.translationKey);
+    expect((await store.usageRows()).map((r) => r.source)).toEqual(['working', 'working']);
+    await pool.end();
+  });
+
+  it('renaming a draft slug updates the row in place and frees the old slug (#106)', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    const created = await store.upsertDraft(base);
+    const tk = created.translationKey;
+    const renamed = await store.upsertDraft({ ...created, de: { ...created.de, slug: 'renamed-de' } });
+    expect(renamed.de.slug).toBe('renamed-de');
+    // exactly one DE row for the key — no abandoned old-slug row left behind
+    const { rows } = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM posts WHERE translation_key=$1 AND locale='de'`, [tk]);
+    expect(rows[0]?.n).toBe(1);
+    expect((await store.get(tk))?.de.slug).toBe('renamed-de');
+    // the old slug is reusable by a brand-new pair
+    const other = await store.upsertDraft({ ...base, en: { ...base.en, slug: 'other-en' } });
+    expect(other.de.slug).toBe('de-slug');
+    expect(other.translationKey).not.toBe(tk);
+    expect(await store.list()).toHaveLength(2);
+    await pool.end();
+  });
+
+  it('posts_tk_locale_idx enforces one row per (translation_key, locale)', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const { rows } = await pool.query<{ indexname: string }>(`SELECT indexname FROM pg_indexes WHERE tablename='posts'`);
+    expect(rows.map((r) => r.indexname)).toContain('posts_tk_locale_idx');
+    const created = await pgPostStore(pool).upsertDraft(base);
+    await expect(pool.query(
+      `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region, excerpt, hero_image, coordinates, body_markdown)
+       VALUES ($1, $2, 'de', 'dupe-slug', 'T', '2024-10-03', 'X', 'RO', 'europe', 'e', '{}', '{}', 'b')`,
+      [randomUUID(), created.translationKey],
+    )).rejects.toMatchObject({ code: '23505' });
+    await pool.end();
+  });
+
+  it('ensureSchema reports pre-existing duplicate rows and skips the index instead of deleting', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const indexSql = `SELECT 1 FROM pg_indexes WHERE tablename='posts' AND indexname='posts_tk_locale_idx'`;
+    await pool.query(`DROP INDEX posts_tk_locale_idx`);
+    const tk = randomUUID();
+    for (const slug of ['old-slug', 'new-slug']) {
+      await pool.query(
+        `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region, excerpt, hero_image, coordinates, body_markdown)
+         VALUES ($1, $2, 'de', $3, 'T', '2024-10-03', 'X', 'RO', 'europe', 'e', '{}', '{}', 'b')`,
+        [randomUUID(), tk, slug],
+      );
+    }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(ensureSchema(pool)).resolves.toBeUndefined();
+      expect((await pool.query(indexSql)).rowCount).toBe(0);
+      const logged = spy.mock.calls.map((c) => String(c[0]));
+      expect(logged).toContain(`[db] posts has 2 rows for (translation_key=${tk}, locale=de)`);
+      expect(logged.some((l) => l.includes('posts_tk_locale_idx was NOT created'))).toBe(true);
+      // never deleted (Golden Rule 3)
+      expect((await pool.query(`SELECT count(*)::int AS n FROM posts WHERE translation_key=$1`, [tk])).rows[0].n).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+    await pool.query(`DELETE FROM posts WHERE translation_key=$1`, [tk]);
+    await ensureSchema(pool);
+    expect((await pool.query(indexSql)).rowCount).toBe(1);
+    await pool.end();
+  });
+
+  // Issue #120: the documented minimum draft (a DE title alone) used to die on
+  // `date NOT NULL` / `country_code CHECK` / `region CHECK` in Postgres only —
+  // the memory store accepted the same payload, so the unit suite stayed green.
+  it('a title-only draft saves on Postgres with the import placeholders and round-trips', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    // Exactly what POST /posts hands to upsertDraft after validateDraft for the
+    // editor's "type a title, Save draft" payload (blank shared fields omitted).
+    const titleOnly = {
+      translationKey: '', status: 'draft' as const, shared: {},
+      de: { locale: 'de' as const, slug: '', title: 'Nur ein Titel', excerpt: '', country: '', bodyMarkdown: '', images: {} },
+      en: { locale: 'en' as const, slug: '', title: '', excerpt: '', country: '', bodyMarkdown: '', images: {} },
+    } as unknown as Parameters<typeof store.upsertDraft>[0];
+    const created = await store.upsertDraft(titleOnly);
+    const got = await store.get(created.translationKey);
+    expect(got?.shared).toMatchObject({ countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } });
+    expect(got?.shared.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(got?.de.title).toBe('Nur ein Titel');
+    expect(got?.en).toMatchObject({ slug: '', title: '', heroImage: { src: '' } });
+    await pool.end();
+  });
+
+  // Issue #119: '' is "no EN slug yet". Two DE-first drafts must coexist, the
+  // unique index must still catch a real collision, and a database created
+  // before #119 (non-partial index) must be migrated on boot without data loss.
+  it('empty EN slug is unset: DE-first drafts coexist; the pre-#119 index is migrated to the partial form', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const indexDef = async () => (await pool.query<{ indexdef: string }>(
+      `SELECT indexdef FROM pg_indexes WHERE tablename='posts' AND indexname='posts_locale_slug_idx'`,
+    )).rows[0]?.indexdef ?? '';
+    // Rewind to the pre-#119 schema and seed one DE-first draft under it.
+    await pool.query(`DROP INDEX posts_locale_slug_idx`);
+    await pool.query(`CREATE UNIQUE INDEX posts_locale_slug_idx ON posts (locale, slug)`);
+    const store = pgPostStore(pool);
+    const deFirst = (deSlug: string) => ({ ...base, de: { ...base.de, slug: deSlug }, en: { ...base.en, slug: '', title: '', bodyMarkdown: '' } });
+    const a = await store.upsertDraft(deFirst('first'));
+    await ensureSchema(pool);
+    expect(await indexDef()).toMatch(/WHERE \(?slug <> ''/);
+    expect((await store.get(a.translationKey))?.de.slug).toBe('first');
+    // The second DE-first draft now saves — the 23505 backstop no longer fires on ''.
+    const b = await store.upsertDraft(deFirst('second'));
+    expect(b.translationKey).not.toBe(a.translationKey);
+    expect((await store.list()).map((p) => p.slugEn)).toEqual(['', '']);
+    // A real slug is still unique, both at the pre-check and at the index.
+    await store.upsertDraft({ ...a, en: { ...a.en, slug: 'taken' } });
+    await expect(store.upsertDraft({ ...b, en: { ...b.en, slug: 'taken' } })).rejects.toMatchObject({ code: 'duplicate_slug' });
+    await expect(pool.query(
+      `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region, excerpt, hero_image, coordinates, body_markdown)
+       VALUES ($1, $2, 'en', 'taken', 'T', '2024-10-03', 'X', 'RO', 'europe', 'e', '{}', '{}', 'b')`,
+      [randomUUID(), randomUUID()],
+    )).rejects.toMatchObject({ code: '23505', constraint: 'posts_locale_slug_idx' });
+    // Running ensureSchema again leaves the partial index alone.
+    const before = await indexDef();
+    await ensureSchema(pool);
+    expect(await indexDef()).toBe(before);
+    await pool.end();
+  });
 });
 
 maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
   let pool: DbPool;
   const base = (slug: string, title = 'T') => ({
     translationKey: '', status: 'draft' as const,
-    shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-    de: { locale: 'de' as const, slug: `${slug}-de`, title, excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-    en: { locale: 'en' as const, slug: `${slug}-en`, title, excerpt: 'e', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de' as const, slug: `${slug}-de`, title, excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    en: { locale: 'en' as const, slug: `${slug}-en`, title, excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
   beforeAll(async () => {
     pool = createPool(url!);
@@ -369,9 +621,9 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     const store = pgPostStore(pool);
     const base = {
       translationKey: '', status: 'draft' as const,
-      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de' as const, slug: 'tz-de', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-      en: { locale: 'en' as const, slug: 'tz-en', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de' as const, slug: 'tz-de', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en' as const, slug: 'tz-en', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     };
     const created = await store.upsertDraft(base);
     const loaded = await store.get(created.translationKey);
@@ -394,9 +646,9 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     const store = pgPostStore(pool);
     const created = await store.upsertDraft({
       translationKey: '', status: 'draft',
-      shared: { date: '2024-10-03', country: 'Rumänien', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de', slug: 'sum-de', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/hero', width: 1600, height: 900, alt: 'a' }, bodyMarkdown: '## b', images: {} },
-      en: { locale: 'en', slug: 'sum-en', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/hero', width: 1600, height: 900, alt: 'a' }, bodyMarkdown: '', images: {} },
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de', slug: 'sum-de', title: 'T', excerpt: 'e', country: 'Rumänien', heroImage: { src: 'https://i/hero', width: 1600, height: 900, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en', slug: 'sum-en', title: 'T', excerpt: 'e', country: 'Romania', heroImage: { src: 'https://i/hero', width: 1600, height: 900, alt: 'a' }, bodyMarkdown: '', images: {} },
     });
     const summary = (await store.list()).find((p) => p.translationKey === created.translationKey);
     expect(summary).toMatchObject({
@@ -415,12 +667,30 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     const store = pgPostStore(pool);
     const created = await store.upsertDraft({
       translationKey: '', status: 'draft',
-      shared: { date: '2024-10-03', country: 'X', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
-      de: { locale: 'de', slug: 'fb-de', title: 'T', excerpt: 'e', heroImage: { src: '', width: 0, height: 0, alt: '' }, bodyMarkdown: '## b', images: {} },
-      en: { locale: 'en', slug: 'fb-en', title: 'T', excerpt: 'e', heroImage: { src: 'https://i/en-hero', width: 800, height: 600, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+      de: { locale: 'de', slug: 'fb-de', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: '', width: 0, height: 0, alt: '' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en', slug: 'fb-en', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/en-hero', width: 800, height: 600, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     });
     const summary = (await store.list()).find((p) => p.translationKey === created.translationKey);
     expect(summary).toMatchObject({ heroSrc: 'https://i/en-hero', heroWidth: 800 });
+    await pool.end();
+  });
+
+  it('getCmsStats counts pairs as draft or published and nothing else (#121)', async () => {
+    const pool = createPool(url!);
+    await ensureSchema(pool);
+    await pool.query('DELETE FROM posts');
+    const store = pgPostStore(pool);
+    const mk = (n: string, extra: { categories?: string[]; tags?: string[] } = {}) => store.upsertDraft({
+      translationKey: '', status: 'draft',
+      shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 }, ...extra },
+      de: { locale: 'de', slug: `st-${n}-de`, title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+      en: { locale: 'en', slug: `st-${n}-en`, title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+    });
+    const a = await mk('a');
+    await store.publish(a.translationKey);
+    await mk('b', { categories: ['City'], tags: ['x', 'y'] });
+    expect(await store.getCmsStats!()).toEqual({ totalPosts: 2, draftPosts: 1, publishedPosts: 1, totalCategories: 1, totalTags: 2 });
     await pool.end();
   });
 
@@ -437,5 +707,90 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     expect(revs.some((r) => r.titleDe === 'v5')).toBe(false); // oldest pruned
     const count = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key=$1`, [tk]);
     expect(count.rows[0].n).toBe(REVISION_CAP);
+  });
+
+  // #137: post_revisions has no FK, so nothing cascades on its own.
+  it('remove() deletes the post\'s revisions with it and leaves other posts\' revisions alone', async () => {
+    const store = pgPostStore(pool);
+    const doomed = await store.upsertDraft(base('doomed'));
+    await store.upsertDraft({ ...doomed, de: { ...doomed.de, title: 'edited' } });
+    const kept = await store.upsertDraft(base('kept'));
+    await store.upsertDraft({ ...kept, de: { ...kept.de, title: 'edited' } });
+    const [doomedRev] = await store.listRevisions(doomed.translationKey);
+    expect(doomedRev).toBeDefined();
+
+    await store.remove(doomed.translationKey);
+    expect(await store.listRevisions(doomed.translationKey)).toEqual([]);
+    expect(await store.getRevision(doomed.translationKey, doomedRev!.id)).toBeNull();
+    const { rows } = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key=$1`, [doomed.translationKey]);
+    expect(rows[0].n).toBe(0);
+    expect(await store.listRevisions(kept.translationKey)).toHaveLength(1);
+
+    // An unknown key still reports not found and deletes nothing — not even
+    // orphans under that key (a restored dump before the next boot sweep).
+    await pool.query(
+      `INSERT INTO post_revisions (id, translation_key, snapshot) VALUES ($1, 'no-such-post', '{"status":"draft","de":{"title":"orphan"}}')`,
+      [randomUUID()],
+    );
+    await expect(store.remove('no-such-post')).rejects.toThrow('post not found');
+    const orphans = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key='no-such-post'`);
+    expect(orphans.rows[0].n).toBe(1);
+    expect(await store.listRevisions(kept.translationKey)).toHaveLength(1);
+  });
+
+  it('remove() also deletes a revision committed by a save it had to wait for', async () => {
+    // A save holds the posts row locks with its revision inserted but not yet
+    // committed; remove() blocks on those locks. One data-modifying CTE would
+    // delete the posts after the commit yet miss the revision (a CTE's
+    // sub-statements share one snapshot, taken before the wait). Two
+    // statements in READ COMMITTED see it.
+    const store = pgPostStore(pool);
+    const post = await store.upsertDraft(base('racy'));
+    const tk = post.translationKey;
+    const saver = await pool.connect();
+    try {
+      await saver.query('BEGIN');
+      await saver.query(
+        `INSERT INTO post_revisions (id, translation_key, snapshot) VALUES ($1, $2, '{"status":"draft","de":{"title":"late"}}')`,
+        [randomUUID(), tk],
+      );
+      await saver.query(`UPDATE posts SET updated_at = now() WHERE translation_key = $1`, [tk]);
+      const removal = store.remove(tk);
+      // Wait for remove() to actually block on the row locks (observable only
+      // server-side — another connection's lock wait has no in-process
+      // signal), so the save's COMMIT is guaranteed to land after remove()'s
+      // first statement started. Polled through the pool, NOT the saver: inside
+      // a transaction pg_stat_activity is a snapshot frozen at first access and
+      // would never show a backend that connected afterwards.
+      for (;;) {
+        const { rowCount } = await pool.query(
+          `SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'DELETE FROM posts%'`,
+        );
+        if (rowCount) break;
+        await scheduler.wait(10);
+      }
+      await saver.query('COMMIT');
+      await removal;
+    } finally {
+      saver.release();
+    }
+    expect(await store.get(tk)).toBeNull();
+    const { rows } = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key=$1`, [tk]);
+    expect(rows[0].n).toBe(0);
+  });
+
+  it('ensureSchema sweeps revisions orphaned before #137 and keeps live posts\' revisions', async () => {
+    const store = pgPostStore(pool);
+    const live = await store.upsertDraft(base('live'));
+    await store.upsertDraft({ ...live, de: { ...live.de, title: 'edited' } });
+    // A revision whose post is gone — what a pre-#137 delete left behind.
+    await pool.query(
+      `INSERT INTO post_revisions (id, translation_key, snapshot) VALUES ($1, 'ghost-post', '{"status":"draft","de":{"title":"secret"}}')`,
+      [randomUUID()],
+    );
+    await ensureSchema(pool);
+    const ghosts = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key='ghost-post'`);
+    expect(ghosts.rows[0].n).toBe(0);
+    expect(await store.listRevisions(live.translationKey)).toHaveLength(1);
   });
 });

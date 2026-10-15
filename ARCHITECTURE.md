@@ -27,7 +27,7 @@ Shared state, all under the **`/data`** volume (bind-mounted from `./uploader/da
 - `site/releases/<stamp>` + `site/current` (symlink) — built static output (`SITE_DIR`).
 - `backup/` — MDX export backups; `backup/db/` — gzipped Postgres dumps and incremental
   image archives.
-- `settings.json` — admin-configurable settings (backup schedule/retention).
+- `settings.json` — admin-configurable settings, including backup scheduling and image conversion/quality.
 
 Plus the **`pgdata`** volume — Postgres data.
 
@@ -70,16 +70,35 @@ Plus the **`pgdata`** volume — Postgres data.
    `SELECT`s the published rows and turns each into a content entry. Post bodies are rendered
    Markdown → HTML, **sanitized**, and body images become responsive `<picture>`
    (`site/src/lib/body-images.ts`). A ` ```gallery ` fence (one image URL per line) becomes a
-   photo grid in the same pass — its URLs are allow-listed against the image host's origin,
-   because that markup is injected *after* the sanitizer runs (see
+   photo gallery in the same pass, in one of three layout modes selected by a `#layout:` line
+   inside the fence — `column` (default; justified rows at the 960px story width), `breakout`
+   (the same rows in a 1112px break-out — centred below `lg`, the whole 960px story spread above it)
+   or `slider` (a scroll-snap carousel). The row partition is computed at build time by
+   `site/src/lib/gallery-layout.ts`, which is kept pure and dependency-free because draft
+   preview runs it under `tsx` too. An unknown or missing mode falls back to `column` (it was
+   `breakout` until 2026-09-20). `site/src/scripts/gallery-lightbox.ts` adds a `<dialog>` lightbox and the
+   slider's controls as progressive enhancement — every photo is a real `<a>` to its largest
+   variant, so the gallery works with JavaScript off. Gallery URLs are allow-listed against
+   the image host's origin, because that markup is injected *after* the sanitizer runs (see
    [SECURITY.md](SECURITY.md#content-injected-after-sanitize-body-images-and-galleries)). The
    fence's per-line `| WIDTHxHEIGHT | alt="…" | caption="…"` metadata is lifted into the row's
    `images` map at save time by `uploader/src/body-content.ts`, and re-attached by the MDX
    exporter so a backup round-trips.
 5. **Release** — the build lands in a fresh `releases/<timestamp>` dir under `/data/site` (built
    into a CWD-local tmp dir first to dodge an `EXDEV` rename across the volume boundary, then
-   `cp`'d), then the `current` symlink is **atomically** swapped to it (old releases pruned, keeping
-   the last 3). The app serves `current` directly via `@fastify/static` — no separate web server.
+   `cp`'d into a dot-prefixed staging dir and renamed into place, so a release dir is either
+   complete or absent), then the `current` symlink is **atomically** swapped to it (old releases
+   pruned, keeping the last 3; staging dirs never count). Every run first sweeps `.build-tmp/`
+   and any `releases/.*` leftover from a killed predecessor. The app serves `current` directly via
+   `@fastify/static` — no separate web server.
+
+The child is bounded (#110): it is SIGKILLed after `BUILD_TIMEOUT_MS` (15 min) and the build
+reports `timed out`, releasing the shared build/encode lock instead of holding every later
+publish, rebuild and encode until a manual restart. Its stderr is streamed to the container log
+**and** its last 4 KiB is appended to the build error the admin sees, so a schema failure names
+the post. The loaders' pool (`site/src/lib/loader-pool.ts`) carries connection and query
+timeouts, so a silently hung Postgres fails the build within about a minute rather than running
+into the deadline.
 
 The Astro entry `id`s (`de/<slug>` / `en/<slug>`) and the Zod schema are unchanged from the original
 MDX era, so the SEO slug contract (`site/src/lib/paths.ts`, `trips.ts`) holds: **DE at root, EN under
@@ -87,29 +106,42 @@ MDX era, so the SEO slug contract (`site/src/lib/paths.ts`, `trips.ts`) holds: *
 
 **Build-on-boot:** on startup, if `/data/site/current` doesn't exist yet (fresh volume), the app
 kicks off an initial build in the background without blocking Fastify from listening; blog routes
-serve a 503 "site is building" page until it lands. Restarts against an existing `/data` volume
-skip this and serve immediately — no rebuild on every boot.
+serve a 503 "site is building" page until it lands. A failed initial build is retried with
+exponential backoff (30 s → 8 min, six attempts; `bootstrapRelease` in `build.ts`), stopping as
+soon as any release exists — an admin's publish counts — and giving up, logged, after the last
+attempt. `GET /health` reports `release: false` meanwhile (information, not a verdict — see
+`SECURITY.md`). Restarts against an existing `/data` volume skip all of this and serve
+immediately — no rebuild on every boot.
 
 ## Image pipeline
 
-The app optimizes each photo into AVIF + WebP at fixed widths (640/1280/1920 plus the source
-width, never upscaled). Metadata is **not** copied wholesale: `pipeline.ts` re-injects only an
+By default, the app optimizes each photo into AVIF + WebP at fixed widths (640/1280/1920 plus
+the source width, never upscaled). **Settings → Image conversion** can keep new JPEG inputs
+as responsive JPEG variants instead; other input formats still produce AVIF + WebP.
+WebP and AVIF quality are configurable (1–100, defaults 75 and 55); JPEG output uses quality 90.
+Metadata is **not** copied wholesale: `pipeline.ts` re-injects only an
 EXIF **allow-list** (camera make/model/lens, capture time, exposure, aperture, ISO, focal length)
 built by `uploader/src/exif.ts`, plus the ICC profile — GPS, XMP, IPTC and `Orientation` never
 reach a public variant. The untouched upload (`{key}-orig.<ext>`) keeps its full original
 metadata but is never served (excluded from the image-host static mount). See
 [SECURITY.md](SECURITY.md#published-image-metadata-allow-list) for why and what's kept. `/upload`
-appends a short content hash to the client's key, so files land as `{key}-{hash8}-{width}.{format}`
-under `STORAGE_DIR`: replacing a photo mints a new URL while previously published URLs keep
-serving untouched — which is what makes the one-year immutable cache correct. (The WP-import
-rehost path keeps deterministic `{key}-{width}.{format}` keys so re-imports stay idempotent.)
+hashes the original bytes together with the encoding profile into the client's key, so files
+land as `{key}-{hash8}-{width}.{format}` under `STORAGE_DIR`: replacing a photo or changing its
+encoding settings mints a new URL while previously published URLs keep serving untouched.
+WP-import body/gallery keys stay deterministic and complete existing sets are resumed.
+Its explicit **overwrite existing drafts** action retains the existing featured-image overwrite behavior.
 `/upload` accepts **one file per request** (a second file in the same multipart body is rejected
 with 413 rather than silently dropped — see [SECURITY.md](SECURITY.md#input-validation)); bulk
 upload is N single-file requests by design.
 
 **Uploads are asynchronous.** The request returns as soon as the untouched original is on disk;
-the AVIF/WebP variants encode in a background queue (`uploader/src/encode-queue.ts`). The
-response is still complete — the storage key is a pure function of the content hash, and a
+variants encode in a background queue (`uploader/src/encode-queue.ts`). The media row stores
+the encoding profile before the original is written; retries and crash recovery use that
+snapshot, not the current global preference. `media.format` and `media.encoding` are additive
+columns; legacy NULL values mean the original modern-format/default-quality contract.
+Hero/body references carry optional `format: 'jpeg'`; absence means AVIF + WebP. Settings
+changes never automatically reprocess existing files. The
+response is still complete — the storage key is a pure function of the bytes and profile, and a
 metadata-only probe reads orientation-corrected dimensions in ~0.0002 s versus ~0.467 s for the
 re-encode probe it replaced. This exists because encoding a 24 MP frame costs ~19 s and ~1.94 GB
 peak RSS: at concurrency 2 the old synchronous path held the connection for 40–90 s, against a
@@ -117,11 +149,18 @@ reverse proxy whose default read timeout is 60 s. The trade-off is that `{src}-6
 until the encode lands, so **`POST /posts/:tk/publish` refuses (409) while any photo the post
 references is not `ready`** — that gate is the only thing standing between a lost encode job and
 a published page full of broken images. A key with no `media` row never blocks (WordPress-imported
-and legacy files predate the library).
+and legacy files predate the library). The same gate also refuses (409, with a count and up to
+five example URLs) while the **rendered** body of either locale would emit an `<img>`, or holds a
+` ```gallery ` line, whose **origin is not the image host** (#91, `foreignImageUrls` in
+`uploader/src/publish-gate.ts`): that is what a failed WXR re-host leaves behind, and the render
+path would hot-link the old domain or drop the photo silently. The body is judged from the
+renderer's own sanitized tree (`renderMarkdown` + `bodyImageSources`), so code fences, code spans
+and every other Markdown/HTML subtlety are decided by the renderer itself, not a second parser.
 
 The queue runs at concurrency **2** (the measured throughput plateau) and shares a lock with the
 site builder (`uploader/src/work-lock.ts`) so a build and image encoding are **mutually
-exclusive** — both peak around 2 GB in one container. A waiting build *preempts* the encode
+exclusive** — both peak around 2 GB in one container. The WordPress importer's per-image encodes
+take the same lock as shared holders (#95; its fetches do not). A waiting build *preempts* the encode
 backlog at the next job boundary rather than queueing behind it, because Publish awaits the
 rebuild synchronously in the editor. That mutual exclusion is why `docker-compose.yml`'s
 `mem_limit` is sized as `max(build, encode) + baseline` rather than their sum.
@@ -132,24 +171,37 @@ in-flight jobs can still write their final status.
 original) ≈ **1.75 GB per 100 photos**, plus roughly the same again under `/data/backup` because
 originals are captured by the incremental image archive — so a 100-photo trip costs about
 **4 GB all-in**. `POST /upload` therefore refuses with **507** when `/data` lacks room for the
-photo's full cost plus a reserve that keeps a build and a backup able to run, and `GET /health`
-reports free space (as information, never as a health verdict — see SECURITY.md). `heroImage` is a remote URL object
+photo's full cost plus a reserve that keeps a build and a backup able to run; `POST /import`
+applies the same precondition sized from the photos it still has to fetch (#94); and `GET /health`
+reports free space to an admin session only (as information, never as a health verdict — see SECURITY.md). `heroImage` is a remote URL object
 `{src,width,height,alt}`; body images are referenced by URL and rendered as `<picture>` at build
 time. This contract is mirrored on the blog side in `site/src/lib/images.ts`.
 
 **CLI subcommands** (alongside `restore`/`set-password`, see
 [Database dumps](#database-dumps)):
 
+- `rebuild` — rebuilds the live blog from the current database.
+  `docker compose exec app node --import tsx src/cli.ts rebuild`. It does **not** build in the
+  CLI process: it mints a one-request admin session, calls `POST /rebuild` on `127.0.0.1` and
+  revokes the session in a `finally`. That keeps the build inside the single process whose
+  `work-lock.ts` makes building and encoding mutually exclusive — the assumption
+  `docker-compose.yml` sizes `mem_limit` against, and which a second unlocked builder would
+  break (a build beside the encode queue is ≈4.9 GB against a 4.6 GB ceiling). Minting the
+  session is not a new trust boundary: the same CLI already offers `set-password`. Requires the
+  app to be running; exits non-zero with the build's own error message on failure. Normal
+  publishing never needs it — Publish, unpublish, delete and page saves all build on their own;
+  this is for changes made behind the app's back (a `restore`, a hand-run `UPDATE`).
 - `audit-exif` — read-only scan of every variant under `STORAGE_DIR`, reporting how many carry
   EXIF and how many carry GPS, and (when any do) which storage keys and whether each has a
   retained `-orig` to re-encode from. Gates whether a remediation pass is needed at all; nothing
   is written. `docker compose exec app node --import tsx src/cli.ts audit-exif`.
-- `strip-gps` — **not yet built.** It remediates the historical corpus (a lossy re-encode for
-  the keys with no retained original), and is scoped to be added only if a server-side
-  `audit-exif` run finds GPS-carrying variants. A pre-release audit of the **local development
-  corpus** (not the server) found 102 variant files with EXIF and zero with GPS, so it wasn't
-  built speculatively — the pipeline fix above already stops new GPS exposure regardless. The
-  server's corpus has not yet been audited; see SECURITY.md.
+- `strip-gps` — **not built, and its trigger never fired.** It would remediate the historical
+  corpus (a lossy re-encode for the keys with no retained original), scoped to be added only if
+  an `audit-exif` run found GPS-carrying variants. Audits found 102 variant files with EXIF and
+  zero with GPS. The "server corpus is unaudited" caveat that used to sit here was retired on
+  2026-07-29 with issue #68: there is no production deployment yet, and the WXR importer re-hosts
+  via `processImage`, so imported photos pass the `allowedExif()` allow-list at encode time — the
+  allow-list is upstream of the importer, not beside it. See SECURITY.md.
 
 Host-based routing keeps the two domains on one process: the image-variant static handler is
 registered with a Fastify **host constraint** for the hostname of `PUBLIC_BASE_URL` (overridable
@@ -171,8 +223,43 @@ The post editor and photo uploader offer a "Suggest alt text" button per alt fie
 downscales the picked photo and calls the author's local LM Studio (`<lmBaseUrl>/chat/completions`)
 directly — the app server never contacts the model. LM config (`lmBaseUrl`, `lmModel`,
 `captionTimeoutMs`, `captionMaxEdge`, `captionPrompt`) lives in the JSON settings store, edited on
-the admin-only Settings page; authors read it read-only via `GET /ai-config`. No
+the admin-only Settings page; authors read it via `GET /ai-config?purpose=caption`. No
 `docker-compose`/`.env` LM variables are needed.
+
+The editorial-review client (#213, part of #211) shares `public/llm.js` without changing
+the caption flow. `src/editorial-review.ts` owns the pure result type, JSON Schema,
+default prompt and parser; the browser parser is checked against the same corpus.
+`LLM.reviewStory` sends an active-locale draft snapshot directly to an OpenAI-compatible
+provider with an optional request-local Bearer key. Its one deadline covers the initial
+request, the single unsupported-`response_format` HTTP 400 fallback, and body reads;
+an optional AbortSignal lets the drawer cancel stale work.
+Provider/secrets integration (#214) adds non-sensitive review settings to `settings.json`,
+and one AES-256-GCM encrypted `ai_api_key` in Postgres. Default `GET /ai-config` returns
+resolved provider config and the shared key to authenticated authors for browser-direct
+review; settings responses expose only `hasAiApiKey`. Caption-only config never queries
+or decrypts secrets, so a broken remote credential cannot break local captions. Both
+config surfaces are `Cache-Control: no-store`.
+
+The master key is optional bootstrap `ENCRYPTION_KEY` (32 bytes / 64 hex characters),
+forwarded explicitly by Compose. Missing means local-only startup remains available;
+supplied malformed values fail before schema work. No secret is stored in settings.json.
+Settings POST operations serialize, validate first, commit the secret, then atomically
+rename settings.json. **This is not a transaction across both stores:** a file failure
+can leave a new key with the old endpoint. The API reports partial failure and the UI
+clears its input and reloads; saving never runs inference. One key intentionally follows
+admin-selected remote destinations; the UI warns before a destination change.
+See [the approved design](docs/superpowers/specs/2026-09-19-encrypted-ai-review-secrets-design.md)
+for trust boundaries, failure semantics, key escrow, rotation, and rollback.
+
+The editor's `public/editor-review.js` controller (#215) owns a native modal slide-over:
+`EditorLinter.lintStory` renders five immediate checks, then `LLM.reviewStory` resolves
+semantic suggestions from the same unsaved active-locale snapshot. A request epoch,
+AbortController and editor identity check reject late results after close, re-review,
+locale/post changes, restoration or edits. Applying a suggestion dispatches the normal
+field input event under an owned-apply guard, preserving dirty tracking and slug derivation
+without invalidating the other suggestion. No body rewrite, autosave or publish gate is
+introduced. Source jumps close before focusing EasyMDE's zero-indexed line or hero alt;
+normal close restores the trigger. Review output is rendered as text and is not persisted.
 
 ## Data model (Postgres)
 
@@ -180,13 +267,23 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 
 - **`users`** — `id`, `username` (unique, case-insensitive), `password_hash` (scrypt), `is_admin`, `created_at`.
 - **`sessions`** — `id` (SHA-256 of the random token), `user_id` (FK, cascade), `expires_at`. Expired rows are swept hourly.
-- **`posts`** — one row per (`translation_key`, `locale`); `slug`, `title`, `date`, `country`, `country_code`, `region`, `excerpt`, `hero_image` (jsonb), `coordinates` (jsonb), optional `stops`/`route`/`key_facts`, `body_markdown`, `images` (jsonb), `status` (`draft`/`published`). Unique on (`locale`, `slug`).
+- **`app_secrets`** — `key` primary key, `ciphertext`, `iv`, `tag` (hex-encoded AES-256-GCM envelope), `updated_at`. The master key and plaintext credentials never enter this table.
+- **`posts`** — one row per (`translation_key`, `locale`); `slug`, `title`, `date`, `country`, `country_code`, `region`, `excerpt`, `hero_image` (jsonb), `coordinates` (jsonb), optional `stops`/`route`/`key_facts`, `body_markdown`, `images` (jsonb), `status` (`draft`/`published`), `featured` (boolean, "use as homepage cover" — a SHARED value written to both locale rows, deliberately not unique: the homepage takes the newest flagged story and falls back to the newest story), `comments_enabled` (boolean, SHARED, default `true` — the per-post switch; the site-wide `settings.commentsEnabled`, default `false`, is the real gate). Unique on (`locale`, `slug`) **where `slug <> ''`** — an empty slug means "not set yet" (a DE-first draft without an EN title), so any number of such drafts may coexist; `validateForPublish` requires a real slug per locale (#119).
+- **`comments`** — reader comments (#204, [spec](docs/superpowers/specs/2026-09-14-comments-design.md)): `id`, `translation_key` (one flat thread per post pair, no FK — `posts` has no single-column pair key), `locale` (the locale the reader posted from), `name`, `body` (plain text, 1–2000 chars, control characters stripped), `status` (`pending`/`approved`/`rejected`/`spam`; every reader row is born `pending`), `is_author` (an admin reply — born `approved`), `sender_hash` (keyed HMAC of the IP for rate limiting, never the raw IP), `created_at`. The legacy `email` column is always `NULL` — no email is collected. `pgPostStore.remove` deletes the thread in the same transaction as the post, and `ensureSchema` sweeps orphans on boot. **Runtime data, not build input:** the Astro build never reads this table — the blog fetches approved comments from `GET /comments?tk=…` at page load, so approving a comment needs no rebuild.
 - **`media`** — one row per storage key: `folder` (virtual, decoupled from the key), `title`,
   bilingual `alt_*`/`caption_*`, `tags` (`text[]`), dimensions, byte sizes, `status`
   (`processing`/`ready`/`failed`/`missing`), EXIF (`taken_at`, `camera`, `lens`, `lat`, `lng`)
   and `uploaded_by` (FK, `ON DELETE SET NULL`).
 - **`media_folders`** — `path` primary key; the single source of truth for the folder tree
   (every write that sets a `folder` upserts the row and its ancestors).
+- **`import_jobs`** — one row per WordPress import (#92): `status` (`running` / `done` /
+  `failed` / `interrupted`), `started_by`, timestamps, `progress` (jsonb counters) and the
+  final `summary`. Operational state, not content — **excluded from the DB backup** and untouched
+  by restore, pruned to the newest 20 rows. `POST /import` runs the pre-flight synchronously and
+  answers 202 with the job; `GET /import/status` serves the running job's live counters from
+  memory, else the newest row. Boot marks a row the previous process left `running` as
+  `interrupted` (`importJobs.recover()`, before `listen()`); the recovery is running the import
+  again, which resumes from disk.
 
 > **The filesystem stays the source of truth for a file's existence.** A `media` row is metadata
 > *about* a file under `STORAGE_DIR`, never the other way round — which is what preserves the
@@ -195,7 +292,17 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 > (`POST /media/rescan`): it backfills rows for keys already on disk, harvests existing alt text
 > by **exact URL match only**, and marks a row whose files vanished as `missing` rather than
 > deleting it. Its walk matches originals as well as variants, so a crashed upload — which has
-> written only `{key}-orig.<ext>` — is discovered and re-queued.
+> written only `{key}-orig.<ext>` — is discovered as `processing`. Both callers go through
+> `createReconciler`, which runs the sync and **then** `encodeQueue.recover()`, so the row is
+> actually re-queued (#117: the rescan route used to run the sync alone and strand it until the
+> next restart). "Present" means **complete** (#118): a key is `ready` only when every file in
+> `variantWidths(intrinsic) × FORMATS` exists, with the intrinsic width probed from the retained
+> original (a crash truncates the *top* widths, so the largest surviving variant cannot be
+> trusted to define the set); a partial set is `processing` when the original exists and
+> `missing` when it does not, and a `ready` row that lost files is demoted the same way on the
+> next pass. `storage.ts` writes every original and variant to a `.part-*` temp and renames it
+> into place, so a file carrying a final name is never truncated. The report carries
+> `recovered` and `demoted` counts alongside the sync counters.
 
 Schema evolution is additive and idempotent — no migration framework, no `schema_version` table.
 `ensureSchema` runs on every boot before the server starts serving, so a new column is added in
@@ -216,54 +323,109 @@ botched restore, accidental delete), **not** against disk failure or host loss.
 
 > **Offsite backup is required for real DR:** run a host-level backup (e.g. a restic / borg /
 > rsync cron job) of `./uploader/data`. That one directory contains the DB dumps, the image
-> archives, and the image originals, so copying it offsite is the complete disaster-recovery
-> story. The manual download buttons on the settings page are an escape hatch, not a strategy.
+> archives, image originals, and settings.json. Encrypted AI credentials additionally require
+> **separate offsite master-key escrow**; `/data` and a DB dump cannot recover a lost master key.
+> The manual download buttons on the settings page are an escape hatch, not a strategy.
 
 ### Database dumps
 
 `uploader/src/backup.ts` provides app-native logical dumps (no `pg_dump`, no sidecar container):
 
 - **Dump format** — one file per run, `/data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`, containing
-  `{ "version": 3, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […] } }`
-  with full column fidelity. `sessions` are **never** dumped — they're disposable, and token
-  hashes don't belong in a backup file. `version` lets restore reject incompatible dumps; the
-  guard is an **allow-list** (1, 2 and 3), so every bump must widen it or newly written dumps
-  become unrestorable. v1 predates `pages`, v2 predates the media tables; both still restore and
-  leave the tables they never captured alone (for media, `POST /media/rescan` rebuilds the rows
-  from the files on disk).
+  `{ "version": 8, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […], "comments": […] } }`
+  with full column fidelity — an integration test diffs the dumped `posts` keys against
+  `information_schema.columns`, so a column added in `db.ts` without touching `backup.ts` fails
+  the suite instead of silently vanishing from every backup. The six table reads run on one
+  client inside a single `REPEATABLE READ` snapshot, so a bulk delete during a backup can never
+  produce a dump whose `posts` reference `media` rows that aren't in it. `sessions` are
+  **never** dumped — they're disposable, and token hashes don't belong in a backup file. A dump
+  **never overwrites an existing file**: names have one-second resolution and every writer
+  (scheduler, **Back up now**, the restore CLI's pre-restore dump — a separate process) shares
+  the directory, so the finished temp file is published with `link(2)` (fails with `EEXIST`
+  where `rename` would clobber) and a taken name advances to the next free second while
+  `createdAt` keeps the real time (#114).
+  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 8), so
+  every bump must widen it or newly written dumps become unrestorable. v1 predates `pages`, v2
+  predates the media tables, v3 predates `posts.categories`/`tags`/`scheduled_at`, v4 predates
+  `posts.featured` (the homepage-cover flag); all still restore and leave what they never
+  captured alone (for media, `POST /media/rescan` rebuilds the rows from the files on disk; the
+  older post columns come back at their defaults — `'{}'`, `'{}'`, `NULL`, `false`).
+  v5 predates `app_secrets`: an absent secrets field preserves live rows; a present empty
+  array clears them; present rows replace them in the content restore transaction.
+  Restore needs no master key, but subsequent decryption needs the original key.
+  v6 predates media `format`/`encoding`; v7 preserves both so JPEG-only files and queued
+  encoding profiles survive restore. Older dumps restore media with legacy modern defaults.
+  v8 (#204) added `comments` and `posts.comments_enabled`. A v≤7 dump has neither: the
+  restore **always** replaces the comments table (a thread must not outlive posts the dump may
+  not contain), so restoring an older dump leaves it empty, and `comments_enabled` comes back
+  `true` (its column default). Comment rows from a dump are not trusted verbatim: `status`
+  outside the moderation allow-list restores as `pending`, `is_author` only as the literal
+  boolean `true`, and a legacy `email` field is dropped. The restore summary counts comments.
+  The CLI names replacement versus preservation and its pre-restore undo dump includes
+  current encrypted secrets. Pause AI/settings edits during restore and reconcile the
+  provider in settings.json before resuming: that file is not part of a logical DB dump.
   Two ordering details the naive version gets wrong: `media` and `media_folders` are deleted
   **before** `users` (`media.uploaded_by` is `ON DELETE SET NULL`, so the other order silently
   nulls every attribution), and `tags` is `text[]`, which cannot round-trip through the
   `JSON.stringify` path every other non-scalar column uses — it needs a `$n::text[]` bind.
 - **Schedule** — admin-configurable in settings: `backupSchedule` (`off` / `daily` / `weekly`,
   default `off`) and `backupRetention` (1–100 files, default 14). An hourly in-process tick (same
-  pattern as the session sweep) runs a backup when due, tracked in
-  `/data/backup/db/state.json` (`lastAttemptAt`/`lastSuccessAt`/`lastError`/`lastImagesArchiveAt`);
-  missed windows catch up on next boot. After a successful run, dump files beyond the retention
-  count are pruned. Failures are recorded and logged, never crash the app.
+  pattern as the session sweep) runs a backup in the first tick of each new calendar window —
+  UTC day, or Monday-anchored UTC week — after the last success (an elapsed-time rule drifted an
+  hour per day, #113), tracked in `/data/backup/db/state.json`
+  (`lastAttemptAt`/`lastSuccessAt`/`lastError`/`lastImagesArchiveAt`); missed windows catch up on
+  next boot. After a successful run, dump files beyond the retention count are pruned. Failures
+  are recorded and logged, never crash the app.
+- **Images archive safety (#113,
+  [spec](docs/superpowers/specs/2026-09-05-images-archive-safety-design.md))** — the incremental
+  `images-*.tar` is streamed to a `.<pid>.tmp` that is unlinked on any failure, including the
+  process exiting mid-stream; stale temps from a SIGKILL are swept at boot and before each run.
+  The archive refuses (recorded as `lastError`, cutoff unchanged) when its estimated size plus the
+  same 2 GiB reserve `/upload` keeps would not fit. `state.json` is validated field by field, and
+  the mtime cutoff is derived from the archives on disk when the state is unusable — a corrupt
+  file resumes incrementally from the newest tar's stamp, and a hand-emptied archive dir starts
+  a fresh full chain — rather than re-tarring the ~11 GB corpus. Not detected: deleting only
+  *some* archives of a chain, and files whose mtime moved backwards (a host-level restore that
+  preserves old mtimes) — an mtime incremental never picks those up.
 - **Admin UI** (settings page) — schedule select, retention input, **Back up now** button, last-run
-  status, and lists of existing dumps and image archives with download links.
-- **Routes** (all admin-only): `GET /backups` (state + dump list + image-archive list),
-  `POST /backups` (run now), `GET /backups/:name` (download; filename validated against
-  `^db-\d{8}-\d{6}\.json\.gz$` or `^images-\d{8}-\d{6}\.tar$` — no traversal).
+  status (shows *Running…* while a run is in flight), and lists of existing dumps and image
+  archives with download links.
+- **Routes** (all admin-only): `GET /backups` (state + `running` + dump list + image-archive
+  list), `POST /backups` (run now; **409** while a run is already in flight),
+  `GET /backups/:name` (download; filename validated against `^db-\d{8}-\d{6}\.json\.gz$` or
+  `^images-\d{8}-\d{6}\.tar$` — no traversal).
 - **Restore is CLI-only** (destructive, so no web button):
-  `docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/<file>`.
+  `docker compose exec app node --import tsx src/cli.ts restore [--yes] /data/backup/db/<file>`.
   The DHI runtime image has no shell, so `exec` must invoke `node` directly (a bare
   `tsx src/cli.ts ...` cannot run there); outside Docker use `npx tsx src/cli.ts restore <file>`.
-  Restore validates
-  the dump `version`, then in **one transaction** deletes and re-inserts `users`, `posts`, and —
-  for v2 dumps — `pages` (v1 dumps leave existing pages untouched). Deleting users **cascades to
-  `sessions`**, so every login is invalidated — the CLI prints a reminder to trigger a rebuild
-  afterwards (`POST /rebuild`).
+  Before anything touches the database, restore (#114, spec
+  `docs/superpowers/specs/2026-09-05-restore-cli-confirmation-design.md`): refuses a file name
+  outside `db-YYYYMMDD-HHmmss.json.gz` (the same pattern the download route enforces); rejects
+  an unsupported dump `version`; prints the target database (`host:port/dbname`, never the
+  credentials), the dump's `createdAt` and per-table counts, and the **live** per-table counts
+  about to be replaced; then asks for the literal line `yes` — `--yes` skips the prompt for
+  scripted use, and EOF/anything else aborts with nothing changed. It then writes a
+  **pre-restore dump** of the current state into `BACKUP_DIR/db/` — the scheduler's own
+  directory, resolved the same way (`/data/backup` by default) — (an ordinary
+  `db-<stamp>.json.gz`: listed and downloadable in the admin UI, subject to retention pruning,
+  and restorable with this same command — the CLI prints it as the undo path) and **aborts if
+  that dump cannot be written**. Only then does it, in **one transaction**, delete and re-insert
+  `users`, `posts`, media, and — for v2+ dumps — `pages` (v1 dumps leave existing pages
+  untouched). Deleting users **cascades to `sessions`**, so every login is invalidated — the CLI
+  prints a reminder to trigger a rebuild afterwards (`POST /rebuild`).
 - **Admin password recovery** — a forgotten password is reset from the host via the CLI (the
   runtime image has no shell, so use the exec form):
   `docker compose exec app node --import tsx src/cli.ts set-password <username>` — prompts for
   the new password when omitted (input is echoed; passing it as an argument would expose it in
-  the container's process list) and invalidates that user's sessions. Routine rotation while
-  logged in: the "Change my password" card on `/admin/users.html`. Last-resort lockout fallback:
-  `docker compose exec db psql -U images -d images -c 'DELETE FROM users;'` re-opens `/setup`
-  (zero-users check) on the next visit to `/login`. That deletes **only** accounts and their
-  cascaded sessions — `posts`, `pages`, and images carry no user FK and are untouched.
+  the container's process list), enforces the same 12–1024 character policy as the web forms
+  (#109), and invalidates that user's sessions. Routine rotation while logged in: the "Change my
+  password" card on `/admin/users.html`. A **login lockout** (100 failed attempts on the account
+  within 15 minutes, from any addresses) lives in process memory: it expires on its own 15 minutes
+  after the last failure, or `docker compose restart app` clears it at once — `set-password` does
+  not, since the CLI is a separate process (see `SECURITY.md`, *Rate limiting*). Last-resort
+  fallback: `docker compose exec db psql -U images -d images -c 'DELETE FROM users;'` re-opens
+  `/setup` (zero-users check) on the next visit to `/login`. That deletes **only** accounts and
+  their cascaded sessions — `posts`, `pages`, and images carry no user FK and are untouched.
 
 ### Image originals & incremental archives
 
@@ -278,6 +440,14 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   captures them, but the app's image-host static mount excludes `-orig.*` (404), so a
   full-resolution original is never publicly downloadable — only the derived variants the site
   links to are served.
+- **Importer keys** — the WordPress importer writes a body/gallery photo under
+  `trips/<slug>/<name>_<h8>`, where `<name>` is the source filename slugified and cut to 48
+  characters and `<h8>` is the first 8 hex of SHA-256 over the source URL (#98; the `_` keeps the
+  namespace disjoint from pre-#98 keys and from `contentHashKey`'s `-<hash>`); the featured image
+  is `trips/<slug>/hero`. The key is a pure function of (slug, URL) — never of bytes or fetch order
+  — because `/data/images` is the importer's resume record (#85): a re-run resolves the same key
+  and skips what is complete on disk. Photos imported before #98 sit under the plain
+  `trips/<slug>/<name>` and stay resumable while that name is unique within the pair.
 - **Image archives** — after each successful scheduled/on-demand dump, files under `/data/images`
   modified since the previous archive are tarred into
   `/data/backup/db/images-<YYYYMMDD-HHmmss>.tar` (mtime-incremental; when nothing changed, no
@@ -359,13 +529,15 @@ the `IMAGE_TAG` defaults (`docker-compose.yml`, `uploader/.env.example`), commit
 | Var | Used by | Purpose |
 | :-- | :-- | :-- |
 | `DATABASE_URL` | app | Postgres connection (content + auth) |
+| `ENCRYPTION_KEY` | app | Optional 64-hex master key for encrypted AI credentials; unset permits local workflows, malformed values refuse boot; escrow separately |
 | `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.simonswanderlust.com`) |
 | `IMG_HOST` | app | Hostname routed to the image-variant static handler (defaults to the host of `PUBLIC_BASE_URL`) |
 | `SITE_APP_DIR` | app | Path to the Astro project the builder spawns (`/app/site`) |
 | `SITE_DIR` | app | Release root for the built blog (`/data/site`) — `current` is served from here |
 | `MAP_DIR` | app | PMTiles/glyph assets root for `/map/` (`/map-assets`) |
-| `STORAGE_DIR` | app | On-disk image variants |
-| `BACKUP_DIR` | app | Root for MDX export backups and (in `db/`) database dumps |
+| `STORAGE_DIR` | app | On-disk image originals + variants (`/data/images`) |
+| `SETTINGS_PATH` | app | JSON settings store; defaults to `settings.json` beside `STORAGE_DIR` (`/data/settings.json`) |
+| `BACKUP_DIR` | app | Root for MDX export backups and (in `db/`) database dumps; defaults to `backup/` beside `STORAGE_DIR` (`/data/backup`), for the app and the restore CLI alike |
 | `PORT` | app | Listen port (default `3000`) |
 | `PROTOMAPS_BUILD` / `MAP_MAXZOOM` / `PMTILES_VERSION` | Dockerfile (build args) | Pin the map basemap fetched + baked into the image at build (see `docs/map-assets.md`) |
 | `IMAGE_TAG` | compose | Released GHCR image version to run |

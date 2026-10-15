@@ -22,7 +22,7 @@
  * the two together with a compile-time assertion — plain assignment does NOT
  * catch this, see the comment there before changing it.
  */
-export interface ImageMeta { width: number; height: number; alt?: string; caption?: string }
+export interface ImageMeta { width: number; height: number; alt?: string; caption?: string; format?: 'jpeg' }
 
 /** Longest alt/caption accepted — these end up in every gallery's HTML. */
 const MAX_TEXT = 1000;
@@ -58,6 +58,9 @@ export function imagesMapError(images: unknown): string | null {
         return `images["${src}"].${dim} must be a positive integer`;
       }
     }
+    if (v.format !== undefined && v.format !== 'jpeg') {
+      return `images["${src}"].format must be "jpeg"`;
+    }
     for (const text of ['alt', 'caption'] as const) {
       if (v[text] === undefined || v[text] === null) continue;
       if (typeof v[text] !== 'string') return `images["${src}"].${text} must be a string`;
@@ -67,6 +70,66 @@ export function imagesMapError(images: unknown): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Validate an untyped `heroImage` from a request body. Same posture as
+ * `imagesMapError`: the hero's `alt` reaches every reader page's markup, and
+ * a draft save (`validateDraft` only checks "is an object") was the one text
+ * field with no length cap at all — an AI suggestion that ran away to 2 kB
+ * was saved verbatim (#140). Draft-tolerant: `src` may be empty and the
+ * dimensions zero (the importer's placeholder); `validateLocale` tightens
+ * both at publish time.
+ */
+export function heroImageError(hero: unknown): string | null {
+  if (hero === undefined) return null;
+  if (typeof hero !== 'object' || hero === null || Array.isArray(hero)) return 'heroImage must be an object';
+  const h = hero as Record<string, unknown>;
+  for (const text of ['src', 'alt'] as const) {
+    if (typeof h[text] !== 'string') return `heroImage.${text} must be a string`;
+  }
+  if ((h.alt as string).length > MAX_TEXT) return `heroImage.alt must be at most ${MAX_TEXT} characters`;
+  for (const dim of ['width', 'height'] as const) {
+    if (!Number.isInteger(h[dim]) || (h[dim] as number) < 0) return `heroImage.${dim} must be a non-negative integer`;
+  }
+  if (h.format !== undefined && h.format !== 'jpeg') return 'heroImage.format must be "jpeg"';
+  // Optional focal point: percentages of the frame, fed to `object-position`
+  // by site/src/lib/images.ts so a full-bleed `object-fit: cover` crop keeps
+  // the subject in frame. Validated HERE, at the store chokepoint,
+  // rather than in validateDraft because the WXR importer bypasses that, and
+  // rejected outright rather than coerced — a silently clamped focal point
+  // looks like the author's pick failed to save.
+  if (h.focus !== undefined) {
+    const f = h.focus;
+    if (typeof f !== 'object' || f === null || Array.isArray(f)) return 'heroImage.focus must be an object';
+    for (const axis of ['x', 'y'] as const) {
+      const v = (f as Record<string, unknown>)[axis];
+      if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 100) {
+        return `heroImage.focus.${axis} must be a number between 0 and 100`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Alt text as a CommonMark image label: `\`, `[` and `]` escaped so the label
+ * ends where the author's text does. Composing `![${alt}](${src})` from raw
+ * text turned `Blick vom Gipfel [Norwegen]` into a broken image that rendered
+ * literally (#140). Mirrored by `public/image-markdown.js` for the editor —
+ * `test/image-markdown-mirror.test.ts` keeps the two honest.
+ */
+export function escapeAltText(alt: string): string {
+  return alt.replace(/[\\[\]]/g, '\\$&');
+}
+
+/** Inverse of `escapeAltText` — CommonMark §2.4: a backslash escapes ASCII punctuation only. */
+export function unescapeAltText(alt: string): string {
+  return alt.replace(/\\([!-/:-@[-`{-~])/g, '$1');
+}
+
+export function imageMarkdown(alt: string, src: string): string {
+  return `![${escapeAltText(alt)}](${src})`;
 }
 
 /**
@@ -132,7 +195,7 @@ function isSkippableLine(line: string): boolean {
  * liberal — indent and tildes included — because being generous about what
  * protects content is the safe direction to be wrong in.
  */
-function rewriteFences(body: string, rewriteLine: (line: string) => string): string {
+export function rewriteFences(body: string, rewriteLine: (line: string) => string): string {
   const lines = body.split('\n');
   let open: { marker: string; len: number; isGallery: boolean } | null = null;
 
@@ -170,7 +233,7 @@ function rewriteFences(body: string, rewriteLine: (line: string) => string): str
 }
 
 const DIMS_RE = /^(\d{1,6})x(\d{1,6})$/;
-const ATTR_RE = /^(alt|caption)="([^"]*)"$/;
+const ATTR_RE = /^(alt|caption|format)="([^"]*)"$/;
 
 /**
  * Save-time normalization of gallery fences, the exact inverse of
@@ -202,6 +265,8 @@ export function normalizeGalleryFences(
     let height: number | undefined;
     let alt: string | undefined;
     let caption: string | undefined;
+    let format: 'jpeg' | undefined;
+    let invalidFormat = false;
     for (const field of fields.slice(1)) {
       const dims = DIMS_RE.exec(field);
       if (dims) {
@@ -213,9 +278,12 @@ export function normalizeGalleryFences(
       if (attr) {
         const value = unescapeMeta(attr[2] ?? '').slice(0, MAX_TEXT);
         if (attr[1] === 'alt') alt = value;
-        else caption = value;
+        else if (attr[1] === 'caption') caption = value;
+        else if (value === 'jpeg') format = value;
+        else invalidFormat = true;
       }
     }
+    if (invalidFormat) return line;
     const existing = merged[src];
     const w = width ?? existing?.width ?? 0;
     const hgt = height ?? existing?.height ?? 0;
@@ -225,6 +293,7 @@ export function normalizeGalleryFences(
     merged[src] = {
       width: w,
       height: hgt,
+      ...(format !== undefined ? { format } : existing?.format !== undefined ? { format: existing.format } : {}),
       ...(alt !== undefined ? { alt } : existing?.alt !== undefined ? { alt: existing.alt } : {}),
       ...(caption !== undefined
         ? { caption }
@@ -252,6 +321,7 @@ export function galleryFencesToMdx(
     const meta = images[src];
     if (!meta) return line;
     const parts = [src, `${meta.width}x${meta.height}`];
+    if (meta.format === 'jpeg') parts.push('format="jpeg"');
     if (meta.alt) parts.push(`alt="${escapeMeta(meta.alt)}"`);
     if (meta.caption) parts.push(`caption="${escapeMeta(meta.caption)}"`);
     return parts.join(' | ');

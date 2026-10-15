@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assertSafeKey, contentHashKey, storeVariants, storeOriginal, storeVariantFiles, isOriginalFile } from '../src/storage.js';
+import { assertSafeKey, contentHashKey, storeVariants, storeOriginal, storeVariantFiles, isOriginalFile, MAX_KEY_LEN, MAX_KEY_DEPTH } from '../src/storage.js';
 import type { ProcessResult } from '../src/pipeline.js';
 
 const result: ProcessResult = {
@@ -76,6 +76,44 @@ describe('storeVariants', () => {
       ].join('\n'),
     );
   });
+
+  it('returns the JPEG discriminator in both structured output and the paste-ready snippet', async () => {
+    const jpeg = await storeVariants('trips/t/hero-jpeg', 'A', {
+      ...result,
+      format: 'jpeg',
+      variants: [{ width: 2000, format: 'jpeg', data: Buffer.from('j') }],
+    }, { storageDir: dir, baseUrl: 'https://img.example' });
+    expect(jpeg.format).toBe('jpeg');
+    expect(jpeg.snippet).toContain("  format: 'jpeg'");
+    expect(jpeg.files).toContain('trips/t/hero-jpeg-2000.jpeg');
+  });
+});
+
+// #118: a file carrying a final variant/original name must be complete. The
+// old plain writeFile left a truncated file under the final name on
+// SIGKILL / ENOSPC, which every "present and non-empty" check then trusted.
+describe('atomic writes', () => {
+  it('leaves no file under the final name (and no temp) when a variant write fails', async () => {
+    const broken = [{ width: 640, format: 'webp' as const, data: null as unknown as Buffer }];
+    await expect(storeVariantFiles('trips/x/hero', broken, { storageDir: dir })).rejects.toThrow();
+    expect(await readdir(join(dir, 'trips', 'x'))).toEqual([]);
+  });
+
+  it('keeps the previous complete file when a re-encode of the same name fails', async () => {
+    await storeVariantFiles('trips/x/hero', [{ width: 640, format: 'webp', data: Buffer.from('good') }], { storageDir: dir });
+    const broken = [{ width: 640, format: 'webp' as const, data: null as unknown as Buffer }];
+    await expect(storeVariantFiles('trips/x/hero', broken, { storageDir: dir })).rejects.toThrow();
+    expect(await readdir(join(dir, 'trips', 'x'))).toEqual(['hero-640.webp']);
+    expect((await readFile(join(dir, 'trips', 'x', 'hero-640.webp'))).toString()).toBe('good');
+  });
+
+  it('never leaves a temp behind on success — only final names exist afterwards', async () => {
+    await storeOriginal('trips/x/hero', Buffer.from('o'), 'jpg', { storageDir: dir });
+    await storeVariantFiles('trips/x/hero', result.variants, { storageDir: dir });
+    const files = await readdir(join(dir, 'trips', 'x'));
+    expect(files.some((f) => f.includes('.part-'))).toBe(false);
+    expect(files).toHaveLength(5);
+  });
 });
 
 describe('isOriginalFile', () => {
@@ -90,6 +128,35 @@ describe('isOriginalFile', () => {
     // A key ending in "-orig" still only excludes its actual original file.
     expect(isOriginalFile('trips/foo-orig-1280.webp')).toBe(false);
     expect(isOriginalFile('trips/foo-orig-orig.jpg')).toBe(true);
+  });
+});
+
+describe('assertSafeKey bounds (#133)', () => {
+  it('accepts a key at the length and depth caps', () => {
+    expect(() => assertSafeKey('a'.repeat(MAX_KEY_LEN))).not.toThrow();
+    expect(() => assertSafeKey(Array.from({ length: MAX_KEY_DEPTH }, () => 'a').join('/'))).not.toThrow();
+  });
+
+  it('rejects one over the length cap without echoing the key', () => {
+    const key = 'a'.repeat(MAX_KEY_LEN + 1);
+    let message = '';
+    try { assertSafeKey(key); } catch (e) { message = (e as Error).message; }
+    expect(message).toMatch(/longer than/);
+    expect(message).not.toContain(key);
+  });
+
+  it('rejects one over the depth cap — storeOriginal would mkdir -p the whole tree', async () => {
+    const key = Array.from({ length: MAX_KEY_DEPTH + 1 }, () => 'a').join('/');
+    expect(() => assertSafeKey(key)).toThrow(/path segments/);
+    await expect(storeOriginal(key, Buffer.from('x'), 'jpg', { storageDir: dir })).rejects.toThrow(/unsafe storage key/);
+    await expect(readdir(join(dir, 'a'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // The producers every real key comes from must sit inside the cap.
+  it('a versioned library key fits with room to spare', () => {
+    const key = contentHashKey(`library/2026/${'x'.repeat(60)}`, Buffer.from('img'));
+    expect(key.length).toBeLessThan(MAX_KEY_LEN);
+    expect(() => assertSafeKey(key)).not.toThrow();
   });
 });
 
@@ -109,6 +176,22 @@ describe('contentHashKey', () => {
     const versioned = contentHashKey('trips/x/hero', Buffer.from('img'));
     expect(versioned).toMatch(/^trips\/x\/hero-[0-9a-f]{8}$/);
     expect(() => assertSafeKey(versioned)).not.toThrow();
+  });
+
+  it('includes the complete encoding profile so settings transitions never reuse an immutable URL', () => {
+    const bytes = Buffer.from('same-photo');
+    const modern = contentHashKey('trips/x/hero', bytes, {
+      convertJpeg: true, webpQuality: 75, avifQuality: 55,
+    });
+    expect(contentHashKey('trips/x/hero', bytes, {
+      convertJpeg: false, webpQuality: 75, avifQuality: 55,
+    })).not.toBe(modern);
+    expect(contentHashKey('trips/x/hero', bytes, {
+      convertJpeg: true, webpQuality: 80, avifQuality: 55,
+    })).not.toBe(modern);
+    expect(contentHashKey('trips/x/hero', bytes, {
+      convertJpeg: true, webpQuality: 75, avifQuality: 60,
+    })).not.toBe(modern);
   });
 
   it('does not launder traversal-shaped keys — storeVariants still rejects them', async () => {

@@ -50,6 +50,22 @@ maybe('pgMediaStore (integration)', () => {
     expect(typeof saved.origBytes).toBe('number');
   });
 
+  it('round-trips JPEG format and the immutable encoding snapshot', async () => {
+    const saved = await add('library/2026/jpeg', {
+      format: 'jpeg',
+      encoding: { convertJpeg: false, webpQuality: 82, avifQuality: 62 },
+    });
+    expect(saved).toMatchObject({
+      format: 'jpeg',
+      encoding: { convertJpeg: false, webpQuality: 82, avifQuality: 62 },
+      thumbSrc: `${BASE}/library/2026/jpeg-640.jpeg`,
+    });
+    expect(await store.get('library/2026/jpeg')).toMatchObject({
+      format: 'jpeg',
+      encoding: { convertJpeg: false, webpQuality: 82, avifQuality: 62 },
+    });
+  });
+
   it('upserting a folder creates its ancestor rows', async () => {
     await add('k', { folder: 'a/b/c' });
     expect(await store.folders()).toEqual(['a', 'a/b', 'a/b/c']);
@@ -147,6 +163,41 @@ maybe('pgMediaStore (integration)', () => {
     await expect(store.renameFolder('a', 'a/child')).rejects.toMatchObject({ code: 'invalid' });
   });
 
+  // Before #133 the rename was four pool queries: a folder created between the
+  // `media` rewrite and the `media_folders` rewrite left every moved row in a
+  // folder the tree never listed. Inject exactly that race on a wrapped
+  // client and assert the media rows roll back with the failed tree rewrite.
+  it('rename is one transaction: a tree rewrite that fails undoes the media rewrite', async () => {
+    await add('k1', { folder: 'a' });
+    let injected = false;
+    const racing = {
+      query: pool.query.bind(pool),
+      async connect() {
+        const client = await pool.connect();
+        return Object.assign(Object.create(client), {
+          async query(text: string, values?: unknown[]) {
+            if (!injected && text.includes('UPDATE media_folders')) {
+              injected = true;
+              await pool.query(`INSERT INTO media_folders (path) VALUES ('b')`); // another connection, autocommitted
+            }
+            return client.query(text, values);
+          },
+        });
+      },
+    } as unknown as DbPool;
+    const raced = pgMediaStore(racing, { baseUrl: BASE });
+    await expect(raced.renameFolder('a', 'b')).rejects.toMatchObject({ code: '23505' });
+    expect(injected).toBe(true);
+    expect((await store.get('k1'))?.folder).toBe('a');
+    expect(await store.folders()).toEqual(['a', 'b']);
+  });
+
+  it('strips a NUL that Postgres text would otherwise reject with a 500', async () => {
+    const saved = await add('k', { title: 'a\u0000b', alt: { de: 'x\u0000', en: '' } });
+    expect(saved).toMatchObject({ title: 'ab', alt: { de: 'x', en: '' } });
+    expect((await store.patch('k', { caption: { en: '\u0000c' } })).caption.en).toBe('c');
+  });
+
   it('refuses to delete a non-empty folder', async () => {
     await add('k1', { folder: 'Full' });
     await expect(store.deleteFolder('Full')).rejects.toMatchObject({ code: 'not_empty' });
@@ -190,5 +241,21 @@ maybe('pgMediaStore (integration)', () => {
     expect((await store.get('k'))?.uploadedBy).toBe(userId);
     await pool.query('DELETE FROM users WHERE id = $1', [userId]);
     expect((await store.get('k'))?.uploadedBy).toBeNull();
+  });
+
+  // The rule the memory store mirrors (#135): ON CONFLICT never lists
+  // uploaded_by, so a re-upload by another account does not claim the row.
+  it('re-upserting keeps the first uploader', async () => {
+    const mk = async (name: string) => (await pool.query<{ id: string }>(
+      `INSERT INTO users (id, username, password_hash) VALUES (gen_random_uuid(), $1, 'x') RETURNING id`, [name],
+    )).rows[0]!.id;
+    const first = await mk(`first-${Date.now()}`);
+    const second = await mk(`second-${Date.now()}`);
+    try {
+      await add('k', { uploadedBy: first });
+      expect((await add('k', { uploadedBy: second })).uploadedBy).toBe(first);
+    } finally {
+      await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [[first, second]]);
+    }
   });
 });

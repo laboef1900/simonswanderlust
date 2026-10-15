@@ -1,8 +1,13 @@
+import { request } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { processImage } from './pipeline.js';
+import { basename, dirname, join, resolve } from 'node:path';
+import { SESSION_COOKIE } from './authn.js';
+import { normalizeProcessOptions, processImage, type ProcessOptions } from './pipeline.js';
 import { contentHashKey, storeVariants, type StorageOptions, type StoredImage } from './storage.js';
-import type { UserStore } from './users.js';
+import type { Dump } from './backup.js';
+import { passwordPolicyViolation, type UserStore } from './users.js';
 import type { SessionStore } from './sessions.js';
+import { createSettingsStore, defaultSettings } from './settings.js';
 
 /** Reusable: process an in-memory image and store its variants.
  * Keys are content-hash versioned like POST /upload, so a re-upload mints a
@@ -12,19 +17,77 @@ export async function uploadFile(
   key: string,
   alt: string,
   opts: StorageOptions,
+  encoding: ProcessOptions = {},
 ): Promise<StoredImage> {
-  const result = await processImage(input);
-  return storeVariants(contentHashKey(key, input), alt, result, opts);
+  const profile = normalizeProcessOptions(encoding);
+  const result = await processImage(input, profile);
+  return storeVariants(contentHashKey(key, input, profile), alt, result, opts);
 }
 
-async function restoreMain(file: string | undefined): Promise<void> {
+/** One line from stdin. Resolves '' when stdin closes without a line (EOF /
+ * Ctrl-D, or a spawned process with stdin closed) — `question()` alone never
+ * settles in that case, so it is raced against 'close'. */
+async function promptLine(question: string): Promise<string> {
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const closed = new Promise<string>((res) => rl.once('close', () => res('')));
+    return await Promise.race([rl.question(question), closed]);
+  } finally {
+    rl.close();
+  }
+}
+
+/** `host:port/dbname` for the confirmation summary — never the credentials. */
+function describeDatabase(databaseUrl: string): string {
+  try {
+    const u = new URL(databaseUrl);
+    return `${u.hostname}${u.port ? `:${u.port}` : ''}${u.pathname}`;
+  } catch {
+    return '(unparseable DATABASE_URL)';
+  }
+}
+
+const RESTORE_TABLES = ['users', 'posts', 'pages', 'media', 'media_folders', 'comments'] as const;
+type RowCounts = Record<(typeof RESTORE_TABLES)[number], number>;
+
+/** `users 3, posts 12, …` — the same shape for the dump and for the live rows,
+ * so the operator compares them column by column. */
+function formatCounts(c: RowCounts): string {
+  return RESTORE_TABLES.map((t) => `${t} ${c[t]}`).join(', ');
+}
+
+/** Parse `restore [--yes] <file>`; the flag may appear on either side of the path. */
+export function parseRestoreArgs(args: string[]): { yes: boolean; file: string | undefined } {
+  const yes = args.includes('--yes');
+  const rest = args.filter((a) => a !== '--yes');
+  return { yes, file: rest[0] };
+}
+
+/**
+ * Destructive: replaces users/posts/pages/media in the live database. Order is
+ * load-bearing (issue #114, spec 2026-09-05-restore-cli-confirmation-design.md):
+ * refuse a bad filename or unrestorable version BEFORE connecting, show what is
+ * about to be replaced, require confirmation, write a pre-restore dump, and
+ * only then run the transaction. Every early exit leaves the database untouched.
+ */
+async function restoreMain(args: string[]): Promise<void> {
+  const { yes, file } = parseRestoreArgs(args);
   if (!file) {
     // @ai-warning: the DHI runtime image has no shell, so `docker compose exec`
     // must invoke node directly — `tsx src/cli.ts ...` cannot run there.
     console.error(
-      'usage: docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
-      '       (bare dev: npx tsx src/cli.ts restore <file>)',
+      'usage: docker compose exec app node --import tsx src/cli.ts restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
+      '       (bare dev: npx tsx src/cli.ts restore [--yes] <file>)\n' +
+      '       --yes skips the interactive confirmation; a pre-restore dump is written either way.',
     );
+    process.exit(1);
+  }
+  // Lazy like every subcommand here: `uploadFile` is imported by tests and by
+  // the upload path, neither of which should load pg.
+  const { BACKUP_FILE_RE, BackupError, dumpDatabase, readDump, resolveBackupDir, restoreDatabase } = await import('./backup.js');
+  if (!BACKUP_FILE_RE.test(basename(file))) {
+    console.error(`refusing to restore ${file}: the file name must match db-YYYYMMDD-HHmmss.json.gz. nothing was changed.`);
     process.exit(1);
   }
   const databaseUrl = process.env.DATABASE_URL;
@@ -32,12 +95,61 @@ async function restoreMain(file: string | undefined): Promise<void> {
     console.error('DATABASE_URL is required for restore.');
     process.exit(1);
   }
+  let dump: Dump;
+  try {
+    dump = readDump(file);
+  } catch (e) {
+    const reason = e instanceof BackupError ? e.message : `cannot read dump (${e instanceof Error ? e.message : String(e)})`;
+    console.error(`refusing to restore ${file}: ${reason}. nothing was changed.`);
+    process.exit(1);
+  }
+  const dumpCounts: RowCounts = {
+    users: dump.tables.users.length, posts: dump.tables.posts.length,
+    pages: dump.tables.pages?.length ?? 0, media: dump.tables.media?.length ?? 0,
+    media_folders: dump.tables.media_folders?.length ?? 0,
+    comments: dump.tables.comments?.length ?? 0,
+  };
   const { createPool } = await import('./db.js');
-  const { restoreDatabase } = await import('./backup.js');
   const pool = createPool(databaseUrl);
   try {
+    const live = {} as RowCounts;
+    for (const t of RESTORE_TABLES) {
+      live[t] = Number((await pool.query(`SELECT count(*) AS n FROM ${t}`)).rows[0].n);
+    }
+    console.log(`target database: ${describeDatabase(databaseUrl)}`);
+    console.log(`dump:            ${file} (v${dump.version}, created ${dump.createdAt}) — ${formatCounts(dumpCounts)}`);
+    console.log(`about to REPLACE the live rows: ${formatCounts(live)} — and invalidate every session.`);
+    console.log(dump.tables.app_secrets === undefined
+      ? 'app_secrets preserved: absent from dump.'
+      : `app_secrets: replace ${Number((await pool.query('SELECT count(*) AS n FROM app_secrets')).rows[0].n)} live rows with ${dump.tables.app_secrets.length} encrypted rows from dump.`);
+    console.log('Encrypted credentials require their original master key; reconcile settings.json before using remote AI.');
+    if (!yes) {
+      const answer = await promptLine("type 'yes' to continue (or pass --yes): ");
+      if (answer.trim() !== 'yes') {
+        console.error('aborted; nothing was changed.');
+        process.exitCode = 1;
+        return;
+      }
+    }
+    // Golden Rule 3: a dump of the state being replaced lands next to the
+    // scheduled backups BEFORE the first DELETE. A restore that cannot be
+    // undone is not run. `dumpDatabase` never reuses an existing name, so
+    // neither the file being restored (a back-to-back undo) nor an earlier
+    // pre-dump can be overwritten by this one.
+    const backupDir = join(resolveBackupDir(), 'db');
+    let preDump: string;
+    try {
+      preDump = resolve(backupDir, await dumpDatabase(pool, backupDir));
+    } catch (e) {
+      console.error(`pre-restore dump into ${backupDir} failed (${e instanceof Error ? e.message : String(e)}); restore aborted, nothing was changed.`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`pre-restore dump written: ${preDump}`);
     const counts = await restoreDatabase(pool, file);
-    console.log(`restored ${counts.users} users, ${counts.posts} posts, and ${counts.pages} pages (all sessions invalidated).`);
+    console.log(`restored ${counts.users} users, ${counts.posts} posts, ${counts.pages} pages, ${counts.media} media rows, and ${counts.comments} comments (all sessions invalidated).`);
+    console.log(counts.appSecrets === null ? 'app_secrets preserved.' : `restored ${counts.appSecrets} encrypted app_secrets rows.`);
+    console.log(`to undo: restore --yes ${preDump}`);
     console.log('now rebuild the site: /admin/settings.html → "Rebuild site now" (or POST /rebuild).');
   } finally {
     await pool.end();
@@ -69,19 +181,13 @@ async function setPasswordMain(username: string | undefined, passwordArg: string
   }
   let password = passwordArg;
   if (password === undefined) {
-    const { createInterface } = await import('node:readline/promises');
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    try {
-      // question() never settles if stdin closes without a line (EOF/Ctrl-D),
-      // so race it against 'close' and fall through to the empty-password error.
-      const closed = new Promise<string>((res) => rl.once('close', () => res('')));
-      password = await Promise.race([rl.question('New password (input is echoed): '), closed]);
-    } finally {
-      rl.close();
-    }
+    password = await promptLine('New password (input is echoed): ');
   }
-  if (!password) {
-    console.error('the new password must not be empty.');
+  // Same rule as the web paths — the hash rejects it anyway, but checking here
+  // fails before a pool is opened and prints one line instead of a stack (#109).
+  const violation = passwordPolicyViolation(password);
+  if (violation) {
+    console.error(`the new ${violation}.`);
     process.exit(1);
   }
   const { createPool } = await import('./db.js');
@@ -141,20 +247,146 @@ async function auditExifMain(): Promise<void> {
   console.log('\nBack up first, then: node --import tsx src/cli.ts strip-gps --dry-run');
 }
 
+/** A 60s window is a whole build's worth of headroom for a request the CLI
+ * makes and revokes in the same function. It is not a login. */
+export const REBUILD_SESSION_TTL_MS = 60_000;
+
+/** How `triggerRebuild` reaches the running app. Injected so the contract
+ * below can be tested without a socket. */
+export type RebuildTransport = (cookie: string) => Promise<{ status: number; body: string }>;
+
+/**
+ * Ask the RUNNING app to rebuild the site, as an admin, over loopback.
+ *
+ * @ai-warning It deliberately does NOT build here. `work-lock.ts` makes a site
+ * build and image encoding mutually exclusive WITHIN ONE PROCESS, and
+ * docker-compose.yml sizes `mem_limit` as `max(build, encode) + baseline`
+ * (~4.4 GB) on exactly that assumption. A CLI that spawned its own
+ * `astro build` would be a second, unlocked builder: concurrent with the
+ * encode queue that is ~0.47 + 3.9 + 0.5 ≈ 4.9 GB against a 4.6 GB ceiling,
+ * i.e. an OOM of the whole container — blog, admin, image host and the
+ * in-flight build together. Two racing builders would also both flip the
+ * `current` symlink and both prune `releases/`.
+ *
+ * @ai-note Minting a session for an existing admin is not a new trust
+ * boundary: this same CLI already offers `set-password`, which takes over any
+ * account outright, so anyone who can run it has more power than this. The
+ * session lives for one request and is destroyed in `finally`, including when
+ * the build fails or the socket dies.
+ */
+export async function triggerRebuild(
+  users: UserStore,
+  sessions: SessionStore,
+  post: RebuildTransport,
+): Promise<string> {
+  const admin = (await users.list()).find((u) => u.isAdmin);
+  if (!admin) throw new Error('no admin user exists yet — create one in the admin UI first');
+  const token = await sessions.create(admin.id, REBUILD_SESSION_TTL_MS);
+  try {
+    const { status, body } = await post(`${SESSION_COOKIE}=${token}`);
+    // /rebuild answers 200 with `{ ok: false, error }` for a FAILED build — a
+    // status check alone would report a schema error as success.
+    if (status !== 200) throw new Error(`the app answered ${status}: ${body.slice(0, 300)}`);
+    let outcome: { ok?: boolean; release?: string; error?: string };
+    try {
+      outcome = JSON.parse(body) as typeof outcome;
+    } catch {
+      throw new Error(`the app answered 200 with a non-JSON body: ${body.slice(0, 300)}`);
+    }
+    if (!outcome.ok) throw new Error(outcome.error ?? 'the build failed without a message');
+    return outcome.release ?? '(unnamed release)';
+  } finally {
+    await sessions.destroy(token);
+  }
+}
+
+/** Loopback POST with no client-side deadline: a build may legitimately run
+ * for `BUILD_TIMEOUT_MS` (15 min) plus its wait for the exclusive lock, and
+ * the route answers only when it is done. `node:http` is used rather than
+ * `fetch` for exactly that reason — undici's 5-minute `headersTimeout` would
+ * abort a long but healthy build, and raising it means taking on undici as a
+ * direct dependency. */
+function loopbackRebuild(port: number): RebuildTransport {
+  return (cookie) => {
+    // `settle`, not `resolve`: `resolve` is node:path's, imported at the top.
+    const { promise, resolve: settle, reject } = Promise.withResolvers<{ status: number; body: string }>();
+    const req = request(
+      { host: '127.0.0.1', port, path: '/rebuild', method: 'POST', headers: { cookie } },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (c: string) => { body += c; });
+        res.on('end', () => settle({ status: res.statusCode ?? 0, body }));
+      },
+    );
+    req.on('error', reject);
+    req.end();
+    return promise;
+  };
+}
+
+async function rebuildMain(): Promise<void> {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    console.error('DATABASE_URL is required for rebuild.');
+    process.exit(1);
+  }
+  const port = Number(process.env.PORT ?? 3000);
+  const { createPool } = await import('./db.js');
+  const { pgUserStore } = await import('./users.js');
+  const { pgSessionStore } = await import('./sessions.js');
+  const pool = createPool(databaseUrl);
+  try {
+    console.log(`rebuilding the site via the running app on 127.0.0.1:${port} — this can take a few minutes…`);
+    const release = await triggerRebuild(pgUserStore(pool), pgSessionStore(pool), loopbackRebuild(port));
+    console.log(`site rebuilt and released as ${release}.`);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(
+      (e as NodeJS.ErrnoException)?.code === 'ECONNREFUSED'
+        // The one failure an operator will actually hit, and the fix is not obvious.
+        ? `nothing is listening on 127.0.0.1:${port}. A rebuild runs INSIDE the app process, which holds ` +
+          'the build/encode lock, so the app has to be up. Start it (`docker compose up -d app`); if there ' +
+          'is no release at all yet, boot builds one by itself.'
+        : `rebuild failed: ${msg}`,
+    );
+    process.exitCode = 1;
+  } finally {
+    await pool.end();
+  }
+}
+
 async function main(): Promise<void> {
   if (process.argv[2] === 'audit-exif') return auditExifMain();
-  if (process.argv[2] === 'restore') return restoreMain(process.argv[3]);
+  if (process.argv[2] === 'restore') return restoreMain(process.argv.slice(3));
   if (process.argv[2] === 'set-password') return setPasswordMain(process.argv[3], process.argv[4]);
+  if (process.argv[2] === 'rebuild') return rebuildMain();
   const [, , file, key, alt = ''] = process.argv;
   if (!file || !key) {
-    console.error('usage: npm run upload -- <imageFile> <key> [alt]   |   docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/<file>   |   docker compose exec app node --import tsx src/cli.ts set-password <username> [newPassword]   |   docker compose exec app node --import tsx src/cli.ts audit-exif');
+    // @ai-warning: the DHI runtime image has no shell, so `docker compose exec`
+    // must invoke node directly — `tsx src/cli.ts ...` cannot run there.
+    const exec = 'docker compose exec app node --import tsx src/cli.ts';
+    console.error(
+      'usage:\n' +
+      '  npm run upload -- <imageFile> <key> [alt]\n' +
+      `  ${exec} rebuild\n` +
+      `  ${exec} restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n` +
+      `  ${exec} set-password <username> [newPassword]\n` +
+      `  ${exec} audit-exif`,
+    );
     process.exit(1);
   }
   const opts: StorageOptions = {
     storageDir: process.env.STORAGE_DIR ?? './data/images',
     baseUrl: process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com',
   };
-  const stored = await uploadFile(await readFile(file), key, alt, opts);
+  const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(opts.storageDir), 'settings.json');
+  const current = createSettingsStore({ path: settingsPath, defaults: defaultSettings() }).get();
+  const stored = await uploadFile(await readFile(file), key, alt, opts, {
+    convertJpeg: current.convertJpeg,
+    webpQuality: current.webpQuality,
+    avifQuality: current.avifQuality,
+  });
   console.log(stored.snippet);
 }
 

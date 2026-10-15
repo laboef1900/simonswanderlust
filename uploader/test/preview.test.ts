@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { renderPreviewHtml } from '../src/preview.js';
+import { previewCsp, renderPreviewHtml } from '../src/preview.js';
+import { SHIKI_CSS } from '../../site/src/lib/shiki-classes.js';
 import type { PostPair } from '../src/posts.js';
 
 /** The app's own image base — what server.ts passes as the gallery allow-list. */
@@ -14,26 +15,27 @@ function pair(overrides: Partial<PostPair> = {}): PostPair {
     status: 'draft',
     shared: {
       date: '2024-10-03',
-      country: 'Rumänien',
       countryCode: 'RO',
       region: 'europe',
       coordinates: { lat: 44.4268, lng: 26.1025 },
-      keyFacts: { Währung: 'Leu', Sprache: 'Rumänisch' },
     },
     de: {
       locale: 'de',
       slug: 'bukarest',
       title: 'Bukarest im Herbst',
       excerpt: 'Ein Wochenende in der Hauptstadt.',
+      country: 'Rumänien',
       heroImage: { src: 'https://img.example.com/trips/bukarest/hero', width: 1600, height: 900, alt: 'Altstadt' },
       bodyMarkdown: '## Anreise\n\n**fett** und mehr.',
       images: {},
+      keyFacts: { Währung: 'Leu', Sprache: 'Rumänisch' },
     },
     en: {
       locale: 'en',
       slug: 'bucharest',
       title: 'Bucharest in autumn',
       excerpt: 'A weekend in the capital.',
+      country: 'Romania',
       heroImage: { src: '', width: 0, height: 0, alt: '' }, // the draft placeholder
       bodyMarkdown: 'Plain text.',
       images: {},
@@ -61,6 +63,18 @@ describe('renderPreviewHtml', () => {
     expect(html).toContain('alt="Old town"');
   });
 
+  it('renders JPEG-only body references without requesting nonexistent modern variants', async () => {
+    const p = pair();
+    const src = 'https://img.example.com/trips/bukarest/jpeg';
+    p.de.bodyMarkdown = `![JPEG](${src})`;
+    p.de.images = { [src]: { width: 1600, height: 1200, format: 'jpeg' } };
+    const html = await renderPreviewHtml(p, 'de', ORIGIN);
+    expect(html).toContain('type="image/jpeg"');
+    expect(html).toContain(`${src}-1280.jpeg`);
+    expect(html).not.toContain(`${src}-640.avif`);
+    expect(html).not.toContain(`${src}-640.webp`);
+  });
+
   it('sanitizes the body: strips <script>, inline handlers and javascript: URLs', async () => {
     const p = pair();
     p.de.bodyMarkdown = [
@@ -77,8 +91,8 @@ describe('renderPreviewHtml', () => {
   it('HTML-escapes hostile frontmatter strings (title, country, key facts, alt)', async () => {
     const p = pair();
     p.de.title = '<script>x</script>';
-    p.shared.country = '<b>evil</b>';
-    p.shared.keyFacts = { '<i>k</i>': '"v" & more' };
+    p.de.country = '<b>evil</b>';
+    p.de.keyFacts = { '<i>k</i>': '"v" & more' };
     p.de.heroImage.alt = '"><script>y</script>';
     const html = await renderPreviewHtml(p, 'de', ORIGIN);
     expect(html).not.toContain('<script>x</script>');
@@ -115,7 +129,7 @@ describe('renderPreviewHtml', () => {
       height: 900,
       alt: undefined as unknown as string, // missing 'alt' key in the jsonb
     };
-    p.shared.keyFacts = { Höhe: 42 as unknown as string }; // a number, not a string
+    p.de.keyFacts = { Höhe: 42 as unknown as string }; // a number, not a string
     const html = await renderPreviewHtml(p, 'de', ORIGIN);
     expect(html).toContain('class="hero"'); // hero still renders (dims are valid)
     expect(html).toContain('alt=""'); // undefined alt coerced to empty string
@@ -139,6 +153,16 @@ describe('renderPreviewHtml', () => {
     expect(html).toContain('alt="Altstadt"');
   });
 
+  it('renders a JPEG-only hero using only .jpeg variants', async () => {
+    const p = pair();
+    p.de.heroImage = { ...p.de.heroImage, format: 'jpeg' };
+    const html = await renderPreviewHtml(p, 'de', ORIGIN);
+    expect(html).toContain('type="image/jpeg"');
+    expect(html).toContain('https://img.example.com/trips/bukarest/hero-1280.jpeg');
+    expect(html).not.toContain('https://img.example.com/trips/bukarest/hero-640.avif');
+    expect(html).not.toContain('https://img.example.com/trips/bukarest/hero-640.webp');
+  });
+
   it('omits the hero block for the empty-src draft placeholder', async () => {
     const html = await renderPreviewHtml(pair(), 'en', ORIGIN);
     expect(html).not.toContain('class="hero"');
@@ -149,6 +173,17 @@ describe('renderPreviewHtml', () => {
     const html = await renderPreviewHtml(pair(), 'de', ORIGIN);
     expect(html).toContain('<dt>Währung</dt>');
     expect(html).toContain('<dd>Leu</dd>');
+  });
+
+  // Issue #87: country and key facts are per-locale — the EN preview must show
+  // its OWN country, never the DE row's.
+  it('shows each locale\'s own country, not the other locale\'s', async () => {
+    const de = await renderPreviewHtml(pair(), 'de', ORIGIN);
+    const en = await renderPreviewHtml(pair(), 'en', ORIGIN);
+    expect(de).toContain('Rumänien');
+    expect(en).not.toContain('Rumänien');
+    expect(en).toContain('Romania');
+    expect(de).not.toContain('Romania');
   });
 
   it('carries a draft banner and a robots noindex meta', async () => {
@@ -170,7 +205,7 @@ describe('renderPreviewHtml', () => {
     p.de.bodyMarkdown = `\`\`\`gallery\n${a}\n\`\`\``;
     p.de.images = { [a]: { width: 3000, height: 2000, alt: 'Altstadt bei Nacht', caption: 'Tag 2' } };
     const html = await renderPreviewHtml(p, 'de', ORIGIN);
-    expect(html).toContain('class="jgal not-prose"');
+    expect(html).toContain('class="jgal jgal--column not-prose"');
     expect(html).toContain('alt="Altstadt bei Nacht"');
     expect(html).toContain('Tag 2');
   });
@@ -194,6 +229,31 @@ describe('renderPreviewHtml', () => {
     const placeholder = await renderPreviewHtml(p, 'de', ORIGIN);
     expect(placeholder).not.toContain('0.0000° N');
   });
+
+  // Issue #124: the schema allows no `style`, so a preview's code block only
+  // stays coloured if the page ships the class palette the build uses.
+  it('highlights a code block through classes and ships their stylesheet', async () => {
+    const html = await renderPreviewHtml(pair({
+      de: { ...pair().de, bodyMarkdown: '```js\nconst a = 1;\n```\n\n<p style="position:fixed">x</p>' },
+    }), 'de', ORIGIN);
+    expect(html).toContain(SHIKI_CSS);
+    expect(html).toContain('<span class="sh-c-f97583">const</span>');
+    expect(html).not.toContain('style=');
+  });
+});
+
+describe('previewCsp', () => {
+  it('denies everything but self/base-origin images and the inline styles the page needs', () => {
+    const csp = previewCsp('https://img.example.com/');
+    expect(csp).toBe(
+      "default-src 'none'; img-src 'self' https://img.example.com; style-src 'unsafe-inline'; " +
+        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    );
+  });
+
+  it('reduces a base URL with a path to its origin', () => {
+    expect(previewCsp('http://localhost:3000/images')).toContain("img-src 'self' http://localhost:3000;");
+  });
 });
 
 describe('preview gallery CSS mirrors the site stylesheet', () => {
@@ -207,7 +267,10 @@ describe('preview gallery CSS mirrors the site stylesheet', () => {
   it('declares every .jgal selector that global.css does', async () => {
     const globalCss = read('../../site/src/styles/global.css');
     const previewSrc = read('../src/preview.ts');
-    const selectors = [...globalCss.matchAll(/^\.jgal[^{]*/gm)].map((m) => m[0].trim());
+    // Leading whitespace is allowed so rules nested inside @container blocks
+    // are scraped too — #66 put the stacking and slides-per-view breakpoints
+    // there, and an unindented-only scrape would have let exactly those drift.
+    const selectors = [...globalCss.matchAll(/^\s*\.jgal[^{]*/gm)].map((m) => m[0].trim());
     expect(selectors.length).toBeGreaterThan(0);
     for (const selector of selectors) expect(previewSrc).toContain(selector);
   });

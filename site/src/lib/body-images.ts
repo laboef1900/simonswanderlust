@@ -4,7 +4,15 @@ import rehypeStringify from 'rehype-stringify';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import { visit, SKIP } from 'unist-util-visit';
 import { h } from 'hastscript';
-import { srcset, fallbackSrc, variantWidths, type RemoteHeroImage } from './images.js';
+import { srcset, fallbackSrc, largestVariant, sourceFormats, type RemoteHeroImage } from './images.js';
+import {
+  BREAKOUT_WIDTH,
+  ROW_GAP,
+  containerWidthFor,
+  partitionRows,
+  readLayoutMode,
+  type GalleryMode,
+} from './gallery-layout.js';
 
 /**
  * One entry of a post/page `images` map: the intrinsic dimensions plus the
@@ -21,22 +29,59 @@ import { srcset, fallbackSrc, variantWidths, type RemoteHeroImage } from './imag
  * the build — but the assertion lives in the uploader tree, which means a
  * `site`-only check (`astro check` alone) still will not catch it.
  */
-export interface ImageDims { width: number; height: number; alt?: string; caption?: string }
+export interface ImageDims { width: number; height: number; alt?: string; caption?: string; format?: 'jpeg' }
 const SIZES = '(min-width: 768px) 720px, 100vw';
+
 /**
- * Conservative bound: the gallery grid is capped at ~3 columns inside the
- * story's `max-w-3xl` (48rem) column, so a photo is never wider than ~360 CSS
- * px on desktop. Deliberately not derived from a build-time column count —
- * the browser re-flows the grid at any width.
+ * Viewport below which the CSS container query stacks a justified row to one
+ * photo per line. MUST match the `@container` breakpoint in global.css — a
+ * disagreement only costs a wrong `sizes` hint, never a broken layout.
  */
-const GALLERY_SIZES = '(min-width: 768px) 360px, 100vw';
+const STACK_WIDTH = 600;
+
+/**
+ * `sizes` for one photo in a justified row, from the build-time partition.
+ *
+ * Three clauses, because the photo's rendered width has three regimes:
+ *  - at or above the design width the gallery stops growing, so the width is a
+ *    fixed pixel value;
+ *  - between the stack breakpoint and the design width the whole row scales,
+ *    so the photo keeps its SHARE of the container — accurate throughout, and
+ *    an over-estimate rather than an under-estimate, since the container is
+ *    narrower than the viewport;
+ *  - below the stack breakpoint each photo is full width.
+ *
+ * Deriving this per photo (rather than one conservative constant for the whole
+ * gallery) is what keeps a lone full-width panorama from being served a 640px
+ * variant while a 3-up row is served 1920px ones.
+ */
+function rowSizes(photoWidth: number, containerWidth: number): string {
+  const px = Math.round(photoWidth);
+  const share = Math.max(1, Math.round((photoWidth / containerWidth) * 100));
+  return `(min-width: ${containerWidth}px) ${px}px, (min-width: ${STACK_WIDTH}px) ${share}vw, 100vw`;
+}
+
+/**
+ * `sizes` for a slider tile. Slides per view is a fixed 3/2/1 at the
+ * breakpoints in global.css, so the tile width follows directly.
+ */
+const SLIDER_SIZES =
+  `(min-width: ${BREAKOUT_WIDTH}px) ${Math.round((BREAKOUT_WIDTH - 2 * ROW_GAP) / 3)}px, ` +
+  '(min-width: 900px) 33vw, (min-width: 600px) 50vw, 100vw';
 
 // Tuned from the GitHub-safe default: it still strips <script>, inline event
 // handlers, javascript: URLs and iframe/object/svg, but preserves the benign
 // markup Astro emits so the page doesn't visibly regress —
 //  • clobberPrefix:'' keeps heading `id`s un-prefixed so <Toc> #slug anchors resolve
 //  • `id`/`className` are allowed so heading anchors and code classes survive
-//  • `style` is allowed only on code spans (Shiki inline syntax colors)
+//
+// @ai-warning No element may allow `style` (#124). The sanitizer cannot tell
+// Shiki's `<span style>` from an author-typed one, and an author-typed
+// `style="position:fixed;inset:0;background:url(https://evil/…)"` would reach
+// every reader page (defacement + a third-party request per view) and the
+// draft preview, which is same-origin with /admin/*. Shiki's colours therefore
+// arrive as classes instead (`shiki-classes.ts`), backed by SHIKI_CSS — do not
+// re-add `style` "for one element"; extend the class mapping.
 const baseAttrs = defaultSchema.attributes ?? {};
 const BODY_SCHEMA = {
   ...defaultSchema,
@@ -44,18 +89,21 @@ const BODY_SCHEMA = {
   attributes: {
     ...baseAttrs,
     '*': [...(baseAttrs['*'] ?? []), 'id', 'className'],
-    span: [...(baseAttrs.span ?? []), 'style'],
-    code: [...(baseAttrs.code ?? []), 'className', 'style'],
-    pre: [...(baseAttrs.pre ?? []), 'className', 'style'],
   },
 };
+
+/** `<source>` nodes for exactly the formats recorded on this image. */
+function sourceNodes(image: RemoteHeroImage, sizes: string) {
+  return sourceFormats(image).map((format) =>
+    h('source', { type: `image/${format}`, srcset: srcset(image, format), sizes }),
+  );
+}
 
 /** hast <figure><picture>…</figure> mirroring BodyImage → RemoteImage output. */
 function pictureNode(image: RemoteHeroImage) {
   return h('figure', { class: 'my-8' }, [
     h('picture', [
-      h('source', { type: 'image/avif', srcset: srcset(image, 'avif'), sizes: SIZES }),
-      h('source', { type: 'image/webp', srcset: srcset(image, 'webp'), sizes: SIZES }),
+      ...sourceNodes(image, SIZES),
       h('img', {
         src: fallbackSrc(image),
         alt: image.alt,
@@ -67,12 +115,6 @@ function pictureNode(image: RemoteHeroImage) {
       }),
     ]),
   ]);
-}
-
-/** The largest variant that exists for a photo — the no-JS "open full size" target. */
-function largestVariant(image: RemoteHeroImage): string {
-  const widths = variantWidths(image.width);
-  return `${image.src}-${widths[widths.length - 1]}.webp`;
 }
 
 /**
@@ -113,9 +155,10 @@ function textOf(node: unknown): string {
  *     URL: `raw.startsWith('https://img.simonswanderlust.com')` passes both
  *     `https://img.simonswanderlust.com.evil.com/x` (origin …com.evil.com) and
  *     `https://img.simonswanderlust.com@evil.com/x` (origin https://evil.com).
- *     A `javascript:` line lands in the <a href> below and fires — and
- *     GET /posts/:tk/preview renders this same transform at author level,
- *     same-origin with /admin/* and with no CSP.
+ *     A `javascript:` line lands in the <a href> below and fires on the
+ *     public site, which carries no CSP — and GET /posts/:tk/preview renders
+ *     this same transform at author level, same-origin with /admin/*, where
+ *     its deny-by-default CSP (#124) is a backstop, not a substitute.
  *  2. alt/caption are coerced with String(). The images map is untyped JSON,
  *     and hastscript treats a node-shaped object in a children array AS A NODE
  *     — `{type:'raw', value:'<script>…'}` would emit a live script tag,
@@ -124,19 +167,22 @@ function textOf(node: unknown): string {
  *
  * Nothing disappears silently: a URL with no `images` entry is skipped, and if
  * that leaves the gallery empty the caller keeps the original sanitized <pre>.
+ *
+ * @ai-warning The `<a href>` below is exactly the sink guard 1 exists for, and
+ * #66 made it load-bearing twice over: the lightbox island reads that href back
+ * out of the DOM. Every photo reaching the item builder has already passed all
+ * three guards — do not move item construction above them, and do not relax
+ * them for a layout mode.
  */
-function galleryNode(
+type GalleryPhoto = { image: RemoteHeroImage; caption: string };
+
+/** Photos a fence resolves to, in order, after the three guards above. */
+function galleryPhotos(
   fenceText: string,
   images: Record<string, ImageDims>,
-  imageOrigin: string,
-): ReturnType<typeof h> | null {
-  let allowedOrigin: string;
-  try {
-    allowedOrigin = new URL(imageOrigin).origin;
-  } catch {
-    return null; // no usable origin ⇒ allow nothing
-  }
-  const items: ReturnType<typeof h>[] = [];
+  allowedOrigin: string,
+): GalleryPhoto[] {
+  const photos: GalleryPhoto[] = [];
   for (const line of fenceText.split('\n')) {
     // Tolerate the export format's `url | 3000x2000 | alt="…"` trailing
     // metadata: normalizeBodyImages lifts it into `images` on save, but a body
@@ -152,32 +198,116 @@ function galleryNode(
     const w = d.width;
     const hgt = d.height;
     if (!Number.isInteger(w) || w <= 0 || !Number.isInteger(hgt) || hgt <= 0) continue;
+    if (d.format !== undefined && d.format !== 'jpeg') continue;
     const alt = String(d.alt ?? '');
     const caption = String(d.caption ?? '');
-    const image: RemoteHeroImage = { src: raw, alt, width: w, height: hgt };
-    items.push(h('figure', { class: 'jgal__item' }, [
-      h('a', { href: largestVariant(image) }, [
-        h('picture', [
-          h('source', { type: 'image/avif', srcset: srcset(image, 'avif'), sizes: GALLERY_SIZES }),
-          h('source', { type: 'image/webp', srcset: srcset(image, 'webp'), sizes: GALLERY_SIZES }),
-          h('img', {
-            src: fallbackSrc(image),
-            alt,
-            width: w,
-            height: hgt,
-            loading: 'lazy',
-            decoding: 'async',
-          }),
-        ]),
-      ]),
-      ...(caption === '' ? [] : [h('figcaption', { class: 'jgal__cap' }, caption)]),
-    ]));
+    photos.push({
+      image: { src: raw, alt, width: w, height: hgt, ...(d.format === 'jpeg' ? { format: d.format } : {}) },
+      caption,
+    });
   }
-  if (items.length === 0) return null;
-  // `not-prose` opts the grid out of @tailwindcss/typography, which would
+  return photos;
+}
+
+/** One `<figure>` — the same item markup in every layout mode. */
+function itemNode(
+  { image, caption }: GalleryPhoto,
+  sizes: string,
+  style?: string,
+): ReturnType<typeof h> {
+  return h('figure', { class: 'jgal__item', ...(style ? { style } : {}) }, [
+    h('a', { href: largestVariant(image) }, [
+      h('picture', [
+        ...sourceNodes(image, sizes),
+        h('img', {
+          src: fallbackSrc(image),
+          alt: image.alt,
+          width: image.width,
+          height: image.height,
+          loading: 'lazy',
+          decoding: 'async',
+        }),
+      ]),
+    ]),
+    ...(caption === '' ? [] : [h('figcaption', { class: 'jgal__cap' }, caption)]),
+  ]);
+}
+
+/** `breakout` / `column`: photos partitioned into justified rows that stack to a square, at build time. */
+function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 'slider'>) {
+  const width = containerWidthFor(mode);
+  const rows = partitionRows(photos.map((p) => p.image.width / p.image.height), width);
+  // @ai-note Photos are re-associated with their ratios BY POSITION, which is
+  // only sound because partitionRows cannot drop one here: galleryPhotos has
+  // already rejected any photo whose width/height are not positive integers, so
+  // every ratio is finite and positive and the partition's own guard never
+  // fires. Feed it unvalidated dimensions and this slicing silently pairs each
+  // photo with the wrong ratio from that point on.
+  let taken = 0;
+  return rows.map((row) => {
+    const slice = photos.slice(taken, taken + row.ratios.length);
+    taken += row.ratios.length;
+    const rowWidth = (row.maxWidthFraction ?? 1) * width;
+    const gaps = (row.ratios.length - 1) * ROW_GAP;
+    const height = (rowWidth - gaps) / row.ratios.reduce((a, r) => a + r, 0);
+    // A PERCENTAGE, not pixels, and only on a row that would stand taller
+    // than the square is wide. See GalleryRow.maxWidthFraction.
+    const cap = row.maxWidthFraction;
+    return h(
+      'div',
+      { class: 'jgal__row', ...(cap === null ? {} : { style: `--jgal-maxw:${(cap * 100).toFixed(2)}%` }) },
+      slice.map((photo, i) => {
+        const ratio = row.ratios[i] ?? 1;
+        // `--r` drives `flex: calc(var(--r) * 100) 1 0`. The `* 100` is in the
+        // CSS, not here: flex-grow values summing below 1 leave part of the row
+        // unfilled (a lone portrait rendered 808px instead of 1112px).
+        return itemNode(photo, rowSizes(ratio * height, width), `--r:${ratio.toFixed(4)}`);
+      }),
+    );
+  });
+}
+
+/**
+ * `slider`: a scroll-snap track of uniform tiles.
+ *
+ * @ai-note This mode CROPS — uniform tiles cannot preserve aspect ratio, which
+ * is the opposite of what the justified modes exist to do. That is a deliberate
+ * trade-off for a conventional carousel feel, and the reason the slider is one
+ * mode of three rather than the only layout. Do not "fix" it by restoring
+ * intrinsic ratios; that just makes it a worse justified row.
+ *
+ * The track is keyboard-scrollable on its own (`tabindex="0"` + `overflow-x`),
+ * so the slider works with JavaScript off. The buttons ship `hidden` and are
+ * revealed — and named — by the island, which is also why they are absolutely
+ * positioned: neither state may move the layout, or CLS comes back.
+ */
+function sliderNode(photos: GalleryPhoto[]) {
+  return [
+    h('div', { class: 'jgal__track', tabindex: '0' }, photos.map((p) => itemNode(p, SLIDER_SIZES))),
+    h('button', { type: 'button', class: 'jgal__nav jgal__nav--prev', hidden: true, 'data-jgal-nav': 'prev' }, '‹'),
+    h('button', { type: 'button', class: 'jgal__nav jgal__nav--next', hidden: true, 'data-jgal-nav': 'next' }, '›'),
+  ];
+}
+
+function galleryNode(
+  fenceText: string,
+  images: Record<string, ImageDims>,
+  imageOrigin: string,
+): ReturnType<typeof h> | null {
+  let allowedOrigin: string;
+  try {
+    allowedOrigin = new URL(imageOrigin).origin;
+  } catch {
+    return null; // no usable origin ⇒ allow nothing
+  }
+  const photos = galleryPhotos(fenceText, images, allowedOrigin);
+  if (photos.length === 0) return null;
+  const mode = readLayoutMode(fenceText);
+  const children = mode === 'slider' ? sliderNode(photos) : justifiedRows(photos, mode);
+  // `not-prose` opts the gallery out of @tailwindcss/typography, which would
   // otherwise apply its own figure/figcaption margins inside StoryPage's
-  // `prose` article and fight the grid gap.
-  return h('div', { class: 'jgal not-prose' }, items);
+  // `prose` article and fight the row arithmetic.
+  return h('div', { class: `jgal jgal--${mode} not-prose` }, children);
 }
 
 /**
@@ -219,8 +349,12 @@ export function transformBodyImages(
         const src = imgNode.properties?.src as string | undefined;
         if (src && images[src]) {
           const d = images[src];
+          if (d.format !== undefined && d.format !== 'jpeg') return;
           const alt = (imgNode.properties?.alt as string) ?? '';
-          parent.children[index] = pictureNode({ src, alt, width: d.width, height: d.height });
+          parent.children[index] = pictureNode({
+            src, alt, width: d.width, height: d.height,
+            ...(d.format === 'jpeg' ? { format: d.format } : {}),
+          });
           return SKIP;
         }
       }
@@ -230,9 +364,57 @@ export function transformBodyImages(
       const src = node.properties?.src as string | undefined;
       if (!src || !images[src]) return;
       const d = images[src];
+      if (d.format !== undefined && d.format !== 'jpeg') return;
       const alt = (node.properties?.alt as string) ?? '';
-      parent.children[index] = pictureNode({ src, alt, width: d.width, height: d.height });
+      parent.children[index] = pictureNode({
+        src, alt, width: d.width, height: d.height,
+        ...(d.format === 'jpeg' ? { format: d.format } : {}),
+      });
     }
   });
   return unified().use(rehypeStringify, { allowDangerousHtml: true }).stringify(tree);
+}
+
+/** Candidate URLs of a `srcset` (hast gives a comma-list as an array or a string). */
+function srcsetUrls(value: unknown): string[] {
+  const parts = Array.isArray(value) ? value.map(String) : typeof value === 'string' ? value.split(',') : [];
+  return parts.map((c) => c.trim().split(/\s+/, 1)[0] ?? '').filter((u) => u !== '');
+}
+
+/**
+ * Every image source the SANITIZED body would load, read from the same hast
+ * tree `transformBodyImages` starts from, BEFORE any `images` resolution:
+ * the `src`/`srcset` of every `<img>` and `<source>` (a raw `<picture>` is
+ * allowed through by the schema), plus the raw photo lines of every gallery
+ * fence exactly as `galleryPhotos` would read them.
+ *
+ * @ai-context The uploader's publish gate (#91, `uploader/src/publish-gate.ts`)
+ * refuses a foreign origin in either list: the renderer would hot-link the
+ * first kind and silently drop the second. It reads from THIS tree so that the
+ * gate and the renderer cannot disagree about what an image is — a regex over
+ * the serialized HTML did (attribute values keep a raw `>`, `<pre>` may carry
+ * `id`/whitespace) and a Markdown text scanner did worse.
+ */
+export function bodyImageSources(html: string): { sources: string[]; galleryLines: string[] } {
+  const parser = unified().use(rehypeParse, { fragment: true }).use(rehypeSanitize, BODY_SCHEMA);
+  const tree = parser.runSync(parser.parse(html));
+  const sources: string[] = [];
+  const galleryLines: string[] = [];
+  visit(tree, 'element', (node) => {
+    if (node.tagName === 'pre') {
+      const code = galleryCode(node);
+      if (!code) return;
+      for (const line of textOf(code).split('\n')) {
+        const raw = (line.split('|', 1)[0] ?? '').trim();
+        if (raw !== '' && !raw.startsWith('#')) galleryLines.push(raw);
+      }
+      return SKIP;
+    }
+    if (node.tagName === 'img' || node.tagName === 'source') {
+      const src = node.properties?.src;
+      if (typeof src === 'string' && src !== '') sources.push(src);
+      sources.push(...srcsetUrls(node.properties?.srcSet));
+    }
+  });
+  return { sources, galleryLines };
 }

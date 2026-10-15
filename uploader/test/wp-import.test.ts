@@ -1,26 +1,141 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { importWxr } from '../src/wp-import.js';
-import { memoryPostStore } from '../src/posts.js';
+import sharp from 'sharp';
+import { importWxr, prepareImport, rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, DEFAULT_MAX_IMAGES, type ImportDeps } from '../src/wp-import.js';
+import { memoryPostStore, PostError, type PostStore } from '../src/posts.js';
+import { createRehostResume, rehostImage, type RehostResult } from '../src/wp-images.js';
+import { FetchError, type LookupFn } from '../src/safe-fetch.js';
 
 const xml = readFileSync(join(process.cwd(), 'test/fixtures/wxr-sample.xml'), 'utf8');
 const stubRehost = async (_url: string, _key: string, _alt: string) => ({ src: 'https://img/x', width: 100, height: 80 });
+/** safeFetch resolves every hostname (#93); the stub hosts here have no DNS. */
+const publicLookup: LookupFn = async () => [{ address: '93.184.216.34', family: 4 }];
+
+// ---- WXR builders for the hardening suites (issue #85) -------------------
+// Deliberately WITHOUT a `_thumbnail_id`, so every fetch in these tests is a
+// body image: the hero slot is never resumed (see wp-images.test.ts) and would
+// otherwise add an untracked fetch to every assertion.
+
+const wxr = (items: string): string => `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/"
+  xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/"
+  xmlns:wp="http://wordpress.org/export/1.2/">
+<channel>
+${items}
+</channel>
+</rss>`;
+
+const item = (loc: 'de' | 'en', slug: string, group: string, html: string): string => `  <item>
+    <title>${slug}</title>
+    <wp:post_name><![CDATA[${slug}]]></wp:post_name>
+    <wp:post_type><![CDATA[post]]></wp:post_type>
+    <wp:status><![CDATA[publish]]></wp:status>
+    <wp:post_date><![CDATA[2021-07-25 00:00:00]]></wp:post_date>
+    <excerpt:encoded><![CDATA[]]></excerpt:encoded>
+    <content:encoded><![CDATA[${html}]]></content:encoded>
+    <category domain="language" nicename="${loc}"><![CDATA[${loc}]]></category>
+    <category domain="post_translations" nicename="${group}"><![CDATA[${group}]]></category>
+  </item>`;
+
+const imgs = (...urls: string[]): string => urls.map((u) => `<img src="${u}" alt="a" />`).join('');
+
+const pairOf = (
+  group: string, deSlug: string, enSlug: string, deHtml: string, enHtml = '<p>x</p>',
+): string => wxr(`${item('de', deSlug, group, deHtml)}\n${item('en', enSlug, group, enHtml)}`);
+
+/** A pair WITH a featured image, so the hero slot is exercised. */
+const pairWithHero = (heroUrl: string, deImgs: string[]): string => wxr([
+  `  <item>
+    <title>hero</title>
+    <wp:post_id><![CDATA[900]]></wp:post_id>
+    <wp:post_type><![CDATA[attachment]]></wp:post_type>
+    <wp:status><![CDATA[inherit]]></wp:status>
+    <wp:attachment_url><![CDATA[${heroUrl}]]></wp:attachment_url>
+  </item>`,
+  item('de', 'de-1', 'gh', imgs(...deImgs)).replace(
+    '\n  </item>',
+    '\n    <wp:postmeta><wp:meta_key><![CDATA[_thumbnail_id]]></wp:meta_key><wp:meta_value><![CDATA[900]]></wp:meta_value></wp:postmeta>\n  </item>',
+  ),
+  item('en', 'en-1', 'gh', '<p>x</p>'),
+].join('\n'));
+
+/**
+ * A fake clock, a recording `sleep`, and a scriptable `rehost`.
+ *
+ * `sleep` advances the clock, so the elapsed gate composes exactly as it does in
+ * production. No fake timers: there is one `vi.useFakeTimers()` in this whole
+ * tree and nothing keeps real fs/sharp/pg work ticking under it.
+ */
+function harness(opts: { fail?: (url: string, attempt: number) => unknown; costMs?: number } = {}) {
+  const order: string[] = [];
+  const calls: string[] = [];
+  const keys: string[] = [];
+  const sleeps: number[] = [];
+  const attempts = new Map<string, number>();
+  let clock = 0;
+  return {
+    order, calls, keys, sleeps,
+    now: () => clock,
+    sleep: async (ms: number) => { order.push(`sleep:${ms}`); sleeps.push(ms); clock += ms; },
+    rehost: async (url: string, key: string, _alt: string): Promise<RehostResult> => {
+      const n = attempts.get(url) ?? 0;
+      attempts.set(url, n + 1);
+      order.push(`fetch:${url}`);
+      calls.push(url);
+      keys.push(key);
+      clock += opts.costMs ?? 0;
+      const err = opts.fail?.(url, n);
+      if (err) throw err;
+      return { src: `https://img/${key}`, width: 100, height: 80 };
+    },
+  };
+}
+
+/** The URL a re-hosted photo of the post at `slug` is served from (issue #98 key shape). */
+const SRC = (slug: string, url: string): string => `https://img/${rehostKey(slug, url)}`;
+
+const run = (
+  body: string, h: ReturnType<typeof harness>, extra: Partial<ImportDeps> = {}, store: PostStore = memoryPostStore(),
+) => importWxr(body, {
+  postStore: store, storageDir: '/tmp', baseUrl: 'https://img',
+  rehost: h.rehost, sleep: h.sleep, now: h.now, delayMs: 0, retries: 0, ...extra,
+});
 
 describe('importWxr', () => {
   it('creates a draft pair with preserved slugs, placeholders, and re-hosted images', async () => {
     const store = memoryPostStore();
     const s = await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
-    expect(s).toMatchObject({ imported: 1, updated: 0, skipped: 0 });
+    expect(s).toMatchObject({ imported: 1, updated: 0, skippedPublished: 0, rejected: 0, failed: 0 });
     const list = await store.list();
     const first = list[0]!;
     expect(first).toMatchObject({ slugDe: 'rhodos-abenteuer', slugEn: 'rhodes-adventure', status: 'draft' });
     const pair = await store.get(first.translationKey);
-    expect(pair!.shared).toMatchObject({ date: '2021-07-25', country: '', countryCode: 'XX', region: 'europe' });
+    expect(pair!.shared).toMatchObject({ date: '2021-07-25', countryCode: 'XX', region: 'europe' });
+    // country is per-locale and left blank for the author to fill in per language.
+    expect(pair!.de.country).toBe('');
+    expect(pair!.en.country).toBe('');
     expect(pair!.de.heroImage.src).toBe('https://img/x');
     expect(pair!.de.bodyMarkdown).toContain('## Überschrift');
     expect(pair!.de.bodyMarkdown).toContain('![Strand](https://img/x)'); // body image rewritten
     expect(pair!.de.images['https://img/x']).toEqual({ width: 100, height: 80 });
+  });
+
+  it('preserves JPEG format through imported hero and body metadata', async () => {
+    const store = memoryPostStore();
+    await importWxr(xml, {
+      postStore: store, storageDir: '/tmp', baseUrl: 'https://img',
+      rehost: async () => ({ src: 'https://img/jpeg', width: 100, height: 80, format: 'jpeg' }),
+    });
+    const summary = (await store.list())[0]!;
+    const pair = await store.get(summary.translationKey);
+    expect(pair?.de.heroImage).toMatchObject({ src: 'https://img/jpeg', format: 'jpeg' });
+    expect(pair?.de.images['https://img/jpeg']).toMatchObject({
+      width: 100, height: 80, format: 'jpeg',
+    });
   });
 
   it('rewrites all occurrences of a duplicated body image ref', async () => {
@@ -66,7 +181,92 @@ describe('importWxr', () => {
     expect(deBody).not.toContain('https://wp/dup.jpg');
   });
 
-  it('skips a group whose slug is unsafe (path-traversal defense) without storing it', async () => {
+  it('re-hosts every photo of an Elementor gallery and keeps its lightbox title as alt', async () => {
+    const anchor = (href: string, title: string) =>
+      `<a href="${href}" data-elementor-open-lightbox="yes" data-elementor-lightbox-slideshow="g1" data-elementor-lightbox-title="${title}"></a>`;
+    const body = `<p>Intro</p>${anchor('https://wp/one.jpg', 'Hoatzin')}${anchor('https://wp/two.jpg', 'Kingfisher')}`;
+    const galleryXml = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/"
+  xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/"
+  xmlns:wp="http://wordpress.org/export/1.2/">
+<channel>
+${['de', 'en']
+  .map(
+    (loc) => `  <item>
+    <title>Gal ${loc}</title>
+    <wp:post_name><![CDATA[gal-${loc}]]></wp:post_name>
+    <wp:post_type><![CDATA[post]]></wp:post_type>
+    <wp:status><![CDATA[publish]]></wp:status>
+    <wp:post_date><![CDATA[2021-07-25 00:00:00]]></wp:post_date>
+    <excerpt:encoded><![CDATA[]]></excerpt:encoded>
+    <content:encoded><![CDATA[${body}]]></content:encoded>
+    <category domain="language" nicename="${loc}"><![CDATA[${loc}]]></category>
+    <category domain="post_translations" nicename="pll_gal"><![CDATA[pll_gal]]></category>
+  </item>`,
+  )
+  .join('\n')}
+</channel>
+</rss>`;
+    const seen: string[] = [];
+    const rehost = async (url: string, _key: string, _alt: string) => {
+      seen.push(url);
+      return { src: `https://img/${url.endsWith('one.jpg') ? 'one' : 'two'}`, width: 640, height: 480 };
+    };
+    const store = memoryPostStore();
+    await importWxr(galleryXml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost });
+
+    // a photo shared by both translations is fetched and encoded ONCE
+    expect(seen.filter((u) => u === 'https://wp/one.jpg')).toHaveLength(1);
+    expect(seen.filter((u) => u === 'https://wp/two.jpg')).toHaveLength(1);
+
+    const pair = (await store.get((await store.list())[0]!.translationKey))!;
+    const de = pair.de.bodyMarkdown;
+    expect(de).not.toContain('https://wp/');            // no WordPress URL survives
+    expect(de).toContain('```gallery\nhttps://img/one\nhttps://img/two\n```'); // normalized to bare URLs
+    expect(pair.de.images['https://img/one']).toEqual({ width: 640, height: 480, alt: 'Hoatzin' });
+    expect(pair.de.images['https://img/two']).toEqual({ width: 640, height: 480, alt: 'Kingfisher' });
+    // ...and both locales point at that single copy
+    expect(pair.en.bodyMarkdown).toContain('```gallery\nhttps://img/one\nhttps://img/two\n```');
+    expect(pair.en.images['https://img/one']).toEqual({ width: 640, height: 480, alt: 'Hoatzin' });
+  });
+
+  it('stores a shared photo under one key, taken from the locale processed first', async () => {
+    const anchor = (href: string) =>
+      `<a href="${href}" data-elementor-lightbox-slideshow="g1" data-elementor-lightbox-title="t"></a>`;
+    const xmlPair = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/"
+  xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/"
+  xmlns:wp="http://wordpress.org/export/1.2/">
+<channel>
+${['de', 'en']
+  .map(
+    (loc) => `  <item>
+    <title>K ${loc}</title>
+    <wp:post_name><![CDATA[key-${loc}]]></wp:post_name>
+    <wp:post_type><![CDATA[post]]></wp:post_type>
+    <wp:status><![CDATA[publish]]></wp:status>
+    <wp:post_date><![CDATA[2021-07-25 00:00:00]]></wp:post_date>
+    <excerpt:encoded><![CDATA[]]></excerpt:encoded>
+    <content:encoded><![CDATA[${anchor('https://wp/shared.jpg')}]]></content:encoded>
+    <category domain="language" nicename="${loc}"><![CDATA[${loc}]]></category>
+    <category domain="post_translations" nicename="pll_k"><![CDATA[pll_k]]></category>
+  </item>`,
+  )
+  .join('\n')}
+</channel>
+</rss>`;
+    const keys: string[] = [];
+    const store = memoryPostStore();
+    await importWxr(xmlPair, {
+      postStore: store, storageDir: '/tmp', baseUrl: 'https://img',
+      rehost: async (_u, key) => { keys.push(key); return { src: 'https://img/s', width: 1, height: 1 }; },
+    });
+    expect(keys).toEqual([rehostKey('key-de', 'https://wp/shared.jpg')]);
+  });
+
+  it('rejects a group whose slug is unsafe (path-traversal defense) without storing it', async () => {
     const evilXml = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"
   xmlns:content="http://purl.org/rss/1.0/modules/content/"
@@ -101,7 +301,7 @@ describe('importWxr', () => {
     const rehostSpy = async () => { throw new Error('rehost must not be called for an unsafe slug'); };
     const s = await importWxr(evilXml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: rehostSpy });
     expect(s.imported).toBe(0);
-    expect(s.skipped).toBe(1);
+    expect(s).toMatchObject({ updated: 0, skippedPublished: 0, rejected: 1, failed: 0 });
     expect(s.warnings.join(' ')).toMatch(/slug/i);
     expect(await store.list()).toHaveLength(0);
   });
@@ -110,13 +310,1137 @@ describe('importWxr', () => {
     const store = memoryPostStore();
     await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
     const again = await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
-    expect(again).toMatchObject({ imported: 0, updated: 1 });
+    expect(again).toMatchObject({ imported: 0, updated: 1, skippedPublished: 0, rejected: 0, failed: 0 });
     expect(await store.list()).toHaveLength(1);
-    // publish it, then re-import → skipped, content untouched
+    // publish it, then re-import → skippedPublished, content untouched
     const tk = (await store.list())[0]!.translationKey;
     await store.publish(tk);
     const third = await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
-    expect(third.skipped).toBe(1);
+    expect(third).toMatchObject({ imported: 0, updated: 0, skippedPublished: 1, rejected: 0, failed: 0 });
     expect(third.warnings.join(' ')).toMatch(/published/);
+  });
+});
+
+/**
+ * Issue #99: pair identity is the (DE slug, EN slug) tuple matched as a unit.
+ * A single slug matched across locales is never a binding — and because the
+ * image storage keys (`trips/<slug>/…`) carry no locale, a cross-locale
+ * namesake is not admitted as a new pair either: it would write its photos over
+ * the existing post's variant files.
+ */
+describe('importWxr pair identity', () => {
+  const seed = async (store: PostStore, deSlug: string, enSlug: string) => importWxr(
+    pairOf('seed', deSlug, enSlug, '<p>original de</p>', '<p>original en</p>'),
+    { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost },
+  );
+  const rehostSpy = async () => { throw new Error('rehost must not be called for a conflicting group'); };
+
+  it('rejects a group whose EN slug equals an unrelated post\'s DE slug, fetching and writing nothing', async () => {
+    const store = memoryPostStore();
+    await seed(store, 'rhodos', 'rhodes-adventure');       // existing DE slug "rhodos"
+    const s = await importWxr(pairOf('g2', 'rhodos-2', 'rhodos', imgs('https://wp/hero.jpg'), '<p>new en</p>'), // incoming EN slug "rhodos"
+      { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: rehostSpy });
+    expect(s).toMatchObject({ imported: 0, updated: 0, skippedPublished: 0, rejected: 1, failed: 0 });
+    expect(s.warnings.join(' ')).toMatch(/slug conflict with an existing post \(rhodos\/rhodes-adventure\)/);
+    const posts = await store.list();
+    expect(posts).toHaveLength(1);
+    const original = (await store.get(posts[0]!.translationKey))!;
+    expect(original.en.slug).toBe('rhodes-adventure');
+    expect(original.de.bodyMarkdown).toContain('original de');
+  });
+
+  it('never binds a published post\'s protection to a cross-locale namesake (rejected, not skippedPublished)', async () => {
+    const store = memoryPostStore();
+    await seed(store, 'rhodos', 'rhodes-adventure');
+    await store.publish((await store.list())[0]!.translationKey);
+    const s = await importWxr(pairOf('g2', 'rhodos-2', 'rhodos', '<p>new de</p>'),
+      { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: rehostSpy });
+    expect(s).toMatchObject({ imported: 0, rejected: 1, skippedPublished: 0 });
+  });
+
+  it('rejects a group whose slug is already claimed by an earlier group in the same export', async () => {
+    const store = memoryPostStore();
+    const s = await importWxr(wxr([
+      item('de', 'rhodos', 'g1', '<p>a</p>'), item('en', 'rhodes', 'g1', '<p>a</p>'),
+      item('de', 'kreta', 'g2', '<p>b</p>'), item('en', 'rhodos', 'g2', '<p>b</p>'), // EN "rhodos" = g1's DE slug
+    ].join('\n')), { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
+    expect(s).toMatchObject({ imported: 1, rejected: 1 });
+    expect(s.warnings.join(' ')).toMatch(/kreta\/rhodos: slug conflict within this export \(also used by rhodos\/rhodes\)/);
+    expect((await store.list()).map((p) => `${p.slugDe}/${p.slugEn}`)).toEqual(['rhodos/rhodes']);
+  });
+
+  it('accepts a pair whose DE and EN slugs are the same word (one trip, one namespace)', async () => {
+    const store = memoryPostStore();
+    const s = await seed(store, 'rhodos', 'rhodos');
+    expect(s).toMatchObject({ imported: 1, rejected: 0 });
+    expect(await seed(store, 'rhodos', 'rhodos')).toMatchObject({ updated: 1, rejected: 0 });
+  });
+
+  it('re-binds only when BOTH slugs match one existing pair', async () => {
+    const store = memoryPostStore();
+    await seed(store, 'rhodos', 'rhodes-adventure');
+    const tk = (await store.list())[0]!.translationKey;
+    const s = await seed(store, 'rhodos', 'rhodes-adventure');
+    expect(s).toMatchObject({ imported: 0, updated: 1, rejected: 0 });
+    expect((await store.list()).map((p) => p.translationKey)).toEqual([tk]);
+  });
+
+  it('rejects a group whose two slugs belong to two different existing pairs, writing nothing', async () => {
+    const store = memoryPostStore();
+    await seed(store, 'rhodos', 'rhodes-adventure');
+    await importWxr(pairOf('seed2', 'kreta', 'crete', '<p>original de</p>'), { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
+    const rehostSpy = async () => { throw new Error('rehost must not be called for a conflicting group'); };
+    const s = await importWxr(pairOf('g3', 'rhodos', 'crete', imgs('https://wp/a.jpg')),
+      { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: rehostSpy });
+    expect(s).toMatchObject({ imported: 0, updated: 0, skippedPublished: 0, rejected: 1, failed: 0 });
+    expect(s.warnings.join(' ')).toMatch(/slug conflict/);
+    const posts = await store.list();
+    expect(posts.map((p) => `${p.slugDe}/${p.slugEn}`).sort()).toEqual(['kreta/crete', 'rhodos/rhodes-adventure']);
+    for (const p of posts) expect((await store.get(p.translationKey))!.de.bodyMarkdown).toContain('original de');
+  });
+
+  it('rejects a partial match rather than renaming the other locale\'s live slug', async () => {
+    const store = memoryPostStore();
+    await seed(store, 'rhodos', 'rhodes-adventure');
+    const s = await importWxr(pairOf('g4', 'rhodos', 'rhodes', '<p>new de</p>'), { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
+    expect(s).toMatchObject({ imported: 0, updated: 0, rejected: 1, failed: 0 });
+    const only = (await store.list());
+    expect(only).toHaveLength(1);
+    expect(only[0]).toMatchObject({ slugDe: 'rhodos', slugEn: 'rhodes-adventure' });
+  });
+});
+
+/**
+ * Issue #126: a re-run over an existing draft is a URL substitution over the
+ * author's stored pair, not a rebuild from the export — unless `overwriteDrafts`.
+ *
+ * @ai-context docs/superpowers/specs/2026-09-05-wxr-import-merge-existing-drafts-design.md
+ */
+describe('importWxr re-run merge', () => {
+  // First run: b.jpg fails (hot-link left behind); second run: everything succeeds.
+  const flaky = (failFirst: string) => {
+    let run = 0;
+    const h = harness({ fail: (u) => (run === 0 && u.includes(failFirst) ? new FetchError('x', 'network') : null) });
+    return { h, nextRun: () => { run++; } };
+  };
+  const html = '<p>Intro</p>' + imgs('https://wp/a.jpg', 'https://wp/b.jpg')
+    + '<a href="https://wp/g1.jpg" data-elementor-lightbox-slideshow="s" data-elementor-lightbox-title="G1"></a>'
+    + '<a href="https://wp/g2.jpg" data-elementor-lightbox-slideshow="s"></a>';
+  const export1 = pairOf('g', 'de-1', 'en-1', html, '<p>en</p>');
+
+  /** Import once, then edit the draft the way an author would. */
+  async function seeded(store: PostStore, h: ReturnType<typeof harness>) {
+    await run(export1, h, {}, store);
+    const tk = (await store.list())[0]!.translationKey;
+    const p = (await store.get(tk))!;
+    expect(p.de.bodyMarkdown).toContain('![a](https://wp/b.jpg)'); // still hot-linked after run 1
+    await store.upsertDraft({
+      ...p,
+      shared: { ...p.shared, countryCode: 'GR', region: 'europe', coordinates: { lat: 36.4, lng: 28.2 }, stops: [{ name: 'Lindos', lat: 36.09, lng: 28.08 }] },
+      de: {
+        ...p.de, country: 'Griechenland', title: 'Rhodos, endlich', excerpt: 'Neu', keyFacts: { Dauer: '4 Tage' },
+        heroImage: { src: 'https://img/authors-pick', width: 10, height: 20, alt: 'Mein Held' },
+        bodyMarkdown: p.de.bodyMarkdown
+          .replace('Intro', 'Eine bessere Einleitung')
+          .replace(`![a](${SRC('de-1', 'https://wp/a.jpg')})`, '') // author removed photo a
+          .replace('![a](https://wp/b.jpg)', '![Strand bei Nacht](https://wp/b.jpg)'), // author wrote alt on the hot-link
+      },
+    });
+    return tk;
+  }
+
+  it('keeps the author\'s shared and locale fields, body edits and hero; swaps in only the recovered photo', async () => {
+    const store = memoryPostStore();
+    const { h, nextRun } = flaky('b.jpg');
+    const tk = await seeded(store, h);
+    nextRun();
+    const s = await run(export1, h, {}, store);
+    expect(s).toMatchObject({ imported: 0, updated: 1, rejected: 0, failed: 0 });
+    const p = (await store.get(tk))!;
+    expect(p.shared).toMatchObject({ countryCode: 'GR', coordinates: { lat: 36.4, lng: 28.2 }, stops: [{ name: 'Lindos' }] });
+    expect(p.de).toMatchObject({ country: 'Griechenland', title: 'Rhodos, endlich', excerpt: 'Neu', keyFacts: { Dauer: '4 Tage' } });
+    expect(p.de.heroImage).toEqual({ src: 'https://img/authors-pick', width: 10, height: 20, alt: 'Mein Held' });
+    const body = p.de.bodyMarkdown;
+    expect(body).toContain('Eine bessere Einleitung');
+    expect(body).not.toContain(rehostKey('de-1', 'https://wp/a.jpg'));       // removed photo stays removed
+    expect(body).toContain(`![Strand bei Nacht](${SRC('de-1', 'https://wp/b.jpg')})`); // hot-link healed, author's alt kept
+    expect(body).not.toContain('https://wp/');
+    expect(p.de.images).toMatchObject({
+      [SRC('de-1', 'https://wp/b.jpg')]: { width: 100, height: 80 },
+      [SRC('de-1', 'https://wp/g1.jpg')]: { width: 100, height: 80 }, // pre-existing entry kept
+    });
+  });
+
+  it('fills an empty hero slot from the export on re-run, keeping the author\'s alt', async () => {
+    const store = memoryPostStore();
+    const { h, nextRun } = flaky('hero.jpg');
+    await run(pairWithHero('https://wp/hero.jpg', ['https://wp/body.jpg']), h, {}, store);
+    const tk = (await store.list())[0]!.translationKey;
+    const p = (await store.get(tk))!;
+    expect(p.de.heroImage.src).toBe('');
+    await store.upsertDraft({ ...p, de: { ...p.de, heroImage: { ...p.de.heroImage, alt: 'Alt vom Autor' } } });
+    nextRun();
+    await run(pairWithHero('https://wp/hero.jpg', ['https://wp/body.jpg']), h, {}, store);
+    expect((await store.get(tk))!.de.heroImage).toEqual({ src: 'https://img/trips/de-1/hero', width: 100, height: 80, alt: 'Alt vom Autor' });
+  });
+
+  it('rebuilds the pair from the export when overwriteDrafts is set', async () => {
+    const store = memoryPostStore();
+    const { h, nextRun } = flaky('b.jpg');
+    const tk = await seeded(store, h);
+    nextRun();
+    const s = await run(export1, h, { overwriteDrafts: true }, store);
+    expect(s).toMatchObject({ updated: 1 });
+    const p = (await store.get(tk))!;
+    expect(p.shared).toMatchObject({ countryCode: 'XX', coordinates: { lat: 0, lng: 0 } });
+    expect(p.de.country).toBe('');
+    expect(p.de.heroImage.src).toBe('');
+    expect(p.de.bodyMarkdown).toContain('Intro');
+    expect(p.de.bodyMarkdown).toContain(`![a](${SRC('de-1', 'https://wp/a.jpg')})`);
+  });
+
+  it('still fetches exactly the export\'s photo set on a merge run (the #96 count is unchanged)', async () => {
+    const store = memoryPostStore();
+    const { h, nextRun } = flaky('b.jpg');
+    await seeded(store, h);
+    nextRun();
+    h.calls.length = 0;
+    const s = await run(export1, h, { maxImages: 4 }, store);
+    expect(h.calls.sort()).toEqual(['https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/g1.jpg', 'https://wp/g2.jpg']);
+    expect(s.images).toEqual({ total: 4, hosted: 4, failed: 0 });
+  });
+
+  it('carries the author\'s gallery alt/caption from the hot-linked key to the healed URL', async () => {
+    const store = memoryPostStore();
+    const { h, nextRun } = flaky('g2.jpg');
+    await run(export1, h, {}, store);
+    const tk = (await store.list())[0]!.translationKey;
+    const p = (await store.get(tk))!;
+    // The author annotates the still-hot-linked gallery line; the store lifts
+    // the metadata into images[<wp url>] and leaves a bare URL on the line.
+    await store.upsertDraft({ ...p, de: { ...p.de, bodyMarkdown: p.de.bodyMarkdown.replace('https://wp/g2.jpg', 'https://wp/g2.jpg | 640x400 | alt="Abend" | caption="Am Hafen"') } });
+    expect((await store.get(tk))!.de.images['https://wp/g2.jpg']).toMatchObject({ alt: 'Abend', caption: 'Am Hafen' });
+    nextRun();
+    await run(export1, h, {}, store);
+    const healed = (await store.get(tk))!.de;
+    expect(healed.bodyMarkdown).not.toContain('https://wp/');
+    expect(healed.images[SRC('de-1', 'https://wp/g2.jpg')]).toEqual({ width: 100, height: 80, alt: 'Abend', caption: 'Am Hafen' });
+    expect(healed.images['https://wp/g2.jpg']).toBeUndefined();
+  });
+
+  it('keeps gallery metadata when the same hot-link occurs twice (second substitution must not clobber the first)', async () => {
+    const store = memoryPostStore();
+    const { h, nextRun } = flaky('g2.jpg');
+    await run(export1, h, {}, store);
+    const tk = (await store.list())[0]!.translationKey;
+    const p = (await store.get(tk))!;
+    // A second gallery block referencing the same failed photo, annotated once
+    // WITH dimensions — that is what makes the store lift the alt into
+    // images[<wp url>] (without them it stays on the line).
+    await store.upsertDraft({ ...p, de: { ...p.de, bodyMarkdown: p.de.bodyMarkdown.replace('https://wp/g2.jpg', 'https://wp/g2.jpg | 640x400 | alt="Abend"') + '\n\n```gallery\nhttps://wp/g2.jpg\n```' } });
+    expect((await store.get(tk))!.de.images['https://wp/g2.jpg']).toMatchObject({ alt: 'Abend' });
+    nextRun();
+    await run(export1, h, {}, store);
+    expect((await store.get(tk))!.de.images[SRC('de-1', 'https://wp/g2.jpg')]).toEqual({ width: 100, height: 80, alt: 'Abend' });
+  });
+
+  it('does not refetch the featured image while EITHER locale keeps a hero (both share one storage key)', async () => {
+    const store = memoryPostStore();
+    const h = harness();
+    // Same featured image on both sides: the EN hero resolves (via the pair cache) to DE's key.
+    const both = pairWithHero('https://wp/hero.jpg', ['https://wp/body.jpg']);
+    await run(both, h, {}, store);
+    const tk = (await store.list())[0]!.translationKey;
+    const p = (await store.get(tk))!;
+    // Author clears the DE hero but keeps EN's, which points at trips/de-1/hero.
+    await store.upsertDraft({ ...p, de: { ...p.de, heroImage: { src: '', width: 0, height: 0, alt: '' } }, en: { ...p.en, heroImage: { src: 'https://img/trips/de-1/hero', width: 100, height: 80, alt: 'kept' } } });
+    h.calls.length = 0;
+    await run(both, h, { maxImages: 1 }, store);
+    expect(h.calls).toEqual(['https://wp/body.jpg']); // no hero fetch → trips/de-1/hero untouched
+    const after = (await store.get(tk))!;
+    expect(after.de.heroImage.src).toBe('');
+    expect(after.en.heroImage.src).toBe('https://img/trips/de-1/hero');
+  });
+
+  it('does not refetch (and so never overwrites) a stored hero on a merge run; the count agrees', async () => {
+    const store = memoryPostStore();
+    const h = harness();
+    const body = pairWithHero('https://wp/hero.jpg', ['https://wp/body.jpg']);
+    await run(body, h, {}, store);
+    expect(h.calls.sort()).toEqual(['https://wp/body.jpg', 'https://wp/hero.jpg']);
+    h.calls.length = 0;
+    // maxImages: 1 — the hero must not be counted either, or this would throw.
+    const s = await run(body, h, { maxImages: 1 }, store);
+    expect(h.calls).toEqual(['https://wp/body.jpg']);
+    expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+    expect((await store.get((await store.list())[0]!.translationKey))!.de.heroImage.src).toBe('https://img/trips/de-1/hero');
+  });
+});
+
+/**
+ * Issue #85: throttle, bounded retry, honest accounting, resumability.
+ *
+ * @ai-context docs/superpowers/specs/2026-07-30-wxr-import-hardening-design.md
+ */
+describe('importWxr pacing', () => {
+  it('spaces distinct fetches by the delay, and never sleeps before the first', async () => {
+    const h = harness();
+    await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/c.jpg')), h, { delayMs: 1200 });
+    expect(h.order).toEqual([
+      'fetch:https://wp/a.jpg', 'sleep:1200',
+      'fetch:https://wp/b.jpg', 'sleep:1200',
+      'fetch:https://wp/c.jpg',
+    ]);
+  });
+
+  // sharedRehost dedups by URL within a pair, and the gate sits BELOW it. The
+  // 2026-06-24 export was ~650 photos arriving as 1,338 calls; pacing above the
+  // memo would sleep 1,338 times for 665 fetches.
+  it('does not pace a photo the other locale already fetched', async () => {
+    const h = harness();
+    await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg'), imgs('https://wp/a.jpg')), h, { delayMs: 1200 });
+    expect(h.order).toEqual(['fetch:https://wp/a.jpg']);
+    expect(h.calls).toEqual(['https://wp/a.jpg']);
+  });
+
+  // An elapsed gate, not a flat sleep: a fetch+encode that already took longer
+  // than the delay has satisfied it, so the throttle costs nothing.
+  it('charges nothing when the fetch itself outlasted the delay', async () => {
+    const h = harness({ costMs: 5000 });
+    await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg')), h, { delayMs: 1200 });
+    expect(h.sleeps).toEqual([]);
+  });
+});
+
+describe('importWxr retry', () => {
+  const network = () => new FetchError('request failed for x: socket hang up', 'network');
+
+  it('retries a transient failure with the documented backoff, then succeeds', async () => {
+    const h = harness({ fail: (_u, attempt) => (attempt < 2 ? network() : null) });
+    const s = await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg')), h, { retries: 3 });
+    expect(h.calls).toHaveLength(3);
+    expect(h.sleeps).toEqual([5000, 15000]);
+    expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+  });
+
+  it('does not retry the SSRF guard, a bad URL, or an oversized response', async () => {
+    for (const kind of ['blocked', 'invalid-url', 'too-large'] as const) {
+      const h = harness({ fail: () => new FetchError('nope', kind) });
+      const s = await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg')), h, { retries: 3 });
+      expect(h.calls, kind).toHaveLength(1);
+      expect(h.sleeps, kind).toEqual([]);
+      expect(s.images, kind).toEqual({ total: 1, hosted: 0, failed: 1 });
+    }
+  });
+
+  it('does not retry a permanently dead host', async () => {
+    const h = harness({ fail: () => new FetchError('request failed for x: getaddrinfo', 'network', { code: 'ENOTFOUND' }) });
+    await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg')), h, { retries: 3 });
+    expect(h.calls).toHaveLength(1);
+  });
+
+  it('retries a 429 and a 5xx but not a 404', async () => {
+    for (const [status, expected] of [[429, 2], [503, 2], [404, 1]] as const) {
+      const h = harness({ fail: (_u, attempt) => (attempt < 1 ? new FetchError('x', 'http', { status }) : null) });
+      await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg')), h, { retries: 3 });
+      expect(h.calls, String(status)).toHaveLength(expected);
+    }
+  });
+
+  // processImage and storeVariants throw plain Errors. sharp runs with
+  // failOn:'none' and 2+2x|widths| pipelines per image inside a 4608 MiB
+  // container, so re-decoding the same hostile buffer is amplification, not
+  // recovery. Only the FETCH is retried.
+  it('never retries a non-fetch failure such as a decode or a full disk', async () => {
+    const h = harness({ fail: () => new Error('Input buffer contains unsupported image format') });
+    await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg')), h, { retries: 3 });
+    expect(h.calls).toHaveLength(1);
+    expect(h.sleeps).toEqual([]);
+  });
+
+  // @ai-warning sharedRehost stores the PROMISE before awaiting and never
+  // deletes it on rejection, so it memoises rejections. Retry must stay BELOW
+  // it or the second locale gets the settled rejection instantly while the
+  // first burns the full backoff, and both report the same failure.
+  it('retries once per pair, not once per locale, and reports one failure', async () => {
+    const h = harness({ fail: () => network() });
+    const s = await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg'), imgs('https://wp/a.jpg')), h, { retries: 3 });
+    expect(h.calls).toHaveLength(4); // 1 + 3 retries, not 8
+    expect(s.images).toEqual({ total: 1, hosted: 0, failed: 1 });
+    expect(s.warnings.filter((w) => w.includes('https://wp/a.jpg'))).toHaveLength(1);
+  });
+});
+
+describe('importWxr blast-radius bounds', () => {
+  const network = () => new FetchError('boom', 'network');
+
+  // Bounds RETRIES, not first attempts: first attempts are the legitimate work
+  // (one per distinct image) and capping them would break a large export.
+  it('stops retrying once the retry budget is spent, but keeps first attempts', async () => {
+    const h = harness({ fail: () => network() });
+    const s = await run(
+      pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/c.jpg')),
+      h, { retries: 3, retryBudget: 2 },
+    );
+    // 3 first attempts + exactly 2 retries anywhere
+    expect(h.calls).toHaveLength(5);
+    expect(s.images).toEqual({ total: 3, hosted: 0, failed: 3 });
+    expect(s.warnings.join(' ')).toMatch(/retry budget/i);
+  });
+
+  it('stops fetching a host after too many consecutive failures', async () => {
+    const h = harness({ fail: (u) => (u.includes('dead') ? network() : null) });
+    const urls = [1, 2, 3, 4, 5].map((n) => `https://dead/${n}.jpg`);
+    const s = await run(
+      pairOf('g', 'de-1', 'en-1', imgs(...urls, 'https://live/ok.jpg')), h,
+      { retries: 0, hostFailureLimit: 3 },
+    );
+    // 3 attempts against the dead host, then it is abandoned; the other host is untouched.
+    expect(h.calls.filter((u) => u.includes('dead'))).toHaveLength(3);
+    expect(h.calls).toContain('https://live/ok.jpg');
+    expect(s.images).toEqual({ total: 6, hosted: 1, failed: 5 });
+    expect(s.warnings.join(' ')).toMatch(/consecutive failures/i);
+  });
+
+  // The reset is what this pins, so the failure run must be long enough to trip
+  // the breaker if the reset were removed: fail, fail, SUCCEED, fail, fail with a
+  // limit of 3 must fetch all five. Without the reset the counter reaches 3 on
+  // the fourth URL and the fifth is never attempted.
+  it('forgives a host that recovers', async () => {
+    let n = 0;
+    const h = harness({ fail: () => (++n === 3 ? null : network()) });
+    const urls = ['a', 'b', 'c', 'd', 'e'].map((x) => `https://wp/${x}.jpg`);
+    await run(pairOf('g', 'de-1', 'en-1', imgs(...urls)), h, { retries: 0, hostFailureLimit: 3 });
+    expect(h.calls).toHaveLength(5);
+  });
+
+  /**
+   * @ai-warning The breaker exists to notice "this host is refusing us", so only
+   * a HOST-SHAPED failure may count toward it. A 404, an oversized response, an
+   * unusable URL, a sharp decode failure or an ENOSPC on our own /data are facts
+   * about one resource (or about us), not about the host.
+   *
+   * Counting them is not a cosmetic mistake: a trip whose photos were deleted
+   * from the WordPress media library is a contiguous run of 404s, which abandons
+   * a perfectly healthy host and leaves every later trip's photos un-fetched.
+   * And because the run of 404s repeats identically on the next import, the
+   * breaker trips at the same point every time — so re-running, the recovery
+   * action this whole feature is built around, can never converge.
+   */
+  it('does not blame the host for individual photos that are simply gone', async () => {
+    const dead = (u: string) => (u.includes('dead') ? new FetchError('x', 'http', { status: 404 }) : null);
+    const h = harness({ fail: dead });
+    const body = wxr([
+      item('de', 'de-1', 'g1', imgs('https://wp/ok1.jpg')),
+      item('en', 'en-1', 'g1', '<p>x</p>'),
+      item('de', 'de-2', 'g2', imgs(...[1, 2, 3, 4, 5].map((n) => `https://wp/dead${n}.jpg`))),
+      item('en', 'en-2', 'g2', '<p>x</p>'),
+      item('de', 'de-3', 'g3', imgs('https://wp/ok2.jpg', 'https://wp/ok3.jpg')),
+      item('en', 'en-3', 'g3', '<p>x</p>'),
+    ].join('\n'));
+    const s = await run(body, h, { retries: 0, hostFailureLimit: 3 });
+    // The healthy photos of the LAST trip must still be fetched.
+    expect(h.calls).toContain('https://wp/ok2.jpg');
+    expect(h.calls).toContain('https://wp/ok3.jpg');
+    expect(s.images).toEqual({ total: 8, hosted: 3, failed: 5 });
+  });
+
+  it('does not blame the host for a decode failure on our side', async () => {
+    const h = harness({ fail: (u) => (u.includes('bad') ? new Error('unsupported image format') : null) });
+    const urls = [...[1, 2, 3, 4].map((n) => `https://wp/bad${n}.jpg`), 'https://wp/good.jpg'];
+    const h2 = await run(pairOf('g', 'de-1', 'en-1', imgs(...urls)), h, { retries: 0, hostFailureLimit: 3 });
+    expect(h.calls).toContain('https://wp/good.jpg');
+    expect(h2.images).toEqual({ total: 5, hosted: 1, failed: 4 });
+  });
+
+  // Both bounds truncate work, so both must be traceable in BOTH channels — the
+  // response can drop them to the cap, the log cannot.
+  it('logs the retry-budget notice, not only appends it to a capped list', async () => {
+    const logged: string[] = [];
+    const h = harness({ fail: () => network() });
+    const urls = Array.from({ length: 6 }, (_, i) => `https://dead/p${i}.jpg`);
+    // hostFailureLimit high enough that the breaker cannot fire first and mask it.
+    await run(pairOf('g', 'de-1', 'en-1', imgs(...urls)), h,
+      { retries: 3, retryBudget: 2, hostFailureLimit: 999, log: (m) => logged.push(m) });
+    expect(logged.join('\n')).toMatch(/retry budget/i);
+  });
+
+  it('logs the host-breaker notice', async () => {
+    const logged: string[] = [];
+    const h = harness({ fail: () => network() });
+    const urls = Array.from({ length: 6 }, (_, i) => `https://dead/p${i}.jpg`);
+    await run(pairOf('g', 'de-1', 'en-1', imgs(...urls)), h,
+      { retries: 0, hostFailureLimit: 3, log: (m) => logged.push(m) });
+    expect(logged.join('\n')).toMatch(/stopped fetching dead after 3 consecutive failures/i);
+  });
+
+  it('keeps the truncation notices in the response even when the cap is reached', async () => {
+    const h = harness({ fail: () => network() });
+    const urls = Array.from({ length: 260 }, (_, i) => `https://dead/p${i}.jpg`);
+    const s = await run(pairOf('g', 'de-1', 'en-1', imgs(...urls)), h,
+      { retries: 0, hostFailureLimit: 3, log: () => {} });
+    // "stopped fetching <host>" is the NOTICE. The per-image warnings happen to
+    // share the phrase "consecutive failures", so matching that would pass even
+    // with the notice dropped.
+    expect(s.warnings.join(' ')).toMatch(/stopped fetching/i);
+  });
+});
+
+/**
+ * Issue #96: a per-import cap on the TOTAL number of distinct (pair, url)
+ * re-host operations. #85's `retryBudget` bounds retries and `hostFailureLimit`
+ * bounds a FAILING host, but neither bounds first attempts against a host that
+ * keeps answering — the re-host cache is per-pair, so one attachment URL
+ * referenced from N groups is fetched N times.
+ *
+ * @ai-context docs/superpowers/specs/2026-08-25-wxr-import-image-cap-design.md
+ */
+describe('importWxr image cap', () => {
+  // n DE/EN groups, each de body carrying ONE image of the SAME url — the
+  // exact amplification shape from the issue (one url, N groups → N fetches).
+  const manyGroups = (n: number, url: string): string => wxr(
+    Array.from({ length: n }, (_, i) =>
+      item('de', `de-${i}`, `g${i}`, `<img src="${url}" alt="a" />`) + '\n' +
+      item('en', `en-${i}`, `g${i}`, '<p>x</p>'),
+    ).join('\n'),
+  );
+
+  it('rejects an import whose distinct-image count exceeds the cap, fetching NOTHING', async () => {
+    const h = harness();
+    await expect(run(manyGroups(5, 'https://wp/same.jpg'), h, { maxImages: 4 }))
+      .rejects.toBeInstanceOf(ImportTooLargeError);
+    expect(h.calls).toHaveLength(0); // the pre-flight check must precede every fetch
+  });
+
+  it('names the count and the cap in the rejection', async () => {
+    const h = harness();
+    await expect(run(manyGroups(5, 'https://wp/same.jpg'), h, { maxImages: 4 }))
+      .rejects.toThrow('would re-host 5 distinct images, which exceeds the cap of 4');
+  });
+
+  it('logs the rejection to stdout, not only into the (absent) response', async () => {
+    const logged: string[] = [];
+    const h = harness();
+    await expect(run(manyGroups(5, 'https://wp/same.jpg'), h, { maxImages: 4, log: (m) => logged.push(m) }))
+      .rejects.toBeInstanceOf(ImportTooLargeError);
+    expect(logged.join('\n')).toMatch(/5 distinct images exceeds the cap of 4/i);
+  });
+
+  it('imports an export at exactly the cap (the bound is inclusive)', async () => {
+    const h = harness();
+    const s = await run(manyGroups(5, 'https://wp/same.jpg'), h, { maxImages: 5 });
+    expect(s.imported).toBe(5);
+    // same url, five distinct pairs → five fetches, five counted.
+    expect(h.calls).toHaveLength(5);
+    expect(s.images).toEqual({ total: 5, hosted: 5, failed: 0 });
+  });
+
+  it('counts a URL shared by both locales of a pair once, not twice', async () => {
+    const h = harness();
+    const s = await run(
+      pairOf('g', 'de-1', 'en-1', imgs('https://wp/same.jpg'), imgs('https://wp/same.jpg')),
+      h, { maxImages: 1 },
+    );
+    expect(h.calls).toHaveLength(1);
+    expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+  });
+
+  it('counts the hero (featured image) toward the cap', async () => {
+    const h = harness();
+    // pairWithHero: one hero + one body image on the de side → 2 distinct (pair, url).
+    const s = await run(pairWithHero('https://wp/hero.jpg', ['https://wp/body.jpg']), h, { maxImages: 2 });
+    expect(h.calls).toHaveLength(2);
+    expect(s.images).toEqual({ total: 2, hosted: 2, failed: 0 });
+  });
+
+  it('does not count images from groups that will be rejected', async () => {
+    const h = harness();
+    const body = wxr([
+      // g1 is missing its en translation → rejected; its 3 images must not count.
+      item('de', 'de-1', 'g1', imgs('https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/c.jpg')),
+      // g2 is valid with 1 image.
+      item('de', 'de-2', 'g2', imgs('https://wp/d.jpg')),
+      item('en', 'en-2', 'g2', '<p>x</p>'),
+    ].join('\n'));
+    const s = await run(body, h, { maxImages: 1 });
+    expect(s.rejected).toBe(1);
+    expect(s.imported).toBe(1);
+    expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+  });
+
+  it('defaults to a cap above any legitimate export, so ordinary imports are untouched', async () => {
+    const h = harness();
+    // 100 groups, 1 image each → 100 distinct, far below DEFAULT_MAX_IMAGES.
+    const s = await run(manyGroups(100, 'https://wp/same.jpg'), h);
+    expect(s.imported).toBe(100);
+    expect(s.images.total).toBe(100);
+    expect(DEFAULT_MAX_IMAGES).toBeGreaterThan(100);
+  });
+});
+
+/**
+ * Issue #125: Turndown writes `![alt](src "title")`, escapes parens, and wraps
+ * a spaced destination in `<…>`. The importer must fetch the URL Turndown
+ * encoded, not the encoded text.
+ */
+describe('importWxr Turndown image destinations', () => {
+  it('re-hosts a titled image by its real URL and rewrites the reference without the title', async () => {
+    const h = harness();
+    const store = memoryPostStore();
+    const s = await run(pairOf('g', 'de-1', 'en-1', '<img src="https://wp/uploads/a.jpg" alt="Beach" title="IMG_0001">'), h, {}, store);
+    expect(h.calls).toEqual(['https://wp/uploads/a.jpg']);
+    expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+    expect(s.warnings).toEqual([]);
+    const pair = (await store.get((await store.list())[0]!.translationKey))!;
+    expect(pair.de.bodyMarkdown).toBe(`![Beach](${SRC('de-1', 'https://wp/uploads/a.jpg')})`);
+    expect(pair.de.images[SRC('de-1', 'https://wp/uploads/a.jpg')]).toEqual({ width: 100, height: 80 });
+  });
+
+  it('decodes escaped parens and a <…>-wrapped destination, and the pre-flight count agrees', async () => {
+    const h = harness();
+    const store = memoryPostStore();
+    const html = '<img src="https://wp/u/p-(1).jpg" alt=""><img src="https://wp/u/my photo.jpg" alt="">';
+    // maxImages: 2 — if the pre-flight count saw a different set than buildLocale fetches, this would throw.
+    const s = await run(pairOf('g', 'de-1', 'en-1', html), h, { maxImages: 2 }, store);
+    expect(h.calls).toEqual(['https://wp/u/p-(1).jpg', 'https://wp/u/my photo.jpg']);
+    expect(s.images).toEqual({ total: 2, hosted: 2, failed: 0 });
+    const pair = (await store.get((await store.list())[0]!.translationKey))!;
+    expect(pair.de.bodyMarkdown).not.toContain('https://wp/');
+  });
+
+  it('expands a classic [gallery ids] shortcode against the export\'s attachments and re-hosts it', async () => {
+    const h = harness();
+    const store = memoryPostStore();
+    const xmlWithGallery = wxr([
+      `  <item>
+    <title>one</title>
+    <wp:post_id><![CDATA[41]]></wp:post_id>
+    <wp:post_type><![CDATA[attachment]]></wp:post_type>
+    <wp:status><![CDATA[inherit]]></wp:status>
+    <wp:attachment_url><![CDATA[https://wp/u/one.jpg]]></wp:attachment_url>
+  </item>`,
+      item('de', 'de-1', 'g', '<p>Intro</p>[gallery ids="41,42"]'),
+      item('en', 'en-1', 'g', '<p>x</p>'),
+    ].join('\n'));
+    const s = await run(xmlWithGallery, h, { maxImages: 1 }, store);
+    expect(h.calls).toEqual(['https://wp/u/one.jpg']);
+    expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+    const pair = (await store.get((await store.list())[0]!.translationKey))!;
+    expect(pair.de.bodyMarkdown).toContain(`\`\`\`gallery\n${SRC('de-1', 'https://wp/u/one.jpg')}\n\`\`\``); // WxH lifted into `images` by the store
+    expect(pair.de.images[SRC('de-1', 'https://wp/u/one.jpg')]).toEqual({ width: 100, height: 80 });
+    expect(pair.de.bodyMarkdown).not.toContain('gallery ids');
+  });
+});
+
+describe('importWxr reporting', () => {
+  it('counts distinct photos per pair, so hosted + failed === total', async () => {
+    const h = harness({ fail: (u) => (u.includes('b.jpg') ? new FetchError('x', 'blocked') : null) });
+    const s = await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg'), imgs('https://wp/a.jpg')), h);
+    expect(s.images).toEqual({ total: 2, hosted: 1, failed: 1 });
+  });
+
+  // Two trips sharing a photo each get their own copy under their own slug, so
+  // the count is per (pair, url). This is wp-import.ts's pair-scoping warning.
+  it('counts and fetches a shared photo once per trip', async () => {
+    const h = harness();
+    const body = wxr([
+      item('de', 'de-1', 'g1', imgs('https://wp/shared.jpg')),
+      item('en', 'en-1', 'g1', '<p>x</p>'),
+      item('de', 'de-2', 'g2', imgs('https://wp/shared.jpg')),
+      item('en', 'en-2', 'g2', '<p>x</p>'),
+    ].join('\n'));
+    const s = await run(body, h);
+    expect(s.images).toEqual({ total: 2, hosted: 2, failed: 0 });
+    expect(h.calls).toEqual(['https://wp/shared.jpg', 'https://wp/shared.jpg']);
+    expect(h.keys).toEqual([rehostKey('de-1', 'https://wp/shared.jpg'), rehostKey('de-2', 'https://wp/shared.jpg')]);
+  });
+
+  // CLAUDE.md: never return raw infrastructure errors. isBlockedHost does not
+  // block RFC1918, so today's warnings hand a non-admin author a working
+  // network-mapping oracle. The response gets a stable reason; detail goes to stdout.
+  it('reports a stable reason to the author and the detail only to the log', async () => {
+    const logged: string[] = [];
+    const h = harness({
+      fail: () => new FetchError('request failed for http://10.0.0.5:8080/x: connect ECONNREFUSED 10.0.0.5:8080', 'network', { code: 'ECONNREFUSED' }),
+    });
+    const s = await run(pairOf('g', 'de-1', 'en-1', imgs('http://10.0.0.5:8080/x.jpg')), h, { log: (m) => logged.push(m) });
+    const joined = s.warnings.join(' ');
+    expect(joined).not.toMatch(/ECONNREFUSED/);
+    expect(joined).toMatch(/network error/);
+    expect(logged.join(' ')).toMatch(/ECONNREFUSED/);
+  });
+
+  it('caps the warning list instead of returning one string per dead photo', async () => {
+    const h = harness({ fail: () => new FetchError('x', 'blocked') });
+    const urls = Array.from({ length: 240 }, (_, i) => `https://wp/p${i}.jpg`);
+    const s = await run(pairOf('g', 'de-1', 'en-1', imgs(...urls)), h);
+    expect(s.images.failed).toBe(240);
+    expect(s.warnings.length).toBeLessThanOrEqual(201);
+    expect(s.warnings[s.warnings.length - 1]).toMatch(/and \d+ more/);
+  });
+
+  // issue #100: one bucket per outcome. "Already published" is a success, a
+  // rejected slug is the path-traversal defence firing, and a thrown upsert is
+  // a failure — none may share a counter with the others. Every group lands in
+  // exactly one bucket, so the buckets sum to the group count.
+  it('gives each outcome its own bucket, so the buckets sum to the group count', async () => {
+    const h = harness();
+    const body = wxr([
+      // g1: complete and new → imported.
+      item('de', 'de-1', 'g1', '<p>a</p>'),
+      item('en', 'en-1', 'g1', '<p>a</p>'),
+      // g2: no en translation → rejected.
+      item('de', 'de-2', 'g2', '<p>b</p>'),
+      // g3: path-traversal slug → rejected.
+      item('de', '../evil', 'g3', '<p>c</p>'),
+      item('en', 'en-3', 'g3', '<p>c</p>'),
+      // g4: new, but the store refuses the write → failed.
+      item('de', 'de-4', 'g4', '<p>d</p>'),
+      item('en', 'en-4', 'g4', '<p>d</p>'),
+    ].join('\n'));
+    const ok = memoryPostStore();
+    const refusing: PostStore = {
+      ...ok,
+      upsertDraft: (pair, baseUpdatedAt) =>
+        (pair.de.slug === 'de-4' ? Promise.reject(new Error('invalid byte sequence for encoding "UTF8": 0x00')) : ok.upsertDraft(pair, baseUpdatedAt)),
+    };
+    const logged: string[] = [];
+    const s = await run(body, h, { log: (m) => logged.push(m) }, refusing);
+    expect(s).toMatchObject({ imported: 1, updated: 0, skippedPublished: 0, rejected: 2, failed: 1 });
+    expect(s.imported + s.updated + s.skippedPublished + s.rejected + s.failed).toBe(4);
+    // the buckets are honest: the store holds only the imported group.
+    expect((await refusing.list()).map((x) => x.slugDe)).toEqual(['de-1']);
+    // issue #143: a pg/infrastructure message goes to the log, never to the client.
+    expect(s.warnings.find((w) => w.startsWith('de-4/en-4'))).toBe('de-4/en-4: could not be saved (see server logs)');
+    expect(s.warnings.join(' ')).not.toContain('byte sequence');
+    expect(logged.join('\n')).toContain('de-4/en-4 failed: invalid byte sequence');
+  });
+
+  it('passes a PostError through to the client — it is a verdict worded for the author', async () => {
+    const h = harness();
+    const refusing: PostStore = { ...memoryPostStore(), upsertDraft: () => Promise.reject(new PostError('invalid images map: bad dims', 'invalid_images')) };
+    const s = await run(pairOf('g', 'de-1', 'en-1', '<p>a</p>'), h, {}, refusing);
+    expect(s.failed).toBe(1);
+    expect(s.warnings).toContain('de-1/en-1: invalid images map: bad dims');
+  });
+
+  it('logs the summary, because on a real export nobody receives the response', async () => {
+    const logged: string[] = [];
+    const h = harness();
+    await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg')), h, { log: (m) => logged.push(m) });
+    expect(logged.join('\n')).toMatch(/imported=1.*images=1\/1/s);
+  });
+});
+
+describe('importWxr layering', () => {
+  const network = () => new FetchError('boom', 'network');
+
+  /**
+   * @ai-warning The gate lives INSIDE the retry loop, so every network attempt is
+   * paced and `nextAt` stays accurate. Moving it outside changes this order to
+   * ['fetch:a','sleep:5000','fetch:a','fetch:b'] — the single gate entry for `a`
+   * sets nextAt to t+1200, the 5 s backoff overshoots it, and `b` then fires with
+   * no spacing at all. This assertion is the only thing distinguishing the two.
+   */
+  it('gates every attempt, not just the first of each image', async () => {
+    const h = harness({ fail: (u, attempt) => (u.includes('a.jpg') && attempt < 1 ? network() : null) });
+    await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg')), h,
+      { delayMs: 1200, retries: 1 });
+    expect(h.order).toEqual([
+      'fetch:https://wp/a.jpg', 'sleep:5000',
+      'fetch:https://wp/a.jpg', 'sleep:1200',
+      'fetch:https://wp/b.jpg',
+    ]);
+  });
+
+  /**
+   * Invariant: the SSRF guard runs on EVERY attempt. `assertFetchableUrl` is
+   * called inside `safeFetch` and builds a fresh `URL`, which `safeFetch` passes
+   * straight to `fetch` — so a distinct instance per call is exactly the
+   * "not hoisted out of the retry loop" property. Uses the REAL safeFetch.
+   */
+  it('re-validates the URL through safeFetch on every retry attempt', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'wprevalidate-'));
+    const baseUrl = 'https://img.example';
+    const jpg = await sharp({ create: { width: 700, height: 500, channels: 3, background: '#345' } }).jpeg().toBuffer();
+    const seen: unknown[] = [];
+    let n = 0;
+    const fetchImpl = (async (u: URL | string) => {
+      seen.push(u);
+      return ++n < 3 ? new Response('busy', { status: 503 }) : new Response(new Uint8Array(jpg));
+    }) as unknown as typeof fetch;
+    const sleeps: number[] = [];
+    const s = await importWxr(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg')), {
+      postStore: memoryPostStore(), storageDir, baseUrl,
+      rehost: (url, key, alt) => rehostImage(url, key, alt, { storageDir, baseUrl, fetchImpl, lookup: publicLookup }),
+      delayMs: 0, retries: 2, sleep: async (ms) => { sleeps.push(ms); }, log: () => {},
+    });
+    expect(seen).toHaveLength(3);
+    expect(new Set(seen).size).toBe(3);
+    expect(sleeps).toEqual([5000, 15000]); // a real 503 is retryable
+    expect(s.images).toEqual({ total: 1, hosted: 1, failed: 0 });
+  });
+});
+
+/**
+ * Issue #94: the /data free-space precondition, judged on the photos the run
+ * will actually fetch. `IMPORT_PHOTO_BYTES` × that count + the 2 GiB floor.
+ */
+describe('importWxr free-space precondition', () => {
+  const GiB = 1024 ** 3;
+  const MiB = 1024 ** 2;
+  const three = () => pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/c.jpg'));
+
+  it('refuses BEFORE any fetch when the volume cannot hold the photos to fetch', async () => {
+    const h = harness();
+    // floor + 3 × 17.5 MB ≈ 2.05 GiB required; 2 GiB + 20 MiB free is short.
+    const diskSpace = async () => ({ free: 2 * GiB + 20 * MiB, total: 100 * GiB });
+    await expect(run(three(), h, { diskSpace })).rejects.toBeInstanceOf(ImportInsufficientSpaceError);
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it('names the count and sizes without leaking the path, and maps 3 photos to the message', async () => {
+    const h = harness();
+    const diskSpace = async () => ({ free: 1 * GiB, total: 100 * GiB });
+    const err = await run(three(), h, { diskSpace }).catch((e: unknown) => e) as ImportInsufficientSpaceError;
+    expect(err).toBeInstanceOf(ImportInsufficientSpaceError);
+    expect(err.photos).toBe(3);
+    expect(err.freeBytes).toBe(1 * GiB);
+    expect(err.message).toMatch(/not enough free disk space for this import .*for 3 photos/);
+    expect(err.message).not.toContain('/tmp');
+  });
+
+  it('proceeds when there is room, and runs the whole import', async () => {
+    const h = harness();
+    const s = await run(three(), h, { diskSpace: async () => ({ free: 50 * GiB, total: 100 * GiB }) });
+    expect(s.imported).toBe(1);
+    expect(h.calls).toHaveLength(3);
+  });
+
+  // The post-ENOSPC re-run is the documented recovery path: the already-hosted
+  // majority is resumed from disk and must not be charged again, or a volume
+  // that could finish the import would refuse it forever.
+  it('charges only the photos the resume index does NOT hold', async () => {
+    const h = harness();
+    const resume = { lookup: async (key: string) => (/\/c(_[0-9a-f]{8})?$/.test(key) ? null : { src: 'https://img/kept', width: 12, height: 34 }) };
+    // Room for 1 photo (floor + 20 MiB), not for 3.
+    const diskSpace = async () => ({ free: 2 * GiB + 20 * MiB, total: 100 * GiB });
+    const s = await run(three(), h, { diskSpace, resume });
+    expect(h.calls).toEqual(['https://wp/c.jpg']);
+    expect(s.images).toEqual({ total: 3, hosted: 3, failed: 0 });
+  });
+
+  // The hero's key encodes no url identity, so the real index (`HERO_KEY_RE`
+  // in wp-images.ts) never resumes it. The estimate delegates that decision to
+  // the index rather than duplicating the rule: it asks for the hero key too,
+  // under the key `buildLocale` will actually use, and charges what comes back null.
+  it('asks the index about the hero under its real key, so an unresumable hero is charged', async () => {
+    const h = harness();
+    const looked: string[] = [];
+    const resume = { lookup: async (key: string) => { looked.push(key); return key.endsWith('/hero') ? null : { src: 'https://img/kept', width: 12, height: 34 }; } };
+    // Body photo resumable, hero not → 1 photo to fetch; room for 0.
+    const diskSpace = async () => ({ free: 2 * GiB + 1 * MiB, total: 100 * GiB });
+    const err = await run(pairWithHero('https://wp/hero.jpg', ['https://wp/a.jpg']), h, { diskSpace, resume }).catch((e: unknown) => e) as ImportInsufficientSpaceError;
+    expect(err).toBeInstanceOf(ImportInsufficientSpaceError);
+    expect(err.photos).toBe(1);
+    expect(looked.sort()).toEqual([rehostKey('de-1', 'https://wp/a.jpg'), 'trips/de-1/hero']);
+  });
+
+  it('memoises resume lookups so the run does not probe disk twice per key', async () => {
+    const h = harness();
+    const looked: string[] = [];
+    const resume = { lookup: async (key: string) => { looked.push(key); return null; } };
+    await run(three(), h, { diskSpace: async () => ({ free: 50 * GiB, total: 100 * GiB }), resume });
+    expect(h.calls).toHaveLength(3);
+    // Each key once under its own name and once under the pre-#98 legacy name
+    // it may still be stored under (a miss on both) — six probes, never twelve.
+    const abc = ['https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/c.jpg'];
+    expect(looked.sort()).toEqual([...abc.map((u) => rehostKey('de-1', u)), 'trips/de-1/a', 'trips/de-1/b', 'trips/de-1/c'].sort());
+  });
+
+  it('treats a throwing resume lookup as "will fetch" in the estimate, and re-fetches in the run', async () => {
+    const h = harness();
+    const resume = { lookup: async () => { throw new Error('index broken'); } };
+    const logged: string[] = [];
+    const s = await run(three(), h, { diskSpace: async () => ({ free: 50 * GiB, total: 100 * GiB }), resume, log: (m) => logged.push(m) });
+    expect(h.calls).toHaveLength(3);
+    expect(s.images).toEqual({ total: 3, hosted: 3, failed: 0 });
+    expect(logged.filter((m) => /resume lookup failed/.test(m))).toHaveLength(3); // once per key, not twice
+  });
+
+  it('skips the check when statfs fails — an unreadable volume must not block the import', async () => {
+    const h = harness();
+    const logged: string[] = [];
+    const s = await run(three(), h, { diskSpace: async () => { throw new Error('ENOENT'); }, log: (m) => logged.push(m) });
+    expect(s.imported).toBe(1);
+    expect(logged.join('\n')).toMatch(/free-space check skipped/);
+  });
+
+  it('skips the check when no probe is injected (pre-#94 behaviour, and the unit-test default)', async () => {
+    const h = harness();
+    const s = await run(three(), h);
+    expect(s.imported).toBe(1);
+  });
+
+  // The cap must be checked FIRST: an over-cap export is refused for its count,
+  // not diagnosed as a disk problem after probing 40,000 keys.
+  it('checks the image cap before the free-space estimate', async () => {
+    const h = harness();
+    let probed = false;
+    await expect(run(three(), h, { maxImages: 2, diskSpace: async () => { probed = true; return { free: 0, total: 1 }; } }))
+      .rejects.toBeInstanceOf(ImportTooLargeError);
+    expect(probed).toBe(false);
+  });
+});
+
+/**
+ * Issue #92: the pre-flight/run split and the progress callback the job
+ * runner consumes.
+ *
+ * @ai-context docs/superpowers/specs/2026-09-05-async-import-job-design.md
+ */
+describe('prepareImport', () => {
+  const prep = (body: string, h: ReturnType<typeof harness>, extra: Partial<ImportDeps> = {}, store: PostStore = memoryPostStore()) =>
+    prepareImport(body, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: h.rehost, sleep: h.sleep, now: h.now, delayMs: 0, retries: 0, ...extra });
+
+  it('performs no fetch and writes no post until run() is called', async () => {
+    const h = harness();
+    const store = memoryPostStore();
+    const p = await prep(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg')), h, {}, store);
+    expect(p.groups).toBe(1);
+    expect(p.planned).toEqual({ groups: { total: 1, done: 0 }, images: { planned: 2, hosted: 0, failed: 0 } });
+    expect(h.calls).toHaveLength(0);
+    expect(await store.list()).toHaveLength(0);
+    const s = await p.run();
+    expect(s.imported).toBe(1);
+    expect(h.calls).toHaveLength(2);
+  });
+
+  it('counts EVERY group in `groups`, including rejected and already-published ones, but plans only the pending', async () => {
+    const h = harness();
+    const store = memoryPostStore();
+    const body = wxr([
+      item('de', 'de-1', 'g1', imgs('https://wp/a.jpg')), item('en', 'en-1', 'g1', '<p>x</p>'),
+      item('de', 'lonely', 'g2', imgs('https://wp/b.jpg')), // no EN twin → rejected
+    ].join('\n'));
+    const p = await prep(body, h, {}, store);
+    expect(p.groups).toBe(2);
+    expect(p.planned.groups.total).toBe(1);
+    expect(p.planned.images.planned).toBe(1);
+    const s = await p.run();
+    expect(s).toMatchObject({ imported: 1, rejected: 1 });
+  });
+
+  it('reports progress after every image and every group, ending at the totals', async () => {
+    const h = harness({ fail: (u) => (u.includes('c.jpg') ? new FetchError('x', 'blocked') : null) });
+    const body = wxr([
+      item('de', 'de-1', 'g1', imgs('https://wp/a.jpg', 'https://wp/b.jpg')), item('en', 'en-1', 'g1', '<p>x</p>'),
+      item('de', 'de-2', 'g2', imgs('https://wp/c.jpg')), item('en', 'en-2', 'g2', '<p>x</p>'),
+    ].join('\n'));
+    const p = await prep(body, h);
+    const seen: string[] = [];
+    const s = await p.run((pr) => seen.push(`${pr.groups.done}/${pr.groups.total} ${pr.images.hosted}+${pr.images.failed}/${pr.images.planned}`));
+    expect(seen).toEqual([
+      '0/2 1+0/3', '0/2 2+0/3', '1/2 2+0/3', // group 1: two photos, then the group boundary
+      '1/2 2+1/3', '2/2 2+1/3',             // group 2: one failed photo, then the boundary
+    ]);
+    expect(s.images).toEqual({ total: 3, hosted: 2, failed: 1 });
+  });
+
+  it('counts a resumed photo as progress without a fetch', async () => {
+    const h = harness();
+    const resume = { lookup: async (key: string) => (key.endsWith('/a') ? { src: 'https://img/kept', width: 12, height: 34 } : null) };
+    const p = await prep(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg')), h, { resume });
+    const hosted: number[] = [];
+    await p.run((pr) => hosted.push(pr.images.hosted));
+    expect(hosted).toEqual([1, 2, 2]);
+    expect(h.calls).toEqual(['https://wp/b.jpg']);
+  });
+
+  it('a prepared import runs once', async () => {
+    const h = harness();
+    const p = await prep(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg')), h);
+    await p.run();
+    await expect(p.run()).rejects.toThrow(/only run once/);
+    expect(h.calls).toHaveLength(1);
+  });
+
+  it('importWxr is prepareImport().run(): the same summary for the same export', async () => {
+    const h1 = harness(); const h2 = harness();
+    const body = pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg'));
+    const viaImport = await run(body, h1);
+    const viaPrepare = await (await prep(body, h2)).run();
+    expect(viaPrepare).toEqual(viaImport);
+  });
+});
+
+/**
+ * Issue #98: the key segment used to be the filename slug alone, so two photos
+ * whose names collapse to one slug (`foo.jpg`/`foo.png`, `a_b`/`a-b`, two
+ * years' `beach.jpg`) were written under one key — the second overwrote the
+ * first and both references pointed at one photo. The segment is now
+ * `<name>_<8 hex of the URL>`: a pure function of the URL, distinct per URL,
+ * and — via the `_` no legacy segment can contain — in a namespace of its own.
+ */
+describe('importWxr key derivation (issue #98)', () => {
+  const collide = ['https://wp/2019/07/beach.jpg', 'https://wp/2021/09/beach.jpeg', 'https://wp/beach.png?v=2', 'https://wp/BEACH.JPG'];
+
+  it('is a pure function of (slug, url) with a bounded, slug-safe segment', () => {
+    expect(rehostKey('de-1', 'https://wp/a.jpg')).toBe(rehostKey('de-1', 'https://wp/a.jpg'));
+    expect(rehostKey('de-1', 'https://wp/a.jpg')).not.toBe(rehostKey('de-2', 'https://wp/a.jpg'));
+    expect(rehostKey('de-1', 'https://wp/a.jpg')).toMatch(/^trips\/de-1\/a_[0-9a-f]{8}$/);
+    const long = rehostKey('de-1', `https://wp/${'x'.repeat(300)}.jpg`);
+    expect(long.split('/')).toHaveLength(3);
+    expect(long.split('/')[2]!.length).toBeLessThanOrEqual(57);
+    expect(long).toMatch(/^[a-z0-9][a-z0-9/_-]*$/); // storage.ts SAFE_KEY_RE
+    expect(rehostKey('de-1', 'https://wp/---.jpg')).toMatch(/^trips\/de-1\/image_[0-9a-f]{8}$/);
+  });
+
+  // Review finding on PR #188: with a `-` separator, a legacy file for the
+  // filename `a-<h8 of a.jpg>` would have been a resume hit for `a.jpg`'s new
+  // key. A legacy segment can never contain `_`, so the two cannot meet.
+  it('keeps the new keys in a namespace no pre-#98 key can occupy', async () => {
+    const newKey = rehostKey('de-1', 'https://wp/a.jpg');
+    const forged = `https://wp/${newKey.split('/')[2]!}.jpg`; // a filename spelling the new segment
+    const h = harness();
+    const looked: string[] = [];
+    const resume = { lookup: async (key: string) => { looked.push(key); return null; } };
+    await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', forged)), h, { resume });
+    const legacyProbes = looked.filter((k) => !k.includes('_') && !k.endsWith('/hero'));
+    expect(legacyProbes).not.toContain(newKey);
+    expect(new Set(h.keys).size).toBe(2);
+  });
+
+  it('gives colliding filenames distinct keys, hosts every photo and rewrites each reference to its own', async () => {
+    const h = harness();
+    const store = memoryPostStore();
+    const s = await run(pairOf('g', 'de-1', 'en-1', imgs(...collide)), h, {}, store);
+    expect(s.images).toEqual({ total: 4, hosted: 4, failed: 0 });
+    expect(new Set(h.keys).size).toBe(4);
+    const body = (await store.get((await store.list())[0]!.translationKey))!.de.bodyMarkdown;
+    for (const url of collide) expect(body).toContain(`](${SRC('de-1', url)})`);
+  });
+
+  // Migration: the 2026-07-29 corpus sits on disk under the legacy keys and the
+  // stored bodies point there. A re-run must resume it, not fetch 665 photos
+  // again — but only where the legacy name is unambiguous within the pair.
+  it('resumes a photo stored under its pre-#98 key when its name is unique in the pair', async () => {
+    const h = harness();
+    const resume = { lookup: async (key: string) => (key === 'trips/de-1/a' ? { src: 'https://img/trips/de-1/a', width: 12, height: 34 } : null) };
+    const store = memoryPostStore();
+    const s = await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg')), h, { resume }, store);
+    expect(h.calls).toEqual(['https://wp/b.jpg']);
+    expect(s.images).toEqual({ total: 2, hosted: 2, failed: 0 });
+    const body = (await store.get((await store.list())[0]!.translationKey))!.de.bodyMarkdown;
+    expect(body).toContain('](https://img/trips/de-1/a)'); // the file the stored body already references
+  });
+
+  it('does not consult the legacy key when two URLs of the pair share that name', async () => {
+    const h = harness();
+    const looked: string[] = [];
+    const resume = { lookup: async (key: string) => { looked.push(key); return key === 'trips/de-1/beach' ? { src: 'https://img/trips/de-1/beach', width: 12, height: 34 } : null; } };
+    const s = await run(pairOf('g', 'de-1', 'en-1', imgs(collide[0]!, collide[1]!, 'https://wp/c.jpg')), h, { resume });
+    expect(looked).not.toContain('trips/de-1/beach');
+    expect(looked).toContain('trips/de-1/c');
+    expect(h.calls.sort()).toEqual([collide[0], collide[1], 'https://wp/c.jpg'].sort());
+    expect(s.images).toEqual({ total: 3, hosted: 3, failed: 0 });
+  });
+
+  it('never resumes the hero from a legacy key', async () => {
+    const h = harness();
+    const looked: string[] = [];
+    const resume = { lookup: async (key: string) => { looked.push(key); return null; } };
+    await run(pairWithHero('https://wp/hero.jpg', []), h, { resume });
+    expect(looked).toEqual(['trips/de-1/hero']);
+  });
+});
+
+describe('importWxr resumability', () => {
+  it('skips a photo the resume index already has, without fetching or pacing', async () => {
+    const h = harness();
+    const resume = { lookup: async (key: string) => (key === rehostKey('de-1', 'https://wp/a.jpg') ? { src: 'https://img/kept', width: 12, height: 34 } : null) };
+    const s = await run(pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg')), h, { resume, delayMs: 1200 });
+    expect(h.calls).toEqual(['https://wp/b.jpg']);
+    expect(h.order).toEqual(['fetch:https://wp/b.jpg']); // no sleep for the resumed one
+    expect(s.images).toEqual({ total: 2, hosted: 2, failed: 0 });
+  });
+
+  /**
+   * @ai-warning This is the ONLY thing tying `trips/<slug>/hero` (wp-import.ts)
+   * to `HERO_KEY_RE` (wp-images.ts). The two modules must agree or the hero
+   * silently becomes resumable, and changing a post's featured image in
+   * WordPress would then keep the old photo forever even on an `overwriteDrafts`
+   * run. (A default merge run does not fetch a stored hero at all — issue #126,
+   * covered in 'importWxr re-run merge' — so the re-run here overwrites.)
+   */
+  it('always re-fetches the hero, whose key encodes no url identity', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'wphero-'));
+    const baseUrl = 'https://img.example';
+    const jpg = await sharp({ create: { width: 800, height: 600, channels: 3, background: '#345' } }).jpeg().toBuffer();
+    const calls: string[] = [];
+    const fetchImpl = (async (u: URL | string) => {
+      calls.push(String(u));
+      return new Response(new Uint8Array(jpg));
+    }) as unknown as typeof fetch;
+    const store = memoryPostStore();
+    const deps = async (): Promise<ImportDeps> => ({
+      postStore: store, storageDir, baseUrl,
+      rehost: (url, key, alt) => rehostImage(url, key, alt, { storageDir, baseUrl, fetchImpl, lookup: publicLookup }),
+      resume: await createRehostResume({ storageDir, baseUrl }),
+      delayMs: 0, retries: 0, log: () => {},
+    });
+    const body = pairWithHero('https://wp/hero.jpg', ['https://wp/a.jpg']);
+
+    await importWxr(body, await deps());
+    expect([...calls].sort()).toEqual(['https://wp/a.jpg', 'https://wp/hero.jpg']);
+
+    calls.length = 0;
+    await importWxr(body, { ...(await deps()), overwriteDrafts: true });
+    // The body image resumes from disk; the hero does not.
+    expect(calls).toEqual(['https://wp/hero.jpg']);
+  });
+
+  // The real thing: two runs against one storageDir, real rehostImage, real
+  // createRehostResume, a stub fetchImpl serving a generated JPEG. This is the
+  // kill-and-resume proof — everything else here uses a fake index.
+  it('re-fetches only what failed when the whole import is re-run', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'wpresume-'));
+    const baseUrl = 'https://img.example';
+    const jpeg = await sharp({ create: { width: 900, height: 600, channels: 3, background: '#345' } }).jpeg().toBuffer();
+    const calls: string[] = [];
+    let cFails = true;
+    const fetchImpl = (async (u: URL | string) => {
+      const url = String(u);
+      calls.push(url);
+      if (cFails && url.endsWith('c.jpg')) return new Response('gone', { status: 503 });
+      return new Response(new Uint8Array(jpeg));
+    }) as unknown as typeof fetch;
+
+    const store = memoryPostStore();
+    const deps = async (): Promise<ImportDeps> => ({
+      postStore: store, storageDir, baseUrl,
+      rehost: (url, key, alt) => rehostImage(url, key, alt, { storageDir, baseUrl, fetchImpl, lookup: publicLookup }),
+      resume: await createRehostResume({ storageDir, baseUrl }),
+      delayMs: 0, retries: 0, log: () => {},
+    });
+    const body = pairOf('g', 'de-1', 'en-1', imgs('https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/c.jpg'));
+
+    const first = await importWxr(body, await deps());
+    expect(first.images).toEqual({ total: 3, hosted: 2, failed: 1 });
+    expect(calls).toHaveLength(3);
+
+    calls.length = 0;
+    cFails = false;
+    const second = await importWxr(body, await deps());
+    // The double-charging proof: call IDENTITY, not merely a count.
+    expect(calls).toEqual(['https://wp/c.jpg']);
+    expect(second).toMatchObject({ imported: 0, updated: 1 });
+    expect(second.images).toEqual({ total: 3, hosted: 3, failed: 0 });
+
+    const pair = (await store.get((await store.list())[0]!.translationKey))!;
+    for (const name of ['a', 'b', 'c']) {
+      expect(pair.de.images[`${baseUrl}/${rehostKey('de-1', `https://wp/${name}.jpg`)}`], name).toMatchObject({ width: 900, height: 600 });
+    }
+    expect(pair.de.bodyMarkdown).not.toContain('https://wp/');
   });
 });

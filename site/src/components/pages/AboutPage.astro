@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import GalleryIsland from '../GalleryIsland.astro';
 import { getCollection, getEntry, render } from 'astro:content';
 import { useTranslations, type Locale } from '../../i18n/ui';
 import { aboutPath } from '../../lib/paths';
@@ -77,6 +78,7 @@ const description = plain ? plain.slice(0, 150) : t('about.title');
         <article class="prose prose-lg mt-6 max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-a:font-semibold prose-a:text-brand-red prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:italic prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red">
           {Content ? <Content /> : null}
         </article>
+        <GalleryIsland locale={locale} />
       </div>
     </div>
   </section>

@@ -30,8 +30,18 @@ into Postgres without manually re-authoring each one:
 5. **Refine and publish** — Open each draft in the editor, review the imported content, fill in
    missing details, and hit **Publish** when ready.
 
-**Note:** The import is **idempotent by slug** — re-importing the same WXR will not overwrite
-published posts or duplicate existing drafts. Only draft posts from this import are refreshed.
+**Note:** The import is **idempotent by slug pair** — a group is matched to an existing post only
+when *both* its DE and EN slugs belong to that same post. Re-importing the same WXR never touches
+a published post. A draft from an earlier import is **merged, not rebuilt**: everything you edited
+(country, region, coordinates, key facts, stops, alt text, body changes, a hero you picked) is
+kept, and only the photos that were still missing are downloaded and swapped in — so re-running to
+recover photos is safe. Tick **Replace existing drafts with the export** only when you changed a
+post in WordPress and exported again; it rebuilds the matched drafts from the export and discards
+your edits to them (each keeps a revision you can restore from the editor). A group whose slugs
+overlap an existing post without matching it as a pair — one slug matches, the two slugs belong to
+two different posts, or a slug equals another post's slug in the *other* language (re-hosted photos
+are filed by slug, without a language) — is **rejected** with a warning naming the owner, and
+nothing is written. Resolve the slug in the editor and run the import again.
 
 ---
 
@@ -72,26 +82,40 @@ text by hand.
 The in-admin editor at `/admin/posts.html` is the authoring interface — no GitHub or `curl`
 needed. Content is stored in **Postgres**; MDX files are generated automatically as backups.
 
+The editor opens on the title and story body. **Story details** beside the writing
+surface holds the active language's country, permalink, summary, key facts and hero
+image; expedition details and taxonomy are shared. Hide the inspector for more writing
+space, or use **Details** on a phone to open it as a drawer. Switching DE/EN preserves
+both languages' unsaved edits.
+
+**Save draft** and **Publish** stay in the top command bar. **More actions** (or
+**More** on phones) contains Preview, Review story and, for published posts,
+Unpublish. Missing-field links select the right language and reveal the field to fix.
+For an existing hero, use **Replace photo** to upload or choose from the library,
+and **Adjust framing** for focal-point controls.
+
 ### Create a new post
 
 1. Sign in and open **Posts** (`/admin/posts.html`).
 2. Click **New post** — the editor opens at `/admin/editor.html`.
-3. Fill in the **German** tab first (the slug is set here and locked once saved):
+3. Fill in the **German** tab first (the slug is set here and locked once published):
 
    | Field | Notes |
    |-------|-------|
-   | **Slug** | Must match the live WordPress slug exactly — it becomes the URL (`/<slug>/`). Locked after first save. |
+   | **Slug** | Must match the live WordPress slug exactly — it becomes the URL (`/<slug>/`). It is derived from the title only while you have not typed into it (clear the field to re-derive); a slug loaded from the server — including an imported draft's — is never re-derived. Changing a saved draft's slug asks for confirmation naming both URLs; locked after publish. |
    | **Title** | DE page title |
    | **Date** | Publication / travel date (YYYY-MM-DD) |
    | **Country** | Localized country name |
    | **Country code** | ISO-3166 alpha-2 (e.g. `GR`) |
    | **Region** | `europe` \| `north-america` \| `south-america` |
    | **Excerpt** | 1-2 sentence summary |
-   | **Hero image** | Paste the `src` URL, width, height, and alt text from the uploader; or use the inline **Upload** button next to the hero fields |
+   | **Hero image** | Open Story details → **Replace photo**, then **Upload hero** or **Choose from library**; edit alt text beside the preview and use **Adjust framing** for the focal point |
    | **Coordinates** | `lat`, `lng` decimal |
    | **Body** | Markdown (EasyMDE editor). Embed photos via the body toolbar's inline upload — it inserts a markdown image (`![alt](URL)`) and records the dimensions automatically. Pasted `<BodyImage …/>` tags (from an MDX backup or the upload page) also work: they're converted on save. |
 
-4. Switch to the **English** tab and fill in the EN fields (title, excerpt, alt text, body).
+4. Switch to the **English** tab and fill in the EN fields (title, country, excerpt, key facts,
+   alt text, body) — **country** and **key facts** are per-locale and do NOT carry over from the
+   German tab, so enter the English country name (e.g. "Greece", not "Griechenland") here too.
    The slug and shared fields (date, countryCode, region, coordinates) carry over automatically.
 5. Click **Save draft** — both locale rows are written to Postgres. The post is not yet live.
 
@@ -106,17 +130,17 @@ the post is live at `/<slug>/` and `/en/<slug>/`.
 
 ### Edit an existing post
 
-Open **Posts**, find the post, click **Edit**. Saving a draft of a published post **never**
+Open **Posts**, find the post, click its title or **Edit**. Saving a draft of a published post **never**
 changes the live site — rebuilds of any kind (publishing another post, saving the About page,
 **Rebuild site now**) keep serving the published snapshot, not your in-progress edits. The Posts
-list marks such posts with an **edited** badge and the editor status line shows
+list marks such posts with an **Unpublished changes** badge and the editor status line shows
 *has unpublished changes*. Your edits go live only when you hit **Publish** again, which
 refreshes the snapshot.
 
 ### Duplicating a post ("New from this one")
 
 Trips in the same region repeat a lot of structure — key facts, stops, route, region, country
-code — so the Posts list has a **Duplicate** action per row.
+code — so each Posts row has **More actions → Duplicate**.
 
 It asks for the **DE and EN slugs up front**, before anything is created, and refuses if either
 is blank, malformed, or already taken (you get a plain "already in use" error rather than a
@@ -143,21 +167,32 @@ against the already-loaded list, so it is instant and never hits the server — 
 trade at this size and is documented to move server-side once the list grows to a few hundred
 posts. A post with no hero yet shows a dashed placeholder instead of a broken image.
 
+The status filter also offers **Unpublished changes** and **EN missing**. **X of Y posts**
+reports the current results; **More filters** indicates active refinements even when collapsed.
+Use **Clear filters** to return to the full inventory, including from an empty search.
+Filter and sort state is recorded in the URL and restored when returning from the editor.
+On narrow screens, rows stack into labeled groups without removing selection or actions.
+If loading fails, stale row actions are removed; **Retry** reloads the list.
+
 Tick the checkboxes to select posts (the header checkbox selects everything currently visible,
 i.e. it respects the filters), then use **Publish**, **Unpublish** or **Delete** in the bar that
-appears. Admin-only, like their single-post equivalents. Two things worth knowing:
+appears. Admin-only, like their single-post equivalents. Selections survive filter changes:
+the bar reports how many selected posts are outside the current view. **Review selection**
+lists every selected title; **Clear selection** deselects the entire set. Bulk confirmations
+name the affected stories. Important details:
 
 - **The whole batch triggers one rebuild**, at the end — not one per post. Bulk publish also
   writes each post's MDX backup, exactly like publishing one at a time.
 - **Failures are reported per post, and the rest of the batch still runs.** A post that fails
   validation (or a half-created pair with only one locale row) is listed by name in the status
-  box with its reason; everything else goes through.
+  box with its reason; everything else goes through. Failed stories remain selected for retry;
+  successfully processed stories are deselected.
 - **Bulk delete asks you to type `DELETE`.** There is no undo — revisions are per-save snapshots
   of a post, so deleting the post takes them with it.
 
 ### Export / backup
 
-The **Export all** button (Posts list) writes MDX backup files for all posts to
+The **Export MDX to server backup** button (Posts list) writes MDX backup files for all posts to
 `/data/backup` on the server. Exports contain the **working copies** (what you see in the
 editor) — including draft edits not yet published. These are reference copies — Postgres is the
 source of truth.
@@ -224,6 +259,22 @@ most heroes already exist, and re-uploading one would just mint a second copy un
 
 ### Galleries
 
+**The easy way: "Insert / edit gallery".** Each locale tab has the button next to "Insert body
+image". Put the cursor where the gallery should go — or anywhere inside an existing one — and it
+opens the media library in multi-select mode. Click photos to add them, use ↑ / ↓ to set the order
+(that *is* the order they appear in), and × to drop one. Confirming writes the fence below for you;
+confirming with nothing selected removes the gallery. The photos already in the gallery are
+pre-selected the moment the dialog opens, whichever library page they happen to live on, and a photo
+that is no longer in the library is kept too — marked `in gallery` and with no thumbnail — so
+editing a gallery never quietly loses a photo. Alt text and captions you have already written for
+*this post* win over the media library's own; only newly added photos take the library's.
+
+Two cases it will refuse rather than guess: a gallery whose closing ` ``` ` is missing (its extent
+would run to the end of the post), and a cursor inside a code block that is likewise unclosed. It
+tells you which; close the fence and try again.
+
+Everything below is what that button writes, and is still the format to hand-edit.
+
 Several photos in one grid go in a fenced block with the language `gallery`, one image URL per
 line. Order is line order; blank lines and `#`-prefixed lines are ignored.
 
@@ -256,8 +307,55 @@ Two things silently drop a photo from the grid, both deliberate:
 > galleries locally. Draft previews in the admin are unaffected — they use the app's own
 > configured image base.
 
-Galleries work in **page** bodies (the About page) on the same terms. The draft preview renders
-them; per the current phase there is no lightbox, so clicking a photo opens the full-size image.
+#### Layout modes
+
+A gallery picks one of three layouts with a `#layout:` line **inside** the fence. The picker sets
+it for you; by hand it looks like this:
+
+````
+```gallery
+#layout: column
+https://img.simonswanderlust.com/trips/rhodes-2021/a-1a2b3c4d | 3000x2000 | alt="Blick über die Bucht"
+```
+````
+
+| Mode | What it does |
+| --- | --- |
+| `column` | **Default.** Justified rows aligned to the body-text column. |
+| `breakout` | Justified rows, wider than the story column — the full spread on a desktop. |
+| `slider` | One horizontally scrollable row. |
+
+The directive goes **inside** the fence, not on the opener — ` ```gallery layout=slider ` does not
+work, because the info string is discarded before the renderer sees it. It must be a whole line, so
+a `#layout:` sequence inside an `alt="…"` value stays content. The first one wins, and an unknown
+or missing mode falls back to `column`. (The default was `breakout` until 2026-09-20; a gallery
+that should stay wide needs an explicit `#layout: breakout`, which the picker writes for you.)
+
+In the justified modes the last row is capped at the height of the row above it, so a short final
+row can't leave one photo towering over the rest.
+
+Galleries work in **page** bodies (the About page) on the same terms. Clicking any photo opens a
+lightbox, in all three modes. The draft preview renders galleries but **not** the lightbox — it is
+a separate island that only runs on the built site.
+
+### Comments
+
+Reader comments are stored in Postgres and served at request time — they are **never** baked
+into the static site, so none of the switches below need a Publish or a rebuild.
+
+1. **Global switch** — on the admin-only Settings page (`/admin/settings.html`), *Enable comments
+   on the site*. **Default off.** While it is off the form is hidden on every story and
+   `POST /comments` answers 409; approved comments already visible stay visible, and the per-post
+   checkbox has no effect. Turning it off is the rollback for the whole feature and deletes nothing.
+2. **Per-post checkbox** — *Allow comments on this trip* under **Expedition details** in the
+   editor (shared between DE and EN). **Default on**; untick it to close one thread. Authors can
+   close a trip, but only an admin can open the site to comments.
+3. **Moderation** — a reader's comment lands in `/admin/comments.html` as **pending** and is not
+   public until an admin clicks **Approve**. Author replies are auto-approved and marked as such.
+4. **No rebuild** — closing or opening comments (either switch) takes effect on the next request.
+   It does not require **Publish** and never triggers a site build.
+5. **Deleting a post deletes its comments** — the thread is removed in the same transaction as the
+   post and its revisions; there is no undo.
 
 ---
 
@@ -281,7 +379,16 @@ use `docker build .` from the repo root instead.)
 
 To trigger a rebuild manually (e.g. after a database restore, or a template code change), sign in
 as an admin and use the **Rebuild site now** button on the settings page (`/admin/settings.html`),
-which calls the admin-only `POST /rebuild` route.
+which calls the admin-only `POST /rebuild` route. From a shell on the host, without signing in:
+
+```bash
+docker compose exec app node --import tsx src/cli.ts rebuild
+```
+
+That subcommand does **not** build in its own process — it asks the running app over loopback, so
+the build still takes the one lock that keeps it from running beside image encoding (which is
+what the container's memory ceiling is sized against). The app therefore has to be up; if there
+is no release at all yet, boot builds one by itself.
 
 Notes:
 
@@ -305,7 +412,7 @@ Notes:
 
 - [ ] Photos uploaded — hero and body images via the editor's inline upload, or pre-uploaded via `/admin/` (hero); snippets/URLs ready.
 - [ ] In the editor: DE tab filled — slug (matches live WordPress slug, never renamed), title, date, country, countryCode, region, excerpt, heroImage fields, body photos inserted via the toolbar (or pasted `<BodyImage …/>` tags — converted on save) with DE alt text.
-- [ ] In the editor: EN tab filled — title, excerpt, EN hero alt text, EN body with its own photo inserts (EN alt text).
+- [ ] In the editor: EN tab filled — title, country (its own field — does not carry over from DE), excerpt, EN hero alt text, EN body with its own photo inserts (EN alt text).
 - [ ] **Save draft** — both locale rows written to Postgres; the live site is never affected by a save.
 - [ ] **Publish** — snapshots the content as the live version and triggers the rebuild automatically.
 - [ ] Verify the post renders at `/<slug>/` and `/en/<slug>/`, hero + body images load.

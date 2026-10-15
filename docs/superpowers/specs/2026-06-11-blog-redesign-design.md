@@ -55,12 +55,62 @@ Locale model: German is the default locale at root (no prefix); English under `/
 4. Story grid: asymmetric editorial grid of all trips (one large card per row-group, smaller satellites), region filter chips above
 5. About teaser (photo + two sentences + link), footer (localized strings only, Instagram link)
 
+#### Homepage refinement — 2026-09-19
+
+The current editorial-log implementation supersedes the original composition
+above: hero → complete chronological story index → map band → footer. The
+existing `featured` choice remains authoritative, with newest-story fallback.
+
+- Below `640px`, show the hero photograph at its natural aspect ratio and the
+  opaque paper entry below it. Long titles expand in flow, never over the photo.
+- Mobile story cards preserve each photo's aspect ratio and put the full title
+  and date on a solid navy caption below. Retire index-based double-height cards.
+- Keep the promoted story in the full index, using a compact mobile thumbnail
+  beside its title rather than repeating the opening photo at full size.
+  Preserve chronology, all entries, and the desktop mosaic's no-empty-cell rule.
+- Region navigation uses 14px mono labels with counts, arrows and 44px targets.
+  These remain links to region pages, not in-place filters.
+- From `640px`, small story tiles separate the photograph from a solid navy
+  caption using an image row of at least `6rem` plus a content-sized caption.
+  Keep the `280px` mosaic tracks and existing spans. Only the double-height lead
+  at `1024px` and above retains its full-photo overlay and contrast-safe ramp.
+- Homepage hero date/coordinates and card dates use the existing `12px` mono
+  role, retaining the shared tracking token, wrapping and established colours.
+- Teaser rewrites and genuine photographic alt descriptions are bilingual
+  author-approval proposals, not automatic changes to stored post content.
+- Preserve content, editorial flags, slugs, DE/EN parity, palettes and fonts.
+  No database writes, publishing changes or new client-side interaction.
+
+Verification: affected Vitest coverage for image source hints, Astro check,
+and rendered DE/EN layouts, image proportions, navigation and keyboard focus
+at mobile, tablet and desktop sizes. Rollback is a source revert; stored
+content is untouched.
+
 ### Story page composition
-1. Full-bleed hero image, title + label overlaid
-2. Intro + key-facts box (country stats, as today) + section TOC
-3. Body: prose sections, image galleries (grid + lightbox-free enlarged view; no JS lightbox in v1), tables where present
-4. Mini-map of this trip (pin(s); route line when data exists)
-5. Prev/next story navigation, link to the other language version
+The owner-approved refinement of 2026-09-19 supersedes the original overlaid
+hero and expanded preamble:
+
+1. Full-width photograph: natural aspect ratio on mobile; `36vh`, clamped to
+   `240–400px`, from `640px`. Title and metadata follow on opaque canvas.
+   Coordinates, the arrival stamp and the other-language link form one header.
+2. Compact, initially collapsed native contents and optional key-facts
+   disclosures. Contents stays available while reading; section selection
+   closes it and focuses the destination without replacing native URL history.
+   No-JavaScript links and disclosures remain functional.
+3. Unchanged author prose, headings, galleries and image rendering. The body
+   retains its `728px` desktop measure, `18px` type and `32px` line height;
+   list items also wrap non-breaking text at narrow widths.
+4. Existing trip mini-map and route divider.
+5. Chronological previous/next links with modest photographic thumbnails and
+   complete titles. A lone link uses the full column; absent links create no
+   placeholders, and no navigation is rendered when neither sibling exists.
+
+Content, slugs, DE/EN pairing, typography, palette, gallery behavior and stored
+data are preserved. The UI uses the existing translation keys. Verification
+includes encoded heading navigation, keyboard Escape, native no-JS navigation,
+320px long-content wrapping, portrait heroes, both locales and zero/one/two
+pagination states. Rollback is a source revert; no database migration or
+content rewrite is involved.
 
 ## 5. Technical architecture
 

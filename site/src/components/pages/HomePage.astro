@@ -4,10 +4,8 @@ import Base from '../../layouts/Base.astro';
 import FeaturedHero from '../FeaturedHero.astro';
 import MapTeaser from '../MapTeaser.astro';
 import RegionFilter from '../RegionFilter.astro';
-import RouteDivider from '../RouteDivider.astro';
 import StoryGrid from '../StoryGrid.astro';
 import { useTranslations, type Locale } from '../../i18n/ui';
-import { aboutPath } from '../../lib/paths';
 import { byLocale, entryNumberOf } from '../../lib/trips';
 
 interface Props {
@@ -16,8 +14,40 @@ interface Props {
 
 const { locale } = Astro.props;
 const t = useTranslations(locale);
+// `byLocale` sorts newest-first (trips.ts: `b.data.date - a.data.date`), so
+// `trips[0]` is the newest story and is the fallback cover.
 const trips = byLocale(await getCollection('trips'), locale);
-const [featured, ...rest] = trips;
+// @ai-note The cover is an EDITORIAL choice, not "whatever was published last":
+// `featured` (content.config.ts) lets the author nominate the photograph the
+// front door leads with. Uniqueness is deliberately not enforced anywhere —
+// several posts may carry the flag and the newest of them wins, which is why
+// this is a `find` over a newest-first list rather than a lookup that could
+// fail. No flag at all = the newest story, i.e. the pre-#209 behaviour.
+const flagged = trips.findIndex((t) => t.data.featured);
+const coverIndex = flagged >= 0 ? flagged : 0;
+const featured = trips[coverIndex];
+/*
+  @ai-note Section order is the argument this page makes, and it was backwards.
+  The map band used to sit directly under the hero, so the first thing a scroll
+  revealed on a photography-led front door was not another photograph but the
+  stat line at 12px — a credentials claim answering a question nobody has asked
+  yet, measured occupying the bottom 270px of a 1440x900 first viewport. It now
+  closes the page instead, where "where has he been" is a question the visitor
+  actually holds after browsing the index, and where its navy runs into the
+  footer's navy as one dark base.
+
+  What used to close the page — a centred about teaser whose final call was the
+  smallest link on it, pointing away from the only action this page exists to
+  produce — is gone. Its gear line, the most credible sentence here for a
+  photography audience, moved into the footer's identity column where it sits
+  in the same mono register as the logline; the About page itself is linked
+  from the nav and from the footer.
+
+  RouteDivider went with it. One dashed rule between two sections that already
+  meet at a hard canvas/navy edge was a motif asserting itself rather than
+  dividing anything; the rule inside the hero panel, which separates the
+  masthead from the entry, is the instance that does work.
+*/
 ---
 
 <Base
@@ -25,33 +55,58 @@ const [featured, ...rest] = trips;
   description={t('site.tagline')}
   locale={locale}
   alternates={{ de: '/', en: '/en/' }}
+  image={featured?.data.heroImage}
 >
-  {featured && <FeaturedHero trip={featured} number={entryNumberOf(featured, trips)} />}
-  <MapTeaser locale={locale} />
-  <section id="stories" class="mx-auto max-w-6xl px-5 py-14">
-    <div class="flex flex-wrap items-baseline justify-between gap-4">
-      <h2 class="text-2xl font-extrabold text-navy">{t('home.allStories')}</h2>
-      <RegionFilter locale={locale} />
-    </div>
-    <div class="mt-6">
-      {/* Single-story locale: grid repeats the hero story — duplicate beats an empty grid during migration. */}
-      <StoryGrid trips={rest.length > 0 ? rest : trips} locale={locale} numberingPool={trips} />
+  {
+    /*
+      @ai-warning FeaturedHero owns the document's <h1> (the site tagline), so
+      a homepage WITHOUT a cover story would otherwise ship no <h1> at all —
+      and that is a reachable state, not a hypothetical: it is exactly what a
+      fresh install renders. The masthead below is the same line at the same
+      level, which is why it is a fallback rather than a second banner.
+    */
+    featured ? (
+      <FeaturedHero trip={featured} number={entryNumberOf(featured, trips)} />
+    ) : (
+      <section class="border-b border-navy/10 bg-canvas">
+        <div class="mx-auto max-w-6xl px-5 py-16">
+          <h1 class="text-2xl font-extrabold text-navy sm:text-3xl">{t('site.tagline')}</h1>
+        </div>
+      </section>
+    )
+  }
+  {/*
+      @ai-warning The grid gets EVERY story, the hero included. It used to get
+      `rest` — everything but the hero — under a heading reading "all travel
+      stories" beside a chip counting `trips.length`, so the section claimed 9
+      and held 8, and the one story it omitted was the newest: exactly the one
+      the site most wants opened. (An older revision had the opposite bug, the
+      grid repeating the hero as a second full-size tile; the fix for that was
+      to exclude it, which bought this one.) The hero is a promotion of one of
+      the grid's own entries rather than a twin of it, the way a lead story
+      also appears in the index below it — and the count is true by
+      construction, with nothing to keep in sync. `coverIndex` hands the desktop
+      lead tile to another story and makes the cover a compact mobile index
+      entry. The collection stays complete and chronological without showing
+      the opening photograph at full size twice in succession.
+
+      @ai-note This section is NOT gated on `trips.length > 0` any more.
+      StoryGrid has an authored empty state and the gate made it unreachable,
+      so a site with nothing published rendered a homepage with no photograph,
+      no grid and no explanation — just a navy band reading "0 Reisen · 0
+      Länder · 0 Kontinente". The band itself is gated instead: with no trips
+      the chart emits nothing and the stat line is the only thing left in it.
+    */}
+  <section id="stories" class="mx-auto max-w-6xl px-5 py-12 sm:py-16">
+    <h2 class="text-2xl font-extrabold text-navy sm:text-3xl">{t('home.allStories')}</h2>
+    {trips.length > 0 && (
+      <div class="mt-3">
+        <RegionFilter locale={locale} />
+      </div>
+    )}
+    <div class="mt-8">
+      <StoryGrid trips={trips} locale={locale} coverIndex={coverIndex} />
     </div>
   </section>
-  <RouteDivider />
-  <section>
-    <div class="mx-auto max-w-3xl px-5 py-14 text-center">
-      <h2 class="text-xl font-extrabold text-navy">{t('nav.about')}</h2>
-      <p class="mt-3 text-ink/80">{t('home.aboutTeaser.text')}</p>
-      <a
-        href={aboutPath(locale)}
-        class="group/about mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-brand-red hover:text-brand-red-light"
-      >
-        <span>{t('home.aboutTeaser.cta')}</span>
-        <svg aria-hidden="true" focusable="false" class="h-4 w-4 transition-transform duration-300 group-hover/about:translate-x-1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M3 8h10M9 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      </a>
-    </div>
-  </section>
+  {trips.length > 0 && <MapTeaser locale={locale} />}
 </Base>
