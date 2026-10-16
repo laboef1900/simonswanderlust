@@ -44,6 +44,7 @@ import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
 import { compressionHook } from './compress.js';
 import { CommentError, isCommentStatus, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
+import { ui } from '../../site/src/i18n/ui.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -1014,6 +1015,18 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   const { posts } = cfg;
 
+  // Static editor copy shares the site's bilingual dictionary, not a second
+  // hand-maintained translation file. Like /admin/*.js, this contains no secrets.
+  app.get('/admin/editor-image-copy.js', async (_req, reply) => {
+    const copy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale,
+      Object.fromEntries(Object.entries(strings)
+        .filter(([key]) => key.startsWith('editor.titleImage.'))
+        .map(([key, value]) => [key.slice('editor.titleImage.'.length), value])),
+    ]));
+    return reply.type('application/javascript').send(`window.EditorImageCopy = ${JSON.stringify(copy)};`);
+  });
+
   /**
    * Turn an image URL from a post back into its storage key, or null when the
    * URL is not one of ours. Strips the image base and any hand-pasted variant
@@ -1041,6 +1054,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     for (const locale of ['de', 'en'] as const) {
       const l = pair[locale];
       if (l?.heroImage?.src) out.add(l.heroImage.src);
+      if (l?.titleImage?.src) out.add(l.titleImage.src);
       for (const key of Object.keys(l?.images ?? {})) out.add(key);
     }
     return [...out];
@@ -1066,6 +1080,14 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       .filter((k): k is string => k !== null);
     if (keys.length === 0) return [];
     const notReady = await cfg.media.notReadyKeys(keys);
+    // Title images are new library selections, not pre-library legacy heroes.
+    // Unknown keys must not slip through notReadyKeys' legacy exception.
+    for (const locale of ['de', 'en'] as const) {
+      const image = pair[locale].titleImage;
+      if (!image) continue;
+      const key = srcToKey(image.src, imageBase);
+      if (key !== null && !(await cfg.media.get(key))) notReady.add(key);
+    }
     return [...notReady];
   }
 
@@ -1079,13 +1101,15 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const out = new Set<string>();
     for (const locale of ['de', 'en'] as const) {
       for (const url of await foreignImageUrls(pair[locale].bodyMarkdown, imageBase)) out.add(url);
+      const title = pair[locale].titleImage;
+      if (title && srcToKey(title.src, imageBase) === null) out.add(title.src);
     }
     return [...out];
   }
 
   const FOREIGN_EXAMPLES = 5;
   function foreignImagesMessage(n: number): string {
-    return `${n} image(s) in the body still point at another host — re-run the WordPress import to re-host them, or replace them with library photos, then publish again`;
+    return `${n} image(s) in the body or title banner are not hosted here — replace them with library photos or re-host imported body images, then publish again`;
   }
 
   app.get('/posts', { preHandler: requireAuth }, async () => posts.list());

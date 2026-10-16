@@ -208,6 +208,7 @@
                 <input id="deHeroFormat" type="hidden" />
               </div>
             </section>
+            <section class="editor-inspector-group title-image-editor" id="deTitleImage"></section>
           </section>
 
           <section class="editor-inspector-locale" data-inspector-locale="en" aria-labelledby="enStoryDetailsHeading" hidden>
@@ -282,6 +283,7 @@
                 <input id="enHeroFormat" type="hidden" />
               </div>
             </section>
+            <section class="editor-inspector-group title-image-editor" id="enTitleImage"></section>
           </section>
 
           <details class="editor-inspector-group" id="expeditionDetails">
@@ -405,6 +407,8 @@
     <script src="/admin/posts-filter.js"></script>
     <script src="/admin/tabs.js"></script>
     <script src="/admin/editor-inspector.js"></script>
+    <script src="/admin/editor-image-copy.js"></script>
+    <script src="/admin/editor-title-image.js"></script>
     <script>
       'use strict';
       const $ = (id) => document.getElementById(id);
@@ -847,6 +851,16 @@
 
       ['de', 'en'].forEach(HeroFocus.wire);
 
+      const titleImages = Object.fromEntries(['de', 'en'].map((locale) => [
+        locale,
+        EditorTitleImage.create({
+          locale, mount: $(locale + 'TitleImage'), copy: EditorImageCopy[locale],
+          getSlug: () => $(locale === 'de' ? 'slugFieldDe' : 'slugFieldEn').value.trim(),
+          onChange: () => { guard.markDirty(); storyReview?.invalidate(); },
+          onUnauthed: () => guard.redirectToLogin(),
+        }),
+      ]));
+
       // Layout modes (#66). The labels are the admin's; the VALUES must match
       // GALLERY_MODES in site/src/lib/gallery-layout.ts, which is what the
       // renderer accepts — an unknown value silently falls back to the column.
@@ -1109,6 +1123,7 @@
                   ...(framed ? { focus: focus } : {}),
                 }
               : undefined,
+            titleImage: titleImages[loc].get(),
             bodyMarkdown: mde.value(),
             images: loc === 'de' ? { ...deImages } : { ...enImages },
             keyFacts: collectKeyFacts(loc),
@@ -1574,6 +1589,7 @@
         $(loc + 'HeroFocusX').value = Number.isFinite(focus.x) ? focus.x : 50;
         $(loc + 'HeroFocusY').value = Number.isFinite(focus.y) ? focus.y : 50;
         HeroFocus.sync(loc);
+        titleImages[loc].set(data.titleImage);
         // Reset the dimension map before filling it — merging would persist
         // stale entries from the pre-restore state on the next Save.
         const map = loc === 'de' ? deImages : enImages;

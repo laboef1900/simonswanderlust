@@ -1,12 +1,13 @@
 import type { Loader } from 'astro/loaders';
 import { loaderPool } from './loader-pool.js';
 import { transformBodyImages, type ImageDims } from './body-images.js';
-import { imageOrigin, retargetImageOrigins } from './images.js';
+import { imageOrigin, retargetImageOrigins, type RemoteHeroImage } from './images.js';
 
 interface PostRow {
   translation_key: string; locale: 'de' | 'en'; slug: string; title: string; date: Date | string;
   country: string; country_code: string; region: string; excerpt: string;
-  hero_image: { src: string; width: number; height: number; alt: string; format?: 'jpeg'; focus?: { x: number; y: number } };
+  hero_image: RemoteHeroImage;
+  title_image?: RemoteHeroImage | null;
   coordinates: { lat: number; lng: number };
   stops: { name: string; lat: number; lng: number }[] | null; route: string | null;
   key_facts: Record<string, string> | null; body_markdown: string; images: Record<string, ImageDims>;
@@ -43,7 +44,7 @@ function parseRowDate(date: Date | string): Date {
  */
 export function rowToEntryInput(row: PostRow, imageHost: string) {
   const portable = retargetImageOrigins(
-    { heroSrc: row.hero_image?.src ?? '', images: row.images ?? {}, body: row.body_markdown },
+    { heroSrc: row.hero_image?.src ?? '', titleSrc: row.title_image?.src, images: row.images ?? {}, body: row.body_markdown },
     imageHost,
   );
   return {
@@ -59,6 +60,7 @@ export function rowToEntryInput(row: PostRow, imageHost: string) {
       translationKey: row.translation_key,
       excerpt: row.excerpt,
       heroImage: { ...row.hero_image, src: portable.heroSrc },
+      ...(row.title_image ? { titleImage: { ...row.title_image, src: portable.titleSrc! } } : {}),
       coordinates: row.coordinates,
       ...(row.stops ? { stops: row.stops } : {}),
       ...(row.route ? { route: row.route } : {}),

@@ -131,6 +131,14 @@ describe('harvestAlt', () => {
     expect(out).toEqual({ de: 'Altstadt', en: 'Old town' });
   });
 
+  it('harvests title-image alt only for its exact URL and locale', () => {
+    const src = `${BASE}/trips/a/title`;
+    expect(harvestAlt(src, [
+      row({ titleImage: { src: src + '-other', width: 2000, height: 600, alt: 'Wrong photo' } }),
+      row({ locale: 'en', titleImage: { src, width: 2000, height: 600, alt: 'Skyline' } }),
+    ])).toEqual({ de: '', en: 'Skyline' });
+  });
+
   it('harvests body-image alt from the ![alt](src) form', () => {
     const src = `${BASE}/trips/a/pic`;
     expect(harvestAlt(src, [row({ locale: 'en', bodyMarkdown: `text ![A gate](${src}) more` })]))

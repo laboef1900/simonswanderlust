@@ -2,11 +2,23 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { galleryFencesToMdx, unescapeAltText } from './body-content.js';
 import { markdownImages } from './wp-content.js';
-import type { Locale, PostLocale, PostPair } from './posts.js';
+import type { HeroImage, Locale, PostLocale, PostPair } from './posts.js';
 
 // YAML single-quoted scalar: a literal quote is escaped by doubling it ('' ),
 // never with a backslash. Mirrors storage.ts so exported MDX re-parses cleanly.
 const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
+
+function imageYaml(name: string, image: HeroImage): string[] {
+  return [
+    `${name}:`,
+    `  src: ${q(image.src)}`,
+    `  width: ${image.width}`,
+    `  height: ${image.height}`,
+    `  alt: ${q(image.alt)}`,
+    ...(image.format === 'jpeg' ? ['  format: jpeg'] : []),
+    ...(image.focus ? [`  focus: { x: ${image.focus.x}, y: ${image.focus.y} }`] : []),
+  ];
+}
 
 /**
  * Turn markdown body images back into <BodyImage> tags using the images map,
@@ -46,18 +58,8 @@ export function renderPostToMdx(pair: PostPair, locale: Locale): string {
     `region: ${q(s.region)}`,
     `translationKey: ${q(pair.translationKey)}`,
     `excerpt: ${q(p.excerpt)}`,
-    'heroImage:',
-    `  src: ${q(p.heroImage.src)}`,
-    `  width: ${p.heroImage.width}`,
-    `  height: ${p.heroImage.height}`,
-    `  alt: ${q(p.heroImage.alt)}`,
-    ...(p.heroImage.format === 'jpeg' ? ['  format: jpeg'] : []),
-    // The MDX files are the recovery path, so an author's focal point has to
-    // survive them. Nested under heroImage, matching the Zod schema in
-    // site/src/content.config.ts.
-    ...(p.heroImage.focus
-      ? [`  focus: { x: ${p.heroImage.focus.x}, y: ${p.heroImage.focus.y} }`]
-      : []),
+    ...imageYaml('heroImage', p.heroImage),
+    ...(p.titleImage ? imageYaml('titleImage', p.titleImage) : []),
     `coordinates: { lat: ${s.coordinates.lat}, lng: ${s.coordinates.lng} }`,
   ];
   if (s.route) lines.push(`route: ${q(s.route)}`);

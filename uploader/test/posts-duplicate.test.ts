@@ -48,6 +48,17 @@ const TODAY = new Date('2026-07-27T09:00:00Z');
 const slugs = { de: 'schweden-2026', en: 'sweden-2026' };
 
 describe('PostsDuplicate.duplicatePayload — structure copies', () => {
+  it('copies title-image metadata without sharing mutable focus state', () => {
+    const original = structuredClone(source);
+    original.de.titleImage = { src: 'https://img/title', width: 2400, height: 800,
+      alt: 'Panorama', focus: { x: 20, y: 60 } };
+    const copied = load().duplicatePayload(original, slugs, TODAY);
+    expect(copied.de.titleImage).toEqual(original.de.titleImage);
+    copied.de.titleImage!.focus!.x = 90;
+    expect(original.de.titleImage.focus!.x).toBe(20);
+    expect(copied.en.titleImage).toBeUndefined();
+  });
+
   const api = load();
   const copy = api.duplicatePayload(source, slugs, TODAY);
 

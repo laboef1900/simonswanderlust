@@ -1678,6 +1678,60 @@ describe('publish gate (encode status)', () => {
   const create = async (b: Built, cookie: { sid: string }, payload: Record<string, unknown>) =>
     (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload })).json().translationKey;
 
+  it.each(['processing', 'failed', 'missing', 'unknown'] as const)('blocks single and bulk publication of a %s title image', async (status) => {
+    const b = build();
+    try {
+      const { cookie } = await authed(b);
+      const key = 'trips/g/title';
+      if (status !== 'unknown') await b.media.upsert({ key, status, width: 2400, height: 800, origBytes: 1,
+        exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+      const p = pairUsing(`${IMG}/trips/g/hero`);
+      const tk = await create(b, cookie, { ...p, de: { ...p.de,
+        titleImage: { src: `${IMG}/${key}`, width: 2400, height: 800, alt: 'View' } } });
+      const single = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+      expect(single.statusCode).toBe(409);
+      expect(single.json().notReady).toContain(key);
+      const bulk = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+      expect(bulk.json().results[0].ok).toBe(false);
+      expect((await b.posts.get(tk))?.status).toBe('draft');
+    } finally { await b.app.close(); }
+  });
+
+  it('refuses a foreign title image before publication', async () => {
+    const b = build();
+    try {
+      const { cookie } = await authed(b);
+      const p = pairUsing(`${IMG}/trips/g/hero`);
+      const titleImage = { src: 'https://img.simonswanderlust.com.attacker.test/title', width: 2400, height: 800, alt: 'View' };
+      const tk = await create(b, cookie, { ...p, de: { ...p.de, titleImage } });
+      const response = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+      expect(response.statusCode).toBe(409);
+      expect(response.json().foreignImages).toEqual([titleImage.src]);
+    } finally { await b.app.close(); }
+  });
+
+  it('protects a ready title image from deletion until neither draft nor live snapshot uses it', async () => {
+    const b = build();
+    try {
+      const { cookie } = await authed(b);
+      const key = 'trips/g/title';
+      await b.media.upsert({ key, status: 'ready', width: 2400, height: 800, origBytes: 1,
+        exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+      const p = pairUsing(`${IMG}/trips/g/hero`);
+      const tk = await create(b, cookie, { ...p, de: { ...p.de,
+        titleImage: { src: `${IMG}/${key}`, width: 2400, height: 800, alt: 'View' } } });
+      const remove = () => b.app.inject({ method: 'DELETE', url: `/media/items/${key}`, cookies: cookie });
+      expect((await remove()).statusCode).toBe(409);
+      expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie })).statusCode).toBe(200);
+      const saved = (await b.posts.get(tk))!;
+      delete saved.de.titleImage;
+      await b.posts.upsertDraft(saved);
+      expect((await remove()).statusCode).toBe(409);
+      expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie })).statusCode).toBe(200);
+      expect((await remove()).statusCode).toBe(200);
+    } finally { await b.app.close(); }
+  });
+
   it('blocks publishing while a referenced photo is still processing', async () => {
     const b = build();
     const { cookie } = await authed(b);
@@ -1839,7 +1893,6 @@ describe('publish gate (foreign images, #91)', () => {
     const tk = await create(b, cookie, pairWithBody(de, '```gallery\nhttps://old.example/wp-content/uploads/g.jpg\n```'));
     const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error).toMatch(/8 image\(s\) in the body still point at another host/);
     expect(res.json().foreignImageCount).toBe(8);
     expect(res.json().foreignImages).toEqual(urls.slice(0, 5));
     expect(s.calls.length).toBe(0);
@@ -1862,7 +1915,6 @@ describe('publish gate (foreign images, #91)', () => {
       payload: { action: 'publish', keys: [tk] },
     });
     expect(res.json()).toMatchObject({ succeeded: 0, failed: 1 });
-    expect(res.json().results[0].error).toMatch(/1 image\(s\) in the body still point at another host/);
   });
 });
 

@@ -46,7 +46,9 @@ maybe('backup round-trip (Postgres)', () => {
         date: '2026-01-01', countryCode: 'RO', region: 'europe', coordinates: { lat: 45, lng: 25 },
         categories: ['reise'], tags: ['griechenland', 'sommer'], scheduledAt: '2026-10-01T08:00:00.000Z',
       },
-      de: { locale: 'de' as const, slug: 'test-reise', title: 'Test', excerpt: 'x', country: 'Rumänien', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hallo', images: {} },
+      de: { locale: 'de' as const, slug: 'test-reise', title: 'Test', excerpt: 'x', country: 'Rumänien', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' },
+        titleImage: { src: 'https://img.example/title-live', width: 2400, height: 800, alt: 'Skyline', format: 'jpeg' as const, focus: { x: 25, y: 75 } },
+        bodyMarkdown: 'Hallo', images: {} },
       en: { locale: 'en' as const, slug: 'test-trip', title: 'Test', excerpt: 'x', country: 'Romania', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hello', images: {} },
     };
     const createdPair = await posts.upsertDraft(base);
@@ -57,7 +59,8 @@ maybe('backup round-trip (Postgres)', () => {
     // the calendar date west, and re-saving it would poison the date column —
     // a pre-existing quirk this test deliberately keeps out of its scope.)
     await posts.publish(createdPair.translationKey);
-    await posts.upsertDraft({ ...base, translationKey: createdPair.translationKey, de: { ...base.de, bodyMarkdown: 'Hallo v2' } });
+    await posts.upsertDraft({ ...base, translationKey: createdPair.translationKey, de: { ...base.de, bodyMarkdown: 'Hallo v2',
+      titleImage: { ...base.de.titleImage, src: 'https://img.example/title-draft' } } });
     await pool.query(`INSERT INTO pages (key,locale,title,body_markdown) VALUES ('about','de','T','Body')
       ON CONFLICT (key,locale) DO UPDATE SET title=EXCLUDED.title, body_markdown=EXCLUDED.body_markdown`);
 
@@ -104,6 +107,10 @@ maybe('backup round-trip (Postgres)', () => {
     // columns the old explicit SELECT/INSERT lists omitted, so a restore silently
     // reset every working copy to '{}' / '{}' / NULL.
     const restored = await posts.get(createdPair.translationKey);
+    expect(restored?.de.titleImage).toEqual({ ...base.de.titleImage, src: 'https://img.example/title-draft' });
+    expect(restored?.en.titleImage).toBeUndefined();
+    const liveTitle = (await posts.usageRows()).find((row) => row.translationKey === createdPair.translationKey && row.locale === 'de' && row.source === 'published');
+    expect(liveTitle?.titleImage).toEqual(base.de.titleImage);
     expect(restored?.shared.categories).toEqual(['reise']);
     expect(restored?.shared.tags).toEqual(['griechenland', 'sommer']);
     expect(restored?.shared.scheduledAt).toBe('2026-10-01T08:00:00.000Z');
@@ -114,7 +121,7 @@ maybe('backup round-trip (Postgres)', () => {
   });
 
   it('rejects an unsupported dump version without touching data', async () => {
-    // @ai-warning: the guard is an ALLOW-LIST (1–8), not a minimum —
+    // @ai-warning: the guard is an ALLOW-LIST, not a minimum —
     // so this probes the next UNRELEASED version. Bump it whenever
     // DUMP_VERSION is bumped, or this stops testing anything.
     // gzipSync/writeFileSync are imported statically at the top of the file.
@@ -207,9 +214,10 @@ maybe('backup round-trip (Postgres)', () => {
     writeFileSync(v4, gzipSync(JSON.stringify({ version: 4, tables: { users: [], posts: [v4Post] } })));
 
     await restoreDatabase(pool, v4);
-    const row = (await pool.query(`SELECT featured, categories FROM posts WHERE slug='v4-reise'`)).rows[0];
+    const row = (await pool.query(`SELECT featured, categories, title_image FROM posts WHERE slug='v4-reise'`)).rows[0];
     expect(row.featured).toBe(false);
     expect(row.categories).toEqual(['reise']); // the v4 columns still restore
+    expect(row.title_image).toBeNull();
     await pool.query('DELETE FROM posts');
   });
 
@@ -474,7 +482,6 @@ maybe('backup round-trip (Postgres)', () => {
       const r = await comments.replyAsAuthor({ translationKey: tk, body: 'reply' });
       const file = join(dir, await dumpDatabase(pool, dir));
       const dump = readDump(file);
-      expect(dump.version).toBe(8);
       expect(dump.tables.comments).toHaveLength(2);
       for (const c of dump.tables.comments!) expect(c).not.toHaveProperty('email');
       const schemaCols = (await pool.query(

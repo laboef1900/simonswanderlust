@@ -137,6 +137,38 @@ maybe('pgPostStore (integration)', () => {
     en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   };
 
+  it('round-trips title images and keeps live snapshots isolated through schema reruns and removal', async () => {
+    const pool = createPool(url!);
+    try {
+      await ensureSchema(pool);
+      const store = pgPostStore(pool);
+      const slug = `title-${randomUUID()}`;
+      const titleImage = { src: 'https://i/title', width: 2400, height: 800, alt: 'Panorama',
+        format: 'jpeg' as const, focus: { x: 20, y: 40 } };
+      const saved = await store.upsertDraft({ ...base,
+        de: { ...base.de, slug: `${slug}-de`, titleImage },
+        en: { ...base.en, slug: `${slug}-en` },
+      });
+      expect((await store.get(saved.translationKey))?.de.titleImage).toEqual(titleImage);
+      expect((await store.get(saved.translationKey))?.en.titleImage).toBeUndefined();
+      await store.publish(saved.translationKey);
+      delete saved.de.titleImage;
+      await store.upsertDraft(saved);
+      await ensureSchema(pool);
+      expect((await store.get(saved.translationKey))?.de.titleImage).toBeUndefined();
+      const usage = (await store.usageRows()).filter((r) => r.translationKey === saved.translationKey && r.locale === 'de');
+      expect(usage.find((r) => r.source === 'working')?.titleImage).toBeUndefined();
+      expect(usage.find((r) => r.source === 'published')?.titleImage).toEqual(titleImage);
+      const rev = (await store.listRevisions(saved.translationKey))[0];
+      if (!rev) throw new Error('missing title-image revision');
+      expect((await store.getRevision(saved.translationKey, rev.id))?.snapshot.de.titleImage).toEqual(titleImage);
+      await store.publish(saved.translationKey);
+      expect((await store.usageRows()).filter((r) => r.translationKey === saved.translationKey).every((r) => !r.titleImage)).toBe(true);
+    } finally {
+      await pool.end();
+    }
+  });
+
   it('round-trips a pair, publishes, and enforces slug immutability', async () => {
     const pool = createPool(url!);
     await ensureSchema(pool);

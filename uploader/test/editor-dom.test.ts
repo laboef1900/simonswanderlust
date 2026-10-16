@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import type { PostPair } from '../src/posts.js';
 import type { EditorialReviewResult } from '../src/editorial-review.js';
 import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
+import { ui } from '../../site/src/i18n/ui.js';
 
 // editor.html's inline script is plain top-level browser code. Run it in a vm
 // context whose `document.getElementById` answers from the REAL markup's ids —
@@ -35,6 +36,7 @@ interface EditorOptions {
   review?: Review;
   isAdmin?: boolean;
   mobile?: boolean;
+  pickImage?: { src: string; width: number; height: number; alt: { de: string; en: string }; format?: 'jpeg' };
 }
 interface EditorApi {
   populateForm(post: unknown): void;
@@ -125,12 +127,19 @@ function loadEditor(options: EditorOptions = {}) {
     Auth: { ensureAuthed: async () => options.isAdmin === undefined ? null : { isAdmin: options.isAdmin }, renderHeader() {} },
     AdminConfirm: { ask: async () => false, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     DraftGuard: { createDraftGuard: () => guard, tabScopedKey: (p: string) => p + ':test' },
-    MediaPicker: { open() {} },
+    MediaPicker: { open(settings: { onPick?: (item: EditorOptions['pickImage']) => void }) {
+      if (options.pickImage) settings.onPick?.(options.pickImage);
+    } },
+    EditorImageCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale, Object.fromEntries(Object.entries(strings)
+        .filter(([key]) => key.startsWith('editor.titleImage.'))
+        .map(([key, value]) => [key.slice('editor.titleImage.'.length), value])),
+    ])),
     AltSuggest: { wire() {} },
   };
   ctx.window = ctx;
   vm.createContext(ctx);
-  for (const file of ['posts-filter.js', 'gallery-fence.js', 'editor-linter.js', 'llm.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
+  for (const file of ['posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'editor-linter.js', 'llm.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
     vm.runInContext(readFileSync('public/' + file, 'utf8'), ctx, { filename: file });
   }
   if (options.review) (ctx.LLM as { reviewStory: Review }).reviewStory = options.review;
@@ -175,6 +184,33 @@ function minimalPair(): StashPayload {
 }
 
 describe('editor.html inline script against its own markup', () => {
+  it('selects an independent title image, round-trips framing, and clears it on removal or old revision restore', () => {
+    const pickImage = { src: 'https://img/banner', width: 2400, height: 800,
+      alt: { de: 'Bergpanorama', en: 'Mountain panorama' }, format: 'jpeg' as const };
+    const { api, el } = loadEditor({ pickImage });
+    const original = fullPair();
+    api.populateForm(original);
+    el('deTitleImageLibrary').click();
+    el('deTitleImageX').value = '72';
+    el('deTitleImageY').value = '30';
+    el('deTitleImageAlt').value = 'Berge im Morgenlicht';
+    const saved = api.buildPayload();
+    expect(saved.de.titleImage).toEqual({ src: pickImage.src, width: 2400, height: 800,
+      alt: 'Berge im Morgenlicht', format: 'jpeg', focus: { x: 72, y: 30 } });
+    expect(saved.de.heroImage).toEqual(original.de.heroImage);
+    expect(saved.en.titleImage).toBeUndefined();
+    api.populateForm(saved);
+    expect(api.buildPayload().de.titleImage).toEqual(saved.de.titleImage);
+    el('deTitleImageRemove').click();
+    expect(api.buildPayload().de.titleImage).toBeUndefined();
+    expect(api.buildPayload().de.heroImage).toEqual(original.de.heroImage);
+    api.populateForm(saved);
+    api.populateForm(original);
+    expect(api.buildPayload().de.titleImage).toBeUndefined();
+    expect(el('deTitleImageAlt').value).toBe('');
+    expect(el('deTitleImageX').value).toBe('50');
+  });
+
   it('populateForm fills every shared and per-locale field from a full PostPair', () => {
     const { api, el } = loadEditor();
     expect(() => api.populateForm(fullPair())).not.toThrow();

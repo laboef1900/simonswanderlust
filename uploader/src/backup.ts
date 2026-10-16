@@ -16,6 +16,7 @@ import { storedProcessOptions } from './pipeline.js';
  * has neither key: restoring it leaves an EMPTY comments table (comments
  * cannot outlive posts the dump may not contain) and comments_enabled = true
  * (the column default; the site-wide setting is the real off switch).
+ * v9 adds the optional story-only `posts.title_image`; older dumps restore it as NULL.
  * v7 added media `format` + `encoding`, preserving JPEG-only sets and their
  * snapped retry/recovery profile across restore.
  * v6 added encrypted `app_secrets` (never the encryption master key);
@@ -23,9 +24,9 @@ import { storedProcessOptions } from './pipeline.js';
  * v3 added `media` + `media_folders`; v2 added `pages`.
  * @ai-warning Bumping this ALSO requires widening the allow-list guard below.
  */
-export const DUMP_VERSION = 8;
+export const DUMP_VERSION = 9;
 /** Every version `readDump` accepts — an allow-list, not a minimum. */
-export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8];
+export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
 export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 /**
@@ -106,7 +107,7 @@ export async function dumpDatabase(db: Connectable, dir: string, now: Date = new
       `SELECT id, translation_key, locale, slug, title, to_char(date, 'YYYY-MM-DD') AS date, country,
          country_code, region, excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown,
          images, status, created_at, updated_at, published_snapshot, published_at,
-         categories, tags, scheduled_at, featured, comments_enabled
+         categories, tags, scheduled_at, featured, comments_enabled, title_image
        FROM posts ORDER BY created_at`,
     )).rows;
     comments = (await client.query(
@@ -616,16 +617,16 @@ export async function restoreDatabase(
       await client.query(
         `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
            excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status, created_at, updated_at,
-           published_snapshot, published_at, categories, tags, scheduled_at, featured, comments_enabled)
+           published_snapshot, published_at, categories, tags, scheduled_at, featured, comments_enabled, title_image)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15::jsonb,$16,$17::jsonb,$18,$19,$20,$21::jsonb,$22,
-           $23::text[],$24::text[],$25,$26,$27)`,
+           $23::text[],$24::text[],$25,$26,$27,$28::jsonb)`,
         [p.id, p.translation_key, p.locale, p.slug, p.title, p.date, p.country, p.country_code, p.region,
          p.excerpt, asJsonb(p.hero_image), asJsonb(p.coordinates), asJsonb(p.stops), p.route,
          asJsonb(p.key_facts), p.body_markdown, asJsonb(p.images), p.status, p.created_at, p.updated_at,
          asJsonb(p.published_snapshot), p.published_at ?? null,
          asTextArray(p.categories), asTextArray(p.tags), p.scheduled_at ?? null, p.featured === true,
          // absent from v<=7 dumps → true (the column default); only an explicit false disables
-         p.comments_enabled !== false],
+         p.comments_enabled !== false, asJsonb(p.title_image)],
       );
     }
     // @ai-warning A dump is a file the operator hands us, not a trusted row

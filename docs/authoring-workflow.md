@@ -83,8 +83,8 @@ The in-admin editor at `/admin/posts.html` is the authoring interface — no Git
 needed. Content is stored in **Postgres**; MDX files are generated automatically as backups.
 
 The editor opens on the title and story body. **Story details** beside the writing
-surface holds the active language's country, permalink, summary, key facts and hero
-image; expedition details and taxonomy are shared. Hide the inspector for more writing
+surface holds the active language's country, permalink, summary, key facts, hero
+image and optional title image; expedition details and taxonomy are shared. Hide the inspector for more writing
 space, or use **Details** on a phone to open it as a drawer. Switching DE/EN preserves
 both languages' unsaved edits.
 
@@ -93,6 +93,15 @@ both languages' unsaved edits.
 Unpublish. Missing-field links select the right language and reveal the field to fix.
 For an existing hero, use **Replace photo** to upload or choose from the library,
 and **Adjust framing** for focal-point controls.
+
+**Separate wide title image** — in Story details, use **Titelbild (optional)** on the DE tab
+or **Title image (optional)** on the EN tab. Choose a photo from the media library or upload
+a wide photograph, enter its language-specific alt text, and adjust framing if needed.
+This changes only the photograph above the story and in Preview; cards, the homepage cover
+and social images keep the hero. Each language has its own optional selection. **Remove title
+image** restores the hero fallback without deleting either photo from the library.
+Save a draft and preview first; only **Publish** changes the live banner. Upload encoding
+can still be running when the upload returns: wait until the photo is ready before publishing.
 
 ### Create a new post
 
@@ -110,6 +119,7 @@ and **Adjust framing** for focal-point controls.
    | **Region** | `europe` \| `north-america` \| `south-america` |
    | **Excerpt** | 1-2 sentence summary |
    | **Hero image** | Open Story details → **Replace photo**, then **Upload hero** or **Choose from library**; edit alt text beside the preview and use **Adjust framing** for the focal point |
+   | **Title image (optional)** | A separate wide photograph for the story header; choose/upload in Story details, add alt text and adjust framing. Leave empty to use the hero |
    | **Coordinates** | `lat`, `lng` decimal |
    | **Body** | Markdown (EasyMDE editor). Embed photos via the body toolbar's inline upload — it inserts a markdown image (`![alt](URL)`) and records the dimensions automatically. Pasted `<BodyImage …/>` tags (from an MDX backup or the upload page) also work: they're converted on save. |
 
@@ -151,7 +161,7 @@ kind of thing that gets published by accident.
 
 | Carried over | Reset |
 |---|---|
-| Title, excerpt, body, hero image | Trip date → today |
+| Title, excerpt, body, hero image and optional title image | Trip date → today |
 | The `images` map (mandatory — without it the body's photos silently stop rendering) | Coordinates → unset |
 | Key facts, stops, route, region, country, country code | Status → always draft |
 
