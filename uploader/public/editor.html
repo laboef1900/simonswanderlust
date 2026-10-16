@@ -340,8 +340,10 @@
 
             <div id="stopsContainer">
               <p class="section-label">Waypoints / stops</p>
+              <p id="waypointPrivacy" class="muted"></p>
               <div id="stopsList"></div>
               <button type="button" id="addStop" class="btn-secondary">Add stop</button>
+              <p class="muted"><a id="waypointAttribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer"></a></p>
             </div>
           </details>
 
@@ -409,6 +411,8 @@
     <script src="/admin/editor-inspector.js"></script>
     <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/editor-title-image.js"></script>
+    <script src="/admin/waypoint-copy.js"></script>
+    <script src="/admin/waypoint-lookup.js"></script>
     <script>
       'use strict';
       const $ = (id) => document.getElementById(id);
@@ -619,6 +623,9 @@
       }
 
       // ---- stops (optional rows: mini-map waypoints) ----
+      const stopLookups = new Map();
+      $('waypointPrivacy').textContent = WaypointCopy.en.privacy;
+      $('waypointAttribution').textContent = WaypointCopy.en.attribution;
       function addStopRow(name = '', lat = '', lng = '') {
         const row = document.createElement('div');
         row.className = 'stop-row';
@@ -655,13 +662,23 @@
         remove.className = 'btn-remove';
         remove.textContent = '×';
         remove.setAttribute('aria-label', 'Remove stop');
-        remove.addEventListener('click', () => { row.remove(); guard.markDirty(); });
+        remove.addEventListener('click', () => {
+          stopLookups.get(row)();
+          stopLookups.delete(row);
+          row.remove();
+          guard.markDirty();
+        });
 
         row.appendChild(nameInput);
         row.appendChild(latInput);
         row.appendChild(lngInput);
         row.appendChild(remove);
         $('stopsList').appendChild(row);
+        stopLookups.set(row, WaypointLookup.attach({
+          row, nameInput, latInput, lngInput, copy: WaypointCopy.en,
+          onChange: () => guard.markDirty(),
+          onUnauthed: () => guard.redirectToLogin(),
+        }));
       }
 
       $('addStop').addEventListener('click', () => addStopRow());
@@ -1558,6 +1575,8 @@
       }
 
       function populateStops(stops) {
+        stopLookups.forEach((dispose) => dispose());
+        stopLookups.clear();
         $('stopsList').innerHTML = '';
         if (!Array.isArray(stops)) return;
         stops.forEach((s) => {

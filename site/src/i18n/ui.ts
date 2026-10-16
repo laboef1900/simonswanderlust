@@ -3,6 +3,17 @@ export type Locale = (typeof locales)[number];
 export const defaultLocale: Locale = 'de';
 
 const de = {
+  'editor.waypoint.search': 'Koordinaten suchen',
+  'editor.waypoint.searching': 'Ort wird gesucht…',
+  'editor.waypoint.enterName': 'Bitte einen Ortsnamen mit 2–200 Zeichen eingeben.',
+  'editor.waypoint.choose': 'Passenden Ort auswählen, um die Koordinaten zu übernehmen:',
+  'editor.waypoint.empty': 'Kein Ort gefunden. Land ergänzen oder Koordinaten selbst eingeben.',
+  'editor.waypoint.failed': 'Ortssuche nicht verfügbar. Erneut versuchen oder Koordinaten selbst eingeben.',
+  'editor.waypoint.busy': 'Eine Suche läuft oder wurde gerade beendet. Bitte kurz warten und erneut suchen.',
+  'editor.waypoint.disabled': 'Ortssuche ist deaktiviert. Koordinaten bitte selbst eingeben.',
+  'editor.waypoint.selected': 'Koordinaten übernommen. Entwurf speichern, um sie zu behalten.',
+  'editor.waypoint.privacy': 'Die Suche sendet den Ortsnamen an einen externen Geocoding-Dienst (standardmäßig Nominatim). Keine vertraulichen Angaben eingeben. Koordinaten bleiben frei editierbar.',
+  'editor.waypoint.attribution': 'Ortsdaten © OpenStreetMap-Mitwirkende',
   'editor.titleImage.heading': 'Titelbild (optional)',
   'editor.titleImage.help': 'Ein eigenes breites Foto für den Kopf dieses Reiseberichts. Übersicht und Startseite behalten das Hero-Bild.',
   'editor.titleImage.fallback': 'Kein eigenes Titelbild gewählt — der Reisebericht verwendet das Hero-Bild.',
@@ -111,6 +122,17 @@ const de = {
 export type UIKey = keyof typeof de;
 
 const en: Record<UIKey, string> = {
+  'editor.waypoint.search': 'Find coordinates',
+  'editor.waypoint.searching': 'Finding location…',
+  'editor.waypoint.enterName': 'Enter a location name of 2–200 characters first.',
+  'editor.waypoint.choose': 'Choose the matching location to fill its coordinates:',
+  'editor.waypoint.empty': 'No location found. Add the country or enter coordinates manually.',
+  'editor.waypoint.failed': 'Location search unavailable. Try again or enter coordinates manually.',
+  'editor.waypoint.busy': 'A search is running or just finished. Wait a moment, then search again.',
+  'editor.waypoint.disabled': 'Location search is disabled. Enter coordinates manually.',
+  'editor.waypoint.selected': 'Coordinates filled. Save the draft to keep them.',
+  'editor.waypoint.privacy': 'Search sends the place name to an external geocoding service (Nominatim by default). Do not enter confidential information. Coordinates remain editable.',
+  'editor.waypoint.attribution': 'Location data © OpenStreetMap contributors',
   'editor.titleImage.heading': 'Title image (optional)',
   'editor.titleImage.help': 'A separate wide photo for this story header. Overview cards and the homepage keep the hero image.',
   'editor.titleImage.fallback': 'No separate title image selected — the story uses its hero image.',

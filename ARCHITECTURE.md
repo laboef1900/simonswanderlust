@@ -217,6 +217,26 @@ inventory is available. `/wp-content/uploads/*` image URLs are intentionally **n
 (accepted loss — the old URLs carry no post slug, so they cannot be mapped onto the
 `trips/<slug>/…` key scheme, and no mapping table was persisted at import time).
 
+## Waypoint location lookup
+
+The editor's **Find coordinates** action calls authenticated `POST /geocode`.
+`uploader/src/geocoding.ts` performs a bounded Nominatim search via `safeFetch`,
+with one app-wide in-flight request, at least 1100ms between starts, and a
+100-entry/24h memory cache. This editor-only external service was approved by the
+owner on 2026-10-16; public map assets and rendering remain self-hosted.
+Selecting a result changes only the existing stop's `lat` and `lng`, then the
+ordinary draft save persists them. No schema or publishing changes.
+
+The existing admin-only `POST /settings` accepts `geocodingSearchUrl` to switch
+to another Nominatim-compatible HTTPS search endpoint without a software update;
+`GET /settings` returns the current value. Default:
+`https://nominatim.openstreetmap.org/search`. Set it to `""` to disable lookup.
+This operational setting is API-managed, not a new Settings-page field. Other
+settings are preserved by partial updates. An alternate endpoint must use the
+same JSON response format and OpenStreetMap data attribution. Do not run multiple
+independent app replicas against the public service without a shared request budget.
+See the [provider usage policy](https://operations.osmfoundation.org/policies/nominatim/).
+
 ## AI alt-text (local LM Studio)
 
 The post editor and photo uploader offer a "Suggest alt text" button per alt field. The browser

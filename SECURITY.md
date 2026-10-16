@@ -310,6 +310,31 @@ predate the fix, audited twice with identical results.
 Re-run `audit-exif` if a pre-#62 variant corpus is ever copied onto a server
 wholesale; that is the one path that could reintroduce the question.
 
+## Editor location lookup
+
+Owner-approved external editor lookup (2026-10-16): authenticated `POST /geocode`
+accepts only a place-name query (2–200 characters, no control characters; 2KiB
+request body limit). The app contacts Nominatim; the provider sees the query and
+server IP, never the editor's session. Public maps make no additional requests.
+The query is a JSON body, not an incoming logged URL; neither queries nor upstream
+errors are logged by the lookup implementation.
+
+Only admins may change `geocodingSearchUrl` through the existing settings API.
+It must be HTTPS without credentials, query or fragment; empty disables lookup.
+Authors cannot supply a destination. `safeFetch` enforces the existing IP/DNS
+SSRF guards, a 10-second deadline and a 256KiB response cap. Redirects are refused,
+so one admitted lookup cannot generate several provider requests. The existing
+DNS rebinding limitation below remains; no guard was weakened.
+
+One app-wide request at a time, starts at least 1100ms apart, no queue or retries.
+Successful searches are cached for 24h in a 100-entry memory cache, including
+empty results. The limit assumes the existing single app container. Results
+contain only bounded labels and finite in-range coordinates; labels are rendered
+as text. Stable failure codes disclose no upstream errors. Manual coordinates
+remain usable during failures; setting the endpoint to empty contains the feature
+without changing stored content. See the
+[design and recovery plan](docs/superpowers/specs/2026-10-16-waypoint-location-lookup-design.md).
+
 ## SSRF protection (WordPress import)
 
 The importer fetches image URLs taken from an uploaded export — attacker-influenced input. All such
