@@ -129,6 +129,20 @@ can still be running when the upload returns: wait until the photo is ready befo
    The slug and shared fields (date, countryCode, region, coordinates) carry over automatically.
 5. Click **Save draft** — both locale rows are written to Postgres. The post is not yet live.
 
+### Find waypoint coordinates
+
+In **Story details → Expedition details → Waypoints / stops**, add a stop and enter
+a place name, for example **Cancun**. Click **Find coordinates** (or press Enter
+in the name field), then choose the matching full location from the results.
+Add a country to the name if the results are ambiguous.
+
+Choosing a result fills that stop's latitude and longitude without changing its
+name. Coordinates remain editable. **Save draft** keeps the change; lookup does
+not save or publish automatically. Searches use an external geocoding service
+(OpenStreetMap Nominatim by default), so do not enter confidential information.
+If lookup is unavailable, enter coordinates manually.
+
+
 ### Publish
 
 Click **Publish** — this marks both locale rows as published, takes a **published snapshot** of

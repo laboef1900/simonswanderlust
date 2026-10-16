@@ -2965,3 +2965,38 @@ describe('GET /posts/:tk/preview', () => {
     expect(list.headers['content-security-policy']).toBeUndefined();
   });
 });
+
+describe('editor geocoding boundary', () => {
+  it('requires a session, validates query text, and leaves disabled lookup available only as manual entry', async () => {
+    const b = build({ settings: fakeStore({ ...SETTINGS, geocodingSearchUrl: '' }) });
+    try {
+      expect((await b.app.inject({ method: 'POST', url: '/geocode', payload: { query: 'Cancun' } })).statusCode).toBe(401);
+      const { cookie } = await authed(b, { isAdmin: false });
+      const invalid = await b.app.inject({ method: 'POST', url: '/geocode', cookies: cookie, payload: { query: { url: 'https://evil.example' } } });
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.json()).toEqual({ code: 'invalid_query' });
+      const disabled = await b.app.inject({ method: 'POST', url: '/geocode', cookies: cookie, payload: { query: 'Cancun' } });
+      expect(disabled.statusCode).toBe(503);
+      expect(disabled.json()).toEqual({ code: 'lookup_disabled' });
+      expect(disabled.headers['cache-control']).toBe('no-store');
+      expect((await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload: { geocodingSearchUrl: 'https://example.com/search' } })).statusCode).toBe(403);
+    } finally { await b.app.close(); }
+  });
+
+  it('lets an admin switch or disable the persisted endpoint, but rejects unsafe configuration', async () => {
+    const store = fakeStore();
+    const b = build({ settings: store });
+    try {
+      const { cookie } = await authed(b);
+      const change = (geocodingSearchUrl: string) => b.app.inject({
+        method: 'POST', url: '/settings', cookies: cookie, payload: { geocodingSearchUrl },
+      });
+      expect((await change('https://geocode.example/search')).statusCode).toBe(200);
+      expect(store.get().geocodingSearchUrl).toBe('https://geocode.example/search');
+      expect((await change('http://geocode.example/search')).statusCode).toBe(400);
+      expect(store.get().geocodingSearchUrl).toBe('https://geocode.example/search');
+      expect((await change('')).statusCode).toBe(200);
+      expect((await b.app.inject({ method: 'POST', url: '/geocode', cookies: cookie, payload: { query: 'Cancun' } })).statusCode).toBe(503);
+    } finally { await b.app.close(); }
+  });
+});

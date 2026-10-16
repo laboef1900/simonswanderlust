@@ -130,6 +130,11 @@ function loadEditor(options: EditorOptions = {}) {
     MediaPicker: { open(settings: { onPick?: (item: EditorOptions['pickImage']) => void }) {
       if (options.pickImage) settings.onPick?.(options.pickImage);
     } },
+    WaypointCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale, Object.fromEntries(Object.entries(strings)
+        .filter(([key]) => key.startsWith('editor.waypoint.'))
+        .map(([key, value]) => [key.slice('editor.waypoint.'.length), value])),
+    ])),
     EditorImageCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
       locale, Object.fromEntries(Object.entries(strings)
         .filter(([key]) => key.startsWith('editor.titleImage.'))
@@ -139,7 +144,7 @@ function loadEditor(options: EditorOptions = {}) {
   };
   ctx.window = ctx;
   vm.createContext(ctx);
-  for (const file of ['posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'editor-linter.js', 'llm.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
+  for (const file of ['waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'editor-linter.js', 'llm.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
     vm.runInContext(readFileSync('public/' + file, 'utf8'), ctx, { filename: file });
   }
   if (options.review) (ctx.LLM as { reviewStory: Review }).reviewStory = options.review;
@@ -1000,5 +1005,85 @@ describe('Story review in the real editor', () => {
     expect(h.el('storyReviewDialog').open).toBe(false);
     expect(h.el('reviewSemantic').querySelector('[data-review-action]')).toBeNull();
     expect(h.api.buildPayload()).toEqual(nextPayload);
+  });
+});
+
+describe('waypoint location lookup', () => {
+  const location = { label: 'Cancún, Quintana Roo, México', lat: 21.1619, lng: -86.8515 };
+
+  it('searches only on request and saves the selected coordinates without renaming or touching another stop', async () => {
+    const h = loadEditor({ fetch: async () => response({ results: [location, { label: '<img src=x>', lat: 0, lng: 0 }] }) });
+    const pair = fullPair();
+    pair.shared.stops!.push({ name: 'Other stop', lat: 1, lng: 2 });
+    h.api.populateForm(pair);
+    const row = required(h.el('stopsList'), '.stop-row');
+    const name = required(row, '.stop-name');
+    name.value = 'Cancun';
+    name.dispatchEvent(new EditorEvent('input'));
+    expect(h.requests).toEqual([]);
+    required(row, '.stop-search').click();
+    await settle();
+    expect(h.requests.map((r) => [r.url, JSON.parse(String(r.options.body))])).toEqual([['/geocode', { query: 'Cancun' }]]);
+    expect(h.api.buildPayload().shared.stops![0]).toEqual({ name: 'Cancun', lat: 44.4, lng: 26.1 });
+    const choices = row.querySelectorAll('.stop-search-result');
+    expect(choices[1]!.textContent).toBe('<img src=x>');
+    expect(choices[1]!.querySelector('img')).toBeNull();
+    const before = h.dirtyCalls();
+    choices[0]!.click();
+    expect(h.api.buildPayload().shared.stops).toEqual([
+      { name: 'Cancun', lat: location.lat, lng: location.lng }, { name: 'Other stop', lat: 1, lng: 2 },
+    ]);
+    expect(h.dirtyCalls()).toBe(before + 1);
+    expect(h.document.activeElement).toBe(required(row, '.stop-lat'));
+  });
+
+  it.each([200, 429, 502, 503])('preserves coordinates when search returns no usable result (%s)', async (status) => {
+    const h = loadEditor({ fetch: async () => response(status === 200 ? { results: [] } : { code: 'lookup_failed' }, status) });
+    h.api.populateForm(fullPair());
+    const row = required(h.el('stopsList'), '.stop-row');
+    const before = h.api.buildPayload();
+    required(row, '.stop-search').click();
+    await settle();
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(row.querySelector('.stop-search-result')).toBeNull();
+    expect(required(row, '.stop-search').disabled).toBe(false);
+    expect(required(row, '.stop-search-status').textContent).toBe(ui.en[
+      status === 200 ? 'editor.waypoint.empty' : status === 429 ? 'editor.waypoint.busy'
+        : status === 503 ? 'editor.waypoint.disabled' : 'editor.waypoint.failed'
+    ]);
+  });
+
+  it.each(['name', 'latitude', 'remove', 'restore'])('ignores a pending result after %s changes', async (change) => {
+    const pending = Promise.withResolvers<Response>();
+    const h = loadEditor({ fetch: () => pending.promise });
+    h.api.populateForm(fullPair());
+    const row = required(h.el('stopsList'), '.stop-row');
+    required(row, '.stop-search').click();
+    if (change === 'remove') required(row, '.btn-remove').click();
+    else if (change === 'restore') h.api.populateForm(minimalPair());
+    else {
+      const input = required(row, change === 'name' ? '.stop-name' : '.stop-lat');
+      input.value = change === 'name' ? 'London' : '51';
+      input.dispatchEvent(new EditorEvent('input'));
+    }
+    const before = h.api.buildPayload();
+    expect(h.requests[0]!.options.signal!.aborted).toBe(true);
+    pending.resolve(response({ results: [location] }));
+    await settle();
+    expect(row.querySelector('.stop-search-result')).toBeNull();
+    expect(h.api.buildPayload()).toEqual(before);
+  });
+
+  it('supports Enter and preserves the draft when the session expires', async () => {
+    const h = loadEditor({ fetch: async () => response({}, 401) });
+    h.api.populateForm(fullPair());
+    const row = required(h.el('stopsList'), '.stop-row');
+    const before = h.api.buildPayload();
+    const event = new EditorEvent('keydown', { key: 'Enter', cancelable: true });
+    required(row, '.stop-name').dispatchEvent(event);
+    await settle();
+    expect(event.defaultPrevented).toBe(true);
+    expect(h.redirects()).toBe(1);
+    expect(h.api.buildPayload()).toEqual(before);
   });
 });

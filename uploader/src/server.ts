@@ -45,6 +45,7 @@ import { legacyRedirect } from './redirects.js';
 import { compressionHook } from './compress.js';
 import { CommentError, isCommentStatus, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
 import { ui } from '../../site/src/i18n/ui.js';
+import { createGeocoder, GeocodingError } from './geocoding.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -765,6 +766,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       convertJpeg: s.convertJpeg, webpQuality: s.webpQuality, avifQuality: s.avifQuality,
       importDelayMs: s.importDelayMs, importRetries: s.importRetries,
     commentsEnabled: s.commentsEnabled,
+      geocodingSearchUrl: s.geocodingSearchUrl,
       aiProvider: s.aiProvider, aiModel: s.aiModel, aiCustomBaseUrl: s.aiCustomBaseUrl,
       reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs, hasAiApiKey,
     };
@@ -807,6 +809,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     for (const field of ['aiProvider', 'aiModel', 'aiCustomBaseUrl', 'reviewPrompt', 'reviewTimeoutMs'] as const) {
       if (Object.hasOwn(b, field)) partial[field] = b[field];
     }
+    if (Object.hasOwn(b, 'geocodingSearchUrl')) partial.geocodingSearchUrl = b.geocodingSearchUrl;
     const changesSecret = Object.hasOwn(b, 'aiApiKey');
     const key = b.aiApiKey;
     if (changesSecret && key !== null && (typeof key !== 'string' || /[\p{C}]/u.test(key))) {
@@ -1014,6 +1017,27 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   const { posts } = cfg;
+  const geocode = createGeocoder({ endpoint: () => cfg.settings.get().geocodingSearchUrl });
+  app.post('/geocode', { preHandler: requireAuth, bodyLimit: 2048 }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const query = req.body && typeof req.body === 'object' && 'query' in req.body ? req.body.query : undefined;
+    try {
+      return reply.send({ results: await geocode(query) });
+    } catch (error) {
+      if (!(error instanceof GeocodingError)) throw error;
+      if (error.status === 429) reply.header('Retry-After', '2');
+      return reply.code(error.status).send({ code: error.code });
+    }
+  });
+
+  app.get('/admin/waypoint-copy.js', async (_req, reply) => {
+    const copy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale, Object.fromEntries(Object.entries(strings)
+        .filter(([key]) => key.startsWith('editor.waypoint.'))
+        .map(([key, value]) => [key.slice('editor.waypoint.'.length), value])),
+    ]));
+    return reply.type('application/javascript').send(`window.WaypointCopy = ${JSON.stringify(copy)};`);
+  });
 
   // Static editor copy shares the site's bilingual dictionary, not a second
   // hand-maintained translation file. Like /admin/*.js, this contains no secrets.
