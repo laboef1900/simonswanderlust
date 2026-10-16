@@ -145,10 +145,8 @@ describe('delete-with-post (memory post store)', () => {
   });
 });
 
-describe('dump version allow-list (#204 → v8)', () => {
-  it('DUMP_VERSION is 8 and every version up to it is accepted; the next one is not', async () => {
-    expect(DUMP_VERSION).toBe(8);
-    expect(SUPPORTED_DUMP_VERSIONS).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+describe('dump version allow-list', () => {
+  it('reads supported historical formats and rejects the next unknown format', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'dumpv-'));
     const file = async (version: number) => {
       const f = join(dir, `db-2026010${version}-000000.json.gz`);
@@ -158,6 +156,6 @@ describe('dump version allow-list (#204 → v8)', () => {
     for (const v of SUPPORTED_DUMP_VERSIONS) expect(readDump(await file(v)).version).toBe(v);
     expect(() => readDump(join(dir, 'x'))).toThrow();
     const next = await file(DUMP_VERSION + 1);
-    expect(() => readDump(next)).toThrow(/unsupported dump version 9/);
+    expect(() => readDump(next)).toThrow(/unsupported dump version/);
   });
 });

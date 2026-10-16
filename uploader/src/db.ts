@@ -33,6 +33,7 @@ export const POST_SNAPSHOT_SQL = `jsonb_build_object(
   'translation_key', translation_key, 'locale', locale, 'slug', slug, 'title', title,
   'date', to_char(date, 'YYYY-MM-DD'), 'country', country, 'country_code', country_code,
   'region', region, 'excerpt', excerpt, 'hero_image', hero_image, 'coordinates', coordinates,
+  'title_image', title_image,
   'stops', stops, 'route', route, 'key_facts', key_facts,
   'body_markdown', body_markdown, 'images', images,
   'categories', categories, 'tags', tags, 'scheduled_at', scheduled_at,
@@ -66,6 +67,7 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       country_code text NOT NULL CHECK (char_length(country_code)=2),
       region text NOT NULL CHECK (region IN ('europe','north-america','south-america')),
       excerpt text NOT NULL, hero_image jsonb NOT NULL, coordinates jsonb NOT NULL,
+      title_image jsonb,
       stops jsonb, route text, key_facts jsonb, body_markdown text NOT NULL,
       images jsonb NOT NULL DEFAULT '{}', status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
       featured boolean NOT NULL DEFAULT false,
@@ -83,6 +85,7 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   // draft save over a published post can never leak onto the public site via
   // an unrelated rebuild (issue #20). Additive, idempotent migration.
   await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS published_snapshot jsonb`);
+  await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS title_image jsonb`);
   await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS published_at timestamptz`);
   await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS categories text[] NOT NULL DEFAULT '{}'`);
   await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}'`);

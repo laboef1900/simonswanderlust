@@ -39,6 +39,16 @@ const row = {
 };
 
 describe('rowToEntryInput', () => {
+  it('retargets the optional title image independently and retains its metadata', () => {
+    const title = { src: 'http://localhost:3000/trips/x/title', width: 2400, height: 800,
+      alt: 'Panorama', format: 'jpeg' as const, focus: { x: 30, y: 60 } };
+    const result = rowToEntryInput({ ...row, title_image: title }, 'https://img');
+    expect(result.data.titleImage).toEqual({ ...title, src: 'https://img/trips/x/title' });
+    expect(result.data.heroImage).toEqual(row.hero_image);
+    expect(rowToEntryInput(row, 'https://img').data.titleImage).toBeUndefined();
+    expect(rowToEntryInput({ ...row, title_image: null }, 'https://img').data.titleImage).toBeUndefined();
+  });
+
   it('builds id as `${locale}/${slug}` and camelCase data matching the schema', () => {
     const e = rowToEntryInput(row as never, 'https://img');
     expect(e.id).toBe('de/reisebericht-4-tage-bukarest');

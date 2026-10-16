@@ -491,6 +491,17 @@ the way in as well, at the store chokepoint (`heroImageError` in `uploader/src/b
 because the WordPress importer bypasses `validateDraft`. `site/src/lib/images.test.ts` pins the
 clamp and the hostile-input case.
 
+**Optional story title images** (2026-10-16) reuse the hero image validator and focal-point
+renderer; `posts.title_image` introduces no raw markup or remote-fetch path. The store rejects
+invalid dimensions, format, focus and URL shape; publishing additionally requires nonblank alt
+text, the configured image origin, and a known `ready` media item. Single and bulk publication
+apply the same checks. Working and published title references both participate in media usage
+and deletion protection, so replacing a draft banner cannot orphan the live banner.
+Existing upload authorization, EXIF filtering and preview CSP remain unchanged. The
+`/admin/editor-image-copy.js` asset contains only public DE/EN interface strings, never
+post data or credentials. Schema and v9 backup recovery are documented in the
+[approved title-image spec](docs/superpowers/specs/2026-10-16-story-title-image-design.md).
+
 > We deliberately use a maintained, allow-list sanitizer rather than hand-rolled escaping — the
 > cardinal rule of XSS defense.
 

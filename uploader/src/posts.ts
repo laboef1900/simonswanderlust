@@ -34,6 +34,7 @@ export type PostStatus = 'draft' | 'published';
 export interface PostLocale {
   locale: Locale; slug: string; title: string; excerpt: string; country: string;
   heroImage: HeroImage; bodyMarkdown: string; images: Record<string, ImageDims>;
+  titleImage?: HeroImage;
   keyFacts?: Record<string, string>;
 }
 export interface PostShared {
@@ -129,6 +130,7 @@ export interface PostUsageRow {
   source: 'working' | 'published';
   title: string;
   heroImage: HeroImage; bodyMarkdown: string; images: Record<string, ImageDims>;
+  titleImage?: HeroImage;
 }
 export class PostError extends Error {
   code?: string;
@@ -285,6 +287,7 @@ export function validateDraft(pair: unknown): asserts pair is PostPair {
     if (!isPlainObject(l)) throw new PostError(`${locale} must be an object`);
     for (const f of ['slug', 'title', 'excerpt', 'country', 'bodyMarkdown']) optString(l, f, locale);
     if (l.heroImage !== undefined && !isPlainObject(l.heroImage)) throw new PostError(`${locale}.heroImage must be an object`);
+    if (l.titleImage !== undefined && !isPlainObject(l.titleImage)) throw new PostError(`${locale}.titleImage must be an object`);
     if (l.images !== undefined && !isPlainObject(l.images)) throw new PostError(`${locale}.images must be an object`);
     if (l.keyFacts !== undefined && (!isPlainObject(l.keyFacts) || Object.values(l.keyFacts).some((v) => typeof v !== 'string'))) {
       throw new PostError(`${locale}.keyFacts must be an object of strings`);
@@ -302,12 +305,16 @@ function validateLocale(p: PostLocale): void {
   if (!p.country.trim()) throw new PostError(`${p.locale}: country required`);
   if (!p.bodyMarkdown.trim()) throw new PostError(`${p.locale}: body required`);
   if (!p.heroImage) throw new PostError(`${p.locale}: heroImage required`);
-  const h = p.heroImage;
-  try { new URL(h.src); } catch { throw new PostError(`${p.locale}: heroImage.src must be a URL`); }
+  validatePublishedImage(p.heroImage, `${p.locale}: heroImage`);
+  if (p.titleImage !== undefined) validatePublishedImage(p.titleImage, `${p.locale}: titleImage`);
+}
+
+function validatePublishedImage(h: HeroImage, field: string, requireAlt = true): void {
+  try { new URL(h.src); } catch { throw new PostError(`${field}.src must be a URL`); }
   if (!Number.isInteger(h.width) || h.width <= 0 || !Number.isInteger(h.height) || h.height <= 0) {
-    throw new PostError(`${p.locale}: heroImage needs positive integer width/height`);
+    throw new PostError(`${field} needs positive integer width/height`);
   }
-  if (!h.alt.trim()) throw new PostError(`${p.locale}: heroImage.alt required`);
+  if (requireAlt && !h.alt.trim()) throw new PostError(`${field}.alt required`);
 }
 
 /**
@@ -464,6 +471,17 @@ function draftWithDefaults(pair: PostPair): PostPair {
   const fillLocale = (l: PostLocale, locale: Locale): PostLocale => {
     const err = imagesMapError(l.images) ?? heroImageError(l.heroImage);
     if (err) throw new PostError(`${locale}: ${err}`);
+    const titleError = heroImageError(l.titleImage);
+    if (titleError) throw new PostError(`${locale}: ${titleError.replaceAll('heroImage', 'titleImage')}`);
+    if (l.titleImage !== undefined) {
+      // Unlike the required hero's legacy draft placeholder, an optional banner
+      // is either a complete selection or absent. Alt text can be authored later.
+      validatePublishedImage(l.titleImage, `${locale}: titleImage`, false);
+      const url = new URL(l.titleImage.src);
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+        throw new PostError(`${locale}: titleImage.src must be an HTTP(S) image base URL without credentials, query or fragment`);
+      }
+    }
     const filled: PostLocale = {
       ...l,
       locale,
@@ -548,6 +566,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         return sources.flatMap(({ source, from }) => (['de', 'en'] as const).map((loc) => structuredClone({
           translationKey: p.translationKey, locale: loc, source, title: from[loc].title,
           heroImage: from[loc].heroImage, bodyMarkdown: from[loc].bodyMarkdown, images: from[loc].images,
+          ...(from[loc].titleImage ? { titleImage: from[loc].titleImage } : {}),
         })));
       });
     },
@@ -655,6 +674,7 @@ interface PostRow {
   translation_key: string; locale: Locale; slug: string; title: string; date: Date | string;
   country: string; country_code: string; region: string; excerpt: string;
   hero_image: HeroImage; coordinates: { lat: number; lng: number };
+  title_image: HeroImage | null;
   stops: PostShared['stops'] | null; route: string | null; key_facts: Record<string, string> | null;
   body_markdown: string; images: Record<string, ImageDims>; status: PostStatus; updated_at: Date;
   published_at: Date | null;
@@ -693,7 +713,7 @@ function dateText(date: Date | string | null | undefined): string {
 }
 
 function rowLocale(r: PostRow): PostLocale {
-  return { locale: r.locale, slug: r.slug, title: r.title, excerpt: r.excerpt, country: r.country, heroImage: r.hero_image, bodyMarkdown: r.body_markdown, images: r.images ?? {}, ...(r.key_facts ? { keyFacts: r.key_facts } : {}) };
+  return { locale: r.locale, slug: r.slug, title: r.title, excerpt: r.excerpt, country: r.country, heroImage: r.hero_image, ...(r.title_image ? { titleImage: r.title_image } : {}), bodyMarkdown: r.body_markdown, images: r.images ?? {}, ...(r.key_facts ? { keyFacts: r.key_facts } : {}) };
 }
 function rowShared(r: PostRow): PostShared {
   const d = dateText(r.date);
@@ -729,7 +749,7 @@ function localeParams(tk: string, status: string, shared: PostShared, p: PostLoc
     shared.stops?.length ? JSON.stringify(shared.stops) : null, shared.route ?? null, p.keyFacts ? JSON.stringify(p.keyFacts) : null,
     p.bodyMarkdown, JSON.stringify(p.images), status,
     shared.categories ?? [], shared.tags ?? [], shared.scheduledAt ? new Date(shared.scheduledAt) : null,
-    shared.featured ?? false, shared.commentsEnabled ?? true];
+    shared.featured ?? false, shared.commentsEnabled ?? true, p.titleImage ? JSON.stringify(p.titleImage) : null];
 }
 
 export function pgPostStore(pool: DbPool): PostStore {
@@ -740,8 +760,8 @@ export function pgPostStore(pool: DbPool): PostStore {
     await client.query(
       `INSERT INTO posts (translation_key, locale, slug, title, date, country, country_code, region,
          excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status,
-         categories, tags, scheduled_at, featured, comments_enabled, id, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23, now())`,
+         categories, tags, scheduled_at, featured, comments_enabled, title_image, id, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24, now())`,
       [...localeParams(tk, status, shared, p), randomUUID()],
     );
   }
@@ -752,7 +772,7 @@ export function pgPostStore(pool: DbPool): PostStore {
     const res = await client.query(
       `UPDATE posts SET slug=$3, title=$4, date=$5, country=$6, country_code=$7, region=$8, excerpt=$9,
          hero_image=$10, coordinates=$11, stops=$12, route=$13, key_facts=$14, body_markdown=$15, images=$16,
-         status=$17, categories=$18, tags=$19, scheduled_at=$20, featured=$21, comments_enabled=$22, updated_at=now()
+         status=$17, categories=$18, tags=$19, scheduled_at=$20, featured=$21, comments_enabled=$22, title_image=$23, updated_at=now()
        WHERE translation_key=$1 AND locale=$2`,
       localeParams(tk, status, shared, p),
     );
@@ -805,17 +825,18 @@ export function pgPostStore(pool: DbPool): PostStore {
       // `status = 'published' AND published_snapshot IS NOT NULL`) so the
       // snapshot rows are exactly what the blog serves. Working rows sort
       // first per locale so the alt harvest prefers the editable copy.
-      const { rows } = await pool.query<Pick<PostRow, 'translation_key' | 'locale' | 'title' | 'hero_image' | 'body_markdown' | 'images'> & { source: PostUsageRow['source'] }>(
-        `SELECT translation_key, locale, title, hero_image, body_markdown, images, 'working' AS source FROM posts
+      const { rows } = await pool.query<Pick<PostRow, 'translation_key' | 'locale' | 'title' | 'hero_image' | 'title_image' | 'body_markdown' | 'images'> & { source: PostUsageRow['source'] }>(
+        `SELECT translation_key, locale, title, hero_image, title_image, body_markdown, images, 'working' AS source FROM posts
          UNION ALL
          SELECT translation_key, locale, published_snapshot->>'title', published_snapshot->'hero_image',
-                published_snapshot->>'body_markdown', published_snapshot->'images', 'published'
+                published_snapshot->'title_image', published_snapshot->>'body_markdown', published_snapshot->'images', 'published'
            FROM posts WHERE status = 'published' AND published_snapshot IS NOT NULL
          ORDER BY translation_key, locale, source DESC`,
       );
       return rows.map((r) => ({
         translationKey: r.translation_key, locale: r.locale, source: r.source, title: r.title ?? '',
         heroImage: r.hero_image, bodyMarkdown: r.body_markdown ?? '', images: r.images ?? {},
+        ...(r.title_image ? { titleImage: r.title_image } : {}),
       }));
     },
     async upsertDraft(pair, baseUpdatedAt) {

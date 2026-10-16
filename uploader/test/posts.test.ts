@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { memoryPostStore, normalizeBodyImages, PostError, REVISION_CAP, validateDraft, validateForPublish, type PostPair } from '../src/posts.js';
 import { renderPostToMdx } from '../src/export.js';
+import { imageUsage } from '../src/media-files.js';
 
 function pair(overrides: Partial<PostPair> = {}): PostPair {
   const loc = (locale: 'de' | 'en', slug: string, title: string, country: string) => ({
@@ -17,6 +18,50 @@ function pair(overrides: Partial<PostPair> = {}): PostPair {
 }
 
 describe('memoryPostStore', () => {
+  it('keeps title images independent and protects the published banner after a draft removal', async () => {
+    const store = memoryPostStore();
+    const input = pair();
+    const titleImage = { src: 'https://img/title', width: 2400, height: 800, alt: 'Panorama',
+      format: 'jpeg' as const, focus: { x: 30, y: 70 } };
+    input.de.titleImage = titleImage;
+    const saved = await store.upsertDraft(input);
+    expect((await store.get(saved.translationKey))?.de.titleImage).toEqual(titleImage);
+    expect(saved.en.titleImage).toBeUndefined();
+    expect(saved.de.heroImage).toEqual(input.de.heroImage);
+    expect(renderPostToMdx(saved, 'de')).toContain("titleImage:\n  src: 'https://img/title'\n  width: 2400\n  height: 800\n  alt: 'Panorama'\n  format: jpeg\n  focus: { x: 30, y: 70 }");
+    await store.publish(saved.translationKey);
+    delete saved.de.titleImage;
+    await store.upsertDraft(saved);
+    expect((await store.get(saved.translationKey))?.de.titleImage).toBeUndefined();
+    expect(imageUsage(titleImage.src, await store.usageRows(), [])).toMatchObject([
+      { key: saved.translationKey, working: false, published: true },
+    ]);
+    const revisions = await store.listRevisions(saved.translationKey);
+    if (!revisions[0]) throw new Error('missing revision for overwritten title image');
+    expect((await store.getRevision(saved.translationKey, revisions[0].id))?.snapshot.de.titleImage).toEqual(titleImage);
+    await store.publish(saved.translationKey);
+    expect(imageUsage(titleImage.src, await store.usageRows(), [])).toEqual([]);
+  });
+
+  it.each([
+    { width: 0 }, { height: -1 }, { src: 'javascript:alert(1)' },
+    { src: 'https://user:pass@example.com/title' }, { format: 'gif' },
+    { focus: { x: 101, y: 50 } }, { alt: 12 },
+  ])('rejects malformed selected title images at the store boundary: %j', async (invalid) => {
+    const input = pair();
+    input.de.titleImage = { src: 'https://img/title', width: 2000, height: 700, alt: 'View', ...invalid } as never;
+    await expect(memoryPostStore().upsertDraft(input)).rejects.toThrow(/titleImage/);
+  });
+
+  it('allows drafting banner alt text but refuses publishing until it is supplied', async () => {
+    const input = pair();
+    input.de.titleImage = { src: 'https://img/title', width: 2000, height: 700, alt: '' };
+    const saved = await memoryPostStore().upsertDraft(input);
+    expect(() => validateForPublish(saved)).toThrow(/titleImage.alt/);
+    saved.de.titleImage!.alt = 'Mountain panorama';
+    expect(() => validateForPublish(saved)).not.toThrow();
+  });
+
   it('creates a pair with a generated translationKey and lists it', async () => {
     const s = memoryPostStore();
     const created = await s.upsertDraft(pair());

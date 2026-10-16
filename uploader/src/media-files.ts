@@ -50,16 +50,16 @@ function textReferences(src: string, text: string): boolean {
 
 interface UsageLocale {
   heroImage?: { src: string };
+  titleImage?: { src: string };
   images?: Record<string, unknown>;
   bodyMarkdown: string;
 }
 
 function localeUses(src: string, l: UsageLocale): boolean {
-  // Symmetric matching everywhere a URL can live: heroImage.src, images-map
-  // keys, and the body. Each may carry a hand-pasted direct variant URL
-  // (e.g. `${src}-1280.webp` from the browser's "Copy image address"), so all
-  // three go through the variant-tolerant, boundary-safe matcher.
+  // Match both header images, map keys and body using the same variant-tolerant,
+  // boundary-safe matcher, including hand-pasted direct variant URLs.
   if (l.heroImage && textReferences(src, l.heroImage.src)) return true;
+  if (l.titleImage && textReferences(src, l.titleImage.src)) return true;
   if (l.images && Object.keys(l.images).some((k) => textReferences(src, k))) return true;
   return textReferences(src, l.bodyMarkdown);
 }

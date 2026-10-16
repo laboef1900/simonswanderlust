@@ -202,7 +202,7 @@ export async function renderPreviewHtml(pair: PostPair, locale: Locale, imageOri
 </head>
 <body>
 <div class="banner">${escapeHtml(banner)} · ${locale.toUpperCase()}</div>
-${heroHtml(post.heroImage)}
+${heroHtml(post.titleImage ?? post.heroImage)}
 <main>
   <p class="meta">${escapeHtml(metaParts.join(' · '))}</p>
   <h1>${escapeHtml(title)}</h1>

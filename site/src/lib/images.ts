@@ -122,9 +122,9 @@ export function variantWidths(
  * rewriting the short one first would corrupt the long one.
  */
 export function retargetImageOrigins<V>(
-  content: { heroSrc: string; images: Record<string, V>; body: string },
+  content: { heroSrc: string; titleSrc?: string; images: Record<string, V>; body: string },
   origin: string,
-): { heroSrc: string; images: Record<string, V>; body: string } {
+): { heroSrc: string; titleSrc?: string; images: Record<string, V>; body: string } {
   const retarget = (url: string): string => {
     let u: URL;
     try { u = new URL(url); } catch { return url; }
@@ -144,7 +144,11 @@ export function retargetImageOrigins<V>(
   let body = content.body;
   for (const [from, to] of renames) body = body.split(from).join(to);
 
-  return { heroSrc: content.heroSrc === '' ? '' : retarget(content.heroSrc), images, body };
+  return {
+    heroSrc: content.heroSrc === '' ? '' : retarget(content.heroSrc),
+    ...(content.titleSrc !== undefined ? { titleSrc: retarget(content.titleSrc) } : {}),
+    images, body,
+  };
 }
 
 /** Responsive srcset string for one format. */

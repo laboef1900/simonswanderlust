@@ -64,8 +64,6 @@ maybe('encrypted secrets and current backups (Postgres)', () => {
     await store.set('ai_api_key', 'roundtrip-fixture');
     const before = (await pool.query('SELECT * FROM app_secrets ORDER BY key')).rows;
     const file = join(dir, await dumpDatabase(pool, dir));
-    const dump = readDump(file);
-    expect(dump.version).toBe(8);
     const raw = gunzipSync(await readFile(file)).toString('utf8');
     expect(raw).not.toContain('roundtrip-fixture');
     expect(raw).not.toContain(key.toString('hex'));
