@@ -250,6 +250,22 @@ window.EditorGalleries = (function () {
     refresh();
     return {
       refresh: () => refresh(true), cancel,
+      focusPhoto(src) {
+        if (!previews) toggle.click();
+        for (const controller of controllers) {
+          const field = controller.fields.find((entry) => entry.src === src);
+          const range = controller.marker.find();
+          if (!field || !range) continue;
+          // CodeMirror mounts offscreen widgets lazily. Reveal the line before
+          // focusing its real control, never a measurement clone.
+          cm.scrollIntoView(range.from);
+          cm.refresh();
+          field.input.focus({ preventScroll: true });
+          field.input.scrollIntoView({ block: 'center' });
+          return true;
+        }
+        return false;
+      },
       revealLine(line) {
         if (controllers.some((controller) => {
           const range = controller.marker.find();

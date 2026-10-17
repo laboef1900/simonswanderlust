@@ -330,7 +330,8 @@ Full misuse cases and rollback: [approved design](../docs/superpowers/specs/2026
 
 ### Review Story in the editor (#215)
 
-Choose **Review Story** to review the active DE or EN tab's **unsaved** title, excerpt,
+Choose **Review Story** directly in the editor's top command bar, beside Save draft
+and Publish, to review the active DE or EN tab's **unsaved** title, excerpt,
 hero alt text and Markdown. Five deterministic checks appear immediately; editorial
 suggestions arrive asynchronously from the provider selected in Settings. Opening the
 drawer starts that browser-direct request, sending the active-locale snapshot to that
@@ -379,14 +380,42 @@ outside this check. Another-story links can be root-relative or path-relative, n
 URLs, fragment-only links, or query-only links. Alt checks flag missing/whitespace-only text,
 not generic wording; they inspect the supplied markdown rather than the saved `images` map.
 
+`findImage(markdown, src)` reuses that inline scanner to locate a body image's
+editable alt label. It returns `{ start, end, line }` (zero-based string offsets,
+exclusive end, one-based line), or `null` when the image is absent. Code examples
+and ordinary links are not repair targets.
+
+## Editor titles and save state
+
+Article titles grow and wrap in the editor while remaining single-line values in
+saved posts. Pasted line breaks become spaces; loaded and manually chosen slugs
+are not re-derived when the title changes.
+
+The command bar separates draft persistence from publish readiness:
+**Not saved yet**, **Unsaved changes**, **Saving…**, or **Saved to server**.
+Edits made during an in-flight save remain dirty until a later save includes them.
+Failed saves and cancelled URL-change confirmations retain the unsaved form.
+A browser recovery stash is not a server save, and saving a published post's draft
+does not change its live version.
+
 ## Alt-text audit (advisory)
 
-The editor shows a warning listing every photo of the post that reaches a reader with **no
-description** — an empty alt, or an alt that only repeats that locale's title, which
-`heroAltOf` (`site/src/lib/trips.ts`) renders as `alt=""` because the heading beside the photo
-already says those words. It covers both locales' heroes plus the body and gallery photos in the
-`images` map, and each entry is a button that jumps to the field (and the "Suggest alt text"
-button) that fixes it.
+The saved-draft audit flags empty descriptions, descriptions that repeat the
+locale's title, and imported filename-pattern descriptions. It covers both
+locales' heroes plus body and gallery photos in the `images` map.
+
+The editor initially shows only a compact **Alt-text review** disclosure with the
+photo count and an **optional** label. Expanding it groups issues by locale and
+reason. Each photo button selects the correct locale and focuses that gallery
+photo's alt field, selects the inline Markdown image's alt label, or opens the
+hero alt field. Gallery links also restore visual previews when raw Markdown is
+showing. A photo removed from the current draft produces a refresh-after-save
+message instead of sending the author to an unrelated field.
+
+The audit refreshes after saving. Its disclosure state and focused issue survive
+a refresh when that issue remains; resolving every issue hides the disclosure.
+The warning stays within the writing column, leaving the pinned Story details
+panel and its Close button available beside it.
 
 It is a **warning, never a gate**: `src/alt-audit.ts` is pure, is not part of `validateForPublish`,
 and touches none of `publish-gate.ts`'s 409 paths — every WordPress-imported post stores the post

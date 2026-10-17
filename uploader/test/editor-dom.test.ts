@@ -6,6 +6,7 @@ import type { EditorialReviewResult } from '../src/editorial-review.js';
 import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { normalizeGalleryFences } from '../src/body-content.js';
+import type { AltAudit } from '../src/alt-audit.js';
 
 // editor.html's inline script is plain top-level browser code. Run it in a vm
 // context whose `document.getElementById` answers from the REAL markup's ids —
@@ -37,12 +38,17 @@ interface EditorOptions {
   review?: Review;
   isAdmin?: boolean;
   mobile?: boolean;
+  search?: string;
+  confirm?: boolean;
+  stash?: { key: string; payload: unknown };
   pickImage?: { src: string; width: number; height: number; alt: { de: string; en: string }; format?: 'jpeg' };
   caption?: (options: { url: string; lang: string; signal: AbortSignal }) => Promise<string>;
 }
 interface EditorApi {
   populateForm(post: unknown): void;
   loadPost(translationKey: string): Promise<boolean>;
+  doSaveDraft(): Promise<boolean>;
+  renderAltAudit(audit: AltAudit | null, published: boolean): void;
   // No `status`/`scheduledAt`: the store decides status and nothing consumes
   // scheduled_at, so the editor sends neither (#121).
   buildPayload(): Omit<PostPair, 'status'>;
@@ -53,6 +59,11 @@ function loadEditor(options: EditorOptions = {}) {
   const dom = editorDocument(markup);
   let dirty = 0;
   let redirects = 0;
+  let mediaChanged: (() => void) | undefined;
+  const media = {
+    matches: options.mobile === true,
+    addEventListener(_type: string, listener: () => void) { mediaChanged = listener; },
+  };
   const requests: { url: string; options: RequestInit }[] = [];
   const el = (id: string): Element => {
     const element = dom.document.getElementById(id);
@@ -64,15 +75,22 @@ function loadEditor(options: EditorOptions = {}) {
     return {
       getItem: (k: string): string | null => m.get(k) ?? null,
       setItem: (k: string, v: string): void => { m.set(k, String(v)); },
+      get length() { return m.size; },
+      key: (index: number): string | null => [...m.keys()][index] ?? null,
       removeItem: (k: string): void => { m.delete(k); },
     };
   };
+  const local = storage();
+  if (options.stash) local.setItem(options.stash.key, JSON.stringify({
+    savedAt: '2026-10-01T12:00:00Z', payload: options.stash.payload,
+  }));
   class EasyMDE {
     private text = '';
     private readonly changes: (() => void)[] = [];
     private readonly markers = new Set<{ start: number; end: number; cleared: boolean }>();
     input = dom.document.createElement('textarea');
     cursor: { line: number; ch: number } | null = null;
+    selection: { from: { line: number; ch: number }; to: { line: number; ch: number } } | null = null;
     focusCalls = 0;
     codemirror = {
       on: (event: string, callback: () => void) => { if (event === 'change' || event === 'changes') this.changes.push(callback); },
@@ -81,6 +99,8 @@ function loadEditor(options: EditorOptions = {}) {
       setValue: (value: string) => { this.value(value); },
       getInputField: () => this.input,
       setCursor: (position: { line: number; ch: number }) => { this.cursor = position; },
+      setSelection: (from: { line: number; ch: number }, to: { line: number; ch: number }) => { this.selection = { from, to }; },
+      scrollIntoView() {},
       focus: () => { this.focusCalls += 1; this.input.focus(); },
       operation: (callback: () => void) => callback(),
       posFromIndex: (index: number) => {
@@ -127,19 +147,19 @@ function loadEditor(options: EditorOptions = {}) {
     toTextArea() {}
   }
   const editors: EasyMDE[] = [];
-  const guard = { markDirty() { dirty += 1; }, markClean() {}, snapshot() { return 0; }, stashNow() {}, tryRestore() { return null; }, adopt() {}, dismissRestore() {}, wasDismissed() { return false; }, setKey() {}, redirectToLogin() { redirects += 1; } };
   const ctx: Record<string, unknown> = {
     document: dom.document,
-    location: { search: '', pathname: '/admin/editor.html', href: 'http://localhost/admin/editor.html', origin: 'http://localhost' },
+    location: { search: options.search ?? '', pathname: '/admin/editor.html', href: 'http://localhost/admin/editor.html' + (options.search ?? ''), origin: 'http://localhost' },
     history: { replaceState() {} },
     sessionStorage: storage(),
-    localStorage: storage(),
+    localStorage: local,
     fetch: (url: string, init: RequestInit = {}) => {
       requests.push({ url: String(url), options: init });
       return options.fetch?.(String(url), init) ?? Promise.reject(new Error('no network in test'));
     },
     setTimeout: () => 0,
     clearTimeout() {},
+    addEventListener: dom.document.addEventListener,
     URLSearchParams,
     URL,
     AbortController,
@@ -149,11 +169,7 @@ function loadEditor(options: EditorOptions = {}) {
     alert() {},
     confirm: () => false,
     navigator: {},
-    matchMedia: () => ({
-      matches: options.mobile === true,
-      addEventListener() {},
-      addListener() {},
-    }),
+    matchMedia: () => media,
     EasyMDE: class extends EasyMDE {
       constructor(settings: { element: Element }) {
         super();
@@ -162,8 +178,7 @@ function loadEditor(options: EditorOptions = {}) {
       }
     },
     Auth: { ensureAuthed: async () => options.isAdmin === undefined ? null : { isAdmin: options.isAdmin }, renderHeader() {} },
-    AdminConfirm: { ask: async () => false, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
-    DraftGuard: { createDraftGuard: () => guard, tabScopedKey: (p: string) => p + ':test' },
+    AdminConfirm: { ask: async () => options.confirm === true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     MediaPicker: { open(settings: { onPick?: (item: EditorOptions['pickImage']) => void }) {
       if (options.pickImage) settings.onPick?.(options.pickImage);
     } },
@@ -182,20 +197,41 @@ function loadEditor(options: EditorOptions = {}) {
         .filter(([key]) => key.startsWith('editor.gallery.'))
         .map(([key, value]) => [key.slice('editor.gallery.'.length), value])),
     ])),
+    EditorCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale, Object.fromEntries(Object.entries(strings)
+        .filter(([key]) => key.startsWith('editor.chrome.'))
+        .map(([key, value]) => [key.slice('editor.chrome.'.length), value])),
+    ])),
     EditorGalleryImageOrigin: 'https://img',
     AltSuggest: { wire() {}, suggestHosted: options.caption ?? (() => Promise.reject(new Error('no model in test'))) },
   };
   ctx.window = ctx;
   vm.createContext(ctx);
+  vm.runInContext(readFileSync('public/draft-guard.js', 'utf8'), ctx, { filename: 'draft-guard.js' });
+  const safety = ctx.DraftGuard as {
+    createDraftGuard(options: { storageKey: string; collect: () => unknown; onChange?: (dirty: boolean) => void }): {
+      markDirty(): void; redirectToLogin(): void;
+    };
+  };
+  const createGuard = safety.createDraftGuard;
+  safety.createDraftGuard = (settings) => {
+    const guard = createGuard(settings);
+    const markDirty = guard.markDirty;
+    const redirect = guard.redirectToLogin;
+    guard.markDirty = () => { dirty += 1; markDirty(); };
+    guard.redirectToLogin = () => { redirects += 1; redirect(); };
+    return guard;
+  };
   for (const file of ['waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
     vm.runInContext(readFileSync('public/' + file, 'utf8'), ctx, { filename: file });
   }
   if (options.review) (ctx.LLM as { reviewStory: Review }).reviewStory = options.review;
   vm.runInContext(script, ctx);
-  const api = vm.runInContext('({ populateForm, buildPayload, loadPost })', ctx) as EditorApi;
+  const api = vm.runInContext('({ populateForm, buildPayload, loadPost, doSaveDraft, renderAltAudit })', ctx) as EditorApi;
   return {
-    api, el, editors, created: dom.created, document: dom.document, requests,
+    api, el, editors, created: dom.created, document: dom.document, requests, local,
     flushDialogEvents: dom.flushDialogEvents,
+    setMobile(mobile: boolean) { media.matches = mobile; mediaChanged?.(); },
     dirtyCalls: () => dirty, redirects: () => redirects,
   };
 }
@@ -281,11 +317,19 @@ describe('editor.html inline script against its own markup', () => {
     el('tabbtn-en').click();
     expect(el('editorInspector').querySelector('[data-inspector-locale=\"de\"]')!.hidden).toBe(true);
     expect(el('editorInspector').querySelector('[data-inspector-locale=\"en\"]')!.hidden).toBe(false);
-    el('inspectorToggle').click();
+    expect(el('inspectorToggle').hidden).toBe(true);
+    el('inspectorClose').focus();
+    el('inspectorClose').click();
     expect(document.body!.classList.contains('editor-inspector-collapsed')).toBe(true);
     expect(el('editorInspector').getAttribute('aria-hidden')).toBe('true');
+    expect(el('editorInspector').hasAttribute('inert')).toBe(true);
+    expect(el('inspectorToggle').hidden).toBe(false);
+    expect(document.activeElement).toBe(el('inspectorToggle'));
     el('inspectorToggle').click();
     expect(document.body!.classList.contains('editor-inspector-collapsed')).toBe(false);
+    expect(el('editorInspector').hasAttribute('inert')).toBe(false);
+    expect(el('inspectorToggle').hidden).toBe(true);
+    expect(document.activeElement).toBe(el('inspectorClose'));
     el('tabbtn-de').click();
     expect(api.buildPayload()).toEqual(before);
   });
@@ -311,6 +355,28 @@ describe('editor.html inline script against its own markup', () => {
     expect(el('inspectorScrim').hidden).toBe(true);
     expect(el('editorWritingSurface').hasAttribute('inert')).toBe(false);
     expect(document.activeElement).toBe(toggle);
+  });
+
+  it('keeps focus on visible panel controls across desktop and drawer transitions', () => {
+    const { el, document, setMobile } = loadEditor({ mobile: true });
+    el('inspectorToggle').focus();
+    setMobile(false);
+    expect(document.activeElement).toBe(el('inspectorClose'));
+    expect(el('inspectorToggle').hidden).toBe(true);
+
+    el('inspectorClose').click();
+    setMobile(true);
+    el('inspectorToggle').click();
+    expect(document.activeElement).toBe(el('inspectorClose'));
+    setMobile(false);
+    expect(document.activeElement).toBe(el('inspectorToggle'));
+    expect(el('editorInspector').hasAttribute('inert')).toBe(true);
+
+    el('inspectorToggle').click();
+    setMobile(true);
+    expect(document.activeElement).toBe(el('inspectorToggle'));
+    expect(el('inspectorToggle').hidden).toBe(false);
+    expect(el('editorInspector').getAttribute('aria-hidden')).toBe('true');
   });
 
   it('reveals the correct locale and disclosure before focusing a missing inspector field', () => {
@@ -1208,5 +1274,186 @@ describe('inline gallery editing', () => {
     expect(h.api.buildPayload().de.bodyMarkdown).toBe(pair.de.bodyMarkdown);
     h.el('deGalleryView').click();
     expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(2);
+  });
+});
+
+describe('manuscript-first editor refinements', () => {
+  const emptyAudit = { count: 0, images: [] };
+  const copy = ui.en;
+  const saved = fullPair();
+  const readPost: Fetch = async (url) => response(url.endsWith('/alt-audit') ? emptyAudit : url.endsWith('/revisions') ? [] : saved);
+
+  it('keeps grouped advisory issues collapsed without stealing focus, and preserves disclosure/focus on refresh', () => {
+    const h = loadEditor();
+    const audit: AltAudit = { count: 3, images: [
+      { locale: 'de', kind: 'gallery', src: 'https://img/one', reason: 'filename' },
+      { locale: 'en', kind: 'body', src: 'https://img/<img onerror=alert(1)>', reason: 'empty' },
+      { locale: 'de', kind: 'hero', src: 'https://img/hero', reason: 'repeats-title' },
+    ] };
+    h.el('deTitle').focus();
+    h.api.renderAltAudit(audit, false);
+    expect(h.el('altAudit').hidden).toBe(false);
+    expect(h.el('altAudit').open).toBe(false);
+    expect(h.el('altAuditSummary').getAttribute('role')).toBe('status');
+    expect(h.document.activeElement).toBe(h.el('deTitle'));
+    const list = h.el('altAuditList');
+    expect(list.querySelectorAll('h3').map((heading) => heading.textContent)).toEqual([
+      'DE · ' + copy['editor.chrome.auditFilename'], 'EN · ' + copy['editor.chrome.auditEmpty'], 'DE · ' + copy['editor.chrome.auditTitle'],
+    ]);
+    expect(list.querySelectorAll('button').map((button) => button.textContent)).toEqual([
+      copy['editor.chrome.auditGallery'] + ' — one',
+      copy['editor.chrome.auditBody'] + ' — <img onerror=alert(1)>',
+      copy['editor.chrome.auditHero'] + ' — hero',
+    ]);
+    expect(list.querySelector('img')).toBeNull();
+    h.el('altAudit').open = true;
+    list.querySelector('button')!.focus();
+    h.api.renderAltAudit(audit, false);
+    expect(h.el('altAudit').open).toBe(true);
+    expect(h.document.activeElement).toBe(list.querySelector('button'));
+    h.el('altAudit').querySelector('summary')!.focus();
+    h.api.renderAltAudit(emptyAudit, false);
+    expect(h.el('altAudit').hidden).toBe(true);
+    expect(h.document.activeElement).toBe(h.el('deTitle'));
+  });
+
+  it('opens the warned locale and targets the matching photo across galleries, including raw Markdown mode', () => {
+    const h = loadEditor({ mobile: true });
+    const pair = fullPair();
+    pair.en.bodyMarkdown = '```gallery\nhttps://img/first\n```\n\nText\n\n```gallery\nhttps://img/target\n```';
+    pair.en.images = {
+      'https://img/first': { width: 900, height: 600, alt: 'First' },
+      'https://img/target': { width: 900, height: 600, alt: 'Target' },
+    };
+    h.api.populateForm(pair);
+    h.el('tabbtn-en').click();
+    h.el('enGalleryView').click();
+    h.el('tabbtn-de').click();
+    const before = h.api.buildPayload();
+    h.api.renderAltAudit({ count: 1, images: [{ locale: 'en', kind: 'gallery', src: 'https://img/target', reason: 'filename' }] }, false);
+    h.el('altAudit').open = true;
+    h.el('altAuditList').querySelector('button')!.click();
+    h.flushDialogEvents();
+    expect(h.el('tab-en').hidden).toBe(false);
+    expect(h.el('enGalleryView').getAttribute('aria-pressed')).toBe('false');
+    expect(h.document.activeElement?.classList.contains('editor-gallery__alt')).toBe(true);
+    expect(h.document.activeElement?.value).toBe('Target');
+    expect(h.api.buildPayload()).toEqual(before);
+  });
+
+  it('selects the real body image alt instead of matching a code example or ordinary link', () => {
+    const h = loadEditor();
+    const pair = fullPair();
+    pair.de.bodyMarkdown = '`![example](https://img/body)`\n\n[Link](https://img/body)\n\n![file\\]name](<https://img/body> "title")';
+    h.api.populateForm(pair);
+    h.api.renderAltAudit({ count: 1, images: [{ locale: 'de', kind: 'body', src: 'https://img/body', reason: 'filename' }] }, false);
+    h.el('altAuditList').querySelector('button')!.click();
+    const editor = h.editors[0]!;
+    expect(h.document.activeElement).toBe(editor.input);
+    expect(editor.codemirror.getRange(editor.selection!.from, editor.selection!.to)).toBe('file\\]name');
+    expect(editor.value()).toBe(pair.de.bodyMarkdown);
+  });
+
+  it.each(['gallery', 'hero'] as const)('does not jump to a different %s photo when a saved warning is stale', (kind) => {
+    const h = loadEditor();
+    h.api.populateForm(fullPair());
+    h.api.renderAltAudit({ count: 1, images: [{ locale: 'de', kind, src: 'https://img/removed', reason: 'empty' }] }, false);
+    const before = h.api.buildPayload();
+    h.el('altAuditList').querySelector('button')!.click();
+    expect(h.el('altAuditFeedback').hidden).toBe(false);
+    expect(h.el('altAuditFeedback').textContent).toBe(copy['editor.chrome.auditMissing']);
+    expect(h.document.activeElement).not.toBe(h.el('deGallery'));
+    expect(h.document.activeElement).not.toBe(h.el('deHeroAlt'));
+    expect(h.api.buildPayload()).toEqual(before);
+  });
+
+  it('normalizes pasted title line breaks without renaming a loaded slug or interrupting composition', () => {
+    const h = loadEditor();
+    h.api.populateForm(fullPair());
+    const title = h.el('deTitle');
+    title.value = 'Über die Berge\r\nund ans Meer';
+    title.setSelectionRange(16, 16);
+    title.fire('input');
+    expect(title.value).toBe('Über die Berge und ans Meer');
+    expect(title.selectionStart).toBe(15);
+    expect(h.api.buildPayload().de.title).toBe(title.value);
+    expect(h.api.buildPayload().de.slug).toBe('bukarest');
+    title.value = '一\n二';
+    title.setSelectionRange(3, 3);
+    title.dispatchEvent(new EditorEvent('input', { bubbles: true, isComposing: true }));
+    expect(title.value).toBe('一\n二');
+    title.fire('compositionend');
+    expect(title.value).toBe('一 二');
+    expect(title.fire('keydown', { key: 'Enter' }).defaultPrevented).toBe(true);
+    const composing = new EditorEvent('keydown', { key: 'Enter', cancelable: true, isComposing: true });
+    title.dispatchEvent(composing);
+    expect(composing.defaultPrevented).toBe(false);
+  });
+
+  it('reports loaded, edited, in-flight and saved states without clearing edits made during a save', async () => {
+    const pending = Promise.withResolvers<Response>();
+    let firstSave = true;
+    const h = loadEditor({ fetch: async (url, options) => {
+      if (options?.method !== 'PUT') return readPost(url, options);
+      if (firstSave) { firstSave = false; return pending.promise; }
+      return response(saved);
+    } });
+    await h.api.loadPost('tk1');
+    expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveSaved']);
+    expect(h.el('draftSaveState').getAttribute('role')).toBe('status');
+    h.el('deTitle').value = 'First edit';
+    h.el('deTitle').fire('input');
+    expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveUnsaved']);
+    const saving = h.api.doSaveDraft();
+    expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveSaving']);
+    h.el('deTitle').value = 'Newer edit';
+    h.el('deTitle').fire('input');
+    pending.resolve(response(saved));
+    expect(await saving).toBe(true);
+    expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveUnsaved']);
+    expect(h.el('actionStatus').textContent).toBe(copy['editor.chrome.saveNewer']);
+    expect(h.api.buildPayload().de.title).toBe('Newer edit');
+    expect(await h.api.doSaveDraft()).toBe(true);
+    expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveSaved']);
+  });
+
+  it.each(['network', 500, 409, 401])('keeps edited content unsaved when saving fails (%s)', async (failure) => {
+    const h = loadEditor({ fetch: async (url, options) => {
+      if (options?.method !== 'PUT') return readPost(url, options);
+      if (failure === 'network') throw new Error('offline');
+      return response({ code: 'conflict', error: 'Save refused' }, Number(failure));
+    } });
+    await h.api.loadPost('tk1');
+    h.el('deTitle').value = 'Keep this draft';
+    h.el('deTitle').fire('input');
+    expect(await h.api.doSaveDraft()).toBe(false);
+    expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveUnsaved']);
+    expect(h.api.buildPayload().de.title).toBe('Keep this draft');
+    if (failure === 401) {
+      expect(h.redirects()).toBe(1);
+      const stash = h.local.key(0)!;
+      expect(JSON.parse(h.local.getItem(stash)!).payload.de.title).toBe('Keep this draft');
+    } else expect(h.el('actionError').hidden).toBe(false);
+  });
+
+  it('keeps a cancelled URL change unsaved without sending a write', async () => {
+    const h = loadEditor({ fetch: readPost });
+    await h.api.loadPost('tk1');
+    h.el('slugFieldDe').value = 'new-slug';
+    h.el('slugFieldDe').fire('input');
+    expect(await h.api.doSaveDraft()).toBe(false);
+    expect(h.requests.filter((request) => request.options.method === 'PUT')).toEqual([]);
+    expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveUnsaved']);
+  });
+
+  it('offers the existing recovery stash after loading and keeps the restored draft unsaved', async () => {
+    const restored = fullPair();
+    restored.de.title = 'Recovered local title';
+    const h = loadEditor({ isAdmin: true, search: '?tk=tk1', confirm: true,
+      stash: { key: 'swl:draft:tk1', payload: restored }, fetch: readPost });
+    await settle();
+    expect(h.el('deTitle').value).toBe('Recovered local title');
+    expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveUnsaved']);
+    expect(h.local.getItem('swl:draft:tk1')).not.toBeNull();
   });
 });

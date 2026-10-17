@@ -144,6 +144,8 @@ window.EditorLinter = (function () {
         alt: match[2],
         destination: (match[3] === undefined ? match[4] : match[3]).replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, '$1'),
         line: lineAt(doc.starts, match.index),
+        start: match.index + 2,
+        end: match.index + 2 + match[2].length,
       });
     }
     return items;
@@ -193,6 +195,15 @@ window.EditorLinter = (function () {
     return linksIn(inlineIn(prepare(markdown)));
   }
 
+  // Reuse the same offset-preserving scanner as Review Story: a URL in a
+  // code example or ordinary link must never receive an image-repair jump.
+  function findImage(markdown, src) {
+    var image = inlineIn(prepare(markdown)).find(function (item) {
+      return item.image && item.destination === src;
+    });
+    return image ? { start: image.start, end: image.end, line: image.line } : null;
+  }
+
   function lintStory(input) {
     input = input || {};
     var doc = prepare(input.markdown);
@@ -214,5 +225,6 @@ window.EditorLinter = (function () {
     lintAltText: lintAltText,
     lintInternalLinks: lintInternalLinks,
     lintStory: lintStory,
+    findImage: findImage,
   };
 })();

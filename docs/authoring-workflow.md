@@ -82,15 +82,31 @@ text by hand.
 The in-admin editor at `/admin/posts.html` is the authoring interface — no GitHub or `curl`
 needed. Content is stored in **Postgres**; MDX files are generated automatically as backups.
 
-The editor opens on the title and story body. **Story details** beside the writing
-surface holds the active language's country, permalink, summary, key facts, hero
-image and optional title image; expedition details and taxonomy are shared. Hide the inspector for more writing
-space, or use **Details** on a phone to open it as a drawer. Switching DE/EN preserves
-both languages' unsaved edits.
+The editor opens on the title and story body. Long titles wrap and grow to show
+the whole title; the saved title remains a single line. On desktop, the left main
+menu stays in place while the page scrolls. **Story details** stays below the top
+command bar and scrolls independently; its header and compact **Close** button remain visible.
+The panel holds the active language's country, permalink, summary, key facts, hero
+image and optional title image; expedition details and taxonomy are shared. Use
+**Close** inside the panel for more writing space, then **Story details** in the
+command bar to reopen it. On phones, **Details** opens a keyboard-managed drawer.
+Switching DE/EN preserves both languages' unsaved edits.
 
-**Save draft** and **Publish** stay in the top command bar. **More actions** (or
-**More** on phones) contains Preview, Review story and, for published posts,
-Unpublish. Missing-field links select the right language and reveal the field to fix.
+**Save draft**, **Publish** and **Review story** stay in the top command bar.
+**More actions** (or **More** on phones) contains Preview and, for published posts,
+Unpublish. The save indicator distinguishes **Not saved yet**, **Unsaved changes**,
+**Saving…** and **Saved to server**. Publish readiness is separate. A failed save
+leaves edits unsaved; edits typed while a save is running still need another save.
+Browser recovery copies do not mean the draft has been saved to the server.
+
+Alt-text warnings start as a compact, collapsed **Alt-text review** disclosure
+above the story, within the writing column. Expand it to see photos grouped by
+language and issue. Selecting a photo opens the correct language and focuses its
+gallery alt field, selects its inline Markdown alt, or reveals its hero alt field.
+The audit reflects the last saved draft: save after repairs to refresh it. If a
+photo has since been removed, the editor asks you to save rather than jumping to
+an unrelated photo. These checks are optional and never block publishing.
+Missing-field links select the right language and reveal the field to fix.
 For an existing hero, use **Replace photo** to upload or choose from the library,
 and **Adjust framing** for focal-point controls.
 
