@@ -179,6 +179,15 @@ storage key, not per variant file. Bulk drag-and-drop upload, virtual folders (a
 table; moving a photo re-labels it, it does not move bytes on disk), search, and per-item alt text
 that the gallery picker reuses.
 
+The shared image picker in `public/media-picker.js` exposes read-only folder navigation
+for title images, heroes, and galleries. It uses `MediaApi.folderTree`, the Media page's
+folder styles, and the existing `/media/folders` endpoint. Folder views include descendants;
+search and pagination stay scoped to the folder. Selection/order survives folder changes,
+and stale list responses cannot repaint a newer view. Folder loading is independent of photo
+loading, so a failed folder request does not prevent searching all photos. At narrow widths
+the folder list becomes a native disclosure. `test/media-picker-dom.test.ts` exercises these
+behaviors against the real in-memory store's filters.
+
 Encoding is **asynchronous**: an upload lands, its row goes `processing`, and `encode-queue.ts`
 works the backlog at concurrency 2. A build preempts the queue — both take the same mutex in
 `work-lock.ts`, so a publish never competes with an encode. Rows survive restarts: the boot pass

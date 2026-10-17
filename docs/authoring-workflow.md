@@ -327,6 +327,14 @@ only), and flags rows whose files have gone missing without deleting the metadat
 In the post editor, the hero fields now offer **Choose from library** alongside **Upload hero** —
 most heroes already exist, and re-uploading one would just mint a second copy under a new key.
 
+The shared library picker — including **Aus Mediathek wählen** for the title image and
+the gallery chooser — has the same nested **Folders** list as the Media page. Select
+a folder to browse it and its subfolders, or **All photos** to return to the full
+library. Search is scoped to the current folder; changing folders returns to page one
+without dropping gallery selections or their order. Only ready photos are offered.
+On a phone, expand **Folders** above the photos; it collapses after a folder is chosen.
+Create, rename, and delete folders on the Media page, not in the picker.
+
 ### Galleries
 
 **Inline editing.** Complete gallery blocks appear as photo previews inside the
