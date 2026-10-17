@@ -6,7 +6,7 @@
 # repo root (bases default to DHI — see Dockerfile).
 services:
   app:
-    image: ghcr.io/laboef1900/simonswanderlust-app:${IMAGE_TAG:-0.9.0}
+    image: ghcr.io/laboef1900/simonswanderlust-app:${IMAGE_TAG:-0.10.0}
     # tini as PID 1: forwards SIGTERM to node (clean shutdown handler in
     # uploader/src/main.ts) and reaps the spawned `astro build` child process.
     init: true
