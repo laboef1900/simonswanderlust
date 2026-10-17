@@ -1,11 +1,9 @@
 /*
- * Browser-direct AI helpers: local vision captions and OpenAI-compatible
- * editorial reviews. The server never contacts a model. Review credentials
- * belong only to their individual request, never to shared caption/model headers.
- * Providers must allow browser CORS; see mixedContentWarning for local HTTP.
+ * Browser-direct OpenAI-compatible vision captions and editorial reviews.
+ * The server never contacts a model. Credentials belong only to their individual
+ * request, never to shared headers. Providers must allow browser CORS.
  */
 window.LLM = (function () {
-  const base = (u) => String(u).replace(/\/+$/, '');
 
   // Mirrors src/caption.ts MAX_ALT / cleanAlt (enforced by test/llm-mirror.test.ts):
   // model output is untrusted input — one line, single-spaced, capped, never
@@ -282,45 +280,87 @@ window.LLM = (function () {
     }
   }
 
-  async function listModels(baseUrl) {
-    const res = await fetch(base(baseUrl) + '/models');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const body = await res.json();
-    return (body.data || []).map((m) => m.id).filter(Boolean);
+  function captionEndpoint(baseUrl, path) {
+    let url;
+    try { url = new URL(String(baseUrl)); } catch { throw new Error('Invalid caption endpoint'); }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+      throw new Error('Invalid caption endpoint');
+    }
+    url.pathname = url.pathname.replace(/\/+$/, '') + path;
+    return url.href;
+  }
+
+  async function listModels(baseUrl, apiKey) {
+    const endpoint = captionEndpoint(baseUrl, '/models');
+    const headers = {};
+    if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
+    try {
+      const res = await fetch(endpoint, {
+        headers, signal: AbortSignal.timeout(15000),
+        credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer',
+      });
+      if (!res.ok) throw new Error();
+      const body = await res.json();
+      return (body.data || []).map((m) => m.id).filter((id) => typeof id === 'string' && id);
+    } catch {
+      throw new Error('Could not list models. Check the provider, API key and browser CORS access.');
+    }
   }
 
   /** Load a File, downscale its longest edge to maxEdge, return a JPEG data URL
    *  plus the ORIGINAL intrinsic dimensions. The original file is never re-encoded
    *  here — upload still sends the untouched file to /upload. */
-  function prepImage(file, maxEdge) {
+  function prepImage(file, maxEdge, signal) {
     return new Promise((resolve, reject) => {
       const img = new Image();
       const url = URL.createObjectURL(file);
-      img.onload = () => {
+      const cleanup = () => {
         URL.revokeObjectURL(url);
-        const w = img.naturalWidth;
-        const h = img.naturalHeight;
-        const scale = Math.min(1, (maxEdge || 768) / Math.max(w, h));
-        const cw = Math.max(1, Math.round(w * scale));
-        const ch = Math.max(1, Math.round(h * scale));
-        const canvas = document.createElement('canvas');
-        canvas.width = cw;
-        canvas.height = ch;
-        canvas.getContext('2d').drawImage(img, 0, 0, cw, ch);
-        resolve({ dataUrl: canvas.toDataURL('image/jpeg', 0.8), width: w, height: h });
+        signal?.removeEventListener('abort', cancel);
       };
-      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('not a decodable image')); };
+      const cancel = () => {
+        img.onload = img.onerror = null;
+        img.src = '';
+        cleanup();
+        reject(signal.reason);
+      };
+      signal?.addEventListener('abort', cancel, { once: true });
+      if (signal?.aborted) { cancel(); return; }
+      img.onload = () => {
+        cleanup();
+        try {
+          const w = img.naturalWidth;
+          const h = img.naturalHeight;
+          const scale = Math.min(1, (maxEdge || 768) / Math.max(w, h));
+          const cw = Math.max(1, Math.round(w * scale));
+          const ch = Math.max(1, Math.round(h * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = cw;
+          canvas.height = ch;
+          canvas.getContext('2d').drawImage(img, 0, 0, cw, ch);
+          resolve({ dataUrl: canvas.toDataURL('image/jpeg', 0.8), width: w, height: h });
+        } catch (error) { reject(error); }
+      };
+      img.onerror = () => { cleanup(); reject(new Error('not a decodable image')); };
       img.src = url;
     });
   }
 
-  async function caption(baseUrl, model, prompt, dataUrl, timeoutMs) {
+  async function caption(baseUrl, model, prompt, dataUrl, timeoutMs, signal, apiKey) {
+    const endpoint = captionEndpoint(baseUrl, '/chat/completions');
+    const headers = { 'content-type': 'application/json' };
+    if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
     const ctrl = new AbortController();
+    const cancel = () => ctrl.abort();
+    if (signal) {
+      signal.addEventListener('abort', cancel, { once: true });
+      if (signal.aborted) ctrl.abort();
+    }
     const timer = setTimeout(() => ctrl.abort(), timeoutMs || 60000);
     try {
-      const res = await fetch(base(baseUrl) + '/chat/completions', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
+      const res = await fetch(endpoint, {
+        method: 'POST', headers,
+        credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer',
         signal: ctrl.signal,
         body: JSON.stringify({
           model,
@@ -340,8 +380,14 @@ window.LLM = (function () {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const body = await res.json();
       return parseCaption(body.choices && body.choices[0] && body.choices[0].message ? body.choices[0].message.content : '');
+    } catch {
+      const error = new Error(ctrl.signal.aborted ? 'Caption request cancelled or timed out' :
+        'Caption request failed. Check the provider, API key, vision model and browser CORS access.');
+      if (ctrl.signal.aborted) error.name = 'AbortError';
+      throw error;
     } finally {
       clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', cancel);
     }
   }
 

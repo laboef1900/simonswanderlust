@@ -198,6 +198,10 @@ export function harvestAlt(src: string, posts: PostUsageRow[]): { de: string; en
       out[locale] = row.heroImage.alt;
       continue;
     }
+    if (row.titleImage?.src === src && typeof row.titleImage.alt === 'string' && row.titleImage.alt) {
+      out[locale] = row.titleImage.alt;
+      continue;
+    }
     // Labels carry backslash escapes (`imageMarkdown`); the library stores the text the author typed.
     const hit = markdownImages(row.bodyMarkdown ?? '').find((img) => img.url === src && img.alt);
     if (hit) out[locale] = unescapeAltText(hit.alt);

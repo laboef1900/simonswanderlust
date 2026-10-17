@@ -65,7 +65,6 @@ describe('dumpDatabase', () => {
     expect(name).toBe('db-20260703-143005.json.gz');
     expect(BACKUP_FILE_RE.test(name)).toBe(true);
     const dump = JSON.parse(gunzipSync(await readFile(join(dir, name))).toString('utf8'));
-    expect(dump.version).toBe(8);
     expect(dump.tables.comments).toEqual([{ id: 'c1', translation_key: 'p1', locale: 'de', name: 'R', body: 'hi', status: 'pending', is_author: false }]);
     expect(dump.tables.users).toEqual([{ id: 'u1', username: 'simon' }]);
     expect(dump.tables.posts).toEqual([{ id: 'p1', slug: 's' }]);

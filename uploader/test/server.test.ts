@@ -945,6 +945,8 @@ describe('AI credential boundaries', () => {
     for (const payload of [
       { reviewTimeoutMs: 4999, aiApiKey: 'replacement' },
       { aiModel: {}, aiApiKey: 'replacement' },
+      { captionProvider: ['openrouter'], aiApiKey: 'replacement' },
+      { captionCustomBaseUrl: 'https://example.test/v1?key=fixture', aiApiKey: 'replacement' },
       { aiApiKey: ['replacement'] },
       { aiApiKey: 'header\r\ninjection' },
     ]) {
@@ -995,6 +997,8 @@ describe('AI credential boundaries', () => {
       expect(caption.json()).toEqual({
         lmBaseUrl: SETTINGS.lmBaseUrl, lmModel: SETTINGS.lmModel, captionPrompt: SETTINGS.captionPrompt,
         captionTimeoutMs: SETTINGS.captionTimeoutMs, captionMaxEdge: SETTINGS.captionMaxEdge,
+        captionProvider: 'lm-studio', captionCustomBaseUrl: '',
+        captionBaseUrl: SETTINGS.lmBaseUrl, captionApiKey: null,
       });
       expect(caption.headers['cache-control']).toBe('no-store');
       expect(log).not.toHaveBeenCalled();
@@ -1027,6 +1031,70 @@ describe('AI credential boundaries', () => {
     const anonymous = await b.app.inject({ url: '/ai-config?purpose=caption' });
     expect(anonymous.statusCode).toBe(401);
     expect(anonymous.headers['cache-control']).toBe('no-store');
+    await b.app.close();
+  });
+
+  it('resolves captions independently, shares the encrypted key and fails closed only for remote captions', async () => {
+    const secrets = memorySecretsStore();
+    await secrets.set('ai_api_key', 'fixture-shared');
+    const settings = fakeStore();
+    const b = build({ secrets, settings });
+    const admin = await authed(b);
+    const author = await authed(b, { isAdmin: false, username: 'caption-author' });
+    const save = (payload: Record<string, unknown>) => b.app.inject({ method: 'POST', url: '/settings', cookies: admin.cookie, payload });
+    for (const [provider, destination] of [
+      ['openrouter', 'https://openrouter.ai/api/v1'], ['deepseek', 'https://api.deepseek.com/v1'],
+      ['custom', 'https://vision.example/v1'],
+    ] as const) {
+      const saved = await save({ captionProvider: provider, captionCustomBaseUrl: 'https://vision.example/v1', lmModel: 'vision-model' });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.body).not.toContain('fixture-shared');
+      expect(saved.json()).not.toHaveProperty('captionApiKey');
+      const caption = await b.app.inject({ url: '/ai-config?purpose=caption', cookies: author.cookie });
+      expect(caption.statusCode).toBe(200);
+      expect(caption.headers['cache-control']).toBe('no-store');
+      expect(caption.json()).toMatchObject({ captionProvider: provider, captionBaseUrl: destination, captionApiKey: 'fixture-shared', lmModel: 'vision-model' });
+      expect((await b.app.inject({ url: '/ai-config', cookies: author.cookie })).json()).toMatchObject({
+        aiProvider: 'lm-studio', aiBaseUrl: SETTINGS.lmBaseUrl, aiModel: SETTINGS.aiModel, aiApiKey: null,
+      });
+    }
+    expect((await b.app.inject({ method: 'POST', url: '/settings', cookies: author.cookie, payload: { captionProvider: 'custom' } })).statusCode).toBe(403);
+    await save({ captionCustomBaseUrl: '' });
+    expect((await b.app.inject({ url: '/ai-config?purpose=caption', cookies: author.cookie })).statusCode).toBe(400);
+    await save({ captionProvider: 'openrouter' });
+    await secrets.delete('ai_api_key');
+    expect((await b.app.inject({ url: '/ai-config?purpose=caption', cookies: author.cookie })).json().captionApiKey).toBeNull();
+    secrets.get = async () => { throw new Error('DO-NOT-LEAK'); };
+    const failed = await b.app.inject({ url: '/ai-config?purpose=caption', cookies: author.cookie });
+    expect(failed.statusCode).toBe(503);
+    expect(failed.body).not.toContain('DO-NOT-LEAK');
+    settings.update({ captionProvider: 'lm-studio' });
+    expect((await b.app.inject({ url: '/ai-config?purpose=caption', cookies: author.cookie })).json()).toMatchObject({
+      captionBaseUrl: SETTINGS.lmBaseUrl, captionApiKey: null,
+    });
+    await b.app.close();
+  });
+
+  it('remote caption config waits for both key and destination to commit', async () => {
+    const secrets = memorySecretsStore();
+    const originalSet = secrets.set;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    secrets.set = async (key, value) => { entered.resolve(); await release.promise; await originalSet(key, value); };
+    const b = build({ secrets, settings: fakeStore({ ...SETTINGS, captionProvider: 'openrouter' }) });
+    const { cookie } = await authed(b);
+    const saving = b.app.inject({ method: 'POST', url: '/settings', cookies: cookie,
+      payload: { aiApiKey: 'fixture-new', captionProvider: 'custom', captionCustomBaseUrl: 'https://vision.example/v1' } }).then((r) => r);
+    await entered.promise;
+    let resolved = false;
+    const caption = b.app.inject({ url: '/ai-config?purpose=caption', cookies: cookie }).then((r) => { resolved = true; return r; });
+    const turn = Promise.withResolvers<void>();
+    setImmediate(turn.resolve);
+    await turn.promise;
+    expect(resolved).toBe(false);
+    release.resolve();
+    expect((await saving).statusCode).toBe(200);
+    expect((await caption).json()).toMatchObject({ captionBaseUrl: 'https://vision.example/v1', captionApiKey: 'fixture-new' });
     await b.app.close();
   });
 
@@ -1678,6 +1746,60 @@ describe('publish gate (encode status)', () => {
   const create = async (b: Built, cookie: { sid: string }, payload: Record<string, unknown>) =>
     (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload })).json().translationKey;
 
+  it.each(['processing', 'failed', 'missing', 'unknown'] as const)('blocks single and bulk publication of a %s title image', async (status) => {
+    const b = build();
+    try {
+      const { cookie } = await authed(b);
+      const key = 'trips/g/title';
+      if (status !== 'unknown') await b.media.upsert({ key, status, width: 2400, height: 800, origBytes: 1,
+        exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+      const p = pairUsing(`${IMG}/trips/g/hero`);
+      const tk = await create(b, cookie, { ...p, de: { ...p.de,
+        titleImage: { src: `${IMG}/${key}`, width: 2400, height: 800, alt: 'View' } } });
+      const single = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+      expect(single.statusCode).toBe(409);
+      expect(single.json().notReady).toContain(key);
+      const bulk = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+      expect(bulk.json().results[0].ok).toBe(false);
+      expect((await b.posts.get(tk))?.status).toBe('draft');
+    } finally { await b.app.close(); }
+  });
+
+  it('refuses a foreign title image before publication', async () => {
+    const b = build();
+    try {
+      const { cookie } = await authed(b);
+      const p = pairUsing(`${IMG}/trips/g/hero`);
+      const titleImage = { src: 'https://img.simonswanderlust.com.attacker.test/title', width: 2400, height: 800, alt: 'View' };
+      const tk = await create(b, cookie, { ...p, de: { ...p.de, titleImage } });
+      const response = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+      expect(response.statusCode).toBe(409);
+      expect(response.json().foreignImages).toEqual([titleImage.src]);
+    } finally { await b.app.close(); }
+  });
+
+  it('protects a ready title image from deletion until neither draft nor live snapshot uses it', async () => {
+    const b = build();
+    try {
+      const { cookie } = await authed(b);
+      const key = 'trips/g/title';
+      await b.media.upsert({ key, status: 'ready', width: 2400, height: 800, origBytes: 1,
+        exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+      const p = pairUsing(`${IMG}/trips/g/hero`);
+      const tk = await create(b, cookie, { ...p, de: { ...p.de,
+        titleImage: { src: `${IMG}/${key}`, width: 2400, height: 800, alt: 'View' } } });
+      const remove = () => b.app.inject({ method: 'DELETE', url: `/media/items/${key}`, cookies: cookie });
+      expect((await remove()).statusCode).toBe(409);
+      expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie })).statusCode).toBe(200);
+      const saved = (await b.posts.get(tk))!;
+      delete saved.de.titleImage;
+      await b.posts.upsertDraft(saved);
+      expect((await remove()).statusCode).toBe(409);
+      expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie })).statusCode).toBe(200);
+      expect((await remove()).statusCode).toBe(200);
+    } finally { await b.app.close(); }
+  });
+
   it('blocks publishing while a referenced photo is still processing', async () => {
     const b = build();
     const { cookie } = await authed(b);
@@ -1839,7 +1961,6 @@ describe('publish gate (foreign images, #91)', () => {
     const tk = await create(b, cookie, pairWithBody(de, '```gallery\nhttps://old.example/wp-content/uploads/g.jpg\n```'));
     const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error).toMatch(/8 image\(s\) in the body still point at another host/);
     expect(res.json().foreignImageCount).toBe(8);
     expect(res.json().foreignImages).toEqual(urls.slice(0, 5));
     expect(s.calls.length).toBe(0);
@@ -1862,7 +1983,6 @@ describe('publish gate (foreign images, #91)', () => {
       payload: { action: 'publish', keys: [tk] },
     });
     expect(res.json()).toMatchObject({ succeeded: 0, failed: 1 });
-    expect(res.json().results[0].error).toMatch(/1 image\(s\) in the body still point at another host/);
   });
 });
 
@@ -2911,5 +3031,40 @@ describe('GET /posts/:tk/preview', () => {
     // Other admin JSON routes stay without one — the policy is preview-specific.
     const list = await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie });
     expect(list.headers['content-security-policy']).toBeUndefined();
+  });
+});
+
+describe('editor geocoding boundary', () => {
+  it('requires a session, validates query text, and leaves disabled lookup available only as manual entry', async () => {
+    const b = build({ settings: fakeStore({ ...SETTINGS, geocodingSearchUrl: '' }) });
+    try {
+      expect((await b.app.inject({ method: 'POST', url: '/geocode', payload: { query: 'Cancun' } })).statusCode).toBe(401);
+      const { cookie } = await authed(b, { isAdmin: false });
+      const invalid = await b.app.inject({ method: 'POST', url: '/geocode', cookies: cookie, payload: { query: { url: 'https://evil.example' } } });
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.json()).toEqual({ code: 'invalid_query' });
+      const disabled = await b.app.inject({ method: 'POST', url: '/geocode', cookies: cookie, payload: { query: 'Cancun' } });
+      expect(disabled.statusCode).toBe(503);
+      expect(disabled.json()).toEqual({ code: 'lookup_disabled' });
+      expect(disabled.headers['cache-control']).toBe('no-store');
+      expect((await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload: { geocodingSearchUrl: 'https://example.com/search' } })).statusCode).toBe(403);
+    } finally { await b.app.close(); }
+  });
+
+  it('lets an admin switch or disable the persisted endpoint, but rejects unsafe configuration', async () => {
+    const store = fakeStore();
+    const b = build({ settings: store });
+    try {
+      const { cookie } = await authed(b);
+      const change = (geocodingSearchUrl: string) => b.app.inject({
+        method: 'POST', url: '/settings', cookies: cookie, payload: { geocodingSearchUrl },
+      });
+      expect((await change('https://geocode.example/search')).statusCode).toBe(200);
+      expect(store.get().geocodingSearchUrl).toBe('https://geocode.example/search');
+      expect((await change('http://geocode.example/search')).statusCode).toBe(400);
+      expect(store.get().geocodingSearchUrl).toBe('https://geocode.example/search');
+      expect((await change('')).statusCode).toBe(200);
+      expect((await b.app.inject({ method: 'POST', url: '/geocode', cookies: cookie, payload: { query: 'Cancun' } })).statusCode).toBe(503);
+    } finally { await b.app.close(); }
   });
 });

@@ -268,6 +268,38 @@ describe('import settings', () => {
   });
 });
 
+describe('caption provider settings', () => {
+  it('keeps legacy captions local, and round-trips independent remote provider settings', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ lmModel: 'existing-vision', aiProvider: 'deepseek', backupSchedule: 'daily' }));
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(store.get()).toMatchObject({ captionProvider: 'lm-studio', captionCustomBaseUrl: '', lmModel: 'existing-vision' });
+    store.update({ captionProvider: 'custom', captionCustomBaseUrl: 'https://vision.example/v1' });
+    expect(createSettingsStore({ path, defaults: DEFAULTS }).get()).toMatchObject({
+      captionProvider: 'custom', captionCustomBaseUrl: 'https://vision.example/v1',
+      lmModel: 'existing-vision', aiProvider: 'deepseek', backupSchedule: 'daily',
+    });
+  });
+
+  it('rejects invalid providers and credential-bearing or non-HTTP endpoints without saving', async () => {
+    const path = join(dir, 'settings.json');
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    store.update({ captionProvider: 'openrouter' });
+    const before = await readFile(path, 'utf8');
+    for (const partial of [
+      { captionProvider: 'other' }, { captionProvider: ['custom'] },
+      { captionCustomBaseUrl: null }, { captionCustomBaseUrl: 'file:///private' },
+      { captionCustomBaseUrl: 'https://user:password@example.test/v1' },
+      { captionCustomBaseUrl: 'https://example.test/v1?key=fixture' },
+      { captionCustomBaseUrl: 'https://example.test/v1#fragment' },
+    ]) {
+      expect(() => store.update(partial as unknown as Partial<Settings>)).toThrow(SettingsError);
+    }
+    expect(store.get().captionProvider).toBe('openrouter');
+    expect(await readFile(path, 'utf8')).toBe(before);
+  });
+});
+
 describe('editorial review settings', () => {
   it('enforces provider, model, destination and integer timeout boundaries', () => {
     const invalid: Record<string, unknown>[] = [

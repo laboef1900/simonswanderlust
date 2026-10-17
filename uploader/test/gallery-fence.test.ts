@@ -29,6 +29,7 @@ interface PickedItem {
   alt?: { de?: string; en?: string };
   caption?: { de?: string; en?: string };
   format?: 'jpeg';
+  fromPost?: boolean;
 }
 interface ParsedLine {
   src: string;
@@ -55,6 +56,7 @@ interface Api {
     postMeta?: PostMeta,
   ): string;
   parse(text: string): { directives: string[]; lines: ParsedLine[] };
+  withAlt(text: string, src: string, value: string): string;
   scanFences(text: string): { start: number; end: number; isGallery: boolean; unterminated: boolean }[];
   fenceAt(body: string, cursor: number): { text: string; start: number; end: number } | null;
   replaceFenceAt(body: string, cursor: number, fence: string): Edit;
@@ -210,9 +212,11 @@ describe('serialize', () => {
 
     it('respects a deliberately cleared value rather than refilling it', () => {
       const out = G.serialize([item()], 'de', [], { 'https://img.example.com/trips/x/a': { alt: '' } });
-      expect(out).not.toContain('alt=');
-      // caption is absent from postMeta, so the library value still fills in
-      expect(out).toContain('caption="Am Morgen"');
+      const saved = normalizeGalleryFences(out, {
+        'https://img.example.com/trips/x/a': { width: 3000, height: 2000, alt: 'Old saved alt' },
+      });
+      expect(saved.images['https://img.example.com/trips/x/a']?.alt).toBe('');
+      expect(saved.images['https://img.example.com/trips/x/a']?.caption).toBe('Am Morgen');
     });
 
     it('falls back to the library row for a photo the post has never seen', () => {
@@ -226,6 +230,17 @@ describe('serialize', () => {
       });
       expect(out.split('\n')).toHaveLength(3);
       expect((out.split('\n')[1] ?? '').split('|')).toHaveLength(4);
+    });
+  });
+
+  it('retains unsaved alt on an existing unresolved photo through picker updates', () => {
+    const src = 'https://img.example.com/missing';
+    const body = G.serialize([{ src, width: 0, height: 0, fromPost: true }], 'de', ['#layout: slider'], {
+      [src]: { alt: 'Kept | "description"' },
+    });
+    const saved = normalizeGalleryFences(body, {});
+    expect(G.parse(saved.bodyMarkdown)).toEqual({
+      directives: ['#layout: slider'], lines: [{ src, alt: 'Kept | "description"' }],
     });
   });
 });

@@ -56,6 +56,9 @@ Self-hosted, single-author travel CMS with a custom bilingual editor, automatic 
 2. **Photography leads** — The image pipeline and visual presentation treat photos as the primary content, not decoration.
 3. **Bilingual by design** — DE/EN content lives as a first-class pair, not a translation afterthought.
 4. **Self-hosted independence** — The stack is two containers, `app` (Fastify, which also builds the Astro site in-process) and `db` (Postgres), with no third-party runtime services.
+   Owner-approved exception (2026-10-16): explicit waypoint searches in the editor
+   use external Nominatim through the authenticated app, with caching/rate limits
+   and manual-coordinate fallback. Public maps remain entirely self-hosted.
 
 ## Accessibility & Inclusion
 

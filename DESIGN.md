@@ -688,6 +688,12 @@ aspect ratio when desktop cover cropping needs a wider source. Mobile retains
 the whole frame, including portrait photographs. No title clamp or
 photographic scrim.
 
+The photograph can be an independently selected **title image**, with its own alt text
+and focal point. If absent, the existing hero is used. This does not alter the opening's
+geometry or introduce text over the photograph; homepage covers, cards, pagination and
+social images keep the hero. Selection is per locale in the editor's existing inspector,
+using the same media picker, upload and framing controls rather than a new visual pattern.
+
 ### Navigation
 
 - **Header:** canvas with a `border-navy/10` underline, `1152px` container,

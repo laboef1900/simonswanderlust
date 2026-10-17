@@ -310,6 +310,31 @@ predate the fix, audited twice with identical results.
 Re-run `audit-exif` if a pre-#62 variant corpus is ever copied onto a server
 wholesale; that is the one path that could reintroduce the question.
 
+## Editor location lookup
+
+Owner-approved external editor lookup (2026-10-16): authenticated `POST /geocode`
+accepts only a place-name query (2–200 characters, no control characters; 2KiB
+request body limit). The app contacts Nominatim; the provider sees the query and
+server IP, never the editor's session. Public maps make no additional requests.
+The query is a JSON body, not an incoming logged URL; neither queries nor upstream
+errors are logged by the lookup implementation.
+
+Only admins may change `geocodingSearchUrl` through the existing settings API.
+It must be HTTPS without credentials, query or fragment; empty disables lookup.
+Authors cannot supply a destination. `safeFetch` enforces the existing IP/DNS
+SSRF guards, a 10-second deadline and a 256KiB response cap. Redirects are refused,
+so one admitted lookup cannot generate several provider requests. The existing
+DNS rebinding limitation below remains; no guard was weakened.
+
+One app-wide request at a time, starts at least 1100ms apart, no queue or retries.
+Successful searches are cached for 24h in a 100-entry memory cache, including
+empty results. The limit assumes the existing single app container. Results
+contain only bounded labels and finite in-range coordinates; labels are rendered
+as text. Stable failure codes disclose no upstream errors. Manual coordinates
+remain usable during failures; setting the endpoint to empty contains the feature
+without changing stored content. See the
+[design and recovery plan](docs/superpowers/specs/2026-10-16-waypoint-location-lookup-design.md).
+
 ## SSRF protection (WordPress import)
 
 The importer fetches image URLs taken from an uploaded export — attacker-influenced input. All such
@@ -344,19 +369,20 @@ fetches go through `safeFetch` (`uploader/src/safe-fetch.ts`), which:
 Design and misuse cases: `docs/superpowers/specs/2026-09-05-safe-fetch-redirects-design.md` and
 `docs/superpowers/specs/2026-09-06-safe-fetch-literals-and-body-cancel-design.md`.
 
-AI inference is **browser-direct**, not a server remote-fetch path. Local LM Studio
-alt-text suggestions and the editorial-review client (#213) never call `safeFetch`
-or a server inference proxy. `src/editorial-review.ts` contains only the contract,
+AI inference is **browser-direct**, not a server remote-fetch path. Alt-text suggestions
+(local LM Studio or an admin-selected remote vision provider) and editorial review never
+call `safeFetch` or a server inference proxy. `src/editorial-review.ts` contains only the contract,
 schema, prompt and parser.
 
-The review client scopes an optional Bearer key to the configured completion request;
-it never shares credentials with caption calls or model discovery. Review requests omit
-cookies/referrers and refuse redirects (including same-origin redirects), preventing
-credentials from being forwarded to a different endpoint. OpenRouter attribution uses
+Review, caption and model-discovery clients scope optional Bearer keys to individual
+requests; local LM Studio receives none. Remote captions and reviews intentionally use
+the same encrypted key, even with different selected destinations (owner approval,
+2026-10-17, §13 of the #214 spec). Requests omit cookies/referrers and refuse redirects,
+preventing credentials from being forwarded to a different endpoint. OpenRouter attribution uses
 exact URL hostname equality, not a string/prefix match. Provider errors and abort reasons
 are not surfaced verbatim, since they may echo credentials or unpublished content.
-One abortable deadline covers attempts and body reads; only an HTTP 400 explicitly naming
-unsupported `response_format` permits one retry without that parameter.
+Review's abortable deadline covers attempts and body reads; only an HTTP 400 explicitly
+naming unsupported `response_format` permits one retry without that parameter.
 
 Model output is untrusted: both review parsers validate required fields, types and statuses,
 reject extra properties, strip Unicode controls, and cap text/list lengths. This is not
@@ -491,6 +517,17 @@ the way in as well, at the store chokepoint (`heroImageError` in `uploader/src/b
 because the WordPress importer bypasses `validateDraft`. `site/src/lib/images.test.ts` pins the
 clamp and the hostile-input case.
 
+**Optional story title images** (2026-10-16) reuse the hero image validator and focal-point
+renderer; `posts.title_image` introduces no raw markup or remote-fetch path. The store rejects
+invalid dimensions, format, focus and URL shape; publishing additionally requires nonblank alt
+text, the configured image origin, and a known `ready` media item. Single and bulk publication
+apply the same checks. Working and published title references both participate in media usage
+and deletion protection, so replacing a draft banner cannot orphan the live banner.
+Existing upload authorization, EXIF filtering and preview CSP remain unchanged. The
+`/admin/editor-image-copy.js` asset contains only public DE/EN interface strings, never
+post data or credentials. Schema and v9 backup recovery are documented in the
+[approved title-image spec](docs/superpowers/specs/2026-10-16-story-title-image-design.md).
+
 > We deliberately use a maintained, allow-list sanitizer rather than hand-rolled escaping — the
 > cardinal rule of XSS defense.
 
@@ -578,16 +615,20 @@ preview even though the live site would load it.
   stop boot before schema work. Wrong keys/tampering fail closed with fixed sanitized
   errors, without logging raw crypto/driver errors or credential-bearing request bodies.
 - **Author disclosure is deliberate:** admin-only settings writes manage the shared key,
-  while full authenticated `GET /ai-config` returns plaintext in browser memory for
-  browser-direct review. `GET/POST /settings` return presence only, never key/ciphertext.
-  Both endpoints use `Cache-Control: no-store`. Do not persist keys in browser storage,
-  draft backups, URLs, logs, or rendered output. TLS at the proxy remains required.
+  while authenticated `GET /ai-config` and `?purpose=caption` return plaintext in browser
+  memory when the respective feature selects a remote provider. `GET/POST /settings`
+  return presence only, never key/ciphertext. All use `Cache-Control: no-store`.
+  Never persist keys in browser storage, draft backups, URLs, logs, or rendered output.
+  TLS at the proxy remains required.
   Every author can copy the returned key; session revocation cannot retract it. Revoke at
   the provider after suspected exposure and use provider-side access/spend limits.
 - **No server AI egress:** the server never fetches provider URLs. The caption-only query
-  `GET /ai-config?purpose=caption` returns only existing LM settings and performs no secret
-  lookup, so remote crypto failures do not disable local alt text. Presets and custom
-  HTTP(S) destinations are admin authority; a retained key follows a destination change.
+  `GET /ai-config?purpose=caption` resolves its independent provider/model. For local
+  captions it performs no secret lookup or wait, so remote crypto failures do not
+  disable local alt text. Remote captions send a resized JPEG and prompt from the
+  browser using the same shared key as review; remote config fails closed on secret
+  errors. Presets and custom HTTP(S) destinations are admin authority. A retained key
+  follows either destination change; replacing/removing it affects both features.
   UI warnings do not bind keys to providers. Custom HTTP can expose key/content on the
   network; prefer HTTPS and never add a proxy to work around CORS/mixed-content failures.
 - **Settings failure residual:** settings.json and Postgres cannot commit together. The

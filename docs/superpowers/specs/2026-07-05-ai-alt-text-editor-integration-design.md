@@ -2,6 +2,11 @@
 
 **Date:** 2026-07-05
 **Status:** Approved (pending spec review)
+**Extension approved 2026-10-17:** local remains the default, but captions can now use
+the same provider choices and shared encrypted API key as editorial review. The
+current contract and owner approval are in §13 of
+`2026-09-19-encrypted-ai-review-secrets-design.md`; its remote-caption rules supersede
+the local-only portions below.
 **Repos touched:** blog repo — `uploader/` only.
 **Builds on:** `2026-06-22-ai-batch-image-uploader-design.md` and
 `2026-06-23-llm-settings-page-design.md` (the original AI caption + LM settings work,

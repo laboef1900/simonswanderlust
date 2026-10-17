@@ -7,8 +7,12 @@ import { DEFAULT_PROCESS_OPTIONS } from './variants.js';
 export type BackupSchedule = 'off' | 'daily' | 'weekly';
 
 export interface Settings {
+  /** Nominatim-compatible HTTPS endpoint; empty disables editor lookup. */
+  geocodingSearchUrl: string;
   lmBaseUrl: string;
   lmModel: string;
+  captionProvider: 'lm-studio' | 'openrouter' | 'deepseek' | 'custom';
+  captionCustomBaseUrl: string;
   captionTimeoutMs: number;
   captionMaxEdge: number;
   captionPrompt: string;
@@ -47,8 +51,11 @@ export interface SettingsStore {
 
 export function defaultSettings(): Settings {
   return {
+    geocodingSearchUrl: 'https://nominatim.openstreetmap.org/search',
     lmBaseUrl: 'http://localhost:1234/v1',
     lmModel: 'qwen/qwen3-vl-4b',
+    captionProvider: 'lm-studio',
+    captionCustomBaseUrl: '',
     captionTimeoutMs: 60000,
     captionMaxEdge: 768,
     captionPrompt: DEFAULT_PROMPT,
@@ -75,6 +82,16 @@ export function defaultSettings(): Settings {
  * The key order is the order `validate()` reports errors in.
  */
 const FIELD_CHECKS: { [K in keyof Settings]: (v: unknown) => string | null } = {
+  geocodingSearchUrl: (v) => {
+    if (v === '') return null;
+    if (typeof v === 'string' && !/[\p{C}\s]/u.test(v)) {
+      try {
+        const url = new URL(v);
+        if (url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash) return null;
+      } catch { /* Fixed error below: never echo a supplied URL. */ }
+    }
+    return 'Geocoding endpoint must be an HTTPS URL without credentials, query, or fragment; leave empty to disable.';
+  },
   lmBaseUrl: (v) => {
     let url: URL;
     try {
@@ -88,6 +105,10 @@ const FIELD_CHECKS: { [K in keyof Settings]: (v: unknown) => string | null } = {
     return null;
   },
   lmModel: (v) => (typeof v === 'string' && v.trim() !== '' ? null : 'Model is required.'),
+  captionProvider: (v) =>
+    v === 'lm-studio' || v === 'openrouter' || v === 'deepseek' || v === 'custom'
+      ? null : 'Alt-text provider must be lm-studio, openrouter, deepseek, or custom.',
+  captionCustomBaseUrl: (v) => FIELD_CHECKS.aiCustomBaseUrl(v),
   captionTimeoutMs: (v) =>
     intInRange(v, 1000, 600000) ? null : 'Timeout must be a whole number of milliseconds between 1000 and 600000.',
   captionMaxEdge: (v) =>

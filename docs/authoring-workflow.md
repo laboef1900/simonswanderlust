@@ -82,17 +82,42 @@ text by hand.
 The in-admin editor at `/admin/posts.html` is the authoring interface — no GitHub or `curl`
 needed. Content is stored in **Postgres**; MDX files are generated automatically as backups.
 
-The editor opens on the title and story body. **Story details** beside the writing
-surface holds the active language's country, permalink, summary, key facts and hero
-image; expedition details and taxonomy are shared. Hide the inspector for more writing
-space, or use **Details** on a phone to open it as a drawer. Switching DE/EN preserves
-both languages' unsaved edits.
+The editor opens on the title and story body. Long titles wrap and grow to show
+the whole title; the saved title remains a single line. On desktop, the left main
+menu stays in place while the page scrolls. **Story details** stays below the top
+command bar and scrolls independently; its header and compact **Close** button remain visible.
+The panel holds the active language's country, permalink, summary, key facts, hero
+image and optional title image; expedition details and taxonomy are shared. Use
+**Close** inside the panel for more writing space, then **Story details** in the
+command bar to reopen it. On phones, **Details** opens a keyboard-managed drawer.
+Switching DE/EN preserves both languages' unsaved edits.
 
-**Save draft** and **Publish** stay in the top command bar. **More actions** (or
-**More** on phones) contains Preview, Review story and, for published posts,
-Unpublish. Missing-field links select the right language and reveal the field to fix.
+**Save draft**, **Publish** and **Review story** stay in the top command bar.
+**More actions** (or **More** on phones) contains Preview and, for published posts,
+Unpublish. The save indicator distinguishes **Not saved yet**, **Unsaved changes**,
+**Saving…** and **Saved to server**. Publish readiness is separate. A failed save
+leaves edits unsaved; edits typed while a save is running still need another save.
+Browser recovery copies do not mean the draft has been saved to the server.
+
+Alt-text warnings start as a compact, collapsed **Alt-text review** disclosure
+above the story, within the writing column. Expand it to see photos grouped by
+language and issue. Selecting a photo opens the correct language and focuses its
+gallery alt field, selects its inline Markdown alt, or reveals its hero alt field.
+The audit reflects the last saved draft: save after repairs to refresh it. If a
+photo has since been removed, the editor asks you to save rather than jumping to
+an unrelated photo. These checks are optional and never block publishing.
+Missing-field links select the right language and reveal the field to fix.
 For an existing hero, use **Replace photo** to upload or choose from the library,
 and **Adjust framing** for focal-point controls.
+
+**Separate wide title image** — in Story details, use **Titelbild (optional)** on the DE tab
+or **Title image (optional)** on the EN tab. Choose a photo from the media library or upload
+a wide photograph, enter its language-specific alt text, and adjust framing if needed.
+This changes only the photograph above the story and in Preview; cards, the homepage cover
+and social images keep the hero. Each language has its own optional selection. **Remove title
+image** restores the hero fallback without deleting either photo from the library.
+Save a draft and preview first; only **Publish** changes the live banner. Upload encoding
+can still be running when the upload returns: wait until the photo is ready before publishing.
 
 ### Create a new post
 
@@ -110,6 +135,7 @@ and **Adjust framing** for focal-point controls.
    | **Region** | `europe` \| `north-america` \| `south-america` |
    | **Excerpt** | 1-2 sentence summary |
    | **Hero image** | Open Story details → **Replace photo**, then **Upload hero** or **Choose from library**; edit alt text beside the preview and use **Adjust framing** for the focal point |
+   | **Title image (optional)** | A separate wide photograph for the story header; choose/upload in Story details, add alt text and adjust framing. Leave empty to use the hero |
    | **Coordinates** | `lat`, `lng` decimal |
    | **Body** | Markdown (EasyMDE editor). Embed photos via the body toolbar's inline upload — it inserts a markdown image (`![alt](URL)`) and records the dimensions automatically. Pasted `<BodyImage …/>` tags (from an MDX backup or the upload page) also work: they're converted on save. |
 
@@ -118,6 +144,20 @@ and **Adjust framing** for focal-point controls.
    German tab, so enter the English country name (e.g. "Greece", not "Griechenland") here too.
    The slug and shared fields (date, countryCode, region, coordinates) carry over automatically.
 5. Click **Save draft** — both locale rows are written to Postgres. The post is not yet live.
+
+### Find waypoint coordinates
+
+In **Story details → Expedition details → Waypoints / stops**, add a stop and enter
+a place name, for example **Cancun**. Click **Find coordinates** (or press Enter
+in the name field), then choose the matching full location from the results.
+Add a country to the name if the results are ambiguous.
+
+Choosing a result fills that stop's latitude and longitude without changing its
+name. Coordinates remain editable. **Save draft** keeps the change; lookup does
+not save or publish automatically. Searches use an external geocoding service
+(OpenStreetMap Nominatim by default), so do not enter confidential information.
+If lookup is unavailable, enter coordinates manually.
+
 
 ### Publish
 
@@ -151,7 +191,7 @@ kind of thing that gets published by accident.
 
 | Carried over | Reset |
 |---|---|
-| Title, excerpt, body, hero image | Trip date → today |
+| Title, excerpt, body, hero image and optional title image | Trip date → today |
 | The `images` map (mandatory — without it the body's photos silently stop rendering) | Coordinates → unset |
 | Key facts, stops, route, region, country, country code | Status → always draft |
 
@@ -258,6 +298,26 @@ In the post editor, the hero fields now offer **Choose from library** alongside 
 most heroes already exist, and re-uploading one would just mint a second copy under a new key.
 
 ### Galleries
+
+**Inline editing.** Complete gallery blocks appear as photo previews inside the
+article's writing area. Each photo has an editable **Alt text** field. Clearing it
+explicitly saves an empty alt; captions, image order and layout stay unchanged.
+Changes belong to the active language of this article, not to the media library.
+Repeated uses of the same image URL in that language share alt text, so editing
+one gallery occurrence updates the others. Click **Save draft** to keep changes.
+
+For AI assistance, click **Suggest alt text with AI** beside a photo. This uses
+the existing local vision-model caption settings and sends a resized display
+variant directly from your browser; it does not use the Review Story provider or
+its API key. Review the result, then choose **Use suggestion** or **Dismiss**.
+An arriving suggestion never overwrites your draft. Typing or changing context
+cancels stale requests. If the model is unavailable, manual editing still works.
+
+Use **Edit photos and layout** in the preview to open the existing gallery picker.
+**Show gallery Markdown** above the writing area exposes the underlying fence for
+manual editing; **Show gallery previews** returns to visual editing. Undo/redo
+continues to work through the Markdown editor. The inline view shows every photo
+in order for editing; use the article's **Preview** for its published layout.
 
 **The easy way: "Insert / edit gallery".** Each locale tab has the button next to "Insert body
 image". Put the cursor where the gallery should go — or anywhere inside an existing one — and it

@@ -45,6 +45,21 @@ function pair(overrides: Partial<PostPair> = {}): PostPair {
 }
 
 describe('renderPreviewHtml', () => {
+  it('renders the independent title image with its own alt, format and framing, then falls back when removed', async () => {
+    const p = pair();
+    p.de.titleImage = { src: ORIGIN + '/trips/bukarest/title', width: 2400, height: 800,
+      alt: 'Skyline <at dawn>', format: 'jpeg', focus: { x: 25, y: 70 } };
+    const html = await renderPreviewHtml(p, 'de', ORIGIN);
+    expect(html).toContain('/trips/bukarest/title-1280.jpeg');
+    expect(html).toContain('alt="Skyline &lt;at dawn&gt;"');
+    expect(html).toContain('object-position:25% 70%');
+    expect(html).not.toContain('/trips/bukarest/hero-');
+    delete p.de.titleImage;
+    const fallback = await renderPreviewHtml(p, 'de', ORIGIN);
+    expect(fallback).toContain('/trips/bukarest/hero-1280.webp');
+    expect(fallback).not.toContain('/trips/bukarest/title-');
+  });
+
   it('renders the markdown body like the site build (heading ids, bold)', async () => {
     const html = await renderPreviewHtml(pair(), 'de', ORIGIN);
     expect(html).toContain('<h2 id="anreise">Anreise</h2>');

@@ -44,6 +44,8 @@ import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
 import { compressionHook } from './compress.js';
 import { CommentError, isCommentStatus, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
+import { ui } from '../../site/src/i18n/ui.js';
+import { createGeocoder, GeocodingError } from './geocoding.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -745,17 +747,23 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   // Serialize config reads and writes: JSON settings and Postgres cannot commit
-  // together. Caption-only reads deliberately bypass this optional secret path.
+  // together. Local captions deliberately bypass this optional secret path.
   let settingsTail = Promise.resolve();
   function settingsOperation<T>(operation: () => Promise<T>): Promise<T> {
     const result = settingsTail.then(operation);
     settingsTail = result.then(() => {}, () => {});
     return result;
   }
+  function providerBaseUrl(provider: Settings['aiProvider'], custom: string, local: string) {
+    return provider === 'lm-studio' ? local
+      : provider === 'openrouter' ? 'https://openrouter.ai/api/v1'
+        : provider === 'deepseek' ? 'https://api.deepseek.com/v1' : custom;
+  }
   function captionConfig(s: Settings) {
     return {
       lmBaseUrl: s.lmBaseUrl, lmModel: s.lmModel, captionPrompt: s.captionPrompt,
       captionTimeoutMs: s.captionTimeoutMs, captionMaxEdge: s.captionMaxEdge,
+      captionProvider: s.captionProvider, captionCustomBaseUrl: s.captionCustomBaseUrl,
     };
   }
   function settingsResponse(s: Settings, hasAiApiKey: boolean) {
@@ -764,6 +772,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       convertJpeg: s.convertJpeg, webpQuality: s.webpQuality, avifQuality: s.avifQuality,
       importDelayMs: s.importDelayMs, importRetries: s.importRetries,
     commentsEnabled: s.commentsEnabled,
+      geocodingSearchUrl: s.geocodingSearchUrl,
       aiProvider: s.aiProvider, aiModel: s.aiModel, aiCustomBaseUrl: s.aiCustomBaseUrl,
       reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs, hasAiApiKey,
     };
@@ -803,9 +812,10 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (b.commentsEnabled !== undefined) partial.commentsEnabled = b.commentsEnabled;
     if (b.webpQuality !== undefined) partial.webpQuality = Number(b.webpQuality);
     if (b.avifQuality !== undefined) partial.avifQuality = Number(b.avifQuality);
-    for (const field of ['aiProvider', 'aiModel', 'aiCustomBaseUrl', 'reviewPrompt', 'reviewTimeoutMs'] as const) {
+    for (const field of ['captionProvider', 'captionCustomBaseUrl', 'aiProvider', 'aiModel', 'aiCustomBaseUrl', 'reviewPrompt', 'reviewTimeoutMs'] as const) {
       if (Object.hasOwn(b, field)) partial[field] = b[field];
     }
+    if (Object.hasOwn(b, 'geocodingSearchUrl')) partial.geocodingSearchUrl = b.geocodingSearchUrl;
     const changesSecret = Object.hasOwn(b, 'aiApiKey');
     const key = b.aiApiKey;
     if (changesSecret && key !== null && (typeof key !== 'string' || /[\p{C}]/u.test(key))) {
@@ -848,17 +858,34 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   app.get('/ai-config', { preHandler: requireAuth }, async (req, reply) => {
     const purpose = (req.query as Record<string, unknown>).purpose;
-    if (purpose === 'caption') return reply.send(captionConfig(cfg.settings.get()));
+    if (purpose === 'caption') {
+      const current = cfg.settings.get();
+      if (current.captionProvider === 'lm-studio') {
+        return reply.send({ ...captionConfig(current), captionBaseUrl: current.lmBaseUrl, captionApiKey: null });
+      }
+      return settingsOperation(async () => {
+        const s = cfg.settings.get();
+        const captionBaseUrl = providerBaseUrl(s.captionProvider, s.captionCustomBaseUrl, s.lmBaseUrl);
+        if (!captionBaseUrl) return reply.code(400).send({
+          code: 'invalid_caption_configuration', error: 'Configure a custom alt-text base URL first.',
+        });
+        try {
+          // Re-read after queued saves; a switch back to local must not decrypt.
+          const captionApiKey = s.captionProvider === 'lm-studio' ? null : await cfg.secrets.get('ai_api_key');
+          return reply.send({ ...captionConfig(s), captionBaseUrl, captionApiKey });
+        } catch (e) {
+          return reply.code(503).send(secretFailure(e));
+        }
+      });
+    }
     if (purpose !== undefined) return reply.code(400).send({ error: 'Unknown AI configuration purpose.' });
     return settingsOperation(async () => {
       const s = cfg.settings.get();
-      const aiBaseUrl = s.aiProvider === 'lm-studio' ? s.lmBaseUrl
-        : s.aiProvider === 'openrouter' ? 'https://openrouter.ai/api/v1'
-          : s.aiProvider === 'deepseek' ? 'https://api.deepseek.com/v1' : s.aiCustomBaseUrl;
+      const aiBaseUrl = providerBaseUrl(s.aiProvider, s.aiCustomBaseUrl, s.lmBaseUrl);
       if (!aiBaseUrl) return reply.code(400).send({ code: 'invalid_review_configuration', error: 'Configure a custom review base URL first.' });
       try {
         // get() checks encryption availability even when no row exists. Local
-        // captions/review never decrypt or receive a remotely configured key.
+        // review never decrypts or receives a remotely configured key.
         const aiApiKey = s.aiProvider === 'lm-studio' ? null : await cfg.secrets.get('ai_api_key');
         const hasAiApiKey = s.aiProvider === 'lm-studio' ? await cfg.secrets.has('ai_api_key') : aiApiKey !== null;
         return reply.send({
@@ -1013,6 +1040,54 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   const { posts } = cfg;
+  const geocode = createGeocoder({ endpoint: () => cfg.settings.get().geocodingSearchUrl });
+  app.post('/geocode', { preHandler: requireAuth, bodyLimit: 2048 }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const query = req.body && typeof req.body === 'object' && 'query' in req.body ? req.body.query : undefined;
+    try {
+      return reply.send({ results: await geocode(query) });
+    } catch (error) {
+      if (!(error instanceof GeocodingError)) throw error;
+      if (error.status === 429) reply.header('Retry-After', '2');
+      return reply.code(error.status).send({ code: error.code });
+    }
+  });
+
+  app.get('/admin/waypoint-copy.js', async (_req, reply) => {
+    const copy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale, Object.fromEntries(Object.entries(strings)
+        .filter(([key]) => key.startsWith('editor.waypoint.'))
+        .map(([key, value]) => [key.slice('editor.waypoint.'.length), value])),
+    ]));
+    return reply.type('application/javascript').send(`window.WaypointCopy = ${JSON.stringify(copy)};`);
+  });
+
+  // Static editor copy shares the site's bilingual dictionary, not a second
+  // hand-maintained translation file. Like /admin/*.js, this contains no secrets.
+  app.get('/admin/editor-image-copy.js', async (_req, reply) => {
+    const copy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale,
+      Object.fromEntries(Object.entries(strings)
+        .filter(([key]) => key.startsWith('editor.titleImage.'))
+        .map(([key, value]) => [key.slice('editor.titleImage.'.length), value])),
+    ]));
+    const galleryCopy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale, Object.fromEntries(Object.entries(strings)
+        .filter(([key]) => key.startsWith('editor.gallery.'))
+        .map(([key, value]) => [key.slice('editor.gallery.'.length), value])),
+    ]));
+    const editorCopy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale, Object.fromEntries(Object.entries(strings)
+        .filter(([key]) => key.startsWith('editor.chrome.'))
+        .map(([key, value]) => [key.slice('editor.chrome.'.length), value])),
+    ]));
+    return reply.type('application/javascript').send(
+      `window.EditorImageCopy = ${JSON.stringify(copy)};\n` +
+      `window.EditorGalleryCopy = ${JSON.stringify(galleryCopy)};\n` +
+      `window.EditorCopy = ${JSON.stringify(editorCopy)};\n` +
+      `window.EditorGalleryImageOrigin = ${JSON.stringify(new URL(cfg.baseUrl).origin)};`,
+    );
+  });
 
   /**
    * Turn an image URL from a post back into its storage key, or null when the
@@ -1041,6 +1116,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     for (const locale of ['de', 'en'] as const) {
       const l = pair[locale];
       if (l?.heroImage?.src) out.add(l.heroImage.src);
+      if (l?.titleImage?.src) out.add(l.titleImage.src);
       for (const key of Object.keys(l?.images ?? {})) out.add(key);
     }
     return [...out];
@@ -1066,6 +1142,14 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       .filter((k): k is string => k !== null);
     if (keys.length === 0) return [];
     const notReady = await cfg.media.notReadyKeys(keys);
+    // Title images are new library selections, not pre-library legacy heroes.
+    // Unknown keys must not slip through notReadyKeys' legacy exception.
+    for (const locale of ['de', 'en'] as const) {
+      const image = pair[locale].titleImage;
+      if (!image) continue;
+      const key = srcToKey(image.src, imageBase);
+      if (key !== null && !(await cfg.media.get(key))) notReady.add(key);
+    }
     return [...notReady];
   }
 
@@ -1079,13 +1163,15 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const out = new Set<string>();
     for (const locale of ['de', 'en'] as const) {
       for (const url of await foreignImageUrls(pair[locale].bodyMarkdown, imageBase)) out.add(url);
+      const title = pair[locale].titleImage;
+      if (title && srcToKey(title.src, imageBase) === null) out.add(title.src);
     }
     return [...out];
   }
 
   const FOREIGN_EXAMPLES = 5;
   function foreignImagesMessage(n: number): string {
-    return `${n} image(s) in the body still point at another host — re-run the WordPress import to re-host them, or replace them with library photos, then publish again`;
+    return `${n} image(s) in the body or title banner are not hosted here — replace them with library photos or re-host imported body images, then publish again`;
   }
 
   app.get('/posts', { preHandler: requireAuth }, async () => posts.list());

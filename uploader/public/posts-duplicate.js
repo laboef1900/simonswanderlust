@@ -55,6 +55,7 @@ window.PostsDuplicate = (function () {
         excerpt: src.excerpt,
         country: src.country,             // the repeating structure this feature exists for
         heroImage: clone(src.heroImage),  // cheap to replace; a placeholder would just mean re-uploading
+        ...(src.titleImage ? { titleImage: clone(src.titleImage) } : {}),
         bodyMarkdown: src.bodyMarkdown,
         images: clone(src.images) || {},  // mandatory — see above
         // Spread only when present so the copy does not gain an empty key the source never had.

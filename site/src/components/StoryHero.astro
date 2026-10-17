@@ -14,7 +14,7 @@ interface Props {
 const { trip, locale, otherHref } = Astro.props;
 const t = useTranslations(locale);
 const otherLocale = locale === 'de' ? 'en' : 'de';
-const image = trip.data.heroImage;
+const image = trip.data.titleImage ?? trip.data.heroImage;
 const aspect = image.width / image.height;
 // Cover paints whichever is wider: the viewport or the clamped height ×
 // the photograph's actual aspect ratio. Mobile preserves the whole frame.
@@ -24,7 +24,7 @@ const sizes = `(max-width: 639px) 100vw, max(100vw, clamp(${240 * aspect}px, ${3
 <header class="bg-canvas">
   <RemoteImage
     image={image}
-    alt={heroAltOf(trip)}
+    alt={trip.data.titleImage ? image.alt : heroAltOf(trip)}
     sizes={sizes}
     loading="eager"
     fetchpriority="high"

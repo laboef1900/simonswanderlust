@@ -217,17 +217,39 @@ inventory is available. `/wp-content/uploads/*` image URLs are intentionally **n
 (accepted loss — the old URLs carry no post slug, so they cannot be mapped onto the
 `trips/<slug>/…` key scheme, and no mapping table was persisted at import time).
 
-## AI alt-text (local LM Studio)
+## Waypoint location lookup
 
-The post editor and photo uploader offer a "Suggest alt text" button per alt field. The browser
-downscales the picked photo and calls the author's local LM Studio (`<lmBaseUrl>/chat/completions`)
-directly — the app server never contacts the model. LM config (`lmBaseUrl`, `lmModel`,
-`captionTimeoutMs`, `captionMaxEdge`, `captionPrompt`) lives in the JSON settings store, edited on
-the admin-only Settings page; authors read it via `GET /ai-config?purpose=caption`. No
-`docker-compose`/`.env` LM variables are needed.
+The editor's **Find coordinates** action calls authenticated `POST /geocode`.
+`uploader/src/geocoding.ts` performs a bounded Nominatim search via `safeFetch`,
+with one app-wide in-flight request, at least 1100ms between starts, and a
+100-entry/24h memory cache. This editor-only external service was approved by the
+owner on 2026-10-16; public map assets and rendering remain self-hosted.
+Selecting a result changes only the existing stop's `lat` and `lng`, then the
+ordinary draft save persists them. No schema or publishing changes.
 
-The editorial-review client (#213, part of #211) shares `public/llm.js` without changing
-the caption flow. `src/editorial-review.ts` owns the pure result type, JSON Schema,
+The existing admin-only `POST /settings` accepts `geocodingSearchUrl` to switch
+to another Nominatim-compatible HTTPS search endpoint without a software update;
+`GET /settings` returns the current value. Default:
+`https://nominatim.openstreetmap.org/search`. Set it to `""` to disable lookup.
+This operational setting is API-managed, not a new Settings-page field. Other
+settings are preserved by partial updates. An alternate endpoint must use the
+same JSON response format and OpenStreetMap data attribution. Do not run multiple
+independent app replicas against the public service without a shared request budget.
+See the [provider usage policy](https://operations.osmfoundation.org/policies/nominatim/).
+
+## AI alt-text (browser-direct providers)
+
+The post editor and photo uploader offer a "Suggest alt text" button per alt field.
+The browser downscales the photo and calls the selected OpenAI-compatible vision
+provider directly; the app server never contacts a model. Settings stores independent
+`captionProvider` and `captionCustomBaseUrl`, alongside the existing `lmModel`,
+`captionTimeoutMs`, `captionMaxEdge` and `captionPrompt`. Local LM Studio is the default;
+`lmBaseUrl` remains the shared local endpoint for captions and review.
+Authors read `GET /ai-config?purpose=caption`, including resolved `captionBaseUrl` and
+request-local `captionApiKey` (null for local). Remote captions reuse `ai_api_key`.
+
+The editorial-review client (#213, part of #211) shares `public/llm.js`.
+`src/editorial-review.ts` owns the pure result type, JSON Schema,
 default prompt and parser; the browser parser is checked against the same corpus.
 `LLM.reviewStory` sends an active-locale draft snapshot directly to an OpenAI-compatible
 provider with an optional request-local Bearer key. Its one deadline covers the initial
@@ -236,9 +258,10 @@ an optional AbortSignal lets the drawer cancel stale work.
 Provider/secrets integration (#214) adds non-sensitive review settings to `settings.json`,
 and one AES-256-GCM encrypted `ai_api_key` in Postgres. Default `GET /ai-config` returns
 resolved provider config and the shared key to authenticated authors for browser-direct
-review; settings responses expose only `hasAiApiKey`. Caption-only config never queries
-or decrypts secrets, so a broken remote credential cannot break local captions. Both
-config surfaces are `Cache-Control: no-store`.
+review; settings responses expose only `hasAiApiKey`. Local caption config never queries
+or decrypts secrets, so a broken remote credential cannot break local captions. Remote
+caption reads serialize with settings writes, resolve their own provider, and fail
+closed on secret errors. Both config surfaces are `Cache-Control: no-store`.
 
 The master key is optional bootstrap `ENCRYPTION_KEY` (32 bytes / 64 hex characters),
 forwarded explicitly by Compose. Missing means local-only startup remains available;
@@ -269,6 +292,12 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 - **`sessions`** — `id` (SHA-256 of the random token), `user_id` (FK, cascade), `expires_at`. Expired rows are swept hourly.
 - **`app_secrets`** — `key` primary key, `ciphertext`, `iv`, `tag` (hex-encoded AES-256-GCM envelope), `updated_at`. The master key and plaintext credentials never enter this table.
 - **`posts`** — one row per (`translation_key`, `locale`); `slug`, `title`, `date`, `country`, `country_code`, `region`, `excerpt`, `hero_image` (jsonb), `coordinates` (jsonb), optional `stops`/`route`/`key_facts`, `body_markdown`, `images` (jsonb), `status` (`draft`/`published`), `featured` (boolean, "use as homepage cover" — a SHARED value written to both locale rows, deliberately not unique: the homepage takes the newest flagged story and falls back to the newest story), `comments_enabled` (boolean, SHARED, default `true` — the per-post switch; the site-wide `settings.commentsEnabled`, default `false`, is the real gate). Unique on (`locale`, `slug`) **where `slug <> ''`** — an empty slug means "not set yet" (a DE-first draft without an EN title), so any number of such drafts may coexist; `validateForPublish` requires a real slug per locale (#119).
+  Optional **`title_image`** (nullable jsonb) holds an independent per-locale story banner.
+  It uses the hero's image shape, including format and focal point. The story header and
+  draft preview prefer it; overview, homepage and social images retain `hero_image`.
+  Working copies and published snapshots keep separate selections. The additive column
+  migration runs before snapshot SQL references it and never backfills an existing snapshot
+  from an unpublished working copy.
 - **`comments`** — reader comments (#204, [spec](docs/superpowers/specs/2026-09-14-comments-design.md)): `id`, `translation_key` (one flat thread per post pair, no FK — `posts` has no single-column pair key), `locale` (the locale the reader posted from), `name`, `body` (plain text, 1–2000 chars, control characters stripped), `status` (`pending`/`approved`/`rejected`/`spam`; every reader row is born `pending`), `is_author` (an admin reply — born `approved`), `sender_hash` (keyed HMAC of the IP for rate limiting, never the raw IP), `created_at`. The legacy `email` column is always `NULL` — no email is collected. `pgPostStore.remove` deletes the thread in the same transaction as the post, and `ensureSchema` sweeps orphans on boot. **Runtime data, not build input:** the Astro build never reads this table — the blog fetches approved comments from `GET /comments?tk=…` at page load, so approving a comment needs no rebuild.
 - **`media`** — one row per storage key: `folder` (virtual, decoupled from the key), `title`,
   bilingual `alt_*`/`caption_*`, `tags` (`text[]`), dimensions, byte sizes, `status`
@@ -332,7 +361,7 @@ botched restore, accidental delete), **not** against disk failure or host loss.
 `uploader/src/backup.ts` provides app-native logical dumps (no `pg_dump`, no sidecar container):
 
 - **Dump format** — one file per run, `/data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`, containing
-  `{ "version": 8, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […], "comments": […] } }`
+  `{ "version": 9, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […], "comments": […] } }`
   with full column fidelity — an integration test diffs the dumped `posts` keys against
   `information_schema.columns`, so a column added in `db.ts` without touching `backup.ts` fails
   the suite instead of silently vanishing from every backup. The six table reads run on one
@@ -344,7 +373,7 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   the directory, so the finished temp file is published with `link(2)` (fails with `EEXIST`
   where `rename` would clobber) and a taken name advances to the next free second while
   `createdAt` keeps the real time (#114).
-  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 8), so
+  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 9), so
   every bump must widen it or newly written dumps become unrestorable. v1 predates `pages`, v2
   predates the media tables, v3 predates `posts.categories`/`tags`/`scheduled_at`, v4 predates
   `posts.featured` (the homepage-cover flag); all still restore and leave what they never
@@ -361,6 +390,9 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   `true` (its column default). Comment rows from a dump are not trusted verbatim: `status`
   outside the moderation allow-list restores as `pending`, `is_author` only as the literal
   boolean `true`, and a legacy `email` field is dropped. The restore summary counts comments.
+  v9 adds `posts.title_image`; both the working and published selections survive restore.
+  Older dumps restore an absent title image as NULL, preserving the hero fallback.
+  Older application versions reject v9 rather than silently dropping the new selection.
   The CLI names replacement versus preservation and its pre-restore undo dump includes
   current encrypted secrets. Pause AI/settings edits during restore and reconcile the
   provider in settings.json before resuming: that file is not part of a logical DB dump.
