@@ -339,6 +339,23 @@ One key follows both selected remote destinations. Review the warning when chang
 either provider/custom URL; replace/remove a key that belongs elsewhere. Prefer HTTPS for
 custom endpoints. Browser CORS/mixed-content failures are not bypassed by a server proxy.
 
+**Test configuration** tests the current review provider, model, instructions and timeout
+from the browser with a built-in sample, never an author's draft. It does not save settings
+or keys; use **Save review settings** separately. A successful test requires a valid
+structured review, not just a reachable endpoint. Provider usage charges may apply.
+
+The test uses the entered key, or the stored key when a remote review provider is already
+saved. If review is still saved as **Local LM Studio**, its configuration deliberately
+withholds the stored remote key, even when captions use it. Enter a key to test the new
+remote provider without saving, or save the remote review provider first. The same
+guidance applies if another tab switches saved review back to local.
+
+Missing required keys are caught before provider calls. Authentication, credit, rate-limit
+and timeout failures do not display provider response bodies. Editing a review field cancels
+the running test and clears its result. Testing never runs automatically on load, selection
+or save. This review test does not verify a caption model's image support.
+
+
 Settings and key saves are not atomic across disk/Postgres. If the key commits and
 settings fail, the new key can remain associated with the old endpoint. The UI clears the
 typed key and reloads on partial/unknown outcomes; inspect the destination and deliberately

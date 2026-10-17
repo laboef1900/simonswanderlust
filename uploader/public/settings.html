@@ -181,23 +181,27 @@
         <p id="reviewDestination" class="muted"></p>
         <p id="reviewUrlWarning" class="notice-warn" role="status" hidden></p>
         <p id="reviewKeyWarning" class="notice-warn" role="status" hidden></p>
+        <label for="aiApiKey">Shared API key (review and alt text) <span id="aiKeyStatus" class="status-badge status-draft" role="status">Loading</span></label>
+        <input id="aiApiKey" type="password" autocomplete="new-password" aria-describedby="aiKeyRequirement aiKeyHelp" />
+        <p id="aiKeyRequirement" class="muted" role="status"></p>
+        <p id="aiKeyHelp" class="muted">Leave blank to keep the stored key; enter a new key to replace it for both features.
+          Each remote feature sends this same key to its selected endpoint, even when the providers differ.
+          Keys are encrypted in Postgres, but every signed-in author receives the shared key in browser memory for direct calls.
+          Keep the encryption master key separately from database backups.</p>
         <label for="aiModel">Review model ID</label>
         <input id="aiModel" type="text" maxlength="100" />
         <label for="reviewTimeoutMs">Review timeout (ms)</label>
         <input id="reviewTimeoutMs" type="number" min="5000" max="300000" step="1" />
         <label for="reviewPrompt">Review instructions</label>
         <textarea id="reviewPrompt" rows="8"></textarea>
-        <label for="aiApiKey">Shared API key (review and alt text) <span id="aiKeyStatus" class="status-badge status-draft" role="status">Loading</span></label>
-        <input id="aiApiKey" type="password" autocomplete="new-password" aria-describedby="aiKeyHelp" />
-        <p id="aiKeyHelp" class="muted">Leave blank to keep the stored key; enter a new key to replace it for both features.
-          Each remote feature sends this same key to its selected endpoint, even when the providers differ.
-          Keys are encrypted in Postgres, but every signed-in author receives the shared key in browser memory for direct calls.
-          Keep the encryption master key separately from database backups.</p>
         <div class="settings-actions">
           <button id="saveReview" type="button" class="btn-secondary">Save review settings</button>
+          <button id="testReview" type="button" class="btn-secondary" aria-describedby="reviewTestHelp" disabled></button>
           <button id="removeAiKey" type="button" class="btn-remove" disabled>Remove stored key</button>
         </div>
         <p id="reviewOut" class="page-status" role="status"></p>
+        <p id="reviewTestHelp" class="muted"></p>
+        <p id="reviewTestOut" class="page-status" role="status"></p>
       </section>
 
       <p id="out" class="page-status" role="status"></p>
@@ -206,10 +210,22 @@
     <script src="/admin/auth.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/llm.js"></script>
+    <script src="/admin/editor-image-copy.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
+      const reviewCopy = EditorCopy.en;
+      $('testReview').textContent = reviewCopy.reviewTestLabel;
+      $('reviewTestHelp').textContent = reviewCopy.reviewTestHelp;
       let savedReview = null;
+      let reviewTestController = null;
       let savedCaption = null;
+
+      function clearReviewTest() {
+        if (reviewTestController) reviewTestController.abort();
+        reviewTestController = null;
+        $('testReview').disabled = false;
+        $('reviewTestOut').textContent = '';
+      }
 
       function reviewDestination(provider, custom, local) {
         return provider === 'lm-studio' ? local
@@ -252,6 +268,11 @@
 
       function updateReviewWarnings() {
         const provider = $('aiProvider').value;
+        const needsKey = provider === 'openrouter' || provider === 'deepseek';
+        $('aiKeyRequirement').textContent = needsKey
+          ? reviewCopy.reviewKeyRequired.replace('{provider}', provider === 'openrouter' ? 'OpenRouter' : 'DeepSeek') + ' ' +
+            (savedReview?.hasAiApiKey ? reviewCopy.reviewKeyStored : reviewCopy.reviewKeyEnter)
+          : provider === 'lm-studio' ? reviewCopy.reviewKeyLocal : reviewCopy.reviewKeyCustom;
         const custom = $('aiCustomBaseUrl').value.trim();
         const destination = reviewDestination(provider, custom, savedReview?.lmBaseUrl || '');
         $('customReviewFields').hidden = provider !== 'custom';
@@ -270,6 +291,10 @@
       }
       $('aiProvider').addEventListener('change', updateReviewWarnings);
       $('aiCustomBaseUrl').addEventListener('input', updateReviewWarnings);
+      for (const id of ['aiProvider', 'aiCustomBaseUrl', 'aiModel', 'aiApiKey', 'reviewPrompt', 'reviewTimeoutMs']) {
+        $(id).addEventListener('input', clearReviewTest);
+        $(id).addEventListener('change', clearReviewTest);
+      }
 
       // A plain-http model URL on an https page is blocked as mixed content and
       // surfaces only as "Failed to fetch"; say so next to the field (#140).
@@ -311,6 +336,7 @@
       }
 
       function rememberReview(s) {
+        clearReviewTest();
         savedReview = {
           aiProvider: s.aiProvider, aiCustomBaseUrl: s.aiCustomBaseUrl,
           lmBaseUrl: s.lmBaseUrl, hasAiApiKey: s.hasAiApiKey,
@@ -510,7 +536,78 @@
         }
       });
 
+      $('testReview').addEventListener('click', async () => {
+        if (reviewTestController) return;
+        const provider = $('aiProvider').value;
+        const destination = reviewDestination(provider, $('aiCustomBaseUrl').value.trim(), savedReview?.lmBaseUrl || '');
+        const model = $('aiModel').value.trim();
+        const prompt = $('reviewPrompt').value;
+        const timeout = Number($('reviewTimeoutMs').value);
+        let apiKey = provider === 'lm-studio' ? null : $('aiApiKey').value;
+        const needsKey = provider === 'openrouter' || provider === 'deepseek';
+        if (!model) { $('reviewTestOut').textContent = reviewCopy.reviewTestModel; return; }
+        if (!Number.isInteger(timeout) || timeout < 5000 || timeout > 300000) {
+          $('reviewTestOut').textContent = reviewCopy.reviewTestTimeoutRange; return;
+        }
+        try {
+          const url = new URL(destination);
+          if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
+        } catch { $('reviewTestOut').textContent = reviewCopy.reviewTestEndpoint; return; }
+        if (needsKey && !apiKey && !savedReview?.hasAiApiKey) {
+          $('reviewTestOut').textContent = reviewCopy.reviewTestMissingKey; return;
+        }
+        // /ai-config intentionally withholds the stored key while saved review is local.
+        if (provider !== 'lm-studio' && !apiKey && savedReview?.hasAiApiKey && savedReview.aiProvider === 'lm-studio') {
+          $('reviewTestOut').textContent = reviewCopy.reviewTestLocalKey;
+          return;
+        }
+        const controller = new AbortController();
+        reviewTestController = controller;
+        const timer = setTimeout(() => controller.abort(), timeout);
+        $('testReview').disabled = true;
+        $('reviewTestOut').textContent = reviewCopy.reviewTestRunning;
+        try {
+          if (provider !== 'lm-studio' && !apiKey && savedReview?.hasAiApiKey) {
+            const res = await fetch('/ai-config', { cache: 'no-store', signal: controller.signal });
+            if (!res.ok) throw new Error('Stored API key unavailable');
+            const config = await res.json();
+            apiKey = config.aiApiKey;
+            config.aiApiKey = null;
+            // Another tab may have switched the saved provider since this page loaded.
+            if (config.aiProvider === 'lm-studio') throw new Error('Saved review is local');
+            if (typeof apiKey !== 'string' || !apiKey.trim()) throw new Error('Stored API key unavailable');
+          }
+          if (controller.signal.aborted) throw new Error('Test cancelled');
+          await LLM.reviewStory(destination, model, prompt, {
+            locale: 'en', title: 'A morning walk', excerpt: 'A short walk through the old town.',
+            markdown: '## The route\nWe walked from the station to the market in the morning.',
+            heroAlt: '', heroSrc: '',
+          }, apiKey, timeout, controller.signal);
+          if (reviewTestController === controller) {
+            $('reviewTestOut').textContent = reviewCopy.reviewTestSuccess;
+          }
+        } catch (error) {
+          if (reviewTestController !== controller) return;
+          const message = String(error.message);
+          $('reviewTestOut').textContent = controller.signal.aborted ? reviewCopy.reviewTestTimedOut
+            : message === 'Saved review is local' ? reviewCopy.reviewTestLocalKey
+            : message === 'Stored API key unavailable' ? reviewCopy.reviewTestKeyUnavailable
+            : /^Editorial review HTTP (401|403)$/.test(message) ? reviewCopy.reviewTestAuthentication
+            : message === 'Editorial review HTTP 402' ? reviewCopy.reviewTestCredits
+            : message === 'Editorial review HTTP 429' ? reviewCopy.reviewTestRateLimit
+            : reviewCopy.reviewTestFailed;
+        } finally {
+          apiKey = null;
+          clearTimeout(timer);
+          if (reviewTestController === controller) {
+            reviewTestController = null;
+            $('testReview').disabled = false;
+          }
+        }
+      });
+
       async function saveReviewSettings(removeKey = false) {
+        clearReviewTest();
         if (removeKey && !await AdminConfirm.ask({
           title: 'Remove the shared API key?',
           body: 'Future remote reviews and remote alt-text suggestions will lose this key. Already-copied keys and encrypted backups remain; revoke the key at the provider to stop external use. Local captions are unaffected.',
