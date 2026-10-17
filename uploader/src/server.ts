@@ -289,6 +289,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     maxAge: '365d',
     immutable: true,
     constraints: { host: cfg.imgHost },
+    // Public variants must be readable by the editor on a different origin.
+    // Scope CORS to this file mount, never authenticated APIs or private originals.
+    setHeaders: (res) => { res.setHeader('Access-Control-Allow-Origin', '*'); },
     // Only finished variants (`<key>-<width>.<avif|webp|jpeg>`) are web assets.
     // Untouched full-resolution originals (`<key>-orig.<ext>`) live in
     // storageDir so the incremental backup tar captures them, but they are a

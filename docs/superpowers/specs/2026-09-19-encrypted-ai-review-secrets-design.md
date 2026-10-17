@@ -391,3 +391,22 @@ A 307 completion redirect was refused (no redirected request), and switching
 captions back to local sent no authorization despite the stored shared key.
 No commercial provider or real private photo was used; external provider vision
 and CORS compatibility remain operator prerequisites.
+
+Production correction (2026-10-17): gallery captions on
+`new.simonswanderlust.com` could not fetch display variants from
+`img.simonswanderlust.com`; the browser rejected the missing image CORS header
+before contacting the model. The public variant static mount now adds
+`Access-Control-Allow-Origin: *` without credential permission. This is limited
+to successfully served public files (including HEAD, 206 and 304); the existing
+variant allow-list still rejects originals and partial files. Admin/API routes
+and blog responses do not gain CORS. Provider configuration and inference are
+unchanged. Rollback removes this header hook, restoring the cross-origin caption
+failure without changing stored data or public URLs.
+
+Verification on the isolated PR branch: 1,623 uploader tests passed with isolated
+Postgres integration, including all three variant formats, ranges, revalidation
+and negative private-file/API/blog cases. All 290 site tests, uploader
+type-checking, Astro checking and the static build against an empty trip schema passed.
+A real `src/main.ts` instance and a Brave browser exercised a credential-free
+cross-origin variant fetch and the real `LLM.prepImage` JPEG conversion.
+No commercial inference request or production credential was used.
