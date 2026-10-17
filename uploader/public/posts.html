@@ -10,31 +10,41 @@
     <header class="cms-page-meta">
       <h1>Posts</h1>
       <p class="lede">Manage DE/EN post pairs — create drafts, edit content, and publish to the live blog.</p>
+      <div class="cms-page-actions">
+        <button id="exportAll" type="button" class="btn-secondary">Export MDX to server backup</button>
+        <a id="newPost" href="/admin/editor.html" class="btn-new">New post</a>
+      </div>
     </header>
 
     <main>
       <section class="card">
-        <div class="posts-toolbar">
-          <a id="newPost" href="/admin/editor.html" class="btn-new">New post</a>
-          <button id="exportAll" type="button" class="btn-secondary">Export MDX to server backup</button>
-          <p id="out" class="page-status" role="status"></p>
-        </div>
+        <p id="out" class="page-status" role="status"></p>
 
         <div class="posts-filters" id="filters" hidden>
-          <label class="filter-field">
-            <span>Search</span>
-            <input id="fSearch" type="search" placeholder="Title, slug or country" autocomplete="off" />
-          </label>
-          <label class="filter-field">
-            <span>Status</span>
-            <select id="fStatus">
-              <option value="">All statuses</option>
-              <option value="draft">Draft</option>
-              <option value="published">Published</option>
-              <option value="unpublished">Unpublished changes</option>
-              <option value="missing-en">EN missing</option>
-            </select>
-          </label>
+          <div class="posts-filters-main">
+            <label class="filter-field filter-search">
+              <span>Search</span>
+              <input id="fSearch" type="search" placeholder="Title, slug or country" autocomplete="off" />
+            </label>
+            <label class="filter-field">
+              <span>Status</span>
+              <select id="fStatus">
+                <option value="">All statuses</option>
+                <option value="draft">Draft</option>
+                <option value="published">Published</option>
+                <option value="unpublished">Unpublished changes</option>
+                <option value="missing-en">EN missing</option>
+              </select>
+            </label>
+            <label class="filter-field">
+              <span>Sort</span>
+              <select id="fSort">
+                <option value="updated">Updated</option>
+                <option value="date">Trip date</option>
+                <option value="title">Title (DE)</option>
+              </select>
+            </label>
+          </div>
           <button type="button" id="fMore" class="btn-link filter-reset" aria-expanded="false" aria-controls="fExtra">More filters</button>
           <div class="posts-filters-extra" id="fExtra" hidden>
             <label class="filter-field">
@@ -46,14 +56,6 @@
               <select id="fCountry"><option value="">All</option></select>
             </label>
             <label class="filter-field">
-              <span>Sort</span>
-              <select id="fSort">
-                <option value="updated">Updated</option>
-                <option value="date">Trip date</option>
-                <option value="title">Title (DE)</option>
-              </select>
-            </label>
-            <label class="filter-field">
               <span>Order</span>
               <select id="fOrder">
                 <option value="desc">Descending</option>
@@ -63,6 +65,9 @@
           </div>
           <button id="fReset" class="btn-secondary filter-reset" type="button">Clear filters</button>
         </div>
+        <!-- Status views are toggle buttons over the same state as #fStatus,
+             filled by the script; hidden with the filters while nothing is loaded. -->
+        <div id="statusViews" class="posts-status-tabs" role="group" hidden></div>
         <p id="resultsCount" class="posts-results" role="status"></p>
 
 
@@ -91,8 +96,8 @@
               </th>
               <th class="col-thumb" scope="col" role="columnheader">Hero</th>
               <th class="col-title" scope="col" role="columnheader">Title (DE)</th>
-              <th class="col-trip" scope="col" role="columnheader">Trip</th>
               <th class="col-status" scope="col" role="columnheader">Status</th>
+              <th id="languagesHeading" class="col-languages" scope="col" role="columnheader">Languages</th>
               <th class="col-updated" scope="col" role="columnheader">Updated</th>
               <th class="col-actions" scope="col" role="columnheader">Actions</th>
             </tr>
@@ -116,7 +121,52 @@
       const selected = new Set();     // translationKeys ticked in the list
       let filtersInitialized = false;
       let openMoreActions = null;
+      const copy = EditorCopy.en;
+      $('languagesHeading').textContent = copy.postsLanguages;
 
+      // Status views: toggle buttons over the SAME state as the #fStatus select
+      // (one source of truth — the select's value), so the URL, Edit's returnTo
+      // and Clear filters need no second code path. Plain buttons with
+      // aria-pressed, not role="tab": they filter one list, they do not switch panels.
+      // @ai-note Each count is PostsFilter.apply over the loaded rows with every
+      // CURRENT non-status filter (search, region, country) and that status —
+      // "what clicking this would show", never a whole-library total.
+      const STATUS_VIEWS = [
+        { status: '', label: copy.postsAll },
+        { status: 'draft', label: copy.postsDrafts },
+        { status: 'published', label: copy.postsPublished },
+        { status: 'unpublished', label: copy.postsChanges },
+        { status: 'missing-en', label: copy.postsMissingEn },
+      ];
+      $('statusViews').setAttribute('aria-label', copy.postsStatusFilters);
+      const statusViewButtons = STATUS_VIEWS.map((view) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'posts-status-tab';
+        button.setAttribute('data-status', view.status);
+        button.setAttribute('aria-pressed', 'false');
+        const label = document.createElement('span');
+        label.className = 'posts-status-label';
+        label.textContent = view.label;
+        const count = document.createElement('span');
+        count.className = 'posts-status-count';
+        button.appendChild(label);
+        button.appendChild(count);
+        button.addEventListener('click', () => {
+          $('fStatus').value = view.status;
+          render(true);
+        });
+        $('statusViews').appendChild(button);
+        return { view, button, count };
+      });
+
+      function syncStatusViews() {
+        const filters = currentFilters();
+        for (const { view, button, count } of statusViewButtons) {
+          button.setAttribute('aria-pressed', filters.status === view.status ? 'true' : 'false');
+          count.textContent = String(PostsFilter.apply(allPosts, { ...filters, status: view.status }).length);
+        }
+      }
 
       function describeBuild(build) {
         if (!build) return '';
@@ -147,20 +197,6 @@
         $('fCountry').value = state.country;
         $('fSort').value = state.sort;
         $('fOrder').value = state.order;
-      }
-
-      function initialFilterSearch() {
-        if (location.search) return location.search;
-        try {
-          const referrer = new URL(document.referrer);
-          if (referrer.origin !== location.origin || referrer.pathname !== '/admin/editor.html') return '';
-          const returnTo = new URL(referrer.searchParams.get('returnTo') || '', location.origin);
-          return returnTo.origin === location.origin && returnTo.pathname === '/admin/posts.html'
-            ? returnTo.search
-            : '';
-        } catch (_) {
-          return '';
-        }
       }
 
       function syncFilterUrl() {
@@ -443,6 +479,67 @@
         return td;
       }
 
+      // Country and trip date sit under the title (the old Trip column), plus
+      // the textual "EN missing" cue, so the state never rests on badge colour.
+      // Items are joined by a real " · " separator span, so the line reads
+      // correctly as plain text (copy, screen readers, no CSS) — not by gap alone.
+      function tripMeta(p) {
+        const items = [p.country, p.date].filter((v) => typeof v === 'string' && v).map((text) => {
+          const span = document.createElement('span');
+          span.textContent = text;
+          return span;
+        });
+        if (p.hasEnBody === false) {
+          const hint = document.createElement('span');
+          hint.className = 'post-locale-state';
+          hint.textContent = copy.postsMissingEn;
+          items.push(hint);
+        }
+        if (!items.length) return null;
+        const meta = document.createElement('div');
+        meta.className = 'post-trip-meta';
+        items.forEach((item, i) => {
+          if (i > 0) {
+            const sep = document.createElement('span');
+            sep.className = 'post-trip-sep';
+            sep.textContent = ' · ';
+            meta.appendChild(sep);
+          }
+          meta.appendChild(item);
+        });
+        return meta;
+      }
+
+      function languageBadge(code, name, state) {
+        const badge = document.createElement('span');
+        badge.className = 'post-language' + (state ? ' is-' + state : '');
+        // role="img" makes the spoken name the honest state, not just "EN".
+        badge.setAttribute('role', 'img');
+        badge.setAttribute('aria-label', name);
+        badge.title = name;
+        badge.textContent = code;
+        return badge;
+      }
+
+      // @ai-warning The list payload carries hasEnBody and nothing about the DE
+      // body, so DE is labelled as the primary locale only — never "complete".
+      // EN is present/missing only on a strict boolean; an absent field is
+      // "unknown", not "present" (an older or partial summary must not look done).
+      function languagesCell(p) {
+        const td = document.createElement('td');
+        td.className = 'col-languages';
+        td.setAttribute('role', 'cell');
+        td.setAttribute('data-label', copy.postsLanguages);
+        const wrap = document.createElement('div');
+        wrap.className = 'post-languages';
+        wrap.appendChild(languageBadge('DE', copy.postsGermanLocale, ''));
+        if (p.hasEnBody === true) wrap.appendChild(languageBadge('EN', copy.postsEnglishPresent, ''));
+        else if (p.hasEnBody === false) wrap.appendChild(languageBadge('EN', copy.postsEnglishMissing, 'missing'));
+        else wrap.appendChild(languageBadge('EN', copy.postsEnglishUnknown, 'unknown'));
+        td.appendChild(wrap);
+        return td;
+      }
+
       function wirePostDisclosure(details, summary) {
         details.addEventListener('toggle', () => {
           if (!details.open) {
@@ -533,20 +630,9 @@
           titleLink.setAttribute('aria-label', 'Edit ' + (p.titleDe || 'untitled post'));
           titleLink.textContent = p.titleDe || '(untitled)';
           tdTitle.appendChild(titleLink);
-          if (p.hasEnBody === false) {
-            const hint = document.createElement('span');
-            hint.className = 'post-locale-state';
-            hint.textContent = 'EN missing';
-            tdTitle.appendChild(hint);
-          }
+          const meta = tripMeta(p);
+          if (meta) tdTitle.appendChild(meta);
           tr.appendChild(tdTitle);
-
-          const tdTrip = document.createElement('td');
-          tdTrip.className = 'col-trip posts-date';
-          tdTrip.setAttribute('role', 'cell');
-          tdTrip.setAttribute('data-label', 'Trip');
-          tdTrip.textContent = [p.country, p.date].filter(Boolean).join(' · ');
-          tr.appendChild(tdTrip);
 
           const tdStatus = document.createElement('td');
           tdStatus.className = 'col-status';
@@ -565,6 +651,8 @@
             tdStatus.appendChild(changed);
           }
           tr.appendChild(tdStatus);
+
+          tr.appendChild(languagesCell(p));
 
           const tdUpdated = document.createElement('td');
           tdUpdated.className = 'col-updated posts-date';
@@ -650,6 +738,7 @@
         syncSelectAll();
         refreshBulkBar();
         updateFilterContext(posts);
+        syncStatusViews();
         $('newPost').href = editorHref();
         if (updateUrl) syncFilterUrl();
       }
@@ -676,6 +765,7 @@
         $('postsList').innerHTML = '';
         $('postsTable').hidden = true;
         $('filters').hidden = true;
+        $('statusViews').hidden = true;
         $('bulkBar').hidden = true;
         $('retryLoad').hidden = true;
         $('loadMsg').hidden = false;
@@ -689,6 +779,8 @@
           selected.clear();
           $('postsList').innerHTML = '';
           $('resultsCount').textContent = '';
+          // Counts of a list that is gone must not survive, even hidden.
+          for (const { count } of statusViewButtons) count.textContent = '';
           $('loadMsg').setAttribute('role', 'alert');
           $('loadMsg').textContent = 'Posts could not be loaded.';
           $('retryLoad').hidden = false;
@@ -714,11 +806,12 @@
         fillOptions($('fRegion'), PostsFilter.REGIONS);
         fillOptions($('fCountry'), countryOptions);
         if (!filtersInitialized) {
-          setFilterControls(PostsFilter.fromSearch(initialFilterSearch(), countryOptions));
+          setFilterControls(PostsFilter.fromSearch(location.search, countryOptions));
           filtersInitialized = true;
         }
         $('loadMsg').hidden = true;
         $('filters').hidden = false;
+        $('statusViews').hidden = false;
         $('postsTable').hidden = false;
         render(true);
         // Callers that already set an outcome pass it through so rebuild and

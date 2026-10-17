@@ -268,6 +268,24 @@ function minimalPair(): StashPayload {
 }
 
 describe('editor.html inline script against its own markup', () => {
+  it('returns to the filtered Posts view without relying on the browser referrer', () => {
+    const returnTo = '/admin/posts.html?status=draft&country=Ecuador&q=river';
+    const h = loadEditor({ search: '?returnTo=' + encodeURIComponent(returnTo) });
+    expect(h.el('backToPosts').getAttribute('href')).toBe(returnTo);
+  });
+
+  it.each([
+    'https://elsewhere.example/admin/posts.html?status=draft',
+    '//elsewhere.example/admin/posts.html',
+    '/admin/settings.html',
+    'javascript:alert(1)',
+    'http://[',
+    '',
+  ])('keeps the Posts fallback for an unsafe or absent return destination: %s', (returnTo) => {
+    const h = loadEditor({ search: '?returnTo=' + encodeURIComponent(returnTo) });
+    expect(h.el('backToPosts').getAttribute('href')).toBe('/admin/posts.html');
+  });
+
   it('selects an independent title image, round-trips framing, and clears it on removal or old revision restore', () => {
     const pickImage = { src: 'https://img/banner', width: 2400, height: 800,
       alt: { de: 'Bergpanorama', en: 'Mountain panorama' }, format: 'jpeg' as const };

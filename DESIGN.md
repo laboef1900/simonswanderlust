@@ -866,9 +866,46 @@ than the square — a lone portrait — held at the square's own height as a
 
 ## Admin authoring: Wanderlust Studio
 
-The admin retains the blog's canvas/navy/red palette and self-hosted Inter/IBM Plex Mono.
-The shared shell and login identify it as **Wanderlust Studio**, with **Simon's travel
-journal** as the descriptor. This is an editorial workspace, not a separate image product.
+The approved **Editorial desk** direction (UI mockup 2, based on the owner's CompendiQ
+reference) governs the shared admin shell and Posts list. It is a light operating UI:
+quiet gray navigation, a white workspace, compact rows, and steel-blue navigation and
+New post accents. The public blog's expedition identity is unchanged. Self-hosted
+Inter/IBM Plex Mono remain; the shell and login identify the workspace as **Wanderlust
+Studio**, with **Simon's travel journal** as the descriptor.
+
+Admin shell tokens are scoped to `.cms-app-shell` in `uploader/public/admin.css`:
+
+| Role | Token | Value |
+|---|---|---|
+| Surrounding canvas | `--canvas` | `#f5f6f7` |
+| Structural navy | `--navy` | `#263b51` |
+| Body text | `--ink` | `#202630` |
+| Secondary text | `--muted` | `#626974` |
+| Dividers | `--line` | `#e7e9ec` |
+| Strong dividers | `--line-strong` | `#d6dbe1` |
+| Form boundaries | `--line-control` | `#858c95` |
+| Active navigation / New post | `--studio-accent` | `#416486` |
+| Active navigation surface | `--studio-accent-soft` | `#eaf0f6` |
+
+- A full-width 4rem masthead sits above a 13rem sidebar and a single rounded white
+  workspace. Content, Media, and admin-only Manage orient the workspace; the sidebar
+  holds the actual page navigation and account controls. Roles and server authorization
+  are unchanged. Publish and destructive actions retain their existing red treatment.
+- Below 900px, navigation becomes a dismissible drawer. It traps keyboard focus,
+  makes both masthead and workspace inert, closes with Escape, and restores focus to
+  the menu button. Reduced-motion preferences are respected.
+- Posts keeps search, status, and sort visible; country, region, and ordering live under
+  More filters. Status views share the status select's state. Their counts include the
+  current search/country/region filters, not the unfiltered library. Selection survives
+  filter changes and continues to name stories outside the current view.
+- Each row combines the title with country/date, a hero thumbnail, publication state,
+  DE/EN indicators, modification date, and existing actions. DE means primary locale,
+  not verified completeness. EN distinguishes available, missing, and unknown body
+  state with accessible names and non-color-only cues.
+- Under a 58rem list container, table rows become stacked records without losing
+  selection, status, language, date, or actions. Edit and New post carry the list query
+  into an explicit, same-origin Back to Posts link; restoration does not depend on
+  a referrer header.
 
 - The editor command bar separates primary actions from the full-width save/readiness
   status row. Error/status text wraps instead of disappearing behind ellipses.

@@ -209,8 +209,8 @@ describe('PostsFilter URL state', () => {
   });
 
   it('counts only controls hidden inside the collapsed filter group', () => {
-    expect(api.extraFilterCount({ q: 'trip', status: 'draft', sort: 'updated', order: 'desc' })).toBe(0);
-    expect(api.extraFilterCount({ region: 'europe', country: 'Island', sort: 'title', order: 'asc' })).toBe(4);
+    expect(api.extraFilterCount({ q: 'trip', status: 'draft', sort: 'title', order: 'desc' })).toBe(0);
+    expect(api.extraFilterCount({ region: 'europe', country: 'Island', sort: 'title', order: 'asc' })).toBe(3);
   });
 });
 
