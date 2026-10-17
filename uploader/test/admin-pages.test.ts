@@ -485,18 +485,6 @@ describe('admin page wiring', () => {
     expect(auth).toContain(".cms-user-name').textContent = s.username");
   });
 
-  it('the runtime shell is Image Station, not Wanderlust CMS', () => {
-    expect(auth).toContain('Image Station');
-    expect(auth).toContain('Expedition Log');
-    expect(auth).toContain('Log out');
-    expect(auth).toContain('class="skip-link"');
-    expect(auth).not.toContain('Wanderlust CMS');
-    expect(auth).not.toContain('System Live');
-    expect(auth).not.toContain('cms-brand-badge');
-    expect(auth).not.toContain('#38bdf8');
-    expect(auth).not.toContain('aria-label="Log out"');
-  });
-
   it('Publish, Rebuild, Save & rebuild, Unpublish, and Delete go through AdminConfirm', () => {
     expect(editor).toContain('AdminConfirm.ask');
     expect(editor).toContain('Publish to the live site?');

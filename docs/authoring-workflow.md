@@ -145,6 +145,36 @@ can still be running when the upload returns: wait until the photo is ready befo
    The slug and shared fields (date, countryCode, region, coordinates) carry over automatically.
 5. Click **Save draft** — both locale rows are written to Postgres. The post is not yet live.
 
+### Fill coordinates from the country
+
+Enter a country in either language's **Country** field, then leave the field. Recognized
+German/English names and ISO codes fill empty latitude/longitude with an **approximate
+country center**, and fill an empty country code. This lookup works offline; it does
+not send the country to a geocoding service. Refine the point for a specific trip location.
+
+Only values automatically filled during this editing session follow subsequent country
+changes. Saved or manually entered coordinates, including a single entered coordinate,
+are preserved. **Use country center** explicitly replaces them. An existing ISO code is
+preserved too; the editor warns when it disagrees with the country. Conflicting DE/EN
+countries are not guessed. Loading a post never silently fills or moves its map pin.
+Save draft to keep the result.
+
+### Generate an excerpt
+
+In the active language's story details, select **Generate excerpt with AI**. It uses
+**Settings → Story review & excerpts**: the same provider, model, timeout, and shared
+remote API key as Story Review. Review instructions supply editorial guidance; the
+generator requests a short plain-text excerpt in the active language from the unsaved
+title and manuscript. It does not need the other language to be complete.
+
+The browser sends this text directly to the configured provider only when requested;
+provider charges and privacy policies apply. The app server never calls a model.
+Review the suggestion and character count, then choose **Use excerpt** or **Replace
+existing excerpt**. Generate alone never changes the current excerpt, saves, or publishes.
+You can cancel or dismiss a suggestion; edits or a locale switch invalidate stale work.
+Save draft remains a separate step. If the provider is unavailable, write the excerpt
+manually.
+
 ### Find waypoint coordinates
 
 In **Story details → Expedition details → Waypoints / stops**, add a stop and enter

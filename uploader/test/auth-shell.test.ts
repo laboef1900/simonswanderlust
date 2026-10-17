@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
+import { ui } from '../../site/src/i18n/ui.js';
 
 const authSource = readFileSync('public/auth.js', 'utf8');
 
@@ -146,6 +147,8 @@ function shellSandbox(pathname: string) {
           const logout = makeElement('cmsLogoutBtn');
           (sidebar as StubElement & { setFocusables(items: StubElement[]): void }).setFocusables([close, logout]);
           (shell as StubElement & { setSelectors(map: Record<string, StubElement>): void }).setSelectors({
+            '.cms-brand-title': makeElement(),
+            '.cms-brand-sub': makeElement(),
             '#cmsSidebar': sidebar,
             '#cmsMenuBtn': menu,
             '#cmsNavScrim': scrim,
@@ -169,6 +172,9 @@ function shellSandbox(pathname: string) {
   };
 
   const context: Record<string, unknown> = {
+    EditorCopy: { en: Object.fromEntries(Object.entries(ui.en)
+      .filter(([key]) => key.startsWith('editor.chrome.'))
+      .map(([key, value]) => [key.slice('editor.chrome.'.length), value])) },
     document: documentStub,
     location: { pathname, search: '', href: '' },
     fetch: async () => ({ json: async () => ({}) }),

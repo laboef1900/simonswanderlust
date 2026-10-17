@@ -246,16 +246,16 @@ Author-facing detail is in [`../docs/authoring-workflow.md`](../docs/authoring-w
 
 ## AI alt-text (browser-direct providers)
 
-Settings → **Alt-text model** has the same provider choices as **Editorial review**:
+Settings → **Photo descriptions** has the same provider choices as **Story review & excerpts**:
 Local LM Studio (default), OpenRouter, DeepSeek, or a custom HTTP(S) OpenAI-compatible
 endpoint. Caption provider/model/prompt/timeout are independent of review. Select a
 **vision-capable model**; a provider's model list does not guarantee image support.
 
 The editor and photo uploader send a resized JPEG and caption prompt directly from
 the browser to that provider. The app server never contacts the model. Remote captions
-reuse the **shared API key** managed under Editorial review; save that key there, then
-save the alt-text provider/model settings. Replacing/removing the key affects both
-features, and selecting different providers sends the same key to two destinations.
+reuse the **shared API key** managed under Story review & excerpts; save that key there, then
+save the alt-text provider/model settings. Replacing/removing the key affects review, excerpts,
+and remote captions; selecting different providers sends the same key to two destinations.
 Use only photos you intend to share with the selected provider; usage charges may apply.
 
 **Test connection** explicitly lists models using the saved caption destination/key.
@@ -314,11 +314,37 @@ Base URLs must be HTTP(S) with no credentials, query or fragment.
 `public/editor-review.js` integrates this client with the editor's **Review Story**
 drawer (#215). Captions and model discovery also use request-local credentials when remote.
 
+### Country coordinates and excerpt assistance
+
+`public/country-coordinates.js` resolves German/English country names or ISO2 codes against
+`public/country-centers.js`, an offline table of approximate label points from public-domain
+Natural Earth v5.1.2. `node scripts/build-country-centers.mjs` regenerates the table from
+the pinned upstream GeoJSON. No runtime geocoding or provider request is involved.
+Committed country edits fill empty coordinates/ISO codes; subsequent edits follow only
+session-owned automatic values. Saved/manual values are retained, conflicting locale
+countries are refused, and **Use country center** is an explicit replacement action.
+
+`public/editor-excerpt.js` fetches the existing `/ai-config` and calls
+`LLM.suggestExcerpt(baseUrl, model, guidance, { locale, title, markdown }, apiKey?, timeoutMs?, signal?)`.
+It shares Story Review's provider, model, prompt-as-editorial-guidance, timeout, and key.
+The dedicated task asks for 100–160 characters in the active language; the parser accepts
+only `{"excerpt":"…"}` with plain text up to 300 characters, rejecting rather than
+truncating invalid output. The shared review transport preserves its cancellation,
+redirect, credential, and response-format fallback rules.
+
+The generator previews the suggestion next to the locale's excerpt. Explicit acceptance
+is required; no request saves or publishes. Draft edits, locale switches, and loading a
+different post invalidate results, with a second snapshot comparison on acceptance.
+Provider failure leaves the current excerpt untouched. New chrome lives in both locales
+of `site/src/i18n/ui.ts`.
+
+
 ### Review providers and encrypted credentials (#214)
 
-Settings → **Editorial review** selects Local LM Studio, OpenRouter, DeepSeek, or a custom
-HTTP(S) OpenAI-compatible API base. Review model/prompt/timeout are separate from captions.
-The default provider is local; remote review is optional. No inference occurs on save.
+Settings → **Story review & excerpts** selects Local LM Studio, OpenRouter, DeepSeek, or a
+custom HTTP(S) OpenAI-compatible API base. The excerpt generator uses these same settings.
+Review model/prompt/timeout remain separate from captions. The default provider is local;
+remote inference is optional. No inference occurs on save.
 
 For remote credentials, privately generate a master key with `openssl rand -hex 32`, store
 its 64 hex characters as `ENCRYPTION_KEY` in the untracked root `.env`, and recreate the
@@ -327,12 +353,12 @@ output containing it. Leave the variable **unset**, not empty, for local-only us
 Malformed supplied keys refuse boot; missing keys permit local startup/captions but
 encrypted operations report `ENCRYPTION_KEY not configured in .env`.
 
-Enter the provider key in the masked **Shared API key (review and alt text)** field.
+Enter the provider key in the masked **Shared API key · review, excerpts & alt text** field.
 OpenRouter and DeepSeek require a key; local LM Studio never receives the shared key.
 Blank leaves an existing key untouched; **Remove stored key** explicitly deletes it
 after confirmation. The chip means stored, not tested. Postgres stores AES-256-GCM ciphertext; **every signed-in author receives the
 shared plaintext key in browser memory** for direct provider calls. The server never
-contacts a model. The selected providers receive review content or resized caption photos;
+contacts a model. The selected providers receive review/excerpt content or resized caption photos;
 use provider-side limits and revoke/reissue a credential after suspected exposure.
 
 One key follows both selected remote destinations. Review the warning when changing
