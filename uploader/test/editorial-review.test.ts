@@ -20,7 +20,7 @@ interface BrowserLlm {
 }
 function browserClient(fetcher: typeof fetch = vi.fn<typeof fetch>()): BrowserLlm {
   const window = {} as { LLM: BrowserLlm };
-  runInNewContext(source, { window, URL, AbortController, setTimeout, clearTimeout, fetch: fetcher });
+  runInNewContext(source, { window, URL, AbortController, AbortSignal, setTimeout, clearTimeout, fetch: fetcher });
   return window.LLM;
 }
 

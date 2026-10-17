@@ -237,17 +237,19 @@ same JSON response format and OpenStreetMap data attribution. Do not run multipl
 independent app replicas against the public service without a shared request budget.
 See the [provider usage policy](https://operations.osmfoundation.org/policies/nominatim/).
 
-## AI alt-text (local LM Studio)
+## AI alt-text (browser-direct providers)
 
-The post editor and photo uploader offer a "Suggest alt text" button per alt field. The browser
-downscales the picked photo and calls the author's local LM Studio (`<lmBaseUrl>/chat/completions`)
-directly — the app server never contacts the model. LM config (`lmBaseUrl`, `lmModel`,
-`captionTimeoutMs`, `captionMaxEdge`, `captionPrompt`) lives in the JSON settings store, edited on
-the admin-only Settings page; authors read it via `GET /ai-config?purpose=caption`. No
-`docker-compose`/`.env` LM variables are needed.
+The post editor and photo uploader offer a "Suggest alt text" button per alt field.
+The browser downscales the photo and calls the selected OpenAI-compatible vision
+provider directly; the app server never contacts a model. Settings stores independent
+`captionProvider` and `captionCustomBaseUrl`, alongside the existing `lmModel`,
+`captionTimeoutMs`, `captionMaxEdge` and `captionPrompt`. Local LM Studio is the default;
+`lmBaseUrl` remains the shared local endpoint for captions and review.
+Authors read `GET /ai-config?purpose=caption`, including resolved `captionBaseUrl` and
+request-local `captionApiKey` (null for local). Remote captions reuse `ai_api_key`.
 
-The editorial-review client (#213, part of #211) shares `public/llm.js` without changing
-the caption flow. `src/editorial-review.ts` owns the pure result type, JSON Schema,
+The editorial-review client (#213, part of #211) shares `public/llm.js`.
+`src/editorial-review.ts` owns the pure result type, JSON Schema,
 default prompt and parser; the browser parser is checked against the same corpus.
 `LLM.reviewStory` sends an active-locale draft snapshot directly to an OpenAI-compatible
 provider with an optional request-local Bearer key. Its one deadline covers the initial
@@ -256,9 +258,10 @@ an optional AbortSignal lets the drawer cancel stale work.
 Provider/secrets integration (#214) adds non-sensitive review settings to `settings.json`,
 and one AES-256-GCM encrypted `ai_api_key` in Postgres. Default `GET /ai-config` returns
 resolved provider config and the shared key to authenticated authors for browser-direct
-review; settings responses expose only `hasAiApiKey`. Caption-only config never queries
-or decrypts secrets, so a broken remote credential cannot break local captions. Both
-config surfaces are `Cache-Control: no-store`.
+review; settings responses expose only `hasAiApiKey`. Local caption config never queries
+or decrypts secrets, so a broken remote credential cannot break local captions. Remote
+caption reads serialize with settings writes, resolve their own provider, and fail
+closed on secret errors. Both config surfaces are `Cache-Control: no-store`.
 
 The master key is optional bootstrap `ENCRYPTION_KEY` (32 bytes / 64 hex characters),
 forwarded explicitly by Compose. Missing means local-only startup remains available;

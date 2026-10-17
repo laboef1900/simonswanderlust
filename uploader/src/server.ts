@@ -747,17 +747,23 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   });
 
   // Serialize config reads and writes: JSON settings and Postgres cannot commit
-  // together. Caption-only reads deliberately bypass this optional secret path.
+  // together. Local captions deliberately bypass this optional secret path.
   let settingsTail = Promise.resolve();
   function settingsOperation<T>(operation: () => Promise<T>): Promise<T> {
     const result = settingsTail.then(operation);
     settingsTail = result.then(() => {}, () => {});
     return result;
   }
+  function providerBaseUrl(provider: Settings['aiProvider'], custom: string, local: string) {
+    return provider === 'lm-studio' ? local
+      : provider === 'openrouter' ? 'https://openrouter.ai/api/v1'
+        : provider === 'deepseek' ? 'https://api.deepseek.com/v1' : custom;
+  }
   function captionConfig(s: Settings) {
     return {
       lmBaseUrl: s.lmBaseUrl, lmModel: s.lmModel, captionPrompt: s.captionPrompt,
       captionTimeoutMs: s.captionTimeoutMs, captionMaxEdge: s.captionMaxEdge,
+      captionProvider: s.captionProvider, captionCustomBaseUrl: s.captionCustomBaseUrl,
     };
   }
   function settingsResponse(s: Settings, hasAiApiKey: boolean) {
@@ -806,7 +812,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (b.commentsEnabled !== undefined) partial.commentsEnabled = b.commentsEnabled;
     if (b.webpQuality !== undefined) partial.webpQuality = Number(b.webpQuality);
     if (b.avifQuality !== undefined) partial.avifQuality = Number(b.avifQuality);
-    for (const field of ['aiProvider', 'aiModel', 'aiCustomBaseUrl', 'reviewPrompt', 'reviewTimeoutMs'] as const) {
+    for (const field of ['captionProvider', 'captionCustomBaseUrl', 'aiProvider', 'aiModel', 'aiCustomBaseUrl', 'reviewPrompt', 'reviewTimeoutMs'] as const) {
       if (Object.hasOwn(b, field)) partial[field] = b[field];
     }
     if (Object.hasOwn(b, 'geocodingSearchUrl')) partial.geocodingSearchUrl = b.geocodingSearchUrl;
@@ -852,17 +858,34 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   app.get('/ai-config', { preHandler: requireAuth }, async (req, reply) => {
     const purpose = (req.query as Record<string, unknown>).purpose;
-    if (purpose === 'caption') return reply.send(captionConfig(cfg.settings.get()));
+    if (purpose === 'caption') {
+      const current = cfg.settings.get();
+      if (current.captionProvider === 'lm-studio') {
+        return reply.send({ ...captionConfig(current), captionBaseUrl: current.lmBaseUrl, captionApiKey: null });
+      }
+      return settingsOperation(async () => {
+        const s = cfg.settings.get();
+        const captionBaseUrl = providerBaseUrl(s.captionProvider, s.captionCustomBaseUrl, s.lmBaseUrl);
+        if (!captionBaseUrl) return reply.code(400).send({
+          code: 'invalid_caption_configuration', error: 'Configure a custom alt-text base URL first.',
+        });
+        try {
+          // Re-read after queued saves; a switch back to local must not decrypt.
+          const captionApiKey = s.captionProvider === 'lm-studio' ? null : await cfg.secrets.get('ai_api_key');
+          return reply.send({ ...captionConfig(s), captionBaseUrl, captionApiKey });
+        } catch (e) {
+          return reply.code(503).send(secretFailure(e));
+        }
+      });
+    }
     if (purpose !== undefined) return reply.code(400).send({ error: 'Unknown AI configuration purpose.' });
     return settingsOperation(async () => {
       const s = cfg.settings.get();
-      const aiBaseUrl = s.aiProvider === 'lm-studio' ? s.lmBaseUrl
-        : s.aiProvider === 'openrouter' ? 'https://openrouter.ai/api/v1'
-          : s.aiProvider === 'deepseek' ? 'https://api.deepseek.com/v1' : s.aiCustomBaseUrl;
+      const aiBaseUrl = providerBaseUrl(s.aiProvider, s.aiCustomBaseUrl, s.lmBaseUrl);
       if (!aiBaseUrl) return reply.code(400).send({ code: 'invalid_review_configuration', error: 'Configure a custom review base URL first.' });
       try {
         // get() checks encryption availability even when no row exists. Local
-        // captions/review never decrypt or receive a remotely configured key.
+        // review never decrypts or receives a remotely configured key.
         const aiApiKey = s.aiProvider === 'lm-studio' ? null : await cfg.secrets.get('ai_api_key');
         const hasAiApiKey = s.aiProvider === 'lm-studio' ? await cfg.secrets.has('ai_api_key') : aiApiKey !== null;
         return reply.send({

@@ -111,17 +111,35 @@
         </form>
       </section>
 
-      <section class="card">
-        <h2 class="card-heading">Alt-text model</h2>
-        <p class="muted">
-          Suggestions run in <em>this browser</em> against the base URL below (your machine's
-          LM Studio) — the server never contacts the model. Set it to where LM Studio listens
-          here, usually <code>http://localhost:1234/v1</code>.
+      <section class="card" aria-labelledby="captionHeading">
+        <h2 id="captionHeading" class="card-heading">Alt-text model</h2>
+        <p class="muted" id="captionPrivacy">
+          Suggestions run in <em>this browser</em>. The selected provider receives a resized photo
+          and the caption prompt — the server never contacts the model. Choose a model that supports images.
         </p>
+        <label for="captionProvider">Alt-text provider</label>
+        <select id="captionProvider" aria-describedby="captionPrivacy captionDestination captionKeyHelp">
+          <option value="lm-studio">Local LM Studio</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="custom">Custom</option>
+        </select>
+        <div id="customCaptionFields" hidden>
+          <label for="captionCustomBaseUrl">Custom API base URL</label>
+          <input id="captionCustomBaseUrl" type="url" placeholder="https://your-provider.example/v1" aria-describedby="captionUrlWarning" />
+        </div>
+        <p id="captionDestination" class="muted"></p>
+        <p id="captionUrlWarning" class="notice-warn" role="status" hidden></p>
+        <p id="captionKeyWarning" class="notice-warn" role="status" hidden></p>
+        <p id="captionKeyHelp" class="muted"></p>
+        <p class="muted">Remote captions use the <a href="#aiApiKey">shared API key below</a>.
+          Save the key there and the alt-text settings here before testing a remote connection.
+          Provider usage charges may apply when suggesting alt text.</p>
 
         <label for="baseUrl">LM Studio base URL (as this browser reaches it)</label>
         <input id="baseUrl" type="text" placeholder="http://localhost:1234/v1" aria-describedby="baseUrlWarn" />
         <p id="baseUrlWarn" class="notice-warn" role="status" hidden></p>
+        <p class="muted">Used by either feature when Local LM Studio is selected, usually <code>http://localhost:1234/v1</code>.</p>
 
         <label for="model">Model</label>
         <select id="model"></select>
@@ -140,12 +158,15 @@
           <button id="test" type="button" class="btn-secondary">Test connection</button>
           <button id="saveAi" type="button" class="btn-secondary">Save settings</button>
         </div>
+        <p id="captionOut" class="page-status" role="status"></p>
+        <p class="muted">Test connection lists available models; it does not send a photo or verify image support.</p>
       </section>
 
       <section class="card" aria-labelledby="reviewHeading">
         <h2 id="reviewHeading" class="card-heading">Editorial review</h2>
         <p class="muted" id="reviewPrivacy">Reviews run from the author's browser. The selected provider receives the draft.
-          The server never calls a model. Local review uses the saved LM Studio base URL above; caption settings are otherwise independent.</p>
+          The server never calls a model. Local review uses the saved LM Studio base URL above.
+          Remote review and remote captions share one API key; their providers and models are independent.</p>
         <label for="aiProvider">Review provider</label>
         <select id="aiProvider" aria-describedby="reviewPrivacy reviewDestination">
           <option value="lm-studio">Local LM Studio</option>
@@ -166,10 +187,11 @@
         <input id="reviewTimeoutMs" type="number" min="5000" max="300000" step="1" />
         <label for="reviewPrompt">Review instructions</label>
         <textarea id="reviewPrompt" rows="8"></textarea>
-        <label for="aiApiKey">Replace API key <span id="aiKeyStatus" class="status-badge status-draft" role="status">Loading</span></label>
+        <label for="aiApiKey">Shared API key (review and alt text) <span id="aiKeyStatus" class="status-badge status-draft" role="status">Loading</span></label>
         <input id="aiApiKey" type="password" autocomplete="new-password" aria-describedby="aiKeyHelp" />
-        <p id="aiKeyHelp" class="muted">Leave blank to keep the stored key. Keys are encrypted in Postgres, but every signed-in
-          author receives the shared key in browser memory for direct calls. A configured key has not been tested.
+        <p id="aiKeyHelp" class="muted">Leave blank to keep the stored key; enter a new key to replace it for both features.
+          Each remote feature sends this same key to its selected endpoint, even when the providers differ.
+          Keys are encrypted in Postgres, but every signed-in author receives the shared key in browser memory for direct calls.
           Keep the encryption master key separately from database backups.</p>
         <div class="settings-actions">
           <button id="saveReview" type="button" class="btn-secondary">Save review settings</button>
@@ -187,11 +209,45 @@
     <script>
       const $ = (id) => document.getElementById(id);
       let savedReview = null;
+      let savedCaption = null;
 
       function reviewDestination(provider, custom, local) {
         return provider === 'lm-studio' ? local
           : provider === 'openrouter' ? 'https://openrouter.ai/api/v1'
             : provider === 'deepseek' ? 'https://api.deepseek.com/v1' : custom;
+      }
+
+      function captionDestination() {
+        return reviewDestination($('captionProvider').value, $('captionCustomBaseUrl').value.trim(), $('baseUrl').value.trim());
+      }
+
+      function updateCaptionWarnings() {
+        const provider = $('captionProvider').value;
+        const destination = captionDestination();
+        $('customCaptionFields').hidden = provider !== 'custom';
+        $('captionDestination').textContent = 'Requests go to: ' + (destination || 'set a custom base URL');
+        const why = provider === 'custom' && destination.startsWith('http:')
+          ? 'HTTP can expose the shared key and photo on the network. Prefer HTTPS. Your browser may block this connection.'
+          : LLM.mixedContentWarning(destination, location.protocol);
+        $('captionUrlWarning').textContent = why || '';
+        $('captionUrlWarning').hidden = !why;
+        const previous = savedCaption && reviewDestination(savedCaption.captionProvider, savedCaption.captionCustomBaseUrl, savedCaption.lmBaseUrl);
+        const changesDestination = savedCaption && savedReview?.hasAiApiKey && provider !== 'lm-studio'
+          && (provider !== savedCaption.captionProvider || destination !== previous);
+        $('captionKeyWarning').hidden = !changesDestination;
+        $('captionKeyWarning').textContent = changesDestination
+          ? 'The shared key will be sent to ' + (destination || 'the custom endpoint') + ' instead of ' + previous +
+            '. Review still uses its own endpoint. Replace or remove the shared key below if it belongs to another provider.' : '';
+        $('captionKeyHelp').textContent = provider === 'lm-studio'
+          ? 'Local LM Studio does not use the shared API key.'
+          : !savedReview ? 'Reload settings to check the shared API key before using remote captions.'
+          : savedReview.hasAiApiKey ? 'A shared key is stored. Make sure it is valid for this caption provider as well as the review provider.'
+          : provider === 'custom' ? 'No shared key is stored. Configure one below if this endpoint requires it.'
+          : 'This provider requires an API key. Configure the shared key below, then save review settings.';
+      }
+      for (const id of ['captionProvider', 'captionCustomBaseUrl', 'baseUrl']) {
+        $(id).addEventListener('input', updateCaptionWarnings);
+        $(id).addEventListener('change', updateCaptionWarnings);
       }
 
       function updateReviewWarnings() {
@@ -226,6 +282,11 @@
 
       function fillGeneral(s) {
         $('baseUrl').value = s.lmBaseUrl || '';
+        $('captionProvider').value = s.captionProvider;
+        $('captionCustomBaseUrl').value = s.captionCustomBaseUrl;
+        savedCaption = {
+          captionProvider: s.captionProvider, captionCustomBaseUrl: s.captionCustomBaseUrl, lmBaseUrl: s.lmBaseUrl,
+        };
         checkBaseUrl();
         $('timeout').value = s.captionTimeoutMs ?? '';
         $('maxEdge').value = s.captionMaxEdge ?? '';
@@ -239,6 +300,7 @@
           sel.add(new Option(s.lmModel, s.lmModel));
         }
         if (s.lmModel) sel.value = s.lmModel;
+        updateCaptionWarnings();
       }
 
       function fillImages(s) {
@@ -255,6 +317,7 @@
         };
         $('aiKeyStatus').textContent = s.hasAiApiKey ? 'Configured' : 'Not configured';
         $('removeAiKey').disabled = !s.hasAiApiKey;
+        updateCaptionWarnings();
       }
 
       function fillReview(s) {
@@ -311,6 +374,7 @@
       }
 
       async function loadModels() {
+        if ($('captionProvider').value !== 'lm-studio') return;
         try {
           populateModels(await LLM.listModels($('baseUrl').value.trim()));
         } catch { /* LM Studio not reachable from here — leave the manual field */ }
@@ -330,27 +394,53 @@
       }
 
       $('test').addEventListener('click', async () => {
-        $('out').textContent = 'Testing from this browser…';
+        const provider = $('captionProvider').value;
+        const destination = captionDestination();
+        let apiKey = null;
+        $('test').disabled = true;
+        $('captionOut').textContent = 'Testing from this browser…';
         try {
-          const models = await LLM.listModels($('baseUrl').value.trim());
+          if (provider !== 'lm-studio') {
+            const res = await fetch('/ai-config?purpose=caption', { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+            if (res.status === 401) { location.href = '/login'; return; }
+            if (!res.ok) throw new Error('Stored caption configuration unavailable');
+            const config = await res.json();
+            apiKey = config.captionApiKey;
+            config.captionApiKey = null;
+            if (config.captionProvider !== provider || config.captionBaseUrl !== destination) {
+              $('captionOut').textContent = 'Save the alt-text provider settings before testing this destination.';
+              return;
+            }
+            if ((provider === 'openrouter' || provider === 'deepseek') && !apiKey) {
+              $('captionOut').textContent = 'Save a shared API key below before testing this provider.';
+              return;
+            }
+          }
+          const models = await LLM.listModels(destination, apiKey);
+          // Do not install a stale model list after the author changes provider.
+          if (provider !== $('captionProvider').value || destination !== captionDestination()) return;
           populateModels(models);
           const model = chosenModel();
-          if (models.includes(model)) {
-            $('out').textContent = 'Reachable from this browser. Model "' + model + '" is available ✓';
-          } else if (models.length) {
-            $('out').textContent = 'Reachable, but "' + (model || '(none selected)') +
-              '" is not being served. Available now: ' + models.join(', ');
-          } else {
-            $('out').textContent = 'Reachable, but no models are loaded in LM Studio.';
-          }
-        } catch (e) {
-          const why = LLM.mixedContentWarning($('baseUrl').value.trim(), location.protocol);
-          $('out').textContent = 'Not reachable from this browser (' + e.message + '). ' +
-            (why || 'Is LM Studio running and serving on ' + $('baseUrl').value.trim() + '?');
+          $('captionOut').textContent = models.includes(model)
+            ? 'Reachable. Selected model is available; image support has not been tested.'
+            : models.length ? 'Reachable. Choose an available vision model or enter its ID.'
+            : 'Reachable, but no models were listed. Enter a vision model ID manually.';
+        } catch {
+          $('captionOut').textContent = 'Connection test failed. Check the saved provider, shared key, endpoint and browser CORS access.';
+        } finally {
+          apiKey = null;
+          $('test').disabled = false;
         }
       });
 
       async function saveSettings() {
+        updateCaptionWarnings();
+        if (!$('captionKeyWarning').hidden && !await AdminConfirm.ask({
+          title: 'Change the alt-text destination?',
+          body: $('captionKeyWarning').textContent + ' No photo is sent on save.',
+          confirmLabel: 'Save destination',
+        })) return;
+        $('captionOut').textContent = 'Saving…';
         $('out').textContent = 'Saving…';
         let res;
         try {
@@ -358,6 +448,8 @@
             method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
               lmBaseUrl: $('baseUrl').value.trim(),
+              captionProvider: $('captionProvider').value,
+              captionCustomBaseUrl: $('captionCustomBaseUrl').value.trim(),
               lmModel: chosenModel(),
               captionTimeoutMs: Number($('timeout').value),
               captionMaxEdge: Number($('maxEdge').value),
@@ -370,16 +462,22 @@
           });
         } catch (e) {
           $('out').textContent = 'Could not send the save request (' + e + ').';
+          $('captionOut').textContent = 'Could not save. Check your connection and try again.';
           return;
         }
         if (res.status === 401) { location.href = '/login'; return; }
         const r = await res.json().catch(() => ({}));
-        if (!res.ok) { $('out').textContent = 'Not saved: ' + (r.error || res.status); return; }
+        if (!res.ok) {
+          $('out').textContent = 'Not saved: ' + (r.error || res.status);
+          $('captionOut').textContent = $('out').textContent;
+          return;
+        }
         // Refresh this section and persisted review metadata, not pending review edits.
         fillGeneral(r);
         rememberReview(r);
         updateReviewWarnings();
         $('out').textContent = 'Saved.';
+        $('captionOut').textContent = 'Saved. No photo was sent.';
       }
       $('save').addEventListener('click', saveSettings);
       $('saveAi').addEventListener('click', saveSettings);
@@ -415,13 +513,18 @@
       async function saveReviewSettings(removeKey = false) {
         if (removeKey && !await AdminConfirm.ask({
           title: 'Remove the shared API key?',
-          body: 'Future remote reviews will lose this key. Already-copied keys and encrypted backups remain; revoke the key at the provider to stop external use. Local captions are unaffected.',
+          body: 'Future remote reviews and remote alt-text suggestions will lose this key. Already-copied keys and encrypted backups remain; revoke the key at the provider to stop external use. Local captions are unaffected.',
           confirmLabel: 'Remove key',
         })) return;
         if (!removeKey && !$('reviewKeyWarning').hidden && !await AdminConfirm.ask({
           title: 'Change the review destination?',
           body: $('reviewKeyWarning').textContent + ' Saving a key and settings is not atomic: if settings fail, the new key may remain with the old destination. No review runs on save.',
           confirmLabel: 'Save destination',
+        })) return;
+        if (!removeKey && $('aiApiKey').value && savedCaption?.captionProvider !== 'lm-studio' && !await AdminConfirm.ask({
+          title: 'Replace the shared API key?',
+          body: 'This changes the key used by both remote reviews and remote alt-text suggestions. Confirm it is valid for both selected endpoints. No model request runs on save.',
+          confirmLabel: 'Replace shared key',
         })) return;
         const payload = removeKey ? { aiApiKey: null } : {
           aiProvider: $('aiProvider').value,
@@ -442,9 +545,9 @@
           if (res.status === 401) { location.href = '/login'; return; }
           const result = await res.json();
           message = res.ok ? 'Saved. No review request was sent.'
-            : (result.error || 'Could not save review settings.') + ' Check the reloaded destination and key status before using remote review.';
+            : (result.error || 'Could not save review settings.') + ' Check the reloaded destinations and key status before using remote AI.';
         } catch {
-          message = 'Save outcome is unknown. Check the reloaded destination and deliberately replace or remove the key before using remote review.';
+          message = 'Save outcome is unknown. Check the reloaded destinations and deliberately replace or remove the key before using remote AI.';
         } finally {
           $('aiApiKey').value = '';
           delete payload.aiApiKey;
@@ -456,6 +559,7 @@
             message = (message || '') + ' Reload failed; refresh this page before trying again.';
             savedReview = null;
             $('aiKeyStatus').textContent = 'Unknown — reload';
+            updateCaptionWarnings();
           }
           $('saveReview').disabled = false;
           $('removeAiKey').disabled = !savedReview || !savedReview.hasAiApiKey;
