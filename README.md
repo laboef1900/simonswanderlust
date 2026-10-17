@@ -78,14 +78,31 @@ docker compose pull && docker compose up -d
 
 ### Cutting a release
 
+**Current release: v0.9.0.** Highlights since v0.8.0:
+
+- Independent story title images and waypoint coordinate lookup.
+- Inline gallery previews and alt-text editing, with selectable AI caption providers.
+- Pinned editor navigation/details, direct Review story access, compact photo warnings,
+  growing titles, and explicit draft save state.
+
+1. On a `feature/*` branch from `dev`, update both apps' `package.json` and root
+   `package-lock.json` versions, plus the `IMAGE_TAG` defaults in `docker-compose.yml`
+   and `uploader/.env.example`. Update these release highlights.
+2. Open a PR into `dev`, wait for required CI, and merge it. Then open a release PR
+   from `dev` to `main`, wait for required CI, and merge that PR too.
+3. Tag the merged release on `main` (example for this release):
+
 ```bash
-# 1. bump the IMAGE_TAG defaults in docker-compose.yml + uploader/.env.example
-# 2. commit, then tag and push the tag:
-git tag v0.X.Y && git push origin v0.X.Y
+git fetch origin main
+git tag -a v0.9.0 origin/main -m "Release v0.9.0"
+git push origin v0.9.0
 ```
 
-The `release` workflow builds the image (multi-arch amd64+arm64, on the DHI node bases), publishes
-it to GHCR, and creates the GitHub Release with generated notes.
+Never push directly to `dev` or `main`, tag an unmerged feature branch, or replace a
+published version tag. The `release` workflow builds the image once for amd64 and
+arm64 on the DHI Node bases, publishes it to GHCR, and creates the GitHub Release
+with generated notes. Verify that workflow before deploying the versioned image;
+publishing a release does not deploy it or rebuild the live blog.
 
 Then open `/login` to create the first admin account, write a post in the editor, and hit
 **Publish**. The app rebuilds the blog in-process and starts serving it immediately.
