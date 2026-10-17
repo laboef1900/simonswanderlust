@@ -41,8 +41,9 @@ Self-hosted, single-author travel CMS with a custom bilingual editor, automatic 
 
 - Name: "Simon's Wanderlust" (blog), "Wanderlust Studio" (admin), with the descriptor "Simon's travel journal".
 - Fonts: Inter (sans), IBM Plex Mono (mono) — self-hosted from `uploader/public/fonts/`
-- Colors: Navy (#142a42), Brand Red (#d23b30), Canvas (#fbfbfd)
-- Visual identity: Expedition/cartography theme with dashed route dividers, passport stamps, mono-tracked uppercase labels
+- Public blog colors: Navy (#142a42), Brand Red (#d23b30), Canvas (#fbfbfd).
+- Public visual identity: Expedition/cartography theme with dashed route dividers, passport stamps, mono-tracked uppercase labels.
+- Admin shell and Posts: approved **Editorial desk** (mockup 2), following the owner's CompendiQ reference — light gray navigation, white workspace, compact lists, and steel-blue active navigation/New post. Publish and destructive actions retain red; the public blog is unchanged. Exact scoped tokens and responsive behavior live in `DESIGN.md`.
 
 ## Evidence on Hand
 

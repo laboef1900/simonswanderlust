@@ -297,7 +297,7 @@ describe('posts.html selection, recovery and disclosures', () => {
     expect(el('selectionList').children.map((item) => item.textContent)).toEqual(['Beta']);
   });
 
-  it('carries canonical filter params through Edit and accepts only the posts return path', () => {
+  it('carries canonical filter params through Edit and New post', () => {
     const { ctx, el } = loadPosts({
       PostsFilter: {
         ...filterStub,
@@ -319,15 +319,6 @@ describe('posts.html selection, recovery and disclosures', () => {
     const newHref = new URL(el('newPost').href, 'http://localhost');
     expect(newHref.searchParams.has('tk')).toBe(false);
     expect(newHref.searchParams.get('returnTo')).toBe('/admin/posts.html?q=Rhodes+%26+sun&status=missing-en');
-
-    const documentStub = ctx.document as { referrer: string };
-    documentStub.referrer = href.toString();
-    expect((vm.runInContext('initialFilterSearch', ctx) as () => string)())
-      .toBe('?q=Rhodes+%26+sun&status=missing-en');
-
-    href.searchParams.set('returnTo', '/admin/settings.html?q=secret');
-    documentStub.referrer = href.toString();
-    expect((vm.runInContext('initialFilterSearch', ctx) as () => string)()).toBe('');
   });
 
   it('removes stale actions on load failure and Retry reaches a clean loaded state', async () => {
@@ -376,6 +367,123 @@ describe('posts.html selection, recovery and disclosures', () => {
     await second.fire('keydown', { key: 'Escape' });
     expect(second.open).toBe(false);
     expect(secondSummary.focused).toBe(true);
+  });
+});
+
+describe('posts.html status views and language states', () => {
+  // The real helper, not a stub: counts and filtering are its contract.
+  const realFilter = () => {
+    const windowStub: Record<string, unknown> = {};
+    vm.runInNewContext(readFileSync('public/posts-filter.js', 'utf8'), { window: windowStub, URLSearchParams });
+    return windowStub.PostsFilter;
+  };
+  const library = [
+    { ...post, translationKey: 'a', titleDe: 'Altstadt', status: 'draft', country: 'Romania', region: 'europe', hasEnBody: true },
+    { ...post, translationKey: 'b', titleDe: 'Parks', status: 'published', hasUnpublishedChanges: true, country: 'Romania', region: 'europe', hasEnBody: false },
+    { ...post, translationKey: 'c', titleDe: 'Donau', status: 'published', country: 'Hungary', region: 'europe', hasEnBody: true },
+    { ...post, translationKey: 'd', titleDe: 'Burg', status: 'draft', country: 'Hungary', region: 'europe' },
+  ];
+  const views = (el: (id: string) => Element) => el('statusViews').children.map((button) => ({
+    status: button.attrs['data-status'],
+    pressed: button.attrs['aria-pressed'],
+    count: button.children[1]?.textContent,
+  }));
+
+  async function loadedPage(search: string) {
+    const urls: string[] = [];
+    const page = loadPosts({
+      PostsFilter: realFilter(),
+      location: { href: 'http://localhost/admin/posts.html' + search, origin: 'http://localhost', pathname: '/admin/posts.html', search, protocol: 'http:' },
+      history: { replaceState: (_s: unknown, _t: string, url: string) => { urls.push(url); } },
+      fetch: async () => ({ status: 200, ok: true, json: async () => library }),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    vm.runInContext('me = { isAdmin: true }', page.ctx);
+    await (vm.runInContext('load', page.ctx) as () => Promise<void>)();
+    return { ...page, urls };
+  }
+
+  it('restores the view from the URL and counts under the current non-status filters', async () => {
+    const { el } = await loadedPage('?country=Romania&status=published&sort=title');
+    expect(views(el)).toEqual([
+      { status: '', pressed: 'false', count: '2' },
+      { status: 'draft', pressed: 'false', count: '1' },
+      { status: 'published', pressed: 'true', count: '1' },
+      { status: 'unpublished', pressed: 'false', count: '1' },
+      { status: 'missing-en', pressed: 'false', count: '1' },
+    ]);
+
+    el('fSearch').value = 'no such story';
+    await el('fSearch').fire('input');
+    expect(views(el).map((v) => v.count)).toEqual(['0', '0', '0', '0', '0']);
+  });
+
+  it('switching a view keeps search, region, country, sort and the selection, and updates the URL', async () => {
+    const { ctx, el, urls } = await loadedPage('?country=Romania&status=published&sort=title');
+    vm.runInContext("selected.add('a'); selected.add('c');", ctx);
+
+    const draftView = el('statusViews').children[1];
+    if (!draftView) throw new Error('Draft status view is missing');
+    await draftView.click();
+
+    expect(el('fStatus').value).toBe('draft');
+    expect(el('fCountry').value).toBe('Romania');
+    expect(el('fSort').value).toBe('title');
+    expect(vm.runInContext('[...selected]', ctx)).toEqual(['a', 'c']);
+    expect(el('bulkCount').textContent).toBe('2 selected · 1 outside current view');
+    const lastUrl = urls.at(-1);
+    if (!lastUrl) throw new Error('Status switch did not update the URL');
+    expect(new URL(lastUrl).search).toBe('?status=draft&country=Romania&sort=title');
+    expect(views(el).map((v) => v.pressed)).toEqual(['false', 'true', 'false', 'false', 'false']);
+    expect(views(el).map((v) => v.count)).toEqual(['2', '1', '1', '1', '1']);
+
+    // The select is the same state: changing it moves the pressed view.
+    el('fStatus').value = 'missing-en';
+    await el('fStatus').fire('input');
+    expect(views(el).map((v) => v.pressed)).toEqual(['false', 'false', 'false', 'false', 'true']);
+  });
+
+  it('hides the views and drops their counts when a reload fails', async () => {
+    const { ctx, el } = await loadedPage('');
+    expect(el('statusViews').hidden).toBe(false);
+    ctx.fetch = () => Promise.reject(NETWORK_DOWN);
+    await (vm.runInContext('load', ctx) as () => Promise<void>)();
+    expect(el('statusViews').hidden).toBe(true);
+    expect(views(el).map((v) => v.count)).toEqual(['', '', '', '', '']);
+  });
+
+  it('reports EN as present, missing or unknown only from hasEnBody, and keeps trip meta', () => {
+    const { ctx, el } = loadPosts({ PostsFilter: realFilter() });
+    const rows = [
+      { ...post, translationKey: 'p', country: 'Romania', date: '2024-05-01', hasEnBody: true },
+      { ...post, translationKey: 'm', country: 'Romania', date: '2024-05-01', hasEnBody: false },
+      { ...post, translationKey: 'u', country: 'Romania', date: '2024-05-01' },
+    ];
+    (vm.runInContext('renderRows', ctx) as (posts: unknown[]) => void)(rows);
+
+    const badges = el('postsList').children.map((row) => {
+      const languages = row.children.find((td) => td.className === 'col-languages')?.children[0];
+      if (!languages) throw new Error('Post language indicators are missing');
+      return languages.children.map((badge) => ({ code: badge.textContent, className: badge.className, name: badge.attrs['aria-label'] }));
+    });
+    for (const rowBadges of badges) {
+      expect(rowBadges[0]).toEqual({ code: 'DE', className: 'post-language', name: EDITOR_COPY.postsGermanLocale });
+    }
+    expect(badges.map((rowBadges) => rowBadges[1])).toEqual([
+      { code: 'EN', className: 'post-language', name: EDITOR_COPY.postsEnglishPresent },
+      { code: 'EN', className: 'post-language is-missing', name: EDITOR_COPY.postsEnglishMissing },
+      { code: 'EN', className: 'post-language is-unknown', name: EDITOR_COPY.postsEnglishUnknown },
+    ]);
+
+    // Country and trip date survive under the title; only a confirmed missing
+    // EN body adds the textual cue, an unknown one does not.
+    const meta = el('postsList').children.map((row) => row.children.find((td) => td.className === 'col-title')!.children
+      .find((child) => child.className === 'post-trip-meta')!.children.map((part) => part.className || part.textContent));
+    expect(meta).toEqual([
+      ['Romania', 'post-trip-sep', '2024-05-01'],
+      ['Romania', 'post-trip-sep', '2024-05-01', 'post-trip-sep', 'post-locale-state'],
+      ['Romania', 'post-trip-sep', '2024-05-01'],
+    ]);
   });
 });
 

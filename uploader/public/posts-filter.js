@@ -146,11 +146,14 @@ window.PostsFilter = (function () {
     return params.toString();
   }
 
-  /** Number of non-default controls currently hidden inside “More filters”. */
+  /**
+   * Number of non-default controls currently hidden inside “More filters”:
+   * region, country and order. Sort sits in the always-visible main row.
+   */
   function extraFilterCount(opts) {
     var o = opts || {};
     return Number(Boolean(o.region)) + Number(Boolean(o.country)) +
-      Number(o.sort && o.sort !== 'updated') + Number(o.order && o.order !== 'desc');
+      Number(o.order && o.order !== 'desc');
   }
 
   return {
