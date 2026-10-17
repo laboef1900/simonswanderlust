@@ -5,6 +5,7 @@ import type { PostPair } from '../src/posts.js';
 import type { EditorialReviewResult } from '../src/editorial-review.js';
 import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
+import { normalizeGalleryFences } from '../src/body-content.js';
 
 // editor.html's inline script is plain top-level browser code. Run it in a vm
 // context whose `document.getElementById` answers from the REAL markup's ids —
@@ -37,6 +38,7 @@ interface EditorOptions {
   isAdmin?: boolean;
   mobile?: boolean;
   pickImage?: { src: string; width: number; height: number; alt: { de: string; en: string }; format?: 'jpeg' };
+  caption?: (options: { url: string; lang: string; signal: AbortSignal }) => Promise<string>;
 }
 interface EditorApi {
   populateForm(post: unknown): void;
@@ -68,20 +70,55 @@ function loadEditor(options: EditorOptions = {}) {
   class EasyMDE {
     private text = '';
     private readonly changes: (() => void)[] = [];
+    private readonly markers = new Set<{ start: number; end: number; cleared: boolean }>();
     input = dom.document.createElement('textarea');
     cursor: { line: number; ch: number } | null = null;
     focusCalls = 0;
     codemirror = {
-      on: (event: string, callback: () => void) => { if (event === 'change') this.changes.push(callback); },
+      on: (event: string, callback: () => void) => { if (event === 'change' || event === 'changes') this.changes.push(callback); },
       refresh() {},
       getValue: () => this.text,
       setValue: (value: string) => { this.value(value); },
       getInputField: () => this.input,
       setCursor: (position: { line: number; ch: number }) => { this.cursor = position; },
       focus: () => { this.focusCalls += 1; this.input.focus(); },
+      operation: (callback: () => void) => callback(),
+      posFromIndex: (index: number) => {
+        const lines = this.text.slice(0, index).split('\n');
+        return { line: lines.length - 1, ch: lines.at(-1)!.length };
+      },
+      indexFromPos: (pos: { line: number; ch: number }): number =>
+        this.text.split('\n').slice(0, pos.line).reduce((sum, line) => sum + line.length + 1, 0) + pos.ch,
+      getRange: (from: { line: number; ch: number }, to: { line: number; ch: number }): string =>
+        this.text.slice(this.codemirror.indexFromPos(from), this.codemirror.indexFromPos(to)),
+      markText: (from: { line: number; ch: number }, to: { line: number; ch: number }) => {
+        const marker = { start: this.codemirror.indexFromPos(from), end: this.codemirror.indexFromPos(to), cleared: false };
+        this.markers.add(marker);
+        return {
+          find: () => marker.cleared ? undefined : { from: this.codemirror.posFromIndex(marker.start), to: this.codemirror.posFromIndex(marker.end) },
+          clear: () => { marker.cleared = true; this.markers.delete(marker); },
+        };
+      },
+      addLineWidget: (_line: number, node: Element) => {
+        this.input.parentElement!.appendChild(node);
+        return { clear: () => node.remove(), changed() {} };
+      },
+      replaceRange: (value: string, from: { line: number; ch: number }, to: { line: number; ch: number }) => {
+        const start = this.codemirror.indexFromPos(from);
+        const end = this.codemirror.indexFromPos(to);
+        this.text = this.text.slice(0, start) + value + this.text.slice(end);
+        const delta = value.length - (end - start);
+        for (const marker of this.markers) {
+          if (end <= marker.start) { marker.start += delta; marker.end += delta; }
+          else if (start > marker.start && end < marker.end) marker.end += delta;
+          else if (start < marker.end && end > marker.start) marker.cleared = true;
+        }
+        for (const callback of this.changes) callback();
+      },
     };
     value(value?: string): string {
       if (value !== undefined) {
+        for (const marker of this.markers) marker.cleared = true;
         this.text = value;
         for (const callback of this.changes) callback();
       }
@@ -93,7 +130,7 @@ function loadEditor(options: EditorOptions = {}) {
   const guard = { markDirty() { dirty += 1; }, markClean() {}, snapshot() { return 0; }, stashNow() {}, tryRestore() { return null; }, adopt() {}, dismissRestore() {}, wasDismissed() { return false; }, setKey() {}, redirectToLogin() { redirects += 1; } };
   const ctx: Record<string, unknown> = {
     document: dom.document,
-    location: { search: '', pathname: '/admin/editor.html', href: '' },
+    location: { search: '', pathname: '/admin/editor.html', href: 'http://localhost/admin/editor.html', origin: 'http://localhost' },
     history: { replaceState() {} },
     sessionStorage: storage(),
     localStorage: storage(),
@@ -140,11 +177,17 @@ function loadEditor(options: EditorOptions = {}) {
         .filter(([key]) => key.startsWith('editor.titleImage.'))
         .map(([key, value]) => [key.slice('editor.titleImage.'.length), value])),
     ])),
-    AltSuggest: { wire() {} },
+    EditorGalleryCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale, Object.fromEntries(Object.entries(strings)
+        .filter(([key]) => key.startsWith('editor.gallery.'))
+        .map(([key, value]) => [key.slice('editor.gallery.'.length), value])),
+    ])),
+    EditorGalleryImageOrigin: 'https://img',
+    AltSuggest: { wire() {}, suggestHosted: options.caption ?? (() => Promise.reject(new Error('no model in test'))) },
   };
   ctx.window = ctx;
   vm.createContext(ctx);
-  for (const file of ['waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'editor-linter.js', 'llm.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
+  for (const file of ['waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
     vm.runInContext(readFileSync('public/' + file, 'utf8'), ctx, { filename: file });
   }
   if (options.review) (ctx.LLM as { reviewStory: Review }).reviewStory = options.review;
@@ -1085,5 +1128,85 @@ describe('waypoint location lookup', () => {
     expect(event.defaultPrevented).toBe(true);
     expect(h.redirects()).toBe(1);
     expect(h.api.buildPayload()).toEqual(before);
+  });
+});
+
+describe('inline gallery editing', () => {
+  function pairWithGallery() {
+    const pair = fullPair();
+    pair.de.bodyMarkdown = 'Intro\n\n```gallery\n#layout: slider\nhttps://img/photo\nhttps://img/photo\n```\n\nAfter';
+    pair.de.images = { 'https://img/photo': { width: 900, height: 600, alt: 'Original', caption: 'Caption', format: 'jpeg' } };
+    pair.en.bodyMarkdown = pair.de.bodyMarkdown;
+    pair.en.images = { 'https://img/photo': { width: 900, height: 600, alt: 'English' } };
+    return pair;
+  }
+
+  it('edits every gallery occurrence in one locale, clears alt on save, and preserves metadata on reload', () => {
+    const h = loadEditor();
+    const pair = pairWithGallery();
+    h.api.populateForm(pair);
+    const fields = h.document.querySelectorAll('.editor-gallery__alt');
+    expect(fields.map((field) => field.value)).toEqual(['Original', 'Original', 'English', 'English']);
+    fields[0]!.value = 'A \"quote\" | and\nnewline';
+    fields[0]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    expect(fields[1]!.value).toBe(fields[0]!.value);
+    expect(h.api.buildPayload().en).toEqual(pair.en);
+    expect(normalizeGalleryFences(h.api.buildPayload().de.bodyMarkdown, pair.de.images).images['https://img/photo']?.alt)
+      .toBe('A \"quote\" | and\nnewline');
+    fields[0]!.value = '';
+    fields[0]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    const saved = normalizeGalleryFences(h.api.buildPayload().de.bodyMarkdown, pair.de.images);
+    expect(saved.images['https://img/photo']).toEqual({ ...pair.de.images['https://img/photo'], alt: '' });
+    expect(saved.bodyMarkdown).toBe(pair.de.bodyMarkdown);
+    pair.de = { ...pair.de, ...saved };
+    h.api.populateForm(pair);
+    expect(h.document.querySelectorAll('.editor-gallery__alt').map((field) => field.value))
+      .toEqual(['', '', 'English', 'English']);
+  });
+
+  it('requires explicit AI acceptance and ignores a late answer after manual input or a locale change', async () => {
+    let pending = Promise.withResolvers<string>();
+    const calls: { lang: string; signal: AbortSignal }[] = [];
+    const h = loadEditor({ caption: (options) => { calls.push(options); return pending.promise; } });
+    h.api.populateForm(pairWithGallery());
+    const field = h.document.querySelector('.editor-gallery__alt')!;
+    const suggest = h.document.querySelector('.editor-gallery__suggest')!;
+    suggest.click();
+    pending.resolve('Suggested description');
+    await settle();
+    expect(h.document.querySelector('.editor-gallery__suggestion')!.hidden).toBe(false);
+    expect(field.value).toBe('Original');
+    h.document.querySelector('.editor-gallery__suggestion')!.querySelector('button')!.click();
+    expect(field.value).toBe('Suggested description');
+    expect(calls[0]?.lang).toBe('de');
+    pending = Promise.withResolvers<string>();
+    suggest.click();
+    field.value = 'My current edit';
+    field.dispatchEvent(new EditorEvent('input'));
+    expect(calls[1]?.signal.aborted).toBe(true);
+    pending.resolve('Obsolete answer');
+    await settle();
+    expect(field.value).toBe('My current edit');
+    expect(h.document.querySelector('.editor-gallery__suggestion')!.hidden).toBe(true);
+    pending = Promise.withResolvers<string>();
+    suggest.click();
+    h.el('tabbtn-en').click();
+    expect(calls[2]?.signal.aborted).toBe(true);
+    pending.resolve('Wrong locale answer');
+    await settle();
+    expect(field.value).toBe('My current edit');
+  });
+
+  it('leaves nested examples and unfinished fences editable, and cancels previews when showing raw Markdown', () => {
+    const h = loadEditor();
+    const pair = pairWithGallery();
+    pair.de.bodyMarkdown += '\n\n````markdown\n```gallery\nhttps://img/example\n```\n````\n\n```gallery\nhttps://img/unfinished';
+    h.api.populateForm(pair);
+    expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(2);
+    h.el('deGalleryView').click();
+    expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(1);
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe(pair.de.bodyMarkdown);
+    h.el('deGalleryView').click();
+    expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(2);
   });
 });

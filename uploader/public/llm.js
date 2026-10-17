@@ -292,30 +292,49 @@ window.LLM = (function () {
   /** Load a File, downscale its longest edge to maxEdge, return a JPEG data URL
    *  plus the ORIGINAL intrinsic dimensions. The original file is never re-encoded
    *  here — upload still sends the untouched file to /upload. */
-  function prepImage(file, maxEdge) {
+  function prepImage(file, maxEdge, signal) {
     return new Promise((resolve, reject) => {
       const img = new Image();
       const url = URL.createObjectURL(file);
-      img.onload = () => {
+      const cleanup = () => {
         URL.revokeObjectURL(url);
-        const w = img.naturalWidth;
-        const h = img.naturalHeight;
-        const scale = Math.min(1, (maxEdge || 768) / Math.max(w, h));
-        const cw = Math.max(1, Math.round(w * scale));
-        const ch = Math.max(1, Math.round(h * scale));
-        const canvas = document.createElement('canvas');
-        canvas.width = cw;
-        canvas.height = ch;
-        canvas.getContext('2d').drawImage(img, 0, 0, cw, ch);
-        resolve({ dataUrl: canvas.toDataURL('image/jpeg', 0.8), width: w, height: h });
+        signal?.removeEventListener('abort', cancel);
       };
-      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('not a decodable image')); };
+      const cancel = () => {
+        img.onload = img.onerror = null;
+        img.src = '';
+        cleanup();
+        reject(signal.reason);
+      };
+      signal?.addEventListener('abort', cancel, { once: true });
+      if (signal?.aborted) { cancel(); return; }
+      img.onload = () => {
+        cleanup();
+        try {
+          const w = img.naturalWidth;
+          const h = img.naturalHeight;
+          const scale = Math.min(1, (maxEdge || 768) / Math.max(w, h));
+          const cw = Math.max(1, Math.round(w * scale));
+          const ch = Math.max(1, Math.round(h * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = cw;
+          canvas.height = ch;
+          canvas.getContext('2d').drawImage(img, 0, 0, cw, ch);
+          resolve({ dataUrl: canvas.toDataURL('image/jpeg', 0.8), width: w, height: h });
+        } catch (error) { reject(error); }
+      };
+      img.onerror = () => { cleanup(); reject(new Error('not a decodable image')); };
       img.src = url;
     });
   }
 
-  async function caption(baseUrl, model, prompt, dataUrl, timeoutMs) {
+  async function caption(baseUrl, model, prompt, dataUrl, timeoutMs, signal) {
     const ctrl = new AbortController();
+    const cancel = () => ctrl.abort();
+    if (signal) {
+      signal.addEventListener('abort', cancel, { once: true });
+      if (signal.aborted) ctrl.abort();
+    }
     const timer = setTimeout(() => ctrl.abort(), timeoutMs || 60000);
     try {
       const res = await fetch(base(baseUrl) + '/chat/completions', {
@@ -342,6 +361,7 @@ window.LLM = (function () {
       return parseCaption(body.choices && body.choices[0] && body.choices[0].message ? body.choices[0].message.content : '');
     } finally {
       clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', cancel);
     }
   }
 
