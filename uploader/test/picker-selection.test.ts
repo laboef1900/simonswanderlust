@@ -5,8 +5,8 @@ import vm from 'node:vm';
 // picker-selection.js is a plain browser IIFE (window.PickerSelection) holding
 // the media picker's ordered multi-selection. Run it in a vm sandbox — same
 // precedent as posts-filter.js — so the ordering rules are covered without a
-// browser. The DOM wiring in media-picker.js stays untested by design; the
-// selection is what silently corrupts a gallery when it is wrong.
+// browser. media-picker-dom.test.ts also exercises selection across folder
+// changes through the real picker.
 const src = readFileSync('public/picker-selection.js', 'utf8');
 
 interface Row { src: string; key?: string; title?: string; width?: number; height?: number; fromPost?: boolean }

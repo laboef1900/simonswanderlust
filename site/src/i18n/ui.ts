@@ -3,6 +3,14 @@ export type Locale = (typeof locales)[number];
 export const defaultLocale: Locale = 'de';
 
 const de = {
+  'editor.chrome.pickerFolders': 'Ordner',
+  'editor.chrome.pickerAllPhotos': 'Alle Fotos',
+  'editor.chrome.pickerSubfoldersHelp': 'Unterordner werden mit angezeigt.',
+  'editor.chrome.pickerFoldersLoading': 'Ordner werden geladen…',
+  'editor.chrome.pickerFoldersFailed': 'Ordner konnten nicht geladen werden. Du kannst weiterhin alle Fotos durchsuchen.',
+  'editor.chrome.pickerPhotosLoading': 'Fotos werden geladen…',
+  'editor.chrome.pickerPhotosEmpty': 'Keine fertigen Fotos für diesen Ordner und diese Suche.',
+  'editor.chrome.pickerPhotosFailed': 'Fotos konnten nicht geladen werden. Mediathek schließen und erneut öffnen.',
   'editor.chrome.countryUseCenter': 'Landesmitte übernehmen',
   'editor.chrome.countryCenterFilled': 'Ungefähre Landesmitte von {country}. Bei Bedarf genauer eintragen.',
   'editor.chrome.countryCenterFromCode': 'Ungefähre Landesmitte von {country}, aus dem ISO-Code {code}.',
@@ -239,6 +247,14 @@ const de = {
 export type UIKey = keyof typeof de;
 
 const en: Record<UIKey, string> = {
+  'editor.chrome.pickerFolders': 'Folders',
+  'editor.chrome.pickerAllPhotos': 'All photos',
+  'editor.chrome.pickerSubfoldersHelp': 'Folder views include subfolders.',
+  'editor.chrome.pickerFoldersLoading': 'Loading folders…',
+  'editor.chrome.pickerFoldersFailed': 'Folders could not be loaded. You can still search all photos.',
+  'editor.chrome.pickerPhotosLoading': 'Loading photos…',
+  'editor.chrome.pickerPhotosEmpty': 'No ready photos match this folder and search.',
+  'editor.chrome.pickerPhotosFailed': 'Photos could not be loaded. Close the picker and open it again.',
   'editor.chrome.countryUseCenter': 'Use country center',
   'editor.chrome.countryCenterFilled': 'Approximate center of {country}. Refine it if the story has a more specific place.',
   'editor.chrome.countryCenterFromCode': 'Approximate center of {country}, from ISO code {code}.',

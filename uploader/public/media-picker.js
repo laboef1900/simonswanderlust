@@ -54,11 +54,13 @@ window.MediaPicker = (function () {
     var o = opts || {};
     var multiple = !!o.multiple;
     var client = api.makeClient({ onUnauthed: o.onUnauthed || function () { location.href = '/login'; } });
-    var state = { items: [], total: 0, q: '', page: 1, pageSize: 40 };
+    var copy = window.EditorCopy.en;
+    var state = { items: [], total: 0, q: '', folder: '', page: 1, pageSize: 40, loading: false, failed: false, closed: false };
+    var compact = window.matchMedia('(max-width: 640px)');
     var picked = window.PickerSelection.create({ preselect: o.preselect });
 
     var dialog = document.createElement('dialog');
-    dialog.className = 'admin-modal';
+    dialog.className = 'admin-modal media-picker';
 
     var head = el('div', 'admin-modal__head');
     var heading = el('h2', null, multiple ? 'Choose photos' : 'Choose a photo');
@@ -67,19 +69,94 @@ window.MediaPicker = (function () {
     dialog.setAttribute('aria-labelledby', heading.id);
     var count = el('span', 'muted');
     head.appendChild(count);
+    count.setAttribute('role', 'status');
+    count.setAttribute('aria-atomic', 'true');
     dialog.appendChild(head);
 
+    var browse = el('div', 'media-picker__browse');
+    dialog.appendChild(browse);
+    var folderPanel = el('details', 'media-picker__folders');
+    folderPanel.open = !compact.matches;
+    var folderSummary = el('summary', null, copy.pickerFolders);
+    var folderCurrent = el('span', 'media-picker__current', copy.pickerAllPhotos);
+    folderCurrent.id = 'mediaPickerFolder';
+    folderSummary.appendChild(folderCurrent);
+    folderPanel.appendChild(folderSummary);
+    var folderNav = el('nav');
+    folderNav.setAttribute('aria-label', copy.pickerFolders);
+    var folderList = el('ul', 'folder-tree');
+    folderNav.appendChild(folderList);
+    var folderStatus = el('p', 'muted', copy.pickerFoldersLoading);
+    folderStatus.setAttribute('role', 'status');
+    folderNav.appendChild(folderStatus);
+    folderNav.appendChild(el('p', 'muted', copy.pickerSubfoldersHelp));
+    folderPanel.appendChild(folderNav);
+    browse.appendChild(folderPanel);
+    var results = el('div', 'media-picker__results');
+    browse.appendChild(results);
+
+    function addFolder(path, label, depth) {
+      var row = el('li');
+      var button = el('button', 'folder-btn', label);
+      button.type = 'button';
+      button.dataset.folder = path;
+      button.title = path || copy.pickerAllPhotos;
+      button.style.paddingLeft = (0.4 + depth * 0.8) + 'rem';
+      button.addEventListener('click', function () {
+        if (state.folder !== path) {
+          state.folder = path;
+          state.q = search.value;
+          state.page = 1;
+          load();
+        }
+        if (compact.matches) {
+          folderPanel.open = false;
+          folderSummary.focus();
+        }
+      });
+      row.appendChild(button);
+      folderList.appendChild(row);
+    }
+
+    function renderFolderSelection() {
+      folderCurrent.textContent = state.folder || copy.pickerAllPhotos;
+      folderList.querySelectorAll('.folder-btn').forEach(function (button) {
+        var current = button.dataset.folder === state.folder;
+        button.classList.toggle('is-current', current);
+        button.setAttribute('aria-current', current ? 'true' : 'false');
+      });
+    }
+
+    addFolder('', copy.pickerAllPhotos, 0);
+    async function loadFolders() {
+      try {
+        var folders = await client.folders();
+        if (state.closed) return;
+        api.folderTree(folders).forEach(function (folder) {
+          addFolder(folder.path, folder.name, folder.depth + 1);
+        });
+        folderStatus.hidden = true;
+        // Keep existing buttons in place: a late folder response must not
+        // steal focus from the root button or an already-loaded photo.
+        renderFolderSelection();
+      } catch (_) {
+        if (!state.closed) folderStatus.textContent = copy.pickerFoldersFailed;
+      }
+    }
+
     var search = document.createElement('input');
+    search.className = 'media-picker__search';
     search.type = 'search';
     search.placeholder = 'Search key, title, alt or caption';
     search.setAttribute('aria-label', 'Search the media library');
-    dialog.appendChild(search);
+    search.setAttribute('aria-describedby', folderCurrent.id);
+    results.appendChild(search);
 
     var grid = el('div', 'media-grid');
     grid.setAttribute('role', 'listbox');
     grid.setAttribute('aria-label', 'Library photos');
     if (multiple) grid.setAttribute('aria-multiselectable', 'true');
-    dialog.appendChild(grid);
+    results.appendChild(grid);
 
     // The ordering strip. Gallery order is the fence's line order, so the
     // author needs to see and change it — and reordering must be operable
@@ -260,13 +337,19 @@ window.MediaPicker = (function () {
     }
 
     function render() {
+      renderFolderSelection();
       grid.innerHTML = '';
-      count.textContent = state.total + ' photo(s)';
+      grid.setAttribute('aria-busy', state.loading ? 'true' : 'false');
+      count.textContent = state.loading ? copy.pickerPhotosLoading : state.failed ? '' : state.total + ' photo(s)';
       pager.textContent = 'Page ' + state.page;
-      prev.disabled = state.page <= 1;
-      next.disabled = state.page * state.pageSize >= state.total;
+      prev.disabled = state.loading || state.page <= 1;
+      next.disabled = state.loading || state.page * state.pageSize >= state.total;
       // Multi-select may commit an empty selection: that removes the gallery.
       choose.disabled = !multiple && picked.size() === 0;
+      if (!state.items.length) {
+        grid.appendChild(el('p', 'muted media-picker__empty',
+          state.loading ? copy.pickerPhotosLoading : state.failed ? copy.pickerPhotosFailed : copy.pickerPhotosEmpty));
+      }
       state.items.forEach(function (item, index) {
         var at = picked.indexOf(item.src);
         var cell = el('div', 'media-cell' + (at >= 0 ? ' is-selected' : ''));
@@ -343,11 +426,20 @@ window.MediaPicker = (function () {
     var loads = api.makeSequence();
     async function load() {
       var ticket = loads.next();
+      state.loading = true;
+      state.failed = false;
+      state.items = [];
+      state.total = 0;
+      render();
       try {
         // Only `ready` photos are offered: one still encoding has no variants,
         // and picking it would put a URL that 404s into a post.
-        var res = await client.list({ q: state.q, status: 'ready', page: state.page, pageSize: state.pageSize });
-        if (!loads.isCurrent(ticket)) return;
+        var res = await client.list({
+          folder: state.folder, recursive: true, q: state.q,
+          status: 'ready', page: state.page, pageSize: state.pageSize,
+        });
+        if (state.closed || !loads.isCurrent(ticket)) return;
+        state.loading = false;
         state.items = res.items;
         state.total = res.total;
         // The caller knows the URLs of the current gallery but not the rows, so
@@ -357,13 +449,16 @@ window.MediaPicker = (function () {
         picked.adopt(res.items);
         render();
       } catch (e) {
-        if (!loads.isCurrent(ticket)) return;
-        grid.innerHTML = '';
-        grid.appendChild(el('p', 'muted', 'Could not load the library: ' + (e && e.message ? e.message : e)));
+        if (state.closed || !loads.isCurrent(ticket)) return;
+        state.loading = false;
+        state.failed = true;
+        render();
       }
     }
 
     function close() {
+      state.closed = true;
+      loads.next();
       dialog.close();
       dialog.remove();
     }
@@ -379,15 +474,21 @@ window.MediaPicker = (function () {
       if (o.onPick) o.onPick(multiple ? items : items[0], { layout: layout });
     }
 
-    search.addEventListener('input', api.debounce(function () { state.q = search.value; state.page = 1; load(); }, 200));
+    search.addEventListener('input', api.debounce(function () {
+      if (state.closed || state.q === search.value) return;
+      state.q = search.value;
+      state.page = 1;
+      load();
+    }, 200));
     prev.addEventListener('click', function () { state.page = Math.max(1, state.page - 1); load(); });
     next.addEventListener('click', function () { state.page += 1; load(); });
     cancel.addEventListener('click', close);
     choose.addEventListener('click', commit);
     // Esc fires `cancel` on a native dialog — clean up the node too.
-    dialog.addEventListener('cancel', function () { dialog.remove(); });
+    dialog.addEventListener('cancel', function (event) { event.preventDefault(); close(); });
 
     dialog.showModal();
+    loadFolders();
     load();
   }
 
