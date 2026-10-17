@@ -269,6 +269,18 @@ Authenticated `GET /ai-config?purpose=caption` resolves `captionBaseUrl` and pro
 `captionApiKey` only for remote captions. Local captions remain usable with broken or
 missing remote credentials. Suggestions fill editable alt text, never autosave/publish.
 
+**Gallery photo CORS:** before contacting a model, the browser downloads the hosted
+display variant and resizes it. When the editor and image host use different origins,
+the image response must allow that read. Public variants carry
+`Access-Control-Allow-Origin: *`; authenticated APIs and private originals do not.
+An image may display normally while JavaScript cannot read it. A console error naming
+the image URL and a missing CORS header means inference has not started, even if
+**Test connection** succeeds. Deploy the app fix to the service serving `IMG_HOST`.
+If a browser or reverse proxy still serves an older immutable response without the
+header, bypass the browser cache (DevTools → Network → Disable cache) while retrying,
+and invalidate any proxy-cached response for the affected variant. No site rebuild,
+image re-encode, provider change or key replacement is required for this fix.
+
 ### Editorial-review client API (#213)
 
 `public/llm.js` also exports
