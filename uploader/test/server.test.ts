@@ -945,6 +945,8 @@ describe('AI credential boundaries', () => {
     for (const payload of [
       { reviewTimeoutMs: 4999, aiApiKey: 'replacement' },
       { aiModel: {}, aiApiKey: 'replacement' },
+      { captionProvider: ['openrouter'], aiApiKey: 'replacement' },
+      { captionCustomBaseUrl: 'https://example.test/v1?key=fixture', aiApiKey: 'replacement' },
       { aiApiKey: ['replacement'] },
       { aiApiKey: 'header\r\ninjection' },
     ]) {
@@ -995,6 +997,8 @@ describe('AI credential boundaries', () => {
       expect(caption.json()).toEqual({
         lmBaseUrl: SETTINGS.lmBaseUrl, lmModel: SETTINGS.lmModel, captionPrompt: SETTINGS.captionPrompt,
         captionTimeoutMs: SETTINGS.captionTimeoutMs, captionMaxEdge: SETTINGS.captionMaxEdge,
+        captionProvider: 'lm-studio', captionCustomBaseUrl: '',
+        captionBaseUrl: SETTINGS.lmBaseUrl, captionApiKey: null,
       });
       expect(caption.headers['cache-control']).toBe('no-store');
       expect(log).not.toHaveBeenCalled();
@@ -1027,6 +1031,70 @@ describe('AI credential boundaries', () => {
     const anonymous = await b.app.inject({ url: '/ai-config?purpose=caption' });
     expect(anonymous.statusCode).toBe(401);
     expect(anonymous.headers['cache-control']).toBe('no-store');
+    await b.app.close();
+  });
+
+  it('resolves captions independently, shares the encrypted key and fails closed only for remote captions', async () => {
+    const secrets = memorySecretsStore();
+    await secrets.set('ai_api_key', 'fixture-shared');
+    const settings = fakeStore();
+    const b = build({ secrets, settings });
+    const admin = await authed(b);
+    const author = await authed(b, { isAdmin: false, username: 'caption-author' });
+    const save = (payload: Record<string, unknown>) => b.app.inject({ method: 'POST', url: '/settings', cookies: admin.cookie, payload });
+    for (const [provider, destination] of [
+      ['openrouter', 'https://openrouter.ai/api/v1'], ['deepseek', 'https://api.deepseek.com/v1'],
+      ['custom', 'https://vision.example/v1'],
+    ] as const) {
+      const saved = await save({ captionProvider: provider, captionCustomBaseUrl: 'https://vision.example/v1', lmModel: 'vision-model' });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.body).not.toContain('fixture-shared');
+      expect(saved.json()).not.toHaveProperty('captionApiKey');
+      const caption = await b.app.inject({ url: '/ai-config?purpose=caption', cookies: author.cookie });
+      expect(caption.statusCode).toBe(200);
+      expect(caption.headers['cache-control']).toBe('no-store');
+      expect(caption.json()).toMatchObject({ captionProvider: provider, captionBaseUrl: destination, captionApiKey: 'fixture-shared', lmModel: 'vision-model' });
+      expect((await b.app.inject({ url: '/ai-config', cookies: author.cookie })).json()).toMatchObject({
+        aiProvider: 'lm-studio', aiBaseUrl: SETTINGS.lmBaseUrl, aiModel: SETTINGS.aiModel, aiApiKey: null,
+      });
+    }
+    expect((await b.app.inject({ method: 'POST', url: '/settings', cookies: author.cookie, payload: { captionProvider: 'custom' } })).statusCode).toBe(403);
+    await save({ captionCustomBaseUrl: '' });
+    expect((await b.app.inject({ url: '/ai-config?purpose=caption', cookies: author.cookie })).statusCode).toBe(400);
+    await save({ captionProvider: 'openrouter' });
+    await secrets.delete('ai_api_key');
+    expect((await b.app.inject({ url: '/ai-config?purpose=caption', cookies: author.cookie })).json().captionApiKey).toBeNull();
+    secrets.get = async () => { throw new Error('DO-NOT-LEAK'); };
+    const failed = await b.app.inject({ url: '/ai-config?purpose=caption', cookies: author.cookie });
+    expect(failed.statusCode).toBe(503);
+    expect(failed.body).not.toContain('DO-NOT-LEAK');
+    settings.update({ captionProvider: 'lm-studio' });
+    expect((await b.app.inject({ url: '/ai-config?purpose=caption', cookies: author.cookie })).json()).toMatchObject({
+      captionBaseUrl: SETTINGS.lmBaseUrl, captionApiKey: null,
+    });
+    await b.app.close();
+  });
+
+  it('remote caption config waits for both key and destination to commit', async () => {
+    const secrets = memorySecretsStore();
+    const originalSet = secrets.set;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    secrets.set = async (key, value) => { entered.resolve(); await release.promise; await originalSet(key, value); };
+    const b = build({ secrets, settings: fakeStore({ ...SETTINGS, captionProvider: 'openrouter' }) });
+    const { cookie } = await authed(b);
+    const saving = b.app.inject({ method: 'POST', url: '/settings', cookies: cookie,
+      payload: { aiApiKey: 'fixture-new', captionProvider: 'custom', captionCustomBaseUrl: 'https://vision.example/v1' } }).then((r) => r);
+    await entered.promise;
+    let resolved = false;
+    const caption = b.app.inject({ url: '/ai-config?purpose=caption', cookies: cookie }).then((r) => { resolved = true; return r; });
+    const turn = Promise.withResolvers<void>();
+    setImmediate(turn.resolve);
+    await turn.promise;
+    expect(resolved).toBe(false);
+    release.resolve();
+    expect((await saving).statusCode).toBe(200);
+    expect((await caption).json()).toMatchObject({ captionBaseUrl: 'https://vision.example/v1', captionApiKey: 'fixture-new' });
     await b.app.close();
   });
 

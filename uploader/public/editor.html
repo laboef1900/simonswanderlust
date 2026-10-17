@@ -1088,7 +1088,7 @@
       $('deBodyImgUpload').addEventListener('click', () => uploadBodyImg('de'));
       $('enBodyImgUpload').addEventListener('click', () => uploadBodyImg('en'));
 
-      // ---- AI alt-text suggestions (browser-direct LM Studio; see alt-suggest.js) ----
+      // ---- AI alt-text suggestions (browser-direct provider; see alt-suggest.js) ----
       // on401 routes a session-expiry through DraftGuard (stash draft + ?next=) instead
       // of a raw redirect, matching every other 401 handler in this editor.
       const suggestOn401 = () => guard.redirectToLogin();

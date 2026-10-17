@@ -326,3 +326,68 @@ After all concurrent work is stable, the integration owner runs `npm test` and `
 **Independent security review:** before final human merge authorization, a reviewer other than the implementation author inspects the actual diff and exercised evidence: auth/response shapes, crypto encoding and authenticated finalization, nonce creation, missing-key boot, raw-error leakage, full/caption query isolation, cross-store failure/crash state, provider portability/HTTP exposure, Compose injection, SQL restore transaction, legacy preservation, and key/backup recovery. Findings must be resolved or explicitly accepted by the human with compensating controls. A test-only review or `ApprovedByAI` label does not replace this gate.
 
 **Documentation cutover with implementation:** update `SECURITY.md` (AI secret disclosure, author trust, no egress, backup sensitivity, partial failure and recovery), `ARCHITECTURE.md` (schema, six-table v6 backup, separate key escrow, env forwarding, config split), `uploader/README.md` and `.env.example` (operator setup/rotation), and relevant root guidance/current-state AI statements. Keep historical #67 sidecar scope distinguished. Reconfirm public routes/slugs, auth, session handling, data paths, and backup deletion guards as unchanged. This specification records proposed behavior only; current-state docs must not prematurely claim it is shipped.
+
+## 13. Remote alt-text providers — owner-approved extension (2026-10-17)
+
+The owner requested the same provider selector for **Alt-text model** as for
+**Editorial review**, then explicitly selected **Share the editorial API key** in
+this conversation. This supersedes the local-only caption restrictions above and
+in the July alt-text design only where stated here. Risk: high, because remote
+captions disclose resized photos and the existing shared credential.
+
+- Add independent `captionProvider` (`lm-studio`, `openrouter`, `deepseek`,
+  `custom`; default `lm-studio`) and `captionCustomBaseUrl` (default empty,
+  HTTP(S), no userinfo/query/fragment). Keep `lmModel`, caption prompt, size and
+  timeout as the existing caption settings; keep `lmBaseUrl` for local use by
+  both features. Existing installations remain local without migration.
+- Caption config resolves `captionBaseUrl` from its own provider and returns
+  `captionApiKey` only for remote captions, from the existing `ai_api_key` slot.
+  Local caption config never accesses secrets or waits on secret operations;
+  remote reads serialize with settings saves and fail closed on secret errors.
+  Auth and `Cache-Control: no-store` remain mandatory.
+- The browser alone sends the resized JPEG and prompt to the chosen provider.
+  Credentials remain request-local, never stored in browser storage, logged,
+  included in URLs, or sent to local LM Studio. Provider requests omit cookies
+  and referrers and reject redirects. Manual alt text remains usable on failure.
+- The UI names the destination and shared-key reuse, warns before redirecting a
+  stored key, and explains that replacing/removing it affects both features.
+  Connection tests are explicit; remote model discovery does not run on page
+  load. Save remote caption settings before testing with the stored key.
+  A vision-capable model and browser CORS support are required; offering a
+  provider is not a claim that every model from it accepts images.
+- No schema, backup, encryption, auth, publishing, or public URL change. The
+  existing encrypted key, author disclosure, partial-save reporting and
+  separately escrowed master key retain their contracts.
+
+Critic self-review: Does a shared key mean a shared destination? No: independent
+selectors can send the same key to two services, explicitly accepted by the
+owner and disclosed beside both controls. Does remote failure break local
+captioning? No: local config bypasses secret access and sends no authorization.
+Does a model list prove vision support? No: the UI must state that limitation.
+
+Acceptance: persistence/default and invalid-input coverage; independent review
+and caption resolution; remote credential failure and local isolation; browser
+caption requests with request-local authorization and safe redirect behavior;
+settings destination warnings, save/reload and explicit connection testing.
+Verify the actual settings page at desktop/mobile sizes using disposable data,
+without paid requests or private photos. Containment: switch captions to local;
+revoke at the provider if a key reached an unintended destination. Reverting
+this extension leaves the existing encrypted key/schema/backups intact.
+
+Initial workspace verification on 2026-10-17: all 1,616 uploader tests passed with
+`TEST_DATABASE_URL` pointing to disposable Postgres 18; all 290 site tests passed.
+The isolated PR excludes unrelated editor-panel and review-test UI changes:
+all 1,602 uploader tests and 290 site tests passed again on that tree.
+`tsc --noEmit` passed; `astro check` reported zero errors/warnings/hints across
+95 files against the isolated schema.
+
+The real `src/main.ts` app, encrypted Postgres secret store and settings UI were
+exercised at 1280px desktop and 390px mobile. Save/reload preserved an independent
+caption provider/model, and shared-key destination changes required confirmation.
+A local HTTP fixture observed an authenticated model-list request and a caption
+request containing the browser-resized JPEG; neither included cookies/referrers.
+The returned fixture caption filled the EN alt field and dispatched `input`.
+A 307 completion redirect was refused (no redirected request), and switching
+captions back to local sent no authorization despite the stored shared key.
+No commercial provider or real private photo was used; external provider vision
+and CORS compatibility remain operator prerequisites.

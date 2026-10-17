@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { defaultSettings } from '../src/settings.js';
@@ -496,6 +496,91 @@ describe('settings.html shared review key lifecycle', () => {
     expect(el('reviewOut').textContent).toContain('outcome is unknown');
     expect(el('reviewOut').textContent).toContain('Reload failed');
     expect(el('aiKeyStatus').textContent).toBe('Unknown — reload');
+  });
+});
+
+describe('settings.html caption providers', () => {
+  function setup(overrides: Record<string, unknown> = {}, approve = true) {
+    let state = { ...defaultSettings(), hasAiApiKey: true, ...overrides };
+    const requests: string[] = [];
+    const confirm = vi.fn(async (_question: unknown) => approve);
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      requests.push(url);
+      if (url === '/settings') {
+        if (init?.body) state = { ...state, ...JSON.parse(String(init.body)) };
+        return Response.json(state);
+      }
+      if (url === '/ai-config?purpose=caption') return Response.json({
+        ...state, captionBaseUrl: 'https://vision.example/v1', captionApiKey: 'fixture-stored-caption-key',
+      });
+      return Response.json({ data: [{ id: 'vision-model' }] });
+    });
+    const page = loadPage('public/settings.html', {
+      fetch: fetcher, AbortController, AbortSignal, setTimeout, clearTimeout,
+      Option: class { constructor(public text: string, public value: string) {} },
+      AdminConfirm: { ask: confirm },
+    });
+    vm.runInContext(readFileSync('public/llm.js', 'utf8'), page.ctx);
+    (page.ctx.fill as (state: unknown) => void)(state);
+    return { ...page, fetcher, requests, confirm, state: () => state };
+  }
+
+  it('requires consent before sending an existing shared key to a new caption destination', async () => {
+    const { el, requests, confirm, state } = setup({}, false);
+    el('captionProvider').value = 'custom';
+    el('captionCustomBaseUrl').value = 'https://vision.example/v1';
+    await el('captionProvider').fire('change');
+    expect(el('customCaptionFields').hidden).toBe(false);
+    expect(el('captionKeyWarning').hidden).toBe(false);
+    expect(el('captionKeyWarning').textContent).toContain('https://vision.example/v1');
+    await el('saveAi').click();
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(requests).toEqual([]);
+    expect(state().captionProvider).toBe('lm-studio');
+  });
+
+  it('persists caption selection without saving pending review edits or changing the shared key', async () => {
+    const { el, state, ctx } = setup();
+    el('captionProvider').value = 'custom';
+    el('captionCustomBaseUrl').value = 'https://vision.example/v1';
+    el('modelManual').value = 'vision-model';
+    el('aiProvider').value = 'deepseek';
+    el('aiApiKey').value = 'unsaved-key';
+    await el('saveAi').click();
+    expect(state()).toMatchObject({
+      captionProvider: 'custom', captionCustomBaseUrl: 'https://vision.example/v1',
+      lmModel: 'vision-model', aiProvider: 'lm-studio', hasAiApiKey: true,
+    });
+    expect(state()).not.toHaveProperty('aiApiKey');
+    expect(el('aiProvider').value).toBe('deepseek');
+    expect(el('aiApiKey').value).toBe('unsaved-key');
+    (ctx.fill as (state: unknown) => void)(state());
+    expect(el('captionProvider').value).toBe('custom');
+    expect(el('captionKeyWarning').hidden).toBe(true);
+  });
+
+  it('does no remote discovery on load; explicit connection test uses saved caption credentials without filling the key field', async () => {
+    const { el, ctx, requests, fetcher } = setup({
+      captionProvider: 'custom', captionCustomBaseUrl: 'https://vision.example/v1', lmModel: 'vision-model',
+    });
+    await (ctx.loadModels as () => Promise<void>)();
+    expect(requests).toEqual([]);
+    await el('test').click();
+    expect(requests).toEqual(['/ai-config?purpose=caption', 'https://vision.example/v1/models']);
+    expect(new Headers(fetcher.mock.calls[1]![1]?.headers).get('authorization')).toBe('Bearer fixture-stored-caption-key');
+    expect(el('captionOut').textContent).toMatch(/Reachable/);
+    expect(el('captionOut').textContent).not.toContain('fixture-stored-caption-key');
+    expect(el('aiApiKey').value).toBe('');
+    expect(el('test').disabled).toBe(false);
+  });
+
+  it('never sends a saved key to an unsaved test destination', async () => {
+    const { el, requests } = setup({ captionProvider: 'custom', captionCustomBaseUrl: 'https://vision.example/v1' });
+    el('captionCustomBaseUrl').value = 'https://other.example/v1';
+    await el('test').click();
+    expect(requests).toEqual(['/ai-config?purpose=caption']);
+    expect(el('captionOut').textContent).toContain('Save the alt-text provider settings');
+    expect(el('test').disabled).toBe(false);
   });
 });
 

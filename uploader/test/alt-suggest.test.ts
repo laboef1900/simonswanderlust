@@ -6,7 +6,7 @@ const script = readFileSync('public/alt-suggest.js', 'utf8');
 
 describe('local alt text remains separate from remote review credentials', () => {
   function setup(status = 200) {
-    const config = { lmBaseUrl: 'http://localhost:1234/v1', lmModel: 'local-vision', captionPrompt: 'describe', captionTimeoutMs: 60000, captionMaxEdge: 768 };
+    const config = { captionProvider: 'lm-studio', captionBaseUrl: 'http://localhost:1234/v1', captionApiKey: null, lmModel: 'local-vision', captionPrompt: 'describe', captionTimeoutMs: 60000, captionMaxEdge: 768 };
     const fetch = vi.fn(async () => ({ status, ok: status === 200, json: async () => config }));
     const caption = vi.fn(async () => ({ altDe: 'Ein Berg', altEn: 'A mountain' }));
     const prepImage = vi.fn(async () => ({ dataUrl: 'data:image/jpeg;base64,fixture' }));
@@ -43,12 +43,17 @@ describe('local alt text remains separate from remote review credentials', () =>
 });
 
 describe('hosted gallery captions', () => {
-  function hosted(pendingModel = false) {
+  function hosted(pendingModel = false, remote = false) {
     const requested: string[] = [];
     let modelSignal: AbortSignal | undefined;
-    const config = { lmBaseUrl: 'http://localhost:1234/v1', lmModel: 'vision', captionPrompt: 'Describe', captionMaxEdge: 768, captionTimeoutMs: 5000 };
+    const config = {
+      captionProvider: remote ? 'openrouter' : 'lm-studio',
+      captionBaseUrl: remote ? 'https://openrouter.ai/api/v1' : 'http://localhost:1234/v1',
+      captionApiKey: remote ? 'fixture-shared-key' : null,
+      lmModel: 'vision', captionPrompt: 'Describe', captionMaxEdge: 768, captionTimeoutMs: 5000,
+    };
     const ctx: Record<string, unknown> = {
-      AbortController, AbortSignal, setTimeout, clearTimeout,
+      URL, AbortController, AbortSignal, setTimeout, clearTimeout,
       fetch: async (url: string, options: RequestInit = {}) => {
         requested.push(url);
         if (url === '/ai-config?purpose=caption') return Response.json(config);
@@ -57,8 +62,14 @@ describe('hosted gallery captions', () => {
           expect(options.redirect).toBe('error');
           return new Response(new Blob(['display variant']));
         }
-        if (url === 'http://localhost:1234/v1/chat/completions') {
-          expect(new Headers(options.headers).has('authorization')).toBe(false);
+        if (url === config.captionBaseUrl + '/chat/completions') {
+          expect(new Headers(options.headers).get('authorization')).toBe(remote ? 'Bearer fixture-shared-key' : null);
+          expect(options.credentials).toBe('omit');
+          expect(options.redirect).toBe('error');
+          expect(options.referrerPolicy).toBe('no-referrer');
+          expect(JSON.parse(String(options.body)).messages[0].content[1]).toEqual({
+            type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AA==' },
+          });
           modelSignal = options.signal ?? undefined;
           if (pendingModel) return new Promise<Response>((_resolve, reject) => {
             modelSignal!.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')), { once: true });
@@ -87,6 +98,16 @@ describe('hosted gallery captions', () => {
     expect(await h.api.suggestHosted({ url: 'https://images.example/photo-640.webp', lang, signal: new AbortController().signal }))
       .toBe(expected);
     expect(h.requested).not.toContain('/ai-config');
+  });
+
+  it('generates a hosted caption using the selected remote vision provider and shared key', async () => {
+    const h = hosted(false, true);
+    expect(await h.api.suggestHosted({ url: 'https://images.example/photo-640.webp', lang: 'en', signal: new AbortController().signal }))
+      .toBe('A mountain');
+    expect(h.requested).toEqual([
+      '/ai-config?purpose=caption', 'https://images.example/photo-640.webp',
+      'https://openrouter.ai/api/v1/chat/completions',
+    ]);
   });
 
   it('aborts an in-flight model request when its photo is no longer current', async () => {
