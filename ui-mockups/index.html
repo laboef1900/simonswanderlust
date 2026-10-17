@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Posts · Wanderlust Studio · UI concepts</title>
+  <link rel="stylesheet" href="mockups.css">
+  <script src="mockups.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#workspace">Skip to posts</a>
+  <div class="concept-bar">
+    <span class="concept-label">UI study <span> / </span> Wanderlust Studio</span>
+    <nav aria-label="Design concepts">
+      <a href="?view=library" data-concept="library">1 <span>Library</span></a>
+      <a href="?view=desk" data-concept="desk">2 <span>Editorial desk</span></a>
+      <a href="?view=gallery" data-concept="gallery">3 <span>Photo library</span></a>
+      <a href="?view=split" data-concept="split">4 <span>Split workspace</span></a>
+    </nav>
+    <span class="sample-label">Sample data · No live changes</span>
+  </div>
+  <header class="app-header">
+    <a class="brand" href="?view=library"><span class="brand-mark" aria-hidden="true">W</span><span>Wanderlust <strong>Studio</strong></span></a>
+    <nav class="top-nav" aria-label="Workspace"><span class="top-current" data-icon="book">Content</span><span data-icon="image">Media</span><span data-icon="settings">Manage</span></nav>
+    <div class="header-right"><span>Simon's travel journal</span><span class="avatar" aria-label="Simon, admin">S</span></div>
+  </header>
+  <div class="app-layout">
+    <aside class="sidebar" aria-label="Studio navigation">
+      <div class="workspace-name"><span data-icon="home">My journal</span><span class="muted">DE / EN</span></div>
+      <div class="nav-caption">Content</div>
+      <div class="side-items"><span class="side-active" data-icon="book">Posts <b>9</b></span><span data-icon="file">About page</span><span data-icon="image">Media library</span><span data-icon="chat">Comments</span></div>
+      <div class="nav-caption">Saved views</div>
+      <nav class="saved-views" aria-label="Filter posts"><button data-status="all" class="active">All posts <b>9</b></button><button data-status="draft">Drafts <b>3</b></button><button data-status="changes">Unpublished changes <b>2</b></button><button data-status="missing">EN missing <b>1</b></button></nav>
+      <div class="sidebar-bottom"><span data-icon="settings">Settings</span><span data-icon="arrow">View blog</span><div class="account"><span class="avatar">S</span><span>Simon<span class="muted account-role">Administrator</span></span></div></div>
+    </aside>
+    <main id="workspace" tabindex="-1">
+      <div class="workspace-heading"><div><div class="breadcrumb">Content <span>/</span> Posts</div><h1>Posts <span class="total">9</span></h1><p class="heading-description">Your journeys, in two languages.</p></div><div class="heading-actions"><button class="secondary" data-demo="export" data-icon="download">Export all</button><button class="primary" data-demo="new" data-icon="plus">New post</button></div></div>
+      <div class="summary"><span><strong>9</strong> post pairs</span><span><i class="dot published"></i><strong>6</strong> published</span><span><i class="dot draft"></i><strong>3</strong> drafts</span><span class="summary-note">DE + EN, together</span></div>
+      <div class="filter-bar"><label class="search"><span data-icon="search"></span><input id="search" type="search" placeholder="Search title or country" aria-label="Search posts" autocomplete="off"><kbd>/</kbd></label><div class="filter-controls"><label class="sr-only" for="status">Post status</label><select id="status"><option value="all">All statuses</option><option value="published">Published</option><option value="draft">Drafts</option><option value="changes">Unpublished changes</option><option value="missing">EN missing</option></select><label class="sr-only" for="sort">Sort posts</label><select id="sort"><option value="updated">Last modified</option><option value="title">Title A–Z</option><option value="country">Country A–Z</option></select></div></div>
+      <div class="status-tabs" aria-label="Post status filters"><button data-status="all" class="active">All posts <span>9</span></button><button data-status="draft">Drafts <span>3</span></button><button data-status="changes">Unpublished changes <span>2</span></button><button data-status="missing">EN missing <span>1</span></button></div>
+      <div class="selection-bar" hidden><span id="selected-count" role="status"></span><button id="clear-selection">Clear selection</button><button data-demo="bulk">Review selected posts</button></div>
+      <div class="results-heading"><label><input id="select-all" type="checkbox" aria-label="Select all visible posts"><span id="result-count" role="status">9 posts</span></label><span class="list-hint">Updated most recently</span><span class="table-columns"><span>Status</span><span>Languages</span><span>Updated</span></span></div>
+      <div class="content-area"><div id="posts" class="posts"></div><aside id="inspector" class="inspector" aria-label="Selected post details"></aside></div>
+      <div class="workspace-footer"><span>One post pair. Two languages.</span><span>Showing illustrative publishing states</span></div>
+    </main>
+  </div>
+  <footer class="concept-footer"><strong id="concept-title"></strong><span id="concept-description"></span><span class="prototype-note">Interactive study: search, filter, select, inspect.</span></footer>
+  <dialog id="preview"><div class="dialog-heading"><h2 id="dialog-title"></h2><button id="close-dialog" aria-label="Close preview" data-icon="close"></button></div><div id="dialog-body"></div></dialog>
+</body>
+</html>

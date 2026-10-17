@@ -30,18 +30,29 @@ window.Auth = (function () {
     import: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
     settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
     users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>',
   };
 
-  // Single source of truth for the admin main menu.
+  // Single source of truth for the admin main menu. `area` names the
+  // masthead workspace a page belongs to; `admin` is the role gate shared by
+  // the sidebar and the masthead.
   const NAV = [
-    { group: 'Journal', label: 'Desk', href: '/admin/', icon: ICON.desk },
-    { group: 'Journal', label: 'Posts', href: '/admin/posts.html', icon: ICON.posts },
-    { group: 'Journal', label: 'Media', href: '/admin/media.html', icon: ICON.media },
-    { group: 'Journal', label: 'About', href: '/admin/about.html', admin: true, icon: ICON.about },
-    { group: 'Journal', label: 'Comments', href: '/admin/comments.html', admin: true, icon: ICON.comments },
-    { group: 'Site', label: 'Import', href: '/admin/import.html', admin: true, icon: ICON.import },
-    { group: 'Site', label: 'Settings', href: '/admin/settings.html', admin: true, icon: ICON.settings },
-    { group: 'Site', label: 'Users', href: '/admin/users.html', admin: true, icon: ICON.users },
+    { group: 'Journal', label: 'Desk', href: '/admin/', icon: ICON.desk, area: 'content' },
+    { group: 'Journal', label: 'Posts', href: '/admin/posts.html', icon: ICON.posts, area: 'content' },
+    { group: 'Journal', label: 'Media', href: '/admin/media.html', icon: ICON.media, area: 'media' },
+    { group: 'Journal', label: 'About', href: '/admin/about.html', admin: true, icon: ICON.about, area: 'content' },
+    { group: 'Journal', label: 'Comments', href: '/admin/comments.html', admin: true, icon: ICON.comments, area: 'content' },
+    { group: 'Site', label: 'Import', href: '/admin/import.html', admin: true, icon: ICON.import, area: 'manage' },
+    { group: 'Site', label: 'Settings', href: '/admin/settings.html', admin: true, icon: ICON.settings, area: 'manage' },
+    { group: 'Site', label: 'Users', href: '/admin/users.html', admin: true, icon: ICON.users, area: 'manage' },
+  ];
+
+  // Masthead workspaces. Each one lands on a page of its own area, and Manage
+  // carries the same admin gate as every page inside it.
+  const WORKSPACES = [
+    { area: 'content', copy: 'shellContent', href: '/admin/posts.html', icon: ICON.posts },
+    { area: 'media', copy: 'shellMedia', href: '/admin/media.html', icon: ICON.media },
+    { area: 'manage', copy: 'shellManage', href: '/admin/settings.html', admin: true, icon: ICON.settings },
   ];
 
   const drawerMedia = window.matchMedia('(max-width: 900px)');
@@ -75,11 +86,32 @@ window.Auth = (function () {
     return html;
   }
 
+  function workspaceMarkup(s, here) {
+    const page = NAV.find((item) => item.href === here);
+    const area = page ? page.area : '';
+    let html = '';
+    for (const ws of WORKSPACES) {
+      if (ws.admin && !s.isAdmin) continue;
+      const active = ws.area === area ? ' is-active' : '';
+      html += '<a href="' + ws.href + '" class="cms-workspace-link' + active + '">' +
+        ws.icon + '<span>' + EditorCopy.en[ws.copy] + '</span></a>';
+    }
+    return html;
+  }
+
+  // While the mobile drawer is open, everything except the drawer (the
+  // masthead holding the menu trigger, and the workspace) is inert.
+  function setBackgroundInert(shell, inert) {
+    const masthead = shell.querySelector('.cms-masthead');
+    const workspace = shell.querySelector('.cms-workspace');
+    if (masthead) masthead.inert = inert;
+    if (workspace) workspace.inert = inert;
+  }
+
   function closeNav(shell, restoreFocus) {
     const sidebar = shell.querySelector('#cmsSidebar');
     const btn = shell.querySelector('#cmsMenuBtn');
     const scrim = shell.querySelector('#cmsNavScrim');
-    const workspace = shell.querySelector('.cms-workspace');
     const wasOpen = sidebar.classList.contains('is-open');
     sidebar.classList.remove('is-open');
     if (btn) {
@@ -87,7 +119,9 @@ window.Auth = (function () {
       btn.setAttribute('aria-label', 'Open menu');
     }
     if (scrim) scrim.hidden = true;
-    if (workspace) workspace.inert = false;
+    // Release the masthead BEFORE focusing its menu button: an inert element
+    // cannot take focus.
+    setBackgroundInert(shell, false);
     if (restoreFocus && wasOpen && drawerMedia.matches && btn) btn.focus();
   }
 
@@ -95,14 +129,13 @@ window.Auth = (function () {
     const sidebar = shell.querySelector('#cmsSidebar');
     const btn = shell.querySelector('#cmsMenuBtn');
     const scrim = shell.querySelector('#cmsNavScrim');
-    const workspace = shell.querySelector('.cms-workspace');
     sidebar.classList.add('is-open');
     if (btn) {
       btn.setAttribute('aria-expanded', 'true');
       btn.setAttribute('aria-label', 'Close menu');
     }
     if (scrim) scrim.hidden = false;
-    if (workspace) workspace.inert = true;
+    setBackgroundInert(shell, true);
     drawerFocusables(sidebar)[0]?.focus();
   }
 
@@ -116,6 +149,7 @@ window.Auth = (function () {
     const meta = document.querySelector('.cms-page-meta') || document.querySelector('.masthead');
     const heading = meta && meta.querySelector('h1');
     const lede = meta && meta.querySelector('.lede');
+    const actions = document.querySelector('.cms-page-actions');
     if (!main.id) main.id = 'cms-main';
     if (!main.hasAttribute('tabindex')) main.setAttribute('tabindex', '-1');
 
@@ -124,23 +158,33 @@ window.Auth = (function () {
     shell.className = 'cms-app-shell';
     shell.innerHTML =
       '<a class="skip-link" href="#' + main.id + '">Skip to content</a>' +
+      '<header class="cms-masthead">' +
+        '<button type="button" class="cms-menu-btn" id="cmsMenuBtn" aria-expanded="false" aria-controls="cmsSidebar" aria-label="Open menu">' +
+          ICON.menu +
+        '</button>' +
+        '<a class="cms-brand" href="/admin/">' +
+          '<span class="cms-brand-mark" aria-hidden="true"></span>' +
+          '<span class="cms-brand-title"></span>' +
+        '</a>' +
+        '<nav class="cms-workspace-nav">' +
+          workspaceMarkup(s, here) +
+        '</nav>' +
+        '<div class="cms-masthead-right">' +
+          '<span class="cms-brand-sub"></span>' +
+          '<a href="/" target="_blank" rel="noopener" class="cms-btn-ghost">View site</a>' +
+        '</div>' +
+      '</header>' +
       '<div class="cms-nav-scrim" id="cmsNavScrim" hidden></div>' +
       '<aside class="cms-sidebar" id="cmsSidebar">' +
         '<div class="cms-sidebar-header">' +
           '<div class="cms-brand-text">' +
-            '<span class="cms-brand-title"></span>' +
+            '<span class="cms-journal-title"></span>' +
             '<span class="cms-brand-sub"></span>' +
           '</div>' +
         '</div>' +
-          '<button type="button" class="cms-nav-close" id="cmsNavClose" aria-label="Close menu">' +
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
-          '</button>' +
-        '<div class="cms-sidebar-action">' +
-          '<a href="/admin/editor.html" class="cms-btn-new">' +
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
-            'New trip' +
-          '</a>' +
-        '</div>' +
+        '<button type="button" class="cms-nav-close" id="cmsNavClose" aria-label="Close menu">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+        '</button>' +
         '<nav class="cms-nav-group" aria-label="Admin">' +
           navMarkup(s, here) +
         '</nav>' +
@@ -159,21 +203,19 @@ window.Auth = (function () {
         '</div>' +
       '</aside>' +
       '<div class="cms-workspace">' +
-        '<header class="cms-topbar">' +
-          '<div class="cms-topbar-left">' +
-            '<button type="button" class="cms-menu-btn" id="cmsMenuBtn" aria-expanded="false" aria-controls="cmsSidebar" aria-label="Open menu">' +
-              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>' +
-            '</button>' +
-            '<div class="cms-title-block"></div>' +
-          '</div>' +
-          '<div class="cms-topbar-right">' +
-            '<a href="/" target="_blank" rel="noopener" class="cms-btn-ghost">View site</a>' +
-          '</div>' +
-        '</header>' +
+        '<div class="cms-topbar">' +
+          '<div class="cms-title-block"></div>' +
+          '<div class="cms-topbar-right"></div>' +
+        '</div>' +
         '<div class="cms-content"></div>' +
       '</div>';
-    shell.querySelector('.cms-brand-title').textContent = EditorCopy.en.studioName;
-    shell.querySelector('.cms-brand-sub').textContent = EditorCopy.en.studioDescriptor;
+    const copy = EditorCopy.en;
+    shell.querySelector('.cms-brand-mark').textContent = copy.studioName.charAt(0);
+    shell.querySelector('.cms-brand-title').textContent = copy.studioName;
+    shell.querySelector('.cms-masthead-right > .cms-brand-sub').textContent = copy.studioDescriptor;
+    shell.querySelector('.cms-workspace-nav').setAttribute('aria-label', copy.shellWorkspaceNav);
+    shell.querySelector('.cms-journal-title').textContent = copy.shellJournal;
+    shell.querySelector('.cms-sidebar-header .cms-brand-sub').textContent = copy.studioDescriptor;
 
     // Username is the one user-controlled string in this shell; set as text
     // AFTER the parse so it can never be markup (#131).
@@ -188,13 +230,16 @@ window.Auth = (function () {
     } else {
       const t = document.createElement('h1');
       t.className = 'cms-page-title';
-      t.textContent = EditorCopy.en.studioName;
+      t.textContent = copy.studioName;
       titleBlock.appendChild(t);
     }
     if (lede) {
       lede.className = 'cms-page-lede';
       titleBlock.appendChild(lede);
     }
+    // Page-level commands (e.g. New post) ride in the title row. Moved before
+    // the meta header is dropped, since a page may declare them inside it.
+    if (actions) shell.querySelector('.cms-topbar-right').appendChild(actions);
     if (meta) meta.remove();
 
     const contentArea = shell.querySelector('.cms-content');
@@ -228,10 +273,16 @@ window.Auth = (function () {
       if (!focusable.length) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
+      const active = document.activeElement;
+      if (!focusable.includes(active)) {
+        // Focus is outside the drawer (e.g. the skip link, which sits outside
+        // both inert regions): pull it back to the matching end.
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && active === first) {
         e.preventDefault();
         last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
+      } else if (!e.shiftKey && active === last) {
         e.preventDefault();
         first.focus();
       }
