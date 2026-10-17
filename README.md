@@ -78,14 +78,14 @@ docker compose pull && docker compose up -d
 
 ### Cutting a release
 
-**Current release: v0.12.0.** Highlights since v0.11.0:
+**Current release: v0.13.0.** Highlights since v0.12.0:
 
-- Adopt the approved Editorial desk admin UI: light sidebar and navigation, a white
-  workspace, and steel-blue accents, without changing the public blog.
-- Add responsive Posts rows, status views with filtered counts, and accessible DE/EN
-  indicators while preserving role restrictions, selection, and confirmations.
-- Keep filters when returning from the editor through an explicit same-origin Posts
-  link, independent of the browser's referrer policy.
+- Browse nested Media folders directly from the shared image picker for title images,
+  hero photos, and galleries, including **Aus Mediathek wählen**.
+- Search within a folder and its subfolders while preserving gallery selections and
+  their order across folder changes and pagination.
+- Use the collapsible folder list on mobile, with clear loading, empty, and failure
+  states, keyboard focus restoration, and compatibility with the Editorial desk UI.
 
 1. On a `feature/*` branch from `dev`, update both apps' `package.json` and root
    `package-lock.json` versions, plus the `IMAGE_TAG` defaults in `docker-compose.yml`
@@ -96,8 +96,8 @@ docker compose pull && docker compose up -d
 
 ```bash
 git fetch origin main
-git tag -a v0.12.0 origin/main -m "Release v0.12.0"
-git push origin v0.12.0
+git tag -a v0.13.0 origin/main -m "Release v0.13.0"
+git push origin v0.13.0
 ```
 
 Never push directly to `dev` or `main`, tag an unmerged feature branch, or replace a
