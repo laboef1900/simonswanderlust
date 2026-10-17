@@ -12,7 +12,7 @@ Simon (sole author and admin): a travel photographer and writer who manages a bi
 
 ## Product Purpose
 
-Simon's Wanderlust is a personal travel journal that presents expedition-style trip reports with professional photography (shot on Leica Q2 and Canon AE-1), interactive route maps (Protomaps/PMTiles), and bilingual content. The admin ("Image Station") is the content management backend: authoring, editing, uploading photos, publishing, and managing the live site.
+Simon's Wanderlust is a personal travel journal that presents expedition-style trip reports with professional photography (shot on Leica Q2 and Canon AE-1), interactive route maps (Protomaps/PMTiles), and bilingual content. The admin ("Wanderlust Studio") is the content management backend: authoring, editing, uploading photos, publishing, and managing the live site.
 
 ## Positioning
 
@@ -30,7 +30,7 @@ Self-hosted, single-author travel CMS with a custom bilingual editor, automatic 
 - **Pages:** Login, Photo Upload (index), Posts list, Post Editor, Media Library, About Page editor, Comments moderation queue, Import (WordPress WXR), Settings, Users management.
 - **Comment moderation queue:** Reader comments on trip reports are held until an admin approves them (`/admin/comments.html`). Admins approve, unapprove, delete (erasure, with confirmation) and reply as the author; author replies publish immediately. Comments are self-hosted in Postgres — Principle 4 still holds, no third-party comment service.
 - **Auth:** Cookie-based sessions with admin/non-admin roles; rate-limited login.
-- **Editor:** Bilingual DE/EN tabs, slug preview, hero image picker, body markdown with EasyMDE, key facts and stops editors, revision history, preview, publish/unpublish.
+- **Editor:** Bilingual DE/EN tabs, slug preview, hero image picker, body markdown with EasyMDE, key facts and stops editors, revision history, preview, publish/unpublish. Country names can fill approximate map coordinates offline without replacing saved/manual locations. Optional browser-direct excerpt suggestions reuse Story Review settings and require explicit acceptance.
 - **Media library:** One browsable store for every hosted photo — bulk drag-and-drop upload, virtual folders, search, per-item alt text. Encoding runs asynchronously behind a queue that a site build preempts; publishing is refused while a referenced photo is still encoding. GPS and uploader identity are redacted for non-admin authors.
 - **Galleries:** Multiple photos render as one grid from a fenced `gallery` block, composed via an "Insert / edit gallery" picker that reuses the library's own alt text. Three layout modes (justified rows at breakout or column width, or a slider), each with a lightbox.
 - **Photo privacy:** Published variants carry an eight-tag EXIF allow-list — no GPS, XMP or IPTC — applied at encode time, so it covers WordPress-imported photos as well as direct uploads.
@@ -39,7 +39,7 @@ Self-hosted, single-author travel CMS with a custom bilingual editor, automatic 
 
 ## Brand Commitments
 
-- Name: "Simon's Wanderlust" (blog), "Expedition Log · Image Station" (admin branding)
+- Name: "Simon's Wanderlust" (blog), "Wanderlust Studio" (admin), with the descriptor "Simon's travel journal".
 - Fonts: Inter (sans), IBM Plex Mono (mono) — self-hosted from `uploader/public/fonts/`
 - Colors: Navy (#142a42), Brand Red (#d23b30), Canvas (#fbfbfd)
 - Visual identity: Expedition/cartography theme with dashed route dividers, passport stamps, mono-tracked uppercase labels

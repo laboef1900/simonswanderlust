@@ -8,8 +8,8 @@
   </head>
   <body class="login-page">
     <header class="login-brand">
-      <h1>Image Station</h1>
-      <p>Expedition Log</p>
+      <h1 id="studioName"></h1>
+      <p id="studioDescriptor"></p>
     </header>
     <main>
       <!-- @ai-note: a real <form> (not bare inputs plus a click handler) so that
@@ -28,10 +28,13 @@
         <p id="err" class="err" role="alert" hidden></p>
       </form>
     </main>
+    <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/draft-guard.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
+      $('studioName').textContent = EditorCopy.en.studioName;
+      $('studioDescriptor').textContent = EditorCopy.en.studioDescriptor;
       let needsSetup = false;
       const nextPath = DraftGuard.safeNextPath(new URLSearchParams(location.search).get('next'));
       async function init() {

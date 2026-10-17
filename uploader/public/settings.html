@@ -6,15 +6,169 @@
     <title>Settings · Simon's Wanderlust</title>
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
-  <body>
+  <body class="settings-page">
     <header class="cms-page-meta">
       <h1>Settings</h1>
-      <p class="lede">Live site, images, backups, and browser-direct AI. Saved settings apply without a redeploy.</p>
+      <p class="lede" id="settingsIntro"></p>
     </header>
 
-    <main>
-      <section class="card">
-        <h2 class="card-heading">Live site &amp; backups</h2>
+    <main class="settings-layout">
+      <nav class="settings-nav" id="settingsNav">
+        <a href="#writingSettings" id="navWriting"></a>
+        <a href="#captionSettings" id="navCaptions"></a>
+        <a href="#imageSettingsSection" id="navImages"></a>
+        <a href="#commentSettings" id="navComments"></a>
+        <a href="#siteSettings" id="navSite"></a>
+      </nav>
+      <div class="settings-sections">
+      <section class="card" id="writingSettings" aria-labelledby="reviewHeading">
+        <h2 id="reviewHeading" class="card-heading"></h2>
+        <p id="reviewPrivacy" class="settings-intro"></p>
+        <p id="writingLocal" class="muted"></p>
+        <label for="aiProvider" id="writingProviderLabel"></label>
+        <select id="aiProvider" aria-describedby="reviewPrivacy reviewDestination">
+          <option value="lm-studio">Local LM Studio</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="custom">Custom</option>
+        </select>
+        <div id="customReviewFields" hidden>
+          <label for="aiCustomBaseUrl">Custom API base URL</label>
+          <input id="aiCustomBaseUrl" type="url" placeholder="https://your-provider.example/v1" aria-describedby="reviewUrlWarning" />
+        </div>
+        <p id="reviewDestination" class="muted"></p>
+        <p id="reviewUrlWarning" class="notice-warn" role="status" hidden></p>
+        <p id="reviewKeyWarning" class="notice-warn" role="status" hidden></p>
+        <label for="aiApiKey"><span id="sharedKeyLabel"></span> <span id="aiKeyStatus" class="status-badge status-draft" role="status">Loading</span></label>
+        <input id="aiApiKey" type="password" autocomplete="new-password" aria-describedby="aiKeyRequirement aiKeyHelp" />
+        <p id="aiKeyRequirement" class="muted" role="status"></p>
+        <p id="aiKeyHelp" class="muted"></p>
+        <div class="settings-field-pair">
+          <div>
+            <label for="aiModel" id="writingModelLabel"></label>
+            <input id="aiModel" type="text" maxlength="100" />
+          </div>
+          <div>
+            <label for="reviewTimeoutMs" id="writingTimeoutLabel"></label>
+            <input id="reviewTimeoutMs" type="number" min="5000" max="300000" step="1" />
+          </div>
+        </div>
+        <label for="reviewPrompt" id="writingInstructionsLabel"></label>
+        <textarea id="reviewPrompt" rows="8" aria-describedby="writingInstructionsHelp"></textarea>
+        <p id="writingInstructionsHelp" class="muted"></p>
+        <div class="settings-actions">
+          <button id="saveReview" type="button" class="btn-secondary"></button>
+          <button id="testReview" type="button" class="btn-secondary" aria-describedby="reviewTestHelp" disabled></button>
+          <button id="removeAiKey" type="button" class="btn-remove" disabled>Remove stored key</button>
+        </div>
+        <p id="reviewOut" class="page-status" role="status"></p>
+        <p id="reviewTestHelp" class="muted"></p>
+        <p id="reviewTestOut" class="page-status" role="status"></p>
+      </section>
+
+      <section class="card" id="captionSettings" aria-labelledby="captionHeading">
+        <h2 id="captionHeading" class="card-heading"></h2>
+        <p class="muted" id="captionPrivacy">
+          Suggestions run in <em>this browser</em>. The selected provider receives a resized photo
+          and the caption prompt — the server never contacts the model. Choose a model that supports images.
+        </p>
+        <label for="captionProvider">Alt-text provider</label>
+        <select id="captionProvider" aria-describedby="captionPrivacy captionDestination captionKeyHelp">
+          <option value="lm-studio">Local LM Studio</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="custom">Custom</option>
+        </select>
+        <div id="customCaptionFields" hidden>
+          <label for="captionCustomBaseUrl">Custom API base URL</label>
+          <input id="captionCustomBaseUrl" type="url" placeholder="https://your-provider.example/v1" aria-describedby="captionUrlWarning" />
+        </div>
+        <p id="captionDestination" class="muted"></p>
+        <p id="captionUrlWarning" class="notice-warn" role="status" hidden></p>
+        <p id="captionKeyWarning" class="notice-warn" role="status" hidden></p>
+        <p id="captionKeyHelp" class="muted"></p>
+        <p class="muted">Remote captions use the <a href="#aiApiKey" id="captionSharedKeyLink"></a>.
+          Save the key there and the alt-text settings here before testing a remote connection.
+          Provider usage charges may apply when suggesting alt text.</p>
+
+        <label for="baseUrl">LM Studio base URL (as this browser reaches it)</label>
+        <input id="baseUrl" type="text" placeholder="http://localhost:1234/v1" aria-describedby="baseUrlWarn" />
+        <p id="baseUrlWarn" class="notice-warn" role="status" hidden></p>
+        <p class="muted" id="sharedLocalHelp"></p>
+
+        <label for="model">Model</label>
+        <select id="model"></select>
+        <input id="modelManual" type="text" placeholder="…or type a model id" aria-label="Model id (typed manually)" />
+
+        <label for="timeout">Caption timeout (ms)</label>
+        <input id="timeout" type="number" min="1000" max="600000" />
+
+        <label for="maxEdge">Max image edge (px)</label>
+        <input id="maxEdge" type="number" min="256" max="4096" />
+
+        <label for="prompt">Caption prompt</label>
+        <textarea id="prompt" rows="8"></textarea>
+
+        <div class="settings-actions">
+          <button id="test" type="button" class="btn-secondary">Test connection</button>
+          <button id="saveAi" type="button" class="btn-secondary">Save settings</button>
+        </div>
+        <p id="captionOut" class="page-status" role="status"></p>
+        <p class="muted">Test connection lists available models; it does not send a photo or verify image support.</p>
+      </section>
+
+      <section class="card" id="imageSettingsSection" aria-labelledby="imageHeading">
+        <h2 id="imageHeading" class="card-heading">Image conversion</h2>
+        <form id="imageSettings">
+          <label class="check-field" for="convertJpeg">
+            <input id="convertJpeg" type="checkbox" aria-describedby="conversionHelp" />
+            Convert JPG images to WebP and AVIF
+          </label>
+          <p id="conversionHelp" class="muted">
+            When off, new JPG uploads keep the JPEG format. Responsive sizes and GPS removal
+            stay enabled. Other image formats still produce WebP and AVIF.
+          </p>
+
+          <label for="webpQuality">WebP quality</label>
+          <input id="webpQuality" type="number" min="1" max="100" step="1" required aria-describedby="imageQualityHelp" />
+          <label for="avifQuality">AVIF quality</label>
+          <input id="avifQuality" type="number" min="1" max="100" step="1" required aria-describedby="imageQualityHelp" />
+          <p id="imageQualityHelp" class="muted">
+            1–100. Higher quality generally means larger files. Defaults: WebP 75, AVIF 55.
+            These controls apply to WebP and AVIF output, not JPEG.
+          </p>
+          <p class="muted">
+            Applies to new uploads and newly processed import images. Existing photos and queued
+            uploads keep their settings. Original files stay private.
+          </p>
+          <div class="settings-actions">
+            <button id="saveImages" type="submit" class="btn-secondary" disabled>Save image settings</button>
+          </div>
+          <p id="imageOut" class="page-status" role="status"></p>
+        </form>
+      </section>
+
+      <section class="card" id="commentSettings" aria-labelledby="commentsHeading">
+        <h2 id="commentsHeading" class="card-heading">Reader comments</h2>
+        <label class="check-field" for="commentsEnabled">
+          <input id="commentsEnabled" type="checkbox" aria-describedby="commentsHelp" />
+          Enable comments on the site
+        </label>
+        <p id="commentsHelp" class="muted">
+          Off (default): the comment form is hidden on every story and <code>POST /comments</code>
+          returns 409. Approved comments already visible stay visible. Per-post "Allow comments"
+          has no effect while this is off. Turning it off does not delete any comments — it is the
+          reversible rollback for the whole comments feature. Every new comment is held for
+          moderation. Saving this does not rebuild the site.
+        </p>
+        <div class="settings-actions">
+          <button id="saveComments" type="button" class="btn-secondary">Save comment setting</button>
+        </div>
+        <p id="commentsOut" class="page-status" role="status"></p>
+      </section>
+
+      <section class="card" id="siteSettings" aria-labelledby="siteSettingsHeading">
+        <h2 class="card-heading" id="siteSettingsHeading"></h2>
 
         <label for="backupSchedule">Database backup schedule</label>
         <select id="backupSchedule">
@@ -61,159 +215,30 @@
         </p>
       </section>
 
-      <section class="card" aria-labelledby="commentsHeading">
-        <h2 id="commentsHeading" class="card-heading">Reader comments</h2>
-        <label class="check-field" for="commentsEnabled">
-          <input id="commentsEnabled" type="checkbox" aria-describedby="commentsHelp" />
-          Enable comments on the site
-        </label>
-        <p id="commentsHelp" class="muted">
-          Off (default): the comment form is hidden on every story and <code>POST /comments</code>
-          returns 409. Approved comments already visible stay visible. Per-post "Allow comments"
-          has no effect while this is off. Turning it off does not delete any comments — it is the
-          reversible rollback for the whole comments feature. Every new comment is held for
-          moderation. Saving this does not rebuild the site.
-        </p>
-        <div class="settings-actions">
-          <button id="saveComments" type="button" class="btn-secondary">Save comment setting</button>
-        </div>
-        <p id="commentsOut" class="page-status" role="status"></p>
-      </section>
-
-      <section class="card" aria-labelledby="imageHeading">
-        <h2 id="imageHeading" class="card-heading">Image conversion</h2>
-        <form id="imageSettings">
-          <label class="check-field" for="convertJpeg">
-            <input id="convertJpeg" type="checkbox" aria-describedby="conversionHelp" />
-            Convert JPG images to WebP and AVIF
-          </label>
-          <p id="conversionHelp" class="muted">
-            When off, new JPG uploads keep the JPEG format. Responsive sizes and GPS removal
-            stay enabled. Other image formats still produce WebP and AVIF.
-          </p>
-
-          <label for="webpQuality">WebP quality</label>
-          <input id="webpQuality" type="number" min="1" max="100" step="1" required aria-describedby="imageQualityHelp" />
-          <label for="avifQuality">AVIF quality</label>
-          <input id="avifQuality" type="number" min="1" max="100" step="1" required aria-describedby="imageQualityHelp" />
-          <p id="imageQualityHelp" class="muted">
-            1–100. Higher quality generally means larger files. Defaults: WebP 75, AVIF 55.
-            These controls apply to WebP and AVIF output, not JPEG.
-          </p>
-          <p class="muted">
-            Applies to new uploads and newly processed import images. Existing photos and queued
-            uploads keep their settings. Original files stay private.
-          </p>
-          <div class="settings-actions">
-            <button id="saveImages" type="submit" class="btn-secondary" disabled>Save image settings</button>
-          </div>
-          <p id="imageOut" class="page-status" role="status"></p>
-        </form>
-      </section>
-
-      <section class="card" aria-labelledby="captionHeading">
-        <h2 id="captionHeading" class="card-heading">Alt-text model</h2>
-        <p class="muted" id="captionPrivacy">
-          Suggestions run in <em>this browser</em>. The selected provider receives a resized photo
-          and the caption prompt — the server never contacts the model. Choose a model that supports images.
-        </p>
-        <label for="captionProvider">Alt-text provider</label>
-        <select id="captionProvider" aria-describedby="captionPrivacy captionDestination captionKeyHelp">
-          <option value="lm-studio">Local LM Studio</option>
-          <option value="openrouter">OpenRouter</option>
-          <option value="deepseek">DeepSeek</option>
-          <option value="custom">Custom</option>
-        </select>
-        <div id="customCaptionFields" hidden>
-          <label for="captionCustomBaseUrl">Custom API base URL</label>
-          <input id="captionCustomBaseUrl" type="url" placeholder="https://your-provider.example/v1" aria-describedby="captionUrlWarning" />
-        </div>
-        <p id="captionDestination" class="muted"></p>
-        <p id="captionUrlWarning" class="notice-warn" role="status" hidden></p>
-        <p id="captionKeyWarning" class="notice-warn" role="status" hidden></p>
-        <p id="captionKeyHelp" class="muted"></p>
-        <p class="muted">Remote captions use the <a href="#aiApiKey">shared API key below</a>.
-          Save the key there and the alt-text settings here before testing a remote connection.
-          Provider usage charges may apply when suggesting alt text.</p>
-
-        <label for="baseUrl">LM Studio base URL (as this browser reaches it)</label>
-        <input id="baseUrl" type="text" placeholder="http://localhost:1234/v1" aria-describedby="baseUrlWarn" />
-        <p id="baseUrlWarn" class="notice-warn" role="status" hidden></p>
-        <p class="muted">Used by either feature when Local LM Studio is selected, usually <code>http://localhost:1234/v1</code>.</p>
-
-        <label for="model">Model</label>
-        <select id="model"></select>
-        <input id="modelManual" type="text" placeholder="…or type a model id" aria-label="Model id (typed manually)" />
-
-        <label for="timeout">Caption timeout (ms)</label>
-        <input id="timeout" type="number" min="1000" max="600000" />
-
-        <label for="maxEdge">Max image edge (px)</label>
-        <input id="maxEdge" type="number" min="256" max="4096" />
-
-        <label for="prompt">Caption prompt</label>
-        <textarea id="prompt" rows="8"></textarea>
-
-        <div class="settings-actions">
-          <button id="test" type="button" class="btn-secondary">Test connection</button>
-          <button id="saveAi" type="button" class="btn-secondary">Save settings</button>
-        </div>
-        <p id="captionOut" class="page-status" role="status"></p>
-        <p class="muted">Test connection lists available models; it does not send a photo or verify image support.</p>
-      </section>
-
-      <section class="card" aria-labelledby="reviewHeading">
-        <h2 id="reviewHeading" class="card-heading">Editorial review</h2>
-        <p class="muted" id="reviewPrivacy">Reviews run from the author's browser. The selected provider receives the draft.
-          The server never calls a model. Local review uses the saved LM Studio base URL above.
-          Remote review and remote captions share one API key; their providers and models are independent.</p>
-        <label for="aiProvider">Review provider</label>
-        <select id="aiProvider" aria-describedby="reviewPrivacy reviewDestination">
-          <option value="lm-studio">Local LM Studio</option>
-          <option value="openrouter">OpenRouter</option>
-          <option value="deepseek">DeepSeek</option>
-          <option value="custom">Custom</option>
-        </select>
-        <div id="customReviewFields" hidden>
-          <label for="aiCustomBaseUrl">Custom API base URL</label>
-          <input id="aiCustomBaseUrl" type="url" placeholder="https://your-provider.example/v1" aria-describedby="reviewUrlWarning" />
-        </div>
-        <p id="reviewDestination" class="muted"></p>
-        <p id="reviewUrlWarning" class="notice-warn" role="status" hidden></p>
-        <p id="reviewKeyWarning" class="notice-warn" role="status" hidden></p>
-        <label for="aiApiKey">Shared API key (review and alt text) <span id="aiKeyStatus" class="status-badge status-draft" role="status">Loading</span></label>
-        <input id="aiApiKey" type="password" autocomplete="new-password" aria-describedby="aiKeyRequirement aiKeyHelp" />
-        <p id="aiKeyRequirement" class="muted" role="status"></p>
-        <p id="aiKeyHelp" class="muted">Leave blank to keep the stored key; enter a new key to replace it for both features.
-          Each remote feature sends this same key to its selected endpoint, even when the providers differ.
-          Keys are encrypted in Postgres, but every signed-in author receives the shared key in browser memory for direct calls.
-          Keep the encryption master key separately from database backups.</p>
-        <label for="aiModel">Review model ID</label>
-        <input id="aiModel" type="text" maxlength="100" />
-        <label for="reviewTimeoutMs">Review timeout (ms)</label>
-        <input id="reviewTimeoutMs" type="number" min="5000" max="300000" step="1" />
-        <label for="reviewPrompt">Review instructions</label>
-        <textarea id="reviewPrompt" rows="8"></textarea>
-        <div class="settings-actions">
-          <button id="saveReview" type="button" class="btn-secondary">Save review settings</button>
-          <button id="testReview" type="button" class="btn-secondary" aria-describedby="reviewTestHelp" disabled></button>
-          <button id="removeAiKey" type="button" class="btn-remove" disabled>Remove stored key</button>
-        </div>
-        <p id="reviewOut" class="page-status" role="status"></p>
-        <p id="reviewTestHelp" class="muted"></p>
-        <p id="reviewTestOut" class="page-status" role="status"></p>
-      </section>
-
       <p id="out" class="page-status" role="status"></p>
+      </div>
     </main>
 
+    <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/llm.js"></script>
-    <script src="/admin/editor-image-copy.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       const reviewCopy = EditorCopy.en;
+      for (const [id, key] of Object.entries({
+        settingsIntro: 'settingsIntro',
+        navWriting: 'settingsWriting', navCaptions: 'settingsCaptions',
+        navImages: 'settingsImages', navComments: 'settingsComments', navSite: 'settingsSite',
+        siteSettingsHeading: 'settingsSite', captionHeading: 'settingsCaptions',
+        reviewHeading: 'settingsWriting', reviewPrivacy: 'writingPrivacy', writingLocal: 'writingLocal',
+        writingProviderLabel: 'writingProvider', writingModelLabel: 'writingModel',
+        writingTimeoutLabel: 'writingTimeout', writingInstructionsLabel: 'writingInstructions',
+        writingInstructionsHelp: 'writingInstructionsHelp', saveReview: 'writingSave',
+        sharedKeyLabel: 'sharedKeyLabel', aiKeyHelp: 'sharedKeyHelp', sharedLocalHelp: 'sharedLocalHelp',
+        captionSharedKeyLink: 'sharedKeyLink',
+      })) $(id).textContent = reviewCopy[key];
+      $('settingsNav').setAttribute('aria-label', reviewCopy.settingsNav);
       $('testReview').textContent = reviewCopy.reviewTestLabel;
       $('reviewTestHelp').textContent = reviewCopy.reviewTestHelp;
       let savedReview = null;
@@ -610,7 +635,7 @@
         clearReviewTest();
         if (removeKey && !await AdminConfirm.ask({
           title: 'Remove the shared API key?',
-          body: 'Future remote reviews and remote alt-text suggestions will lose this key. Already-copied keys and encrypted backups remain; revoke the key at the provider to stop external use. Local captions are unaffected.',
+          body: reviewCopy.removeSharedKey,
           confirmLabel: 'Remove key',
         })) return;
         if (!removeKey && !$('reviewKeyWarning').hidden && !await AdminConfirm.ask({
@@ -620,7 +645,7 @@
         })) return;
         if (!removeKey && $('aiApiKey').value && savedCaption?.captionProvider !== 'lm-studio' && !await AdminConfirm.ask({
           title: 'Replace the shared API key?',
-          body: 'This changes the key used by both remote reviews and remote alt-text suggestions. Confirm it is valid for both selected endpoints. No model request runs on save.',
+          body: reviewCopy.replaceSharedKey,
           confirmLabel: 'Replace shared key',
         })) return;
         const payload = removeKey ? { aiApiKey: null } : {
@@ -641,7 +666,7 @@
           });
           if (res.status === 401) { location.href = '/login'; return; }
           const result = await res.json();
-          message = res.ok ? 'Saved. No review request was sent.'
+          message = res.ok ? reviewCopy.writingSaved
             : (result.error || 'Could not save review settings.') + ' Check the reloaded destinations and key status before using remote AI.';
         } catch {
           message = 'Save outcome is unknown. Check the reloaded destinations and deliberately replace or remove the key before using remote AI.';

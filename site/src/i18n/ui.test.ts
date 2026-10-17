@@ -35,7 +35,7 @@ describe('ui dictionaries', () => {
    * other proper nouns that must NOT be translated. Everything else that is
    * byte-identical in both locales is almost certainly an untranslated copy/paste.
    */
-  const IDENTICAL_ON_PURPOSE: readonly UIKey[] = ['site.title'];
+  const IDENTICAL_ON_PURPOSE: readonly UIKey[] = ['site.title', 'editor.chrome.studioName'];
 
   it('flags untranslated values (identical in DE and EN) outside the allow-list', () => {
     const identical = (Object.keys(ui[defaultLocale]) as UIKey[]).filter(

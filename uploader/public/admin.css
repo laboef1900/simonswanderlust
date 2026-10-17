@@ -1430,7 +1430,7 @@ a:hover { color: var(--red-light); }
   font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.7rem; font-weight: 600;
 }
 
-/* ---- Image Station shell (runtime, injected by auth.js) ---- */
+/* ---- Wanderlust Studio shell (runtime, injected by auth.js) ---- */
 .skip-link {
   position: absolute;
   left: 0.75rem;
@@ -1475,7 +1475,7 @@ a:hover { color: var(--red-light); }
 }
 .cms-sidebar-header {
   flex-shrink: 0;
-  padding: 1.25rem 1rem 1rem;
+  padding: 1.75rem 1.25rem 1.5rem;
 }
 .cms-brand-text {
   display: flex;
@@ -1483,16 +1483,14 @@ a:hover { color: var(--red-light); }
   gap: 0.2rem;
 }
 .cms-brand-title {
-  font-weight: 650;
-  font-size: 1rem;
-  line-height: 1.2;
+  font-weight: 750;
+  font-size: 1.25rem;
+  line-height: 1.3;
   color: #fff;
 }
 .cms-brand-sub {
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font-family: var(--sans);
+  font-size: 0.8rem;
   color: rgba(255, 255, 255, 0.78);
 }
 .cms-sidebar-action { padding: 0 1rem 0.75rem; flex-shrink: 0; }
@@ -1823,6 +1821,95 @@ a:hover { color: var(--red-light); }
   border-radius: 50%;
   background: currentColor;
 }
+/* Settings are one document with a quiet index, not competing cards. */
+body.settings-page .cms-content {
+  max-width: 76rem;
+  padding: clamp(1rem, 2.5vw, 2.5rem);
+}
+body.settings-page .cms-topbar { position: static; }
+body.settings-page .settings-layout {
+  display: grid;
+  grid-template-columns: 11.5rem minmax(0, 46rem);
+  gap: clamp(1.5rem, 3vw, 3rem);
+  align-items: start;
+}
+.settings-nav {
+  position: sticky;
+  top: 1.5rem;
+  display: grid;
+  gap: 0.25rem;
+}
+.settings-nav a {
+  display: flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0.5rem 0;
+  color: var(--navy);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: var(--line-control);
+  text-underline-offset: 0.3em;
+}
+.settings-nav a:hover,
+.settings-nav a:active { color: var(--red); }
+.settings-nav a:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
+.settings-sections { min-width: 0; }
+body.settings-page .card {
+  padding: 0 0 2.5rem;
+  margin: 0 0 2.5rem;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line-strong);
+  border-radius: 0;
+  box-shadow: none;
+  scroll-margin-top: 1.5rem;
+}
+body.settings-page .card-heading {
+  font-size: clamp(1.25rem, 2vw, 1.5rem);
+  line-height: 1.3;
+  margin-bottom: 1rem;
+}
+.settings-intro { margin: 0 0 1rem; max-width: 70ch; }
+body.settings-page label {
+  font-family: var(--sans);
+  font-size: 0.9rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+body.settings-page .muted { max-width: 70ch; overflow-wrap: anywhere; }
+body.settings-page input,
+body.settings-page select,
+body.settings-page button { min-height: 2.75rem; }
+body.settings-page input[type='checkbox'] { min-height: auto; }
+body.settings-page input,
+body.settings-page select,
+body.settings-page textarea { font-size: 1rem; caret-color: var(--red); }
+body.settings-page input::placeholder,
+body.settings-page textarea::placeholder { color: var(--muted); opacity: 1; }
+body.settings-page ::selection { background: var(--navy); color: var(--canvas); }
+.settings-field-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1rem;
+}
+@media (max-width: 72rem) {
+  body.settings-page .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 2rem; }
+  .settings-nav {
+    position: static;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line-strong);
+  }
+}
+@media (max-width: 36rem) {
+  .settings-field-pair { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  body.settings-page .settings-actions { align-items: stretch; }
+  body.settings-page .settings-actions button { flex: 1 1 auto; }
+}
+
 /* ---- editor writing workspace ----
  * Editor-only rules are deliberately rooted at body.editor-page so the
  * writing surface can be quieter and more spacious without changing Posts,
@@ -1921,14 +2008,13 @@ body.editor-page .editor-commandbar {
   top: 0;
   z-index: 70;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.75rem;
   min-width: 0;
   padding: 0.55rem var(--editor-gutter);
   border-bottom: 1px solid var(--line-strong);
-  background: rgba(251, 251, 253, 0.98);
-  box-shadow: 0 4px 12px rgba(20, 42, 66, 0.06);
+  background: var(--canvas);
 }
 
 body.editor-page .editor-commandbar__nav,
@@ -1944,8 +2030,10 @@ body.editor-page .editor-commandbar__nav {
 }
 
 body.editor-page .editor-commandbar__status {
-  gap: 0.6rem;
-  overflow: hidden;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
 }
 
 body.editor-page .editor-save-state {
@@ -1958,6 +2046,8 @@ body.editor-page .editor-save-state {
 }
 
 body.editor-page .editor-commandbar__actions {
+  grid-column: 2;
+  grid-row: 1;
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 0.4rem;
@@ -2681,6 +2771,33 @@ body.editor-page .editor-inspector .muted {
   overflow-wrap: anywhere;
 }
 
+body.editor-page .editor-field-help {
+  margin: 0.45rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+.excerpt-assist { margin: 0.6rem 0 1rem; }
+.excerpt-assist__actions,
+.excerpt-assist__choices {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+}
+.excerpt-assist button { margin-top: 0; }
+.excerpt-assist__status { margin-top: 0.5rem; font-size: 0.82rem; overflow-wrap: anywhere; }
+.excerpt-assist__status:empty { display: none; }
+.excerpt-assist__status p { margin: 0; }
+.excerpt-assist__suggestion {
+  margin-top: 0.75rem;
+  padding: 0.75rem 0;
+  border-block: 1px solid var(--line-strong);
+}
+.excerpt-assist__suggestion[hidden],
+.excerpt-assist__cancel[hidden] { display: none; }
+.excerpt-assist__text { margin: 0; font-size: 0.95rem; line-height: 1.6; overflow-wrap: anywhere; }
+.excerpt-assist__count { margin: 0.5rem 0; color: var(--muted); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+
 body.editor-page .editor-inspector-scrim {
   display: none;
 }
@@ -2756,7 +2873,7 @@ body.editor-page .btn-primary-publish {
 }
 
 body.editor-page .btn-primary-publish:hover {
-  background: var(--red-light);
+  background: var(--navy);
 }
 
 body.editor-page .btn-ghost-preview {
@@ -2790,7 +2907,7 @@ body.editor-page .btn-ghost-preview:hover {
     width: min(23rem, 100vw);
     max-height: 100dvh;
     padding: max(1rem, env(safe-area-inset-top)) 1rem max(1rem, env(safe-area-inset-bottom));
-    border-left: 1px solid var(--line-strong);
+    border-left: 0;
     background: var(--canvas);
     box-shadow: -12px 0 32px rgba(20, 42, 66, 0.18);
     visibility: hidden;
@@ -2856,14 +2973,12 @@ body.editor-page .btn-ghost-preview:hover {
     max-width: 100%;
     margin: 0 !important;
     padding: 0.05rem 0.25rem;
-    overflow: hidden;
     background: transparent;
     box-shadow: none;
     font-size: 0.75rem;
     line-height: 1.25;
     pointer-events: auto;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
   }
 
   body.editor-page .editor-commandbar__status .err:not([hidden]) {
