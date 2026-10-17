@@ -403,9 +403,10 @@ and blog responses do not gain CORS. Provider configuration and inference are
 unchanged. Rollback removes this header hook, restoring the cross-origin caption
 failure without changing stored data or public URLs.
 
-Verification: 1,636 uploader tests passed with isolated Postgres integration,
-including all three variant formats, ranges, revalidation and negative
-private-file/API/blog cases. Uploader type-checking and Astro checking passed.
+Verification on the isolated PR branch: 1,623 uploader tests passed with isolated
+Postgres integration, including all three variant formats, ranges, revalidation
+and negative private-file/API/blog cases. All 290 site tests, uploader
+type-checking, Astro checking and the static build against an empty trip schema passed.
 A real `src/main.ts` instance and a Brave browser exercised a credential-free
 cross-origin variant fetch and the real `LLM.prepImage` JPEG conversion.
 No commercial inference request or production credential was used.
