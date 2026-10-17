@@ -233,6 +233,66 @@ Read the `impeccable` skill before actual UI work and follow the existing admin 
 - After success or any partial/ambiguous review save failure, clear the typed secret input and reload review settings plus presence, preserving pending caption/backup edits. Display partial-failure/unknown-outcome instructions using text content; retain a clear error if reload itself fails. Never report “Not saved” as though neither store changed.
 - Preserve keyboard access, labels/descriptions, visible focus, live status announcements, and the existing local caption connection test. No key/review content in screenshots or saved browser traces.
 
+### Explicit configuration test — refinement (2026-10-17)
+
+Requested on 2026-10-15; the owner authorized the provider-transition correction
+and a separate PR on 2026-10-17. Normal-risk settings UI change: no new route,
+authentication, encryption, storage, caption or publish contract.
+
+- Put the masked shared-key field beside the provider selector, with explicit
+  OpenRouter/DeepSeek key requirements. Keep new copy in the existing bilingual
+  dictionary and serve it through the existing static editor-copy endpoint.
+- **Test configuration** uses the current provider, model, instructions and timeout
+  with a built-in sample, never an author's draft. It does not save. Success
+  requires the existing review client's schema-valid response, not HTTP reachability.
+  The control discloses possible provider charges.
+- An entered key is request-local and retains the same bytes as Save. A blank
+  field can reuse a stored key only when the saved review provider is remote.
+  When a key exists but saved review is local, explain the choice before any
+  request: enter a key to test without saving, or save the remote provider first.
+  Do not fetch caption credentials as a workaround or change local review's
+  `aiApiKey: null` response.
+- Recheck the actual `/ai-config` response: another tab can switch saved review
+  back to local. Give the same guidance, without contacting the provider or
+  misreporting the withheld key as a storage failure.
+- Keep local tests key-free; reject missing required keys before provider calls.
+  Sanitize failures, bound work by the selected timeout, and cancel/invalidate
+  results when fields or saved settings change.
+
+Security reconfirmation: `SECURITY.md`'s browser-direct inference, request-local
+credentials, omitted cookies/referrers, refused redirects and sanitized-error
+rules remain unchanged. Testing grants no save/publish authority. Rollback removes
+the settings test control and client handler; no data migration or key mutation.
+
+Acceptance: exercise local-to-remote transitions against the real authenticated
+`/settings` and `/ai-config` handlers, including entered-key recovery, save-first
+recovery and a stale page. Verify the actual settings surface on desktop/mobile
+with isolated state and a local provider fixture, without paid requests.
+
+Verification (2026-10-17, isolated feature branch):
+
+- Uploader typecheck and all **1,637 tests across 71 files passed**, including
+  Postgres integration suites and the real-main boot test. The settings DOM suite
+  has 46 passing cases, with real authenticated routes covering all three remote
+  provider transitions, entered-key recovery, save-first recovery and stale state.
+- Site: **290 tests passed**; `astro check` reported zero errors, warnings or hints;
+  the full build produced 15 pages against an isolated empty database. Empty-trip
+  collection notices and the existing large-bundle warning were expected.
+- Actual Fastify settings UI, backed by Postgres and encrypted fixture credentials,
+  exercised at 1280px desktop and 390px mobile widths: entered-key and save-first
+  success, unchanged persisted settings during tests, local-provider guidance,
+  stale saved-provider state, invalid structured output, authentication failure,
+  cancellation and deadline expiry. A local provider fixture confirmed synthetic
+  story input and no cookies or referrer. No paid or production requests were made.
+- Feedback stays beside the test control without moving focus to the key field;
+  neither viewport had horizontal overflow. Impeccable's detector could not resolve
+  the served `/admin/admin.css` path and flagged the incumbent type hierarchy;
+  rendered typography was inspected and left unchanged outside this refinement.
+
+The historical verification notes below are retained as the record of their
+original implementation, not rewritten to describe this refinement.
+
+
 ## 8. Backup v6 and restore contract
 
 ### Dump
@@ -391,3 +451,22 @@ A 307 completion redirect was refused (no redirected request), and switching
 captions back to local sent no authorization despite the stored shared key.
 No commercial provider or real private photo was used; external provider vision
 and CORS compatibility remain operator prerequisites.
+
+Production correction (2026-10-17): gallery captions on
+`new.simonswanderlust.com` could not fetch display variants from
+`img.simonswanderlust.com`; the browser rejected the missing image CORS header
+before contacting the model. The public variant static mount now adds
+`Access-Control-Allow-Origin: *` without credential permission. This is limited
+to successfully served public files (including HEAD, 206 and 304); the existing
+variant allow-list still rejects originals and partial files. Admin/API routes
+and blog responses do not gain CORS. Provider configuration and inference are
+unchanged. Rollback removes this header hook, restoring the cross-origin caption
+failure without changing stored data or public URLs.
+
+Verification on the isolated PR branch: 1,623 uploader tests passed with isolated
+Postgres integration, including all three variant formats, ranges, revalidation
+and negative private-file/API/blog cases. All 290 site tests, uploader
+type-checking, Astro checking and the static build against an empty trip schema passed.
+A real `src/main.ts` instance and a Brave browser exercised a credential-free
+cross-origin variant fetch and the real `LLM.prepImage` JPEG conversion.
+No commercial inference request or production credential was used.

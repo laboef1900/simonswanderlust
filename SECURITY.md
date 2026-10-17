@@ -263,8 +263,12 @@ replaces the EXIF block wholesale rather than filtering it.
 
 This replaced a blanket `.withMetadata()` which republished source GPS
 coordinates on every public file. Untouched originals under `/data/images`
-keep their full metadata; they are never served (`isOriginalFile` excludes
-them from the static mount).
+keep their full metadata; they are never served (the static mount admits only
+finished filenames matching `VARIANT_FILE_RE`, excluding originals and temporary files).
+Public variant file responses alone carry `Access-Control-Allow-Origin: *`, allowing
+credential-free browser reads for gallery captioning from a separate admin origin.
+This includes HEAD, byte ranges and cache revalidation; it does not enable credentialed
+CORS or add CORS headers to admin/API routes, blog responses or refused image paths.
 
 The admin-only **Image conversion** setting does not weaken this boundary. With conversion
 off, JPEG inputs are re-encoded as responsive `.jpeg` variants through the **same** orientation

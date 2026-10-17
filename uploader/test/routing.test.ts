@@ -103,6 +103,63 @@ describe('host routing', () => {
     expect(onMain.statusCode).toBe(404);
   });
 
+  it.each(['avif', 'webp', 'jpeg'])('allows cross-origin reads of public %s variants, including ranges and revalidation', async (format) => {
+    await mkdir(join(dir, 'images', 'trips'), { recursive: true });
+    await writeFile(join(dir, 'images', 'trips', `k-640.${format}`), 'img-bytes');
+    const app = build();
+    try {
+      const url = `/trips/k-640.${format}`;
+      const headers = { host: IMG, origin: 'https://new.simonswanderlust.com' };
+      const full = await app.inject({ url, headers });
+      expect(full.statusCode).toBe(200);
+      expect(full.body).toBe('img-bytes');
+      const partial = await app.inject({ url, headers: { ...headers, range: 'bytes=0-2' } });
+      expect(partial.statusCode).toBe(206);
+      expect(partial.body).toBe('img');
+      const cached = await app.inject({ url, headers: { ...headers, 'if-none-match': String(full.headers.etag) } });
+      expect(cached.statusCode).toBe(304);
+      const head = await app.inject({ method: 'HEAD', url, headers });
+      expect(head.statusCode).toBe(200);
+      expect(head.body).toBe('');
+      for (const response of [full, partial, cached, head]) {
+        expect(response.headers['access-control-allow-origin']).toBe('*');
+        expect(response.headers['access-control-allow-credentials']).toBeUndefined();
+        expect(response.headers['cache-control']).toContain('immutable');
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('does not extend image CORS to private files, missing files, blog pages or authenticated routes', async () => {
+    await mkdir(join(dir, 'images'), { recursive: true });
+    await writeFile(join(dir, 'images', 'k-orig.jpeg'), 'private-original');
+    await writeFile(join(dir, 'images', 'k-640.webp.part-abcd'), 'private-partial');
+    await release('r1', { 'index.html': '<h1>blog</h1>', '404.html': 'not here', 'k-640.webp': 'blog-file' });
+    const app = build();
+    try {
+      for (const [host, url, status] of [
+        [IMG, '/k-orig.jpeg', 404],
+        [IMG, '/k-640.webp.part-abcd', 404],
+        [IMG, '/missing-640.webp', 404],
+        [MAIN, '/', 200],
+        [MAIN, '/k-640.webp', 200],
+        [IMG, '/admin/editor.html', 200],
+        [IMG, '/ai-config?purpose=caption', 401],
+        [IMG, '/settings', 401],
+        [IMG, '/media', 401],
+      ] as const) {
+        const response = await app.inject({ url, headers: { host, origin: 'https://new.simonswanderlust.com' } });
+        expect(response.statusCode, url).toBe(status);
+        expect(response.headers['access-control-allow-origin'], url).toBeUndefined();
+        expect(response.body).not.toContain('private-original');
+        expect(response.body).not.toContain('private-partial');
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
   it('serves the blog homepage at / on the main host (no /admin/ redirect)', async () => {
     await release('r1', { 'index.html': '<h1>blog</h1>', '404.html': 'nf' });
     const res = await build().inject({ method: 'GET', url: '/', headers: { host: MAIN } });

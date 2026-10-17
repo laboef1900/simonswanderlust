@@ -78,12 +78,12 @@ docker compose pull && docker compose up -d
 
 ### Cutting a release
 
-**Current release: v0.9.0.** Highlights since v0.8.0:
+**Current release: v0.10.0.** Highlights since v0.9.0:
 
-- Independent story title images and waypoint coordinate lookup.
-- Inline gallery previews and alt-text editing, with selectable AI caption providers.
-- Pinned editor navigation/details, direct Review story access, compact photo warnings,
-  growing titles, and explicit draft save state.
+- Test the current story-review configuration with synthetic sample text, without saving
+  settings or reading a draft; preserve local-provider key isolation.
+- Allow cross-origin reads of public image variants so gallery alt-text suggestions can
+  fetch photos hosted on the image subdomain.
 
 1. On a `feature/*` branch from `dev`, update both apps' `package.json` and root
    `package-lock.json` versions, plus the `IMAGE_TAG` defaults in `docker-compose.yml`
@@ -94,8 +94,8 @@ docker compose pull && docker compose up -d
 
 ```bash
 git fetch origin main
-git tag -a v0.9.0 origin/main -m "Release v0.9.0"
-git push origin v0.9.0
+git tag -a v0.10.0 origin/main -m "Release v0.10.0"
+git push origin v0.10.0
 ```
 
 Never push directly to `dev` or `main`, tag an unmerged feature branch, or replace a

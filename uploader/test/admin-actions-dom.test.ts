@@ -1,7 +1,20 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import vm from 'node:vm';
-import { defaultSettings } from '../src/settings.js';
+import { createSettingsStore, defaultSettings, type Settings } from '../src/settings.js';
+import { buildServer } from '../src/server.js';
+import { memoryUserStore } from '../src/users.js';
+import { memorySessionStore } from '../src/sessions.js';
+import { memorySecretsStore } from '../src/secrets.js';
+import { memoryPostStore } from '../src/posts.js';
+import { memoryPageStore } from '../src/pages.js';
+import { memoryMediaStore } from '../src/media-store.js';
+import { createEncodeQueue } from '../src/encode-queue.js';
+import { createWorkLock } from '../src/work-lock.js';
+import { ui } from '../../site/src/i18n/ui.js';
 
 // posts.html and settings.html run their actions as plain top-level browser
 // code. Load each inline script in a vm context backed by a stub DOM keyed on
@@ -59,6 +72,9 @@ function element(): Element {
 }
 
 const NETWORK_DOWN = new TypeError('Failed to fetch');
+const EDITOR_COPY = Object.fromEntries(Object.entries(ui.en)
+  .filter(([key]) => key.startsWith('editor.chrome.'))
+  .map(([key, value]) => [key.slice('editor.chrome.'.length), value]));
 
 function loadPage(file: string, extraGlobals: Record<string, unknown>): { ctx: Record<string, unknown>; el: (id: string) => Element } {
   const html = readFileSync(file, 'utf8');
@@ -93,6 +109,7 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>): { ctx: R
     confirm: () => true,
     prompt: () => 'DELETE',
     Auth: { ensureAuthed: async () => null, renderHeader() {} },
+    EditorCopy: { en: EDITOR_COPY },
     AdminConfirm: { ask: async () => true, askFields: async () => null, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     ...extraGlobals,
   };
@@ -581,6 +598,224 @@ describe('settings.html caption providers', () => {
     expect(requests).toEqual(['/ai-config?purpose=caption']);
     expect(el('captionOut').textContent).toContain('Save the alt-text provider settings');
     expect(el('test').disabled).toBe(false);
+  });
+});
+
+describe('settings.html review configuration test', () => {
+  const validReview = {
+    title: { status: 'pass', critique: '' },
+    excerpt: { status: 'pass', critique: '' },
+    headings: { status: 'pass', critique: '' },
+    practicalDetails: { status: 'pass', critique: '', missingAspects: [] },
+    internalLinks: { status: 'info', linkOpportunities: [] },
+  };
+  const completion = () => Response.json({ choices: [{ message: { content: JSON.stringify(validReview) } }] });
+  function setup(provider = 'openrouter', stored = false, network: typeof fetch = async () => completion()) {
+    const fetcher = vi.fn(network);
+    const page = loadPage('public/settings.html', {
+      fetch: fetcher, AbortController, setTimeout, clearTimeout,
+      Option: class { constructor(public text: string, public value: string) {} },
+    });
+    vm.runInContext(readFileSync('public/llm.js', 'utf8'), page.ctx);
+    (page.ctx.fill as (state: unknown) => void)({
+      ...defaultSettings(), aiProvider: provider, aiModel: 'selected-model', hasAiApiKey: stored,
+    });
+    return { ...page, fetcher };
+  }
+
+  let closeServer: (() => Promise<void>) | undefined;
+  afterEach(async () => {
+    await closeServer?.();
+    closeServer = undefined;
+  });
+
+  // Use actual authenticated /settings and /ai-config handlers: a fabricated
+  // key response hid the local-to-remote transition's isolation rule.
+  async function setupStoredKey(provider: Settings['aiProvider'] = 'lm-studio') {
+    const dir = await mkdtemp(join(tmpdir(), 'settings-review-'));
+    const settings = createSettingsStore({
+      path: join(dir, 'settings.json'),
+      defaults: { ...defaultSettings(), aiProvider: provider, aiModel: 'selected-model', captionProvider: 'openrouter' },
+      log: () => {},
+    });
+    const secrets = memorySecretsStore();
+    await secrets.set('ai_api_key', 'fixture-stored');
+    const getSecret = vi.spyOn(secrets, 'get');
+    const users = memoryUserStore();
+    const sessions = memorySessionStore();
+    const user = await users.create({ username: 'review-fixture', password: 'password123456', isAdmin: true });
+    const cookies = { sid: await sessions.create(user.id, 60_000) };
+    const media = memoryMediaStore({ baseUrl: 'https://images.example' });
+    const queue = createEncodeQueue({ store: media, storageDir: dir, lock: createWorkLock() });
+    const unavailable = async (): Promise<never> => { throw new Error('Not part of this settings test'); };
+    const app = buildServer({
+      storageDir: dir, baseUrl: 'https://images.example', imgHost: 'images.example', siteDir: join(dir, 'site'),
+      users, sessions, secrets, settings, media, encodeQueue: queue,
+      posts: memoryPostStore(), pages: memoryPageStore(),
+      builder: { build: unavailable, hasRelease: () => false }, backupDir: join(dir, 'backup'),
+      dbBackup: { dir, runNow: unavailable, running: () => false, sweepTempFiles: () => [], list: () => [], listImageArchives: () => [], state: () => ({}) },
+      dbCheck: unavailable,
+    });
+    closeServer = async () => {
+      await app.close();
+      await queue.drain();
+      await rm(dir, { recursive: true, force: true });
+    };
+    const page = setup(provider, true, async (input, init) => {
+      const url = String(input);
+      if (!url.startsWith('/')) return completion();
+      const response = await app.inject({
+        url, method: init?.method === 'POST' ? 'POST' : 'GET', cookies,
+        headers: Object.fromEntries(new Headers(init?.headers).entries()),
+        payload: typeof init?.body === 'string' ? init.body : undefined,
+      });
+      return new Response(response.body, { status: response.statusCode });
+    });
+    const response = await app.inject({ url: '/settings', cookies });
+    expect(response.statusCode).toBe(200);
+    (page.ctx.fill as (state: unknown) => void)(response.json());
+    return { ...page, app, cookies, settings, secrets, getSecret };
+  }
+
+  it.each(['openrouter', 'deepseek', 'custom'])('requires an entered key for an unsaved local-to-%s switch, without reading the stored key', async (provider) => {
+    const { el, fetcher, app, cookies, settings, getSecret } = await setupStoredKey();
+    const config = await app.inject({ url: '/ai-config', cookies });
+    expect(config.json()).toMatchObject({ aiProvider: 'lm-studio', hasAiApiKey: true, aiApiKey: null });
+    el('aiProvider').value = provider;
+    el('aiCustomBaseUrl').value = 'https://review.example/v1';
+    await el('aiProvider').fire('change');
+    await el('testReview').click();
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestLocalKey);
+    expect(el('testReview').disabled).toBe(false);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(getSecret).not.toHaveBeenCalled();
+
+    el('aiApiKey').value = 'fixture-entered';
+    await el('aiApiKey').fire('input');
+    await el('testReview').click();
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestSuccess);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]![1]?.headers).toMatchObject({ Authorization: 'Bearer fixture-entered' });
+    expect(settings.get()).toMatchObject({ aiProvider: 'lm-studio', captionProvider: 'openrouter' });
+    expect(getSecret).not.toHaveBeenCalled();
+  });
+
+  it('can save the remote provider first, then test with the existing stored key', async () => {
+    const { el, fetcher, settings, secrets } = await setupStoredKey();
+    el('aiProvider').value = 'deepseek';
+    await el('aiProvider').fire('change');
+    await el('saveReview').click();
+    expect(settings.get()).toMatchObject({ aiProvider: 'deepseek', captionProvider: 'openrouter' });
+    expect(await secrets.get('ai_api_key')).toBe('fixture-stored');
+    fetcher.mockClear();
+    await el('testReview').click();
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/ai-config', 'https://api.deepseek.com/v1/chat/completions']);
+    expect(fetcher.mock.calls[1]![1]?.headers).toMatchObject({ Authorization: 'Bearer fixture-stored' });
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestSuccess);
+    expect(el('aiApiKey').value).toBe('');
+  });
+
+  it('respects a switch back to local made after this settings page loaded', async () => {
+    const { el, fetcher, settings, getSecret } = await setupStoredKey('openrouter');
+    settings.update({ aiProvider: 'lm-studio' });
+    await el('testReview').click();
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/ai-config']);
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestLocalKey);
+    expect(el('testReview').disabled).toBe(false);
+    expect(getSecret).not.toHaveBeenCalled();
+  });
+
+  it.each(['openrouter', 'deepseek'])('requires a key before contacting %s', async (provider) => {
+    const { el, fetcher } = setup(provider);
+    await el('testReview').click();
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestMissingKey);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('tests an unsaved replacement against the selected destination without saving or loading the old key', async () => {
+    const { el, fetcher } = setup('openrouter', true);
+    el('aiProvider').value = 'deepseek';
+    el('aiApiKey').value = ' fixture-replacement';
+    await el('aiProvider').fire('change');
+    await el('testReview').click();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(url).toBe('https://api.deepseek.com/v1/chat/completions');
+    expect(init?.headers).toMatchObject({ Authorization: 'Bearer  fixture-replacement' });
+    expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'selected-model' });
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestSuccess);
+    expect(el('aiApiKey').value).toBe(' fixture-replacement');
+    await el('aiModel').fire('input');
+    expect(el('reviewTestOut').textContent).toBe('');
+  });
+
+  it('loads a stored key only on explicit test and never puts it into the form', async () => {
+    const { el, fetcher } = setup('openrouter', true, async (url) =>
+      url === '/ai-config' ? Response.json({ aiApiKey: 'fixture-stored' }) : completion());
+    expect(fetcher).not.toHaveBeenCalled();
+    await el('testReview').click();
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/ai-config', 'https://openrouter.ai/api/v1/chat/completions']);
+    expect(fetcher.mock.calls[1]![1]?.headers).toMatchObject({ Authorization: 'Bearer fixture-stored' });
+    expect(el('aiApiKey').value).toBe('');
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestSuccess);
+  });
+
+  it('keeps local tests independent of the stored remote key', async () => {
+    const { el, fetcher } = setup('lm-studio', true);
+    el('aiApiKey').value = 'unused-fixture';
+    await el('testReview').click();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]![1]?.headers).not.toHaveProperty('Authorization');
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestSuccess);
+  });
+
+  it.each([
+    [401, 'reviewTestAuthentication'], [402, 'reviewTestCredits'],
+    [429, 'reviewTestRateLimit'], [503, 'reviewTestFailed'],
+  ] as const)('reports HTTP %s without leaking provider response content', async (status, message) => {
+    const { el } = setup('deepseek', false, async () => new Response('fixture-secret-in-error', { status }));
+    el('aiApiKey').value = 'fixture-key';
+    await el('testReview').click();
+    expect(el('testReview').disabled).toBe(false);
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY[message]);
+  });
+
+  it('does not mistake an HTTP success with invalid model output for a working review configuration', async () => {
+    const { el } = setup('lm-studio', false, async () => Response.json({ choices: [{ message: { content: 'hello' } }] }));
+    await el('testReview').click();
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestFailed);
+  });
+
+  it('does not contact a provider when the stored key cannot be loaded', async () => {
+    const { el, fetcher } = setup('deepseek', true, async () => new Response('', { status: 503 }));
+    await el('testReview').click();
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/ai-config']);
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestKeyUnavailable);
+  });
+
+  it('cancels an in-flight test when fields change and discards its result', async () => {
+    const pending = Promise.withResolvers<Response>();
+    const { el, fetcher } = setup('lm-studio', false, async () => pending.promise);
+    const testing = el('testReview').click();
+    await el('aiProvider').fire('change');
+    pending.resolve(completion());
+    await testing;
+    expect(fetcher.mock.calls[0]![1]?.signal?.aborted).toBe(true);
+    expect(el('reviewTestOut').textContent).toBe('');
+    expect(el('testReview').disabled).toBe(false);
+  });
+
+  it('bounds a stalled provider request and leaves the button usable', async () => {
+    vi.useFakeTimers();
+    try {
+      const { el } = setup('lm-studio', false, async () => new Promise<Response>(() => {}));
+      el('reviewTimeoutMs').value = '5000';
+      const testing = el('testReview').click();
+      await vi.advanceTimersByTimeAsync(5000);
+      await testing;
+      expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestTimedOut);
+      expect(el('testReview').disabled).toBe(false);
+    } finally { vi.useRealTimers(); }
   });
 });
 
