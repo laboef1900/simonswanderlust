@@ -78,12 +78,14 @@ docker compose pull && docker compose up -d
 
 ### Cutting a release
 
-**Current release: v0.10.0.** Highlights since v0.9.0:
+**Current release: v0.11.0.** Highlights since v0.10.0:
 
-- Test the current story-review configuration with synthetic sample text, without saving
-  settings or reading a draft; preserve local-provider key isolation.
-- Allow cross-origin reads of public image variants so gallery alt-text suggestions can
-  fetch photos hosted on the image subdomain.
+- Fill empty article coordinates from German/English country names or ISO codes offline,
+  while preserving saved/manual locations.
+- Generate excerpts from the active language's unsaved manuscript using Story Review
+  settings, with preview and explicit acceptance before changing the excerpt.
+- Introduce Wanderlust Studio branding and refresh the editor and Settings layouts,
+  including shared writing configuration and responsive section navigation.
 
 1. On a `feature/*` branch from `dev`, update both apps' `package.json` and root
    `package-lock.json` versions, plus the `IMAGE_TAG` defaults in `docker-compose.yml`
@@ -94,8 +96,8 @@ docker compose pull && docker compose up -d
 
 ```bash
 git fetch origin main
-git tag -a v0.10.0 origin/main -m "Release v0.10.0"
-git push origin v0.10.0
+git tag -a v0.11.0 origin/main -m "Release v0.11.0"
+git push origin v0.11.0
 ```
 
 Never push directly to `dev` or `main`, tag an unmerged feature branch, or replace a
