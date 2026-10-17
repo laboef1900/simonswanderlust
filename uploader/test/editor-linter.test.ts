@@ -34,6 +34,7 @@ interface Api {
   lintAltText(input: Pick<Story, 'heroSrc' | 'heroAlt' | 'markdown'>): Findings;
   lintInternalLinks(markdown?: string): Findings;
   lintStory(input?: Story): StoryResult;
+  findImage(markdown: string, src: string): { start: number; end: number; line: number } | null;
 }
 
 // A browser IIFE sandbox with no DOM, network, storage, or server dependencies.
@@ -234,5 +235,25 @@ describe('lintStory aggregation', () => {
     expect(checked).toMatchObject({ pass: false, warningCount: 3 });
     expect(checked.altText.findings).toEqual([]);
     expect(checked.internalLinks.findings[0]?.line).toBeUndefined();
+  });
+});
+
+describe('photo repair locations', () => {
+  it.each([
+    ['![a\\]b](https://img/a\\(b\\).webp "caption")', 'https://img/a(b).webp', 'a\\]b'],
+    ['![two\nlines](<https://img/a b.webp>)', 'https://img/a b.webp', 'two\nlines'],
+    ['![](https://img/empty.webp)', 'https://img/empty.webp', ''],
+  ])('locates editable alt text in %s', (image, src, alt) => {
+    const markdown = 'Intro\n\n' + image;
+    const target = L.findImage(markdown, src)!;
+    expect(markdown.slice(target.start, target.end)).toBe(alt);
+    expect(target.line).toBe(3);
+    expect(L.findImage(markdown, 'https://img/absent')).toBeNull();
+  });
+
+  it('does not target examples, links or gallery fences as body images', () => {
+    const src = 'https://img/photo';
+    const markdown = '`![example](' + src + ')`\n\n````markdown\n![](' + src + ')\n````\n\n[link](' + src + ')\n\n```gallery\n' + src + '\n```';
+    expect(L.findImage(markdown, src)).toBeNull();
   });
 });

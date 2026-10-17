@@ -13,14 +13,16 @@ export class EditorEvent {
   readonly shiftKey: boolean;
   readonly ctrlKey: boolean;
   readonly metaKey: boolean;
+  readonly isComposing: boolean;
 
-  constructor(readonly type: string, options: { bubbles?: boolean; cancelable?: boolean; key?: string; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean } = {}) {
+  constructor(readonly type: string, options: { bubbles?: boolean; cancelable?: boolean; key?: string; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; isComposing?: boolean } = {}) {
     this.bubbles = options.bubbles ?? false;
     this.cancelable = options.cancelable ?? false;
     this.key = options.key ?? '';
     this.shiftKey = options.shiftKey ?? false;
     this.ctrlKey = options.ctrlKey ?? false;
     this.metaKey = options.metaKey ?? false;
+    this.isComposing = options.isComposing ?? false;
   }
 
   preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
@@ -51,6 +53,8 @@ export class EditorElement {
   private inputValue = '';
   private previousFocus: EditorElement | null = null;
   checked = false;
+  selectionStart = 0;
+  selectionEnd = 0;
 
   constructor(readonly tagName: string, private readonly state: DomState) {}
 
@@ -161,6 +165,8 @@ export class EditorElement {
   getClientRects() { return this.closest('[hidden]') ? [] : [{}]; }
   get offsetParent(): EditorElement | null { return this.closest('[hidden]') ? null : this.parentElement; }
   focus() { if (!this.disabled && !this.closest('[hidden]')) this.state.activeElement = this; }
+  scrollIntoView() {}
+  setSelectionRange(start: number, end: number) { this.selectionStart = start; this.selectionEnd = end; }
   addEventListener(type: string, callback: (event: EditorEvent) => void) {
     this.listeners.set(type, [...this.listeners.get(type) ?? [], callback]);
   }

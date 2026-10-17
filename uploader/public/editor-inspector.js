@@ -17,6 +17,15 @@ window.EditorInspector = (function () {
     var desktopCollapsed = false;
     var restoreFocus = null;
 
+    // The action bar can wrap at narrow widths or zoom. Measure its actual
+    // height so the pinned inspector never sits underneath its controls.
+    if (window.ResizeObserver && commandbar) {
+      var barObserver = new window.ResizeObserver(function () {
+        body.style.setProperty('--editor-commandbar-height', commandbar.getBoundingClientRect().height + 'px');
+      });
+      barObserver.observe(commandbar);
+    }
+
     function isMobile() { return media.matches; }
 
     function focusables() {
@@ -56,7 +65,7 @@ window.EditorInspector = (function () {
       if (desktopCollapsed) inspector.setAttribute('inert', '');
       else inspector.removeAttribute('inert');
       toggle.setAttribute('aria-expanded', desktopCollapsed ? 'false' : 'true');
-      toggle.textContent = desktopCollapsed ? 'Show story details' : 'Hide story details';
+      toggle.hidden = !desktopCollapsed;
       restoreFocus = null;
     }
 
@@ -70,7 +79,6 @@ window.EditorInspector = (function () {
       inspector.setAttribute('aria-modal', 'true');
       inspector.setAttribute('aria-hidden', 'false');
       toggle.setAttribute('aria-expanded', 'true');
-      toggle.textContent = 'Close story details';
       setBackgroundInert(true);
       if (target) {
         openDetailsFor(target);
@@ -90,7 +98,7 @@ window.EditorInspector = (function () {
       inspector.setAttribute('aria-hidden', 'true');
       inspector.setAttribute('inert', '');
       toggle.setAttribute('aria-expanded', 'false');
-      toggle.textContent = 'Story details';
+      toggle.hidden = false;
       if (shouldRestore && (wasOpen || inspector.contains(document.activeElement))) (restoreFocus || toggle).focus();
       restoreFocus = null;
     }
@@ -101,7 +109,11 @@ window.EditorInspector = (function () {
         closeMobile(false);
         if (moveFocus) toggle.focus();
       } else {
+        var inspectorFocused = inspector.contains(document.activeElement);
+        var toggleFocused = document.activeElement === toggle;
         applyDesktop();
+        if (desktopCollapsed && inspectorFocused) toggle.focus();
+        else if (!desktopCollapsed && toggleFocused) closeButton.focus();
       }
     }
 
@@ -121,11 +133,18 @@ window.EditorInspector = (function () {
         else openMobile();
         return;
       }
-      desktopCollapsed = !desktopCollapsed;
-      if (desktopCollapsed && inspector.contains(document.activeElement)) toggle.focus();
+      desktopCollapsed = false;
       applyDesktop();
+      closeButton.focus();
     });
-    closeButton.addEventListener('click', function () { closeMobile(true); });
+    closeButton.addEventListener('click', function () {
+      if (isMobile()) closeMobile(true);
+      else {
+        desktopCollapsed = true;
+        applyDesktop();
+        toggle.focus();
+      }
+    });
     scrim.addEventListener('click', function () { closeMobile(true); });
     document.addEventListener('keydown', function (event) {
       if (!isMobile() || !body.classList.contains('editor-inspector-open')) return;

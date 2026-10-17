@@ -1461,6 +1461,10 @@ a:hover { color: var(--red-light); }
 }
 
 .cms-sidebar {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100dvh;
   width: 15.5rem;
   background: var(--navy);
   color: #fff;
@@ -1470,6 +1474,7 @@ a:hover { color: var(--red-light); }
   z-index: 100;
 }
 .cms-sidebar-header {
+  flex-shrink: 0;
   padding: 1.25rem 1rem 1rem;
 }
 .cms-brand-text {
@@ -1490,7 +1495,7 @@ a:hover { color: var(--red-light); }
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.78);
 }
-.cms-sidebar-action { padding: 0 1rem 0.75rem; }
+.cms-sidebar-action { padding: 0 1rem 0.75rem; flex-shrink: 0; }
 .cms-btn-new {
   display: flex;
   align-items: center;
@@ -1528,6 +1533,7 @@ a:hover { color: var(--red-light); }
 .cms-nav-group {
   padding: 0.25rem 0.65rem 1rem;
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
@@ -1576,6 +1582,7 @@ a:hover { color: var(--red-light); }
 .cms-nav-item svg { width: 1.1rem; height: 1.1rem; flex-shrink: 0; }
 
 .cms-sidebar-footer {
+  flex-shrink: 0;
   padding: 0.85rem 1rem 1rem;
   border-top: 1px solid rgba(255, 255, 255, 0.12);
   display: flex;
@@ -1824,6 +1831,7 @@ a:hover { color: var(--red-light); }
 body.editor-page {
   --editor-gutter: clamp(0.75rem, 1.6vw, 1.5rem);
   --editor-inspector-width: clamp(18rem, 22vw, 19.5rem);
+  --editor-commandbar-height: 0px;
   overflow-x: clip;
 }
 
@@ -1913,7 +1921,7 @@ body.editor-page .editor-commandbar {
   top: 0;
   z-index: 70;
   display: grid;
-  grid-template-columns: auto minmax(8rem, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.75rem;
   min-width: 0;
@@ -1940,8 +1948,18 @@ body.editor-page .editor-commandbar__status {
   overflow: hidden;
 }
 
+body.editor-page .editor-save-state {
+  flex-shrink: 0;
+  margin: 0;
+  color: var(--navy);
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
 body.editor-page .editor-commandbar__actions {
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 0.4rem;
   white-space: nowrap;
 }
@@ -2133,8 +2151,30 @@ body.editor-page .lang-code {
 }
 
 body.editor-page .alt-audit {
-  max-width: 76rem;
-  margin: 1rem auto 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+body.editor-page .alt-audit summary {
+  min-height: 2.75rem;
+  padding-block: 0.6rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+body.editor-page .alt-audit summary:focus-visible {
+  outline: 2px solid var(--navy);
+  outline-offset: 3px;
+}
+
+body.editor-page .alt-audit h3 {
+  margin: 1.25rem 0 0;
+  font-size: 0.9rem;
+}
+
+body.editor-page .alt-audit #altAuditFeedback:not([hidden]) {
+  margin-top: 1rem;
+  font-weight: 600;
 }
 
 body.editor-page .editor-workspace {
@@ -2167,6 +2207,7 @@ body.editor-page .editor-writing-surface {
 
 body.editor-page .locale-tab[hidden],
 body.editor-page [data-inspector-locale][hidden],
+body.editor-page .editor-inspector-toggle[hidden],
 body.editor-page .editor-inspector-scrim[hidden] {
   display: none;
 }
@@ -2221,6 +2262,10 @@ body.editor-page .editor-card-header .editor-card-title {
 body.editor-page .editor-title-input {
   width: 100%;
   min-height: 3.75rem;
+  display: block;
+  resize: none;
+  overflow: hidden;
+  overflow-wrap: anywhere;
   margin: 0;
   padding: 0.35rem 0;
   border: 0;
@@ -2535,9 +2580,9 @@ body.editor-page .editor-media-toolbar .muted {
    at narrow widths. Its groups are divided by rules rather than nested cards. */
 body.editor-page .editor-inspector {
   position: sticky;
-  top: calc(var(--editor-gutter) + 3.8rem);
+  top: calc(var(--editor-commandbar-height) + var(--editor-gutter));
   min-width: 0;
-  max-height: calc(100dvh - 5.3rem);
+  max-height: calc(100dvh - var(--editor-commandbar-height) - 2 * var(--editor-gutter));
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -2553,6 +2598,10 @@ body.editor-page .editor-inspector > * {
 }
 
 body.editor-page .editor-inspector__header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--canvas);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2570,10 +2619,12 @@ body.editor-page .editor-inspector__header h2 {
 }
 
 body.editor-page .editor-inspector-close {
-  display: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   margin: 0;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
 }
 
 body.editor-page .editor-inspector-group,
@@ -2759,10 +2810,6 @@ body.editor-page .btn-ghost-preview:hover {
     transition-delay: 0s, 0s;
   }
 
-  body.editor-page .editor-inspector-close {
-    display: inline-flex;
-  }
-
   body.editor-page .editor-inspector-scrim:not([hidden]) {
     position: fixed;
     z-index: 100;
@@ -2773,7 +2820,7 @@ body.editor-page .btn-ghost-preview:hover {
   }
 }
 
-@media (max-width: 64rem) {
+@media (max-width: 74rem) {
   body.editor-page .editor-commandbar {
     grid-template-columns: auto minmax(0, 1fr);
     gap: 0.25rem;
@@ -2836,7 +2883,19 @@ body.editor-page .btn-ghost-preview:hover {
     padding-block: 0.65rem;
   }
 
+  body.editor-page .editor-commandbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
 
+  body.editor-page .editor-commandbar__actions {
+    grid-column: 1;
+    grid-row: 2;
+    justify-content: flex-start;
+  }
+
+  body.editor-page .editor-commandbar__status {
+    grid-row: 3;
+  }
 
   body.editor-page .editor-commandbar__actions > button {
     padding-inline: 0.35rem;
@@ -2898,10 +2957,6 @@ body.editor-page .btn-ghost-preview:hover {
 
   body.editor-page .editor-canvas {
     gap: 0.75rem;
-  }
-
-  body.editor-page .alt-audit {
-    margin: 0.75rem;
   }
 
   body.editor-page .editor-writing-surface {

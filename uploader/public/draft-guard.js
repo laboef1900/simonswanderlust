@@ -32,7 +32,7 @@ window.DraftGuard = (function () {
     return prefix + ':' + nonce;
   }
 
-  // opts: { storageKey, collect, debounceMs?, orphanPrefix? } — collect() returns
+  // opts: { storageKey, collect, debounceMs?, orphanPrefix?, onChange? } — collect() returns
   // the full form payload to stash; debounceMs is the idle time before an
   // auto-stash. With orphanPrefix, tryRestore() falls back to the newest stash
   // under that prefix (another tab's — closed, crashed, or still open) when this
@@ -65,6 +65,7 @@ window.DraftGuard = (function () {
       generation += 1;
       cancelTimer();
       timer = setTimeout(() => { timer = null; stashNow(); }, debounceMs);
+      opts.onChange?.(dirty);
     }
 
     // Capture immediately before building a save payload; pass the token to
@@ -86,6 +87,7 @@ window.DraftGuard = (function () {
         // its stash until its content has actually been persisted.
         if (adoptedFrom !== null) { localStorage.removeItem(adoptedFrom); adoptedFrom = null; }
       } catch (e) { /* best-effort */ }
+      opts.onChange?.(dirty);
     }
 
     function parseStash(raw) {
@@ -147,6 +149,7 @@ window.DraftGuard = (function () {
         const at = stash && typeof stash.savedAt === 'string' ? stash.savedAt : '';
         if (at) sessionStorage.setItem((stash.key || key) + ':dismissed', at);
       } catch (e) { /* best-effort: sessionStorage may be unavailable */ }
+      opts.onChange?.(dirty);
     }
 
     // True when this exact stash (same savedAt) was already dismissed this
@@ -187,7 +190,7 @@ window.DraftGuard = (function () {
       e.returnValue = ''; // legacy Chrome needs returnValue set to show the dialog
     });
 
-    return { markDirty, markClean, snapshot, stashNow, tryRestore, adopt, dismissRestore, wasDismissed, setKey, redirectToLogin };
+    return { markDirty, markClean, snapshot, isDirty: () => dirty, stashNow, tryRestore, adopt, dismissRestore, wasDismissed, setKey, redirectToLogin };
   }
 
   return { safeNextPath, tabScopedKey, createDraftGuard };

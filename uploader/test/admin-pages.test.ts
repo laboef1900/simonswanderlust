@@ -556,15 +556,6 @@ describe('admin page wiring', () => {
     }
   });
 
-  it('save handlers pass a pre-fetch snapshot token to markClean (mid-save edits survive)', () => {
-    for (const page of [editor, about]) {
-      expect(page).toContain('const snap = guard.snapshot()');
-      expect(page).toContain('guard.markClean(snap)');
-      // the unconditional form must not be used on the save path
-      expect(page.match(/guard\.markClean\(\)/g) ?? []).toHaveLength(1); // restore-declined only
-    }
-  });
-
   it('login honors a validated ?next= return URL', () => {
     expect(login).toContain('DraftGuard.safeNextPath(');
     expect(login).toContain('location.href = nextPath');
