@@ -15,7 +15,7 @@
     <main>
       <div class="editor-commandbar" id="editorCommandbar">
         <div class="editor-commandbar__nav">
-          <a href="/admin/posts.html" class="action-link">Back to Posts</a>
+          <a id="backToPosts" href="/admin/posts.html" class="action-link">Back to Posts</a>
           <div class="lang-switch-bar" role="tablist" aria-label="Post language">
             <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">
               Deutsch <span class="lang-code" aria-hidden="true">DE</span>
@@ -481,8 +481,18 @@
       deMDE.codemirror.getInputField().setAttribute('aria-label', 'Body (Markdown, DE)');
       enMDE.codemirror.getInputField().setAttribute('aria-label', 'Body (Markdown, EN)');
 
+      // Admin responses use no-referrer. Carry list state in the link itself;
+      // accept only the same-origin Posts path, never an arbitrary return URL.
+      const editorParams = new URLSearchParams(location.search);
+      try {
+        const returnTo = new URL(editorParams.get('returnTo') || '', location.origin);
+        if (returnTo.origin === location.origin && returnTo.pathname === '/admin/posts.html') {
+          $('backToPosts').setAttribute('href', returnTo.pathname + returnTo.search);
+        }
+      } catch (_) { /* Invalid return URLs keep the plain Posts link. */ }
+
       // ---- draft guard: dirty tracking, beforeunload warning, local autosave ----
-      const initialTk = new URLSearchParams(location.search).get('tk');
+      const initialTk = editorParams.get('tk');
       const guard = DraftGuard.createDraftGuard({
         // A new post stashes under a per-tab key; otherwise two new-post tabs
         // share one and the first save deletes the other's work (#138).

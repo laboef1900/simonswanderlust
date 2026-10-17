@@ -21,6 +21,9 @@ interface StubElement {
   hidden: boolean;
   inert: boolean;
   focused: boolean;
+  /** Ancestor whose `inert` blocks focus, as a browser would. */
+  inertRoot: StubElement | null;
+  children: StubElement[];
   classList: {
     add(name: string): void;
     remove(name: string): void;
@@ -38,18 +41,30 @@ interface StubElement {
   fire(type: string, event?: BrowserEvent): BrowserEvent;
 }
 
-function shellSandbox(pathname: string) {
+type SelectorHost = StubElement & {
+  setSelectors(map: Record<string, StubElement>): void;
+  setFocusables(items: StubElement[]): void;
+};
+
+interface SandboxOptions {
+  isAdmin?: boolean;
+  /** Render a page that declares a `.cms-page-actions` command group. */
+  pageActions?: boolean;
+}
+
+function shellSandbox(pathname: string, options: SandboxOptions = {}) {
+  const { isAdmin = true, pageActions = false } = options;
   const ids = new Map<string, StubElement>();
   const documentListeners = new Map<string, Listener[]>();
   let activeElement: StubElement | null = null;
   let renderedShell: StubElement | null = null;
   let shellHtml = '';
+  const selectorsOf = new Map<StubElement, Map<string, StubElement>>();
 
   const makeElement = (id = ''): StubElement => {
     const attrs = new Map<string, string>();
     const classes = new Set<string>();
     const listeners = new Map<string, Listener[]>();
-    const children: StubElement[] = [];
     const selectors = new Map<string, StubElement>();
     let focusables: StubElement[] = [];
     const element: StubElement = {
@@ -59,6 +74,8 @@ function shellSandbox(pathname: string) {
       hidden: false,
       inert: false,
       focused: false,
+      inertRoot: null,
+      children: [],
       classList: {
         add(name) { classes.add(name); },
         remove(name) { classes.delete(name); },
@@ -67,7 +84,7 @@ function shellSandbox(pathname: string) {
       setAttribute(name, value) { attrs.set(name, String(value)); },
       getAttribute(name) { return attrs.get(name) ?? null; },
       hasAttribute(name) { return attrs.has(name); },
-      appendChild(child) { children.push(child); },
+      appendChild(child) { element.children.push(child); },
       addEventListener(type, listener) {
         const registered = listeners.get(type);
         if (registered) registered.push(listener);
@@ -76,6 +93,7 @@ function shellSandbox(pathname: string) {
       querySelector(selector) { return selectors.get(selector) ?? null; },
       querySelectorAll() { return focusables; },
       focus() {
+        if (element.inertRoot?.inert) return;
         if (activeElement) activeElement.focused = false;
         activeElement = element;
         element.focused = true;
@@ -88,6 +106,7 @@ function shellSandbox(pathname: string) {
         return fired;
       },
     };
+    selectorsOf.set(element, selectors);
     Object.assign(element, {
       setSelectors(map: Record<string, StubElement>) {
         for (const [selector, child] of Object.entries(map)) selectors.set(selector, child);
@@ -100,14 +119,14 @@ function shellSandbox(pathname: string) {
 
   const main = makeElement();
   const heading = makeElement();
-  heading.textContent = 'Desk';
   const lede = makeElement();
-  lede.textContent = 'Publishing overview';
-  const meta = makeElement();
-  (meta as StubElement & { setSelectors(map: Record<string, StubElement>): void }).setSelectors({ h1: heading, '.lede': lede });
+  const meta = makeElement() as SelectorHost;
+  meta.setSelectors({ h1: heading, '.lede': lede });
+  const actions = pageActions ? makeElement() : null;
 
   const body = makeElement();
-  body.appendChild = (child) => { renderedShell = child; };
+  let renders = 0;
+  body.appendChild = (child) => { renderedShell = child; renders += 1; };
 
   const mediaListeners: Listener[] = [];
   const media = {
@@ -124,40 +143,44 @@ function shellSandbox(pathname: string) {
       if (selector === '.cms-app-shell') return renderedShell;
       if (selector === 'main') return main;
       if (selector === '.cms-page-meta') return meta;
+      if (selector === '.cms-page-actions') return actions;
       return null;
     },
     createElement() {
-      const shell = makeElement();
+      const shell = makeElement() as SelectorHost;
       Object.defineProperty(shell, 'innerHTML', {
         set(value: string) {
           shellHtml = value;
-          const sidebar = makeElement('cmsSidebar');
+          const masthead = makeElement();
           const menu = makeElement('cmsMenuBtn');
+          menu.inertRoot = masthead;
           menu.setAttribute('aria-expanded', 'false');
           menu.setAttribute('aria-label', 'Open menu');
+          const sidebar = makeElement('cmsSidebar') as SelectorHost;
           const scrim = makeElement('cmsNavScrim');
           scrim.hidden = true;
           const workspace = makeElement();
-          const titleBlock = makeElement();
-          const content = makeElement();
-          const avatar = makeElement();
-          const userName = makeElement();
-          const userRole = makeElement();
           const close = makeElement('cmsNavClose');
           const logout = makeElement('cmsLogoutBtn');
-          (sidebar as StubElement & { setFocusables(items: StubElement[]): void }).setFocusables([close, logout]);
-          (shell as StubElement & { setSelectors(map: Record<string, StubElement>): void }).setSelectors({
+          sidebar.setFocusables([close, logout]);
+          shell.setSelectors({
+            '.cms-masthead': masthead,
+            '.cms-brand-mark': makeElement(),
             '.cms-brand-title': makeElement(),
-            '.cms-brand-sub': makeElement(),
+            '.cms-masthead-right > .cms-brand-sub': makeElement(),
+            '.cms-workspace-nav': makeElement(),
+            '.cms-journal-title': makeElement(),
+            '.cms-sidebar-header .cms-brand-sub': makeElement(),
             '#cmsSidebar': sidebar,
             '#cmsMenuBtn': menu,
             '#cmsNavScrim': scrim,
             '.cms-workspace': workspace,
-            '.cms-title-block': titleBlock,
-            '.cms-content': content,
-            '.cms-avatar': avatar,
-            '.cms-user-name': userName,
-            '.cms-user-role': userRole,
+            '.cms-title-block': makeElement(),
+            '.cms-topbar-right': makeElement(),
+            '.cms-content': makeElement(),
+            '.cms-avatar': makeElement(),
+            '.cms-user-name': makeElement(),
+            '.cms-user-role': makeElement(),
           });
         },
       });
@@ -171,10 +194,11 @@ function shellSandbox(pathname: string) {
     },
   };
 
+  const copy = Object.fromEntries(Object.entries(ui.en)
+    .filter(([key]) => key.startsWith('editor.chrome.'))
+    .map(([key, value]) => [key.slice('editor.chrome.'.length), value]));
   const context: Record<string, unknown> = {
-    EditorCopy: { en: Object.fromEntries(Object.entries(ui.en)
-      .filter(([key]) => key.startsWith('editor.chrome.'))
-      .map(([key, value]) => [key.slice('editor.chrome.'.length), value])) },
+    EditorCopy: { en: copy },
     document: documentStub,
     location: { pathname, search: '', href: '' },
     fetch: async () => ({ json: async () => ({}) }),
@@ -184,25 +208,35 @@ function shellSandbox(pathname: string) {
   vm.createContext(context);
   vm.runInContext(authSource, context);
   const Auth = context.Auth as { renderHeader(session: { username: string; isAdmin: boolean }): void };
-  Auth.renderHeader({ username: 'simon', isAdmin: true });
+  Auth.renderHeader({ username: 'simon', isAdmin });
 
   const shell = ((): StubElement | null => renderedShell)();
   if (!shell) throw new Error('auth.js did not render the shell');
-  const sidebar = shell.querySelector('#cmsSidebar')!;
-  const menu = shell.querySelector('#cmsMenuBtn')!;
-  const scrim = shell.querySelector('#cmsNavScrim')!;
-  const workspace = shell.querySelector('.cms-workspace')!;
+  const part = (selector: string) => {
+    const found = selectorsOf.get(shell)?.get(selector);
+    if (!found) throw new Error('shell is missing ' + selector);
+    return found;
+  };
+  const sidebar = part('#cmsSidebar');
   const focusables = sidebar.querySelectorAll('a, button');
 
   return {
+    copy,
     main,
+    heading,
+    lede,
+    actions,
+    part,
     sidebar,
-    menu,
-    scrim,
-    workspace,
+    menu: part('#cmsMenuBtn'),
+    scrim: part('#cmsNavScrim'),
+    masthead: part('.cms-masthead'),
+    workspace: part('.cms-workspace'),
     first: focusables[0]!,
     last: focusables.at(-1)!,
     html: shellHtml,
+    get renders() { return renders; },
+    renderAgain() { Auth.renderHeader({ username: 'simon', isAdmin }); },
     key(key: string, shiftKey = false) {
       const event: BrowserEvent = { key, shiftKey, defaultPrevented: false };
       event.preventDefault = () => { event.defaultPrevented = true; };
@@ -216,6 +250,35 @@ function shellSandbox(pathname: string) {
   };
 }
 
+/** The drawer's moving parts, as returned by `shellSandbox`. */
+interface DrawerParts {
+  sidebar: StubElement;
+  menu: StubElement;
+  scrim: StubElement;
+  masthead: StubElement;
+  workspace: StubElement;
+}
+
+function expectDrawerOpen(shell: DrawerParts) {
+  expect(shell.sidebar.classList.contains('is-open')).toBe(true);
+  expect(shell.menu.getAttribute('aria-expanded')).toBe('true');
+  expect(shell.scrim.hidden).toBe(false);
+  expect(shell.masthead.inert).toBe(true);
+  expect(shell.workspace.inert).toBe(true);
+}
+
+function expectDrawerClosed(shell: DrawerParts) {
+  expect(shell.sidebar.classList.contains('is-open')).toBe(false);
+  expect(shell.menu.getAttribute('aria-expanded')).toBe('false');
+  expect(shell.scrim.hidden).toBe(true);
+  expect(shell.masthead.inert).toBe(false);
+  expect(shell.workspace.inert).toBe(false);
+}
+
+const workspaceLinks = (html: string) =>
+  [...html.matchAll(/href="([^"]+)" class="cms-workspace-link( is-active)?"/g)]
+    .map(([, href, active]) => ({ href, active: Boolean(active) }));
+
 describe('Auth navigation shell', () => {
   it('marks the logical current page, including editor as part of Posts', () => {
     const desk = shellSandbox('/admin/index.html');
@@ -227,13 +290,56 @@ describe('Auth navigation shell', () => {
     expect(editor.html).toMatch(/href="\/admin\/posts\.html" class="cms-nav-item" aria-current="page"/);
   });
 
+  it('highlights the masthead workspace that owns the current page', () => {
+    const active = (pathname: string) =>
+      workspaceLinks(shellSandbox(pathname).html).filter((link) => link.active).map((link) => link.href);
+    expect(active('/admin/editor.html')).toEqual(['/admin/posts.html']);
+    expect(active('/admin/')).toEqual(['/admin/posts.html']);
+    expect(active('/admin/media.html')).toEqual(['/admin/media.html']);
+    expect(active('/admin/users.html')).toEqual(['/admin/settings.html']);
+  });
+
+  it('offers Manage and the admin pages to admins only', () => {
+    const admin = shellSandbox('/admin/', { isAdmin: true });
+    expect(workspaceLinks(admin.html).map((link) => link.href))
+      .toEqual(['/admin/posts.html', '/admin/media.html', '/admin/settings.html']);
+
+    const author = shellSandbox('/admin/', { isAdmin: false });
+    expect(workspaceLinks(author.html).map((link) => link.href))
+      .toEqual(['/admin/posts.html', '/admin/media.html']);
+    for (const page of ['about', 'comments', 'import', 'settings', 'users']) {
+      expect(author.html).not.toContain('href="/admin/' + page + '.html"');
+    }
+    expect(author.part('.cms-user-role').textContent).toBe('Author');
+  });
+
+  it('keeps the page heading as the workspace h1 and moves page commands into the title row', () => {
+    const shell = shellSandbox('/admin/posts.html', { pageActions: true });
+    expect(shell.part('.cms-title-block').children).toEqual([shell.heading, shell.lede]);
+    expect(shell.heading.className).toBe('cms-page-title');
+    expect(shell.part('.cms-topbar-right').children).toEqual([shell.actions]);
+    expect(shell.part('.cms-content').children).toEqual([shell.main]);
+  });
+
+  it('labels the workspace nav and sets the username as text', () => {
+    const shell = shellSandbox('/admin/');
+    expect(shell.part('.cms-workspace-nav').getAttribute('aria-label')).toBe(shell.copy.shellWorkspaceNav);
+    expect(shell.part('.cms-journal-title').textContent).toBe(shell.copy.shellJournal);
+    expect(shell.part('.cms-user-name').textContent).toBe('simon');
+    expect(shell.html).not.toContain('simon');
+  });
+
+  it('renders the shell only once', () => {
+    const shell = shellSandbox('/admin/');
+    expect(shell.renders).toBe(1);
+    shell.renderAgain();
+    expect(shell.renders).toBe(1);
+  });
+
   it('opens into the drawer, traps Tab, and Escape returns focus to the trigger', () => {
     const shell = shellSandbox('/admin/');
     shell.menu.fire('click');
-    expect(shell.sidebar.classList.contains('is-open')).toBe(true);
-    expect(shell.menu.getAttribute('aria-expanded')).toBe('true');
-    expect(shell.scrim.hidden).toBe(false);
-    expect(shell.workspace.inert).toBe(true);
+    expectDrawerOpen(shell);
     expect(shell.first.focused).toBe(true);
 
     shell.last.focus();
@@ -243,19 +349,36 @@ describe('Auth navigation shell', () => {
     expect(shell.last.focused).toBe(true);
 
     expect(shell.key('Escape').defaultPrevented).toBe(true);
-    expect(shell.sidebar.classList.contains('is-open')).toBe(false);
-    expect(shell.menu.getAttribute('aria-expanded')).toBe('false');
-    expect(shell.scrim.hidden).toBe(true);
-    expect(shell.workspace.inert).toBe(false);
+    expectDrawerClosed(shell);
     expect(shell.menu.focused).toBe(true);
+  });
+
+  it('pulls focus that is outside the drawer back into it', () => {
+    const shell = shellSandbox('/admin/');
+    shell.menu.fire('click');
+    shell.main.focus();
+    expect(shell.key('Tab').defaultPrevented).toBe(true);
+    expect(shell.first.focused).toBe(true);
+    shell.main.focus();
+    expect(shell.key('Tab', true).defaultPrevented).toBe(true);
+    expect(shell.last.focused).toBe(true);
   });
 
   it('offers an in-drawer close control and restores the menu trigger', () => {
     const shell = shellSandbox('/admin/');
     shell.menu.fire('click');
     shell.first.fire('click');
-    expect(shell.sidebar.classList.contains('is-open')).toBe(false);
-    expect(shell.workspace.inert).toBe(false);
+    expectDrawerClosed(shell);
+    expect(shell.menu.focused).toBe(true);
+  });
+
+  it('closes on the scrim and releases the masthead before refocusing its trigger', () => {
+    const shell = shellSandbox('/admin/');
+    shell.menu.fire('click');
+    expectDrawerOpen(shell);
+    shell.scrim.fire('click');
+    expectDrawerClosed(shell);
+    // The stub refuses focus inside an inert masthead, so this also pins the order.
     expect(shell.menu.focused).toBe(true);
   });
 
@@ -263,10 +386,7 @@ describe('Auth navigation shell', () => {
     const shell = shellSandbox('/admin/');
     shell.menu.fire('click');
     shell.resizeToDesktop();
-    expect(shell.sidebar.classList.contains('is-open')).toBe(false);
-    expect(shell.menu.getAttribute('aria-expanded')).toBe('false');
-    expect(shell.scrim.hidden).toBe(true);
-    expect(shell.workspace.inert).toBe(false);
+    expectDrawerClosed(shell);
   });
 
   it('makes the skip-link target programmatically focusable', () => {
