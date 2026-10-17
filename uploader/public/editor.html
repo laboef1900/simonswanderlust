@@ -141,7 +141,8 @@
             <div class="editor-inspector-group" id="deStoryDetails">
               <h3 class="editor-card-title" id="deStoryDetailsHeading">German story details</h3>
               <label for="deCountry">Country (Deutsch)</label>
-              <input id="deCountry" type="text" placeholder="z. B. Griechenland" />
+              <input id="deCountry" type="text" placeholder="z. B. Griechenland" aria-describedby="deCountryHelp" />
+              <p class="muted editor-field-help" id="deCountryHelp"></p>
 
               <label for="slugFieldDe">DE permalink</label>
               <div class="slug-preview">
@@ -151,6 +152,8 @@
 
               <label for="deExcerpt">Excerpt / summary (DE)</label>
               <textarea id="deExcerpt" rows="3" placeholder="Eine kurze Zusammenfassung des Reiseberichts…"></textarea>
+              <p class="muted editor-field-help" id="deExcerptHelp"></p>
+              <div id="deExcerptAssist"></div>
 
               <div id="deKeyFactsContainer" class="keyfacts-editor">
                 <p class="section-label">Key facts (DE)</p>
@@ -216,7 +219,8 @@
             <div class="editor-inspector-group" id="enStoryDetails">
               <h3 class="editor-card-title" id="enStoryDetailsHeading">English story details</h3>
               <label for="enCountry">Country (English)</label>
-              <input id="enCountry" type="text" placeholder="e.g. Greece" />
+              <input id="enCountry" type="text" placeholder="e.g. Greece" aria-describedby="enCountryHelp" />
+              <p class="muted editor-field-help" id="enCountryHelp"></p>
 
               <label for="slugFieldEn">EN permalink</label>
               <div class="slug-preview">
@@ -226,6 +230,8 @@
 
               <label for="enExcerpt">Excerpt / summary (EN)</label>
               <textarea id="enExcerpt" rows="3" placeholder="A short summary of the trip report…"></textarea>
+              <p class="muted editor-field-help" id="enExcerptHelp"></p>
+              <div id="enExcerptAssist"></div>
 
               <div id="enKeyFactsContainer" class="keyfacts-editor">
                 <p class="section-label">Key facts (EN)</p>
@@ -311,13 +317,16 @@
             <div class="form-row-2">
               <div>
                 <label for="fmLat">Latitude</label>
-                <input id="fmLat" type="number" step="any" placeholder="37.9755" />
+                <input id="fmLat" type="number" step="any" min="-90" max="90" placeholder="37.9755" aria-describedby="coordinatesHelp countryCoordinatesStatus" />
               </div>
               <div>
                 <label for="fmLng">Longitude</label>
-                <input id="fmLng" type="number" step="any" placeholder="23.7348" />
+                <input id="fmLng" type="number" step="any" min="-180" max="180" placeholder="23.7348" aria-describedby="coordinatesHelp countryCoordinatesStatus" />
               </div>
             </div>
+            <p class="muted editor-field-help" id="coordinatesHelp"></p>
+            <p class="muted editor-field-help" id="countryCoordinatesStatus" role="status"></p>
+            <button type="button" id="useCountryCenter" class="btn-secondary" hidden></button>
 
             <label for="fmRoute">Route</label>
             <input id="fmRoute" type="text" placeholder="e.g. Athens → Rhodes" />
@@ -392,6 +401,7 @@
       </footer>
     </dialog>
 
+    <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/draft-guard.js"></script>
@@ -404,13 +414,15 @@
     <script src="/admin/gallery-fence.js"></script>
     <script src="/admin/editor-linter.js"></script>
     <script src="/admin/editor-review.js"></script>
+    <script src="/admin/editor-excerpt.js"></script>
+    <script src="/admin/country-centers.js"></script>
+    <script src="/admin/country-coordinates.js"></script>
     <script src="/admin/image-markdown.js"></script>
     <!-- PostsFilter.thumbUrl(): the hero focal-point control needs the same
          never-upscale variant rule the posts list uses. -->
     <script src="/admin/posts-filter.js"></script>
     <script src="/admin/tabs.js"></script>
     <script src="/admin/editor-inspector.js"></script>
-    <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/editor-title-image.js"></script>
     <script src="/admin/waypoint-copy.js"></script>
     <script src="/admin/waypoint-lookup.js"></script>
@@ -427,6 +439,7 @@
       // every save so the server can 409 when another tab/user saved meanwhile.
       let loadedUpdatedAt = null;
       let storyReview = null;
+      let excerptAssist = null;
       let reviewIsAdmin = false;
       let pendingSaves = 0;
       let populatingBody = false;
@@ -490,10 +503,15 @@
       // Delegated listeners cover every static field plus dynamic key-fact rows;
       // the EasyMDE bodies live in CodeMirror and need their own change hooks.
       const mainEl = document.querySelector('main');
-      mainEl.addEventListener('input', () => { guard.markDirty(); storyReview?.invalidate(); });
+      mainEl.addEventListener('input', () => {
+        guard.markDirty();
+        storyReview?.invalidate();
+        excerptAssist?.invalidate();
+      });
       function onBodyChange() {
         if (!populatingBody) guard.markDirty();
         storyReview?.invalidate();
+        excerptAssist?.invalidate();
         updateLocaleChip();
       }
       deMDE.codemirror.on('change', onBodyChange);
@@ -568,6 +586,7 @@
       function activateLocale(tab) {
         Object.values(galleryEditors).forEach((editor) => editor.cancel());
         storyReview?.invalidate();
+        excerptAssist?.invalidate();
         activeTab = tab;
         syncInspectorLocale(tab);
         (tab === 'en' ? enMDE : deMDE).codemirror.refresh();
@@ -637,6 +656,37 @@
         },
         on401: () => guard.redirectToLogin(),
         isAdmin: () => reviewIsAdmin,
+      });
+
+      excerptAssist = EditorExcerpt.create({
+        containers: { de: $('deExcerptAssist'), en: $('enExcerptAssist') },
+        capture: (locale) => ({
+          identity: currentTk, locale,
+          title: $(locale + 'Title').value,
+          markdown: (locale === 'en' ? enMDE : deMDE).value(),
+          excerpt: $(locale + 'Excerpt').value,
+        }),
+        isCurrent: (snapshot) => snapshot.identity === currentTk && snapshot.locale === activeTab,
+        apply: (locale, value) => {
+          const input = $(locale + 'Excerpt');
+          input.value = value;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        },
+        on401: () => guard.redirectToLogin(),
+        isAdmin: () => reviewIsAdmin,
+        copy: editorCopy,
+      });
+      for (const locale of ['de', 'en']) {
+        $(locale + 'CountryHelp').textContent = editorCopy.countryHelp;
+        $(locale + 'ExcerptHelp').textContent = editorCopy.excerptHelp;
+        $(locale + 'Excerpt').setAttribute('aria-describedby', locale + 'ExcerptHelp');
+      }
+      $('coordinatesHelp').textContent = editorCopy.coordinatesHelp;
+      const countryCoords = CountryCoordinates.wire({
+        countries: [$('deCountry'), $('enCountry')],
+        codeInput: $('fmCountryCode'), latInput: $('fmLat'), lngInput: $('fmLng'),
+        status: $('countryCoordinatesStatus'), useButton: $('useCountryCenter'),
+        copy: editorCopy, lang: 'en',
       });
 
       // ---- key facts (optional rows, per locale) ----
@@ -1738,6 +1788,7 @@
       // never merges with what was already on screen.
       function populateForm(post) {
         storyReview?.invalidate();
+        excerptAssist?.invalidate();
         // Every shared field is written unconditionally (with '' fallbacks):
         // buildPayload() deletes cleared/empty keys from the stash, so applying
         // a restore over an already-loaded post must not resurrect values the
@@ -1778,6 +1829,7 @@
           $('slugFieldDe').disabled = true;
           $('slugFieldEn').disabled = true;
         }
+        countryCoords.reset();
         updateLocaleChip();
       }
 

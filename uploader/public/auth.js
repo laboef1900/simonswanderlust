@@ -128,8 +128,8 @@ window.Auth = (function () {
       '<aside class="cms-sidebar" id="cmsSidebar">' +
         '<div class="cms-sidebar-header">' +
           '<div class="cms-brand-text">' +
-            '<span class="cms-brand-title">Image Station</span>' +
-            '<span class="cms-brand-sub">Expedition Log</span>' +
+            '<span class="cms-brand-title"></span>' +
+            '<span class="cms-brand-sub"></span>' +
           '</div>' +
         '</div>' +
           '<button type="button" class="cms-nav-close" id="cmsNavClose" aria-label="Close menu">' +
@@ -172,6 +172,8 @@ window.Auth = (function () {
         '</header>' +
         '<div class="cms-content"></div>' +
       '</div>';
+    shell.querySelector('.cms-brand-title').textContent = EditorCopy.en.studioName;
+    shell.querySelector('.cms-brand-sub').textContent = EditorCopy.en.studioDescriptor;
 
     // Username is the one user-controlled string in this shell; set as text
     // AFTER the parse so it can never be markup (#131).
@@ -186,7 +188,7 @@ window.Auth = (function () {
     } else {
       const t = document.createElement('h1');
       t.className = 'cms-page-title';
-      t.textContent = 'Image Station';
+      t.textContent = EditorCopy.en.studioName;
       titleBlock.appendChild(t);
     }
     if (lede) {

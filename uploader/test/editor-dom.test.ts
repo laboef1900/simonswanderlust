@@ -222,7 +222,7 @@ function loadEditor(options: EditorOptions = {}) {
     guard.redirectToLogin = () => { redirects += 1; redirect(); };
     return guard;
   };
-  for (const file of ['waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
+  for (const file of ['waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
     vm.runInContext(readFileSync('public/' + file, 'utf8'), ctx, { filename: file });
   }
   if (options.review) (ctx.LLM as { reviewStory: Review }).reviewStory = options.review;
@@ -1455,5 +1455,60 @@ describe('manuscript-first editor refinements', () => {
     expect(h.el('deTitle').value).toBe('Recovered local title');
     expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveUnsaved']);
     expect(h.local.getItem('swl:draft:tk1')).not.toBeNull();
+  });
+});
+
+describe('country and excerpt assistance in the real editor', () => {
+  it('treats reloaded automatic coordinates as author-owned before another country edit', () => {
+    const h = loadEditor();
+    h.el('deCountry').value = 'Griechenland';
+    h.el('deCountry').fire('change');
+    const saved = h.api.buildPayload();
+    expect(saved.shared.coordinates).toEqual({ lat: 39.4928, lng: 21.7257 });
+    expect(saved.shared.countryCode).toBe('GR');
+    h.api.populateForm(saved);
+    h.el('deCountry').value = 'Ecuador';
+    h.el('deCountry').fire('change');
+    expect(h.api.buildPayload().shared.coordinates).toEqual(saved.shared.coordinates);
+    expect(h.api.buildPayload().shared.countryCode).toBe('GR');
+    expect(h.el('useCountryCenter').hidden).toBe(false);
+  });
+
+  it('generates from the unsaved active-language manuscript and only replaces an excerpt on acceptance', async () => {
+    const suggestion = 'A quiet walk through Bucharest, from the station to the old town, with a stop at the market and notes from the route.';
+    const h = loadEditor({ fetch: reviewNetwork(async () => response({
+      choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ excerpt: suggestion }) } }],
+    })) });
+    h.api.populateForm(fullPair());
+    h.el('tabbtn-en').click();
+    h.editors[1]!.value('## Morning walk\nWe walked from the station to the old town and stopped at the market.');
+    const before = h.api.buildPayload();
+    required(h.el('enExcerptAssist'), '[data-excerpt-action="generate"]').click();
+    await settle();
+    expect(h.api.buildPayload()).toEqual(before);
+    const request = h.requests.find(({ url }) => url === providerUrl)!;
+    const messages = JSON.parse(String(request.options.body)).messages as { role: string; content: string }[];
+    expect(JSON.parse(messages.find(({ role }) => role === 'user')!.content)).toEqual({
+      locale: 'en', title: before.en.title, markdown: before.en.bodyMarkdown,
+    });
+    required(h.el('enExcerptAssist'), '[data-excerpt-action="apply"]').click();
+    expect(h.api.buildPayload().en.excerpt).toBe(suggestion);
+    expect(h.api.buildPayload().de).toEqual(before.de);
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    expect(h.requests.filter(({ url }) => url.startsWith('/posts'))).toEqual([]);
+  });
+
+  it('invalidates excerpt work when the actual CodeMirror manuscript changes', async () => {
+    const pending = Promise.withResolvers<Response>();
+    const h = loadEditor({ fetch: reviewNetwork(() => pending.promise) });
+    h.api.populateForm(fullPair());
+    required(h.el('deExcerptAssist'), '[data-excerpt-action="generate"]').click();
+    await settle();
+    h.editors[0]!.value('## A different route\nA new unsaved account.');
+    pending.resolve(response({ choices: [{ message: { content: JSON.stringify({ excerpt: 'Outdated suggestion' }) } }] }));
+    await settle();
+    expect(required(h.el('deExcerptAssist'), '.excerpt-assist__suggestion').hidden).toBe(true);
+    expect(h.api.buildPayload().de.excerpt).toBe('x');
+    expect(h.requests.find(({ url }) => url === providerUrl)!.options.signal?.aborted).toBe(true);
   });
 });

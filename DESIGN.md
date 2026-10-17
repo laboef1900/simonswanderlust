@@ -863,3 +863,24 @@ than the square — a lone portrait — held at the square's own height as a
   destination country on 3 of 9 cards at 320px; plates wrap instead.
 - **Don't** fix a grid remainder by hardcoding a column count with a spanning
   tile — that left a **360×240** hole on the live homepage.
+
+## Admin authoring: Wanderlust Studio
+
+The admin retains the blog's canvas/navy/red palette and self-hosted Inter/IBM Plex Mono.
+The shared shell and login identify it as **Wanderlust Studio**, with **Simon's travel
+journal** as the descriptor. This is an editorial workspace, not a separate image product.
+
+- The editor command bar separates primary actions from the full-width save/readiness
+  status row. Error/status text wraps instead of disappearing behind ellipses.
+- Country assistance and excerpt generation sit next to the relevant fields in Story
+  details. Coordinate approximation is explicit. Excerpt suggestions have a plain-text
+  preview, character count, and separate accept/dismiss actions; generation never looks
+  like a saved edit.
+- Settings is one flat document with section dividers and a quiet section index, not a
+  stack of competing cards. **Story review & excerpts** comes first, followed by **Photo
+  descriptions**, image conversion, comments, and site/backups. Sections still save
+  independently.
+- At narrow widths the settings index wraps above the document and paired fields stack.
+  The topbar stays in normal flow so it cannot cover anchor targets. The editor retains
+  its existing keyboard-dismissable Story details drawer and visible focus rings.
+

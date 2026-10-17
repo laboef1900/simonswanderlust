@@ -374,19 +374,21 @@ Design and misuse cases: `docs/superpowers/specs/2026-09-05-safe-fetch-redirects
 `docs/superpowers/specs/2026-09-06-safe-fetch-literals-and-body-cancel-design.md`.
 
 AI inference is **browser-direct**, not a server remote-fetch path. Alt-text suggestions
-(local LM Studio or an admin-selected remote vision provider) and editorial review never
-call `safeFetch` or a server inference proxy. `src/editorial-review.ts` contains only the contract,
-schema, prompt and parser.
+(local LM Studio or an admin-selected remote vision provider), editorial review, and excerpt
+generation never call `safeFetch` or a server inference proxy. `src/editorial-review.ts`
+contains only the review contract, schema, prompt and parser.
 
-Review, caption and model-discovery clients scope optional Bearer keys to individual
-requests; local LM Studio receives none. Remote captions and reviews intentionally use
-the same encrypted key, even with different selected destinations (owner approval,
-2026-10-17, §13 of the #214 spec). Requests omit cookies/referrers and refuse redirects,
+Review, excerpt, caption and model-discovery clients scope optional Bearer keys to individual
+requests; local LM Studio receives none. Excerpts reuse the review provider/model/timeout and
+the existing `/ai-config` authorization contract; there is no additional secret endpoint.
+Remote captions and reviews intentionally use the same encrypted key, even with different
+selected destinations (owner approval, 2026-10-17, §13 of the #214 spec). Requests omit cookies/referrers and refuse redirects,
 preventing credentials from being forwarded to a different endpoint. OpenRouter attribution uses
 exact URL hostname equality, not a string/prefix match. Provider errors and abort reasons
 are not surfaced verbatim, since they may echo credentials or unpublished content.
-Review's abortable deadline covers attempts and body reads; only an HTTP 400 explicitly
-naming unsupported `response_format` permits one retry without that parameter.
+Review and excerpt requests share an abortable deadline covering attempts and body reads;
+only an HTTP 400 explicitly naming unsupported `response_format` permits one retry without
+that parameter.
 
 Model output is untrusted: both review parsers validate required fields, types and statuses,
 reject extra properties, strip Unicode controls, and cap text/list lengths. This is not
@@ -398,6 +400,17 @@ The drawer does not persist results or credentials. It aborts and invalidates wo
 the reviewed draft changes or the drawer closes; late results cannot mutate another
 locale/post. Cancellation does not retract a snapshot already received by the provider.
 Deterministic checks remain usable when remote review fails.
+
+The excerpt generator sends only the active locale's unsaved title and manuscript, not the
+current excerpt. Its parser accepts only a bounded `{"excerpt":"…"}` object, rejects extra
+properties/markup, and strips control characters. Results are plain text, require explicit
+acceptance, and never save/publish automatically. A draft/locale/post change invalidates pending
+and presented results; acceptance checks the snapshot again. `/ai-config` has a separate
+15-second abortable read deadline. Suggestions and keys are not persisted.
+
+Country-derived article coordinates use a bundled public-domain country-label-point table,
+not an automatic request to `/geocode`. Saved/manual coordinates are not overwritten by
+country edits. The separate, explicit waypoint-search boundary is unchanged.
 
 ### Retry widened the per-URL window (issue #85, 2026-07-30; narrowed by #93, 2026-09-05)
 

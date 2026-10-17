@@ -84,3 +84,24 @@ always available.
   check reported zero errors, warnings or hints with a real disposable schema.
 - No deployment, publish, production content changes, or CI run performed.
   Human security review remains a merge requirement.
+
+## Offline country assistance (article editor extension)
+
+The owner's subsequent request adds automatic article latitude/longitude from Country,
+separate from waypoint search. This uses bundled Natural Earth v5.1.2 label points;
+it never calls Nominatim or `/geocode` automatically. Coordinates are approximate,
+not an inferred city or route.
+
+A committed German/English country name or ISO2 code fills empty article coordinates
+and an empty country code. Only values automatically supplied in the current session
+follow later country changes. Saved/manual values, including partial coordinates,
+stay untouched unless the author chooses **Use country center**. Conflicting locale
+countries are not guessed; an existing mismatched ISO code is preserved with a warning.
+Loading/restoring a draft resets automatic ownership and never moves its pin.
+
+This is a normal-risk client-only extension: no route, schema, publish, or external-fetch
+contract changes. Existing waypoint-search controls and limits remain unchanged.
+Regression coverage exercises manual/saved ownership, unknown/conflicting names, ISO
+resolution, and saved payloads. Browser smoke confirmed country filling and save/reload
+against the real app with isolated stores, without touching the owner's content.
+
