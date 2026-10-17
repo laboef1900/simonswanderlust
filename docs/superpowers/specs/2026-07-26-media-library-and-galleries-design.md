@@ -933,6 +933,12 @@ page references the photo.
   chunk of Phase 3, not a footnote.
 - The picker shows **usage refs** ("used in: Patagonia") — "did I already use this shot?" is a
   picker-time question, and `imageUsage` already computes it.
+- **Read-only folder navigation** is shared by the title-image, hero, and gallery pickers:
+  the Media page's nested folder list, **All photos**, and recursive folder-scoped search.
+  Folder changes reset pagination without pruning selected gallery photos or their order.
+  Superseded responses cannot repaint the current folder. On narrow screens the folders
+  use a native disclosure; folder management remains on the Media page. This is client-only,
+  using the existing session-authorized `/media` and `/media/folders` routes.
 - Photos uploaded from the editor land in the library with metadata instead of being invisible
   to it.
 - AI alt-text buttons are untouched.
