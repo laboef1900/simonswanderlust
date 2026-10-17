@@ -143,16 +143,14 @@ window.GalleryFence = (function () {
       // renderer skips such a photo — so a NEWLY PICKED one must never reach the
       // fence. A photo already in the post is different: dropping it would
       // delete an author's photo to avoid writing a line that was already there.
-      // Emit the bare URL, which is exactly the stored form, and leave whatever
-      // the `images` map holds for it untouched (normalizeGalleryFences returns
-      // a single-field line unchanged).
-      if (!usableDim(item.width) || !usableDim(item.height)) {
-        if (item.fromPost) lines.push(src);
-        return;
-      }
+      // Retain any unsaved text metadata too: an unresolved photo must not lose
+      // its alt merely because the picker could not recover its dimensions.
+      var hasDimensions = usableDim(item.width) && usableDim(item.height);
+      if (!hasDimensions && !item.fromPost) return;
 
       var prior = metaFor(postMeta, src);
-      var parts = [src, item.width + 'x' + item.height];
+      var parts = [src];
+      if (hasDimensions) parts.push(item.width + 'x' + item.height);
       var format = typeof prior.format === 'string' ? prior.format : item.format;
       if (format === 'jpeg') parts.push('format="jpeg"');
       // An empty string in `postMeta` is a deliberate clear and is respected;
@@ -161,7 +159,7 @@ window.GalleryFence = (function () {
       var caption = (typeof prior.caption === 'string'
         ? prior.caption
         : pickLocale(item.caption, locale)).slice(0, MAX_TEXT);
-      if (alt !== '') parts.push('alt="' + escapeMeta(alt) + '"');
+      if (alt !== '' || typeof prior.alt === 'string') parts.push('alt="' + escapeMeta(alt) + '"');
       if (caption !== '') parts.push('caption="' + escapeMeta(caption) + '"');
       lines.push(parts.join(' | '));
     });
@@ -210,6 +208,22 @@ window.GalleryFence = (function () {
     });
 
     return { directives: directives, lines: lines };
+  }
+
+  /** Change only alt fields for this photo, retaining every other field and line. */
+  function withAlt(text, src, value) {
+    var field = 'alt="' + escapeMeta(String(value).slice(0, MAX_TEXT)) + '"';
+    return String(text).split('\n').map(function (raw) {
+      var photo = parse(raw).lines[0];
+      if (!photo || photo.src !== src) return raw;
+      var cr = raw.endsWith('\r') ? '\r' : '';
+      var fields = (cr ? raw.slice(0, -1) : raw).split('|');
+      var rest = fields.slice(1).filter(function (part) {
+        var attr = ATTR_RE.exec(part.trim());
+        return !attr || attr[1] !== 'alt';
+      });
+      return [fields[0]].concat(rest).join('|').trimEnd() + ' | ' + field + cr;
+    }).join('\n');
   }
 
   /**
@@ -407,6 +421,7 @@ window.GalleryFence = (function () {
     withLayout: withLayout,
     serialize: serialize,
     parse: parse,
+    withAlt: withAlt,
     scanFences: scanFences,
     fenceAt: fenceAt,
     replaceFenceAt: replaceFenceAt,

@@ -283,6 +283,26 @@ most heroes already exist, and re-uploading one would just mint a second copy un
 
 ### Galleries
 
+**Inline editing.** Complete gallery blocks appear as photo previews inside the
+article's writing area. Each photo has an editable **Alt text** field. Clearing it
+explicitly saves an empty alt; captions, image order and layout stay unchanged.
+Changes belong to the active language of this article, not to the media library.
+Repeated uses of the same image URL in that language share alt text, so editing
+one gallery occurrence updates the others. Click **Save draft** to keep changes.
+
+For AI assistance, click **Suggest alt text with AI** beside a photo. This uses
+the existing local vision-model caption settings and sends a resized display
+variant directly from your browser; it does not use the Review Story provider or
+its API key. Review the result, then choose **Use suggestion** or **Dismiss**.
+An arriving suggestion never overwrites your draft. Typing or changing context
+cancels stale requests. If the model is unavailable, manual editing still works.
+
+Use **Edit photos and layout** in the preview to open the existing gallery picker.
+**Show gallery Markdown** above the writing area exposes the underlying fence for
+manual editing; **Show gallery previews** returns to visual editing. Undo/redo
+continues to work through the Markdown editor. The inline view shows every photo
+in order for editing; use the article's **Preview** for its published layout.
+
 **The easy way: "Insert / edit gallery".** Each locale tab has the button next to "Insert body
 image". Put the cursor where the gallery should go — or anywhere inside an existing one — and it
 opens the media library in multi-select mode. Click photos to add them, use ↑ / ↓ to set the order

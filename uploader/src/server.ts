@@ -1048,7 +1048,16 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         .filter(([key]) => key.startsWith('editor.titleImage.'))
         .map(([key, value]) => [key.slice('editor.titleImage.'.length), value])),
     ]));
-    return reply.type('application/javascript').send(`window.EditorImageCopy = ${JSON.stringify(copy)};`);
+    const galleryCopy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale, Object.fromEntries(Object.entries(strings)
+        .filter(([key]) => key.startsWith('editor.gallery.'))
+        .map(([key, value]) => [key.slice('editor.gallery.'.length), value])),
+    ]));
+    return reply.type('application/javascript').send(
+      `window.EditorImageCopy = ${JSON.stringify(copy)};\n` +
+      `window.EditorGalleryCopy = ${JSON.stringify(galleryCopy)};\n` +
+      `window.EditorGalleryImageOrigin = ${JSON.stringify(new URL(cfg.baseUrl).origin)};`,
+    );
   });
 
   /**

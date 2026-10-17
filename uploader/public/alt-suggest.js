@@ -10,8 +10,8 @@ window.AltSuggest = (function () {
   // on401: called instead of a raw redirect when the session has expired, so a
   // host page with a DraftGuard (editor.html) can stash the draft, clear its
   // dirty flag (no surprise beforeunload prompt), and carry a ?next= back here.
-  async function loadConfig(on401) {
-    const res = await fetch('/ai-config?purpose=caption');
+  async function loadConfig(on401, signal) {
+    const res = await fetch('/ai-config?purpose=caption', { signal, cache: 'no-store' });
     if (res.status === 401) {
       if (on401) on401(); else location.href = '/login';
       throw new Error('unauthorized');
@@ -53,5 +53,24 @@ window.AltSuggest = (function () {
     });
   }
 
-  return { wire };
+  /** Caption a hosted display variant; callers validate its origin before use. */
+  async function suggestHosted({ url, lang, signal, on401 }) {
+    const preparation = AbortSignal.any([signal, AbortSignal.timeout(15000)]);
+    const cfg = await loadConfig(on401, preparation);
+    preparation.throwIfAborted();
+    const response = await fetch(url, {
+      signal: preparation, credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer',
+    });
+    if (!response.ok) throw new Error('Image unavailable');
+    const blob = await response.blob();
+    preparation.throwIfAborted();
+    const prep = await LLM.prepImage(blob, cfg.captionMaxEdge, preparation);
+    preparation.throwIfAborted();
+    const caption = await LLM.caption(cfg.lmBaseUrl, cfg.lmModel, cfg.captionPrompt,
+      prep.dataUrl, cfg.captionTimeoutMs, signal);
+    signal.throwIfAborted();
+    return lang === 'de' ? caption.altDe : caption.altEn;
+  }
+
+  return { wire, suggestHosted };
 })();

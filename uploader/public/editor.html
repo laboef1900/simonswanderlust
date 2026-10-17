@@ -78,6 +78,7 @@
             <div class="editor-card editor-writing-surface__body">
               <div class="editor-card-header">
                 <h2 class="editor-card-title">Story (Deutsch)</h2>
+                <button type="button" id="deGalleryView" class="btn-secondary"></button>
               </div>
               <label for="deBody" hidden>Body (Markdown)</label>
               <textarea id="deBody" aria-label="Body (Markdown, DE)"></textarea>
@@ -101,6 +102,7 @@
             <div class="editor-card editor-writing-surface__body">
               <div class="editor-card-header">
                 <h2 class="editor-card-title">Story (English)</h2>
+                <button type="button" id="enGalleryView" class="btn-secondary"></button>
               </div>
               <label for="enBody" hidden>Body (Markdown)</label>
               <textarea id="enBody" aria-label="Body (Markdown, EN)"></textarea>
@@ -413,6 +415,7 @@
     <script src="/admin/editor-title-image.js"></script>
     <script src="/admin/waypoint-copy.js"></script>
     <script src="/admin/waypoint-lookup.js"></script>
+    <script src="/admin/editor-galleries.js"></script>
     <script>
       'use strict';
       const $ = (id) => document.getElementById(id);
@@ -427,6 +430,7 @@
       let reviewIsAdmin = false;
       const deImages = {};        // src → {width, height}
       const enImages = {};
+      const galleryEditors = {};
 
       // ---- slugify ----
       function slugify(str) {
@@ -503,6 +507,7 @@
         });
       }
       function activateLocale(tab) {
+        Object.values(galleryEditors).forEach((editor) => editor.cancel());
         storyReview?.invalidate();
         activeTab = tab;
         syncInspectorLocale(tab);
@@ -565,6 +570,7 @@
             activateLocale(locale);
             inspectorApi.close();
             const cm = (locale === 'en' ? enMDE : deMDE).codemirror;
+            galleryEditors[locale].revealLine(finding.line - 1);
             cm.setCursor({ line: finding.line - 1, ch: 0 });
             cm.focus();
           }
@@ -891,11 +897,11 @@
       // The picker writes the same line format an author would type by hand;
       // normalizeGalleryFences lifts it into `images` at save. Nothing here
       // touches the images map directly — see public/gallery-fence.js.
-      function galleryFor(locale) {
+      function galleryFor(locale, galleryCursor) {
         const mde = locale === 'de' ? deMDE : enMDE;
         const cm = mde.codemirror;
         const body = mde.value();
-        const cursor = cm.indexFromPos(cm.getCursor());
+        const cursor = galleryCursor ?? cm.indexFromPos(cm.getCursor());
         const existing = GalleryFence.fenceAt(body, cursor);
         const current = existing ? GalleryFence.parse(existing.text) : { directives: [], lines: [] };
 
@@ -987,6 +993,19 @@
 
       $('deGallery').addEventListener('click', () => galleryFor('de'));
       $('enGallery').addEventListener('click', () => galleryFor('en'));
+
+      for (const locale of ['de', 'en']) {
+        galleryEditors[locale] = EditorGalleries.attach({
+          cm: (locale === 'de' ? deMDE : enMDE).codemirror,
+          locale,
+          images: () => locale === 'de' ? deImages : enImages,
+          imageOrigin: EditorGalleryImageOrigin,
+          toggle: $(locale + 'GalleryView'),
+          copy: EditorGalleryCopy[locale],
+          onEdit: (cursor) => galleryFor(locale, cursor),
+          onUnauthed: () => guard.redirectToLogin(),
+        });
+      }
 
       // ---- pick an existing hero from the media library ----
       // The library is the other half of "upload": most heroes already exist,
@@ -1591,7 +1610,6 @@
         $(loc + 'Excerpt').value = data.excerpt || '';
         populateKeyFacts(loc, data.keyFacts);
         const mde = loc === 'de' ? deMDE : enMDE;
-        mde.value(data.bodyMarkdown || '');
         // Written unconditionally: buildPayload() omits heroImage when unset, so
         // a restore payload without it must CLEAR the hero fields rather than
         // leave a previously loaded value on screen (no field resurrection).
@@ -1616,6 +1634,8 @@
         if (data.images && typeof data.images === 'object') {
           Object.assign(map, data.images);
         }
+        mde.value(data.bodyMarkdown || '');
+        galleryEditors[loc].refresh();
       }
 
       // Fills the whole form from a PostPair-shaped object (or a {shared,de,en}
