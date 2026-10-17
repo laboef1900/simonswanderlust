@@ -64,8 +64,8 @@ Required env var for the app: **`DATABASE_URL`** (see `uploader/.env.example`). 
 The same **`uploader/`** app also optimizes uploaded photos into responsive AVIF/WebP variants and
 returns paste-ready `heroImage` / `<RemoteImage>` / `<BodyImage>` snippets. Access is gated by
 username/password accounts stored in Postgres, with HttpOnly session cookies. Everything runs on
-Simon's own server, in one container. AI inference remains **browser-direct**: local
-editor-integrated alt-text suggestions and the **Review Story** drawer, which combines
+Simon's own server, in one container. AI inference remains **browser-direct**:
+editor-integrated alt-text suggestions (local by default, optional remote providers) and the **Review Story** drawer, which combines
 deterministic checks with optional provider-backed suggestions (#212–#215). It reviews
 unsaved active-locale content without autosaving or gating Publish. The server never
 contacts a model.
@@ -316,15 +316,18 @@ Full security model: `SECURITY.md`. These patterns MUST be preserved when changi
 - AI captions and editorial review are browser-direct. The server never contacts a model:
   do not proxy providers through the server or `safeFetch`, which would add an SSRF surface.
 - Model output is untrusted; it MUST NOT reach commands, queries, or authorization decisions.
-- `GET /ai-config?purpose=caption` is an authenticated five-field caption-only response with
-  no secret lookup. Full `GET /ai-config` intentionally sends the shared provider key to
-  authenticated authors in memory; never persist it in browser storage, logs, or draft backups.
+- `GET /ai-config?purpose=caption` resolves the independent caption provider. Local
+  captions never read secrets; remote captions and full review config disclose the
+  same shared provider key to authenticated authors in request-local browser memory
+  (owner-approved 2026-10-17 extension, #214 spec §13). Never persist it in browser
+  storage, logs, or draft backups. Both config responses are `no-store`.
 - Settings writes and key management remain admin-only. Settings responses expose only key
   presence; AES-256-GCM envelopes live in `app_secrets`, with `ENCRYPTION_KEY` separately
   escrowed. Missing master key allows local workflows; malformed supplied values refuse boot.
 - Settings.json and Postgres saves can partially commit: secret first, settings second.
-  Preserve explicit partial-failure reporting and caption isolation. See the approved #214
-  spec and `SECURITY.md` for portable-destination, author-disclosure, and recovery risks.
+  Preserve explicit partial-failure reporting and local caption isolation. See the
+  approved #214 spec and `SECURITY.md` for portable-destination, shared caption/review
+  key, author-disclosure, and recovery risks.
 
 ### 5. Rules for AI Coding Assistants
 

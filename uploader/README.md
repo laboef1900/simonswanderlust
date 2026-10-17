@@ -244,14 +244,30 @@ Author-facing detail is in [`../docs/authoring-workflow.md`](../docs/authoring-w
 > the `posts.ts`/`pages.ts` store chokepoint, not in `validateDraft` — the WXR importer bypasses
 > the latter.
 
-## AI alt-text (local LM Studio)
+## AI alt-text (browser-direct providers)
 
-The post editor and photo uploader offer a "Suggest alt text" button per alt field. The browser
-downscales the picked photo and calls the author's local LM Studio (`<lmBaseUrl>/chat/completions`)
-directly — the app server never contacts the model. LM config (`lmBaseUrl`, `lmModel`,
-`captionTimeoutMs`, `captionMaxEdge`, `captionPrompt`) lives in the JSON settings store, edited on
-the admin-only Settings page; authors read it via `GET /ai-config?purpose=caption`. No
-`docker-compose`/`.env` LM variables are needed.
+Settings → **Alt-text model** has the same provider choices as **Editorial review**:
+Local LM Studio (default), OpenRouter, DeepSeek, or a custom HTTP(S) OpenAI-compatible
+endpoint. Caption provider/model/prompt/timeout are independent of review. Select a
+**vision-capable model**; a provider's model list does not guarantee image support.
+
+The editor and photo uploader send a resized JPEG and caption prompt directly from
+the browser to that provider. The app server never contacts the model. Remote captions
+reuse the **shared API key** managed under Editorial review; save that key there, then
+save the alt-text provider/model settings. Replacing/removing the key affects both
+features, and selecting different providers sends the same key to two destinations.
+Use only photos you intend to share with the selected provider; usage charges may apply.
+
+**Test connection** explicitly lists models using the saved caption destination/key.
+Save remote provider changes first. It sends no photo and does not verify vision support;
+no remote discovery runs automatically. Custom providers must allow browser CORS.
+Local LM Studio uses `lmBaseUrl` and never receives the shared key.
+
+Non-secret caption settings (`captionProvider`, `captionCustomBaseUrl`, `lmBaseUrl`,
+`lmModel`, `captionTimeoutMs`, `captionMaxEdge`, `captionPrompt`) live in settings.json.
+Authenticated `GET /ai-config?purpose=caption` resolves `captionBaseUrl` and provides
+`captionApiKey` only for remote captions. Local captions remain usable with broken or
+missing remote credentials. Suggestions fill editable alt text, never autosave/publish.
 
 ### Editorial-review client API (#213)
 
@@ -284,7 +300,7 @@ omitted, and OpenRouter attribution is attached only for hostname `openrouter.ai
 Base URLs must be HTTP(S) with no credentials, query or fragment.
 
 `public/editor-review.js` integrates this client with the editor's **Review Story**
-drawer (#215). Existing `caption`, `listModels`, and `prepImage` behavior is unchanged.
+drawer (#215). Captions and model discovery also use request-local credentials when remote.
 
 ### Review providers and encrypted credentials (#214)
 
@@ -299,15 +315,16 @@ output containing it. Leave the variable **unset**, not empty, for local-only us
 Malformed supplied keys refuse boot; missing keys permit local startup/captions but
 encrypted operations report `ENCRYPTION_KEY not configured in .env`.
 
-Enter the provider key in the masked field. Blank leaves an existing key untouched;
-**Remove stored key** explicitly deletes it after confirmation. The chip means stored,
-not tested. Postgres stores AES-256-GCM ciphertext; **every signed-in author receives the
+Enter the provider key in the masked **Shared API key (review and alt text)** field.
+OpenRouter and DeepSeek require a key; local LM Studio never receives the shared key.
+Blank leaves an existing key untouched; **Remove stored key** explicitly deletes it
+after confirmation. The chip means stored, not tested. Postgres stores AES-256-GCM ciphertext; **every signed-in author receives the
 shared plaintext key in browser memory** for direct provider calls. The server never
-contacts a model. The chosen provider receives review content; use provider-side limits
-and revoke/reissue a credential after suspected exposure.
+contacts a model. The selected providers receive review content or resized caption photos;
+use provider-side limits and revoke/reissue a credential after suspected exposure.
 
-One key follows the selected remote destination. Review the warning when changing
-providers/custom URL; replace/remove a key that belongs elsewhere. Prefer HTTPS for
+One key follows both selected remote destinations. Review the warning when changing
+either provider/custom URL; replace/remove a key that belongs elsewhere. Prefer HTTPS for
 custom endpoints. Browser CORS/mixed-content failures are not bypassed by a server proxy.
 
 Settings and key saves are not atomic across disk/Postgres. If the key commits and

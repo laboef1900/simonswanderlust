@@ -1,10 +1,9 @@
 /*
- * Wires a "Suggest alt text" button to browser-direct LM Studio captioning.
- * On click: fetch caption-only config (never remote credentials) from GET /ai-config?purpose=caption,
- * caption locally via LLM (llm.js), and fill the alt input with the matching
- * language ('de' → altDe, 'en' → altEn). The model is reached from THIS browser
- * (see llm.js); nothing hits the server. Failures degrade to an inline message —
- * the manual alt field always stays usable.
+ * Wires "Suggest alt text" to browser-direct vision captioning.
+ * Fetches caption-only config and its request-local key for remote providers.
+ * The selected provider receives a resized JPEG; local LM Studio receives no key.
+ * Fill only the matching language and never save automatically.
+ * Failures leave the manual alt field usable.
  */
 window.AltSuggest = (function () {
   // on401: called instead of a raw redirect when the session has expired, so a
@@ -17,7 +16,11 @@ window.AltSuggest = (function () {
       throw new Error('unauthorized');
     }
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    return res.json();
+    const config = await res.json();
+    if ((config.captionProvider === 'openrouter' || config.captionProvider === 'deepseek') && !config.captionApiKey) {
+      throw new Error('Configure the shared API key in Settings first.');
+    }
+    return config;
   }
 
   function wire(opts) {
@@ -35,10 +38,10 @@ window.AltSuggest = (function () {
         say('Could not load AI settings: ' + e.message);
         return;
       }
-      say('Asking the local model…');
+      say('Asking the selected alt-text model…');
       try {
         const prep = await LLM.prepImage(file, cfg.captionMaxEdge);
-        const c = await LLM.caption(cfg.lmBaseUrl, cfg.lmModel, cfg.captionPrompt, prep.dataUrl, cfg.captionTimeoutMs);
+        const c = await LLM.caption(cfg.captionBaseUrl, cfg.lmModel, cfg.captionPrompt, prep.dataUrl, cfg.captionTimeoutMs, undefined, cfg.captionApiKey);
         altInput.value = lang === 'de' ? c.altDe : c.altEn;
         // Programmatic .value assignment fires no input event — dispatch one so
         // the editor's DraftGuard marks the form dirty.
@@ -46,9 +49,11 @@ window.AltSuggest = (function () {
         if (hintEl) hintEl.textContent = lang === 'de' ? 'EN: ' + c.altEn : 'DE: ' + c.altDe;
         say('Suggested — review and edit as needed.');
       } catch (e) {
-        const why = LLM.mixedContentWarning(cfg.lmBaseUrl, location.protocol);
-        say('Couldn\'t reach LM Studio at ' + cfg.lmBaseUrl + ' (' + e.message +
-          '). ' + (why || 'Is it running?') + ' Fill in the alt text manually.');
+        const why = LLM.mixedContentWarning(cfg.captionBaseUrl, location.protocol);
+        say('Could not generate alt text. ' + (why || 'Check the provider, shared key, vision model and browser CORS access.') +
+          ' Fill in the alt text manually.');
+      } finally {
+        cfg.captionApiKey = null;
       }
     });
   }
@@ -66,10 +71,14 @@ window.AltSuggest = (function () {
     preparation.throwIfAborted();
     const prep = await LLM.prepImage(blob, cfg.captionMaxEdge, preparation);
     preparation.throwIfAborted();
-    const caption = await LLM.caption(cfg.lmBaseUrl, cfg.lmModel, cfg.captionPrompt,
-      prep.dataUrl, cfg.captionTimeoutMs, signal);
-    signal.throwIfAborted();
-    return lang === 'de' ? caption.altDe : caption.altEn;
+    try {
+      const caption = await LLM.caption(cfg.captionBaseUrl, cfg.lmModel, cfg.captionPrompt,
+        prep.dataUrl, cfg.captionTimeoutMs, signal, cfg.captionApiKey);
+      signal.throwIfAborted();
+      return lang === 'de' ? caption.altDe : caption.altEn;
+    } finally {
+      cfg.captionApiKey = null;
+    }
   }
 
   return { wire, suggestHosted };
