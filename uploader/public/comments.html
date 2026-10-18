@@ -132,7 +132,12 @@
         if (!data.comments.length) $('out').textContent = 'No ' + status + ' comments.';
       }
 
-      $('statusFilter').addEventListener('change', load);
+      // A new view starts with a clean status line: the previous view's "No
+      // pending comments." must not sit above a populated approved list.
+      $('statusFilter').addEventListener('change', () => {
+        $('out').textContent = '';
+        load();
+      });
 
       (async () => {
         const s = await Auth.ensureAuthed({ admin: true });

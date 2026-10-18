@@ -284,7 +284,7 @@
     folderLabel.appendChild(folderSelect);
     panel.appendChild(folderLabel);
 
-    var save = el('button', 'btn-secondary', 'Save details');
+    var save = el('button', null, 'Save details');
     save.id = 'dSave';
     save.type = 'button';
     save.addEventListener('click', function () { saveDetail(item.key); });

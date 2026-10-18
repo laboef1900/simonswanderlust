@@ -585,9 +585,21 @@
         writingSurface: $('editorWritingSurface'),
         commandbar: $('editorCommandbar'),
       });
-      $('editorActionsMenu').addEventListener('click', (event) => {
+      // The panel floats over the story, so it closes like a menu: after an
+      // action, on Escape (focus back to its trigger), or on a click outside it.
+      const actionsMenu = $('editorActionsMenu');
+      actionsMenu.addEventListener('click', (event) => {
         const action = event.target.closest('button');
-        if (action) $('editorActionsMenu').open = false;
+        if (action) actionsMenu.open = false;
+      });
+      actionsMenu.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || !actionsMenu.open) return;
+        event.preventDefault();
+        actionsMenu.open = false;
+        actionsMenu.querySelector('summary').focus();
+      });
+      document.addEventListener('click', (event) => {
+        if (actionsMenu.open && !actionsMenu.contains(event.target)) actionsMenu.open = false;
       });
 
       // ---- tabs ----

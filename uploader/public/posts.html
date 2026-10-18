@@ -558,6 +558,12 @@
         });
       }
 
+      // The open panel floats over the rows below it, so it closes like a menu:
+      // a click anywhere outside it dismisses it (Escape is handled per row above).
+      document.addEventListener('click', (event) => {
+        if (openMoreActions && !openMoreActions.contains(event.target)) openMoreActions.open = false;
+      });
+
       function renderRows(posts) {
         const tbody = $('postsList');
         tbody.innerHTML = '';

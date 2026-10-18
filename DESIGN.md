@@ -920,7 +920,8 @@ and the `<dialog>`s appended to `<body>` share one set:
 - **Menus and disclosures** share one shape: outlined trigger with a drawn chevron and a
   floating panel (the editor's More actions, the Posts row's More actions); inline
   disclosures (alt-text review, bulk selection, picker folders) use the same chevron in
-  place of the UA triangle.
+  place of the UA triangle. A floating panel closes like a menu: Escape returns focus to
+  its trigger, and a click outside it dismisses it.
 - **Locale tabs** are one segmented control in the editor and on About; About's Publish
   rides in the page title row like the editor's command bar.
 - `[hidden]` is enforced globally with `!important`, because every control carries an
