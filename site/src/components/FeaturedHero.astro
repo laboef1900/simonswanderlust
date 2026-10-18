@@ -1,6 +1,5 @@
 ---
 import RemoteImage from './RemoteImage.astro';
-import Stamp from './Stamp.astro';
 import { useTranslations } from '../i18n/ui';
 import { coordsLabel, dateLabel, entryLabel } from '../lib/format';
 import { heroAltOf, localeOf, pathOf, type Trip } from '../lib/trips';
@@ -22,9 +21,10 @@ const meta = `${dateLabel(trip.data.date, locale)} · ${trip.data.country}`;
   featured trip's title: a homepage whose only <h1> is "Bukarest in 4 Tagen"
   tells every outline reader — and every first-time visitor — that the page is
   about Bucharest, and the same string was then repeated verbatim as the first
-  card's <h3> two screens down. The entry below the rule is an <h2>, the same
-  level as "Alle Reiseberichte", because that is what it is: one promoted item,
-  not the subject of the page.
+  card's <h3> two screens down. The entry below it is an <h2>, the same level
+  as "Alle Reiseberichte", because that is what it is: one promoted item, not
+  the subject of the page. The tagline is visually hidden (owner request,
+  2026-10-18: the panel is smaller without it) but stays in the outline.
 */
 const titleId = 'hero-entry-title';
 
@@ -53,76 +53,35 @@ const HERO_SIZES = '(max-width: 639px) 100vw, max(100vw, min(120vh, 1080px), 720
     />
     {/*
     A grounding vignette, not a scrim. Nothing on this hero reads against the
-    photograph any more — the entry sits on opaque paper and the stamp on its
-    own opaque chip — so the gradient no longer has a contrast job at all. What
-    is left is the job it should always have had: seating the paper on the
-    frame and closing the bottom crop. Alpha above this is photograph thrown
-    away on a page whose premise is the photograph.
+    photograph directly — the entry sits on its own frosted canvas plate — so
+    the gradient has no contrast job. It seats the plate on the frame and
+    closes the bottom crop. Alpha above this is photograph thrown away on a
+    page whose premise is the photograph.
   */}
     <div class="absolute inset-0 hidden bg-gradient-to-t from-navy/45 via-navy/10 via-40% to-transparent sm:block"></div>
-
-    {/*
-    @ai-warning The stamp's inks are DARK (`lib/stamp.ts`: near-black, navy,
-    oxblood, plum, forest) and it blends `multiply` — a rubber stamp pressed
-    onto paper. It used to sit on a `bg-navy/60` backdrop-blur plate, i.e.
-    dark ink multiplied into a dark translucent panel, and measured 1.28:1 to
-    2.58:1 against the sky behind it: the single most ownable mark on the site
-    rendered as an illegible smudge, and was then hidden below `sm` so most
-    visitors never saw it at all. It now sits on an OPAQUE canvas chip — the
-    passport page the ink belongs on — where the lightest ink (#c0311e)
-    measures 5.49:1 and the darkest 16.5:1, on every photograph. Never tint
-    this chip or make it translucent.
-
-    The chip stays square while the ink inside it is rotated by
-    `stampStyle()`, so the stamp reads as pressed askew onto straight paper
-    rather than as a tilted widget. Shown at every width now that it is
-    legible: 124px + margins clears a 320px viewport.
-  */}
-    <div class="pointer-events-none absolute top-4 right-4 z-10 origin-top-right scale-90 sm:top-6 sm:right-6 sm:scale-100">
-      <div class="rounded-sm bg-canvas p-2 shadow-lg sm:p-2.5">
-        <Stamp
-          countryCode={trip.data.countryCode}
-          country={trip.data.country}
-          date={trip.data.date}
-          region={trip.data.region}
-          locale={locale}
-        />
-      </div>
-    </div>
   </div>
 
   <div class="relative sm:absolute sm:right-0 sm:bottom-0 sm:left-0">
     <div class="mx-auto max-w-6xl px-5 py-6 sm:pt-0 sm:pb-10">
       {/*
-        @ai-warning This panel is OPAQUE paper — the same material as the stamp
-        chip above it, and for the same reason. Every previous version of this
-        hero set white type straight onto the gradient and then spent the rest
-        of its life defending that decision: the log line measured 1.19:1 on a
-        phone before it got its own navy plate, and the headline still sat at
-        ~2.8:1 whenever a long German compound pushed its top line up out of the
-        dark end of the scrim. Type on paper is 5.4:1 to 14:1 on every frame,
-        at any length, with no scrim at all — which is also what let the
-        gradient above drop to a vignette. Never tint this panel with an alpha,
-        and never move type back onto the photograph.
+        @ai-warning From `sm` this panel is TRANSLUCENT paper (`canvas/85`)
+        over the photograph — an owner request (2026-10-18) that knowingly
+        relaxes the opaque-plate rule in DESIGN.md. No backdrop blur: that
+        would be the glassmorphism CLAUDE.md rejects. `/85` is a floor: over
+        a pure-black frame the plate composites to #d5d5d7, where the navy/70
+        field line still measures 4.59:1 (`/80` gives 4.28:1, under AA) —
+        `tokens.test.ts` pins it. The brand-red accents (the N° label and
+        "Geschichte lesen") are the accepted cost: 4.61:1 on opaque canvas,
+        down to 3.25:1 over a black frame. Never lower the alpha, and never
+        move type off the plate onto the photograph. Below `sm` the panel
+        sits in flow under the photo on the canvas page, so it stays opaque.
       */}
-      <div class="max-w-2xl bg-canvas sm:rounded-sm sm:p-6 sm:shadow-2xl">
+      <div class="max-w-2xl bg-canvas sm:rounded-sm sm:bg-canvas/85 sm:p-6 sm:shadow-2xl">
         {/*
-          Set quietly on purpose. The wordmark is in the header ~60px above
-          this line, so repeating the identity at display size would be the
-          page shouting its own name; what was actually missing was any
-          statement of what the site IS in the first viewport at all — the
-          tagline rendered only in the footer, three screens down.
+          Visually hidden, not removed: it is the page's only <h1> (see the
+          @ai-note above). The wordmark in the header already names the site.
         */}
-        <h1 class="text-base font-semibold tracking-[-0.01em] text-navy/75 sm:text-lg">
-          {t('site.tagline')}
-        </h1>
-        {/*
-          The route motif, earned rather than decorative: it separates the
-          masthead from the entry, which is the one place on this page where a
-          dashed rule is dividing two different kinds of thing. RouteDivider
-          draws the same line between the index and the map band.
-        */}
-        <div aria-hidden="true" class="mt-4 border-t border-dashed border-navy/25"></div>
+        <h1 class="sr-only">{t('site.tagline')}</h1>
         {/*
           One link, not two. The whole entry is the target — a 44px text link
           under a headline the visitor already read is a second chance to miss —
@@ -134,7 +93,7 @@ const HERO_SIZES = '(max-width: 639px) 100vw, max(100vw, min(120vh, 1080px), 720
         <a
           href={pathOf(trip)}
           aria-labelledby={titleId}
-          class="group/entry mt-4 block rounded-sm focus-visible:outline-brand-red"
+          class="group/entry block rounded-sm focus-visible:outline-brand-red"
         >
           <p class="flex flex-wrap items-center gap-x-2 font-mono text-xs font-semibold tracking-log uppercase">
             {number !== undefined && <span class="text-brand-red">{entryLabel(number)}</span>}
