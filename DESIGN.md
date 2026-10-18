@@ -880,7 +880,8 @@ New post accents. The public blog's expedition identity is unchanged. Self-hoste
 Inter/IBM Plex Mono remain; the shell and login identify the workspace as **Wanderlust
 Studio**, with **Simon's travel journal** as the descriptor.
 
-Admin shell tokens are scoped to `.cms-app-shell` in `uploader/public/admin.css`:
+Admin tokens live on `:root` in `uploader/public/admin.css`, so the shell, the login page
+and the `<dialog>`s appended to `<body>` share one set:
 
 | Role | Token | Value |
 |---|---|---|
@@ -893,6 +894,37 @@ Admin shell tokens are scoped to `.cms-app-shell` in `uploader/public/admin.css`
 | Form boundaries | `--line-control` | `#858c95` |
 | Active navigation / New post | `--studio-accent` | `#416486` |
 | Active navigation surface | `--studio-accent-soft` | `#eaf0f6` |
+| Live-site mutation / destructive | `--red` / `--red-hover` | `#d23b30` / `#ac2a21` |
+| Control height (small) | `--control-h` (`--control-h-sm`) | `2.5rem` (`2rem`); both `2.75rem` on coarse pointers |
+| Focus ring | `--focus-ring` | `2px solid var(--studio-accent)` |
+
+**One control vocabulary.** Every page uses the same primitives; page CSS only places them.
+
+- **Labels** sit above their field in the body face (13px, 600, ink) — the old mono
+  uppercase labels are gone from the admin. A checkbox sits beside its label
+  (`.check-field`), and its help text indents under the label.
+- **Inputs, selects and textareas** share one height, `--line-control` border, 6px radius
+  and accent focus ring. Selects draw their own chevron so they match inputs exactly. File
+  inputs use a quiet outlined picker button, not a filled mono one.
+- **Buttons** have four roles: the unclassed button is the one navy primary per form or
+  section (Save, Add user, Import, Sign in); `.btn-secondary` is outlined and auxiliary
+  (Test connection, Insert image, Review story, Cancel); `.btn-remove` is outlined red for
+  destructive row actions (a destructive *confirm* in the dialog is filled red);
+  `.btn-primary` / `.btn-publish` / `.btn-primary-publish` are the filled red Publish and
+  Rebuild. `.btn-new` is the accent command link (New post, New trip). Form actions sit in
+  one `.form-actions` row, primary first; dense rows (bulk bars, folder actions,
+  revisions, comment moderation) use the small height.
+- **Sections** inside the white workspace are flat: stacked `.card`s divide by a hairline
+  (`--line`), never as cards inside the workspace card. Simple form pages (Users, Import)
+  keep fields at a `34rem` measure.
+- **Menus and disclosures** share one shape: outlined trigger with a drawn chevron and a
+  floating panel (the editor's More actions, the Posts row's More actions); inline
+  disclosures (alt-text review, bulk selection, picker folders) use the same chevron in
+  place of the UA triangle.
+- **Locale tabs** are one segmented control in the editor and on About; About's Publish
+  rides in the page title row like the editor's command bar.
+- `[hidden]` is enforced globally with `!important`, because every control carries an
+  author `display`.
 
 - A full-width 4rem masthead sits above a 13rem sidebar and a single rounded white
   workspace. Content, Media, and admin-only Manage orient the workspace; the sidebar

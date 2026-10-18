@@ -56,8 +56,8 @@
         <label for="reviewPrompt" id="writingInstructionsLabel"></label>
         <textarea id="reviewPrompt" rows="8" aria-describedby="writingInstructionsHelp"></textarea>
         <p id="writingInstructionsHelp" class="muted"></p>
-        <div class="settings-actions">
-          <button id="saveReview" type="button" class="btn-secondary"></button>
+        <div class="form-actions">
+          <button id="saveReview" type="button"></button>
           <button id="testReview" type="button" class="btn-secondary" aria-describedby="reviewTestHelp" disabled></button>
           <button id="removeAiKey" type="button" class="btn-remove" disabled>Remove stored key</button>
         </div>
@@ -109,9 +109,9 @@
         <label for="prompt">Caption prompt</label>
         <textarea id="prompt" rows="8"></textarea>
 
-        <div class="settings-actions">
+        <div class="form-actions">
           <button id="test" type="button" class="btn-secondary">Test connection</button>
-          <button id="saveAi" type="button" class="btn-secondary">Save settings</button>
+          <button id="saveAi" type="button">Save settings</button>
         </div>
         <p id="captionOut" class="page-status" role="status"></p>
         <p class="muted">Test connection lists available models; it does not send a photo or verify image support.</p>
@@ -129,10 +129,16 @@
             stay enabled. Other image formats still produce WebP and AVIF.
           </p>
 
-          <label for="webpQuality">WebP quality</label>
-          <input id="webpQuality" type="number" min="1" max="100" step="1" required aria-describedby="imageQualityHelp" />
-          <label for="avifQuality">AVIF quality</label>
-          <input id="avifQuality" type="number" min="1" max="100" step="1" required aria-describedby="imageQualityHelp" />
+          <div class="settings-field-pair">
+            <div>
+              <label for="webpQuality">WebP quality</label>
+              <input id="webpQuality" type="number" min="1" max="100" step="1" required aria-describedby="imageQualityHelp" />
+            </div>
+            <div>
+              <label for="avifQuality">AVIF quality</label>
+              <input id="avifQuality" type="number" min="1" max="100" step="1" required aria-describedby="imageQualityHelp" />
+            </div>
+          </div>
           <p id="imageQualityHelp" class="muted">
             1–100. Higher quality generally means larger files. Defaults: WebP 75, AVIF 55.
             These controls apply to WebP and AVIF output, not JPEG.
@@ -141,8 +147,8 @@
             Applies to new uploads and newly processed import images. Existing photos and queued
             uploads keep their settings. Original files stay private.
           </p>
-          <div class="settings-actions">
-            <button id="saveImages" type="submit" class="btn-secondary" disabled>Save image settings</button>
+          <div class="form-actions">
+            <button id="saveImages" type="submit" disabled>Save image settings</button>
           </div>
           <p id="imageOut" class="page-status" role="status"></p>
         </form>
@@ -161,8 +167,8 @@
           reversible rollback for the whole comments feature. Every new comment is held for
           moderation. Saving this does not rebuild the site.
         </p>
-        <div class="settings-actions">
-          <button id="saveComments" type="button" class="btn-secondary">Save comment setting</button>
+        <div class="form-actions">
+          <button id="saveComments" type="button">Save comment setting</button>
         </div>
         <p id="commentsOut" class="page-status" role="status"></p>
       </section>
@@ -170,36 +176,46 @@
       <section class="card" id="siteSettings" aria-labelledby="siteSettingsHeading">
         <h2 class="card-heading" id="siteSettingsHeading"></h2>
 
-        <label for="backupSchedule">Database backup schedule</label>
-        <select id="backupSchedule">
-          <option value="off">Off</option>
-          <option value="daily">Daily</option>
-          <option value="weekly">Weekly</option>
-        </select>
-
-        <label for="backupRetention">Backups to keep</label>
-        <input id="backupRetention" type="number" min="1" max="100" />
+        <div class="settings-field-pair">
+          <div>
+            <label for="backupSchedule">Database backup schedule</label>
+            <select id="backupSchedule">
+              <option value="off">Off</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+            </select>
+          </div>
+          <div>
+            <label for="backupRetention">Backups to keep</label>
+            <input id="backupRetention" type="number" min="1" max="100" />
+          </div>
+        </div>
 
         <p class="section-label">WordPress import</p>
-        <label for="importDelayMs">Delay between image downloads (ms)</label>
-        <input id="importDelayMs" type="number" min="0" max="10000" />
-        <p class="muted">
-          How long to wait between fetching photos from the old site. 0 is as fast as
-          possible, which is what got the importer cut off after 37 images; 1200 completed
-          all 665.
-        </p>
+        <div class="settings-field-pair">
+          <div>
+            <label for="importDelayMs">Delay between image downloads (ms)</label>
+            <input id="importDelayMs" type="number" min="0" max="10000" />
+            <p class="muted">
+              How long to wait between fetching photos from the old site. 0 is as fast as
+              possible, which is what got the importer cut off after 37 images; 1200 completed
+              all 665.
+            </p>
+          </div>
+          <div>
+            <label for="importRetries">Retries per image</label>
+            <input id="importRetries" type="number" min="0" max="5" />
+            <p class="muted">
+              Extra attempts after a download fails, spaced 5s / 15s / 45s. Only transient
+              failures are retried — a blocked address or a missing file is not.
+            </p>
+          </div>
+        </div>
 
-        <label for="importRetries">Retries per image</label>
-        <input id="importRetries" type="number" min="0" max="5" />
-        <p class="muted">
-          Extra attempts after a download fails, spaced 5s / 15s / 45s. Only transient
-          failures are retried — a blocked address or a missing file is not.
-        </p>
-
-        <div class="settings-actions">
+        <div class="form-actions">
+          <button id="save" type="button">Save settings</button>
           <button id="backupNow" type="button" class="btn-secondary">Back up now</button>
           <button id="rebuild" type="button" class="btn-primary">Rebuild site now</button>
-          <button id="save" type="button" class="btn-secondary">Save settings</button>
         </div>
         <p class="section-label">Last backup</p>
         <p id="backupStatus" class="page-status" role="status"></p>
