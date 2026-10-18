@@ -10,17 +10,19 @@
   <body>
     <header class="cms-page-meta">
       <h1>About page</h1>
+      <div class="cms-page-actions">
+        <p id="actionStatus" class="muted" role="status"></p>
+        <p id="actionError" class="err" role="alert" hidden></p>
+        <button id="saveBtn" type="button" class="btn-primary-publish">Publish</button>
+      </div>
     </header>
     <main>
-      <div class="editor-topbar">
-        <div class="lang-switch-bar" role="tablist" aria-label="Page language">
-          <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">Deutsch <span class="lang-code" aria-hidden="true">DE</span></button>
-          <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">English <span class="lang-code" aria-hidden="true">EN</span></button>
-        </div>
+      <div class="lang-switch-bar about-tabs" role="tablist" aria-label="Page language">
+        <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">Deutsch <span class="lang-code" aria-hidden="true">DE</span></button>
+        <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">English <span class="lang-code" aria-hidden="true">EN</span></button>
       </div>
 
       <section id="tab-de" class="card locale-tab" role="tabpanel" aria-labelledby="tabbtn-de">
-        <h2 class="card-heading">Deutsch</h2>
         <label for="deTitle">Heading</label>
         <input id="deTitle" type="text" placeholder="Über mich" />
         <label for="deBody">Body (Markdown)</label>
@@ -28,13 +30,14 @@
         <div class="body-img-row">
           <input id="deBodyImgFile" type="file" accept="image/*" aria-label="Body image file (DE)" />
           <input id="deBodyImgAlt" type="text" placeholder="Alt text (DE)" aria-label="Alt text for body image (DE)" />
-          <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert body image</button>
+          <div class="body-img-row__actions">
+            <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert body image</button>
+          </div>
           <p id="deBodyImgStatus" class="muted" role="status"></p>
         </div>
       </section>
 
       <section id="tab-en" class="card locale-tab" role="tabpanel" aria-labelledby="tabbtn-en" hidden>
-        <h2 class="card-heading">English</h2>
         <label for="enTitle">Heading</label>
         <input id="enTitle" type="text" placeholder="About me" />
         <label for="enBody">Body (Markdown)</label>
@@ -42,20 +45,12 @@
         <div class="body-img-row">
           <input id="enBodyImgFile" type="file" accept="image/*" aria-label="Body image file (EN)" />
           <input id="enBodyImgAlt" type="text" placeholder="Alt text (EN)" aria-label="Alt text for body image (EN)" />
-          <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert body image</button>
+          <div class="body-img-row__actions">
+            <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert body image</button>
+          </div>
           <p id="enBodyImgStatus" class="muted" role="status"></p>
         </div>
       </section>
-
-      <div class="editor-sticky-bar">
-        <div class="bar-left">
-          <p id="actionStatus" class="muted" role="status" style="color:#ffffff; margin:0; font-size:0.85rem;"></p>
-          <p id="actionError" class="err" role="alert" hidden style="color:#fca5a5; margin:0; font-size:0.85rem;"></p>
-        </div>
-        <div class="bar-actions">
-          <button id="saveBtn" type="button" class="btn-primary-publish">Publish</button>
-        </div>
-      </div>
 
       <section class="card" id="revisionsCard" hidden aria-labelledby="revisionsHeading">
         <h2 class="card-heading" id="revisionsHeading">Revisions</h2>

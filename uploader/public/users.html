@@ -13,28 +13,32 @@
     <main>
       <!-- Real <form>s (not bare inputs plus a click handler) so that Enter in a
            field submits — keyboard-only account management must work. -->
-      <form class="card" id="addForm">
-        <h2>Add a user</h2>
+      <form class="card form-narrow" id="addForm">
+        <h2 class="card-heading">Add a user</h2>
         <label for="username">Username</label>
         <input id="username" type="text" autocomplete="off" maxlength="64" pattern="[A-Za-z0-9._\-]+" aria-describedby="usernameHint" />
         <p class="muted" id="usernameHint">1–64 characters: letters, digits, ".", "_" and "-".</p>
         <label for="password">Password</label>
         <input id="password" type="password" autocomplete="new-password" />
-        <label><input id="isAdmin" type="checkbox" /> Administrator</label>
-        <button id="add" type="submit">Add user</button>
+        <label class="check-field"><input id="isAdmin" type="checkbox" /> Administrator</label>
+        <div class="form-actions">
+          <button id="add" type="submit">Add user</button>
+        </div>
         <p id="out" class="page-status" role="status"></p>
       </form>
-      <section class="card">
-        <h2>Existing users</h2>
-        <ul id="list"></ul>
+      <section class="card form-narrow">
+        <h2 class="card-heading">Existing users</h2>
+        <ul id="list" class="user-list"></ul>
       </section>
-      <form class="card" id="pwForm">
-        <h2>Change my password</h2>
+      <form class="card form-narrow" id="pwForm">
+        <h2 class="card-heading">Change my password</h2>
         <label for="curpw">Current password</label>
         <input id="curpw" type="password" autocomplete="current-password" />
         <label for="newpw">New password</label>
         <input id="newpw" type="password" autocomplete="new-password" />
-        <button id="changepw" type="submit">Change password</button>
+        <div class="form-actions">
+          <button id="changepw" type="submit">Change password</button>
+        </div>
         <p id="pwout" class="page-status" role="status"></p>
       </form>
     </main>
@@ -54,7 +58,13 @@
         for (const u of users) {
           const li = document.createElement('li');
           const role = u.isAdmin ? 'admin' : 'author';
-          li.textContent = u.username + ' (' + role + ') ';
+          const name = document.createElement('span');
+          name.className = 'user-list__name';
+          name.textContent = u.username;
+          const roleLabel = document.createElement('span');
+          roleLabel.className = 'user-list__role';
+          roleLabel.textContent = u.isAdmin ? 'Admin' : 'Author';
+          li.append(name, roleLabel);
           if (!(me && u.username === me.username)) {
             const btn = document.createElement('button');
             btn.textContent = 'Remove';

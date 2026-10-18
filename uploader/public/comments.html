@@ -13,13 +13,13 @@
     </header>
 
     <main>
-      <section class="card">
+      <div class="inline-field">
         <label for="statusFilter">Show</label>
         <select id="statusFilter">
           <option value="pending">Pending</option>
           <option value="approved">Approved</option>
         </select>
-      </section>
+      </div>
       <p id="out" class="page-status" role="status"></p>
       <ul id="list" class="comment-list"></ul>
     </main>
@@ -61,20 +61,20 @@
       }
 
       function row(c) {
-        const li = el('li', undefined, 'card');
-        const head = el('p');
+        const li = el('li', undefined, 'comment');
+        const head = el('p', undefined, 'comment__meta');
         head.appendChild(el('strong', c.name));
         if (c.isAuthor) head.appendChild(el('span', ' (author)'));
         head.appendChild(el('span', ' · ' + c.translationKey + ' / ' + c.locale + ' · ' + new Date(c.createdAt).toLocaleString(), 'muted'));
         li.appendChild(head);
         if (c.email) li.appendChild(el('p', c.email, 'muted'));
-        for (const para of String(c.body).split(/\n{2,}/)) li.appendChild(el('p', para));
+        for (const para of String(c.body).split(/\n{2,}/)) li.appendChild(el('p', para, 'comment__body'));
 
-        const actions = el('div', undefined, 'actions');
-        const act = (label, fn, danger) => {
+        const actions = el('div', undefined, 'comment-actions');
+        const act = (label, fn, variant) => {
           const b = el('button', label);
           b.type = 'button';
-          if (danger) b.className = 'danger';
+          if (variant) b.className = variant;
           b.addEventListener('click', async () => {
             b.disabled = true;
             try { await fn(); await load(); } catch (e) { $('out').textContent = 'Failed: ' + e.message; }
@@ -83,24 +83,26 @@
           actions.appendChild(b);
         };
         if (c.status === 'pending') act('Approve', () => setStatus(c, 'approved'));
-        else act('Unapprove', () => setStatus(c, 'pending'));
+        else act('Unapprove', () => setStatus(c, 'pending'), 'btn-secondary');
         act('Spam', () => confirmThen({
           title: 'Mark as spam?',
           body: 'This comment by "' + c.name + '" is permanently deleted. This cannot be undone.',
           confirmLabel: 'Delete as spam', danger: true,
-        }, () => api('DELETE', '/moderation/comments/' + encodeURIComponent(c.id))), true);
+        }, () => api('DELETE', '/moderation/comments/' + encodeURIComponent(c.id))), 'btn-remove');
         act('Delete', () => confirmThen({
           title: 'Delete this comment?',
           body: 'This comment by "' + c.name + '" is permanently deleted' + (c.status === 'approved' ? ' and disappears from the site on the next rebuild' : '') + '. This cannot be undone.',
           confirmLabel: 'Delete', danger: true,
-        }, () => api('DELETE', '/moderation/comments/' + encodeURIComponent(c.id))), true);
+        }, () => api('DELETE', '/moderation/comments/' + encodeURIComponent(c.id))), 'btn-remove');
         li.appendChild(actions);
 
-        const form = el('form');
+        const form = el('form', undefined, 'comment-reply');
         const ta = el('textarea');
         ta.maxLength = 2000;
+        ta.rows = 2;
         ta.setAttribute('aria-label', 'Reply as author');
-        const send = el('button', 'Reply as author');
+        ta.placeholder = 'Reply as the author…';
+        const send = el('button', 'Reply as author', 'btn-secondary');
         send.type = 'submit';
         form.append(ta, send);
         form.addEventListener('submit', async (e) => {
@@ -130,7 +132,12 @@
         if (!data.comments.length) $('out').textContent = 'No ' + status + ' comments.';
       }
 
-      $('statusFilter').addEventListener('change', load);
+      // A new view starts with a clean status line: the previous view's "No
+      // pending comments." must not sit above a populated approved list.
+      $('statusFilter').addEventListener('change', () => {
+        $('out').textContent = '';
+        load();
+      });
 
       (async () => {
         const s = await Auth.ensureAuthed({ admin: true });

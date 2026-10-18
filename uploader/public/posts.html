@@ -46,6 +46,7 @@
             </label>
           </div>
           <button type="button" id="fMore" class="btn-link filter-reset" aria-expanded="false" aria-controls="fExtra">More filters</button>
+          <button id="fReset" class="btn-link filter-reset" type="button">Clear filters</button>
           <div class="posts-filters-extra" id="fExtra" hidden>
             <label class="filter-field">
               <span>Region</span>
@@ -63,7 +64,6 @@
               </select>
             </label>
           </div>
-          <button id="fReset" class="btn-secondary filter-reset" type="button">Clear filters</button>
         </div>
         <!-- Status views are toggle buttons over the same state as #fStatus,
              filled by the script; hidden with the filters while nothing is loaded. -->
@@ -557,6 +557,12 @@
           summary.focus();
         });
       }
+
+      // The open panel floats over the rows below it, so it closes like a menu:
+      // a click anywhere outside it dismisses it (Escape is handled per row above).
+      document.addEventListener('click', (event) => {
+        if (openMoreActions && !openMoreActions.contains(event.target)) openMoreActions.open = false;
+      });
 
       function renderRows(posts) {
         const tbody = $('postsList');

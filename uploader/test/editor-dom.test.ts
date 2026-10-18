@@ -427,6 +427,22 @@ describe('editor.html inline script against its own markup', () => {
     expect(document.activeElement).toBe(el('enHeroFile'));
   });
 
+  it('closes the floating actions menu on an outside click or Escape, not on a click inside it', () => {
+    const { el, document } = loadEditor();
+    const menu = el('editorActionsMenu');
+    const trigger = menu.querySelector('summary')!;
+    menu.open = true;
+    menu.querySelector('.editor-actions-menu__readiness')!.click();
+    expect(menu.open).toBe(true);
+    el('editorWritingSurface').click();
+    expect(menu.open).toBe(false);
+
+    menu.open = true;
+    trigger.fire('keydown', { key: 'Escape' });
+    expect(menu.open).toBe(false);
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it('shows the compact hero preview and framing disclosure only for a usable hero', () => {
     const { api, el } = loadEditor();
     api.populateForm(fullPair());

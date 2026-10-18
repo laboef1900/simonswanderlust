@@ -34,7 +34,7 @@
         </div>
 
         <div class="editor-commandbar__actions">
-          <button id="saveDraft" type="button" class="btn-secondary">Save draft</button>
+          <button id="saveDraft" type="button">Save draft</button>
           <button id="publishBtn" type="button" class="btn-primary-publish">Publish</button>
           <button id="reviewStory" type="button" class="btn-secondary" aria-haspopup="dialog" aria-controls="storyReviewDialog">Review story</button>
           <button
@@ -81,12 +81,14 @@
               </div>
               <label for="deBody" hidden>Body (Markdown)</label>
               <textarea id="deBody" aria-label="Body (Markdown, DE)"></textarea>
-              <div class="body-img-row editor-media-toolbar">
+              <div class="body-img-row">
                 <input id="deBodyImgFile" type="file" accept="image/*" aria-label="Body image file (DE)" />
                 <input id="deBodyImgAlt" type="text" placeholder="Alt text for body image (DE)" aria-label="Alt text for body image (DE)" />
-                <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert image</button>
-                <button type="button" id="deBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
-                <button type="button" id="deGallery" class="btn-secondary">Insert / edit gallery</button>
+                <div class="body-img-row__actions">
+                  <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert image</button>
+                  <button type="button" id="deBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
+                  <button type="button" id="deGallery" class="btn-secondary">Insert / edit gallery</button>
+                </div>
                 <p id="deBodyImgStatus" class="muted" role="status"></p>
               </div>
             </div>
@@ -105,12 +107,14 @@
               </div>
               <label for="enBody" hidden>Body (Markdown)</label>
               <textarea id="enBody" aria-label="Body (Markdown, EN)"></textarea>
-              <div class="body-img-row editor-media-toolbar">
+              <div class="body-img-row">
                 <input id="enBodyImgFile" type="file" accept="image/*" aria-label="Body image file (EN)" />
                 <input id="enBodyImgAlt" type="text" placeholder="Alt text for body image (EN)" aria-label="Alt text for body image (EN)" />
-                <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert image</button>
-                <button type="button" id="enBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
-                <button type="button" id="enGallery" class="btn-secondary">Insert / edit gallery</button>
+                <div class="body-img-row__actions">
+                  <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert image</button>
+                  <button type="button" id="enBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
+                  <button type="button" id="enGallery" class="btn-secondary">Insert / edit gallery</button>
+                </div>
                 <p id="enBodyImgStatus" class="muted" role="status"></p>
               </div>
             </div>
@@ -581,9 +585,21 @@
         writingSurface: $('editorWritingSurface'),
         commandbar: $('editorCommandbar'),
       });
-      $('editorActionsMenu').addEventListener('click', (event) => {
+      // The panel floats over the story, so it closes like a menu: after an
+      // action, on Escape (focus back to its trigger), or on a click outside it.
+      const actionsMenu = $('editorActionsMenu');
+      actionsMenu.addEventListener('click', (event) => {
         const action = event.target.closest('button');
-        if (action) $('editorActionsMenu').open = false;
+        if (action) actionsMenu.open = false;
+      });
+      actionsMenu.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || !actionsMenu.open) return;
+        event.preventDefault();
+        actionsMenu.open = false;
+        actionsMenu.querySelector('summary').focus();
+      });
+      document.addEventListener('click', (event) => {
+        if (actionsMenu.open && !actionsMenu.contains(event.target)) actionsMenu.open = false;
       });
 
       // ---- tabs ----

@@ -16,13 +16,13 @@ import { createEncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock } from '../src/work-lock.js';
 import { ui } from '../../site/src/i18n/ui.js';
 
-// posts.html and settings.html run their actions as plain top-level browser
-// code. Load each inline script in a vm context backed by a stub DOM keyed on
-// the REAL markup's ids (same precedent as editor-dom.test.ts) and pull the
-// network out from under an in-flight action: the contract under test is that
-// a rejected fetch leaves the page usable — the trigger re-enabled and the
-// failure named in the status region — instead of an unhandled rejection with
-// "Deleting…" frozen on screen (#139).
+// posts.html, settings.html and comments.html run their actions as plain
+// top-level browser code. Load each inline script in a vm context backed by a
+// stub DOM keyed on the REAL markup's ids (same precedent as
+// editor-dom.test.ts) and pull the network out from under an in-flight action:
+// the contract under test is that a rejected fetch leaves the page usable —
+// the trigger re-enabled and the failure named in the status region — instead
+// of an unhandled rejection with "Deleting…" frozen on screen (#139).
 
 interface Element {
   id: string;
@@ -48,6 +48,9 @@ interface Element {
   click(): Promise<void>;
   fire(type: string, event?: Record<string, unknown>): Promise<void>;
   appendChild(child?: Element): void;
+  append(...children: Element[]): void;
+  replaceChildren(): void;
+  contains(node: unknown): boolean;
   setAttribute(name: string, value: string): void;
   focus(): void;
 }
@@ -66,6 +69,9 @@ function element(): Element {
       for (const fn of listeners[type] ?? []) await fn({ preventDefault() {}, ...event });
     },
     appendChild(child) { if (child) this.children.push(child); },
+    append(...children) { for (const child of children) this.appendChild(child); },
+    replaceChildren() { this.children.length = 0; },
+    contains(node) { return node === this || this.children.some((child) => child.contains(node)); },
     setAttribute(name, value) { this.attrs[name] = value; },
     focus() { this.focused = true; },
   };
@@ -89,11 +95,13 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>): { ctx: R
     return e;
   };
   const ctx: Record<string, unknown> = {
-    document: {
+    // An element itself, so a page can listen on the document (outside-click
+    // dismissal) and a test can fire there with an explicit target.
+    document: Object.assign(element(), {
       referrer: '',
       getElementById: (id: string): Element | null => (ids.has(id) ? el(id) : null),
       createElement: () => element(),
-    },
+    }),
     location: {
       href: 'http://localhost/admin/posts.html',
       origin: 'http://localhost',
@@ -367,6 +375,43 @@ describe('posts.html selection, recovery and disclosures', () => {
     await second.fire('keydown', { key: 'Escape' });
     expect(second.open).toBe(false);
     expect(secondSummary.focused).toBe(true);
+  });
+
+  it('a click outside the open row menu closes it; a click inside it does not', async () => {
+    const { ctx } = loadPosts();
+    const wire = vm.runInContext('wirePostDisclosure', ctx) as (details: Element, summary: Element) => void;
+    const doc = ctx.document as Element;
+    const details = element();
+    const summary = element();
+    const action = element();
+    details.append(summary, action);
+    wire(details, summary);
+    details.open = true;
+    await details.fire('toggle');
+
+    await doc.fire('click', { target: action });
+    expect(details.open).toBe(true);
+
+    await doc.fire('click', { target: element() });
+    expect(details.open).toBe(false);
+  });
+});
+
+describe('comments.html moderation view', () => {
+  it('switching the view clears the previous view\'s empty-state message', async () => {
+    const approved = {
+      id: 'c1', name: 'Reader', isAuthor: false, translationKey: 'tk1', locale: 'de',
+      createdAt: '2026-09-29T04:56:50Z', status: 'approved', body: 'Hallo',
+    };
+    const { el } = loadPage('public/comments.html', {
+      fetch: async () => ({ status: 200, ok: true, json: async () => ({ comments: [approved] }) }),
+    });
+    el('out').textContent = 'No pending comments.';
+    el('statusFilter').value = 'approved';
+    await el('statusFilter').fire('change');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(el('list').children).toHaveLength(1);
+    expect(el('out').textContent).toBe('');
   });
 });
 
