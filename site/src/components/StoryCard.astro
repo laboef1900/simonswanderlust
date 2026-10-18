@@ -14,7 +14,7 @@ interface Props {
 
 const { trip, span, cover = false } = Astro.props;
 const locale = localeOf(trip);
-const meta = cardMetaLabel(trip.data.date, trip.data.country, trip.data.title, locale);
+const meta = cardMetaLabel(trip.data.date, trip.data.country, locale);
 
 /*
   @ai-note Nine consecutive links each named "N°09 OKT 2024 · RUMÄNIEN
@@ -112,8 +112,8 @@ const alt = heroAltOf(trip);
         {trip.data.title}
       </h3>
       {/*
-        @ai-note What is left of the log register on a card: a date, and the
-        country only when the title does not already name it. The entry number
+        @ai-note What is left of the log register on a card: a date and the
+        country (`cardMetaLabel`). The entry number
         and the cover-story marker were both removed — nine `N°` labels down
         the index restated an order the grid already shows, and the marker was
         a second coloured object on the one card that least needed decorating.
