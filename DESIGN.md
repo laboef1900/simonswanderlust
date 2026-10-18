@@ -619,9 +619,9 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
   - *Why the ramp is a fixed length:* a percentage scales with the title's line
     count, so the one distance guaranteeing that type never lands in the fade
     would differ per card.
-  - *Date line:* the month and year, plus the country **only when the title
-    does not already name it** — eight of nine live titles do, and printing it
-    twice within 30px made the index read as repeated. Weight 400 at `12px` in
+  - *Date line:* the month and year, plus the country whenever one is set.
+    It is never suppressed by the title — titles should not lead with the
+    country, since the date line already carries it. Weight 400 at `12px` in
     `white/70`, below the heading, no box. It wraps rather than truncates:
     `truncate` here cut the destination country, the identity payload the card
     exists to deliver, on 3 of 9 cards at a 320px viewport.
