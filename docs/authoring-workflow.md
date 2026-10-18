@@ -317,6 +317,25 @@ operable (arrows move, `Space` toggles, `Shift`+arrow extends, `Ctrl/Cmd`+`A` se
 The detail panel on the right edits title, both alt texts, both captions, tags and folder;
 camera, lens and capture date are read-only, read from the photo's EXIF.
 
+**Generate details with AI.** Uses **Settings → Photo descriptions** (the same vision
+model as the editor's alt-text suggestions); the browser sends each photo's display image
+straight to that provider, so its charges and privacy policy apply.
+
+- **One photo:** select it, then **Suggest with AI** in the detail panel. Empty title,
+  alt, caption and tag fields are filled; a field you already wrote keeps your text and
+  shows the suggestion underneath with **Use**. Nothing is saved until **Save details**.
+- **Several or all photos:** select photos and use **Generate details with AI** in the
+  selection bar, or **Generate details with AI…** above the grid for every photo in the
+  current folder and filters (all pages). Pick the fields, check the count and the
+  destination, then **Generate**. Results are **saved as they arrive**. By default only
+  empty fields are filled and complete photos are skipped, so you can stop (**Stop** or
+  Esc) and run it again later to continue. **Replace text that is already filled in**
+  overwrites the chosen fields and cannot be undone; it has to be ticked for every run.
+  Failed photos are listed with a reason; three failures in a row stop the run.
+
+Library details do not change published stories. They become the defaults when you
+insert the photo into a story; always review generated alt text and captions there.
+
 > Photo GPS is stored for you but is **never published** — image variants carry an EXIF
 > allow-list with no location at all, and the API hides coordinates from non-admin accounts.
 

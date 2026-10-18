@@ -54,6 +54,7 @@
               </select>
             </label>
             <button type="button" id="fMore" class="btn-link filter-reset" aria-expanded="false" aria-controls="fExtra">More filters</button>
+            <button type="button" id="aiAll" class="btn-secondary media-ai-open">Generate details with AI…</button>
             <div class="posts-filters-extra" id="fExtra" hidden>
               <label class="filter-field">
                 <span>Sort</span>
@@ -87,6 +88,7 @@
             </label>
             <button id="moveSelected" type="button" class="btn-secondary">Move</button>
             <button id="retrySelected" type="button" class="btn-secondary">Retry encoding</button>
+            <button id="aiSelected" type="button" class="btn-secondary">Generate details with AI</button>
             <button id="clearSelection" type="button" class="btn-secondary">Clear</button>
           </div>
 
@@ -105,12 +107,51 @@
       </section>
       <p id="out" class="page-status" role="status"></p>
 
+      <!-- Bulk AI details (media-ai.js + media-browser.js). The run saves as it
+           goes, so the scope, the fields and the overwrite choice are all stated
+           before Generate; Stop never sends another save. -->
+      <dialog id="aiDialog" class="admin-modal media-ai" aria-labelledby="aiTitle" aria-describedby="aiIntro">
+        <h2 id="aiTitle" class="card-heading">Generate photo details with AI</h2>
+        <p id="aiIntro" class="help">Each photo's display image is sent to the photo-description model chosen in Settings. Results are saved to the library as they arrive; published stories do not change.</p>
+        <fieldset id="aiOptions" class="media-ai__options">
+          <fieldset class="media-ai__group">
+            <legend>Photos</legend>
+            <label class="check-field"><input type="radio" name="aiScope" id="aiScopeSelected" value="selected" /><span id="aiScopeSelectedLabel">Selected photos</span></label>
+            <label class="check-field"><input type="radio" name="aiScope" id="aiScopeAll" value="all" /><span id="aiScopeAllLabel">All photos in this view</span></label>
+          </fieldset>
+          <fieldset class="media-ai__group">
+            <legend>Fields</legend>
+            <label class="check-field"><input type="checkbox" id="aiFieldTitle" checked />Title</label>
+            <label class="check-field"><input type="checkbox" id="aiFieldAlt" checked />Alt text (DE + EN)</label>
+            <label class="check-field"><input type="checkbox" id="aiFieldCaption" checked />Caption (DE + EN)</label>
+            <label class="check-field"><input type="checkbox" id="aiFieldTags" checked />Tags</label>
+          </fieldset>
+          <label class="check-field"><input type="checkbox" id="aiReplace" aria-describedby="aiReplaceHelp" />Replace text that is already filled in</label>
+          <p id="aiReplaceHelp" class="muted">Off: only empty fields are filled and photos with nothing missing are skipped, so running it again continues where it stopped. On: existing text in the chosen fields is overwritten and cannot be restored.</p>
+        </fieldset>
+        <p id="aiDestination" class="muted"></p>
+        <p id="aiSummary" class="media-ai__summary" role="status"></p>
+        <div id="aiProgress" class="progress" hidden>
+          <progress id="aiBar" max="1" value="0" aria-label="Photos processed"></progress>
+          <p id="aiCount"></p>
+        </div>
+        <ul id="aiFailures" class="media-ai__failures" hidden></ul>
+        <div class="admin-modal__foot">
+          <button type="button" id="aiCancel" class="btn-secondary">Cancel</button>
+          <button type="button" id="aiStart">Generate</button>
+        </div>
+      </dialog>
+
     </main>
 
     <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/admin-confirm.js"></script>
+    <script src="/admin/llm.js"></script>
+    <script src="/admin/alt-suggest.js"></script>
     <script src="/admin/media-api.js"></script>
+    <script src="/admin/media-ai.js"></script>
+    <script src="/admin/media-ai-dialog.js"></script>
     <script src="/admin/media-browser.js"></script>
   </body>
 </html>

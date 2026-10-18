@@ -920,6 +920,10 @@ Admin shell tokens are scoped to `.cms-app-shell` in `uploader/public/admin.css`
   details. Coordinate approximation is explicit. Excerpt suggestions have a plain-text
   preview, character count, and separate accept/dismiss actions; generation never looks
   like a saved edit.
+- Media photo details follow the same rule in the detail panel: AI fills only empty
+  fields (marked unsaved) and offers the rest as a tinted note with **Use**. The bulk
+  dialog is the exception that saves, so it states scope, fields, destination and photo
+  count first; overwriting renames the action to **Generate and overwrite**.
 - Settings is one flat document with section dividers and a quiet section index, not a
   stack of competing cards. **Story review & excerpts** comes first, followed by **Photo
   descriptions**, image conversion, comments, and site/backups. Sections still save

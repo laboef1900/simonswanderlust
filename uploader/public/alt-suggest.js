@@ -4,6 +4,7 @@
  * The selected provider receives a resized JPEG; local LM Studio receives no key.
  * Fill only the matching language and never save automatically.
  * Failures leave the manual alt field usable.
+ * loadConfig/prepHosted are shared with the media library's photo details (media-ai.js).
  */
 window.AltSuggest = (function () {
   // on401: called instead of a raw redirect when the session has expired, so a
@@ -58,20 +59,30 @@ window.AltSuggest = (function () {
     });
   }
 
+  /**
+   * Download a hosted display variant and downscale it for a vision model.
+   * Callers validate the URL's origin first; cookies, referrer and redirects
+   * are refused, so the read can never carry the session elsewhere.
+   */
+  async function prepHosted(url, maxEdge, signal) {
+    const response = await fetch(url, {
+      signal, credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer',
+    });
+    if (!response.ok) throw new Error('Image unavailable');
+    const blob = await response.blob();
+    signal.throwIfAborted();
+    const prep = await LLM.prepImage(blob, maxEdge, signal);
+    signal.throwIfAborted();
+    return prep;
+  }
+
   /** Caption a hosted display variant; callers validate its origin before use. */
   async function suggestHosted({ url, lang, signal, on401 }) {
     const preparation = AbortSignal.any([signal, AbortSignal.timeout(15000)]);
     const cfg = await loadConfig(on401, preparation);
-    preparation.throwIfAborted();
-    const response = await fetch(url, {
-      signal: preparation, credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer',
-    });
-    if (!response.ok) throw new Error('Image unavailable');
-    const blob = await response.blob();
-    preparation.throwIfAborted();
-    const prep = await LLM.prepImage(blob, cfg.captionMaxEdge, preparation);
-    preparation.throwIfAborted();
     try {
+      preparation.throwIfAborted();
+      const prep = await prepHosted(url, cfg.captionMaxEdge, preparation);
       const caption = await LLM.caption(cfg.captionBaseUrl, cfg.lmModel, cfg.captionPrompt,
         prep.dataUrl, cfg.captionTimeoutMs, signal, cfg.captionApiKey);
       signal.throwIfAborted();
@@ -81,5 +92,5 @@ window.AltSuggest = (function () {
     }
   }
 
-  return { wire, suggestHosted };
+  return { wire, suggestHosted, loadConfig, prepHosted };
 })();
