@@ -34,6 +34,8 @@
     detailKey: null,
     detailDirty: false,  // unsaved edits in the detail panel; render() leaves it alone while set
     detailItem: null,    // the row the panel was built from (diff base for saveDetail)
+    suggest: null,       // in-flight AI suggestion for the panel's photo: { key, controller }
+    offers: null,        // suggestions shown under fields that had text: { key, slots: [[inputId, value, what]] }
     queue: null,
   };
 
@@ -47,6 +49,13 @@
   function fail(err) {
     say('Error: ' + (err && err.message ? err.message : String(err)));
   }
+
+  // The configured image host (served by /admin/editor-image-copy.js). Only a
+  // thumbnail on that origin or this one is ever sent to a model.
+  function imageOrigin() { return window.EditorGalleryImageOrigin || location.origin; }
+
+  // Bulk "Generate details with AI" dialog; created in init().
+  var aiDialog = null;
 
   // ---- data ---------------------------------------------------------------
 
@@ -177,6 +186,7 @@
       : '';
     $('prevPage').disabled = state.page <= 1;
     $('nextPage').disabled = state.page * state.pageSize >= state.total;
+    $('aiAll').disabled = state.total === 0;
   }
 
   function renderQueue() {
@@ -217,6 +227,11 @@
     var panel = $('detail');
     panel.innerHTML = '';
     var item = state.items.filter(function (i) { return i.key === state.detailKey; })[0];
+    // A suggestion belongs to the photo it was asked for: once the panel shows
+    // another photo (or none), the request is abandoned, never applied, and
+    // the offers it left under fields are dropped.
+    if (state.suggest && (!item || state.suggest.key !== item.key)) cancelSuggest();
+    if (state.offers && (!item || state.offers.key !== item.key)) state.offers = null;
     if (!item) {
       delete panel.dataset.key;
       panel.appendChild(el('p', 'muted', 'Select a photo to edit its details.'));
@@ -226,6 +241,7 @@
     state.detailItem = item;
     panel.appendChild(el('p', 'section-label', 'Photo'));
     panel.appendChild(el('p', 'media-key', item.key));
+    renderSuggest(panel, item);
 
     var fields = [
       { id: 'dTitle', label: 'Title', value: item.title },
@@ -243,7 +259,13 @@
       input.value = f.value || '';
       label.appendChild(input);
       panel.appendChild(label);
+      // Where a suggestion for a field that already has text is offered.
+      var hint = el('p', 'media-ai-hint');
+      hint.id = f.id + 'Hint';
+      hint.hidden = true;
+      panel.appendChild(hint);
     });
+    restoreOffers();
 
     var folderLabel = el('label', null, 'Folder');
     var folderSelect = document.createElement('select');
@@ -262,7 +284,8 @@
     folderLabel.appendChild(folderSelect);
     panel.appendChild(folderLabel);
 
-    var save = el('button', 'btn-secondary', 'Save details');
+    var save = el('button', null, 'Save details');
+    save.id = 'dSave';
     save.type = 'button';
     save.addEventListener('click', function () { saveDetail(item.key); });
     panel.appendChild(save);
@@ -446,6 +469,139 @@
     }
   }
 
+  // ---- AI suggestion for the photo in the panel ----------------------------
+
+  function renderSuggest(panel, item) {
+    var url = window.MediaAi.photoUrl(item, imageOrigin(), location.origin);
+    var row = el('div', 'media-ai-suggest');
+    var button = el('button', 'btn-secondary', state.suggest ? 'Asking the model…' : 'Suggest with AI');
+    button.id = 'dSuggest';
+    button.type = 'button';
+    button.disabled = !url || !!state.suggest;
+    button.addEventListener('click', function () { suggestDetail(item, url); });
+    var status = el('p', 'muted', state.suggest ? 'Asking the photo model…'
+      : url ? '' : 'Available once the photo has finished encoding.');
+    status.id = 'dSuggestStatus';
+    status.setAttribute('role', 'status');
+    row.appendChild(button);
+    row.appendChild(status);
+    panel.appendChild(row);
+  }
+
+  function cancelSuggest() {
+    if (!state.suggest) return;
+    state.suggest.controller.abort();
+    state.suggest = null;
+  }
+
+  function suggestStatus(busy, message) {
+    var button = $('dSuggest');
+    if (button) {
+      button.disabled = busy;
+      button.textContent = busy ? 'Asking the model…' : 'Suggest with AI';
+    }
+    var status = $('dSuggestStatus');
+    if (status) status.textContent = message;
+  }
+
+  /**
+   * Ask the photo model for title, alt, caption and tags. Empty fields are
+   * filled; a field that already has text keeps it and offers the suggestion
+   * beneath with a Use button. Nothing is saved here — Save details does that.
+   */
+  async function suggestDetail(item, url) {
+    if (state.suggest || !url) return;
+    var request = { key: item.key, controller: new AbortController() };
+    var signal = request.controller.signal;
+    state.suggest = request;
+    suggestStatus(true, 'Asking the photo model…');
+    var config = null;
+    try {
+      config = await window.AltSuggest.loadConfig(null, AbortSignal.any([signal, AbortSignal.timeout(15000)]));
+      var suggestion = await window.MediaAi.suggest(url, config, signal);
+      if (state.suggest !== request || $('detail').dataset.key !== item.key) return;
+      suggestStatus(false, applySuggestion(item.key, suggestion));
+    } catch (e) {
+      if (state.suggest !== request) return;
+      var why = config ? window.LLM.mixedContentWarning(config.captionBaseUrl, location.protocol) : '';
+      suggestStatus(false, 'Could not suggest details: ' + (e && e.message ? e.message : String(e)) + '. '
+        + (why || 'Check the photo-description settings, or fill in the fields by hand.'));
+    } finally {
+      if (config) config.captionApiKey = null;
+      if (state.suggest === request) state.suggest = null;
+    }
+  }
+
+  /** Puts a suggestion into the panel; returns the status line describing what happened. */
+  function applySuggestion(key, s) {
+    var slots = [
+      ['dTitle', s.title, 'title'],
+      ['dAltDe', s.altDe, 'German alt text'],
+      ['dAltEn', s.altEn, 'English alt text'],
+      ['dCapDe', s.captionDe, 'German caption'],
+      ['dCapEn', s.captionEn, 'English caption'],
+      ['dTags', (s.tags || []).join(', '), 'tags'],
+    ];
+    var filled = 0;
+    var offers = [];
+    slots.forEach(function (slot) {
+      var input = $(slot[0]);
+      var hint = $(slot[0] + 'Hint');
+      var value = slot[1];
+      if (!input || !hint || !value) return;
+      if (!input.value.trim()) {
+        input.value = value;
+        filled++;
+      } else if (input.value !== value) {
+        offerSuggestion(hint, input, value, slot[2]);
+        offers.push(slot);
+      }
+    });
+    // Offers don't mark the panel dirty, so render() may rebuild it under
+    // them (re-clicking the photo, a reload); renderDetail puts them back.
+    state.offers = offers.length ? { key: key, slots: offers } : null;
+    var offered = offers.length;
+    if (filled) markDetailDirty();
+    if (!filled && !offered) return 'The model suggested nothing new for this photo.';
+    return (filled ? 'Filled ' + filled + ' empty field' + (filled === 1 ? '' : 's') + '. ' : '')
+      + (offered ? 'Fields that already had text keep it; the suggestion is shown below each. ' : '')
+      + 'Review, then Save details.';
+  }
+
+  /** Re-shows the offers still pending for the panel's photo after a rebuild. */
+  function restoreOffers() {
+    if (!state.offers) return;
+    state.offers.slots = state.offers.slots.filter(function (slot) {
+      var input = $(slot[0]);
+      var hint = $(slot[0] + 'Hint');
+      if (!input || !hint || input.value === slot[1]) return false;
+      offerSuggestion(hint, input, slot[1], slot[2]);
+      return true;
+    });
+    if (!state.offers.slots.length) state.offers = null;
+  }
+
+  function offerSuggestion(hint, input, value, what) {
+    hint.innerHTML = '';
+    hint.appendChild(el('span', 'media-ai-hint__label', 'Suggested: '));
+    hint.appendChild(el('span', null, value));
+    var use = el('button', 'btn-link', 'Use');
+    use.type = 'button';
+    use.setAttribute('aria-label', 'Use the suggested ' + what);
+    use.addEventListener('click', function () {
+      input.value = value;
+      hint.hidden = true;
+      if (state.offers) {
+        state.offers.slots = state.offers.slots.filter(function (slot) { return slot[0] !== input.id; });
+        if (!state.offers.slots.length) state.offers = null;
+      }
+      markDetailDirty();
+      input.focus();
+    });
+    hint.appendChild(use);
+    hint.hidden = false;
+  }
+
   // ---- actions ------------------------------------------------------------
 
   /**
@@ -455,17 +611,22 @@
    * they save: after a bulk move of the same photo, sending the panel's old
    * folder back would silently undo the move. Untouched means "still what
    * the panel showed", which is why the diff base is the render snapshot and
-   * not the freshest row.
+   * not the freshest row. alt and caption send only the locale that changed,
+   * for the same reason: a bulk AI run may have filled the other one meanwhile.
    */
   function detailPatch() {
     var base = state.detailItem;
     var patch = {};
     var title = $('dTitle').value;
     if (title !== (base.title || '')) patch.title = title;
-    var alt = { de: $('dAltDe').value, en: $('dAltEn').value };
-    if (alt.de !== (base.alt.de || '') || alt.en !== (base.alt.en || '')) patch.alt = alt;
-    var caption = { de: $('dCapDe').value, en: $('dCapEn').value };
-    if (caption.de !== (base.caption.de || '') || caption.en !== (base.caption.en || '')) patch.caption = caption;
+    var pair = function (field, deId, enId) {
+      var changed = {};
+      if ($(deId).value !== (base[field].de || '')) changed.de = $(deId).value;
+      if ($(enId).value !== (base[field].en || '')) changed.en = $(enId).value;
+      if (Object.keys(changed).length) patch[field] = changed;
+    };
+    pair('alt', 'dAltDe', 'dAltEn');
+    pair('caption', 'dCapDe', 'dCapEn');
     var tags = $('dTags').value.split(',').map(function (t) { return t.trim(); }).filter(Boolean);
     if (tags.join('\n') !== (base.tags || []).join('\n')) patch.tags = tags;
     var folder = $('dFolder').value;
@@ -596,6 +757,10 @@
         await reload('Re-queued ' + res.queued + ' photo(s).');
       } catch (e) { fail(e); }
     });
+    $('aiSelected').addEventListener('click', function () { aiDialog.open('selected'); });
+    $('aiAll').addEventListener('click', function () {
+      aiDialog.open(state.selected.length ? 'selected' : 'all');
+    });
     $('clearSelection').addEventListener('click', function () {
       state.selected = [];
       render();
@@ -608,6 +773,35 @@
           + ', alt harvested ' + r.altHarvested + ', marked missing ' + r.markedMissing
           + ', demoted ' + r.demoted + ' (incomplete on disk), re-queued ' + r.recovered + ' for encoding.');
       } catch (e) { fail(e); }
+    });
+  }
+
+  /** Human description of the current folder + filters, for the AI dialog's scope. */
+  function viewDescription() {
+    var parts = [state.folder
+      ? 'folder “' + state.folder + '”' + (state.recursive ? ' and its subfolders' : '')
+      : 'every folder'];
+    if (state.q) parts.push('search “' + state.q + '”');
+    if (state.status) parts.push('status ' + state.status);
+    return parts.join(', ');
+  }
+
+  function bindAi() {
+    aiDialog = window.MediaAiDialog.attach({
+      client: client,
+      imageOrigin: imageOrigin(),
+      view: function () {
+        return {
+          selectedItems: state.items.filter(function (i) { return state.selected.indexOf(i.key) !== -1; }),
+          total: state.total,
+          description: viewDescription(),
+          query: {
+            folder: state.folder, recursive: state.recursive, q: state.q, tag: state.tag,
+            status: state.status, sort: state.sort, order: state.order,
+          },
+        };
+      },
+      onFinished: function (message) { reload(message); },
     });
   }
 
@@ -624,6 +818,7 @@
     bindUpload();
     bindFolderActions();
     bindBulk();
+    bindAi();
     // Delegated: the panel's inputs are rebuilt by renderDetail; the panel is not.
     $('detail').addEventListener('input', markDetailDirty);
     $('detail').addEventListener('change', markDetailDirty);

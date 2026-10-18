@@ -13,7 +13,7 @@
     </header>
 
     <main>
-      <section class="card">
+      <section class="card form-narrow">
         <label for="wxr">WordPress export file (.xml)</label>
         <input type="file" id="wxr" accept=".xml" />
         <label class="check-field" for="overwriteDrafts">
@@ -27,7 +27,9 @@
           coordinates, key facts, alt text, body changes). Use it after changing a post in
           WordPress and exporting again. Published posts are never touched either way.
         </p>
-        <button id="importBtn">Import</button>
+        <div class="form-actions">
+          <button id="importBtn">Import</button>
+        </div>
         <p class="muted">
           A large export takes a while — photos are downloaded one at a time, deliberately
           paced so the old site does not cut us off. The import <strong>runs on the server</strong>:

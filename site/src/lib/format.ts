@@ -25,22 +25,16 @@ export function entryLabel(n: number): string {
 }
 
 /**
- * The date line under a story-card title: "OKT 2024", or "OKT 2024 · RUMÄNIEN"
- * when the country is news.
+ * The date line under a story-card title: "OKT 2024 · RUMÄNIEN", or just
+ * "OKT 2024" for a post without a country.
  *
- * @ai-note Eight of nine live titles open with the country ("Ungarn:
- * Sehenswürdigkeiten in Budapest", "Griechenland: Sonne und Abenteuer
- * Rhodos"), and the card printed it a second time directly beside the
- * heading — so the index read as duplicated at a glance and the meta line was
- * wider than it had any reason to be, which is most of why it out-shouted the
- * title. Suppressing the repeat is a substring test on purpose: it can only
- * ever HIDE a country the title already contains verbatim, so a declined or
- * translated mention ("niederländisch" against "Niederlande") simply keeps
- * the country, which is the safe direction to be wrong in.
+ * @ai-note The country is always printed, even when the title repeats it. An
+ * earlier rule hid it on a substring match against the title, which made the
+ * card silently drop a field the author had set; titles are expected not to
+ * lead with the country instead.
  */
-export function cardMetaLabel(date: Date, country: string, title: string, locale: Locale): string {
+export function cardMetaLabel(date: Date, country: string, locale: Locale): string {
   const when = dateLabel(date, locale);
   const name = country.trim();
-  if (!name || title.toLowerCase().includes(name.toLowerCase())) return when;
-  return `${when} · ${name}`;
+  return name ? `${when} · ${name}` : when;
 }

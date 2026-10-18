@@ -28,19 +28,13 @@ describe('entryLabel', () => {
 describe('cardMetaLabel', () => {
   const oct = new Date('2024-10-03');
 
-  it('drops a country the title already names', () => {
-    expect(cardMetaLabel(oct, 'Ungarn', 'Ungarn: Sehenswürdigkeiten in Budapest', 'de')).toBe('OKT 2024');
-    // Mid-title and differently cased both count as already named.
-    expect(cardMetaLabel(oct, 'ecuador', 'Ecuador Cuyabeno: Jungleabenteuer', 'de')).toBe('OKT 2024');
-  });
-
-  it('keeps a country the title leaves out', () => {
-    expect(cardMetaLabel(oct, 'Rumänien', 'Bukarest in 4 Tagen', 'de')).toBe('OKT 2024 · Rumänien');
-    expect(cardMetaLabel(oct, 'Romania', 'Bucharest in 4 Days', 'en')).toBe('OCT 2024 · Romania');
+  it('appends the country to the date', () => {
+    expect(cardMetaLabel(oct, 'Ungarn', 'de')).toBe('OKT 2024 · Ungarn');
+    expect(cardMetaLabel(oct, 'Romania', 'en')).toBe('OCT 2024 · Romania');
   });
 
   it('never renders a dangling separator for a post without a country', () => {
-    expect(cardMetaLabel(oct, '', 'Bukarest in 4 Tagen', 'de')).toBe('OKT 2024');
-    expect(cardMetaLabel(oct, '   ', 'Bukarest in 4 Tagen', 'de')).toBe('OKT 2024');
+    expect(cardMetaLabel(oct, '', 'de')).toBe('OKT 2024');
+    expect(cardMetaLabel(oct, '   ', 'de')).toBe('OKT 2024');
   });
 });

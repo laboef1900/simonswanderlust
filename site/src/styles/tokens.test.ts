@@ -139,12 +139,24 @@ describe('non-text contrast of alpha borders', () => {
 describe('text contrast of alpha text utilities', () => {
   it('ink/70 and navy/70 clear AA on canvas — hero panel meta and the locale link', () => {
     // FeaturedHero.astro sets the panel's two mono lines (the N°/date/country
-    // field line and the coordinates) at navy/70 on opaque canvas paper.
+    // field line and the coordinates) at navy/70 on canvas paper.
     expect(contrast(over(navy, 0.7, canvas), canvas)).toBeGreaterThanOrEqual(4.5);
     // navy/60 is the value that looked close enough and measures 4.05:1.
     expect(contrast(over(navy, 0.6, canvas), canvas)).toBeLessThan(4.5);
     // LangSwitcher.astro.
     expect(contrast(over(ink, 0.7, canvas), canvas)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('the translucent hero panel keeps its navy/70 field line at AA over a black frame', () => {
+    // From `sm` the hero panel is canvas/85 over the photograph. The worst
+    // frame is pure black: the plate composites to #d5d5d7 there and the
+    // navy/70 line measures 4.59:1. `/80` measures 4.28:1, so the alpha is a
+    // floor, not a style. The brand-red accents on the same plate are the
+    // accepted exception (3.25:1 here) — see FeaturedHero.astro.
+    const frosted = over(canvas, 0.85, '#000000');
+    expect(contrast(over(navy, 0.7, frosted), frosted)).toBeGreaterThanOrEqual(4.5);
+    const thinner = over(canvas, 0.8, '#000000');
+    expect(contrast(over(navy, 0.7, thinner), thinner)).toBeLessThan(4.5);
   });
 
   it('records the two alphas that shipped below AA', () => {

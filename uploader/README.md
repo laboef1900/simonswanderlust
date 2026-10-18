@@ -276,7 +276,21 @@ Non-secret caption settings (`captionProvider`, `captionCustomBaseUrl`, `lmBaseU
 `lmModel`, `captionTimeoutMs`, `captionMaxEdge`, `captionPrompt`) live in settings.json.
 Authenticated `GET /ai-config?purpose=caption` resolves `captionBaseUrl` and provides
 `captionApiKey` only for remote captions. Local captions remain usable with broken or
-missing remote credentials. Suggestions fill editable alt text, never autosave/publish.
+missing remote credentials. Editor suggestions fill editable alt text, never autosave/publish.
+
+**Media library photo details.** `public/media-ai.js` (pure rules, unit-tested) and
+`public/media-ai-dialog.js` (bulk dialog) use the same caption config, key and display
+variant to call `LLM.describePhoto`, which asks for `{title, altEn, altDe, captionEn,
+captionDe, tags}`; the saved caption prompt is house guidance for the alt fields only.
+`LLM.parsePhotoDetails` keeps bounded single-line text and normalized tags, and never
+invents a missing field. **Suggest with AI** in the detail panel fills empty fields and
+offers the rest beside their text; **Save details** still saves. The bulk dialog (selected
+photos, or every photo in the current folder/filter view) **does save**, photo by photo
+through `PATCH /media/items/*`: by default only empty fields, re-checked against the row
+just before each save, so re-running continues a stopped run. **Replace text that is
+already filled in** is opt-in per run. A suggestion never clears a field, Stop sends no
+further save, and three failures in a row stop the run. Library metadata changes no
+published story. See `docs/superpowers/specs/2026-10-18-media-ai-details-design.md`.
 
 **Gallery photo CORS:** before contacting a model, the browser downloads the hosted
 display variant and resizes it. When the editor and image host use different origins,

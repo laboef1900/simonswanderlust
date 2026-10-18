@@ -81,7 +81,7 @@ spacing:
   panel-padding-lg: "24px"
   section-y: "48px"
   section-y-lg: "64px"
-  footer-y: "56px"
+  footer-y: "32px"
   grid-row: "280px"
 components:
   hero-entry-panel:
@@ -101,14 +101,14 @@ components:
     padding: "{spacing.card-padding}"
     height: "100%"
   card-caption-panel:
-    backgroundColor: "{colors.navy}"
+    backgroundColor: "rgb(20 42 66 / 0.92)"
     textColor: "#ffffff"
     padding: "16px"
   card-meta-line:
     textColor: "rgb(255 255 255 / 0.7)"
     typography: "{typography.label-quiet}"
   card-caption-ramp:
-    height: "72px"
+    height: "40px"
   footer-logline-plate:
     backgroundColor: "{colors.navy}"
     textColor: "{colors.brand-red-light}"
@@ -176,11 +176,13 @@ evidence-first.
 Photography leads, and the interface is the mount rather than the picture. That
 single commitment produced the system's hardest rule: type is never asked to
 survive against a photograph through a scrim. Where words must sit over an
-image they get their own opaque plate — navy for white type, canvas for dark
-ink — which then frees the gradient above to stay light, so the photograph
-survives too. On desktop the homepage hero's vignette
-(`from-navy/45 via-navy/10 via-40%`) grounds the paper; story captions use a
-72px ramp. On mobile neither needs a scrim: text sits below the photograph.
+image they get their own plate — navy for white type, canvas for dark ink —
+which then frees the gradient above to stay light, so the photograph survives
+too. Two plates are deliberately translucent at a measured floor (the hero entry
+panel at `canvas/85`, card captions at `navy/92`); see The Opaque Plate Rule.
+On desktop the homepage hero's vignette (`from-navy/45 via-navy/10 via-40%`)
+grounds the paper; story captions use a short ramp. On mobile neither needs a
+scrim: text sits below the photograph.
 
 Density is low and deliberately uneven. A six-column mosaic gives the index a
 cadence (a 4×2 lead tile, then threes, with the tail levelled so no cell is ever
@@ -252,9 +254,9 @@ stops sampling whatever coastline passes behind it.
 ### Named Rules
 
 **The Opaque Plate Rule.** Type never reads against a photograph through a
-scrim. Where text must sit on an image it gets its own opaque plate — navy for
+scrim. Where text must sit on an image it gets its own plate — navy for
 white type, canvas for dark ink — and the scrim is then free to stay light so
-the photograph survives. Never tint a plate with an alpha. This is why
+the photograph survives. This is why
 `FeaturedHero`'s entry panel, the story card's caption panel, the stamp chip and
 footer logline all look the way they do: the hero's log line measured **1.19:1**
 on a phone before it got a plate and its headline sat at **~2.8:1** whenever a
@@ -262,6 +264,13 @@ long German compound pushed it out of the dark end of the scrim; on paper the
 same type is **5.4:1 to 14:1** on every frame. The card's accent line ranged
 **1.90:1 to 5.01:1** depending only on which part of which photograph sat behind
 it; on solid navy it is **4.8:1**, and white beside it **14.6:1**.
+A plate may be translucent only at a measured floor, never by eye, and never with
+a backdrop blur (glassmorphism). Two are: story card captions at `navy/92` (see
+Cards), and — at the owner's request (2026-10-18) — the hero entry panel at
+`canvas/85`, where `navy/70` still clears AA over a black frame (**4.59:1**,
+pinned in `tokens.test.ts`) but the `brand-red` accents fall to **3.25:1** in
+that worst case. That shortfall is accepted, not a precedent. The stamp chip and
+the footer logline plate stay opaque.
 
 **The Measured Backdrop Rule.** Contrast is measured against the composited
 pixel, never the token. Alphas multiply; a texture lightens its own background;
@@ -396,8 +405,7 @@ three disclosures stack above one continuous article and the sticky contents
 strip keeps the whole story as its containing block.
 The title block is the spread's own 960px box, the text keeping the column's
 width so its left edge meets the opening's, and the arrival stamp moves to the
-top-right corner above the rail — the same place it sits on the homepage
-hero. This is what the WordPress site's opening row was for (intro, facts,
+top-right corner above the rail. This is what the WordPress site's opening row was for (intro, facts,
 contents and a photograph in the first screen); what it got wrong was setting
 the body at the same 1140px, ~140 characters a line.
 
@@ -472,7 +480,7 @@ lines in the footer, a graticule in the map band. Shadow is not resting
 decoration. It appears in exactly two situations: as a **state** (the card's
 hover/active ring) or as a **material cue**,
 where paper is physically lifted off a photograph (the hero entry panel, the
-stamp chip). Nothing else on the public site casts a shadow at rest.
+story page's stamp chip). Nothing else on the public site casts a shadow at rest.
 
 ### Shadow Vocabulary
 
@@ -480,7 +488,7 @@ stamp chip). Nothing else on the public site casts a shadow at rest.
   the story card's only resting elevation — it replaced a card that carried a 1px
   border *and* a wide soft shadow.
 - **Chip on photograph** (`box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)`):
-  the stamp chip — paper laid on an image.
+  the stamp chip on a story opening — paper laid on an image.
 - **Card raised** (`box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)`):
   the story card under hover **and** `active:`.
 - **Panel on photograph** (`box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25)`):
@@ -531,8 +539,7 @@ control it must clear 3:1 against its composite — the map band's ghost link is
 `border-white/50` (≈3.9:1) because `/30` measured **2.64:1**, and the project's
 answer for a control hairline on canvas is `navy/55`. Dashed strokes are the
 route motif and are used only where something is genuinely being divided or
-traced: the rule inside the hero panel between masthead and entry
-(`border-dashed border-navy/25`), the `RouteDivider` between story body and
+traced: the `RouteDivider` between story body and
 pagination (`border-t-2 border-dashed border-navy/15`), the underline a
 destination link grows on hover (`decoration-dashed`), and one of the three
 stamp border variants (`stroke-dasharray="5 3"`).
@@ -595,14 +602,14 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
   Below `640px`, the photograph is uncropped and followed by a solid navy caption
   with `16px` padding. Mobile titles are not clamped. The homepage's promoted
   cover alone becomes a thumbnail-and-title index row.
-  - *Small and tablet captions:* from `sm`, a two-row grid separates the photo
-    from its solid navy caption (`16px` padding). The image row is
-    `minmax(6rem, 1fr)` and the caption row sizes to its text inside the unchanged
-    `280px` mosaic track. There is no fade or text over a small photograph.
-  - *Lead caption:* only the double-height lead at `lg` fills the tile with a
-    photograph and overlays its caption. A **72px** ramp
-    (`from-navy/92 to-transparent`, no type in it) meets the `navy/92` base.
-  - *Why the lead uses 92 and not 100:* it is the floor, not a preference. White measures
+  - *Mosaic captions:* from `sm`, every tile fills with its photograph and
+    overlays its caption, as the lead always did: a **40px** ramp
+    (`from-navy/92 to-transparent`, no type in it) meets a `navy/92` base with
+    `16px` padding. The double-height lead at `lg` keeps its longer **72px**
+    ramp and `20px` side padding. Translucent small-tile captions are an owner
+    request (2026-10-18); before it, small tiles stacked a solid caption row
+    below the photo.
+  - *Why the captions use 92 and not 100:* it is the floor, not a preference. White measures
     **11.6:1** on it and `white/70` **6.57:1** over the brightest sky in the
     corpus; at `/80` that second figure is 4.66:1 and at `/75` it is 4.07:1,
     i.e. under AA. The caption could only be lighter by giving up the date
@@ -612,9 +619,9 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
   - *Why the ramp is a fixed length:* a percentage scales with the title's line
     count, so the one distance guaranteeing that type never lands in the fade
     would differ per card.
-  - *Date line:* the month and year, plus the country **only when the title
-    does not already name it** — eight of nine live titles do, and printing it
-    twice within 30px made the index read as repeated. Weight 400 at `12px` in
+  - *Date line:* the month and year, plus the country whenever one is set.
+    It is never suppressed by the title — titles should not lead with the
+    country, since the date line already carries it. Weight 400 at `12px` in
     `white/70`, below the heading, no box. It wraps rather than truncates:
     `truncate` here cut the destination country, the identity payload the card
     exists to deliver, on 3 of 9 cards at a 320px viewport.
@@ -630,9 +637,8 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
     at the midpoint, veiling the lower half of every photograph and blurrier
     than the ramp.
   - *Sizing:* mobile height follows the photo and caption, not fixed tracks.
-    From `sm`, the tile is `280px` per row and `cardSizes` retains
-    `max(boxWidth, boxHeight × 1.5)` as a conservative source hint: small photo
-    regions are shorter than their tracks, while the lead still uses its full height.
+    From `sm`, the tile is `280px` per row, the photograph fills it, and
+    `cardSizes` emits `max(boxWidth, boxHeight × 1.5)` as the source hint.
   - *Shadow strategy:* see Elevation — `shadow-sm` at rest, `shadow-xl` plus a
     `2px brand-red` ring on **hover and `active:`**, over `500ms`.
   - *Motion:* `transition-[transform,translate,box-shadow]`. `translate` is
@@ -708,17 +714,18 @@ using the same media picker, upload and framing controls rather than a new visua
   sideways and the language switcher sat off-screen, in the default locale.
 - **Language switcher:** 12px semibold uppercase, `44×44` targets, separated by
   a drawn 1px rule (not a "|" glyph). The current locale is marked with a `2px`
-  `brand-red` bottom border — a different *kind* of signal, not a darker shade —
-  and the outgoing link is `ink/70` (**5.97:1**; `/60` was 4.33:1).
+  `brand-red` bottom border on a square-cornered box, so it reads as one straight
+  rule — a different *kind* of signal, not a darker shade — and the outgoing
+  link is `ink/70` (**5.97:1**; `/60` was 4.33:1).
 - **Destination index** (`RegionFilter`): navigation set in the log register —
   14px mono uppercase navy, a `brand-red` `tabular-nums` count, and a 12px arrow
   at `navy/55` that turns red and slides `2px` on hover. Hover adds a **dashed**
   underline at `4px` offset. The current region is not a link to itself: it is
   `brand-red`, arrow-less, and carries `aria-current`. See The No-Pill Rule.
 - **Footer:** navy with a contour texture, a three-column grid from `md`
-  (`2.2fr 1fr 1fr`), `56px` vertical padding. Every secondary colour is `/70` or
-  heavier — a floor, not a preference. Links are `44px`-tall boxes and focus with
-  the light accent ring.
+  (`2.2fr 1fr 1fr`), `32px` vertical padding (`40px` from `md`) and `24px` row
+  gaps when stacked. Every secondary colour is `/70` or heavier — a floor, not a
+  preference. Links are `44px`-tall boxes and focus with the light accent ring.
 
 ### Featured Hero (signature)
 
@@ -728,17 +735,15 @@ From `sm`, the existing `80vh` cover (clamped to `480–720px`) retains its vign
 and overlaid paper entry.
 
 - **Entry panel:** canvas, capped at `672px`. Mobile uses the page's `20px`
-  gutters and `24px` vertical spacing, without a floating shadow. From `sm`,
-  the panel has `4px` corners, `24px` padding and the system's deepest shadow.
-  Inside, in order: the tagline as a quiet 16px semibold `navy/75` `<h1>` (18px
-  from `sm`; the wordmark is already in the header,
-  so repeating the identity at display size would be the page shouting its own
-  name); a dashed rule; then one link wrapping the whole entry — mono field line
-  (`N°` in red, date · country at `navy/70`), display title, coordinates, a
-  two-line excerpt, and the red call with its arrow.
-- **Stamp chip:** a square canvas chip with `8px` padding and a lifted shadow,
-  pinned top-right, holding the rotated stamp. Shown at every width — 124px plus
-  margins clears a 320px viewport.
+  gutters and `24px` vertical spacing, without a floating shadow, and stays
+  opaque. From `sm`, the panel is `canvas/85` over the photograph (no blur),
+  with `4px` corners, `24px` padding and the system's deepest shadow. Inside:
+  the tagline as a visually hidden `<h1>` (it is the page's only one; the
+  wordmark in the header already names the site), then one link wrapping the
+  whole entry — mono field line (`N°` in red, date · country at `navy/70`),
+  display title, coordinates, a two-line excerpt, and the red call with its
+  arrow. No masthead, no dashed rule, and no stamp on the homepage hero: all
+  three were removed (2026-10-18) to give the photograph the space.
 - **Vignette:** desktop only, `from-navy/45 via-navy/10 via-40% to-transparent`.
   It seats the paper on the frame and closes the bottom crop, not text contrast.
   Alpha above this is photograph thrown away on a page whose premise is the
@@ -758,8 +763,8 @@ chip stays square while the ink is rotated.
 
 Filled `brand-red` dot → dashed 2px navy rule → a 16px compass arrow at
 `ink/40` → dashed rule → open `brand-red` ring on canvas. `aria-hidden`.
-Used where two genuinely different kinds of thing meet: inside the hero panel
-between masthead and entry, and between a story's body and its pagination. It
+Used where two genuinely different kinds of thing meet: between a story's body
+and its pagination. It
 was removed from the homepage because one dashed rule between two sections that
 already meet at a hard canvas/navy edge is a motif asserting itself rather than
 dividing anything.
@@ -769,7 +774,8 @@ dividing anything.
 Navy band, `1152px` container, two-up from `lg`. The chart is a real projection:
 land as a `fill-opacity: 0.14` silhouette *under* the graticule, primary
 meridians and parallels at `opacity 0.34` solid and secondaries at `0.14`
-dashed `4 6`, pins as a `brand-red-light` dot inside a 15px ring. Degree labels
+dashed `4 6`, pins as a `brand-red-light` dot (`r 4.5`) inside an 11-unit ring. The
+chart is fitted to a `2.2:1` window. Degree labels
 are informative text, so they are 600-weight mono with opaque `#d0d4d9` fill and
 a navy `paint-order: stroke fill` halo — the label casts its own plate and
 measures **9.8:1** wherever it lands. At `opacity: 0.8` the same label fell to a
@@ -801,9 +807,10 @@ than the square — a lone portrait — held at the square's own height as a
 
 ### Do:
 
-- **Do** give type its own opaque plate wherever it meets a photograph — navy
-  under white, canvas under dark ink — and let the scrim stay light
-  (`FeaturedHero.astro`, `StoryCard.astro`, `Footer.astro`).
+- **Do** give type its own plate wherever it meets a photograph — navy under
+  white, canvas under dark ink — and let the scrim stay light
+  (`FeaturedHero.astro`, `StoryCard.astro`, `Footer.astro`). Translucency only
+  at a measured, test-pinned floor.
 - **Do** measure contrast against the composited pixel and add the pairing to
   `site/src/styles/tokens.test.ts`. If a pinned ratio moves, the token is wrong,
   not the threshold.
@@ -828,9 +835,9 @@ than the square — a lone portrait — held at the square's own height as a
 
 ### Don't:
 
-- **Don't** tint an opaque plate with an alpha or a backdrop blur. The stamp on
-  a `bg-navy/60` blurred plate measured **1.28:1 to 2.58:1**; on the opaque
-  canvas chip the same inks are **5.49:1 to 16.5:1**.
+- **Don't** thin a plate below its measured floor, and never add a backdrop
+  blur. The stamp on a `bg-navy/60` blurred plate measured **1.28:1 to
+  2.58:1**; on the opaque canvas chip the same inks are **5.49:1 to 16.5:1**.
 - **Don't** stack an opacity utility on an alpha text colour. `text-ink/70` under
   `opacity-70` is α 0.49 and **3.14:1** on canvas — it shipped for a release
   because the active item beside it happened to be safe.
@@ -845,7 +852,7 @@ than the square — a lone portrait — held at the square's own height as a
 - **Don't** put `content-visibility: auto` on the card grid. It implies
   `contain: paint`, and the grid has no padding, so the `2px` focus ring at
   `2px` offset would be sliced off every edge card (WCAG 2.4.7). It is safe in
-  the footer only because `px-5 py-14` keeps every ring inside the containment box.
+  the footer only because `px-5 py-8` keeps every ring inside the containment box.
 - **Don't** rely on `hover:` alone for feedback, and never use a resting
   `opacity` on a photograph that only lifts on hover.
 - **Don't** reintroduce the generic travel-blog hero: full-bleed photo, eyebrow,
@@ -873,7 +880,8 @@ New post accents. The public blog's expedition identity is unchanged. Self-hoste
 Inter/IBM Plex Mono remain; the shell and login identify the workspace as **Wanderlust
 Studio**, with **Simon's travel journal** as the descriptor.
 
-Admin shell tokens are scoped to `.cms-app-shell` in `uploader/public/admin.css`:
+Admin tokens live on `:root` in `uploader/public/admin.css`, so the shell, the login page
+and the `<dialog>`s appended to `<body>` share one set:
 
 | Role | Token | Value |
 |---|---|---|
@@ -886,6 +894,38 @@ Admin shell tokens are scoped to `.cms-app-shell` in `uploader/public/admin.css`
 | Form boundaries | `--line-control` | `#858c95` |
 | Active navigation / New post | `--studio-accent` | `#416486` |
 | Active navigation surface | `--studio-accent-soft` | `#eaf0f6` |
+| Live-site mutation / destructive | `--red` / `--red-hover` | `#d23b30` / `#ac2a21` |
+| Control height (small) | `--control-h` (`--control-h-sm`) | `2.5rem` (`2rem`); both `2.75rem` on coarse pointers |
+| Focus ring | `--focus-ring` | `2px solid var(--studio-accent)` |
+
+**One control vocabulary.** Every page uses the same primitives; page CSS only places them.
+
+- **Labels** sit above their field in the body face (13px, 600, ink) — the old mono
+  uppercase labels are gone from the admin. A checkbox sits beside its label
+  (`.check-field`), and its help text indents under the label.
+- **Inputs, selects and textareas** share one height, `--line-control` border, 6px radius
+  and accent focus ring. Selects draw their own chevron so they match inputs exactly. File
+  inputs use a quiet outlined picker button, not a filled mono one.
+- **Buttons** have four roles: the unclassed button is the one navy primary per form or
+  section (Save, Add user, Import, Sign in); `.btn-secondary` is outlined and auxiliary
+  (Test connection, Insert image, Review story, Cancel); `.btn-remove` is outlined red for
+  destructive row actions (a destructive *confirm* in the dialog is filled red);
+  `.btn-primary` / `.btn-publish` / `.btn-primary-publish` are the filled red Publish and
+  Rebuild. `.btn-new` is the accent command link (New post, New trip). Form actions sit in
+  one `.form-actions` row, primary first; dense rows (bulk bars, folder actions,
+  revisions, comment moderation) use the small height.
+- **Sections** inside the white workspace are flat: stacked `.card`s divide by a hairline
+  (`--line`), never as cards inside the workspace card. Simple form pages (Users, Import)
+  keep fields at a `34rem` measure.
+- **Menus and disclosures** share one shape: outlined trigger with a drawn chevron and a
+  floating panel (the editor's More actions, the Posts row's More actions); inline
+  disclosures (alt-text review, bulk selection, picker folders) use the same chevron in
+  place of the UA triangle. A floating panel closes like a menu: Escape returns focus to
+  its trigger, and a click outside it dismisses it.
+- **Locale tabs** are one segmented control in the editor and on About; About's Publish
+  rides in the page title row like the editor's command bar.
+- `[hidden]` is enforced globally with `!important`, because every control carries an
+  author `display`.
 
 - A full-width 4rem masthead sits above a 13rem sidebar and a single rounded white
   workspace. Content, Media, and admin-only Manage orient the workspace; the sidebar
@@ -913,6 +953,10 @@ Admin shell tokens are scoped to `.cms-app-shell` in `uploader/public/admin.css`
   details. Coordinate approximation is explicit. Excerpt suggestions have a plain-text
   preview, character count, and separate accept/dismiss actions; generation never looks
   like a saved edit.
+- Media photo details follow the same rule in the detail panel: AI fills only empty
+  fields (marked unsaved) and offers the rest as a tinted note with **Use**. The bulk
+  dialog is the exception that saves, so it states scope, fields, destination and photo
+  count first; overwriting renames the action to **Generate and overwrite**.
 - Settings is one flat document with section dividers and a quiet section index, not a
   stack of competing cards. **Story review & excerpts** comes first, followed by **Photo
   descriptions**, image conversion, comments, and site/backups. Sections still save

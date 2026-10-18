@@ -8,8 +8,11 @@
   </head>
   <body class="login-page">
     <header class="login-brand">
-      <h1 id="studioName"></h1>
-      <p id="studioDescriptor"></p>
+      <span class="cms-brand-mark" id="studioMark" aria-hidden="true"></span>
+      <div class="cms-brand-text">
+        <h1 class="cms-brand-title" id="studioName"></h1>
+        <p class="cms-brand-sub" id="studioDescriptor"></p>
+      </div>
     </header>
     <main>
       <!-- @ai-note: a real <form> (not bare inputs plus a click handler) so that
@@ -34,6 +37,7 @@
     <script>
       const $ = (id) => document.getElementById(id);
       $('studioName').textContent = EditorCopy.en.studioName;
+      $('studioMark').textContent = EditorCopy.en.studioName.charAt(0);
       $('studioDescriptor').textContent = EditorCopy.en.studioDescriptor;
       let needsSetup = false;
       const nextPath = DraftGuard.safeNextPath(new URLSearchParams(location.search).get('next'));

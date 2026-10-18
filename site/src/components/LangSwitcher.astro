@@ -28,8 +28,10 @@ const label: Record<Locale, string> = {
 // nobody can name. It now carries a 2px brand underline, which is a different
 // KIND of signal rather than more of the same one. Drawn as a border on a
 // padded box, not `underline`, so it clears the glyph descenders and cannot be
-// confused with the link styling beside it.
-const target = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded';
+// confused with the link styling beside it. The active box has NO radius: a
+// bottom border on a rounded box curls up at both ends, and the marker is
+// meant to read as one straight rule (owner request, 2026-10-18).
+const target = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center';
 // @ai-warning `text-ink/60` here measured 4.33:1 on canvas — below AA at
 // 12px/600, and on the single control a non-German visitor landing on `/`
 // needs most. `/70` composites to 5.97:1, and the state signal is the active
@@ -52,7 +54,7 @@ const inactive = 'text-ink/70 transition-[color] hover:text-brand-red';
             href={otherHref}
             hreflang={code}
             aria-label={label[code]}
-            class={`${target} ${inactive}`}
+            class={`${target} rounded ${inactive}`}
           >
             {code.toUpperCase()}
           </a>

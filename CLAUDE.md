@@ -67,7 +67,10 @@ username/password accounts stored in Postgres, with HttpOnly session cookies. Ev
 Simon's own server, in one container. AI inference remains **browser-direct**:
 editor-integrated alt-text suggestions (local by default, optional remote providers) and the **Review Story** drawer, which combines
 deterministic checks with optional provider-backed suggestions (#212–#215). It reviews
-unsaved active-locale content without autosaving or gating Publish. The server never
+unsaved active-locale content without autosaving or gating Publish. The Media page also
+suggests photo details (title, DE/EN alt + caption, tags) for one photo, or fills empty
+fields in bulk — the one AI path that saves, with opt-in overwrite
+(`docs/superpowers/specs/2026-10-18-media-ai-details-design.md`). The server never
 contacts a model.
 See `docs/superpowers/specs/2026-07-05-ai-alt-text-editor-integration-design.md`. (An earlier
 standalone batch-uploader variant was removed in July 2026 and restored in this slimmer,
@@ -555,7 +558,7 @@ blog/
     ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · settings · posts · pages · body-content · build · backup · export · preview · wxr-parse · wp-content · wp-images · wp-import
     │                              #   media-files (disk) · media-store (database) · media-sync (reconcile) · encode-queue · work-lock · disk · exif
     ├── public/                    #   index.html (hero upload) · import.html (WordPress import) · editor/posts/about/settings/users
-    │                              #   media.html + media-api/media-browser/media-picker.js · posts-filter.js · posts-duplicate.js
+    │                              #   media.html + media-api/media-ai/media-ai-dialog/media-browser/media-picker.js · posts-filter.js · posts-duplicate.js
     ├── test/                      #   Vitest suites (integration suites run when TEST_DATABASE_URL is set)
     └── .env.example · README.md
 ```

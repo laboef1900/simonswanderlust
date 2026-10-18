@@ -83,12 +83,12 @@ const WIDTH = 1000;
 /**
  * Width:height the fitted bounds are expanded to.
  *
- * Wide on purpose: this band sits between the hero and the story grid, and
- * every row of height it takes pushes the grid further below the fold. 2.8
- * keeps the chart a strip rather than a panel. Exported so the test measures
- * the real value instead of restating it.
+ * Wide on purpose: the band closes the home page, and a panel-shaped chart
+ * would dwarf the heading beside it. 2.2 (was 2.8 until 2026-10-18, when the
+ * owner asked for a taller map) keeps it a broad strip with more latitude
+ * shown. Exported so the test measures the real value instead of restating it.
  */
-export const TARGET_ASPECT = 2.8;
+export const TARGET_ASPECT = 2.2;
 /** Padding around the data, as a fraction of its own span. */
 const PAD_FRACTION = 0.12;
 /** Minimum padding in degrees, so a single pin still gets a readable window. */

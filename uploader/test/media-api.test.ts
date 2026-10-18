@@ -296,14 +296,16 @@ describe('MediaApi search helpers', () => {
 describe('media client DOM safety', () => {
   const browser = readFileSync('public/media-browser.js', 'utf8');
   const picker = readFileSync('public/media-picker.js', 'utf8');
+  const aiDialog = readFileSync('public/media-ai-dialog.js', 'utf8');
   const page = readFileSync('public/media.html', 'utf8');
 
   // @ai-warning: these modules render attacker-influenced EXIF strings, folder
-  // names, titles and captions. Every existing admin page already builds DOM
-  // with textContent, but that was convention, not a written rule — this makes
-  // it enforceable.
+  // names, titles and captions — and the AI dialog renders model-derived
+  // failure reasons. Every existing admin page already builds DOM with
+  // textContent, but that was convention, not a written rule — this makes it
+  // enforceable.
   it('never assigns innerHTML anything but the empty string', () => {
-    for (const src of [browser, picker]) {
+    for (const src of [browser, picker, aiDialog]) {
       for (const match of src.matchAll(/\.innerHTML\s*=\s*([^;]+);/g)) {
         expect(match[1]?.trim()).toBe("''");
       }
@@ -311,7 +313,7 @@ describe('media client DOM safety', () => {
   });
 
   it('never builds markup with insertAdjacentHTML, outerHTML or document.write', () => {
-    for (const src of [browser, picker]) {
+    for (const src of [browser, picker, aiDialog]) {
       expect(src).not.toMatch(/insertAdjacentHTML|outerHTML|document\.write/);
     }
   });
