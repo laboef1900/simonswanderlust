@@ -86,13 +86,18 @@ window.MediaAiDialog = (function () {
     async function collect(s) {
       if (s.all || s.collecting) return;
       s.collecting = true;
+      // A retry starts clean: update() shows a stale listError before any count.
+      s.listError = '';
       update();
       try {
         const all = await ai.collectAll(
           (page, pageSize) => opts.client.list({ ...s.query, page, pageSize }), s.controller.signal);
         if (session === s) s.all = all;
       } catch (error) {
-        if (session === s) s.listError = 'Could not list the photos in this view: ' + message(error);
+        if (session === s) {
+          s.listError = 'Could not list the photos in this view: ' + message(error)
+            + '. Close the dialog and open it again to retry.';
+        }
       } finally {
         s.collecting = false;
       }
@@ -168,6 +173,10 @@ window.MediaAiDialog = (function () {
         list.appendChild(more);
       }
       list.hidden = report.failed.length === 0;
+      closable();
+    }
+
+    function closable() {
       $('aiCancel').textContent = 'Close';
       $('aiCancel').disabled = false;
       $('aiCancel').focus();
@@ -186,17 +195,29 @@ window.MediaAiDialog = (function () {
       $('aiCancel').textContent = 'Stop';
       $('aiProgress').hidden = false;
       $('aiSummary').textContent = 'Generating. Keep this page open; Stop cancels the current photo, and photos already saved keep their details.';
-      let report;
+      let report = null;
+      let crash = null;
       try {
         report = await ai.runBulk({
           items, fields: chosen, replace: overwrite, config: s.config, client: opts.client,
           imageOrigin: opts.imageOrigin, pageOrigin: location.origin, signal: s.controller.signal,
           onProgress: progress,
         });
+      } catch (error) {
+        // runBulk records per-photo failures itself, so this is a defect, not a
+        // photo. The dialog must still end closable and the grid show the saves.
+        crash = error;
       } finally {
         s.config.captionApiKey = null;
         s.running = false;
         s.done = true;
+      }
+      if (!report) {
+        $('aiSummary').textContent = 'The run stopped unexpectedly: ' + message(crash)
+          + '. Photos already saved keep their details.';
+        closable();
+        opts.onFinished('AI details: the run stopped unexpectedly.');
+        return;
       }
       finish(report);
       opts.onFinished('AI details: saved ' + report.saved + ', skipped ' + report.skipped

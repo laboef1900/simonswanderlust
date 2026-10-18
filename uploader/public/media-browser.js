@@ -35,6 +35,7 @@
     detailDirty: false,  // unsaved edits in the detail panel; render() leaves it alone while set
     detailItem: null,    // the row the panel was built from (diff base for saveDetail)
     suggest: null,       // in-flight AI suggestion for the panel's photo: { key, controller }
+    offers: null,        // suggestions shown under fields that had text: { key, slots: [[inputId, value, what]] }
     queue: null,
   };
 
@@ -227,8 +228,10 @@
     panel.innerHTML = '';
     var item = state.items.filter(function (i) { return i.key === state.detailKey; })[0];
     // A suggestion belongs to the photo it was asked for: once the panel shows
-    // another photo (or none), the request is abandoned, never applied.
+    // another photo (or none), the request is abandoned, never applied, and
+    // the offers it left under fields are dropped.
     if (state.suggest && (!item || state.suggest.key !== item.key)) cancelSuggest();
+    if (state.offers && (!item || state.offers.key !== item.key)) state.offers = null;
     if (!item) {
       delete panel.dataset.key;
       panel.appendChild(el('p', 'muted', 'Select a photo to edit its details.'));
@@ -262,6 +265,7 @@
       hint.hidden = true;
       panel.appendChild(hint);
     });
+    restoreOffers();
 
     var folderLabel = el('label', null, 'Folder');
     var folderSelect = document.createElement('select');
@@ -516,7 +520,7 @@
       config = await window.AltSuggest.loadConfig(null, AbortSignal.any([signal, AbortSignal.timeout(15000)]));
       var suggestion = await window.MediaAi.suggest(url, config, signal);
       if (state.suggest !== request || $('detail').dataset.key !== item.key) return;
-      suggestStatus(false, applySuggestion(suggestion));
+      suggestStatus(false, applySuggestion(item.key, suggestion));
     } catch (e) {
       if (state.suggest !== request) return;
       var why = config ? window.LLM.mixedContentWarning(config.captionBaseUrl, location.protocol) : '';
@@ -529,7 +533,7 @@
   }
 
   /** Puts a suggestion into the panel; returns the status line describing what happened. */
-  function applySuggestion(s) {
+  function applySuggestion(key, s) {
     var slots = [
       ['dTitle', s.title, 'title'],
       ['dAltDe', s.altDe, 'German alt text'],
@@ -539,7 +543,7 @@
       ['dTags', (s.tags || []).join(', '), 'tags'],
     ];
     var filled = 0;
-    var offered = 0;
+    var offers = [];
     slots.forEach(function (slot) {
       var input = $(slot[0]);
       var hint = $(slot[0] + 'Hint');
@@ -550,14 +554,31 @@
         filled++;
       } else if (input.value !== value) {
         offerSuggestion(hint, input, value, slot[2]);
-        offered++;
+        offers.push(slot);
       }
     });
+    // Offers don't mark the panel dirty, so render() may rebuild it under
+    // them (re-clicking the photo, a reload); renderDetail puts them back.
+    state.offers = offers.length ? { key: key, slots: offers } : null;
+    var offered = offers.length;
     if (filled) markDetailDirty();
     if (!filled && !offered) return 'The model suggested nothing new for this photo.';
     return (filled ? 'Filled ' + filled + ' empty field' + (filled === 1 ? '' : 's') + '. ' : '')
       + (offered ? 'Fields that already had text keep it; the suggestion is shown below each. ' : '')
       + 'Review, then Save details.';
+  }
+
+  /** Re-shows the offers still pending for the panel's photo after a rebuild. */
+  function restoreOffers() {
+    if (!state.offers) return;
+    state.offers.slots = state.offers.slots.filter(function (slot) {
+      var input = $(slot[0]);
+      var hint = $(slot[0] + 'Hint');
+      if (!input || !hint || input.value === slot[1]) return false;
+      offerSuggestion(hint, input, slot[1], slot[2]);
+      return true;
+    });
+    if (!state.offers.slots.length) state.offers = null;
   }
 
   function offerSuggestion(hint, input, value, what) {
@@ -570,6 +591,10 @@
     use.addEventListener('click', function () {
       input.value = value;
       hint.hidden = true;
+      if (state.offers) {
+        state.offers.slots = state.offers.slots.filter(function (slot) { return slot[0] !== input.id; });
+        if (!state.offers.slots.length) state.offers = null;
+      }
       markDetailDirty();
       input.focus();
     });

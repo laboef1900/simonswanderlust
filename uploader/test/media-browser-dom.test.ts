@@ -93,13 +93,15 @@ const DETAILS: Details = {
   tags: ['sea lion', 'wildlife'],
 };
 
-interface Deferred { url: string; resolve(body: unknown): void }
+interface Deferred { url: string; resolve(body: unknown): void; fail(status: number, error: string): void }
 /** The model seam: receives the thumbnail URL the page chose and the request's signal. */
 type Describe = (url: string, signal: AbortSignal) => Promise<Details>;
 
 /** The loaded page: the DOM stub plus everything the page sent over the wire. */
 interface Page {
   el(id: string): FakeNode;
+  /** The page's global object, for replacing a module's function after load. */
+  win: Record<string, unknown>;
   timers: { fn: () => void; cleared: boolean }[];
   listRequests: Deferred[];
   patches: { url: string; body: Record<string, unknown> }[];
@@ -143,7 +145,11 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
     }
     if (url.startsWith('/media/items/')) return ok(rows.get(url.slice('/media/items/'.length)));
     const { promise, resolve } = Promise.withResolvers<unknown>();
-    listRequests.push({ url, resolve: (body) => resolve({ status: 200, ok: true, json: async () => body }) });
+    listRequests.push({
+      url,
+      resolve: (body) => resolve({ status: 200, ok: true, json: async () => body }),
+      fail: (status, error) => resolve({ status, ok: false, json: async () => ({ error }) }),
+    });
     return promise;
   };
   const describePhoto = opts.describe ?? (async () => DETAILS);
@@ -188,7 +194,7 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
   vm.runInContext(dialogSrc, ctx);
   vm.runInContext(browserSrc, ctx);
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await setImmediate(); };
-  return { el, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush };
+  return { el, win: ctx, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush };
 }
 
 function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
@@ -364,6 +370,33 @@ describe('media-browser AI suggestion in the detail panel', () => {
     expect(page.el('dSuggest').disabled).toBe(true);
     expect(page.el('dSuggestStatus').textContent).toMatch(/finished encoding/);
   });
+
+  it('keeps offered suggestions when the panel is rebuilt for the same photo', async () => {
+    const page = loadPage();
+    const filled: Item = {
+      ...item('a', 'Mein Alttext'), alt: { de: 'Mein Alttext', en: 'My alt' },
+      caption: { de: 'Cap', en: 'Cap' }, tags: ['kept'],
+    };
+    await openPhoto(page, [filled, item('b')]);
+    page.el('dSuggest').dispatch('click');
+    await page.flush();
+    expect(page.el('dTitleHint').hidden).toBe(false);
+    expect(page.el('dUnsaved').hidden).toBe(true);
+
+    // Re-clicking the photo rebuilds the clean panel; the offers come back.
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    expect(page.el('dTitleHint').hidden).toBe(false);
+    expect(page.el('dAltEnHint').hidden).toBe(false);
+    page.el('dTitleHint').querySelectorAll('.btn-link')[0]!.dispatch('click');
+    expect(page.el('dTitle').value).toBe(DETAILS.title);
+
+    // Another photo drops them; coming back does not resurrect them.
+    page.confirmAnswer.value = true;
+    page.el('grid').querySelectorAll('.media-cell')[1]!.dispatch('click');
+    expect(page.el('dAltEnHint').hidden).toBe(true);
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    expect(page.el('dAltEnHint').hidden).toBe(true);
+  });
 });
 
 describe('media-browser bulk AI dialog', () => {
@@ -499,6 +532,61 @@ describe('media-browser bulk AI dialog', () => {
     expect(page.patches).toEqual([]);
     expect(page.described).toHaveLength(1);
     expect(page.el('aiSummary').textContent).toBe('Stopped. Saved 0, skipped 0, failed 0, not processed 2. Nothing was changed.');
+    page.el('aiCancel').dispatch('click');
+    expect(page.el('aiDialog').open).toBe(false);
+  });
+
+  it('retries a failed listing when "all photos" is chosen again', async () => {
+    const page = loadPage();
+    const items = [item('a'), item('b')];
+    for (const row of items) page.rows.set(row.key, row);
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items, total: 2 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    page.el('aiAll').dispatch('click');
+    await page.flush();
+    expect(page.el('aiScopeSelected').checked).toBe(true);
+
+    page.el('aiScopeAll').checked = true;
+    page.el('aiScopeAll').dispatch('change');
+    await page.flush();
+    page.listRequests.shift()!.fail(503, 'database unavailable');
+    await page.flush();
+    expect(page.el('aiSummary').textContent).toMatch(/^Could not list the photos in this view: database unavailable/);
+    expect(page.el('aiStart').disabled).toBe(true);
+
+    page.el('aiScopeSelected').checked = true;
+    page.el('aiScopeSelected').dispatch('change');
+    page.el('aiScopeAll').checked = true;
+    page.el('aiScopeAll').dispatch('change');
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items, total: 2 });
+    await page.flush();
+    expect(page.el('aiSummary').textContent).toMatch(/^2 of 2 photos have empty fields/);
+    expect(page.el('aiStart').disabled).toBe(false);
+  });
+
+  it('ends closable when the run itself throws, and reloads the grid', async () => {
+    const page = loadPage();
+    const items = [item('a')];
+    page.rows.set('a', items[0]!);
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items, total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    const mediaAi = page.win.MediaAi;
+    if (typeof mediaAi !== 'object' || mediaAi === null) throw new Error('MediaAi not loaded');
+    Reflect.set(mediaAi, 'runBulk', async () => { throw new Error('boom'); });
+    page.el('aiSelected').dispatch('click');
+    await page.flush();
+    page.el('aiStart').dispatch('click');
+    await page.flush();
+
+    expect(page.el('aiSummary').textContent).toBe('The run stopped unexpectedly: boom. Photos already saved keep their details.');
+    expect(page.el('aiCancel').textContent).toBe('Close');
+    expect(page.el('aiCancel').disabled).toBe(false);
+    expect(page.listRequests.at(-1)!.url).toMatch(/^\/media\?/);
     page.el('aiCancel').dispatch('click');
     expect(page.el('aiDialog').open).toBe(false);
   });

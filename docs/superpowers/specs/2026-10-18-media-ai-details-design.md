@@ -17,8 +17,10 @@ when an author inserts the photo and saves, so no published page changes.
 **One photo (detail panel).** **Suggest with AI** asks the model once for all six
 values. Empty fields are filled; a field that already holds text keeps it and shows the
 suggestion beneath with **Use**. Filled fields mark the panel unsaved; nothing is saved
-until **Save details**. Switching to another photo or deleting it abandons the request;
-a late reply never lands in another photo's panel.
+until **Save details**. Offers alone do not, so they are kept per photo and re-shown when
+the clean panel is rebuilt (re-click, reload) until taken or the panel shows another
+photo. Switching to another photo or deleting it abandons the request; a late reply
+never lands in another photo's panel.
 
 **Several or all photos (dialog).** **Generate details with AI** in the selection bar,
 or **Generate details with AI…** above the grid, opens one dialog stating:
@@ -33,7 +35,9 @@ or **Generate details with AI…** above the grid, opens one dialog stating:
 
 Generate saves photo by photo, with progress, saved/skipped/failed counts and a list of
 failures (key + fixed reason). **Stop** (or Esc) cancels the request in flight and sends
-no further save; the dialog stays open with the result.
+no further save; the dialog stays open with the result. A failed listing of "all photos"
+is retried by choosing that scope again or reopening the dialog; a run that throws
+outside the per-photo bookkeeping still ends with a closable dialog and a grid reload.
 
 ## Write rules (invariants)
 
@@ -86,9 +90,10 @@ UI code leaves all data valid.
 - New `test/media-ai.test.ts`: parser bounds and normalization, transport categories,
   key isolation, cancel vs deadline, caption contract on the shared transport; write
   rules, origin rule, paging, re-read-before-save, failure streak, stop-without-save.
-- `test/media-browser-dom.test.ts`: suggestion fill/offer/save, late reply after a photo
-  switch, not-ready photo; dialog on a selection, overwrite, all-in-view paging across
-  201 photos, Esc stops without saving.
+- `test/media-browser-dom.test.ts`: suggestion fill/offer/save, offers surviving a
+  rebuild of the same photo's panel, late reply after a photo switch, not-ready photo;
+  dialog on a selection, overwrite, all-in-view paging across 201 photos, listing retry
+  after a failure, a run that throws, Esc stops without saving.
 - Browser smoke on an isolated Fastify instance (memory stores, real encode queue, real
   variants on a separate image origin with CORS) against a fake OpenAI-compatible vision
   endpoint: real image download, JPEG preparation and transport; single-photo fill and
