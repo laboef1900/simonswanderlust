@@ -408,6 +408,22 @@ acceptance, and never save/publish automatically. A draft/locale/post change inv
 and presented results; acceptance checks the snapshot again. `/ai-config` has a separate
 15-second abortable read deadline. Suggestions and keys are not persisted.
 
+Media-library photo details (title, DE/EN alt and caption, tags) use the caption
+provider, config and request-local key; there is no additional secret or route. Only a
+`ready` display variant on the configured image origin or the page origin, without
+credentials, is downloaded (cookies and referrer omitted, redirects refused) and
+re-encoded on a canvas, so no EXIF/GPS reaches the provider. The parser bounds the reply
+like the review parsers, strips controls, caps every field and normalizes tags; the UI
+renders it with `textContent`/input values only. This is the one AI path that saves
+without per-item acceptance: the bulk dialog writes through the existing session-level
+`PATCH /media/items/*` (the same authority as typing the text by hand, and server-side
+`cleanText`/`normalizeTags` still apply). Its scope, destination and an explicit,
+never-remembered overwrite choice are stated before it runs; without overwrite it fills
+only fields that are empty on the row re-read just before each save; it never clears a
+field; Stop sends no further save; three consecutive failures stop it. Library metadata
+reaches a story only when an author inserts the photo and saves. See
+`docs/superpowers/specs/2026-10-18-media-ai-details-design.md`.
+
 Country-derived article coordinates use a bundled public-domain country-label-point table,
 not an automatic request to `/geocode`. Saved/manual coordinates are not overwritten by
 country edits. The separate, explicit waypoint-search boundary is unchanged.

@@ -1,17 +1,23 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 
-// media-browser.js is the library page's DOM glue (media.html). Its two
+// media-browser.js is the library page's DOM glue (media.html). Its
 // user-visible contracts that no pure helper can carry — the detail panel
-// keeps unsaved edits across a re-render, and a superseded list response never
-// paints — are exercised here against a tree-shaped DOM stub whose ids come
-// from the REAL markup, the same precedent as editor-dom.test.ts.
+// keeps unsaved edits across a re-render, a superseded list response never
+// paints, an AI suggestion lands only in its own photo's panel and saves
+// nothing, and the bulk dialog saves only what it says — are exercised here
+// against a tree-shaped DOM stub whose ids come from the REAL markup, the same
+// precedent as editor-dom.test.ts. The model itself is stubbed at the
+// AltSuggest/LLM seam; media-ai.js and media-ai-dialog.js run for real.
 const apiSrc = readFileSync('public/media-api.js', 'utf8');
+const aiSrc = readFileSync('public/media-ai.js', 'utf8');
+const dialogSrc = readFileSync('public/media-ai-dialog.js', 'utf8');
 const browserSrc = readFileSync('public/media-browser.js', 'utf8');
 const markup = readFileSync('public/media.html', 'utf8');
 const pageIds = [...markup.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]!);
+const checkedIds = new Set([...markup.matchAll(/<input[^>]*\bid="([^"]+)"[^>]*\bchecked\b/g)].map((m) => m[1]!));
 
 type Listener = (ev: Record<string, unknown>) => void;
 
@@ -22,6 +28,8 @@ class FakeNode {
   value = '';
   hidden = false;
   disabled = false;
+  checked = false;
+  open = false;
   tabIndex = 0;
   clientWidth = 400;
   offsetWidth = 100;
@@ -37,6 +45,8 @@ class FakeNode {
   appendChild(c: FakeNode): FakeNode { this.children.push(c); return c; }
   remove(): void {}
   focus(): void {}
+  showModal(): void { this.open = true; }
+  close(): void { this.open = false; this.dispatch('close'); }
   setAttribute(k: string, v: string): void { this.attrs[k] = v; }
   getAttribute(k: string): string | null { return this.attrs[k] ?? null; }
   classList = { add() {}, remove() {}, toggle() {}, contains() { return false; } };
@@ -61,30 +71,53 @@ class FakeNode {
 }
 
 interface Item {
-  key: string; title: string; folder: string; status: string;
+  key: string; title: string; folder: string; status: string; thumbSrc: string;
   alt: { de: string; en: string }; caption: { de: string; en: string };
   tags: string[]; exif: null; width: number; height: number; origBytes: number; variantBytes: number;
 }
 function item(key: string, altDe = ''): Item {
   return {
-    key, title: key, folder: '', status: 'ready', alt: { de: altDe, en: '' }, caption: { de: '', en: '' },
+    key, title: key, folder: '', status: 'ready', thumbSrc: 'https://img.example/' + key + '-640.webp',
+    alt: { de: altDe, en: '' }, caption: { de: '', en: '' },
     tags: [], exif: null, width: 10, height: 10, origBytes: 1, variantBytes: 1,
   };
 }
 
-interface Deferred { url: string; resolve(body: unknown): void }
+interface Details { title: string; altEn: string; altDe: string; captionEn: string; captionDe: string; tags: string[] }
+const DETAILS: Details = {
+  title: 'Sea lion asleep on black lava',
+  altEn: 'A sea lion sleeps on dark volcanic rock',
+  altDe: 'Ein Seelöwe schläft auf dunklem Vulkangestein',
+  captionEn: 'Midday nap on the lava shore.',
+  captionDe: 'Mittagsschlaf am Lavaufer.',
+  tags: ['sea lion', 'wildlife'],
+};
 
-function loadPage(): {
+interface Deferred { url: string; resolve(body: unknown): void }
+/** The model seam: receives the thumbnail URL the page chose and the request's signal. */
+type Describe = (url: string, signal: AbortSignal) => Promise<Details>;
+
+/** The loaded page: the DOM stub plus everything the page sent over the wire. */
+interface Page {
   el(id: string): FakeNode;
   timers: { fn: () => void; cleared: boolean }[];
   listRequests: Deferred[];
   patches: { url: string; body: Record<string, unknown> }[];
+  rows: Map<string, Item>;
+  described: string[];
   confirms: string[];
   confirmAnswer: { value: boolean };
   flush(): Promise<void>;
-} {
+}
+
+function loadPage(opts: { describe?: Describe } = {}): Page {
   const roots = new Map<string, FakeNode>();
-  for (const id of pageIds) { const n = new FakeNode('div'); n.id = id; roots.set(id, n); }
+  for (const id of pageIds) {
+    const n = new FakeNode('div');
+    n.id = id;
+    n.checked = checkedIds.has(id);
+    roots.set(id, n);
+  }
   const getElementById = (id: string): FakeNode | null => {
     for (const r of roots.values()) { const hit = r.find(id); if (hit) return hit; }
     return null;
@@ -97,26 +130,32 @@ function loadPage(): {
   const timers: { fn: () => void; cleared: boolean }[] = [];
   const listRequests: Deferred[] = [];
   const patches: { url: string; body: Record<string, unknown> }[] = [];
+  const rows = new Map<string, Item>();
+  const described: string[] = [];
   const confirms: string[] = [];
   const confirmAnswer = { value: false };
+  const ok = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
   const fetch = (url: string, init?: { method?: string; body?: string }): Promise<unknown> => {
-    if (url.startsWith('/media/folders')) return Promise.resolve({ status: 200, ok: true, json: async () => [] });
+    if (url.startsWith('/media/folders')) return ok([]);
     if (init?.method === 'PATCH') {
       patches.push({ url, body: JSON.parse(init.body ?? '{}') as Record<string, unknown> });
-      return Promise.resolve({ status: 200, ok: true, json: async () => ({}) });
+      return ok({});
     }
-    // Executor form: the uploader's tsconfig lib predates Promise.withResolvers.
-    return new Promise((resolve) => {
-      listRequests.push({ url, resolve: (body) => resolve({ status: 200, ok: true, json: async () => body }) });
-    });
+    if (url.startsWith('/media/items/')) return ok(rows.get(url.slice('/media/items/'.length)));
+    const { promise, resolve } = Promise.withResolvers<unknown>();
+    listRequests.push({ url, resolve: (body) => resolve({ status: 200, ok: true, json: async () => body }) });
+    return promise;
   };
+  const describePhoto = opts.describe ?? (async () => DETAILS);
   const ctx: Record<string, unknown> = {
     document: {
       getElementById,
       createElement: (tag: string) => new FakeNode(tag),
+      createTextNode: (text: string) => Object.assign(new FakeNode('#text'), { textContent: text }),
     },
-    location: { href: '' },
+    location: { href: '', origin: 'https://app.example', protocol: 'https:' },
     fetch,
+    URL, AbortController, AbortSignal,
     setTimeout: (fn: () => void) => { timers.push({ fn, cleared: false }); return timers.length; },
     clearTimeout: (id: number) => { const t = timers[id - 1]; if (t) t.cleared = true; },
     confirm: (msg: string) => { confirms.push(msg); return confirmAnswer.value; },
@@ -125,13 +164,31 @@ function loadPage(): {
     FormData: class { append() {} },
     XMLHttpRequest: class {},
     Auth: { ensureAuthed: async () => ({ id: 'u1', username: 'simon', isAdmin: true }), renderHeader() {} },
+    EditorGalleryImageOrigin: 'https://img.example',
+    AltSuggest: {
+      loadConfig: async () => ({
+        captionProvider: 'lm-studio', captionBaseUrl: 'http://localhost:1234/v1', captionApiKey: null,
+        lmModel: 'vision', captionPrompt: 'Describe', captionMaxEdge: 768, captionTimeoutMs: 60000,
+      }),
+      // The prepared "image" is the URL itself, so the model stub sees which photo it got.
+      prepHosted: async (url: string) => ({ dataUrl: url }),
+    },
+    LLM: {
+      mixedContentWarning: () => '',
+      describePhoto: (_base: string, _model: string, _guidance: string, dataUrl: string, _timeout: number, signal: AbortSignal) => {
+        described.push(dataUrl);
+        return describePhoto(dataUrl, signal);
+      },
+    },
   };
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(apiSrc, ctx);
+  vm.runInContext(aiSrc, ctx);
+  vm.runInContext(dialogSrc, ctx);
   vm.runInContext(browserSrc, ctx);
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await setImmediate(); };
-  return { el, timers, listRequests, patches, confirms, confirmAnswer, flush };
+  return { el, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush };
 }
 
 function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
@@ -211,7 +268,7 @@ describe('media-browser detail panel', () => {
     expect(page.el('detail').dataset.key).toBe('a');
   });
 
-  it('saves only the fields the author changed, so a stale folder does not undo a bulk move', async () => {
+  it('saves only the fields and locales the author changed, so a stale panel undoes nothing', async () => {
     const page = loadPage();
     await page.flush();
     page.listRequests.shift()!.resolve({ items: [item('a', 'alt-a')], total: 1 });
@@ -219,18 +276,231 @@ describe('media-browser detail panel', () => {
     page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
     page.el('dAltDe').value = 'Fjord';
     page.el('detail').dispatch('input');
-    // Meanwhile the photo was moved (e.g. bulk Move) and the list reloaded
-    // with its new folder; the untouched panel still shows the old one.
+    // Meanwhile the photo was moved (bulk Move) and given English alt text
+    // (bulk AI run), and the list reloaded; the untouched panel still shows
+    // the old folder and the old, empty English alt.
     page.el('fStatus').dispatch('change');
     await page.flush();
-    page.listRequests.shift()!.resolve({ items: [{ ...item('a', 'alt-a'), folder: 'Island' }], total: 1 });
+    page.listRequests.shift()!.resolve({
+      items: [{ ...item('a', 'alt-a'), folder: 'Island', alt: { de: 'alt-a', en: 'Filled by a bulk run' } }], total: 1,
+    });
     await page.flush();
     expect(page.el('dFolder').value).toBe('');
-    page.el('detail').querySelectorAll('.btn-secondary')[0]!.dispatch('click');
+    expect(page.el('dAltEn').value).toBe('');
+    page.el('dSave').dispatch('click');
     await page.flush();
     expect(page.patches).toHaveLength(1);
     expect(page.patches[0]!.url).toBe('/media/items/a');
-    expect(page.patches[0]!.body).toEqual({ alt: { de: 'Fjord', en: '' } });
+    expect(page.patches[0]!.body).toEqual({ alt: { de: 'Fjord' } });
+  });
+});
+
+describe('media-browser AI suggestion in the detail panel', () => {
+  async function openPhoto(page: Page, items: Item[], index = 0): Promise<void> {
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items, total: items.length });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[index]!.dispatch('click');
+  }
+
+  it('fills empty fields, offers the rest beside their text, and saves only on Save details', async () => {
+    const page = loadPage();
+    // Title "a" and German alt already have text; everything else is empty.
+    await openPhoto(page, [item('a', 'Mein Alttext')]);
+    page.el('dSuggest').dispatch('click');
+    await page.flush();
+
+    expect(page.described).toEqual(['https://img.example/a-640.webp']);
+    expect(page.el('dAltEn').value).toBe(DETAILS.altEn);
+    expect(page.el('dCapDe').value).toBe(DETAILS.captionDe);
+    expect(page.el('dCapEn').value).toBe(DETAILS.captionEn);
+    expect(page.el('dTags').value).toBe('sea lion, wildlife');
+    expect(page.el('dAltDe').value).toBe('Mein Alttext');
+    expect(page.el('dTitle').value).toBe('a');
+    expect(page.el('dAltDeHint').hidden).toBe(false);
+    expect(page.el('dTitleHint').hidden).toBe(false);
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dSuggestStatus').textContent).toContain('Filled 4 empty fields');
+    expect(page.patches).toHaveLength(0);
+
+    // Taking one offered suggestion is explicit; the other stays as written.
+    page.el('dTitleHint').querySelectorAll('.btn-link')[0]!.dispatch('click');
+    expect(page.el('dTitle').value).toBe(DETAILS.title);
+    expect(page.el('dTitleHint').hidden).toBe(true);
+
+    page.el('dSave').dispatch('click');
+    await page.flush();
+    expect(page.patches).toEqual([{ url: '/media/items/a', body: {
+      title: DETAILS.title,
+      alt: { en: DETAILS.altEn },
+      caption: { de: DETAILS.captionDe, en: DETAILS.captionEn },
+      tags: DETAILS.tags,
+    } }]);
+  });
+
+  it('abandons a suggestion once the panel shows another photo', async () => {
+    const pending = Promise.withResolvers<Details>();
+    let signal: AbortSignal | undefined;
+    const page = loadPage({ describe: (_url, s) => { signal = s; return pending.promise; } });
+    await openPhoto(page, [item('a'), item('b')]);
+    page.el('dSuggest').dispatch('click');
+    await page.flush();
+    expect(page.el('dSuggest').disabled).toBe(true);
+
+    page.el('grid').querySelectorAll('.media-cell')[1]!.dispatch('click');
+    expect(signal?.aborted).toBe(true);
+    expect(page.el('detail').dataset.key).toBe('b');
+    expect(page.el('dSuggest').disabled).toBe(false);
+
+    pending.resolve(DETAILS);
+    await page.flush();
+    expect(page.el('dAltDe').value).toBe('');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+  });
+
+  it('offers nothing for a photo that is still encoding', async () => {
+    const page = loadPage();
+    await openPhoto(page, [{ ...item('a'), status: 'processing' }]);
+    expect(page.el('dSuggest').disabled).toBe(true);
+    expect(page.el('dSuggestStatus').textContent).toMatch(/finished encoding/);
+  });
+});
+
+describe('media-browser bulk AI dialog', () => {
+  const complete = (key: string): Item => ({
+    ...item(key, 'Alt'), title: 'Done', alt: { de: 'Alt', en: 'Alt' }, caption: { de: 'Cap', en: 'Cap' }, tags: ['t'],
+  });
+
+  it('runs on the selection, skips complete photos and saves what was empty', async () => {
+    const page = loadPage();
+    const items = [complete('a'), item('b'), { ...item('c'), status: 'processing' }];
+    for (const row of items) page.rows.set(row.key, row);
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items, total: 3 });
+    await page.flush();
+    const cells = page.el('grid').querySelectorAll('.media-cell');
+    cells[0]!.dispatch('click');
+    cells[2]!.dispatch('click', { shiftKey: true });
+    page.el('aiSelected').dispatch('click');
+    await page.flush();
+
+    expect(page.el('aiDialog').open).toBe(true);
+    expect(page.el('aiScopeSelected').checked).toBe(true);
+    expect(page.el('aiScopeSelectedLabel').textContent).toBe('The 3 selected photos');
+    expect(page.el('aiSummary').textContent).toBe('1 of 2 photos have empty fields to fill, one model request each.'
+      + ' 1 photo still encoding, failed or missing is left out.');
+    expect(page.el('aiStart').disabled).toBe(false);
+
+    page.el('aiStart').dispatch('click');
+    await page.flush();
+    expect(page.described).toEqual(['https://img.example/b-640.webp']);
+    // b's title ("b") already had text, so it is kept; everything empty is filled.
+    expect(page.patches).toEqual([{ url: '/media/items/b', body: {
+      alt: { de: DETAILS.altDe, en: DETAILS.altEn },
+      caption: { de: DETAILS.captionDe, en: DETAILS.captionEn },
+      tags: DETAILS.tags,
+    } }]);
+    expect(page.el('aiSummary').textContent).toBe('Done. Saved 1, skipped 0, failed 0.');
+    expect(page.el('aiCancel').textContent).toBe('Close');
+    // The grid reloads to show what was saved.
+    expect(page.listRequests.at(-1)!.url).toMatch(/^\/media\?/);
+  });
+
+  it('names an overwrite before it happens and only then sends complete photos', async () => {
+    const page = loadPage();
+    const items = [complete('a')];
+    page.rows.set('a', items[0]!);
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items, total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    page.el('aiSelected').dispatch('click');
+    await page.flush();
+    expect(page.el('aiStart').disabled).toBe(true);
+    expect(page.el('aiSummary').textContent).toMatch(/^0 of 1 photo have empty fields/);
+
+    page.el('aiFieldTags').checked = false;
+    page.el('aiFieldCaption').checked = false;
+    page.el('aiFieldAlt').checked = false;
+    page.el('aiReplace').checked = true;
+    page.el('aiReplace').dispatch('change');
+    expect(page.el('aiStart').textContent).toBe('Generate and overwrite');
+    expect(page.el('aiSummary').textContent).toMatch(/^1 photo will be sent to the model.*overwritten/);
+    page.el('aiStart').dispatch('click');
+    await page.flush();
+    expect(page.patches).toEqual([{ url: '/media/items/a', body: { title: DETAILS.title } }]);
+  });
+
+  it('"all photos in this view" pages through the listing with the current filters', async () => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('p1')], total: 201 });
+    await page.flush();
+    page.el('fStatus').value = 'ready';
+    page.el('fStatus').dispatch('change');
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('p1')], total: 201 });
+    await page.flush();
+
+    page.el('aiAll').dispatch('click');
+    await page.flush();
+    expect(page.el('aiScopeAll').checked).toBe(true);
+    expect(page.el('aiScopeSelected').disabled).toBe(true);
+    expect(page.el('aiScopeAllLabel').textContent).toBe('All 201 photos in this view (every folder, status ready)');
+    expect(page.el('aiSummary').textContent).toBe('Counting the photos in this view…');
+
+    const first = page.listRequests.shift()!;
+    expect(first.url).toContain('status=ready');
+    expect(first.url).toContain('page=1&pageSize=200');
+    const all = Array.from({ length: 201 }, (_, i) => item('all' + i));
+    for (const row of all) page.rows.set(row.key, row);
+    first.resolve({ items: all.slice(0, 200), total: 201 });
+    await page.flush();
+    const second = page.listRequests.shift()!;
+    expect(second.url).toContain('page=2&pageSize=200');
+    second.resolve({ items: all.slice(200), total: 201 });
+    await page.flush();
+    expect(page.el('aiSummary').textContent).toMatch(/^201 of 201 photos have empty fields/);
+
+    page.el('aiStart').dispatch('click');
+    await vi.waitFor(() => expect(page.el('aiSummary').textContent).toMatch(/^Done\./));
+    expect(page.patches).toHaveLength(201);
+  });
+
+  it('Stop cancels the photo in flight and sends no save for it', async () => {
+    let signal: AbortSignal | undefined;
+    const page = loadPage({
+      describe: (_url, s) => {
+        signal = s;
+        const { promise, reject } = Promise.withResolvers<Details>();
+        s.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        return promise;
+      },
+    });
+    const items = [item('a'), item('b')];
+    for (const row of items) page.rows.set(row.key, row);
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items, total: 2 });
+    await page.flush();
+    page.el('aiAll').dispatch('click');
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items, total: 2 });
+    await page.flush();
+    page.el('aiStart').dispatch('click');
+    await page.flush();
+    expect(page.el('aiCancel').textContent).toBe('Stop');
+
+    // Esc while running stops instead of closing.
+    let prevented = false;
+    page.el('aiDialog').dispatch('cancel', { preventDefault() { prevented = true; } });
+    expect(prevented).toBe(true);
+    expect(signal?.aborted).toBe(true);
+    await page.flush();
+    expect(page.patches).toEqual([]);
+    expect(page.described).toHaveLength(1);
+    expect(page.el('aiSummary').textContent).toBe('Stopped. Saved 0, skipped 0, failed 0, not processed 2. Nothing was changed.');
+    page.el('aiCancel').dispatch('click');
+    expect(page.el('aiDialog').open).toBe(false);
   });
 });
 

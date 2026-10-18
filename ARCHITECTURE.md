@@ -248,6 +248,14 @@ provider directly; the app server never contacts a model. Settings stores indepe
 Authors read `GET /ai-config?purpose=caption`, including resolved `captionBaseUrl` and
 request-local `captionApiKey` (null for local). Remote captions reuse `ai_api_key`.
 
+The media library reuses that caption config for photo details (title, DE/EN alt and
+caption, tags): `public/media-ai.js` holds the fill rules and the sequential bulk runner,
+`public/media-ai-dialog.js` the dialog, and `LLM.describePhoto` shares the caption
+transport. The single-photo suggestion only fills the detail panel; the bulk run saves
+through the existing `PATCH /media/items/*`, filling empty fields unless overwrite is
+chosen, re-reading each row just before its save. No route or schema was added. See
+[the design](docs/superpowers/specs/2026-10-18-media-ai-details-design.md).
+
 The editorial-review client (#213, part of #211) shares `public/llm.js`.
 `src/editorial-review.ts` owns the pure result type, JSON Schema,
 default prompt and parser; the browser parser is checked against the same corpus.
