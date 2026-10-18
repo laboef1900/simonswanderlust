@@ -78,16 +78,19 @@ docker compose pull && docker compose up -d
 
 ### Cutting a release
 
-**Current release: v0.13.0.** Highlights since v0.12.0:
+**Current release: v0.14.0.** Highlights since v0.13.0:
 
-- Browse nested Media folders directly from the shared image picker for title images,
-  hero photos, and galleries, including **Aus Mediathek wählen**.
-- Search within a folder and its subfolders while preserving gallery selections and
-  their order across folder changes and pagination.
-- Use the collapsible folder list on mobile, with clear loading, empty, and failure
-  states, keyboard focus restoration, and compatibility with the Editorial desk UI.
+- Generate photo title, DE/EN alt text and captions, and tags with AI on the Media
+  page, for one photo or in bulk; bulk runs fill only empty fields unless overwrite is
+  chosen, and the server still never contacts a model.
+- One control vocabulary across the admin: shared input heights, labels, selects,
+  four button roles, flat sections, and tidier Posts, Editor, About, Users, Comments,
+  and Media pages.
+- Homepage polish: a lighter hero panel over the photo, overlay captions on story
+  cards, a taller map band with smaller pins, and a compact footer.
+- Story cards always show the country beside the date.
 
-1. On a `feature/*` branch from `dev`, update both apps' `package.json` and root
+1. On a `feature/*` branch from `dev`, update both apps' `package.json` and
    `package-lock.json` versions, plus the `IMAGE_TAG` defaults in `docker-compose.yml`
    and `uploader/.env.example`. Update these release highlights.
 2. Open a PR into `dev`, wait for required CI, and merge it. Then open a release PR
@@ -96,8 +99,8 @@ docker compose pull && docker compose up -d
 
 ```bash
 git fetch origin main
-git tag -a v0.13.0 origin/main -m "Release v0.13.0"
-git push origin v0.13.0
+git tag -a v0.14.0 origin/main -m "Release v0.14.0"
+git push origin v0.14.0
 ```
 
 Never push directly to `dev` or `main`, tag an unmerged feature branch, or replace a
