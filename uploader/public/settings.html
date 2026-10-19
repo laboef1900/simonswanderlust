@@ -103,6 +103,10 @@
         <label for="timeout">Caption timeout (ms)</label>
         <input id="timeout" type="number" min="1000" max="600000" />
 
+        <label for="captionMaxTokens" id="captionMaxTokensLabel"></label>
+        <input id="captionMaxTokens" type="number" min="256" max="32768" step="1" required aria-describedby="captionMaxTokensHelp" />
+        <p id="captionMaxTokensHelp" class="muted"></p>
+
         <label for="maxEdge">Max image edge (px)</label>
         <input id="maxEdge" type="number" min="256" max="4096" />
 
@@ -253,6 +257,7 @@
         writingInstructionsHelp: 'writingInstructionsHelp', saveReview: 'writingSave',
         sharedKeyLabel: 'sharedKeyLabel', aiKeyHelp: 'sharedKeyHelp', sharedLocalHelp: 'sharedLocalHelp',
         captionSharedKeyLink: 'sharedKeyLink',
+        captionMaxTokensLabel: 'captionMaxTokensLabel', captionMaxTokensHelp: 'captionMaxTokensHelp',
       })) $(id).textContent = reviewCopy[key];
       $('settingsNav').setAttribute('aria-label', reviewCopy.settingsNav);
       $('testReview').textContent = reviewCopy.reviewTestLabel;
@@ -355,6 +360,7 @@
         };
         checkBaseUrl();
         $('timeout').value = s.captionTimeoutMs ?? '';
+        $('captionMaxTokens').value = s.captionMaxTokens ?? '';
         $('maxEdge').value = s.captionMaxEdge ?? '';
         $('prompt').value = s.captionPrompt || '';
         $('backupSchedule').value = s.backupSchedule || 'off';
@@ -519,6 +525,7 @@
               captionCustomBaseUrl: $('captionCustomBaseUrl').value.trim(),
               lmModel: chosenModel(),
               captionTimeoutMs: Number($('timeout').value),
+              captionMaxTokens: Number($('captionMaxTokens').value),
               captionMaxEdge: Number($('maxEdge').value),
               captionPrompt: $('prompt').value,
               backupSchedule: $('backupSchedule').value,

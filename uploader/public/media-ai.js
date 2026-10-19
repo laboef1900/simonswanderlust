@@ -111,7 +111,7 @@ window.MediaAi = (function () {
    * Suggest details for one photo with a caption config the caller loaded
    * (AltSuggest.loadConfig) and owns, including its request-local key. The
    * download + resize get their own 15 s deadline, as in suggestHosted; the
-   * model call keeps the configured caption timeout.
+   * model call keeps the configured caption timeout and output-token ceiling.
    */
   async function suggest(url, config, signal) {
     const preparation = AbortSignal.any([signal, AbortSignal.timeout(15000)]);
@@ -123,7 +123,7 @@ window.MediaAi = (function () {
       throw new Error('Photo download failed: ' + (error && error.message ? error.message : 'unknown error'));
     }
     return window.LLM.describePhoto(config.captionBaseUrl, config.lmModel, config.captionPrompt,
-      prep.dataUrl, config.captionTimeoutMs, signal, config.captionApiKey);
+      prep.dataUrl, config.captionTimeoutMs, config.captionMaxTokens, signal, config.captionApiKey);
   }
 
   /**

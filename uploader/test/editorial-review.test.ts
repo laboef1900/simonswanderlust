@@ -15,7 +15,7 @@ interface BrowserLlm {
   parseEditorialReview(content: string): EditorialReviewResult;
   reviewStory(baseUrl: string, model: string, prompt: string, story: Story, apiKey?: string | null,
     timeoutMs?: number, signal?: AbortSignal): Promise<EditorialReviewResult>;
-  caption(baseUrl: string, model: string, prompt: string, dataUrl: string, timeoutMs?: number): Promise<{ altEn: string; altDe: string }>;
+  caption(baseUrl: string, model: string, prompt: string, dataUrl: string, timeoutMs: number, maxTokens: number): Promise<{ altEn: string; altDe: string }>;
   listModels(baseUrl: string): Promise<string[]>;
 }
 function browserClient(fetcher: typeof fetch = vi.fn<typeof fetch>()): BrowserLlm {
@@ -244,7 +244,7 @@ describe('browser-direct review transport', () => {
     const client = browserClient(fetcher);
     await client.reviewStory(endpoint, 'm', DEFAULT_REVIEW_PROMPT, story, testKey);
     await client.reviewStory('http://localhost:1234/v1', 'm', DEFAULT_REVIEW_PROMPT, story);
-    expect(await client.caption('http://localhost:1234/v1', 'vision-model', 'Caption', 'data:image/jpeg;base64,AA=='))
+    expect(await client.caption('http://localhost:1234/v1', 'vision-model', 'Caption', 'data:image/jpeg;base64,AA==', 60000, 8000))
       .toEqual({ altEn: 'A beach', altDe: 'Ein Strand' });
     expect(await client.listModels('http://localhost:1234/v1')).toEqual(['vision-model']);
     for (const [, init] of fetcher.mock.calls.slice(1)) {

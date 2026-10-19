@@ -36,6 +36,24 @@ describe('createSettingsStore', () => {
     expect(store.get().backupRetention).toBe(DEFAULTS.backupRetention);
   });
 
+  it('upgrades older photo settings without changing the model, and retains a saved output budget after restart', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ captionProvider: 'deepseek', lmModel: 'deepseek-flash' }));
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(store.get()).toMatchObject({ captionMaxTokens: 8000, captionProvider: 'deepseek', lmModel: 'deepseek-flash' });
+    store.update({ captionMaxTokens: 4096 });
+    expect(createSettingsStore({ path, defaults: DEFAULTS }).get()).toMatchObject({
+      captionMaxTokens: 4096, captionProvider: 'deepseek', lmModel: 'deepseek-flash',
+    });
+  });
+
+  it('replaces an invalid on-disk output budget without losing other photo settings', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({ captionMaxTokens: 0, lmModel: 'chosen-vision-model' }));
+    const store = createSettingsStore({ path, defaults: DEFAULTS, log: () => {} });
+    expect(store.get()).toMatchObject({ captionMaxTokens: 8000, lmModel: 'chosen-vision-model' });
+  });
+
   it('keeps known LM keys but drops truly unknown fields from an older settings.json', async () => {
     const path = join(dir, 'settings.json');
     await writeFile(path, JSON.stringify({ lmModel: 'my/local-vlm', legacyRemovedKey: 'x', backupSchedule: 'weekly' }));
@@ -186,6 +204,14 @@ describe('LM settings validation', () => {
     expect(() => validate({ ...DEFAULTS, captionTimeoutMs: 999 })).toThrow(SettingsError);
     expect(() => validate({ ...DEFAULTS, captionTimeoutMs: 600001 })).toThrow(SettingsError);
     expect(() => validate({ ...DEFAULTS, captionTimeoutMs: 1.5 })).toThrow(SettingsError);
+  });
+
+  it.each([255, 32769, 1.5, NaN, Infinity, '8000', null, true])('rejects invalid output budget %s', (captionMaxTokens) => {
+    expect(() => validate({ ...DEFAULTS, captionMaxTokens } as Settings)).toThrow(SettingsError);
+  });
+
+  it.each([256, 32768])('accepts output budget boundary %i', (captionMaxTokens) => {
+    expect(validate({ ...DEFAULTS, captionMaxTokens }).captionMaxTokens).toBe(captionMaxTokens);
   });
 
   it('rejects maxEdge out of range or non-integer', () => {

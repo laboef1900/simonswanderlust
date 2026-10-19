@@ -754,7 +754,7 @@ describe('settings.html caption providers', () => {
   });
 });
 
-describe('settings.html review configuration test', () => {
+describe('settings.html AI configuration', () => {
   const validReview = {
     title: { status: 'pass', critique: '' },
     excerpt: { status: 'pass', critique: '' },
@@ -829,6 +829,26 @@ describe('settings.html review configuration test', () => {
     (page.ctx.fill as (state: unknown) => void)(response.json());
     return { ...page, app, cookies, settings, secrets, getSecret };
   }
+
+  it('saves the photo output budget, rejects an invalid replacement, and reloads the saved value', async () => {
+    const { el, ctx, app, cookies, settings, fetcher } = await setupStoredKey();
+    el('captionMaxTokens').value = '4096';
+    await el('saveAi').click();
+    expect(settings.get().captionMaxTokens).toBe(4096);
+    const config = await app.inject({ url: '/ai-config?purpose=caption', cookies });
+    expect(config.json().captionMaxTokens).toBe(4096);
+
+    el('captionMaxTokens').value = '255';
+    await el('saveAi').click();
+    expect(settings.get().captionMaxTokens).toBe(4096);
+    expect(el('captionOut').textContent).toMatch(/not saved/i);
+    expect(el('captionMaxTokens').value).toBe('255');
+
+    const response = await app.inject({ url: '/settings', cookies });
+    (ctx.fill as (state: unknown) => void)(response.json());
+    expect(Number(el('captionMaxTokens').value)).toBe(4096);
+    expect(fetcher.mock.calls.every(([url]) => String(url).startsWith('/'))).toBe(true);
+  });
 
   it.each(['openrouter', 'deepseek', 'custom'])('requires an entered key for an unsaved local-to-%s switch, without reading the stored key', async (provider) => {
     const { el, fetcher, app, cookies, settings, getSecret } = await setupStoredKey();

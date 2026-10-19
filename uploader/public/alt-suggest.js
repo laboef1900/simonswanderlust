@@ -42,7 +42,8 @@ window.AltSuggest = (function () {
       say('Asking the selected alt-text model…');
       try {
         const prep = await LLM.prepImage(file, cfg.captionMaxEdge);
-        const c = await LLM.caption(cfg.captionBaseUrl, cfg.lmModel, cfg.captionPrompt, prep.dataUrl, cfg.captionTimeoutMs, undefined, cfg.captionApiKey);
+        const c = await LLM.caption(cfg.captionBaseUrl, cfg.lmModel, cfg.captionPrompt, prep.dataUrl,
+          cfg.captionTimeoutMs, cfg.captionMaxTokens, undefined, cfg.captionApiKey);
         altInput.value = lang === 'de' ? c.altDe : c.altEn;
         // Programmatic .value assignment fires no input event — dispatch one so
         // the editor's DraftGuard marks the form dirty.
@@ -91,7 +92,7 @@ window.AltSuggest = (function () {
       preparation.throwIfAborted();
       const prep = await prepHosted(url, cfg.captionMaxEdge, preparation);
       const caption = await LLM.caption(cfg.captionBaseUrl, cfg.lmModel, cfg.captionPrompt,
-        prep.dataUrl, cfg.captionTimeoutMs, signal, cfg.captionApiKey);
+        prep.dataUrl, cfg.captionTimeoutMs, cfg.captionMaxTokens, signal, cfg.captionApiKey);
       signal.throwIfAborted();
       return lang === 'de' ? caption.altDe : caption.altEn;
     } finally {

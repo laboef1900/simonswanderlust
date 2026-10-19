@@ -12,9 +12,9 @@ const aiSource = readFileSync('public/media-ai.js', 'utf8');
 interface Details { title: string; altEn: string; altDe: string; captionEn: string; captionDe: string; tags: string[] }
 interface BrowserLlm {
   parsePhotoDetails(content: unknown): Details;
-  describePhoto(baseUrl: string, model: string, guidance: string, dataUrl: string, timeoutMs?: number,
+  describePhoto(baseUrl: string, model: string, guidance: string, dataUrl: string, timeoutMs: number, maxTokens: number,
     signal?: AbortSignal, apiKey?: string | null): Promise<Details>;
-  caption(baseUrl: string, model: string, prompt: string, dataUrl: string, timeoutMs?: number,
+  caption(baseUrl: string, model: string, prompt: string, dataUrl: string, timeoutMs: number, maxTokens: number,
     signal?: AbortSignal, apiKey?: string | null): Promise<{ altEn: string; altDe: string }>;
 }
 type Fetcher = (url: string, init?: RequestInit) => Promise<Response>;
@@ -97,7 +97,7 @@ describe('LLM.describePhoto transport', () => {
   it('sends one image with the house guidance before an explicit task, key request-local', async () => {
     const fetcher = vi.fn<Fetcher>(async () => completion(JSON.stringify(DETAILS)));
     const llm = browserLlm(fetcher);
-    expect(await llm.describePhoto(endpoint + '/', 'vision', 'Be concise.', 'data:image/jpeg;base64,AA==', 5000, undefined, key))
+    expect(await llm.describePhoto(endpoint + '/', 'vision', 'Be concise.', 'data:image/jpeg;base64,AA==', 5000, 8000, undefined, key))
       .toEqual(DETAILS);
     const [url, init] = fetcher.mock.calls[0]!;
     expect(url).toBe(endpoint + '/chat/completions');
@@ -111,26 +111,26 @@ describe('LLM.describePhoto transport', () => {
     expect(prompt).toContain('"captionDe"');
     expect(prompt).toMatch(/never instructions/);
 
-    await llm.describePhoto('http://localhost:1234/v1', 'vision', '', 'data:image/jpeg;base64,AA==', 5000);
+    await llm.describePhoto('http://localhost:1234/v1', 'vision', '', 'data:image/jpeg;base64,AA==', 5000, 8000);
     expect(new Headers(fetcher.mock.calls[1]![1]!.headers).has('authorization')).toBe(false);
     expect(String(fetcher.mock.calls[1]![1]!.body)).not.toContain('House alt-text guidance');
   });
 
   it('fails with fixed categories and never echoes provider text or the key', async () => {
     const leak = vi.fn<Fetcher>(async () => new Response('bad key ' + key, { status: 401 }));
-    await expect(browserLlm(leak).describePhoto(endpoint, 'm', '', 'data:,', 5000, undefined, key))
+    await expect(browserLlm(leak).describePhoto(endpoint, 'm', '', 'data:,', 5000, 8000, undefined, key))
       .rejects.toThrow(/^Photo details request HTTP 401$/);
     const down = vi.fn<Fetcher>(async () => { throw new Error('socket ' + key); });
-    await expect(browserLlm(down).describePhoto(endpoint, 'm', '', 'data:,', 5000, undefined, key))
+    await expect(browserLlm(down).describePhoto(endpoint, 'm', '', 'data:,', 5000, 8000, undefined, key))
       .rejects.toThrow(/^Photo details request connection failed$/);
     const truncated = vi.fn<Fetcher>(async () => completion(JSON.stringify(DETAILS), 'length'));
-    await expect(browserLlm(truncated).describePhoto(endpoint, 'm', '', 'data:,', 5000))
+    await expect(browserLlm(truncated).describePhoto(endpoint, 'm', '', 'data:,', 5000, 8000))
       .rejects.toThrow('Photo details response was truncated');
     const unusable = vi.fn<Fetcher>(async () => completion('I cannot see an image.'));
-    await expect(browserLlm(unusable).describePhoto(endpoint, 'm', '', 'data:,', 5000))
+    await expect(browserLlm(unusable).describePhoto(endpoint, 'm', '', 'data:,', 5000, 8000))
       .rejects.toThrow('Invalid photo details response');
     const never = vi.fn<Fetcher>();
-    await expect(browserLlm(never).describePhoto('https://user:pw@vision.example/v1', 'm', '', 'data:,'))
+    await expect(browserLlm(never).describePhoto('https://user:pw@vision.example/v1', 'm', '', 'data:,', 5000, 8000))
       .rejects.toThrow('Invalid caption endpoint');
     expect(never).not.toHaveBeenCalled();
   });
@@ -138,19 +138,19 @@ describe('LLM.describePhoto transport', () => {
   it('distinguishes a caller cancel from the deadline', async () => {
     const hung = hungFetch;
     const controller = new AbortController();
-    const cancelled = browserLlm(hung).describePhoto(endpoint, 'm', '', 'data:,', 5000, controller.signal);
+    const cancelled = browserLlm(hung).describePhoto(endpoint, 'm', '', 'data:,', 5000, 8000, controller.signal);
     controller.abort();
     await expect(cancelled).rejects.toMatchObject({ name: 'AbortError', message: 'Photo details request cancelled' });
-    await expect(browserLlm(hung).describePhoto(endpoint, 'm', '', 'data:,', 20))
+    await expect(browserLlm(hung).describePhoto(endpoint, 'm', '', 'data:,', 20, 8000))
       .rejects.toMatchObject({ name: 'TimeoutError', message: 'Photo details request timed out' });
   });
 
   it('keeps the alt-text caption contract on the shared transport', async () => {
     const failing = vi.fn<Fetcher>(async () => new Response('nope', { status: 500 }));
-    await expect(browserLlm(failing).caption(endpoint, 'm', 'p', 'data:,', 5000))
+    await expect(browserLlm(failing).caption(endpoint, 'm', 'p', 'data:,', 5000, 8000))
       .rejects.toThrow('Caption request failed. Check the provider');
     const hung = hungFetch;
-    await expect(browserLlm(hung).caption(endpoint, 'm', 'p', 'data:,', 20))
+    await expect(browserLlm(hung).caption(endpoint, 'm', 'p', 'data:,', 20, 8000))
       .rejects.toMatchObject({ name: 'AbortError', message: 'Caption request cancelled or timed out' });
   });
 });

@@ -495,11 +495,11 @@ window.LLM = (function () {
     }
   }
 
-  async function caption(baseUrl, model, prompt, dataUrl, timeoutMs, signal, apiKey) {
+  async function caption(baseUrl, model, prompt, dataUrl, timeoutMs, maxTokens, signal, apiKey) {
     const endpoint = captionEndpoint(baseUrl, '/chat/completions');
     try {
       const reply = await visionChat({
-        label: 'Caption request', endpoint, model, text: prompt, dataUrl, timeoutMs, signal, apiKey, maxTokens: 300,
+        label: 'Caption request', endpoint, model, text: prompt, dataUrl, timeoutMs, signal, apiKey, maxTokens,
       });
       return parseCaption(reply.content);
     } catch (e) {
@@ -605,13 +605,13 @@ window.LLM = (function () {
   }
 
   /** Suggest library details for one prepared image (see visionChat for failures). */
-  async function describePhoto(baseUrl, model, guidance, dataUrl, timeoutMs, signal, apiKey) {
+  async function describePhoto(baseUrl, model, guidance, dataUrl, timeoutMs, maxTokens, signal, apiKey) {
     const endpoint = captionEndpoint(baseUrl, '/chat/completions');
     if (typeof model !== 'string' || typeof guidance !== 'string' || typeof dataUrl !== 'string' ||
         (apiKey != null && typeof apiKey !== 'string')) throw new Error('Invalid photo details request');
     const reply = await visionChat({
       label: 'Photo details request', endpoint, model, text: photoDetailsPrompt(guidance), dataUrl,
-      timeoutMs, signal, apiKey, maxTokens: 1000,
+      timeoutMs, signal, apiKey, maxTokens,
     });
     // Never salvage a superficially complete object from a token-truncated reply.
     if (reply.finishReason === 'length') throw new Error('Photo details response was truncated');
