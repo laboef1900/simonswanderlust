@@ -63,10 +63,17 @@ window.AltSuggest = (function () {
    * Download a hosted display variant and downscale it for a vision model.
    * Callers validate the URL's origin first; cookies, referrer and redirects
    * are refused, so the read can never carry the session elsewhere.
+   *
+   * @ai-warning `cache: 'reload'` is load-bearing. Variants are served
+   * `immutable` for a year, and the image host only sends
+   * `Access-Control-Allow-Origin` since ad062a9 (v0.10.0). A browser that
+   * cached a variant before then (any <img> in the media grid) keeps reusing
+   * that header-less copy, and this cross-origin read fails with "Failed to
+   * fetch" / "Load failed". Reload fetches fresh and replaces the stale entry.
    */
   async function prepHosted(url, maxEdge, signal) {
     const response = await fetch(url, {
-      signal, credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer',
+      signal, credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer', cache: 'reload',
     });
     if (!response.ok) throw new Error('Image unavailable');
     const blob = await response.blob();
