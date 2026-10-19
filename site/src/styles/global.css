@@ -26,18 +26,13 @@
    * the drift this replaces. */
   --tracking-log: 0.18em;
   /* Story spread (≥ lg, StoryHero + StoryPage): the opening section beside a
-   * rail, 3rem apart, and the centred body below it, on ONE measure —
-   * --container-story-wide (960px). The spread and the body are the same
-   * width by design: the reader sees one column edge, not a wide opening
-   * over a narrower body. Inside the spread the rail is fixed at 18rem and
-   * the column takes the remainder (39rem = 624px, ~64 characters of
-   * prose-lg); column + gap + rail sum to exactly the spread, so a rail
-   * floated beside the column never intrudes into its line boxes. The body
-   * below runs the full 60rem (~98 characters of prose-lg — the owner's call,
-   * 2026-09-20, in exchange for the matched edge). */
-  --container-story-wide: 60rem;
+   * fixed 18rem rail, 3rem apart, and the centred body share one measure.
+   * 66rem (1056px) is 10% wider than the former 60rem. The opening column
+   * takes the available remainder (720px at full width), not a fixed width,
+   * so it still fits beside the rail at the lg breakpoint. */
+  --container-story-wide: 66rem;
   --container-story-rail: 18rem;
-  --container-story-column: calc(var(--container-story-wide) - var(--container-story-rail) - 3rem);
+  --container-story-column: calc(100% - var(--container-story-rail) - 3rem);
 }
 
 /* ── browser surfaces ────────────────────────────────────────────────────

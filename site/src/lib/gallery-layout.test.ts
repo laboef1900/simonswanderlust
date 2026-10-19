@@ -205,9 +205,14 @@ describe('partitionRows — photos never shrink below the floor', () => {
     expect(Math.max(...rows.map((row) => row.ratios.length))).toBe(4);
   });
 
-  it('takes three landscapes a row in the column and four in the break-out', () => {
-    expect(Math.max(...sizes(repeat(27, LANDSCAPE), COLUMN_WIDTH))).toBe(3);
-    expect(Math.max(...sizes(repeat(27, LANDSCAPE), BREAKOUT_WIDTH))).toBe(4);
+  it('keeps dense column and break-out galleries above the readable row floor', () => {
+    for (const width of [COLUMN_WIDTH, BREAKOUT_WIDTH]) {
+      const rows = partitionRows(repeat(27, LANDSCAPE), width);
+      expect(rows.flatMap(row => row.ratios)).toEqual(repeat(27, LANDSCAPE));
+      for (const row of rows) {
+        expect(rowHeightAt(row.ratios, width)).toBeGreaterThanOrEqual(MIN_ROW_HEIGHT);
+      }
+    }
   });
 
   it('still admits a lone panorama that is under the floor on its own', () => {
