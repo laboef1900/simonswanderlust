@@ -8,117 +8,170 @@
   </head>
   <body class="settings-page">
     <header class="cms-page-meta">
-      <h1>Settings</h1>
+      <h1>Settings<span id="settingsTabTitle" class="settings-title-tab"> · AI models</span></h1>
       <p class="lede" id="settingsIntro"></p>
     </header>
 
     <main class="settings-layout">
-      <nav class="settings-nav" id="settingsNav">
-        <a href="#writingSettings" id="navWriting"></a>
-        <a href="#captionSettings" id="navCaptions"></a>
-        <a href="#imageSettingsSection" id="navImages"></a>
-        <a href="#commentSettings" id="navComments"></a>
-        <a href="#siteSettings" id="navSite"></a>
-      </nav>
+      <div class="settings-tabs" id="settingsTabs" role="tablist" aria-orientation="vertical">
+        <button type="button" role="tab" id="tabbtn-ai-models" aria-controls="panel-ai-models" aria-selected="true" data-tab="ai-models">AI models</button>
+        <button type="button" role="tab" id="tabbtn-images" aria-controls="panel-images" aria-selected="false" tabindex="-1" data-tab="images">Images</button>
+        <button type="button" role="tab" id="tabbtn-comments" aria-controls="panel-comments" aria-selected="false" tabindex="-1" data-tab="comments">Comments</button>
+        <button type="button" role="tab" id="tabbtn-site" aria-controls="panel-site" aria-selected="false" tabindex="-1" data-tab="site">Site &amp; backups</button>
+      </div>
       <div class="settings-sections">
-      <section class="card" id="writingSettings" aria-labelledby="reviewHeading">
-        <h2 id="reviewHeading" class="card-heading"></h2>
-        <p id="reviewPrivacy" class="settings-intro"></p>
-        <p id="writingLocal" class="muted"></p>
-        <label for="aiProvider" id="writingProviderLabel"></label>
-        <select id="aiProvider" aria-describedby="reviewPrivacy reviewDestination">
-          <option value="lm-studio">Local LM Studio</option>
-          <option value="openrouter">OpenRouter</option>
-          <option value="deepseek">DeepSeek</option>
-          <option value="custom">Custom</option>
-        </select>
-        <div id="customReviewFields" hidden>
-          <label for="aiCustomBaseUrl">Custom API base URL</label>
-          <input id="aiCustomBaseUrl" type="url" placeholder="https://your-provider.example/v1" aria-describedby="reviewUrlWarning" />
-        </div>
-        <p id="reviewDestination" class="muted"></p>
-        <p id="reviewUrlWarning" class="notice-warn" role="status" hidden></p>
-        <p id="reviewKeyWarning" class="notice-warn" role="status" hidden></p>
-        <label for="aiApiKey"><span id="sharedKeyLabel"></span> <span id="aiKeyStatus" class="status-badge status-draft" role="status">Loading</span></label>
-        <input id="aiApiKey" type="password" autocomplete="new-password" aria-describedby="aiKeyRequirement aiKeyHelp" />
-        <p id="aiKeyRequirement" class="muted" role="status"></p>
-        <p id="aiKeyHelp" class="muted"></p>
-        <div class="settings-field-pair">
-          <div>
-            <label for="aiModel" id="writingModelLabel"></label>
-            <input id="aiModel" type="text" maxlength="100" />
+      <section class="settings-panel" id="panel-ai-models" role="tabpanel" aria-labelledby="tabbtn-ai-models">
+        <section class="card" id="providersSection" aria-labelledby="providersHeading">
+          <div class="settings-section-head">
+            <h2 id="providersHeading" class="card-heading">Providers</h2>
+            <button id="addProvider" type="button" aria-describedby="providerLimit">Add provider</button>
           </div>
-          <div>
-            <label for="reviewTimeoutMs" id="writingTimeoutLabel"></label>
-            <input id="reviewTimeoutMs" type="number" min="5000" max="300000" step="1" />
+          <p id="providersHelp" class="muted">
+            API keys are stored encrypted on this server, one per provider. When a signed-in author
+            uses an AI feature, their browser receives the key of the provider assigned to that
+            feature, in memory only, and calls the provider directly — the server never calls a
+            model. Remote providers may charge for usage.
+          </p>
+          <p id="providerLimit" class="muted" hidden>This is the limit of 20 providers. Delete one to add another.</p>
+          <ul id="providerList" class="provider-list"></ul>
+          <div id="providerFormSlot">
+            <form id="providerForm" class="provider-form" aria-labelledby="providerFormHeading" hidden>
+              <p id="providerFormHeading" class="section-label"></p>
+              <div class="settings-field-pair">
+                <div>
+                  <label for="providerName">Name</label>
+                  <input id="providerName" type="text" maxlength="60" autocomplete="off" required />
+                </div>
+                <div id="providerKindField">
+                  <label for="providerKind">Kind</label>
+                  <select id="providerKind" aria-describedby="providerKindHelp">
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="custom">Custom (OpenAI-compatible)</option>
+                    <option value="lm-studio">Local LM Studio</option>
+                  </select>
+                  <p id="providerKindHelp" class="muted">The kind cannot change after the provider is added.</p>
+                </div>
+              </div>
+              <label for="providerBaseUrl">Base URL (as this browser reaches it)</label>
+              <input id="providerBaseUrl" type="url" maxlength="300" autocomplete="off" required aria-describedby="providerUrlWarning providerKeyMoveWarning" />
+              <p id="providerUrlWarning" class="notice-warn" role="status" hidden></p>
+              <p id="providerKeyMoveWarning" class="notice-warn" role="status" hidden></p>
+              <div id="providerKeyField">
+                <label for="providerApiKey">API key <span id="providerKeyStatus" class="status-badge status-draft"></span></label>
+                <input id="providerApiKey" type="password" autocomplete="new-password" aria-describedby="providerKeyHelp" />
+                <p id="providerKeyHelp" class="muted"></p>
+              </div>
+              <div class="form-actions">
+                <button id="saveProvider" type="submit">Save provider</button>
+                <button id="testProviderForm" type="button" class="btn-secondary">Test connection</button>
+                <button id="cancelProvider" type="button" class="btn-secondary">Cancel</button>
+                <button id="removeProviderKey" type="button" class="btn-remove" hidden>Remove stored key</button>
+              </div>
+              <p id="providerFormOut" class="page-status" role="status"></p>
+            </form>
           </div>
-        </div>
-        <label for="reviewPrompt" id="writingInstructionsLabel"></label>
-        <textarea id="reviewPrompt" rows="8" aria-describedby="writingInstructionsHelp"></textarea>
-        <p id="writingInstructionsHelp" class="muted"></p>
-        <div class="form-actions">
-          <button id="saveReview" type="button"></button>
-          <button id="testReview" type="button" class="btn-secondary" aria-describedby="reviewTestHelp" disabled></button>
-          <button id="removeAiKey" type="button" class="btn-remove" disabled>Remove stored key</button>
-        </div>
-        <p id="reviewOut" class="page-status" role="status"></p>
-        <p id="reviewTestHelp" class="muted"></p>
-        <p id="reviewTestOut" class="page-status" role="status"></p>
+          <p id="providersOut" class="page-status" role="status"></p>
+        </section>
+
+        <section class="card" id="useCaseSection" aria-labelledby="useCasesHeading">
+          <h2 id="useCasesHeading" class="card-heading">Use case assignments</h2>
+          <p id="useCasesHelp" class="muted">
+            Each feature uses the provider assigned here, or the default provider. Story review and
+            excerpts send the active language’s unsaved draft text; photo descriptions send a
+            resized photo and need a model that can read images.
+          </p>
+          <div class="use-case-panel">
+            <div class="use-case-row">
+              <p class="use-case-name" id="reviewUseCaseLabel"></p>
+              <div class="use-case-field">
+                <label for="reviewProviderId" id="reviewProviderLabel">Provider</label>
+                <select id="reviewProviderId" aria-labelledby="reviewUseCaseLabel reviewProviderLabel"></select>
+              </div>
+              <div class="use-case-field">
+                <label for="aiModel" id="reviewModelLabel">Model</label>
+                <div class="model-picker">
+                  <select id="aiModel" aria-labelledby="reviewUseCaseLabel reviewModelLabel" aria-describedby="reviewModelStatus"></select>
+                  <button id="reviewModelsReload" type="button" class="btn-secondary model-reload" aria-label="Reload models"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></button>
+                </div>
+                <div id="reviewModelOther" class="model-other" hidden>
+                  <label for="aiModelOther" id="reviewModelOtherLabel">Model ID</label>
+                  <input id="aiModelOther" type="text" maxlength="100" autocomplete="off" spellcheck="false" aria-labelledby="reviewUseCaseLabel reviewModelOtherLabel" />
+                </div>
+              </div>
+              <p id="reviewModelStatus" class="use-case-models" role="status"></p>
+              <p class="use-case-resolved"><span id="reviewResolved"></span> <span id="reviewDestination" class="use-case-url"></span></p>
+              <p id="reviewProviderWarn" class="notice-warn" role="status" hidden></p>
+            </div>
+            <div class="use-case-row">
+              <p class="use-case-name" id="captionUseCaseLabel"></p>
+              <div class="use-case-field">
+                <label for="captionProviderId" id="captionProviderLabel">Provider</label>
+                <select id="captionProviderId" aria-labelledby="captionUseCaseLabel captionProviderLabel"></select>
+              </div>
+              <div class="use-case-field">
+                <label for="lmModel" id="captionModelLabel">Model</label>
+                <div class="model-picker">
+                  <select id="lmModel" aria-labelledby="captionUseCaseLabel captionModelLabel" aria-describedby="captionModelStatus"></select>
+                  <button id="captionModelsReload" type="button" class="btn-secondary model-reload" aria-label="Reload models"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></button>
+                </div>
+                <div id="captionModelOther" class="model-other" hidden>
+                  <label for="lmModelOther" id="captionModelOtherLabel">Model ID</label>
+                  <input id="lmModelOther" type="text" maxlength="100" autocomplete="off" spellcheck="false" aria-labelledby="captionUseCaseLabel captionModelOtherLabel" />
+                </div>
+              </div>
+              <p id="captionModelStatus" class="use-case-models" role="status"></p>
+              <p class="use-case-resolved"><span id="captionResolved"></span> <span id="captionDestination" class="use-case-url"></span></p>
+              <p id="captionProviderWarn" class="notice-warn" role="status" hidden></p>
+            </div>
+          </div>
+
+          <p class="section-label" id="reviewDetailsHeading"></p>
+          <p id="reviewPrivacy" class="muted"></p>
+          <div class="settings-field-pair">
+            <div>
+              <label for="reviewTimeoutMs" id="reviewTimeoutLabel"></label>
+              <input id="reviewTimeoutMs" type="number" min="5000" max="300000" step="1" />
+            </div>
+          </div>
+          <label for="reviewPrompt" id="reviewPromptLabel"></label>
+          <textarea id="reviewPrompt" rows="8" aria-describedby="reviewPromptHelp"></textarea>
+          <p id="reviewPromptHelp" class="muted"></p>
+
+          <p class="section-label" id="captionDetailsHeading"></p>
+          <div class="settings-field-pair">
+            <div>
+              <label for="captionTimeoutMs">Timeout for photo descriptions (ms)</label>
+              <input id="captionTimeoutMs" type="number" min="1000" max="600000" />
+            </div>
+            <div>
+              <label for="captionMaxEdge">Longest photo edge sent (px)</label>
+              <input id="captionMaxEdge" type="number" min="256" max="4096" />
+            </div>
+          </div>
+          <label for="captionMaxTokens" id="captionMaxTokensLabel"></label>
+          <input id="captionMaxTokens" type="number" min="256" max="32768" step="1" required aria-describedby="captionMaxTokensHelp" />
+          <p id="captionMaxTokensHelp" class="muted"></p>
+          <label for="captionPrompt">Photo description prompt</label>
+          <textarea id="captionPrompt" rows="8"></textarea>
+
+          <div class="form-actions">
+            <button id="saveAi" type="button">Save AI settings</button>
+            <button id="testReview" type="button" class="btn-secondary" aria-describedby="reviewTestHelp"></button>
+          </div>
+          <p id="aiOut" class="page-status" role="status"></p>
+          <p id="reviewTestHelp" class="muted">
+            Test review runs a built-in sample text — never a draft — through the selected story
+            review provider, model, instructions and timeout, using that provider’s stored key.
+            Nothing is saved. Provider usage charges may apply.
+          </p>
+          <p id="reviewTestOut" class="page-status" role="status"></p>
+        </section>
       </section>
 
-      <section class="card" id="captionSettings" aria-labelledby="captionHeading">
-        <h2 id="captionHeading" class="card-heading"></h2>
-        <p class="muted" id="captionPrivacy">
-          Suggestions run in <em>this browser</em>. The selected provider receives a resized photo
-          and the caption prompt — the server never contacts the model. Choose a model that supports images.
-        </p>
-        <label for="captionProvider">Alt-text provider</label>
-        <select id="captionProvider" aria-describedby="captionPrivacy captionDestination captionKeyHelp">
-          <option value="lm-studio">Local LM Studio</option>
-          <option value="openrouter">OpenRouter</option>
-          <option value="deepseek">DeepSeek</option>
-          <option value="custom">Custom</option>
-        </select>
-        <div id="customCaptionFields" hidden>
-          <label for="captionCustomBaseUrl">Custom API base URL</label>
-          <input id="captionCustomBaseUrl" type="url" placeholder="https://your-provider.example/v1" aria-describedby="captionUrlWarning" />
-        </div>
-        <p id="captionDestination" class="muted"></p>
-        <p id="captionUrlWarning" class="notice-warn" role="status" hidden></p>
-        <p id="captionKeyWarning" class="notice-warn" role="status" hidden></p>
-        <p id="captionKeyHelp" class="muted"></p>
-        <p class="muted">Remote captions use the <a href="#aiApiKey" id="captionSharedKeyLink"></a>.
-          Save the key there and the alt-text settings here before testing a remote connection.
-          Provider usage charges may apply when suggesting alt text.</p>
-
-        <label for="baseUrl">LM Studio base URL (as this browser reaches it)</label>
-        <input id="baseUrl" type="text" placeholder="http://localhost:1234/v1" aria-describedby="baseUrlWarn" />
-        <p id="baseUrlWarn" class="notice-warn" role="status" hidden></p>
-        <p class="muted" id="sharedLocalHelp"></p>
-
-        <label for="model">Model</label>
-        <select id="model"></select>
-        <input id="modelManual" type="text" placeholder="…or type a model id" aria-label="Model id (typed manually)" />
-
-        <label for="timeout">Caption timeout (ms)</label>
-        <input id="timeout" type="number" min="1000" max="600000" />
-
-        <label for="maxEdge">Max image edge (px)</label>
-        <input id="maxEdge" type="number" min="256" max="4096" />
-
-        <label for="prompt">Caption prompt</label>
-        <textarea id="prompt" rows="8"></textarea>
-
-        <div class="form-actions">
-          <button id="saveAi" type="button">Save settings</button>
-          <button id="test" type="button" class="btn-secondary">Test connection</button>
-        </div>
-        <p id="captionOut" class="page-status" role="status"></p>
-        <p class="muted">Test connection lists available models; it does not send a photo or verify image support.</p>
-      </section>
-
+      <section class="settings-panel" id="panel-images" role="tabpanel" aria-labelledby="tabbtn-images" hidden>
       <section class="card" id="imageSettingsSection" aria-labelledby="imageHeading">
-        <h2 id="imageHeading" class="card-heading">Image conversion</h2>
+        <h2 id="imageHeading" class="card-heading"></h2>
         <form id="imageSettings">
           <label class="check-field" for="convertJpeg">
             <input id="convertJpeg" type="checkbox" aria-describedby="conversionHelp" />
@@ -152,10 +205,56 @@
           </div>
           <p id="imageOut" class="page-status" role="status"></p>
         </form>
+
+        <section class="quality-preview" id="qualityPreview" aria-labelledby="qualityPreviewHeading">
+          <h3 class="section-label" id="qualityPreviewHeading">Compare quality</h3>
+          <p id="qualityPreviewHelp" class="muted">
+            Encode a test photo with the quality set above — saved or not — exactly as an upload
+            would be, then compare it with the original. Nothing is saved, and the photo is not
+            added to the media library.
+          </p>
+          <div class="quality-preview-controls">
+            <div class="quality-preview-file">
+              <label for="previewFile">Test photo</label>
+              <input id="previewFile" type="file" accept="image/*" aria-describedby="qualityPreviewHelp" />
+            </div>
+            <div>
+              <p class="quality-preview-label" id="previewFormatLabel">Format</p>
+              <div class="lang-switch-bar" role="group" aria-labelledby="previewFormatLabel">
+                <button id="previewFormatWebp" type="button" class="tab-btn active" aria-pressed="true" data-format="webp">WebP</button>
+                <button id="previewFormatAvif" type="button" class="tab-btn" aria-pressed="false" data-format="avif">AVIF</button>
+              </div>
+            </div>
+            <button id="previewRun" type="button" class="btn-secondary">Preview</button>
+          </div>
+          <p id="previewOut" class="page-status" role="status"></p>
+          <div id="previewResult" class="quality-compare" hidden>
+            <label class="check-field" for="previewActual">
+              <input id="previewActual" type="checkbox" />
+              1:1 pixels
+            </label>
+            <div class="quality-compare-panes">
+              <figure class="quality-pane">
+                <div class="quality-pane-box" id="previewOriginalBox" role="region" tabindex="0" aria-label="Original photo">
+                  <img id="previewOriginal" alt="Original test photo" />
+                </div>
+                <figcaption id="previewOriginalCaption"></figcaption>
+              </figure>
+              <figure class="quality-pane">
+                <div class="quality-pane-box" id="previewEncodedBox" role="region" tabindex="0" aria-label="Encoded preview">
+                  <img id="previewEncoded" alt="" />
+                </div>
+                <figcaption id="previewEncodedCaption"></figcaption>
+              </figure>
+            </div>
+          </div>
+        </section>
+      </section>
       </section>
 
+      <section class="settings-panel" id="panel-comments" role="tabpanel" aria-labelledby="tabbtn-comments" hidden>
       <section class="card" id="commentSettings" aria-labelledby="commentsHeading">
-        <h2 id="commentsHeading" class="card-heading">Reader comments</h2>
+        <h2 id="commentsHeading" class="card-heading"></h2>
         <label class="check-field" for="commentsEnabled">
           <input id="commentsEnabled" type="checkbox" aria-describedby="commentsHelp" />
           Enable comments on the site
@@ -172,7 +271,9 @@
         </div>
         <p id="commentsOut" class="page-status" role="status"></p>
       </section>
+      </section>
 
+      <section class="settings-panel" id="panel-site" role="tabpanel" aria-labelledby="tabbtn-site" hidden>
       <section class="card" id="siteSettings" aria-labelledby="siteSettingsHeading">
         <h2 class="card-heading" id="siteSettingsHeading"></h2>
 
@@ -230,6 +331,7 @@
           (host: <code>./uploader/data</code>).
         </p>
       </section>
+      </section>
 
       <p id="out" class="page-status" role="status"></p>
       </div>
@@ -239,136 +341,795 @@
     <script src="/admin/auth.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/llm.js"></script>
+    <script src="/admin/tabs.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
-      const reviewCopy = EditorCopy.en;
+      const copy = EditorCopy.en;
       for (const [id, key] of Object.entries({
-        settingsIntro: 'settingsIntro',
-        navWriting: 'settingsWriting', navCaptions: 'settingsCaptions',
-        navImages: 'settingsImages', navComments: 'settingsComments', navSite: 'settingsSite',
-        siteSettingsHeading: 'settingsSite', captionHeading: 'settingsCaptions',
-        reviewHeading: 'settingsWriting', reviewPrivacy: 'writingPrivacy', writingLocal: 'writingLocal',
-        writingProviderLabel: 'writingProvider', writingModelLabel: 'writingModel',
-        writingTimeoutLabel: 'writingTimeout', writingInstructionsLabel: 'writingInstructions',
-        writingInstructionsHelp: 'writingInstructionsHelp', saveReview: 'writingSave',
-        sharedKeyLabel: 'sharedKeyLabel', aiKeyHelp: 'sharedKeyHelp', sharedLocalHelp: 'sharedLocalHelp',
-        captionSharedKeyLink: 'sharedKeyLink',
-      })) $(id).textContent = reviewCopy[key];
-      $('settingsNav').setAttribute('aria-label', reviewCopy.settingsNav);
-      $('testReview').textContent = reviewCopy.reviewTestLabel;
-      $('reviewTestHelp').textContent = reviewCopy.reviewTestHelp;
-      let savedReview = null;
-      let reviewTestController = null;
-      let savedCaption = null;
+        settingsIntro: 'settingsIntro', imageHeading: 'settingsImages', commentsHeading: 'settingsComments',
+        siteSettingsHeading: 'settingsSite', reviewUseCaseLabel: 'settingsWriting', captionUseCaseLabel: 'settingsCaptions',
+        reviewDetailsHeading: 'settingsWriting', captionDetailsHeading: 'settingsCaptions',
+        reviewPrivacy: 'writingPrivacy', reviewTimeoutLabel: 'writingTimeout', reviewPromptLabel: 'writingInstructions',
+        reviewPromptHelp: 'writingInstructionsHelp', testReview: 'reviewTestLabel',
+        captionMaxTokensLabel: 'captionMaxTokensLabel', captionMaxTokensHelp: 'captionMaxTokensHelp',
+      })) $(id).textContent = copy[key];
+      $('settingsTabs').setAttribute('aria-label', copy.settingsNav);
 
+      // ---- tabs: the active one is mirrored in the URL hash ------------------
+      const TABS = { 'ai-models': 'AI models', images: 'Images', comments: 'Comments', site: 'Site & backups' };
+
+      function showTabTitle(name) {
+        $('settingsTabTitle').textContent = ' · ' + TABS[name];
+        document.title = 'Settings · ' + TABS[name] + ' · Simon’s Wanderlust';
+      }
+
+      const settingsTabs = Tabs.wire($('settingsTabs'), {
+        onChange(name) {
+          showTabTitle(name);
+          // replaceState: tab switches are not history entries, and it fires no hashchange.
+          history.replaceState(null, '', '#' + name);
+          if (name === 'ai-models') ensureModels();
+        },
+      });
+
+      function selectTabFromHash() {
+        const hashed = String(location.hash).replace(/^#/, '');
+        const name = Object.hasOwn(TABS, hashed) ? hashed : 'ai-models';
+        settingsTabs.select(name);
+        showTabTitle(name);
+        return name;
+      }
+      window.addEventListener('hashchange', () => {
+        if (selectTabFromHash() === 'ai-models') ensureModels();
+      });
+      selectTabFromHash();
+
+      // Below 72rem the index is a wrapping strip above the panel, so its arrow
+      // keys follow (tabs.js reads aria-orientation on every key press).
+      const narrowTabs = window.matchMedia('(max-width: 72rem)');
+      function syncTabOrientation() {
+        $('settingsTabs').setAttribute('aria-orientation', narrowTabs.matches ? 'horizontal' : 'vertical');
+      }
+      narrowTabs.addEventListener('change', syncTabOrientation);
+      syncTabOrientation();
+
+      // ---- AI provider registry --------------------------------------------
+      // Provider names and URLs are admin input: they reach the page through
+      // textContent, option text and attribute values only, never markup.
+      // API keys live in request-local variables, cleared in `finally`; they
+      // never enter DOM text, storage, URLs or logs.
+      const KINDS = {
+        'lm-studio': { label: 'Local LM Studio', baseUrl: 'http://localhost:1234/v1', remote: false, needsKey: false },
+        openrouter: { label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', remote: true, needsKey: true },
+        deepseek: { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', remote: true, needsKey: true },
+        custom: { label: 'Custom', baseUrl: '', remote: true, needsKey: false },
+      };
+      // `saved` is the model of the last settings response, `current` the row's
+      // choice (what Save posts), `other` whether it is typed in "Other model ID…".
+      const USE_CASES = {
+        review: {
+          label: copy.settingsWriting, field: 'reviewProviderId', model: 'aiModel', otherField: 'reviewModelOther',
+          otherInput: 'aiModelOther', status: 'reviewModelStatus', reload: 'reviewModelsReload',
+          resolved: 'reviewResolved', destination: 'reviewDestination', warn: 'reviewProviderWarn',
+          saved: '', current: '', other: false,
+        },
+        caption: {
+          label: copy.settingsCaptions, field: 'captionProviderId', model: 'lmModel', otherField: 'captionModelOther',
+          otherInput: 'lmModelOther', status: 'captionModelStatus', reload: 'captionModelsReload',
+          resolved: 'captionResolved', destination: 'captionDestination', warn: 'captionProviderWarn',
+          saved: '', current: '', other: false,
+        },
+      };
+      const MAX_PROVIDERS = 20;
+      const RELOAD_HINT = 'Reload settings before retrying.';
+      // Model IDs are trimmed, so no real one starts with a space.
+      const OTHER_MODEL = ' other';
+
+      let saved = null;               // registry part of the last /settings response
+      let form = null;                // { id } while the provider form is open; id null = Add
+      let formPresetKind = 'openrouter';
+      let reviewTestController = null;
+      const modelCache = new Map();   // provider id -> { baseUrl, models } listed from this browser
+      const modelLookups = new Map(); // provider id -> { baseUrl, promise } while a listing runs
+      const modelFailures = new Map(); // provider id -> { baseUrl, reason } of the last failed listing
+      const testNotes = new Map();    // provider id -> last Test outcome
+      const rowOutputs = new Map();   // provider id -> the row's status line
+
+      function providerById(id) {
+        return saved && typeof id === 'string' ? saved.aiProviders.find((p) => p.id === id) || null : null;
+      }
+
+      function providerPath(id) { return '/ai-providers/' + encodeURIComponent(id); }
+
+      function keyState(p) {
+        return p.kind === 'lm-studio' ? 'Local — no key' : p.hasApiKey ? 'Key stored' : 'No key';
+      }
+
+      function joinNames(names) {
+        return names.length < 2 ? names.join('') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+      }
+
+      /** Use cases whose SAVED assignment resolves to this provider (explicitly or via the default). */
+      function useCasesOn(id) {
+        return Object.values(USE_CASES)
+          .filter((u) => (saved[u.field] ?? saved.aiDefaultProviderId) === id).map((u) => u.label);
+      }
+
+      function usesSentence(id) {
+        const uses = useCasesOn(id);
+        return uses.length ? joinNames(uses) + ' currently ' + (uses.length > 1 ? 'use' : 'uses') + ' this provider.'
+          : 'No use case uses this provider yet.';
+      }
+
+      function urlWarnings(url, kind) {
+        let parsed;
+        try { parsed = new URL(url); } catch { return ''; }
+        const notes = [];
+        const host = parsed.hostname;
+        const loopback = host === 'localhost' || host.endsWith('.localhost') || host === '[::1]' || /^127\./.test(host);
+        if (KINDS[kind].remote && parsed.protocol === 'http:' && !loopback) {
+          notes.push('Plain HTTP can expose the API key and the content you send on the network. Prefer HTTPS.');
+        }
+        const mixed = LLM.mixedContentWarning(url, location.protocol);
+        if (mixed) notes.push(mixed);
+        return notes.join(' ');
+      }
+
+      function failureMessage(status, result) {
+        const text = typeof result.error === 'string' && result.error ? result.error : 'Request failed (HTTP ' + status + ').';
+        return status < 500 || text.includes(RELOAD_HINT) ? text : text + ' ' + RELOAD_HINT;
+      }
+
+      function node(tag, className, text) {
+        const n = document.createElement(tag);
+        if (className) n.className = className;
+        if (text) n.textContent = text;
+        return n;
+      }
+
+      function rowAction(label, name, run, className) {
+        const btn = node('button', className || 'provider-action', label);
+        btn.type = 'button';
+        btn.setAttribute('aria-label', label + ' ' + name);
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          try { await run(); } finally { btn.disabled = false; }
+        });
+        return btn;
+      }
+
+      function providerRow(p) {
+        const isDefault = p.id === saved.aiDefaultProviderId;
+        const li = node('li', 'provider-row');
+        const main = node('div', 'provider-main');
+        const title = node('p', 'provider-title');
+        title.append(node('span', 'provider-name', p.name));
+        if (isDefault) title.append(node('span', 'status-badge provider-default', 'default'));
+        main.append(title, node('p', 'provider-meta', KINDS[p.kind].label + ' · ' + keyState(p)), node('p', 'provider-url', p.baseUrl));
+
+        const actions = node('div', 'provider-actions');
+        const makeDefault = rowAction('Set default', p.name, () => setDefault(p.id));
+        const remove = rowAction('Delete', p.name, () => deleteProvider(p.id), 'provider-action provider-action--danger');
+        actions.append(
+          rowAction('Edit', p.name, async () => openForm(p.id)),
+          makeDefault,
+          rowAction('Test', p.name, () => runProviderTest(p.id, (text) => {
+            testNotes.set(p.id, text);
+            const out = rowOutputs.get(p.id);
+            if (out) out.textContent = text;
+          })),
+          remove,
+        );
+        li.append(main, actions);
+        if (isDefault) {
+          // The server refuses both for the default (409); say why instead of letting it.
+          makeDefault.disabled = true;
+          remove.disabled = true;
+          const note = node('p', 'provider-note', 'Default provider — make another provider the default before deleting this one.');
+          note.id = 'providerDefaultNote';
+          makeDefault.setAttribute('aria-describedby', note.id);
+          remove.setAttribute('aria-describedby', note.id);
+          li.append(note);
+        }
+        const out = node('p', 'page-status provider-test-out', testNotes.get(p.id) || '');
+        out.setAttribute('role', 'status');
+        rowOutputs.set(p.id, out);
+        li.append(out);
+        if (form && form.id === p.id) li.append($('providerForm'));
+        return li;
+      }
+
+      function renderProviders() {
+        // Re-home the form before the rows go, so it is never dropped with one.
+        $('providerFormSlot').appendChild($('providerForm'));
+        if (form && form.id && !providerById(form.id)) closeForm();
+        rowOutputs.clear();
+        const list = $('providerList');
+        list.replaceChildren();
+        if (!saved) {
+          $('addProvider').disabled = true;
+          return;
+        }
+        for (const p of saved.aiProviders) list.appendChild(providerRow(p));
+        const full = saved.aiProviders.length >= MAX_PROVIDERS;
+        $('addProvider').disabled = full;
+        $('providerLimit').hidden = !full;
+      }
+
+      // ---- provider form -----------------------------------------------------
+      function formKind() {
+        const p = form && form.id ? providerById(form.id) : null;
+        return p ? p.kind : $('providerKind').value;
+      }
+
+      function openForm(id) {
+        const p = id ? providerById(id) : null;
+        if (!saved || (id && !p)) return;
+        form = { id: p ? p.id : null };
+        $('providerFormHeading').textContent = p ? 'Edit ' + p.name : 'Add a provider';
+        $('providerKind').value = p ? p.kind : 'openrouter';
+        formPresetKind = $('providerKind').value;
+        $('providerName').value = p ? p.name : KINDS.openrouter.label;
+        $('providerBaseUrl').value = p ? p.baseUrl : KINDS.openrouter.baseUrl;
+        $('providerApiKey').value = '';
+        $('providerKindField').hidden = Boolean(p);
+        $('providerFormOut').textContent = '';
+        $('providerForm').hidden = false;
+        renderProviders();
+        syncForm();
+        $('providerName').focus();
+      }
+
+      function closeForm() {
+        form = null;
+        $('providerApiKey').value = '';
+        $('providerForm').hidden = true;
+        $('providerFormSlot').appendChild($('providerForm'));
+      }
+
+      function syncForm() {
+        if (!form) return;
+        const p = form.id ? providerById(form.id) : null;
+        const kind = formKind();
+        const info = KINDS[kind];
+        const url = $('providerBaseUrl').value.trim();
+        $('providerKeyField').hidden = !info.remote;
+        $('providerKeyStatus').textContent = p ? keyState(p) : 'No key';
+        $('providerKeyHelp').textContent = !info.remote ? ''
+          : (p && p.hasApiKey ? 'Leave blank to keep the stored key; a new key replaces it. ' : '') +
+            (info.needsKey ? info.label + ' requires an API key.' : 'Only needed if your endpoint requires one.');
+        $('removeProviderKey').hidden = !(p && info.remote && p.hasApiKey);
+        const warning = urlWarnings(url, kind);
+        $('providerUrlWarning').textContent = warning;
+        $('providerUrlWarning').hidden = !warning;
+        const moves = Boolean(p && p.hasApiKey && $('providerApiKey').value === '' && url !== p.baseUrl);
+        $('providerKeyMoveWarning').textContent = moves
+          ? 'The stored key will be sent to ' + (url || 'the new URL') + ' instead of ' + p.baseUrl + '. Saving asks you to confirm.' : '';
+        $('providerKeyMoveWarning').hidden = !moves;
+      }
+
+      $('providerKind').addEventListener('change', () => {
+        const previous = KINDS[formPresetKind];
+        const next = KINDS[$('providerKind').value];
+        // Pre-fill per kind without clobbering what the admin typed.
+        const url = $('providerBaseUrl').value.trim();
+        if (!url || url === previous.baseUrl) $('providerBaseUrl').value = next.baseUrl;
+        const name = $('providerName').value.trim();
+        if (!name || name === previous.label) $('providerName').value = next.label;
+        if (!next.remote) $('providerApiKey').value = '';
+        formPresetKind = $('providerKind').value;
+        syncForm();
+      });
+      $('providerBaseUrl').addEventListener('input', syncForm);
+      $('providerApiKey').addEventListener('input', syncForm);
+      $('addProvider').addEventListener('click', () => openForm(null));
+      $('cancelProvider').addEventListener('click', () => {
+        closeForm();
+        renderProviders();
+        $('addProvider').focus();
+      });
+
+      /** One provider-registry request. The body's key is dropped and the key field cleared whatever happens. */
+      async function send(method, url, body) {
+        try {
+          const res = await fetch(url, body === undefined ? { method } : {
+            method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+          });
+          if (res.status === 401) { location.href = '/login'; return null; }
+          const result = await res.json().catch(() => ({}));
+          return { ok: res.ok, status: res.status, result };
+        } catch {
+          return { ok: false, status: 0, result: {} };
+        } finally {
+          if (body) delete body.apiKey;
+          $('providerApiKey').value = '';
+        }
+      }
+
+      function outcome(r, success) {
+        return r.ok ? success : r.status === 0 ? 'The outcome is unknown. ' + RELOAD_HINT : failureMessage(r.status, r.result);
+      }
+
+      function setProviderBusy(busy) {
+        for (const id of ['saveProvider', 'removeProviderKey', 'testProviderForm']) $(id).disabled = busy;
+      }
+
+      $('providerForm').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if (!form || !saved) return;
+        const p = form.id ? providerById(form.id) : null;
+        const kind = formKind();
+        const name = $('providerName').value.trim();
+        const baseUrl = $('providerBaseUrl').value.trim();
+        if (!name || !baseUrl) { $('providerFormOut').textContent = 'Enter a name and a base URL.'; return; }
+        const typedKey = KINDS[kind].remote && $('providerApiKey').value !== '';
+        if (p && p.hasApiKey && !typedKey && baseUrl !== p.baseUrl && !await AdminConfirm.ask({
+          title: 'Send the stored key to a new URL?',
+          body: 'The stored API key for “' + p.name + '” will be sent to ' + baseUrl + ' instead of ' + p.baseUrl +
+            '. ' + usesSentence(p.id) + ' No request is sent on save.',
+          confirmLabel: 'Save new URL',
+        })) return;
+        const body = p ? { name, baseUrl } : { name, kind, baseUrl };
+        if (typedKey) body.apiKey = $('providerApiKey').value;
+        setProviderBusy(true);
+        $('providerFormOut').textContent = 'Saving…';
+        const r = await send(p ? 'PUT' : 'POST', p ? providerPath(p.id) : '/ai-providers', body);
+        setProviderBusy(false);
+        if (!r) return;
+        // A refused request changed nothing: keep the form so the admin can fix it.
+        const keepForm = r.status >= 400 && r.status < 500;
+        if (!keepForm) closeForm();
+        await reloadSettings();
+        const message = outcome(r, p ? 'Saved “' + name + '”. No request was sent to the provider.' : 'Added “' + name + '”. No request was sent to the provider.');
+        $('providerFormOut').textContent = keepForm ? message : '';
+        if (!keepForm) $('providersOut').textContent = message;
+        syncForm();
+      });
+
+      $('removeProviderKey').addEventListener('click', async () => {
+        const p = form && form.id ? providerById(form.id) : null;
+        if (!p || !p.hasApiKey) return;
+        const uses = useCasesOn(p.id);
+        if (!await AdminConfirm.ask({
+          title: 'Remove the stored key for “' + p.name + '”?',
+          body: (uses.length ? joinNames(uses) + ' will stop sending a key to ' + p.baseUrl + '. ' : '') +
+            'Already-copied keys and encrypted backups remain; revoke the key at the provider to stop external use.',
+          confirmLabel: 'Remove key',
+          danger: true,
+        })) return;
+        setProviderBusy(true);
+        const r = await send('PUT', providerPath(p.id), { apiKey: null });
+        setProviderBusy(false);
+        if (!r) return;
+        closeForm();
+        await reloadSettings();
+        $('providersOut').textContent = outcome(r, 'Removed the stored key for “' + p.name + '”.');
+      });
+
+      async function setDefault(id) {
+        const p = providerById(id);
+        const current = providerById(saved && saved.aiDefaultProviderId);
+        if (!p || !current || p.id === current.id) return;
+        const followers = Object.values(USE_CASES).filter((u) => saved[u.field] === null).map((u) => u.label);
+        if (followers.length && !await AdminConfirm.ask({
+          title: 'Make “' + p.name + '” the default?',
+          body: joinNames(followers) + (followers.length > 1 ? ' follow' : ' follows') + ' the default provider and will send requests to ' +
+            p.baseUrl + (KINDS[p.kind].remote ? ' with that provider’s API key' : '') + ' instead of ' + current.name +
+            ' (' + current.baseUrl + '). No request is sent now.',
+          confirmLabel: 'Set default',
+        })) return;
+        const r = await send('POST', '/settings', { aiDefaultProviderId: p.id });
+        if (!r) return;
+        await reloadSettings();
+        $('providersOut').textContent = outcome(r, '“' + p.name + '” is now the default provider.');
+      }
+
+      async function deleteProvider(id) {
+        const p = providerById(id);
+        if (!p) return;
+        // Refused up front from the saved assignments, or by the server (409) when they were stale.
+        let assigned = Object.values(USE_CASES).filter((u) => saved[u.field] === p.id).map((u) => u.label);
+        let r = null;
+        if (!assigned.length) {
+          if (!await AdminConfirm.ask({
+            title: 'Delete “' + p.name + '”?',
+            body: 'Removes ' + p.name + ' (' + p.baseUrl + ') from the provider list' +
+              (p.hasApiKey ? ' and deletes its stored API key from this server. Revoke the key at the provider to stop any other use of it.' : '.') +
+              ' No use case is assigned to it.',
+            confirmLabel: 'Delete provider',
+            danger: true,
+          })) return;
+          r = await send('DELETE', providerPath(p.id));
+          if (!r) return;
+          if (r.ok) { testNotes.delete(p.id); modelCache.delete(p.id); modelFailures.delete(p.id); }
+          await reloadSettings();
+          assigned = r.status === 409 && r.result.code === 'provider_in_use' && Array.isArray(r.result.useCases)
+            ? r.result.useCases.filter((k) => Object.hasOwn(USE_CASES, k)).map((k) => USE_CASES[k].label) : [];
+        }
+        $('providersOut').textContent = assigned.length
+          ? '“' + p.name + '” is assigned to ' + joinNames(assigned) + '. Assign another provider there first, then delete it.'
+          : outcome(r, 'Deleted “' + p.name + '”.');
+      }
+
+      /**
+       * Lists models from this browser. With the form open for this provider the
+       * typed key and URL are used; otherwise a remote provider's stored key is
+       * fetched for this one request. A stored key is never sent to an unsaved URL.
+       */
+      async function runProviderTest(id, report) {
+        const p = id ? providerById(id) : null;
+        const formOpen = Boolean(form) && form.id === (id || null);
+        if (!p && !formOpen) return;
+        const kind = formOpen ? formKind() : p.kind;
+        const baseUrl = formOpen ? $('providerBaseUrl').value.trim() : p.baseUrl;
+        let apiKey = formOpen && KINDS[kind].remote && $('providerApiKey').value ? $('providerApiKey').value : null;
+        report('Testing from this browser…');
+        try {
+          if (!apiKey && KINDS[kind].remote && p && p.hasApiKey) {
+            if (baseUrl !== p.baseUrl) { report('Save the new URL before testing it with the stored key, or type a key to test with.'); return; }
+            const res = await fetch(providerPath(p.id) + '/credential', { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+            if (res.status === 401) { location.href = '/login'; return; }
+            if (!res.ok) { report('Could not load the stored API key. Reload settings and try again.'); return; }
+            const credential = await res.json();
+            apiKey = typeof credential.apiKey === 'string' && credential.apiKey ? credential.apiKey : null;
+            credential.apiKey = null;
+          }
+          if (KINDS[kind].needsKey && !apiKey) { report(KINDS[kind].label + ' needs an API key. Edit the provider to add one.'); return; }
+          const models = await LLM.listModels(baseUrl, apiKey);
+          if (p && baseUrl === p.baseUrl) {
+            modelCache.set(p.id, { baseUrl, models: tidyModels(models) });
+            modelFailures.delete(p.id);
+            updateUseCases();
+          }
+          report(models.length
+            ? 'Reachable from this browser · ' + models.length + (models.length === 1 ? ' model' : ' models') + ' listed.'
+            : 'Reachable from this browser, but no models were listed. Choose “Other model ID…” to enter one.');
+        } catch {
+          report('Could not list models. Check the base URL, the API key and browser CORS access.');
+        } finally {
+          apiKey = null;
+        }
+      }
+
+      $('testProviderForm').addEventListener('click', async () => {
+        if (!form) return;
+        $('testProviderForm').disabled = true;
+        try {
+          await runProviderTest(form.id, (text) => {
+            $('providerFormOut').textContent = text;
+            if (form && form.id) testNotes.set(form.id, text);
+          });
+        } finally { $('testProviderForm').disabled = false; }
+      });
+
+      /** Listed IDs, de-duplicated and sorted case-insensitively. */
+      function tidyModels(models) {
+        return [...new Set(models)].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }) || (a < b ? -1 : a > b ? 1 : 0));
+      }
+
+      /**
+       * Lists one provider's models from this browser into `modelCache`: only
+       * `/models`, never a completion. A remote provider's stored key comes from
+       * `/credential` for this one request and is dropped in `finally`. One
+       * listing per provider at a time; without `force` a provider already
+       * listed (or failed) at its current URL is not asked again this page load.
+       */
+      function lookupModels(p, force) {
+        const running = modelLookups.get(p.id);
+        if (running && running.baseUrl === p.baseUrl) return running.promise;
+        const known = modelCache.get(p.id) || modelFailures.get(p.id);
+        if (!force && known && known.baseUrl === p.baseUrl) return Promise.resolve();
+        // Registered before it starts: a provider that cannot list (no key)
+        // settles synchronously, and its `finally` must find this entry.
+        const entry = { baseUrl: p.baseUrl, promise: null };
+        modelLookups.set(p.id, entry);
+        updateUseCases();
+        entry.promise = (async () => {
+          let apiKey = null;
+          try {
+            if (KINDS[p.kind].remote && p.hasApiKey) {
+              const res = await fetch(providerPath(p.id) + '/credential', { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+              if (res.status === 401) { location.href = '/login'; return; }
+              if (!res.ok) throw new Error('Stored API key unavailable');
+              const credential = await res.json();
+              apiKey = typeof credential.apiKey === 'string' && credential.apiKey ? credential.apiKey : null;
+              credential.apiKey = null;
+            }
+            if (KINDS[p.kind].needsKey && !apiKey) {
+              modelFailures.set(p.id, { baseUrl: p.baseUrl, reason: 'key' });
+              return;
+            }
+            const models = await LLM.listModels(p.baseUrl, apiKey);
+            modelCache.set(p.id, { baseUrl: p.baseUrl, models: tidyModels(models) });
+            modelFailures.delete(p.id);
+          } catch {
+            modelFailures.set(p.id, { baseUrl: p.baseUrl, reason: 'failed' });
+          } finally {
+            apiKey = null;
+            if (modelLookups.get(p.id) === entry) modelLookups.delete(p.id);
+            updateUseCases();
+          }
+        })();
+        return entry.promise;
+      }
+
+      /** Lists the models of every provider a use case resolves to, while AI models is shown. */
+      function ensureModels() {
+        if (!saved || $('panel-ai-models').hidden) return Promise.resolve();
+        const providers = new Set(Object.values(USE_CASES).map(selectedProvider).filter(Boolean));
+        return Promise.all([...providers].map((p) => lookupModels(p, false)));
+      }
+
+      // ---- use case assignments -----------------------------------------------
+      function selectedProvider(u) {
+        return saved ? providerById($(u.field).value) || providerById(saved.aiDefaultProviderId) : null;
+      }
+
+      function renderUseCaseSelects(values) {
+        for (const [key, u] of Object.entries(USE_CASES)) {
+          const select = $(u.field);
+          const keep = values ? values[key] || '' : select.value;
+          select.replaceChildren();
+          if (!saved) continue;
+          const fallback = providerById(saved.aiDefaultProviderId);
+          const first = node('option', '', 'Default — ' + (fallback ? fallback.name : 'not set'));
+          first.value = '';
+          select.appendChild(first);
+          for (const p of saved.aiProviders) {
+            const option = node('option', '', p.name);
+            option.value = p.id;
+            select.appendChild(option);
+          }
+          select.value = providerById(keep) ? keep : '';
+        }
+        updateUseCases();
+      }
+
+      function modelStatus(p, loading, listed, failure) {
+        if (!p) return '';
+        if (loading) return 'Loading models…';
+        if (failure && failure.reason === 'key') {
+          return p.name + ' needs an API key to list its models. Edit the provider to add one, or choose “Other model ID…”.';
+        }
+        if (failure) {
+          return 'Could not list models from ' + p.name + '. Check its API key, that it allows requests from this ' +
+            'browser (CORS), and that it is online — or choose “Other model ID…” to enter one.';
+        }
+        if (!listed) return '';
+        return listed.length
+          ? listed.length + (listed.length === 1 ? ' model' : ' models') + ' listed by ' + p.name + '.'
+          : p.name + ' listed no models. Choose “Other model ID…” to enter one.';
+      }
+
+      /** The model select: listed IDs, the saved model if unlisted, then "Other model ID…". */
+      function renderModelSelect(u, p) {
+        const running = p ? modelLookups.get(p.id) : null;
+        const loading = Boolean(running && running.baseUrl === p.baseUrl);
+        const cached = p ? modelCache.get(p.id) : null;
+        const listed = cached && cached.baseUrl === p.baseUrl ? cached.models : null;
+        const failed = p ? modelFailures.get(p.id) : null;
+        const failure = !listed && failed && failed.baseUrl === p.baseUrl ? failed : null;
+        const models = listed || [];
+        if (u.other && models.includes(u.current)) u.other = false;
+        // A pending pick the provider does not list (chosen under another
+        // provider) moves to "Other" rather than vanishing, once the list is known.
+        if ((listed || failure) && !u.other && u.current && u.current !== u.saved && !models.includes(u.current)) {
+          u.other = true;
+          $(u.otherInput).value = u.current;
+        }
+        const select = $(u.model);
+        select.replaceChildren();
+        const add = (value, text) => {
+          const option = node('option', '', text);
+          option.value = value;
+          select.appendChild(option);
+        };
+        if (!u.other && !u.current) add('', 'No model set');
+        if (u.saved && !models.includes(u.saved)) add(u.saved, listed ? u.saved + ' (saved, not listed)' : u.saved);
+        // Until the provider's list is known, a pending pick stays as it is.
+        if (!u.other && u.current && u.current !== u.saved && !models.includes(u.current)) add(u.current, u.current);
+        for (const id of models) add(id, id);
+        add(OTHER_MODEL, 'Other model ID…');
+        select.value = u.other ? OTHER_MODEL : u.current;
+        select.setAttribute('aria-busy', loading ? 'true' : 'false');
+        $(u.otherField).hidden = !u.other;
+        $(u.status).textContent = modelStatus(p, loading, listed, failure);
+        const reload = $(u.reload);
+        reload.disabled = !p || loading;
+        reload.setAttribute('aria-label', p ? 'Reload models from ' + p.name : 'Reload models');
+        reload.setAttribute('title', p ? 'Reload models from ' + p.name : 'Reload models');
+      }
+
+      function showResolved(u, p) {
+        $(u.resolved).textContent = p ? '→ ' + p.name + ' / ' + (u.current || 'no model set') : '';
+        $(u.destination).textContent = p ? p.baseUrl : '';
+      }
+
+      function updateUseCases() {
+        for (const u of Object.values(USE_CASES)) {
+          const p = selectedProvider(u);
+          renderModelSelect(u, p);
+          showResolved(u, p);
+          const notes = [];
+          if (p && KINDS[p.kind].needsKey && !p.hasApiKey) notes.push('“' + p.name + '” has no stored API key. Edit the provider to add one.');
+          const warning = p ? urlWarnings(p.baseUrl, p.kind) : '';
+          if (warning) notes.push(warning);
+          $(u.warn).textContent = notes.join(' ');
+          $(u.warn).hidden = notes.length === 0;
+        }
+      }
+
+      /** Replaces a row's model with a settings value (load or save). */
+      function setModel(u, model) {
+        u.saved = model;
+        u.current = model;
+        u.other = false;
+        $(u.otherInput).value = '';
+      }
+
+      for (const u of Object.values(USE_CASES)) {
+        // Not awaited: a slow provider must not hold up the rest of the change.
+        $(u.field).addEventListener('change', () => {
+          updateUseCases();
+          ensureModels();
+        });
+        $(u.model).addEventListener('change', () => {
+          const value = $(u.model).value;
+          u.other = value === OTHER_MODEL;
+          u.current = (u.other ? $(u.otherInput).value : value).trim();
+          updateUseCases();
+          if (u.other) $(u.otherInput).focus();
+        });
+        // Only the resolved line: a full render could leave "Other" mid-typing
+        // once the typed ID matches a listed one.
+        $(u.otherInput).addEventListener('input', () => {
+          u.current = $(u.otherInput).value.trim();
+          showResolved(u, selectedProvider(u));
+        });
+        $(u.reload).addEventListener('click', async () => {
+          const p = selectedProvider(u);
+          if (p) await lookupModels(p, true);
+        });
+      }
+
+      /** Registry state from a settings response; `fillFields` also replaces the AI form's values. */
+      function applyAi(s, fillFields) {
+        saved = {
+          aiProviders: s.aiProviders, aiDefaultProviderId: s.aiDefaultProviderId,
+          reviewProviderId: s.reviewProviderId, captionProviderId: s.captionProviderId,
+        };
+        if (fillFields) {
+          setModel(USE_CASES.review, s.aiModel);
+          $('reviewPrompt').value = s.reviewPrompt;
+          $('reviewTimeoutMs').value = s.reviewTimeoutMs;
+          setModel(USE_CASES.caption, s.lmModel);
+          $('captionPrompt').value = s.captionPrompt;
+          $('captionTimeoutMs').value = s.captionTimeoutMs;
+          $('captionMaxEdge').value = s.captionMaxEdge;
+          $('captionMaxTokens').value = s.captionMaxTokens ?? '';
+        }
+        renderProviders();
+        renderUseCaseSelects(fillFields ? { review: s.reviewProviderId, caption: s.captionProviderId } : null);
+        syncForm();
+        $('saveAi').disabled = false;
+        $('testReview').disabled = false;
+      }
+
+      async function reloadSettings() {
+        try {
+          const res = await fetch('/settings', { cache: 'no-store' });
+          if (res.status === 401) { location.href = '/login'; return false; }
+          if (!res.ok) throw new Error('reload failed');
+          applyAi(await res.json(), false);
+          return true;
+        } catch {
+          saved = null;
+          closeForm();
+          renderProviders();
+          renderUseCaseSelects(null);
+          $('saveAi').disabled = true;
+          $('testReview').disabled = true;
+          $('providersOut').textContent = 'Could not reload settings. Refresh this page before trying again.';
+          return false;
+        }
+      }
+
+      $('saveAi').addEventListener('click', async () => {
+        if (!saved) return;
+        clearReviewTest();
+        const body = {
+          reviewProviderId: $('reviewProviderId').value || null,
+          captionProviderId: $('captionProviderId').value || null,
+          aiModel: USE_CASES.review.current,
+          lmModel: USE_CASES.caption.current,
+          reviewPrompt: $('reviewPrompt').value,
+          reviewTimeoutMs: Number($('reviewTimeoutMs').value),
+          captionPrompt: $('captionPrompt').value,
+          captionTimeoutMs: Number($('captionTimeoutMs').value),
+          captionMaxEdge: Number($('captionMaxEdge').value),
+          captionMaxTokens: Number($('captionMaxTokens').value),
+        };
+        $('saveAi').disabled = true;
+        $('aiOut').textContent = 'Saving…';
+        const r = await send('POST', '/settings', body);
+        $('saveAi').disabled = false;
+        if (!r) return;
+        // Success applies the server's values; a failure keeps the pending edits for a retry.
+        if (r.ok) applyAi(r.result, true);
+        else await reloadSettings();
+        $('aiOut').textContent = outcome(r, copy.writingSaved);
+      });
+
+      // ---- Test review ----------------------------------------------------------
       function clearReviewTest() {
         if (reviewTestController) reviewTestController.abort();
         reviewTestController = null;
-        $('testReview').disabled = false;
+        $('testReview').disabled = !saved;
         $('reviewTestOut').textContent = '';
       }
-
-      function reviewDestination(provider, custom, local) {
-        return provider === 'lm-studio' ? local
-          : provider === 'openrouter' ? 'https://openrouter.ai/api/v1'
-            : provider === 'deepseek' ? 'https://api.deepseek.com/v1' : custom;
-      }
-
-      function captionDestination() {
-        return reviewDestination($('captionProvider').value, $('captionCustomBaseUrl').value.trim(), $('baseUrl').value.trim());
-      }
-
-      function updateCaptionWarnings() {
-        const provider = $('captionProvider').value;
-        const destination = captionDestination();
-        $('customCaptionFields').hidden = provider !== 'custom';
-        $('captionDestination').textContent = 'Requests go to: ' + (destination || 'set a custom base URL');
-        const why = provider === 'custom' && destination.startsWith('http:')
-          ? 'HTTP can expose the shared key and photo on the network. Prefer HTTPS. Your browser may block this connection.'
-          : LLM.mixedContentWarning(destination, location.protocol);
-        $('captionUrlWarning').textContent = why || '';
-        $('captionUrlWarning').hidden = !why;
-        const previous = savedCaption && reviewDestination(savedCaption.captionProvider, savedCaption.captionCustomBaseUrl, savedCaption.lmBaseUrl);
-        const changesDestination = savedCaption && savedReview?.hasAiApiKey && provider !== 'lm-studio'
-          && (provider !== savedCaption.captionProvider || destination !== previous);
-        $('captionKeyWarning').hidden = !changesDestination;
-        $('captionKeyWarning').textContent = changesDestination
-          ? 'The shared key will be sent to ' + (destination || 'the custom endpoint') + ' instead of ' + previous +
-            '. Review still uses its own endpoint. Replace or remove the shared key below if it belongs to another provider.' : '';
-        $('captionKeyHelp').textContent = provider === 'lm-studio'
-          ? 'Local LM Studio does not use the shared API key.'
-          : !savedReview ? 'Reload settings to check the shared API key before using remote captions.'
-          : savedReview.hasAiApiKey ? 'A shared key is stored. Make sure it is valid for this caption provider as well as the review provider.'
-          : provider === 'custom' ? 'No shared key is stored. Configure one below if this endpoint requires it.'
-          : 'This provider requires an API key. Configure the shared key below, then save review settings.';
-      }
-      for (const id of ['captionProvider', 'captionCustomBaseUrl', 'baseUrl']) {
-        $(id).addEventListener('input', updateCaptionWarnings);
-        $(id).addEventListener('change', updateCaptionWarnings);
-      }
-
-      function updateReviewWarnings() {
-        const provider = $('aiProvider').value;
-        const needsKey = provider === 'openrouter' || provider === 'deepseek';
-        $('aiKeyRequirement').textContent = needsKey
-          ? reviewCopy.reviewKeyRequired.replace('{provider}', provider === 'openrouter' ? 'OpenRouter' : 'DeepSeek') + ' ' +
-            (savedReview?.hasAiApiKey ? reviewCopy.reviewKeyStored : reviewCopy.reviewKeyEnter)
-          : provider === 'lm-studio' ? reviewCopy.reviewKeyLocal : reviewCopy.reviewKeyCustom;
-        const custom = $('aiCustomBaseUrl').value.trim();
-        const destination = reviewDestination(provider, custom, savedReview?.lmBaseUrl || '');
-        $('customReviewFields').hidden = provider !== 'custom';
-        $('reviewDestination').textContent = 'Requests go to: ' + (destination || 'set a custom base URL');
-        const why = provider === 'custom' && custom.startsWith('http:')
-          ? 'HTTP can expose the shared key and draft on the network. Prefer HTTPS. Your browser may block this connection.'
-          : LLM.mixedContentWarning(destination, location.protocol);
-        $('reviewUrlWarning').textContent = why || '';
-        $('reviewUrlWarning').hidden = !why;
-        const previous = savedReview && reviewDestination(savedReview.aiProvider, savedReview.aiCustomBaseUrl, savedReview.lmBaseUrl);
-        const changesDestination = savedReview && savedReview.hasAiApiKey && provider !== 'lm-studio'
-          && (provider !== savedReview.aiProvider || destination !== previous);
-        $('reviewKeyWarning').hidden = !changesDestination;
-        $('reviewKeyWarning').textContent = changesDestination
-          ? 'The stored key will be sent to ' + destination + ' instead of ' + previous + '. Replace or remove it if it belongs to the previous provider.' : '';
-      }
-      $('aiProvider').addEventListener('change', updateReviewWarnings);
-      $('aiCustomBaseUrl').addEventListener('input', updateReviewWarnings);
-      for (const id of ['aiProvider', 'aiCustomBaseUrl', 'aiModel', 'aiApiKey', 'reviewPrompt', 'reviewTimeoutMs']) {
+      for (const id of ['reviewProviderId', 'aiModel', 'aiModelOther', 'reviewPrompt', 'reviewTimeoutMs']) {
         $(id).addEventListener('input', clearReviewTest);
         $(id).addEventListener('change', clearReviewTest);
       }
 
-      // A plain-http model URL on an https page is blocked as mixed content and
-      // surfaces only as "Failed to fetch"; say so next to the field (#140).
-      function checkBaseUrl() {
-        const why = LLM.mixedContentWarning($('baseUrl').value.trim(), location.protocol);
-        $('baseUrlWarn').textContent = why;
-        $('baseUrlWarn').hidden = !why;
-      }
-      $('baseUrl').addEventListener('input', checkBaseUrl);
-
-      function fillGeneral(s) {
-        $('baseUrl').value = s.lmBaseUrl || '';
-        $('captionProvider').value = s.captionProvider;
-        $('captionCustomBaseUrl').value = s.captionCustomBaseUrl;
-        savedCaption = {
-          captionProvider: s.captionProvider, captionCustomBaseUrl: s.captionCustomBaseUrl, lmBaseUrl: s.lmBaseUrl,
-        };
-        checkBaseUrl();
-        $('timeout').value = s.captionTimeoutMs ?? '';
-        $('maxEdge').value = s.captionMaxEdge ?? '';
-        $('prompt').value = s.captionPrompt || '';
-        $('backupSchedule').value = s.backupSchedule || 'off';
-        $('backupRetention').value = s.backupRetention ?? 14;
-        $('importDelayMs').value = s.importDelayMs ?? 1200;
-        $('importRetries').value = s.importRetries ?? 3;
-        const sel = $('model');
-        if (s.lmModel && ![...sel.options].some((o) => o.value === s.lmModel)) {
-          sel.add(new Option(s.lmModel, s.lmModel));
+      $('testReview').addEventListener('click', async () => {
+        if (reviewTestController || !saved) return;
+        const p = selectedProvider(USE_CASES.review);
+        if (!p) return;
+        const model = USE_CASES.review.current;
+        const prompt = $('reviewPrompt').value;
+        const timeout = Number($('reviewTimeoutMs').value);
+        if (!model) { $('reviewTestOut').textContent = copy.reviewTestModel; return; }
+        if (!Number.isInteger(timeout) || timeout < 5000 || timeout > 300000) {
+          $('reviewTestOut').textContent = copy.reviewTestTimeoutRange; return;
         }
-        if (s.lmModel) sel.value = s.lmModel;
-        updateCaptionWarnings();
-      }
+        try {
+          const url = new URL(p.baseUrl);
+          if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
+        } catch { $('reviewTestOut').textContent = copy.reviewTestEndpoint; return; }
+        if (KINDS[p.kind].needsKey && !p.hasApiKey) { $('reviewTestOut').textContent = copy.reviewTestMissingKey; return; }
+        const controller = new AbortController();
+        reviewTestController = controller;
+        const timer = setTimeout(() => controller.abort(), timeout);
+        $('testReview').disabled = true;
+        $('reviewTestOut').textContent = copy.reviewTestRunning;
+        let apiKey = null;
+        try {
+          if (KINDS[p.kind].remote && p.hasApiKey) {
+            const res = await fetch(providerPath(p.id) + '/credential', { cache: 'no-store', signal: controller.signal });
+            if (!res.ok) throw new Error('Stored API key unavailable');
+            const credential = await res.json();
+            apiKey = credential.apiKey;
+            credential.apiKey = null;
+            if (typeof apiKey !== 'string' || !apiKey) throw new Error('Stored API key unavailable');
+          }
+          if (controller.signal.aborted) throw new Error('Test cancelled');
+          await LLM.reviewStory(p.baseUrl, model, prompt, {
+            locale: 'en', title: 'A morning walk', excerpt: 'A short walk through the old town.',
+            markdown: '## The route\nWe walked from the station to the market in the morning.',
+            heroAlt: '', heroSrc: '',
+          }, apiKey, timeout, controller.signal);
+          if (reviewTestController === controller) $('reviewTestOut').textContent = copy.reviewTestSuccess;
+        } catch (error) {
+          if (reviewTestController !== controller) return;
+          const message = String(error.message);
+          $('reviewTestOut').textContent = controller.signal.aborted ? copy.reviewTestTimedOut
+            : message === 'Stored API key unavailable' ? copy.reviewTestKeyUnavailable
+            : /^Editorial review HTTP (401|403)$/.test(message) ? copy.reviewTestAuthentication
+            : message === 'Editorial review HTTP 402' ? copy.reviewTestCredits
+            : message === 'Editorial review HTTP 429' ? copy.reviewTestRateLimit
+            : copy.reviewTestFailed;
+        } finally {
+          apiKey = null;
+          clearTimeout(timer);
+          if (reviewTestController === controller) {
+            reviewTestController = null;
+            $('testReview').disabled = false;
+          }
+        }
+      });
 
+      // ---- images, comments, site -------------------------------------------------
       function fillImages(s) {
         $('convertJpeg').checked = s.convertJpeg;
         $('webpQuality').value = s.webpQuality;
@@ -376,36 +1137,22 @@
         $('saveImages').disabled = false;
       }
 
-      function rememberReview(s) {
-        clearReviewTest();
-        savedReview = {
-          aiProvider: s.aiProvider, aiCustomBaseUrl: s.aiCustomBaseUrl,
-          lmBaseUrl: s.lmBaseUrl, hasAiApiKey: s.hasAiApiKey,
-        };
-        $('aiKeyStatus').textContent = s.hasAiApiKey ? 'Configured' : 'Not configured';
-        $('removeAiKey').disabled = !s.hasAiApiKey;
-        updateCaptionWarnings();
-      }
-
-      function fillReview(s) {
-        rememberReview(s);
-        $('aiProvider').value = s.aiProvider;
-        $('aiModel').value = s.aiModel;
-        $('aiCustomBaseUrl').value = s.aiCustomBaseUrl;
-        $('reviewPrompt').value = s.reviewPrompt;
-        $('reviewTimeoutMs').value = s.reviewTimeoutMs;
-        updateReviewWarnings();
-      }
-
       function fillComments(s) {
         $('commentsEnabled').checked = s.commentsEnabled === true;
       }
 
+      function fillSite(s) {
+        $('backupSchedule').value = s.backupSchedule || 'off';
+        $('backupRetention').value = s.backupRetention ?? 14;
+        $('importDelayMs').value = s.importDelayMs ?? 1200;
+        $('importRetries').value = s.importRetries ?? 3;
+      }
+
       function fill(s) {
-        fillGeneral(s);
+        applyAi(s, true);
         fillImages(s);
         fillComments(s);
-        fillReview(s);
+        fillSite(s);
       }
 
       $('saveComments').addEventListener('click', async () => {
@@ -429,98 +1176,25 @@
         }
       });
 
-      // Repopulate the dropdown from a live model list, preserving the current
-      // selection even if LM Studio isn't serving it (so a saved/manual id survives).
-      function populateModels(models) {
-        const sel = $('model');
-        const keep = sel.value;
-        sel.innerHTML = '';
-        for (const m of models) sel.add(new Option(m, m));
-        if (keep && ![...sel.options].some((o) => o.value === keep)) sel.add(new Option(keep, keep));
-        if (keep) sel.value = keep;
-      }
-
-      async function loadModels() {
-        if ($('captionProvider').value !== 'lm-studio') return;
-        try {
-          populateModels(await LLM.listModels($('baseUrl').value.trim()));
-        } catch { /* LM Studio not reachable from here — leave the manual field */ }
-      }
-
-      function chosenModel() { return $('modelManual').value.trim() || $('model').value; }
-
       async function init() {
         try {
           const res = await fetch('/settings');
           if (res.status === 401) { location.href = '/login'; return; }
           if (!res.ok) { $('out').textContent = 'Could not load settings: ' + res.status; return; }
           fill(await res.json());
-          await loadModels();
-          $('out').textContent = 'Loaded.';
+          await ensureModels();
         } catch (e) { $('out').textContent = 'Error: ' + e; }
       }
 
-      $('test').addEventListener('click', async () => {
-        const provider = $('captionProvider').value;
-        const destination = captionDestination();
-        let apiKey = null;
-        $('test').disabled = true;
-        $('captionOut').textContent = 'Testing from this browser…';
-        try {
-          if (provider !== 'lm-studio') {
-            const res = await fetch('/ai-config?purpose=caption', { cache: 'no-store', signal: AbortSignal.timeout(15000) });
-            if (res.status === 401) { location.href = '/login'; return; }
-            if (!res.ok) throw new Error('Stored caption configuration unavailable');
-            const config = await res.json();
-            apiKey = config.captionApiKey;
-            config.captionApiKey = null;
-            if (config.captionProvider !== provider || config.captionBaseUrl !== destination) {
-              $('captionOut').textContent = 'Save the alt-text provider settings before testing this destination.';
-              return;
-            }
-            if ((provider === 'openrouter' || provider === 'deepseek') && !apiKey) {
-              $('captionOut').textContent = 'Save a shared API key below before testing this provider.';
-              return;
-            }
-          }
-          const models = await LLM.listModels(destination, apiKey);
-          // Do not install a stale model list after the author changes provider.
-          if (provider !== $('captionProvider').value || destination !== captionDestination()) return;
-          populateModels(models);
-          const model = chosenModel();
-          $('captionOut').textContent = models.includes(model)
-            ? 'Reachable. Selected model is available; image support has not been tested.'
-            : models.length ? 'Reachable. Choose an available vision model or enter its ID.'
-            : 'Reachable, but no models were listed. Enter a vision model ID manually.';
-        } catch {
-          $('captionOut').textContent = 'Connection test failed. Check the saved provider, shared key, endpoint and browser CORS access.';
-        } finally {
-          apiKey = null;
-          $('test').disabled = false;
-        }
-      });
-
-      async function saveSettings() {
-        updateCaptionWarnings();
-        if (!$('captionKeyWarning').hidden && !await AdminConfirm.ask({
-          title: 'Change the alt-text destination?',
-          body: $('captionKeyWarning').textContent + ' No photo is sent on save.',
-          confirmLabel: 'Save destination',
-        })) return;
-        $('captionOut').textContent = 'Saving…';
+      // Site settings only: AI, image and comment settings save from their own tabs.
+      $('save').addEventListener('click', async () => {
         $('out').textContent = 'Saving…';
         let res;
         try {
           res = await fetch('/settings', {
             method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
-              lmBaseUrl: $('baseUrl').value.trim(),
-              captionProvider: $('captionProvider').value,
-              captionCustomBaseUrl: $('captionCustomBaseUrl').value.trim(),
-              lmModel: chosenModel(),
-              captionTimeoutMs: Number($('timeout').value),
-              captionMaxEdge: Number($('maxEdge').value),
-              captionPrompt: $('prompt').value,
+
               backupSchedule: $('backupSchedule').value,
               backupRetention: Number($('backupRetention').value),
               importDelayMs: Number($('importDelayMs').value),
@@ -529,25 +1203,17 @@
           });
         } catch (e) {
           $('out').textContent = 'Could not send the save request (' + e + ').';
-          $('captionOut').textContent = 'Could not save. Check your connection and try again.';
           return;
         }
         if (res.status === 401) { location.href = '/login'; return; }
         const r = await res.json().catch(() => ({}));
         if (!res.ok) {
           $('out').textContent = 'Not saved: ' + (r.error || res.status);
-          $('captionOut').textContent = $('out').textContent;
           return;
         }
-        // Refresh this section and persisted review metadata, not pending review edits.
-        fillGeneral(r);
-        rememberReview(r);
-        updateReviewWarnings();
+        fillSite(r);
         $('out').textContent = 'Saved.';
-        $('captionOut').textContent = 'Saved. No photo was sent.';
-      }
-      $('save').addEventListener('click', saveSettings);
-      $('saveAi').addEventListener('click', saveSettings);
+      });
 
       $('imageSettings').addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -577,135 +1243,113 @@
         }
       });
 
-      $('testReview').addEventListener('click', async () => {
-        if (reviewTestController) return;
-        const provider = $('aiProvider').value;
-        const destination = reviewDestination(provider, $('aiCustomBaseUrl').value.trim(), savedReview?.lmBaseUrl || '');
-        const model = $('aiModel').value.trim();
-        const prompt = $('reviewPrompt').value;
-        const timeout = Number($('reviewTimeoutMs').value);
-        let apiKey = provider === 'lm-studio' ? null : $('aiApiKey').value;
-        const needsKey = provider === 'openrouter' || provider === 'deepseek';
-        if (!model) { $('reviewTestOut').textContent = reviewCopy.reviewTestModel; return; }
-        if (!Number.isInteger(timeout) || timeout < 5000 || timeout > 300000) {
-          $('reviewTestOut').textContent = reviewCopy.reviewTestTimeoutRange; return;
-        }
-        try {
-          const url = new URL(destination);
-          if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
-        } catch { $('reviewTestOut').textContent = reviewCopy.reviewTestEndpoint; return; }
-        if (needsKey && !apiKey && !savedReview?.hasAiApiKey) {
-          $('reviewTestOut').textContent = reviewCopy.reviewTestMissingKey; return;
-        }
-        // /ai-config intentionally withholds the stored key while saved review is local.
-        if (provider !== 'lm-studio' && !apiKey && savedReview?.hasAiApiKey && savedReview.aiProvider === 'lm-studio') {
-          $('reviewTestOut').textContent = reviewCopy.reviewTestLocalKey;
-          return;
-        }
-        const controller = new AbortController();
-        reviewTestController = controller;
-        const timer = setTimeout(() => controller.abort(), timeout);
-        $('testReview').disabled = true;
-        $('reviewTestOut').textContent = reviewCopy.reviewTestRunning;
-        try {
-          if (provider !== 'lm-studio' && !apiKey && savedReview?.hasAiApiKey) {
-            const res = await fetch('/ai-config', { cache: 'no-store', signal: controller.signal });
-            if (!res.ok) throw new Error('Stored API key unavailable');
-            const config = await res.json();
-            apiKey = config.aiApiKey;
-            config.aiApiKey = null;
-            // Another tab may have switched the saved provider since this page loaded.
-            if (config.aiProvider === 'lm-studio') throw new Error('Saved review is local');
-            if (typeof apiKey !== 'string' || !apiKey.trim()) throw new Error('Stored API key unavailable');
+      // ---- Compare quality ---------------------------------------------------------
+      // The test photo goes through the real encoder (POST /settings/image-preview)
+      // at the quality currently in the field, saved or not; nothing is stored.
+      // Both panes show object URLs this page owns; a new result or a new photo
+      // revokes the previous pair.
+      const PREVIEW_FORMATS = {
+        webp: { label: 'WebP', field: 'webpQuality', button: 'previewFormatWebp' },
+        avif: { label: 'AVIF', field: 'avifQuality', button: 'previewFormatAvif' },
+      };
+      let previewFormat = 'webp';
+      let previewUrls = [];
+      let previewWidth = 0;
+
+      function formatBytes(bytes) {
+        return bytes < 1024 * 1024 ? Math.max(1, Math.round(bytes / 1024)) + ' KB' : (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+      }
+
+      function savingsText(originalBytes, encodedBytes) {
+        const pct = Math.round((1 - encodedBytes / originalBytes) * 100);
+        return pct > 0 ? pct + '% smaller than the original'
+          : pct < 0 ? -pct + '% larger than the original' : 'about the same size as the original';
+      }
+
+      function clearPreview() {
+        for (const url of previewUrls) URL.revokeObjectURL(url);
+        previewUrls = [];
+        $('previewResult').hidden = true;
+      }
+
+      for (const [key, f] of Object.entries(PREVIEW_FORMATS)) {
+        $(f.button).addEventListener('click', () => {
+          previewFormat = key;
+          for (const [other, g] of Object.entries(PREVIEW_FORMATS)) {
+            $(g.button).classList.toggle('active', other === key);
+            $(g.button).setAttribute('aria-pressed', other === key ? 'true' : 'false');
           }
-          if (controller.signal.aborted) throw new Error('Test cancelled');
-          await LLM.reviewStory(destination, model, prompt, {
-            locale: 'en', title: 'A morning walk', excerpt: 'A short walk through the old town.',
-            markdown: '## The route\nWe walked from the station to the market in the morning.',
-            heroAlt: '', heroSrc: '',
-          }, apiKey, timeout, controller.signal);
-          if (reviewTestController === controller) {
-            $('reviewTestOut').textContent = reviewCopy.reviewTestSuccess;
-          }
-        } catch (error) {
-          if (reviewTestController !== controller) return;
-          const message = String(error.message);
-          $('reviewTestOut').textContent = controller.signal.aborted ? reviewCopy.reviewTestTimedOut
-            : message === 'Saved review is local' ? reviewCopy.reviewTestLocalKey
-            : message === 'Stored API key unavailable' ? reviewCopy.reviewTestKeyUnavailable
-            : /^Editorial review HTTP (401|403)$/.test(message) ? reviewCopy.reviewTestAuthentication
-            : message === 'Editorial review HTTP 402' ? reviewCopy.reviewTestCredits
-            : message === 'Editorial review HTTP 429' ? reviewCopy.reviewTestRateLimit
-            : reviewCopy.reviewTestFailed;
-        } finally {
-          apiKey = null;
-          clearTimeout(timer);
-          if (reviewTestController === controller) {
-            reviewTestController = null;
-            $('testReview').disabled = false;
-          }
-        }
+        });
+      }
+
+      $('previewFile').addEventListener('change', () => {
+        clearPreview();
+        $('previewOut').textContent = '';
       });
 
-      async function saveReviewSettings(removeKey = false) {
-        clearReviewTest();
-        if (removeKey && !await AdminConfirm.ask({
-          title: 'Remove the shared API key?',
-          body: reviewCopy.removeSharedKey,
-          confirmLabel: 'Remove key',
-        })) return;
-        if (!removeKey && !$('reviewKeyWarning').hidden && !await AdminConfirm.ask({
-          title: 'Change the review destination?',
-          body: $('reviewKeyWarning').textContent + ' Saving a key and settings is not atomic: if settings fail, the new key may remain with the old destination. No review runs on save.',
-          confirmLabel: 'Save destination',
-        })) return;
-        if (!removeKey && $('aiApiKey').value && savedCaption?.captionProvider !== 'lm-studio' && !await AdminConfirm.ask({
-          title: 'Replace the shared API key?',
-          body: reviewCopy.replaceSharedKey,
-          confirmLabel: 'Replace shared key',
-        })) return;
-        const payload = removeKey ? { aiApiKey: null } : {
-          aiProvider: $('aiProvider').value,
-          aiModel: $('aiModel').value,
-          aiCustomBaseUrl: $('aiCustomBaseUrl').value.trim(),
-          reviewPrompt: $('reviewPrompt').value,
-          reviewTimeoutMs: Number($('reviewTimeoutMs').value),
-          ...($('aiApiKey').value ? { aiApiKey: $('aiApiKey').value } : {}),
-        };
-        $('saveReview').disabled = true;
-        $('removeAiKey').disabled = true;
-        $('reviewOut').textContent = 'Saving…';
-        let message;
-        try {
-          const res = await fetch('/settings', {
-            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
-          });
-          if (res.status === 401) { location.href = '/login'; return; }
-          const result = await res.json();
-          message = res.ok ? reviewCopy.writingSaved
-            : (result.error || 'Could not save review settings.') + ' Check the reloaded destinations and key status before using remote AI.';
-        } catch {
-          message = 'Save outcome is unknown. Check the reloaded destinations and deliberately replace or remove the key before using remote AI.';
-        } finally {
-          $('aiApiKey').value = '';
-          delete payload.aiApiKey;
-          try {
-            const res = await fetch('/settings');
-            if (!res.ok) throw new Error('reload failed');
-            fillReview(await res.json());
-          } catch {
-            message = (message || '') + ' Reload failed; refresh this page before trying again.';
-            savedReview = null;
-            $('aiKeyStatus').textContent = 'Unknown — reload';
-            updateCaptionWarnings();
-          }
-          $('saveReview').disabled = false;
-          $('removeAiKey').disabled = !savedReview || !savedReview.hasAiApiKey;
-          $('reviewOut').textContent = message || 'Reload settings before continuing.';
-        }
+      /** Fit: both scaled into equal boxes. 1:1: both at the preview's pixel width, scrolled together. */
+      function sizePanes() {
+        const actual = $('previewActual').checked;
+        $('previewResult').classList.toggle('is-actual', actual);
+        for (const id of ['previewOriginal', 'previewEncoded']) $(id).style.width = actual ? previewWidth + 'px' : '';
       }
-      $('saveReview').addEventListener('click', () => saveReviewSettings());
-      $('removeAiKey').addEventListener('click', () => saveReviewSettings(true));
+      $('previewActual').addEventListener('change', sizePanes);
+
+      for (const [from, to] of [['previewOriginalBox', 'previewEncodedBox'], ['previewEncodedBox', 'previewOriginalBox']]) {
+        $(from).addEventListener('scroll', () => {
+          // Equal-sized boxes and content, so the two settle on the same offsets.
+          if ($(to).scrollLeft !== $(from).scrollLeft) $(to).scrollLeft = $(from).scrollLeft;
+          if ($(to).scrollTop !== $(from).scrollTop) $(to).scrollTop = $(from).scrollTop;
+        });
+      }
+
+      $('previewRun').addEventListener('click', async () => {
+        const file = $('previewFile').files && $('previewFile').files[0];
+        if (!file) { $('previewOut').textContent = 'Choose a test photo first.'; return; }
+        const f = PREVIEW_FORMATS[previewFormat];
+        const quality = String($(f.field).value).trim();
+        if (!/^\d{1,3}$/.test(quality) || Number(quality) < 1 || Number(quality) > 100) {
+          $('previewOut').textContent = 'Set the ' + f.label + ' quality to a whole number from 1 to 100 first.';
+          return;
+        }
+        const body = new FormData();
+        body.append('format', previewFormat);
+        body.append('quality', quality);
+        body.append('file', file);
+        $('previewRun').disabled = true;
+        $('previewOut').textContent = 'Encoding a ' + f.label + ' preview at quality ' + quality + '…';
+        try {
+          const res = await fetch('/settings/image-preview', { method: 'POST', body });
+          if (res.status === 401) { location.href = '/login'; return; }
+          if (!res.ok) {
+            const r = await res.json().catch(() => ({}));
+            $('previewOut').textContent = res.status === 413 ? 'That photo is over the 25 MB upload limit. Choose a smaller one.'
+              : typeof r.error === 'string' && r.error ? r.error : 'The preview failed (HTTP ' + res.status + '). Try again.';
+            return;
+          }
+          const encoded = await res.blob();
+          const size = (name) => Number(res.headers.get(name)) || 0;
+          clearPreview();
+          previewUrls = [URL.createObjectURL(file), URL.createObjectURL(encoded)];
+          previewWidth = size('X-Preview-Width');
+          $('previewOriginal').src = previewUrls[0];
+          $('previewEncoded').src = previewUrls[1];
+          $('previewEncoded').alt = 'Test photo encoded as ' + f.label + ' at quality ' + quality;
+          const kind = (String(file.type).replace(/^image\//, '') || 'image').toUpperCase();
+          const saving = savingsText(file.size, encoded.size);
+          $('previewOriginalCaption').textContent = 'Original · ' + kind + ' · ' + size('X-Original-Width') + ' × ' +
+            size('X-Original-Height') + ' px · ' + formatBytes(file.size);
+          $('previewEncodedCaption').textContent = f.label + ' quality ' + quality + ' · ' + previewWidth + ' × ' +
+            size('X-Preview-Height') + ' px · ' + formatBytes(encoded.size) + ' · ' + saving;
+          $('previewResult').hidden = false;
+          sizePanes();
+          $('previewOut').textContent = f.label + ' at quality ' + quality + ': ' + formatBytes(encoded.size) + ', ' + saving + '.';
+        } catch {
+          $('previewOut').textContent = 'Could not reach the server. Check your connection and try again.';
+        } finally {
+          $('previewRun').disabled = false;
+        }
+      });
 
       function renderBackups(data) {
         const st = data.state || {};

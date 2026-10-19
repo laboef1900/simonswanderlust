@@ -143,7 +143,8 @@ Classify a change before implementing it:
   honeypot, comment limiter, the public JSON shape), the `images`-map and
   body-HTML render path, gallery URL allow-listing, `safeFetch`/WXR import, path-traversal guards,
   EXIF/GPS handling, the schema in `uploader/src/db.ts`, backup/restore, the build/publish
-  pipeline, `/data` layout, or **any slug or route change**.
+  pipeline, `/data` layout, AI credentials (the provider registry, `app_secrets` slots,
+  `/ai-providers*` and `/ai-config`), or **any slug or route change**.
 
 | Risk | Design and specification | Verification | Review and recovery |
 | --- | --- | --- | --- |
@@ -319,18 +320,22 @@ Full security model: `SECURITY.md`. These patterns MUST be preserved when changi
 - AI captions and editorial review are browser-direct. The server never contacts a model:
   do not proxy providers through the server or `safeFetch`, which would add an SSRF surface.
 - Model output is untrusted; it MUST NOT reach commands, queries, or authorization decisions.
-- `GET /ai-config?purpose=caption` resolves the independent caption provider. Local
-  captions never read secrets; remote captions and full review config disclose the
-  same shared provider key to authenticated authors in request-local browser memory
-  (owner-approved 2026-10-17 extension, #214 spec §13). Never persist it in browser
-  storage, logs, or draft backups. Both config responses are `no-store`.
-- Settings writes and key management remain admin-only. Settings responses expose only key
-  presence; AES-256-GCM envelopes live in `app_secrets`, with `ENCRYPTION_KEY` separately
-  escrowed. Missing master key allows local workflows; malformed supplied values refuse boot.
+- AI destinations live in the **provider registry** (`settings.json` `aiProviders`, one
+  assignment per use case: Story review & excerpts, Photo descriptions). Each remote provider
+  owns one encrypted key (`app_secrets` `ai_provider_key:<id>`); slot names come only from
+  validated registry ids (`slotFor`). `GET /ai-config[?purpose=caption]` returns a key only
+  together with the base URL of the provider that owns it, to authenticated authors in
+  request-local browser memory; local providers never hold or read one, and local captions
+  never touch the secrets store. Never persist keys in browser storage, logs, or draft
+  backups. Config and credential responses are `no-store`.
+- Provider/key management (`/ai-providers*`, incl. the admin-only `/credential` read for
+  Settings Test) and settings writes remain admin-only. Settings responses expose only key
+  presence; `ENCRYPTION_KEY` is separately escrowed. Missing master key allows local
+  workflows; malformed supplied values refuse boot.
 - Settings.json and Postgres saves can partially commit: secret first, settings second.
   Preserve explicit partial-failure reporting and local caption isolation. See the
-  approved #214 spec and `SECURITY.md` for portable-destination, shared caption/review
-  key, author-disclosure, and recovery risks.
+  approved #214 spec, the 2026-10-19 provider-registry spec, and `SECURITY.md` for
+  key-binding, author-disclosure, migration and recovery risks.
 
 ### 5. Rules for AI Coding Assistants
 
@@ -558,7 +563,7 @@ blog/
     ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · settings · posts · pages · body-content · build · backup · export · preview · wxr-parse · wp-content · wp-images · wp-import
     │                              #   media-files (disk) · media-store (database) · media-sync (reconcile) · encode-queue · work-lock · disk · exif
     ├── public/                    #   index.html (hero upload) · import.html (WordPress import) · editor/posts/about/settings/users
-    │                              #   media.html + media-api/media-ai/media-ai-dialog/media-browser/media-picker.js · posts-filter.js · posts-duplicate.js
+    │                              #   media.html + media-api/media-ai/media-ai-dialog/media-browser/media-picker.js · posts-filter.js
     ├── test/                      #   Vitest suites (integration suites run when TEST_DATABASE_URL is set)
     └── .env.example · README.md
 ```
@@ -988,6 +993,32 @@ blog/
   second scrollbar beside the page's — so a rail taller than the opening simply sets the spread's
   height. `COLUMN_WIDTH` in `gallery-layout.ts` is 960 (three landscapes a row still clear the
   168px floor: 208px). Published pages change on the next rebuild. See `DESIGN.md`.
+- **Done:** Admin shell + AI provider registry (2026-10-19, branch `feature/admin-ui-shell`).
+  The admin shell is exactly the viewport: masthead and sidebar never scroll, the gray canvas
+  gutter stays visible, and `.cms-workspace` is the one scroll container (`--cms-workspace-h`
+  sizes sticky descendants such as the editor inspector), with a minimal shadow on every side.
+  The masthead's Content/Media/Manage links and the sidebar's "My journal" header are gone; Log
+  out lives in an account menu on the user badge at the sidebar's foot. The editor's page title
+  is visually hidden (still the page's `h1`); Story details collapses with a panel icon into a
+  slim right-hand rail on desktop, and on phones the drawer opener is the last command-bar
+  action — never left of More actions. Settings became vertical tabs (AI models · Images ·
+  Comments · Site & backups, mirrored in the URL hash); Images gained **Compare quality**
+  (admin-only `POST /settings/image-preview`, in-memory, no EXIF, work-lock + single-flight —
+  `docs/superpowers/specs/2026-10-19-image-quality-preview-design.md`). The posts list's "New
+  from this one" duplicate (#70) was removed, and with it `posts-duplicate.js` and
+  `AdminConfirm.askFields`. **HIGH risk, owner-approved:** the single shared `ai_api_key` was
+  replaced by a provider registry — named providers with their own base URL and their own
+  encrypted key, a default, and per-use-case assignments — with a boot migration that copies the
+  old key envelope to the providers that used it (no decryption) and keeps
+  `settings.json.pre-ai-registry`. Model fields are dropdowns filled automatically from each
+  assigned provider's `/models` (owner decision). `/ai-config`'s consumer shape is unchanged. See
+  `docs/superpowers/specs/2026-10-19-ai-provider-registry-design.md`, `SECURITY.md` (*Secrets*)
+  and `DESIGN.md` (Admin authoring). **HIGH risk, owner-approved:** four new regions — Asia,
+  Africa, Oceania, Antarctica (DE/EN slugs `asien`/`asia`, `afrika`/`africa`,
+  `ozeanien`/`oceania`, `antarktis`/`antarctica`) — with an idempotent widening of
+  `posts_region_check`; a region page is built and linked only once its locale has a published
+  story (`liveRegions` in `site/src/lib/trips.ts`). See
+  `docs/superpowers/specs/2026-10-19-new-regions-design.md`.
 - **In progress:** Reader comments (epic #202, spec #203) — design spec landed 2026-09-14
   (`docs/superpowers/specs/2026-09-14-comments-design.md`, incl. an ASVS L1 exception record).
   #205 admin moderation queue landed: `uploader/public/comments.html` (served at

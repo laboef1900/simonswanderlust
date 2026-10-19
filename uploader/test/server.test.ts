@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -19,10 +19,11 @@ import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { memoryPageStore, type PageStore } from '../src/pages.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
 import { BacklogFullError, createEncodeQueue, type EncodeQueue } from '../src/encode-queue.js';
-import { createWorkLock } from '../src/work-lock.js';
+import { createWorkLock, type WorkLock } from '../src/work-lock.js';
 import { fixedWindowLimiter, accountLockoutLimiter } from '../src/rate-limit.js';
 import type { SiteBuilder, BuildOutcome } from '../src/build.js';
 import { memorySecretsStore, SecretsError } from '../src/secrets.js';
+import type { AiProvider, AiProviderKind } from '../src/ai-providers.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -779,7 +780,7 @@ describe('settings endpoints', () => {
     const admin = await authed(b, { username: 'admin' });
     const res = await b.app.inject({ method: 'GET', url: '/settings', cookies: admin.cookie });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ...SETTINGS, hasAiApiKey: false });
+    expect(res.json()).toEqual({ ...SETTINGS, aiProviders: SETTINGS.aiProviders.map((p) => ({ ...p, hasApiKey: false })) });
   });
 
   it('POST /settings is admin-only: authors cannot mutate image conversion fields', async () => {
@@ -894,7 +895,7 @@ describe('GET /ai-config', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body).toMatchObject({
-      lmBaseUrl: 'http://localhost:1234/v1',
+      captionBaseUrl: 'http://localhost:1234/v1',
       lmModel: 'qwen/qwen3-vl-4b',
       captionTimeoutMs: 60000,
       captionMaxEdge: 768,
@@ -905,60 +906,187 @@ describe('GET /ai-config', () => {
   });
 });
 
-describe('AI credential boundaries', () => {
-  it('stores, preserves, replaces and removes a key without exposing it from admin settings', async () => {
-    const secrets = memorySecretsStore();
-    const b = build({ secrets });
-    const { cookie } = await authed(b);
-    const save = (payload: Record<string, unknown>) => b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload });
-    const first = await save({ aiProvider: 'openrouter', aiApiKey: 'fixture-first', aiModel: 'review-model' });
-    expect(first.statusCode).toBe(200);
-    expect(first.json()).toMatchObject({ hasAiApiKey: true, aiProvider: 'openrouter' });
-    expect(first.body).not.toContain('fixture-first');
-    expect(first.json()).not.toHaveProperty('aiApiKey');
-    expect(first.headers['cache-control']).toBe('no-store');
-    const author = await authed(b, { isAdmin: false, username: 'review-author' });
-    const config = await b.app.inject({ url: '/ai-config', cookies: author.cookie });
-    expect(config.json()).toMatchObject({ aiBaseUrl: 'https://openrouter.ai/api/v1', aiApiKey: 'fixture-first', aiModel: 'review-model', lmModel: SETTINGS.lmModel });
-    expect(config.headers['cache-control']).toBe('no-store');
-    expect((await b.app.inject({ method: 'POST', url: '/settings', cookies: author.cookie, payload: { aiApiKey: 'forbidden' } })).statusCode).toBe(403);
-    await save({ reviewTimeoutMs: 5000 });
-    expect(await secrets.get('ai_api_key')).toBe('fixture-first');
-    await save({ aiApiKey: 'fixture-replacement' });
-    expect(await secrets.get('ai_api_key')).toBe('fixture-replacement');
-    for (const value of ['', null]) {
-      await secrets.set('ai_api_key', 'fixture');
-      expect((await save({ aiApiKey: value })).json().hasAiApiKey).toBe(false);
-      expect(await secrets.get('ai_api_key')).toBeNull();
+/** A second provider beside the default local one; names stay unique per id. */
+const remote = (id: string, kind: AiProviderKind = 'openrouter', baseUrl = 'https://openrouter.ai/api/v1'): AiProvider =>
+  ({ id, name: `Remote ${id}`, kind, baseUrl });
+function registry(providers: AiProvider[], extra: Partial<Settings> = {}): Settings {
+  return { ...SETTINGS, aiProviders: [...SETTINGS.aiProviders, ...providers], ...extra };
+}
+const LOCAL_CAPTION = {
+  lmModel: SETTINGS.lmModel, captionPrompt: SETTINGS.captionPrompt,
+  captionTimeoutMs: SETTINGS.captionTimeoutMs, captionMaxEdge: SETTINGS.captionMaxEdge,
+  captionMaxTokens: SETTINGS.captionMaxTokens,
+  captionProvider: 'lm-studio', captionBaseUrl: 'http://localhost:1234/v1',
+};
+const NAME_ERROR = 'AI provider name must be 1–60 characters without control characters.';
+const URL_ERROR = 'AI provider base URL must be an absolute HTTP(S) URL of at most 300 characters, without credentials, query, or fragment.';
+const KEY_ERROR = 'API key must be a string without control characters, or null.';
+const LOCAL_KEY_ERROR = 'Local LM Studio providers do not use an API key.';
+
+describe('AI provider routes', () => {
+  it('are admin-only (401 anonymous, 403 author) and every response is no-store', async () => {
+    const b = build({ settings: fakeStore(registry([remote('remote')])) });
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+    const admin = await authed(b, { username: 'admin' });
+    const routes = [
+      { method: 'POST', url: '/ai-providers', payload: { name: 'New', kind: 'custom', baseUrl: 'https://new.example/v1' }, ok: 201 },
+      { method: 'PUT', url: '/ai-providers/remote', payload: { name: 'Renamed' }, ok: 200 },
+      { method: 'GET', url: '/ai-providers/remote/credential', payload: undefined, ok: 200 },
+      { method: 'DELETE', url: '/ai-providers/remote', payload: undefined, ok: 200 },
+    ] as const;
+    for (const { method, url, payload } of routes) {
+      const anonymous = await b.app.inject({ method, url, payload });
+      expect(anonymous.statusCode, `${method} ${url}`).toBe(401);
+      expect(anonymous.headers['cache-control']).toBe('no-store');
+      expect((await b.app.inject({ method, url, payload, cookies: author.cookie })).statusCode, `${method} ${url}`).toBe(403);
     }
-    const settings = await b.app.inject({ url: '/settings', cookies: cookie });
-    expect(settings.json()).not.toHaveProperty('aiApiKey');
-    expect(settings.headers['cache-control']).toBe('no-store');
+    for (const { method, url, payload, ok } of routes) {
+      const res = await b.app.inject({ method, url, payload, cookies: admin.cookie });
+      expect(res.statusCode, `${method} ${url}`).toBe(ok);
+      expect(res.headers['cache-control']).toBe('no-store');
+    }
     await b.app.close();
   });
 
-  it('validates the entire candidate before changing either store', async () => {
+  it('creates, edits and deletes a provider, with its key omitted, replaced and removed in its own slot', async () => {
     const secrets = memorySecretsStore();
-    await secrets.set('ai_api_key', 'original');
-    const b = build({ secrets });
-    const { cookie } = await authed(b);
-    for (const payload of [
-      { reviewTimeoutMs: 4999, aiApiKey: 'replacement' },
-      { aiModel: {}, aiApiKey: 'replacement' },
-      { captionProvider: ['openrouter'], aiApiKey: 'replacement' },
-      { captionCustomBaseUrl: 'https://example.test/v1?key=fixture', aiApiKey: 'replacement' },
-      { aiApiKey: ['replacement'] },
-      { aiApiKey: 'header\r\ninjection' },
-    ]) {
-      expect((await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload })).statusCode).toBe(400);
-      expect(await secrets.get('ai_api_key')).toBe('original');
-    }
-    expect((await b.app.inject({ url: '/settings', cookies: cookie })).json().reviewTimeoutMs).toBe(SETTINGS.reviewTimeoutMs);
-    await b.app.close();
-  });
-
-  it('reports the committed secret when settings persistence fails, then permits recovery', async () => {
     const settings = fakeStore();
+    const b = build({ secrets, settings });
+    const { cookie } = await authed(b);
+    const call = (method: 'POST' | 'PUT' | 'DELETE', url: string, payload?: Record<string, unknown>) =>
+      b.app.inject({ method, url, cookies: cookie, payload });
+    const created = await call('POST', '/ai-providers', {
+      name: '  OpenRouter  ', kind: 'openrouter', baseUrl: ' https://openrouter.ai/api/v1 ', apiKey: 'fixture-first',
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.body).not.toContain('fixture-first');
+    expect(Object.keys(created.json()).sort()).toEqual(Object.keys(SETTINGS).sort());
+    const view = created.json().aiProviders[1];
+    expect(view).toEqual({
+      id: expect.stringMatching(/^p-[0-9a-f]{8}$/), name: 'OpenRouter', kind: 'openrouter',
+      baseUrl: 'https://openrouter.ai/api/v1', hasApiKey: true,
+    });
+    const url = `/ai-providers/${view.id as string}`;
+    const slot = `ai_provider_key:${view.id as string}`;
+    expect(await secrets.get(slot)).toBe('fixture-first');
+    expect(settings.get().aiProviders).toHaveLength(2);
+
+    const edited = await call('PUT', url, { name: 'OpenRouter main', baseUrl: 'https://openrouter.ai/api/v2', kind: 'openrouter' });
+    expect(edited.statusCode).toBe(200);
+    expect(edited.json().aiProviders[1]).toEqual({ ...view, name: 'OpenRouter main', baseUrl: 'https://openrouter.ai/api/v2' });
+    expect(await secrets.get(slot)).toBe('fixture-first');
+    expect((await call('PUT', url, { apiKey: 'fixture-replacement' })).statusCode).toBe(200);
+    expect(await secrets.get(slot)).toBe('fixture-replacement');
+    for (const apiKey of ['', null]) {
+      await secrets.set(slot, 'fixture');
+      const removed = await call('PUT', url, { apiKey });
+      expect(removed.json().aiProviders[1].hasApiKey).toBe(false);
+      expect(await secrets.has(slot)).toBe(false);
+    }
+    const settingsPage = await b.app.inject({ url: '/settings', cookies: cookie });
+    expect(settingsPage.json().aiProviders[1]).toMatchObject({ id: view.id, hasApiKey: false });
+
+    await secrets.set(slot, 'fixture-delete');
+    const deleted = await call('DELETE', url);
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.body).not.toContain('fixture-delete');
+    expect(deleted.json().aiProviders.map((p: { id: string }) => p.id)).toEqual(['lm-studio']);
+    expect(await secrets.has(slot)).toBe(false);
+    expect((await call('DELETE', url)).statusCode).toBe(404);
+    await b.app.close();
+  });
+
+  it('refuses invalid input with fixed messages before touching either store', async () => {
+    const secrets = memorySecretsStore();
+    await secrets.set('ai_provider_key:remote', 'original');
+    const settings = fakeStore(registry([remote('remote')]));
+    const b = build({ secrets, settings });
+    const { cookie } = await authed(b);
+    const before = settings.get();
+    const cases: ['POST' | 'PUT', string, unknown, string][] = [
+      ['POST', '/ai-providers', { name: 'Local 2', kind: 'lm-studio', baseUrl: 'http://localhost:1235/v1', apiKey: 'secret-fixture' }, LOCAL_KEY_ERROR],
+      ['PUT', '/ai-providers/lm-studio', { apiKey: 'secret-fixture' }, LOCAL_KEY_ERROR],
+      ['PUT', '/ai-providers/remote', { kind: 'deepseek' }, 'A provider\'s kind cannot change.'],
+      ['PUT', '/ai-providers/remote', { apiKey: 42 }, KEY_ERROR],
+      ['PUT', '/ai-providers/remote', { apiKey: ['secret-fixture'] }, KEY_ERROR],
+      ['PUT', '/ai-providers/remote', { apiKey: 'header\r\nsecret-fixture' }, KEY_ERROR],
+      ['PUT', '/ai-providers/remote', { name: 'local LM studio' }, 'AI provider names must be unique.'],
+      ['PUT', '/ai-providers/remote', { name: 'x'.repeat(61) }, NAME_ERROR],
+      ['PUT', '/ai-providers/remote', { baseUrl: 'https://user:secret-fixture@x.example/v1' }, URL_ERROR],
+      ['POST', '/ai-providers', { name: 'X', kind: 'ollama', baseUrl: 'https://x.example/v1' }, 'AI provider kind must be lm-studio, openrouter, deepseek, or custom.'],
+      ['POST', '/ai-providers', { name: 'tab\there', kind: 'custom', baseUrl: 'https://x.example/v1' }, NAME_ERROR],
+      ['POST', '/ai-providers', { name: 'X', kind: 'custom', baseUrl: 'https://x.example/v1?key=secret-fixture' }, URL_ERROR],
+      ['POST', '/ai-providers', { name: 'X', kind: 'custom', baseUrl: '' }, URL_ERROR],
+      ['POST', '/ai-providers', [], 'AI provider must be a JSON object.'],
+    ];
+    for (const [method, url, payload, error] of cases) {
+      const res = await b.app.inject({ method, url, cookies: cookie, payload: payload as Record<string, unknown> });
+      expect(res.statusCode, `${method} ${url} ${JSON.stringify(payload)}`).toBe(400);
+      expect(res.json()).toEqual({ error });
+      expect(res.body).not.toContain('secret-fixture');
+    }
+    expect(settings.get()).toEqual(before);
+    expect(await secrets.get('ai_provider_key:remote')).toBe('original');
+    expect(await secrets.has('ai_provider_key:lm-studio')).toBe(false);
+    // Removing the (non-existent) key of a local provider is a no-op, not a store call.
+    const remove = vi.spyOn(secrets, 'delete');
+    expect((await b.app.inject({ method: 'PUT', url: '/ai-providers/lm-studio', cookies: cookie, payload: { apiKey: null } })).statusCode).toBe(200);
+    expect(remove).not.toHaveBeenCalled();
+    await b.app.close();
+  });
+
+  it('caps the registry at 20 providers', async () => {
+    const providers = Array.from({ length: 19 }, (_, i) => remote(`p-${i}`, 'custom', 'https://ai.example/v1'));
+    const settings = fakeStore(registry(providers));
+    const b = build({ settings });
+    const { cookie } = await authed(b);
+    const res = await b.app.inject({ method: 'POST', url: '/ai-providers', cookies: cookie, payload: { name: 'One more', kind: 'custom', baseUrl: 'https://x.example/v1' } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'Configure between 1 and 20 AI providers.' });
+    expect(settings.get().aiProviders).toHaveLength(20);
+    await b.app.close();
+  });
+
+  it('answers 404 for an id that is not in the registry, before building any slot name', async () => {
+    const secrets = memorySecretsStore();
+    const calls = [vi.spyOn(secrets, 'get'), vi.spyOn(secrets, 'set'), vi.spyOn(secrets, 'delete'), vi.spyOn(secrets, 'has')];
+    const b = build({ secrets, settings: fakeStore(registry([remote('remote')])) });
+    const { cookie } = await authed(b);
+    for (const id of ['gone', 'UPPER', 'a_b', 'x'.repeat(41), 'ai_provider_key:remote']) {
+      for (const [method, suffix] of [['PUT', ''], ['DELETE', ''], ['GET', '/credential']] as const) {
+        const res = await b.app.inject({ method, url: `/ai-providers/${encodeURIComponent(id)}${suffix}`, cookies: cookie, payload: method === 'PUT' ? { apiKey: 'fixture' } : undefined });
+        expect(res.statusCode, `${method} ${id}${suffix}`).toBe(404);
+        expect(res.json()).toEqual({ error: 'AI provider not found.' });
+      }
+    }
+    for (const spy of calls) expect(spy).not.toHaveBeenCalled();
+    await b.app.close();
+  });
+
+  it('refuses to delete the default or an assigned provider, naming the use cases', async () => {
+    const secrets = memorySecretsStore();
+    await secrets.set('ai_provider_key:b', 'keep-fixture');
+    const settings = fakeStore(registry([remote('a'), remote('b', 'deepseek', 'https://api.deepseek.com/v1')], {
+      aiDefaultProviderId: 'a', reviewProviderId: 'b', captionProviderId: 'b',
+    }));
+    const b = build({ secrets, settings });
+    const { cookie } = await authed(b);
+    const del = (id: string) => b.app.inject({ method: 'DELETE', url: `/ai-providers/${id}`, cookies: cookie });
+    const isDefault = await del('a');
+    expect(isDefault.statusCode).toBe(409);
+    expect(isDefault.json()).toMatchObject({ code: 'provider_is_default', error: expect.any(String) });
+    const inUse = await del('b');
+    expect(inUse.statusCode).toBe(409);
+    expect(inUse.json()).toMatchObject({ code: 'provider_in_use', error: expect.any(String), useCases: ['review', 'caption'] });
+    settings.update({ reviewProviderId: null });
+    expect((await del('b')).json().useCases).toEqual(['caption']);
+    expect(settings.get().aiProviders.map((p) => p.id)).toEqual(['lm-studio', 'a', 'b']);
+    expect(await secrets.get('ai_provider_key:b')).toBe('keep-fixture');
+    await b.app.close();
+  });
+
+  it('reports a committed key change when the settings write fails, then permits recovery', async () => {
+    const settings = fakeStore(registry([remote('remote')]));
     const secrets = memorySecretsStore();
     let fail = true;
     const b = build({ secrets, settings: {
@@ -966,67 +1094,194 @@ describe('AI credential boundaries', () => {
       update(partial) { if (fail) throw new Error('disk fixture'); return settings.update(partial); },
     } });
     const { cookie } = await authed(b);
-    const result = await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload: { aiApiKey: 'new-fixture', aiProvider: 'deepseek' } });
-    expect(result.statusCode).toBe(500);
-    expect(result.json().code).toBe('settings_partial_failure');
-    expect(result.body).not.toContain('new-fixture');
-    expect(await secrets.get('ai_api_key')).toBe('new-fixture');
-    expect((await b.app.inject({ url: '/settings', cookies: cookie })).json()).toMatchObject({ aiProvider: 'lm-studio', hasAiApiKey: true });
+    const put = (payload: Record<string, unknown>) => b.app.inject({ method: 'PUT', url: '/ai-providers/remote', cookies: cookie, payload });
+    const partial = await put({ apiKey: 'new-fixture', baseUrl: 'https://other.example/v1' });
+    expect(partial.statusCode).toBe(500);
+    expect(partial.json()).toEqual({
+      code: 'settings_partial_failure', error: 'API key change saved, but settings were not saved. Reload settings before retrying.',
+    });
+    expect(partial.body).not.toContain('new-fixture');
+    expect(partial.body).not.toContain('disk fixture');
+    expect(await secrets.get('ai_provider_key:remote')).toBe('new-fixture');
+    expect(settings.get().aiProviders[1]!.baseUrl).toBe('https://openrouter.ai/api/v1');
+    expect((await put({ name: 'Other' })).json()).toEqual({
+      code: 'settings_write_failed', error: 'Settings were not saved. Reload settings before retrying.',
+    });
+    const deleted = await b.app.inject({ method: 'DELETE', url: '/ai-providers/remote', cookies: cookie });
+    expect(deleted.statusCode).toBe(500);
+    expect(deleted.json()).toEqual({
+      code: 'settings_partial_failure',
+      error: 'The provider\'s API key was removed, but the provider was not deleted. Reload settings before retrying.',
+    });
+    expect(await secrets.has('ai_provider_key:remote')).toBe(false);
+    expect(settings.get().aiProviders.map((p) => p.id)).toEqual(['lm-studio', 'remote']);
     fail = false;
-    expect((await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload: { aiProvider: 'deepseek' } })).statusCode).toBe(200);
+    expect((await put({ baseUrl: 'https://other.example/v1' })).statusCode).toBe(200);
     await b.app.close();
   });
 
-  it('never logs or returns raw secret failures and keeps caption config independent', async () => {
+  it('credential returns a remote provider\'s stored key, null for local without a store call, 503 when unreadable', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const secrets = memorySecretsStore();
+    await secrets.set('ai_provider_key:remote', 'fixture-remote');
+    const get = vi.spyOn(secrets, 'get');
+    const has = vi.spyOn(secrets, 'has');
+    const b = build({ secrets, settings: fakeStore(registry([remote('remote'), remote('empty', 'deepseek', 'https://api.deepseek.com/v1')])) });
+    try {
+      const { cookie } = await authed(b);
+      const credential = (id: string) => b.app.inject({ url: `/ai-providers/${id}/credential`, cookies: cookie });
+      expect((await credential('lm-studio')).json()).toEqual({ apiKey: null });
+      expect(get).not.toHaveBeenCalled();
+      expect(has).not.toHaveBeenCalled();
+      expect((await credential('remote')).json()).toEqual({ apiKey: 'fixture-remote' });
+      expect(get).toHaveBeenCalledWith('ai_provider_key:remote');
+      expect((await credential('empty')).json()).toEqual({ apiKey: null });
+      secrets.get = async () => { throw new Error('DO-NOT-LEAK driver fixture'); };
+      const failed = await credential('remote');
+      expect(failed.statusCode).toBe(503);
+      expect(failed.json()).toEqual({ code: 'ai_secret_store_unavailable', error: 'AI credential storage is unavailable. Reload settings before retrying.' });
+      expect(log).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); await b.app.close(); }
+  });
+});
+
+describe('AI credential boundaries', () => {
+  it('POST /settings assigns use cases, refuses keys and provider lists, and ignores removed fields', async () => {
+    const secrets = memorySecretsStore();
+    const settings = fakeStore(registry([remote('remote')]));
+    const b = build({ secrets, settings });
+    const { cookie } = await authed(b);
+    const save = (payload: Record<string, unknown>) => b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload });
+    const before = settings.get();
+    for (const [payload, error] of [
+      [{ aiApiKey: 'fixture', aiModel: 'changed' }, 'API keys are managed per provider.'],
+      [{ aiApiKey: null }, 'API keys are managed per provider.'],
+      [{ aiProviders: [], aiModel: 'changed' }, 'Providers are managed with /ai-providers.'],
+    ] as const) {
+      const res = await save(payload);
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error });
+    }
+    for (const payload of [{ reviewProviderId: 'gone' }, { captionProviderId: 'Bad Id' }, { aiDefaultProviderId: null }, { reviewProviderId: '' }]) {
+      expect((await save(payload)).statusCode, JSON.stringify(payload)).toBe(400);
+    }
+    expect(settings.get()).toEqual(before);
+    const saved = await save({
+      aiDefaultProviderId: 'remote', reviewProviderId: null, captionProviderId: 'lm-studio',
+      lmBaseUrl: 'http://ignored.example/v1', aiProvider: 'deepseek', captionCustomBaseUrl: 'https://ignored.example/v1',
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.headers['cache-control']).toBe('no-store');
+    expect(saved.json()).toMatchObject({ aiDefaultProviderId: 'remote', reviewProviderId: null, captionProviderId: 'lm-studio' });
+    expect(Object.keys(saved.json()).sort()).toEqual(Object.keys(SETTINGS).sort());
+    expect(settings.get()).not.toHaveProperty('lmBaseUrl');
+    expect(settings.get()).not.toHaveProperty('aiProvider');
+    expect((await b.app.inject({ method: 'POST', url: '/settings', cookies: (await authed(b, { isAdmin: false, username: 'author' })).cookie, payload: { captionProviderId: 'remote' } })).statusCode).toBe(403);
+    await b.app.close();
+  });
+
+  it('never returns a key from settings responses; only /ai-config and /credential carry one', async () => {
+    const secrets = memorySecretsStore();
+    await secrets.set('ai_provider_key:remote', 'fixture-key');
+    const b = build({ secrets, settings: fakeStore(registry([remote('remote')], { reviewProviderId: 'remote' })) });
+    const { cookie } = await authed(b);
+    const page = await b.app.inject({ url: '/settings', cookies: cookie });
+    expect(page.json().aiProviders).toEqual([
+      { ...SETTINGS.aiProviders[0], hasApiKey: false }, { ...remote('remote'), hasApiKey: true },
+    ]);
+    expect(page.body).not.toContain('fixture-key');
+    expect(page.headers['cache-control']).toBe('no-store');
+    for (const res of [
+      await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload: { aiModel: 'changed' } }),
+      await b.app.inject({ method: 'PUT', url: '/ai-providers/remote', cookies: cookie, payload: { name: 'Renamed' } }),
+      await b.app.inject({ method: 'POST', url: '/ai-providers', cookies: cookie, payload: { name: 'Second', kind: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'fixture-second' } }),
+    ]) {
+      expect(res.statusCode).toBeLessThan(300);
+      expect(res.body).not.toContain('fixture-key');
+      expect(res.body).not.toContain('fixture-second');
+    }
+    expect((await b.app.inject({ url: '/ai-config', cookies: cookie })).json().aiApiKey).toBe('fixture-key');
+    expect((await b.app.inject({ url: '/ai-providers/remote/credential', cookies: cookie })).json().apiKey).toBe('fixture-key');
+    await b.app.close();
+  });
+
+  it('never logs or returns raw secret failures; local captions stay available', async () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     const secrets = memorySecretsStore();
     secrets.get = async () => { throw new SecretsError('ai_secret_unavailable'); };
     secrets.set = async () => { throw new Error('DO-NOT-LEAK driver fixture'); };
     secrets.has = async () => { throw new Error('DO-NOT-LEAK row fixture'); };
-    const b = build({ secrets, settings: fakeStore({ ...SETTINGS, aiProvider: 'openrouter' }) });
+    const settings = fakeStore(registry([remote('remote')], { reviewProviderId: 'remote' }));
+    const b = build({ secrets, settings });
     try {
       const { cookie } = await authed(b);
-      const remote = await b.app.inject({ url: '/ai-config', cookies: cookie });
-      expect(remote.statusCode).toBe(503);
-      expect(remote.json().code).toBe('ai_secret_unavailable');
-      const save = await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload: { aiApiKey: 'fixture', aiModel: 'changed' } });
+      const before = settings.get();
+      const page = await b.app.inject({ url: '/settings', cookies: cookie });
+      expect(page.statusCode).toBe(503);
+      expect(page.json().code).toBe('ai_secret_store_unavailable');
+      const save = await b.app.inject({ method: 'PUT', url: '/ai-providers/remote', cookies: cookie, payload: { apiKey: 'fixture', name: 'Changed' } });
       expect(save.statusCode).toBe(503);
       expect(save.body).not.toContain('DO-NOT-LEAK');
+      expect(settings.get()).toEqual(before);
+      const review = await b.app.inject({ url: '/ai-config', cookies: cookie });
+      expect(review.statusCode).toBe(503);
+      expect(review.json().code).toBe('ai_secret_unavailable');
       const caption = await b.app.inject({ url: '/ai-config?purpose=caption', cookies: cookie });
       expect(caption.statusCode).toBe(200);
-      expect(caption.json()).toEqual({
-        lmBaseUrl: SETTINGS.lmBaseUrl, lmModel: SETTINGS.lmModel, captionPrompt: SETTINGS.captionPrompt,
-        captionTimeoutMs: SETTINGS.captionTimeoutMs, captionMaxEdge: SETTINGS.captionMaxEdge,
-        captionProvider: 'lm-studio', captionCustomBaseUrl: '',
-        captionBaseUrl: SETTINGS.lmBaseUrl, captionApiKey: null,
-      });
+      expect(caption.json()).toEqual({ ...LOCAL_CAPTION, captionApiKey: null });
       expect(caption.headers['cache-control']).toBe('no-store');
       expect(log).not.toHaveBeenCalled();
     } finally { log.mockRestore(); await b.app.close(); }
   });
 
-  it('resolves all providers while never decrypting the remote credential for local review', async () => {
+  it('resolves each use case to its own provider and key, keeping the consumer field sets unchanged', async () => {
     const secrets = memorySecretsStore();
-    await secrets.set('ai_api_key', 'fixture');
-    const settings = fakeStore();
+    await secrets.set('ai_provider_key:review', 'fixture-review');
+    await secrets.set('ai_provider_key:vision', 'fixture-vision');
+    const settings = fakeStore(registry([
+      remote('review', 'deepseek', 'https://api.deepseek.com/v1'), remote('vision', 'custom', 'https://vision.example/v1'),
+    ], { aiDefaultProviderId: 'review', captionProviderId: 'vision' }));
     const b = build({ secrets, settings });
     const { cookie } = await authed(b, { isAdmin: false });
-    for (const [provider, destination] of [
-      ['openrouter', 'https://openrouter.ai/api/v1'], ['deepseek', 'https://api.deepseek.com/v1'],
-      ['custom', 'https://custom.example/v1'],
-    ] as const) {
-      settings.update({ aiProvider: provider, aiCustomBaseUrl: 'https://custom.example/v1' });
-      const response = await b.app.inject({ url: '/ai-config', cookies: cookie });
-      expect(response.json()).toMatchObject({ aiProvider: provider, aiBaseUrl: destination, aiApiKey: 'fixture' });
-    }
-    await secrets.delete('ai_api_key');
-    expect((await b.app.inject({ url: '/ai-config', cookies: cookie })).json()).toMatchObject({ aiApiKey: null, hasAiApiKey: false });
+    const config = (query = '') => b.app.inject({ url: '/ai-config' + query, cookies: cookie });
+    const review = {
+      aiModel: SETTINGS.aiModel, reviewPrompt: SETTINGS.reviewPrompt, reviewTimeoutMs: SETTINGS.reviewTimeoutMs,
+    };
+
+    // Explicit caption assignment; review follows the default.
+    const caption = await config('?purpose=caption');
+    expect(caption.headers['cache-control']).toBe('no-store');
+    expect(caption.json()).toEqual({
+      ...LOCAL_CAPTION, captionProvider: 'custom', captionBaseUrl: 'https://vision.example/v1', captionApiKey: 'fixture-vision',
+    });
+    const full = await config();
+    expect(full.json()).toEqual({
+      ...LOCAL_CAPTION, captionProvider: 'custom', captionBaseUrl: 'https://vision.example/v1',
+      aiProvider: 'deepseek', aiBaseUrl: 'https://api.deepseek.com/v1', ...review, hasAiApiKey: true, aiApiKey: 'fixture-review',
+    });
+    expect(full.body).not.toContain('fixture-vision');
+
+    // Explicit local review; caption follows the (remote) default.
+    settings.update({ reviewProviderId: 'lm-studio', captionProviderId: null });
+    const get = vi.spyOn(secrets, 'get');
+    expect((await config()).json()).toEqual({
+      ...LOCAL_CAPTION, captionProvider: 'deepseek', captionBaseUrl: 'https://api.deepseek.com/v1',
+      aiProvider: 'lm-studio', aiBaseUrl: 'http://localhost:1234/v1', ...review, hasAiApiKey: false, aiApiKey: null,
+    });
+    expect(get).not.toHaveBeenCalled();
+    expect((await config('?purpose=caption')).json()).toMatchObject({ captionProvider: 'deepseek', captionApiKey: 'fixture-review' });
+    expect(get).toHaveBeenCalledWith('ai_provider_key:review');
+
+    // A remote provider without a stored key: null, never another provider's key.
+    await secrets.delete('ai_provider_key:review');
+    settings.update({ reviewProviderId: null });
+    expect((await config('?purpose=caption')).json().captionApiKey).toBeNull();
+    expect((await config()).json()).toMatchObject({ aiProvider: 'deepseek', hasAiApiKey: false, aiApiKey: null });
+
     secrets.get = async () => { throw new SecretsError('encryption_key_unconfigured'); };
-    expect((await b.app.inject({ url: '/ai-config', cookies: cookie })).json()).toMatchObject({ code: 'encryption_key_unconfigured', error: 'ENCRYPTION_KEY not configured in .env' });
-    settings.update({ aiProvider: 'lm-studio' });
-    expect((await b.app.inject({ url: '/ai-config', cookies: cookie })).json()).toMatchObject({ aiApiKey: null, aiBaseUrl: SETTINGS.lmBaseUrl });
+    expect((await config()).json()).toEqual({ code: 'encryption_key_unconfigured', error: 'ENCRYPTION_KEY not configured in .env' });
     for (const query of ['?purpose=unknown', '?purpose=caption&purpose=review']) {
-      expect((await b.app.inject({ url: '/ai-config' + query, cookies: cookie })).statusCode).toBe(400);
+      expect((await config(query)).statusCode).toBe(400);
     }
     const anonymous = await b.app.inject({ url: '/ai-config?purpose=caption' });
     expect(anonymous.statusCode).toBe(401);
@@ -1034,44 +1289,18 @@ describe('AI credential boundaries', () => {
     await b.app.close();
   });
 
-  it('resolves captions independently, shares the encrypted key and fails closed only for remote captions', async () => {
+  it('a local photo provider never touches a throwing secrets store', async () => {
     const secrets = memorySecretsStore();
-    await secrets.set('ai_api_key', 'fixture-shared');
-    const settings = fakeStore();
-    const b = build({ secrets, settings });
-    const admin = await authed(b);
-    const author = await authed(b, { isAdmin: false, username: 'caption-author' });
-    const save = (payload: Record<string, unknown>) => b.app.inject({ method: 'POST', url: '/settings', cookies: admin.cookie, payload });
-    for (const [provider, destination] of [
-      ['openrouter', 'https://openrouter.ai/api/v1'], ['deepseek', 'https://api.deepseek.com/v1'],
-      ['custom', 'https://vision.example/v1'],
-    ] as const) {
-      const saved = await save({ captionProvider: provider, captionCustomBaseUrl: 'https://vision.example/v1', lmModel: 'vision-model' });
-      expect(saved.statusCode).toBe(200);
-      expect(saved.body).not.toContain('fixture-shared');
-      expect(saved.json()).not.toHaveProperty('captionApiKey');
-      const caption = await b.app.inject({ url: '/ai-config?purpose=caption', cookies: author.cookie });
-      expect(caption.statusCode).toBe(200);
-      expect(caption.headers['cache-control']).toBe('no-store');
-      expect(caption.json()).toMatchObject({ captionProvider: provider, captionBaseUrl: destination, captionApiKey: 'fixture-shared', lmModel: 'vision-model' });
-      expect((await b.app.inject({ url: '/ai-config', cookies: author.cookie })).json()).toMatchObject({
-        aiProvider: 'lm-studio', aiBaseUrl: SETTINGS.lmBaseUrl, aiModel: SETTINGS.aiModel, aiApiKey: null,
-      });
-    }
-    expect((await b.app.inject({ method: 'POST', url: '/settings', cookies: author.cookie, payload: { captionProvider: 'custom' } })).statusCode).toBe(403);
-    await save({ captionCustomBaseUrl: '' });
-    expect((await b.app.inject({ url: '/ai-config?purpose=caption', cookies: author.cookie })).statusCode).toBe(400);
-    await save({ captionProvider: 'openrouter' });
-    await secrets.delete('ai_api_key');
-    expect((await b.app.inject({ url: '/ai-config?purpose=caption', cookies: author.cookie })).json().captionApiKey).toBeNull();
-    secrets.get = async () => { throw new Error('DO-NOT-LEAK'); };
-    const failed = await b.app.inject({ url: '/ai-config?purpose=caption', cookies: author.cookie });
-    expect(failed.statusCode).toBe(503);
-    expect(failed.body).not.toContain('DO-NOT-LEAK');
-    settings.update({ captionProvider: 'lm-studio' });
-    expect((await b.app.inject({ url: '/ai-config?purpose=caption', cookies: author.cookie })).json()).toMatchObject({
-      captionBaseUrl: SETTINGS.lmBaseUrl, captionApiKey: null,
-    });
+    secrets.get = async () => { throw new Error('DO-NOT-TOUCH'); };
+    secrets.has = async () => { throw new Error('DO-NOT-TOUCH'); };
+    const b = build({ secrets, settings: fakeStore(registry([remote('remote')], { aiDefaultProviderId: 'remote', captionProviderId: 'lm-studio' })) });
+    const { cookie } = await authed(b, { isAdmin: false });
+    const caption = await b.app.inject({ url: '/ai-config?purpose=caption', cookies: cookie });
+    expect(caption.statusCode).toBe(200);
+    expect(caption.json()).toEqual({ ...LOCAL_CAPTION, captionApiKey: null });
+    const full = await b.app.inject({ url: '/ai-config', cookies: cookie });
+    expect(full.statusCode).toBe(503);
+    expect(full.body).not.toContain('DO-NOT-TOUCH');
     await b.app.close();
   });
 
@@ -1081,10 +1310,10 @@ describe('AI credential boundaries', () => {
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     secrets.set = async (key, value) => { entered.resolve(); await release.promise; await originalSet(key, value); };
-    const b = build({ secrets, settings: fakeStore({ ...SETTINGS, captionProvider: 'openrouter' }) });
+    const b = build({ secrets, settings: fakeStore(registry([remote('vision', 'custom', 'https://vision.example/v1')], { captionProviderId: 'vision' })) });
     const { cookie } = await authed(b);
-    const saving = b.app.inject({ method: 'POST', url: '/settings', cookies: cookie,
-      payload: { aiApiKey: 'fixture-new', captionProvider: 'custom', captionCustomBaseUrl: 'https://vision.example/v1' } }).then((r) => r);
+    const saving = b.app.inject({ method: 'PUT', url: '/ai-providers/vision', cookies: cookie,
+      payload: { apiKey: 'fixture-new', baseUrl: 'https://vision2.example/v1' } }).then((r) => r);
     await entered.promise;
     let resolved = false;
     const caption = b.app.inject({ url: '/ai-config?purpose=caption', cookies: cookie }).then((r) => { resolved = true; return r; });
@@ -1094,19 +1323,19 @@ describe('AI credential boundaries', () => {
     expect(resolved).toBe(false);
     release.resolve();
     expect((await saving).statusCode).toBe(200);
-    expect((await caption).json()).toMatchObject({ captionBaseUrl: 'https://vision.example/v1', captionApiKey: 'fixture-new' });
+    expect((await caption).json()).toMatchObject({ captionBaseUrl: 'https://vision2.example/v1', captionApiKey: 'fixture-new' });
     await b.app.close();
   });
 
-  it('keeps captions responsive while full config waits for a credential mutation', async () => {
+  it('keeps local captions responsive while full config waits for a credential mutation', async () => {
     const secrets = memorySecretsStore();
     const originalSet = secrets.set;
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     secrets.set = async (key, value) => { entered.resolve(); await release.promise; await originalSet(key, value); };
-    const b = build({ secrets });
+    const b = build({ secrets, settings: fakeStore(registry([remote('remote', 'deepseek', 'https://api.deepseek.com/v1')], { reviewProviderId: 'remote' })) });
     const { cookie } = await authed(b);
-    const saving = b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload: { aiApiKey: 'fixture', aiProvider: 'deepseek' } }).then((r) => r);
+    const saving = b.app.inject({ method: 'PUT', url: '/ai-providers/remote', cookies: cookie, payload: { apiKey: 'fixture' } }).then((r) => r);
     await entered.promise;
     const config = b.app.inject({ url: '/ai-config', cookies: cookie }).then((r) => r);
     const caption = await b.app.inject({ url: '/ai-config?purpose=caption', cookies: cookie });
@@ -1131,13 +1360,13 @@ describe('POST /settings (LM fields)', () => {
     expect(res.json()).toMatchObject({ lmModel: 'my/vlm', captionMaxEdge: 1024 });
   });
 
-  it('400 on an invalid lmBaseUrl', async () => {
+  it('400 on an assignment that names no provider', async () => {
     const b = build();
     const { cookie } = await authed(b, { isAdmin: true });
     const res = await b.app.inject({
       method: 'POST', url: '/settings',
       headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { lmBaseUrl: 'not a url' },
+      payload: { captionProviderId: 'gone' },
     });
     expect(res.statusCode).toBe(400);
   });
@@ -3066,5 +3295,141 @@ describe('editor geocoding boundary', () => {
       expect((await change('')).statusCode).toBe(200);
       expect((await b.app.inject({ method: 'POST', url: '/geocode', cookies: cookie, payload: { query: 'Cancun' } })).statusCode).toBe(503);
     } finally { await b.app.close(); }
+  });
+});
+
+describe('POST /settings/image-preview', () => {
+  /** A JPEG with camera tags AND a GPS IFD (see pipeline.test.ts). */
+  async function gpsJpeg(width: number, height: number): Promise<Buffer> {
+    return sharp({ create: { width, height, channels: 3, background: '#5a7' } })
+      .withExif({
+        IFD0: { Make: 'Leica Camera AG', Model: 'LEICA Q2' },
+        IFD3: {
+          GPSLatitudeRef: 'N', GPSLatitude: '63/1 4/1 3312/100',
+          GPSLongitudeRef: 'E', GPSLongitude: '10/1 23/1 1944/100',
+        },
+      })
+      .jpeg()
+      .toBuffer();
+  }
+
+  async function preview(
+    b: Pick<Built, 'app'>,
+    cookie: { sid: string } | undefined,
+    fields: { format?: string; quality?: string },
+    img?: Buffer,
+    extraFile?: Buffer,
+  ) {
+    const form = new FormData();
+    if (fields.format !== undefined) form.append('format', fields.format);
+    if (fields.quality !== undefined) form.append('quality', fields.quality);
+    form.append('file', img ?? await gpsJpeg(400, 300), { filename: 'secret-place.jpg', contentType: 'image/jpeg' });
+    if (extraFile) form.append('file', extraFile, { filename: 'b.jpg', contentType: 'image/jpeg' });
+    return b.app.inject({
+      method: 'POST', url: '/settings/image-preview',
+      headers: form.getHeaders(), ...(cookie ? { cookies: cookie } : {}), payload: form,
+    });
+  }
+
+  it('is admin-only: 401 anonymous, 403 author, 200 admin', async () => {
+    const b = build();
+    expect((await preview(b, undefined, { format: 'webp', quality: '75' })).statusCode).toBe(401);
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+    expect((await preview(b, author.cookie, { format: 'webp', quality: '75' })).statusCode).toBe(403);
+    const admin = await authed(b, { username: 'admin' });
+    expect((await preview(b, admin.cookie, { format: 'webp', quality: '75' })).statusCode).toBe(200);
+  });
+
+  it('returns the encoded WebP at the largest standard width, with size headers and no-store', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await preview(b, cookie, { format: 'webp', quality: '60' }, await gpsJpeg(2400, 1200));
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('image/webp');
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['x-preview-width']).toBe('1920');
+    expect(res.headers['x-preview-height']).toBe('960');
+    expect(res.headers['x-original-width']).toBe('2400');
+    expect(res.headers['x-original-height']).toBe('1200');
+    const meta = await sharp(res.rawPayload).metadata();
+    expect({ format: meta.format, width: meta.width, height: meta.height }).toEqual({ format: 'webp', width: 1920, height: 960 });
+  });
+
+  it('returns AVIF at the intrinsic width when the photo is smaller, never upscaling', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await preview(b, cookie, { format: 'avif', quality: '55' }, await gpsJpeg(400, 300));
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('image/avif');
+    expect([res.headers['x-preview-width'], res.headers['x-preview-height']]).toEqual(['400', '300']);
+    const meta = await sharp(res.rawPayload).metadata();
+    expect({ format: meta.format, width: meta.width, height: meta.height }).toEqual({ format: 'heif', width: 400, height: 300 });
+  });
+
+  it('strips all EXIF, GPS included, and writes nothing to disk or the media library', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const before = await readdir(dir);
+    for (const format of ['webp', 'avif']) {
+      const res = await preview(b, cookie, { format, quality: '50' });
+      expect(res.statusCode).toBe(200);
+      expect((await sharp(res.rawPayload).metadata()).exif, `${format} carried EXIF`).toBeUndefined();
+    }
+    expect(await readdir(dir)).toEqual(before);
+    expect((await b.media.list({})).items).toEqual([]);
+  });
+
+  it('accepts quality 1 and 100, and refuses anything else with a fixed message', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    for (const quality of ['1', '100']) {
+      expect((await preview(b, cookie, { format: 'webp', quality })).statusCode).toBe(200);
+    }
+    for (const quality of ['0', '101', '50.5', '-5', 'abc', '']) {
+      const res = await preview(b, cookie, { format: 'webp', quality });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'Quality must be a whole number from 1 to 100.' });
+    }
+    for (const format of ['jpeg', 'WEBP', '']) {
+      const res = await preview(b, cookie, { format, quality: '50' });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'Format must be webp or avif.' });
+    }
+  });
+
+  it('400s an undecodable file without echoing anything about it', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await preview(b, cookie, { format: 'webp', quality: '75' }, Buffer.from('not an image at all'));
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'Could not read that image.' });
+  });
+
+  it('413s a second file part, like /upload', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await preview(b, cookie, { format: 'webp', quality: '75' }, await gpsJpeg(100, 100), await gpsJpeg(100, 100));
+    expect(res.statusCode).toBe(413);
+  });
+
+  it('waits on the shared work-lock and refuses a concurrent preview with 429', async () => {
+    const gate = Promise.withResolvers<void>();
+    const reached = Promise.withResolvers<void>();
+    const real = createWorkLock();
+    const workLock: WorkLock = {
+      ...real,
+      runShared: async (fn) => { reached.resolve(); await gate.promise; return real.runShared(fn); },
+    };
+    const b = build({ workLock });
+    const { cookie } = await authed(b);
+    const first = preview(b, cookie, { format: 'webp', quality: '75' });
+    await reached.promise;
+    const second = await preview(b, cookie, { format: 'webp', quality: '75' });
+    expect(second.statusCode).toBe(429);
+    expect(second.json()).toEqual({ error: 'A preview is already running. Try again in a moment.' });
+    gate.resolve();
+    expect((await first).statusCode).toBe(200);
+    // The slot is released once the first finishes.
+    expect((await preview(b, cookie, { format: 'webp', quality: '75' })).statusCode).toBe(200);
   });
 });

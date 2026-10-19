@@ -16,6 +16,7 @@ import { pgMediaStore } from './media-store.js';
 import { createEncodeQueue } from './encode-queue.js';
 import { createMediaSync, createReconciler } from './media-sync.js';
 import { parseEncryptionKey, pgSecretsStore } from './secrets.js';
+import { LEGACY_AI_KEY_SLOT, slotFor } from './ai-providers.js';
 import { pgCommentStore } from './comments.js';
 import { pgCommentAdminStore } from './comments-admin.js';
 
@@ -35,6 +36,17 @@ const settings = createSettingsStore({ path: settingsPath, defaults: defaultSett
 
 const pool = createPool(databaseUrl);
 await ensureSchema(pool);
+const secrets = pgSecretsStore(pool, encryptionKey);
+// AI provider registry migration (spec §5), before listen(): copy the legacy
+// shared key to every provider that already received it, THEN persist the
+// derived settings. A crash in between reruns to the same ids; a failure here
+// fails boot exactly as an unreachable ensureSchema does.
+const aiMigration = settings.pendingAiMigration();
+if (aiMigration) {
+  await secrets.migrateLegacyKey(LEGACY_AI_KEY_SLOT, aiMigration.keyedProviderIds.map(slotFor));
+  settings.completeAiMigration();
+  console.log(`settings: migrated AI settings to the provider registry (${settings.get().aiProviders.length} providers)`);
+}
 const users = pgUserStore(pool);
 const sessions = pgSessionStore(pool);
 const posts = pgPostStore(pool);
@@ -109,7 +121,7 @@ const app = buildServer({
   users,
   sessions,
   settings,
-  secrets: pgSecretsStore(pool, encryptionKey),
+  secrets,
   posts,
   pages,
   // Optional in ServerConfig so tests can omit them; omitted here, every

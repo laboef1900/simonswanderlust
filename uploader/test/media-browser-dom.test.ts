@@ -175,13 +175,14 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
       loadConfig: async () => ({
         captionProvider: 'lm-studio', captionBaseUrl: 'http://localhost:1234/v1', captionApiKey: null,
         lmModel: 'vision', captionPrompt: 'Describe', captionMaxEdge: 768, captionTimeoutMs: 60000,
+        captionMaxTokens: 8000,
       }),
       // The prepared "image" is the URL itself, so the model stub sees which photo it got.
       prepHosted: async (url: string) => ({ dataUrl: url }),
     },
     LLM: {
       mixedContentWarning: () => '',
-      describePhoto: (_base: string, _model: string, _guidance: string, dataUrl: string, _timeout: number, signal: AbortSignal) => {
+      describePhoto: (_base: string, _model: string, _guidance: string, dataUrl: string, _timeout: number, _maxTokens: number, signal: AbortSignal) => {
         described.push(dataUrl);
         return describePhoto(dataUrl, signal);
       },

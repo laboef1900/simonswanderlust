@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import type { DbPool } from './db.js';
+import type { DbClient, DbPool } from './db.js';
 
 export class SecretsError extends Error {
   constructor(public readonly code: 'encryption_key_unconfigured' | 'ai_secret_unavailable' | 'ai_secret_store_unavailable') {
@@ -69,6 +69,13 @@ export interface SecretsStore {
   set(key: string, plaintext: string): Promise<void>;
   delete(key: string): Promise<void>;
   has(key: string): Promise<boolean>;
+  /**
+   * Boot-only registry migration (spec §5 step 2): in ONE transaction, copy the
+   * legacy row's envelope to every target that has no row yet, then delete the
+   * legacy row. Pure SQL — no master key, no decryption; envelopes carry no
+   * AAD, so a copy decrypts under its new name. Returns whether it existed.
+   */
+  migrateLegacyKey(legacyKey: string, targetKeys: string[]): Promise<boolean>;
 }
 
 export function pgSecretsStore(pool: DbPool, encryptionKey: Buffer | undefined): SecretsStore {
@@ -102,6 +109,40 @@ export function pgSecretsStore(pool: DbPool, encryptionKey: Buffer | undefined):
     async has(key) {
       return (await query('SELECT 1 FROM app_secrets WHERE key = $1', [key])).rows.length !== 0;
     },
+    async migrateLegacyKey(legacyKey, targetKeys) {
+      let client: DbClient;
+      try { client = await pool.connect(); }
+      catch { throw new SecretsError('ai_secret_store_unavailable'); }
+      try {
+        await client.query('BEGIN');
+        // FOR UPDATE: a concurrent writer of the legacy row cannot slip between copy and delete.
+        const { rows } = await client.query('SELECT 1 FROM app_secrets WHERE key = $1 FOR UPDATE', [legacyKey]);
+        if (rows.length === 0) {
+          await client.query('COMMIT');
+          return false;
+        }
+        for (const target of targetKeys) {
+          if (target === legacyKey) continue;
+          // DO NOTHING: a slot that already holds a key (a rerun, or one set
+          // since) is never overwritten by the legacy envelope.
+          await client.query(
+            `INSERT INTO app_secrets (key, ciphertext, iv, tag)
+             SELECT $2::text, ciphertext, iv, tag FROM app_secrets WHERE key = $1
+             ON CONFLICT (key) DO NOTHING`,
+            [legacyKey, target],
+          );
+        }
+        await client.query('DELETE FROM app_secrets WHERE key = $1', [legacyKey]);
+        await client.query('COMMIT');
+        return true;
+      } catch {
+        // Never retain the driver error: its detail may quote an envelope.
+        await client.query('ROLLBACK').catch(() => {});
+        throw new SecretsError('ai_secret_store_unavailable');
+      } finally {
+        client.release();
+      }
+    },
   };
 }
 
@@ -113,5 +154,12 @@ export function memorySecretsStore(): SecretsStore {
     async set(key, plaintext) { values.set(key, plaintext); },
     async delete(key) { values.delete(key); },
     async has(key) { return values.has(key); },
+    async migrateLegacyKey(legacyKey, targetKeys) {
+      const legacy = values.get(legacyKey);
+      if (legacy === undefined) return false;
+      for (const target of targetKeys) if (!values.has(target)) values.set(target, legacy);
+      values.delete(legacyKey);
+      return true;
+    },
   };
 }

@@ -11,10 +11,11 @@
 // already narrowed to summary columns (see PostListRow in posts.ts), so the
 // remaining cost is roughly linear in row count.
 window.PostsFilter = (function () {
-  // Closed set, enforced by validateForPublish (REGIONS in posts.ts) — so the
-  // region filter is a fixed dropdown. `country` is free text and must be
+  // Closed set, enforced by validateForPublish (REGIONS in src/db.ts, display
+  // order) — so the region filter is a fixed dropdown. posts-filter.test.ts
+  // pins this copy to that constant. `country` is free text and must be
   // derived from the loaded rows instead.
-  var REGIONS = ['europe', 'north-america', 'south-america'];
+  var REGIONS = ['europe', 'asia', 'africa', 'north-america', 'south-america', 'oceania', 'antarctica'];
 
   /** Standard variant widths, mirroring uploader/src/variants.ts WIDTHS. */
   var SMALLEST_WIDTH = 640;

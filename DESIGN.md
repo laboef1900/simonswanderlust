@@ -918,7 +918,7 @@ and the `<dialog>`s appended to `<body>` share one set:
   (`--line`), never as cards inside the workspace card. Simple form pages (Users, Import)
   keep fields at a `34rem` measure.
 - **Menus and disclosures** share one shape: outlined trigger with a drawn chevron and a
-  floating panel (the editor's More actions, the Posts row's More actions); inline
+  floating panel (the editor's More actions, the Posts row's admin-only More actions); inline
   disclosures (alt-text review, bulk selection, picker folders) use the same chevron in
   place of the UA triangle. A floating panel closes like a menu: Escape returns focus to
   its trigger, and a click outside it dismisses it.
@@ -927,10 +927,20 @@ and the `<dialog>`s appended to `<body>` share one set:
 - `[hidden]` is enforced globally with `!important`, because every control carries an
   author `display`.
 
-- A full-width 4rem masthead sits above a 13rem sidebar and a single rounded white
-  workspace. Content, Media, and admin-only Manage orient the workspace; the sidebar
-  holds the actual page navigation and account controls. Roles and server authorization
-  are unchanged. Publish and destructive actions retain their existing red treatment.
+- A full-width 4rem masthead (brand on the left; descriptor and View site on the right)
+  sits above a 13rem sidebar and a single rounded white workspace. The sidebar holds
+  all page navigation (no journal header above it) and, at its foot, the account menu: the
+  user badge (avatar, name, role, chevron) is a menu trigger whose panel opens upward with
+  **Log out**, closing like every admin menu (Escape, outside click). Admin-only pages appear
+  in the sidebar for admins only. Roles and server authorization are unchanged. Publish and
+  destructive actions retain their existing red treatment.
+- The shell is exactly the viewport and the workspace is its only scroll container:
+  masthead, sidebar and the canvas gutter around the workspace never scroll away. The
+  workspace carries a minimal shadow that surrounds it on every side — an ambient blur plus a
+  slight downward key shadow, no border — and a thin scrollbar
+  drawn in `--line-strong`. Sticky children (the editor command bar and inspector,
+  the Settings index) stick inside it, and anything sized to the visible area uses
+  `--cms-workspace-h`, not the viewport. No script reads or sets window scroll.
 - Below 900px, navigation becomes a dismissible drawer. It traps keyboard focus,
   makes both masthead and workspace inert, closes with Escape, and restores focus to
   the menu button. Reduced-motion preferences are respected.
@@ -947,8 +957,18 @@ and the `<dialog>`s appended to `<body>` share one set:
   into an explicit, same-origin Back to Posts link; restoration does not depend on
   a referrer header.
 
-- The editor command bar separates primary actions from the full-width save/readiness
-  status row. Error/status text wraps instead of disappearing behind ellipses.
+- The editor has no visible page title: the shell's h1 (New post / Edit post) is
+  visually hidden, so the command bar opens the workspace. The command bar separates
+  primary actions from the full-width save/readiness status row. Error/status text
+  wraps instead of disappearing behind ellipses.
+- Story details sits beside the manuscript on desktop. Its header carries one
+  icon-only panel toggle (`panel-right-close` / `panel-right-open`, named Collapse /
+  Expand story details); collapsing slides the panel right into a slim rail that
+  keeps only that toggle, and the writing column widens into the freed space. The
+  collapsed content is inert and hidden from assistive technology; the slide honours
+  reduced motion. At 74rem and below it is a modal drawer opened by an icon button
+  after More actions; the same header toggle closes it, and it traps Tab, closes on
+  Escape or the scrim, and restores focus to its opener.
 - Country assistance and excerpt generation sit next to the relevant fields in Story
   details. Coordinate approximation is explicit. Excerpt suggestions have a plain-text
   preview, character count, and separate accept/dismiss actions; generation never looks
@@ -957,11 +977,23 @@ and the `<dialog>`s appended to `<body>` share one set:
   fields (marked unsaved) and offers the rest as a tinted note with **Use**. The bulk
   dialog is the exception that saves, so it states scope, fields, destination and photo
   count first; overwriting renames the action to **Generate and overwrite**.
-- Settings is one flat document with section dividers and a quiet section index, not a
-  stack of competing cards. **Story review & excerpts** comes first, followed by **Photo
-  descriptions**, image conversion, comments, and site/backups. Sections still save
-  independently.
-- At narrow widths the settings index wraps above the document and paired fields stack.
-  The topbar stays in normal flow so it cannot cover anchor targets. The editor retains
-  its existing keyboard-dismissable Story details drawer and visible focus rings.
+- Settings is one flat document per tab beside a quiet vertical tab index (**AI models**,
+  Images, Comments, Site & backups), not a stack of competing cards. The active tab sits
+  on the accent-soft surface, is mirrored in the URL hash (unknown → AI models) and in
+  the title (**Settings · AI models**, the tab in muted weight). AI models holds the
+  **Providers** list — name with a small `default` badge, kind and key state as text,
+  the base URL in mono, and right-aligned text actions Edit · Set default · Test ·
+  Delete (Delete red, disabled actions dimmed with a stated reason) under an **Add
+  provider** primary; add/edit is an inline tinted form, never a card — then a lightly
+  bordered **Use case assignments** panel (use case | provider | model dropdown with a
+  small reload icon, then a muted `→ Provider / model` line with the URL), each feature's
+  prompt and timeout below it, and one **Save AI settings**. Model dropdowns fill from the
+  provider's own list; a saved model it does not list stays as "(saved, not listed)", and
+  **Other model ID…** reveals a text field. Images ends with **Compare quality**: a photo
+  picker, a WebP/AVIF segmented choice and **Preview**, then the original and the result in
+  two equal panes (stacked below 48rem) captioned with format, pixels, file size and saving,
+  with a synchronized **1:1 pixels** view. Tabs still save independently.
+- Below 72rem the index becomes a horizontal, wrapping strip above the panel (its arrow
+  keys follow) and paired fields stack; provider rows and use-case rows stack below
+  48rem. The topbar stays in normal flow.
 

@@ -594,6 +594,44 @@ describe('settings.html import pacing fields', () => {
   });
 });
 
+/**
+ * The AI provider registry (spec 2026-10-19 §6) replaced the single shared key.
+ * The behaviour lives in admin-actions-dom.test.ts; these pin what a markup or
+ * script edit could silently bring back or weaken.
+ */
+describe('settings.html AI provider registry', () => {
+  const html = readFileSync('public/settings.html', 'utf8');
+  const markup = html.slice(0, html.indexOf('<script'));
+
+  it('has no legacy shared-key controls left', () => {
+    for (const id of ['aiApiKey', 'removeAiKey', 'aiProvider', 'captionProvider', 'aiCustomBaseUrl', 'captionCustomBaseUrl', 'baseUrl', 'model', 'modelManual', 'aiKeyStatus', 'saveReview']) {
+      expect(markup).not.toContain(`id="${id}"`);
+    }
+    expect(html).not.toMatch(/aiApiKey|hasAiApiKey|lmBaseUrl/);
+  });
+
+  it('takes a provider key only in a masked, never-autofilled field', () => {
+    expect(markup).toMatch(/<input id="providerApiKey" type="password" autocomplete="new-password"/);
+  });
+
+  it('keeps keys out of storage and logs', () => {
+    expect(html).not.toMatch(/localStorage|sessionStorage|console\./);
+  });
+
+  it('pairs each use case with a provider select, a model select, a bounded Other ID field and an announced model-list status', () => {
+    for (const [provider, model, status] of [
+      ['reviewProviderId', 'aiModel', 'reviewModelStatus'], ['captionProviderId', 'lmModel', 'captionModelStatus'],
+    ] as const) {
+      expect(markup).toMatch(new RegExp(`<select id="${provider}"`));
+      expect(markup).toMatch(new RegExp(`<select id="${model}"[^>]*aria-describedby="${status}"`));
+      // A typed model ID keeps the 100-character cap of the text field it replaced.
+      expect(markup).toMatch(new RegExp(`<input id="${model}Other" type="text" maxlength="100"`));
+      expect(markup).toMatch(new RegExp(`<p id="${status}"[^>]*role="status"`));
+    }
+    expect(markup).not.toMatch(/<datalist|list="/);
+  });
+});
+
 describe('import.html recovery copy', () => {
   const html = readFileSync('public/import.html', 'utf8');
 

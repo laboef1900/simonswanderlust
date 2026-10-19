@@ -38,7 +38,8 @@ describe('admin outcome messages are announced (SC 4.1.3)', () => {
   const liveRoles = /role="(status|alert)"/;
   const cases: [typeof PAGES[number], string[]][] = [
     ['posts', ['out']], ['media', ['out']], ['import', ['out']], ['login', ['out', 'err']],
-    ['users', ['out', 'pwout']], ['settings', ['out', 'backupStatus']],
+    ['users', ['out', 'pwout']],
+    ['settings', ['out', 'backupStatus', 'reviewModelStatus', 'captionModelStatus', 'previewOut']],
     // Audit and draft-state announcements are exercised with editor interactions
     // in editor-dom.test.ts rather than pinned to a particular HTML tag.
     ['editor', ['actionStatus', 'actionError', 'deHeroStatus', 'enHeroStatus', 'deBodyImgStatus', 'enBodyImgStatus']],
@@ -63,13 +64,13 @@ describe('admin outcome messages are announced (SC 4.1.3)', () => {
   });
 });
 
-describe('locale switchers are ARIA tabs', () => {
-  for (const page of ['editor', 'about'] as const) {
+describe('locale switchers and the settings index are ARIA tabs', () => {
+  for (const [page, count] of [['editor', 2], ['about', 2], ['settings', 4]] as const) {
     it(`${page}.html wires tablist, tabs and panels together`, () => {
       const markup = markupOf(html[page]);
-      expect(markup).toMatch(/role="tablist"[^>]*aria-label="/);
+      expect(markup).toMatch(/role="tablist"/);
       const tabs = [...markup.matchAll(/<button\b[^>]*role="tab"[^>]*>/g)].map((m) => m[0]);
-      expect(tabs).toHaveLength(2);
+      expect(tabs).toHaveLength(count);
       const selected = tabs.filter((t) => /aria-selected="true"/.test(t));
       expect(selected).toHaveLength(1);
       for (const tab of tabs) {
@@ -79,13 +80,23 @@ describe('locale switchers are ARIA tabs', () => {
         expect(panel, `panel #${controls}`).toBeDefined();
         expect(panel).toMatch(/role="tabpanel"/);
         expect(panel).toContain(`aria-labelledby="${id}"`);
-        // Only the selected tab is in the Tab order; the other panel starts hidden.
+        // Only the selected tab is in the Tab order; the other panels start hidden.
         if (/aria-selected="true"/.test(tab)) expect(panel).not.toMatch(/\bhidden\b/);
         else { expect(tab).toMatch(/tabindex="-1"/); expect(panel).toMatch(/\bhidden\b/); }
       }
       expect(html[page]).toContain('<script src="/admin/tabs.js"></script>');
     });
   }
+
+  it('editor and about name their tablist in markup; settings names it from the shared copy', () => {
+    expect(markupOf(html.editor)).toMatch(/role="tablist"[^>]*aria-label="/);
+    expect(markupOf(html.about)).toMatch(/role="tablist"[^>]*aria-label="/);
+    expect(html.settings).toMatch(/\$\('settingsTabs'\)\.setAttribute\('aria-label', copy\.settingsNav\)/);
+  });
+
+  it('the settings index declares a vertical orientation', () => {
+    expect(markupOf(html.settings)).toMatch(/id="settingsTabs"[^>]*role="tablist"[^>]*aria-orientation="vertical"/);
+  });
 });
 
 // ---- tabs.js behaviour ----------------------------------------------------
@@ -122,7 +133,10 @@ function tabNode(id: string, selected: boolean): TabNode {
   return node;
 }
 
-function loadTabs(): { de: TabNode; en: TabNode; panels: Record<string, Panel>; changes: string[]; api: { active(): string | null } } {
+function loadTabs(orientation: 'horizontal' | 'vertical' | null = null): {
+  de: TabNode; en: TabNode; panels: Record<string, Panel>; changes: string[]; api: { active(): string | null };
+  list: { attrs: Record<string, string> };
+} {
   const de = tabNode('tabbtn-de', true);
   const en = tabNode('tabbtn-en', false);
   const panels: Record<string, Panel> = { 'tab-de': { id: 'tab-de', hidden: false }, 'tab-en': { id: 'tab-en', hidden: true } };
@@ -134,8 +148,13 @@ function loadTabs(): { de: TabNode; en: TabNode; panels: Record<string, Panel>; 
   vm.runInContext(readFileSync('public/tabs.js', 'utf8'), ctx);
   const changes: string[] = [];
   const Tabs = ctx.Tabs as { wire(list: unknown, opts: unknown): { active(): string | null } };
-  const api = Tabs.wire({ querySelectorAll: () => [de, en] }, { onChange: (name: string) => changes.push(name) });
-  return { de, en, panels, changes, api };
+  const list = {
+    attrs: orientation ? { 'aria-orientation': orientation } as Record<string, string> : {},
+    querySelectorAll: () => [de, en],
+    getAttribute(k: string): string | null { return list.attrs[k] ?? null; },
+  };
+  const api = Tabs.wire(list, { onChange: (name: string) => changes.push(name) });
+  return { de, en, panels, changes, api, list };
 }
 
 describe('Tabs.wire', () => {
@@ -181,5 +200,30 @@ describe('Tabs.wire', () => {
     t.de.fire('keydown', { key: 'Enter' });
     expect(t.api.active()).toBe('de');
     expect(t.changes).toEqual([]);
+  });
+
+  it('a vertical list moves with Up/Down and ignores Left/Right', () => {
+    const t = loadTabs('vertical');
+    t.de.fire('keydown', { key: 'ArrowRight' });
+    expect(t.api.active()).toBe('de');
+    t.de.fire('keydown', { key: 'ArrowDown' });
+    expect(t.api.active()).toBe('en');
+    expect(t.en.focused).toBe(true);
+    t.en.fire('keydown', { key: 'ArrowDown' });
+    expect(t.api.active()).toBe('de');
+    t.de.fire('keydown', { key: 'ArrowUp' });
+    expect(t.api.active()).toBe('en');
+    t.en.fire('keydown', { key: 'Home' });
+    expect(t.api.active()).toBe('de');
+    expect(t.changes).toEqual(['en', 'de', 'en', 'de']);
+  });
+
+  it('reads the orientation per key press, so a page can flip it at a breakpoint', () => {
+    const t = loadTabs('vertical');
+    t.list.attrs['aria-orientation'] = 'horizontal';
+    t.de.fire('keydown', { key: 'ArrowDown' });
+    expect(t.api.active()).toBe('de');
+    t.de.fire('keydown', { key: 'ArrowRight' });
+    expect(t.api.active()).toBe('en');
   });
 });

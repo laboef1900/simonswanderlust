@@ -1,12 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgPostStore } from '../src/posts.js';
 import { pgUserStore } from '../src/users.js';
+import { pgSecretsStore } from '../src/secrets.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -43,6 +45,9 @@ maybe('production boot (src/main.ts, Postgres)', () => {
   let tk: string;
   let username: string;
   const password = 'password123456';
+  const encryptionKey = randomBytes(32);
+  let settingsPath: string;
+  let bootLog = '';
 
   beforeAll(async () => {
     pool = createPool(url!);
@@ -64,8 +69,15 @@ maybe('production boot (src/main.ts, Postgres)', () => {
     await posts.publish(tk);
 
     dir = await mkdtemp(join(tmpdir(), 'main-boot-'));
-    const settingsPath = join(dir, 'settings.json');
-    await writeFile(settingsPath, JSON.stringify({ commentsEnabled: true }));
+    settingsPath = join(dir, 'settings.json');
+    // A pre-registry install: review on OpenRouter, captions local, and the one
+    // shared key in the legacy slot. Boot must migrate both before listen().
+    await pool.query("DELETE FROM app_secrets WHERE key IN ('ai_api_key', 'ai_provider_key:openrouter')");
+    await pgSecretsStore(pool, encryptionKey).set('ai_api_key', 'boot-legacy-fixture');
+    await writeFile(settingsPath, JSON.stringify({
+      commentsEnabled: true, lmBaseUrl: 'http://localhost:1234/v1', aiProvider: 'openrouter', aiCustomBaseUrl: '',
+      captionProvider: 'lm-studio', captionCustomBaseUrl: '',
+    }));
     const port = await freePort();
     base = `http://localhost:${port}`;
     const { ENCRYPTION_KEY: _unused, ...env } = process.env;
@@ -73,6 +85,7 @@ maybe('production boot (src/main.ts, Postgres)', () => {
       cwd: new URL('..', import.meta.url),
       env: {
         ...env,
+        ENCRYPTION_KEY: encryptionKey.toString('hex'),
         DATABASE_URL: url!,
         PORT: String(port),
         PUBLIC_BASE_URL: base,
@@ -87,14 +100,13 @@ maybe('production boot (src/main.ts, Postgres)', () => {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     await new Promise<void>((resolve, reject) => {
-      let out = '';
       const onData = (b: Buffer) => {
-        out += b.toString();
-        if (out.includes(`app listening on :${port}`)) resolve();
+        bootLog += b.toString();
+        if (bootLog.includes(`app listening on :${port}`)) resolve();
       };
       child.stdout!.on('data', onData);
-      child.stderr!.on('data', (b: Buffer) => { out += b.toString(); });
-      child.once('exit', (code) => reject(new Error(`main.ts exited ${code}:\n${out}`)));
+      child.stderr!.on('data', (b: Buffer) => { bootLog += b.toString(); });
+      child.once('exit', (code) => reject(new Error(`main.ts exited ${code}:\n${bootLog}`)));
     });
   }, 30_000);
 
@@ -102,6 +114,7 @@ maybe('production boot (src/main.ts, Postgres)', () => {
     child?.kill('SIGKILL');
     if (tk) await pgPostStore(pool).remove(tk);
     if (username) await pool.query('DELETE FROM users WHERE username = $1', [username]);
+    await pool?.query("DELETE FROM app_secrets WHERE key IN ('ai_api_key', 'ai_provider_key:openrouter')");
     await pool?.end();
     if (dir) await rm(dir, { recursive: true, force: true });
   });
@@ -143,5 +156,32 @@ maybe('production boot (src/main.ts, Postgres)', () => {
     const after = await fetch(`${base}/comments?tk=${tk}`);
     const listed = commentsOf(await after.json());
     expect(listed.map((c) => [c.authorName, c.body])).toEqual([['Leserin', 'Schöne Reise!']]);
+  });
+
+  it('migrated a legacy settings file and the shared key to the provider registry before listening', async () => {
+    expect(bootLog).toContain('settings: migrated AI settings to the provider registry (2 providers)');
+    expect(bootLog).not.toContain('boot-legacy-fixture');
+    const saved = JSON.parse(await readFile(settingsPath, 'utf8'));
+    expect(saved).toMatchObject({
+      aiDefaultProviderId: 'openrouter', reviewProviderId: 'openrouter', captionProviderId: 'lm-studio', commentsEnabled: true,
+    });
+    expect(saved).not.toHaveProperty('aiProvider');
+    expect(JSON.parse(await readFile(`${settingsPath}.pre-ai-registry`, 'utf8'))).toMatchObject({ aiProvider: 'openrouter' });
+    expect((await pool.query("SELECT 1 FROM app_secrets WHERE key = 'ai_api_key'")).rows).toHaveLength(0);
+
+    const login = await fetch(`${base}/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: base },
+      body: JSON.stringify({ username, password }),
+    });
+    expect(login.status).toBe(200);
+    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
+    const review = await fetch(`${base}/ai-config`, { headers: { cookie } });
+    expect(review.status).toBe(200);
+    expect(await review.json()).toMatchObject({
+      aiProvider: 'openrouter', aiBaseUrl: 'https://openrouter.ai/api/v1', hasAiApiKey: true, aiApiKey: 'boot-legacy-fixture',
+    });
+    const caption = await fetch(`${base}/ai-config?purpose=caption`, { headers: { cookie } });
+    expect(await caption.json()).toMatchObject({ captionProvider: 'lm-studio', captionApiKey: null });
   });
 });

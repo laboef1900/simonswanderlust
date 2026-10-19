@@ -112,7 +112,6 @@
     <script src="/admin/auth.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/posts-filter.js"></script>
-    <script src="/admin/posts-duplicate.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       let me = null; // session from Auth.ensureAuthed(); buttons are hidden for
@@ -293,49 +292,6 @@
         } finally {
           btn.disabled = false;
         }
-      }
-
-      // ---- duplicate ("New from this one") -------------------------------
-
-      // Structure copies, identity resets — see posts-duplicate.js. The slugs
-      // are asked for UP FRONT and never derived: they are an SEO contract, and
-      // a silently-derived one is what gets published by accident.
-      async function duplicatePost(p) {
-        const title = p.titleDe || '(untitled)';
-        const suggest = (slug, suffix) => (slug ? slug + suffix : '');
-        const origin = location.origin || '';
-        const values = await AdminConfirm.askFields({
-          title: 'New from this one',
-          body: 'Copy of "' + title + '". Pick slugs for the new draft — these become the live URLs if you publish it.',
-          confirmLabel: 'Create copy',
-          fields: [
-            { name: 'de', label: 'DE slug', value: suggest(p.slugDe, '-kopie'), prefix: origin + '/' },
-            { name: 'en', label: 'EN slug', value: suggest(p.slugEn, '-copy'), prefix: origin + '/en/' },
-          ],
-        });
-        if (!values) return;
-        const slugs = { de: String(values.de || '').trim(), en: String(values.en || '').trim() };
-        const problem = PostsDuplicate.slugError(slugs);
-        if (problem) { $('out').textContent = 'Duplicate cancelled: ' + problem; return; }
-
-        $('out').textContent = 'Duplicating…';
-        const src = await fetch('/posts/' + encodeURIComponent(p.translationKey));
-        if (src.status === 401) { location.href = '/login'; return; }
-        if (!src.ok) { $('out').textContent = 'Could not load the source post: ' + src.status; return; }
-        const payload = PostsDuplicate.duplicatePayload(await src.json(), slugs, new Date());
-
-        const res = await fetch('/posts', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (res.status === 401) { location.href = '/login'; return; }
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          $('out').textContent = 'Duplicate failed: ' + (body.error || res.status);
-          return;
-        }
-        location.href = editorHref(body.translationKey);
       }
 
       // ---- bulk actions -------------------------------------------------
@@ -682,24 +638,17 @@
           editLink.setAttribute('aria-label', 'Edit ' + (p.titleDe || 'untitled post'));
           actions.appendChild(editLink);
 
-          const more = document.createElement('details');
-          more.className = 'post-more';
-          const summary = document.createElement('summary');
-          summary.textContent = 'More actions';
-          summary.setAttribute('aria-label', 'More actions for ' + (p.titleDe || 'untitled post'));
-          more.appendChild(summary);
-          const moreActions = document.createElement('div');
-          moreActions.className = 'post-more-actions';
-
-          // Author-accessible: copying only creates a draft, which POST /posts
-          // already allows any signed-in author to do.
-          const dupBtn = document.createElement('button');
-          dupBtn.type = 'button';
-          dupBtn.textContent = 'New from this one';
-          dupBtn.className = 'btn-secondary';
-          dupBtn.addEventListener('click', () => duplicatePost(p));
-          moreActions.appendChild(dupBtn);
+          // Unpublish and Delete are admin-only, so an author's row offers Edit
+          // alone rather than an empty menu.
           if (me && me.isAdmin) {
+            const more = document.createElement('details');
+            more.className = 'post-more';
+            const summary = document.createElement('summary');
+            summary.textContent = 'More actions';
+            summary.setAttribute('aria-label', 'More actions for ' + (p.titleDe || 'untitled post'));
+            more.appendChild(summary);
+            const moreActions = document.createElement('div');
+            moreActions.className = 'post-more-actions';
             if (p.status === 'published') {
               const unpubBtn = document.createElement('button');
               unpubBtn.type = 'button';
@@ -714,10 +663,10 @@
             delBtn.className = 'btn-remove';
             delBtn.addEventListener('click', () => deletePost(p, delBtn));
             moreActions.appendChild(delBtn);
+            more.appendChild(moreActions);
+            wirePostDisclosure(more, summary);
+            actions.appendChild(more);
           }
-          more.appendChild(moreActions);
-          wirePostDisclosure(more, summary);
-          actions.appendChild(more);
           tdActions.appendChild(actions);
           tr.appendChild(tdActions);
 

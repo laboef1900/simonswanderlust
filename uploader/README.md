@@ -27,7 +27,7 @@ made from this version onward; earlier uploads exist as variants only.
 
 ### Image conversion settings
 
-Open **Settings → Image conversion**:
+Open **Settings → Images**:
 
 - **Convert JPG images to WebP and AVIF** is on by default. Turn it off to create responsive
   JPEG variants from new JPG uploads. JPEG output still corrects orientation, strips GPS and
@@ -38,6 +38,13 @@ Open **Settings → Image conversion**:
 - **Save image settings** saves this section independently of pending AI or backup edits.
   No redeploy is needed. Existing photos are not automatically reprocessed, and queued uploads
   retain their captured settings through retries/restarts. The CLI reads the same settings store.
+- **Compare quality** encodes one test photo with the current (possibly unsaved) WebP or AVIF
+  quality through the same encoder as real uploads, at `min(photo width, 1920)` px, and shows
+  the original and the result side by side with pixel size, file size and the saving (plus a
+  synchronized **1:1 pixels** view). Admin-only `POST /settings/image-preview`; nothing is
+  stored, logged or added to the library, the result carries no EXIF, and the encode runs under
+  the shared work-lock (a site build goes first) with one preview at a time (429 otherwise).
+  See `docs/superpowers/specs/2026-10-19-image-quality-preview-design.md`.
 
 New import work uses the settings; complete body/gallery variant sets are reused regardless
 of the current preference. The importer's explicit **overwrite existing drafts** option still
@@ -255,28 +262,45 @@ Author-facing detail is in [`../docs/authoring-workflow.md`](../docs/authoring-w
 
 ## AI alt-text (browser-direct providers)
 
-Settings → **Photo descriptions** has the same provider choices as **Story review & excerpts**:
-Local LM Studio (default), OpenRouter, DeepSeek, or a custom HTTP(S) OpenAI-compatible
-endpoint. Caption provider/model/prompt/timeout are independent of review. Select a
-**vision-capable model**; a provider's model list does not guarantee image support.
+Settings → **AI models** keeps a **Providers** list (Local LM Studio by default; add
+OpenRouter, DeepSeek, or any custom HTTP(S) OpenAI-compatible endpoint, each with its own
+name, base URL and, for remote providers, its own encrypted API key) and a **Use case
+assignments** grid. **Photo descriptions** (alt text and media details) picks a provider —
+or follows the default — and a model; its prompt/timeout/output budget/max edge are independent
+of review.
+Select a **vision-capable model**; a provider's model list does not guarantee image support.
 
 The editor and photo uploader send a resized JPEG and caption prompt directly from
-the browser to that provider. The app server never contacts the model. Remote captions
-reuse the **shared API key** managed under Story review & excerpts; save that key there, then
-save the alt-text provider/model settings. Replacing/removing the key affects review, excerpts,
-and remote captions; selecting different providers sends the same key to two destinations.
-Use only photos you intend to share with the selected provider; usage charges may apply.
+the browser to that provider, with that provider's own key. The app server never contacts
+the model. Use only photos you intend to share with the selected provider; usage charges may
+apply.
 
-**Test connection** explicitly lists models using the saved caption destination/key.
-Save remote provider changes first. It sends no photo and does not verify vision support;
-no remote discovery runs automatically. Custom providers must allow browser CORS.
-Local LM Studio uses `lmBaseUrl` and never receives the shared key.
+The use-case **Model** fields are dropdowns filled from the provider's own model list. When the
+AI models tab opens, and whenever a row's provider changes (or its refresh button is pressed),
+the browser lists models (`GET <baseUrl>/models` only — never a completion) for each assigned
+provider; remote providers use their stored key, fetched request-locally from the admin-only
+`GET /ai-providers/:id/credential`. A saved model the provider does not list stays selectable,
+and **Other model ID…** takes any ID by hand (for example when browser CORS blocks the list).
+**Test** on a provider row (or **Test connection** in its edit form) lists models on demand,
+with the typed key if one is entered. Listing sends no photo and does not verify vision
+support. Custom providers must allow browser CORS. Local LM Studio providers never hold or
+receive a key.
 
-Non-secret caption settings (`captionProvider`, `captionCustomBaseUrl`, `lmBaseUrl`,
-`lmModel`, `captionTimeoutMs`, `captionMaxEdge`, `captionPrompt`) live in settings.json.
+**Maximum output tokens** sets the per-photo output ceiling for both editor/uploader
+alt-text suggestions and media-library AI details (single and bulk). Default **8,000**;
+allowed range **256–32,768**, whole numbers only. Reasoning models spend this same budget
+on thinking and the final answer: DeepSeek exhausted the former fixed 1,000-token
+photo-details limit before returning any metadata. A higher ceiling permits more work
+and may increase provider charges and latency; the chosen model must support it.
+This does not toggle thinking or change the separate caption timeout. Existing settings
+files without the field use 8,000; saved values survive restart.
+
+Non-secret settings (`aiProviders`, `aiDefaultProviderId`, `captionProviderId`, `lmModel`,
+`captionTimeoutMs`, `captionMaxTokens`, `captionMaxEdge`, `captionPrompt`) live in settings.json.
 Authenticated `GET /ai-config?purpose=caption` resolves `captionBaseUrl` and provides
-`captionApiKey` only for remote captions. Local captions remain usable with broken or
+`captionApiKey` only for a remote photo provider. Local captions remain usable with broken or
 missing remote credentials. Editor suggestions fill editable alt text, never autosave/publish.
+See `docs/superpowers/specs/2026-10-19-ai-provider-registry-design.md`.
 
 **Media library photo details.** `public/media-ai.js` (pure rules, unit-tested) and
 `public/media-ai-dialog.js` (bulk dialog) use the same caption config, key and display
@@ -362,12 +386,14 @@ Provider failure leaves the current excerpt untouched. New chrome lives in both 
 of `site/src/i18n/ui.ts`.
 
 
-### Review providers and encrypted credentials (#214)
+### AI providers and encrypted credentials (#214, registry 2026-10-19)
 
-Settings → **Story review & excerpts** selects Local LM Studio, OpenRouter, DeepSeek, or a
-custom HTTP(S) OpenAI-compatible API base. The excerpt generator uses these same settings.
-Review model/prompt/timeout remain separate from captions. The default provider is local;
-remote inference is optional. No inference occurs on save.
+Settings → **AI models** → **Use case assignments** → **Story review & excerpts** picks a
+provider from the Providers list (or follows the default) and a model. The excerpt generator
+uses these same settings. Review instructions/timeout sit below the grid and stay separate
+from captions. The default provider on a fresh install is Local LM Studio; remote inference
+is optional. **Save AI settings** saves assignments, models, prompts and timeouts; no
+inference occurs on save.
 
 For remote credentials, privately generate a master key with `openssl rand -hex 32`, store
 its 64 hex characters as `ENCRYPTION_KEY` in the untracked root `.env`, and recreate the
@@ -376,52 +402,57 @@ output containing it. Leave the variable **unset**, not empty, for local-only us
 Malformed supplied keys refuse boot; missing keys permit local startup/captions but
 encrypted operations report `ENCRYPTION_KEY not configured in .env`.
 
-Enter the provider key in the masked **Shared API key · review, excerpts & alt text** field.
-OpenRouter and DeepSeek require a key; local LM Studio never receives the shared key.
-Blank leaves an existing key untouched; **Remove stored key** explicitly deletes it
-after confirmation. The chip means stored, not tested. Postgres stores AES-256-GCM ciphertext; **every signed-in author receives the
-shared plaintext key in browser memory** for direct provider calls. The server never
-contacts a model. The selected providers receive review/excerpt content or resized caption photos;
-use provider-side limits and revoke/reissue a credential after suspected exposure.
+Each remote provider has its own masked **API key** field in its Add/Edit form. OpenRouter
+and DeepSeek require one; Local LM Studio providers never hold one. Blank leaves a stored key
+untouched; **Remove stored key** explicitly deletes it after confirmation. "Key stored" means
+stored, not tested. Postgres stores AES-256-GCM ciphertext; **every signed-in author receives
+the key of the provider assigned to a use case, in browser memory**, for direct provider calls
+— never the key of an unassigned provider. The server never contacts a model. The assigned
+providers receive review/excerpt content or resized caption photos; use provider-side limits
+and revoke/reissue a credential after suspected exposure.
 
-One key follows both selected remote destinations. Review the warning when changing
-either provider/custom URL; replace/remove a key that belongs elsewhere. Prefer HTTPS for
-custom endpoints. Browser CORS/mixed-content failures are not bypassed by a server proxy.
+A key is bound to its provider: switching a use case to another provider sends that
+provider's key. Editing a provider's base URL while it holds a key asks for confirmation,
+naming both URLs. **Set default** confirms when it moves a use case that follows the default
+to another destination. A provider can be deleted only when it is neither the default nor
+assigned. Prefer HTTPS for custom endpoints. Browser CORS/mixed-content failures are not
+bypassed by a server proxy.
 
-**Test configuration** tests the current review provider, model, instructions and timeout
+**Test review** tests the selected review provider, model, instructions and timeout
 from the browser with a built-in sample, never an author's draft. It does not save settings
-or keys; use **Save review settings** separately. A successful test requires a valid
-structured review, not just a reachable endpoint. Provider usage charges may apply.
+or keys. A successful test requires a valid structured review, not just a reachable endpoint.
+Provider usage charges may apply. A remote provider's stored key comes from the admin-only
+`GET /ai-providers/:id/credential`, request-local. Missing required keys are caught before
+provider calls. Authentication, credit, rate-limit and timeout failures do not display
+provider response bodies. Editing a review field cancels the running test and clears its
+result. Testing never runs automatically on load, selection or save. This review test does
+not verify a caption model's image support.
 
-The test uses the entered key, or the stored key when a remote review provider is already
-saved. If review is still saved as **Local LM Studio**, its configuration deliberately
-withholds the stored remote key, even when captions use it. Enter a key to test the new
-remote provider without saving, or save the remote review provider first. The same
-guidance applies if another tab switches saved review back to local.
+Provider/key saves are not atomic across disk/Postgres. If the key commits and settings
+fail, the new key can remain associated with the old URL (or a removed key with a provider
+that still exists). The UI clears the typed key and reloads on partial/unknown outcomes;
+inspect the provider and deliberately replace/remove the key before remote use. Local caption
+config never reads secrets.
 
-Missing required keys are caught before provider calls. Authentication, credit, rate-limit
-and timeout failures do not display provider response bodies. Editing a review field cancels
-the running test and clears its result. Testing never runs automatically on load, selection
-or save. This review test does not verify a caption model's image support.
-
-
-Settings and key saves are not atomic across disk/Postgres. If the key commits and
-settings fail, the new key can remain associated with the old endpoint. The UI clears the
-typed key and reloads on partial/unknown outcomes; inspect the destination and deliberately
-replace/remove the key before remote use. Local caption config never reads secrets.
+**Upgrade:** the first boot of the registry release converts a pre-registry settings.json
+into providers (keeping `settings.json.pre-ai-registry`) and copies the old shared key to the
+remote providers that used it, then deletes the old slot. Take **Back up now** before
+deploying: rollback is the older image + that dump + the `.pre-ai-registry` copy.
 
 **Recovery:** v6 and later DB dumps include encrypted secrets, not the master key or settings.json.
 Escrow the master key separately offsite and keep historical keys for historical dumps.
 Absent secrets in legacy v1–v5 preserve live rows; an empty v6-or-later array intentionally clears
 them. Restore is still CLI-only, confirmed, with a pre-restore undo dump. Pause AI/settings
-edits during restore and reconcile the provider in settings.json before resuming.
+edits during restore and reconcile the providers in settings.json before resuming; a restored
+pre-registry `ai_api_key` row is never read — re-enter keys per provider.
 
-To rotate a provider key, replace it in Settings then revoke the old one externally.
+To rotate a provider key, replace it in that provider's form then revoke the old one externally.
 To rotate the master key, back up DB/settings and escrow the old key, pause remote use,
-install a new generated key/recreate the app, re-enter the provider credential, verify
+install a new generated key/recreate the app, re-enter each provider credential, verify
 deliberately with non-sensitive content, and take a new backup. Changing only the master
 key does not re-encrypt old rows. Lost master keys require reissued provider credentials.
-Full misuse cases and rollback: [approved design](../docs/superpowers/specs/2026-09-19-encrypted-ai-review-secrets-design.md).
+Full misuse cases and rollback: [#214 design](../docs/superpowers/specs/2026-09-19-encrypted-ai-review-secrets-design.md)
+and [registry design](../docs/superpowers/specs/2026-10-19-ai-provider-registry-design.md).
 
 ### Review Story in the editor (#215)
 
@@ -510,7 +541,7 @@ message instead of sending the author to an unrelated field.
 The audit refreshes after saving. Its disclosure state and focused issue survive
 a refresh when that issue remains; resolving every issue hides the disclosure.
 The warning stays within the writing column, leaving the pinned Story details
-panel and its Close button available beside it.
+panel and its collapse icon available beside it.
 
 It is a **warning, never a gate**: `src/alt-audit.ts` is pure, is not part of `validateForPublish`,
 and touches none of `publish-gate.ts`'s 409 paths — every WordPress-imported post stores the post

@@ -27,7 +27,7 @@ Shared state, all under the **`/data`** volume (bind-mounted from `./uploader/da
 - `site/releases/<stamp>` + `site/current` (symlink) — built static output (`SITE_DIR`).
 - `backup/` — MDX export backups; `backup/db/` — gzipped Postgres dumps and incremental
   image archives.
-- `settings.json` — admin-configurable settings, including backup scheduling and image conversion/quality.
+- `settings.json` — admin-configurable settings, including backup scheduling, image conversion/quality, and the AI provider registry (no secrets).
 
 Plus the **`pgdata`** volume — Postgres data.
 
@@ -116,9 +116,13 @@ immediately — no rebuild on every boot.
 ## Image pipeline
 
 By default, the app optimizes each photo into AVIF + WebP at fixed widths (640/1280/1920 plus
-the source width, never upscaled). **Settings → Image conversion** can keep new JPEG inputs
+the source width, never upscaled). **Settings → Images** can keep new JPEG inputs
 as responsive JPEG variants instead; other input formats still produce AVIF + WebP.
 WebP and AVIF quality are configurable (1–100, defaults 75 and 55); JPEG output uses quality 90.
+Its **Compare quality** preview (admin-only `POST /settings/image-preview`) runs one test photo
+through the same per-variant encoder (`encodeVariant` in `pipeline.ts`, shared with
+`processImage`) at `min(width, 1920)` px, in memory, without EXIF, under the shared work-lock
+and single-flight, and returns the bytes for a side-by-side comparison.
 Metadata is **not** copied wholesale: `pipeline.ts` re-injects only an
 EXIF **allow-list** (camera make/model/lens, capture time, exposure, aperture, ISO, focal length)
 built by `uploader/src/exif.ts`, plus the ICC profile — GPS, XMP, IPTC and `Orientation` never
@@ -241,12 +245,11 @@ See the [provider usage policy](https://operations.osmfoundation.org/policies/no
 
 The post editor and photo uploader offer a "Suggest alt text" button per alt field.
 The browser downscales the photo and calls the selected OpenAI-compatible vision
-provider directly; the app server never contacts a model. Settings stores independent
-`captionProvider` and `captionCustomBaseUrl`, alongside the existing `lmModel`,
-`captionTimeoutMs`, `captionMaxEdge` and `captionPrompt`. Local LM Studio is the default;
-`lmBaseUrl` remains the shared local endpoint for captions and review.
+provider directly; the app server never contacts a model. Which provider that is comes
+from the **AI provider registry** (below): `captionProviderId` (or the default provider)
+plus the existing `lmModel`, `captionTimeoutMs`, `captionMaxEdge` and `captionPrompt`.
 Authors read `GET /ai-config?purpose=caption`, including resolved `captionBaseUrl` and
-request-local `captionApiKey` (null for local). Remote captions reuse `ai_api_key`.
+request-local `captionApiKey` (null for a local provider, which is never even looked up).
 
 The media library reuses that caption config for photo details (title, DE/EN alt and
 caption, tags): `public/media-ai.js` holds the fill rules and the sequential bulk runner,
@@ -263,24 +266,6 @@ default prompt and parser; the browser parser is checked against the same corpus
 provider with an optional request-local Bearer key. Its one deadline covers the initial
 request, the single unsupported-`response_format` HTTP 400 fallback, and body reads;
 an optional AbortSignal lets the drawer cancel stale work.
-Provider/secrets integration (#214) adds non-sensitive review settings to `settings.json`,
-and one AES-256-GCM encrypted `ai_api_key` in Postgres. Default `GET /ai-config` returns
-resolved provider config and the shared key to authenticated authors for browser-direct
-review; settings responses expose only `hasAiApiKey`. Local caption config never queries
-or decrypts secrets, so a broken remote credential cannot break local captions. Remote
-caption reads serialize with settings writes, resolve their own provider, and fail
-closed on secret errors. Both config surfaces are `Cache-Control: no-store`.
-
-The master key is optional bootstrap `ENCRYPTION_KEY` (32 bytes / 64 hex characters),
-forwarded explicitly by Compose. Missing means local-only startup remains available;
-supplied malformed values fail before schema work. No secret is stored in settings.json.
-Settings POST operations serialize, validate first, commit the secret, then atomically
-rename settings.json. **This is not a transaction across both stores:** a file failure
-can leave a new key with the old endpoint. The API reports partial failure and the UI
-clears its input and reloads; saving never runs inference. One key intentionally follows
-admin-selected remote destinations; the UI warns before a destination change.
-See [the approved design](docs/superpowers/specs/2026-09-19-encrypted-ai-review-secrets-design.md)
-for trust boundaries, failure semantics, key escrow, rotation, and rollback.
 
 The editor's `public/editor-review.js` controller (#215) owns a native modal slide-over:
 `EditorLinter.lintStory` renders five immediate checks, then `LLM.reviewStory` resolves
@@ -292,13 +277,50 @@ without invalidating the other suggestion. No body rewrite, autosave or publish 
 introduced. Source jumps close before focusing EasyMDE's zero-indexed line or hero alt;
 normal close restores the trigger. Review output is rendered as text and is not persisted.
 
+### AI provider registry (2026-10-19)
+
+`settings.json` holds `aiProviders` (1–20 entries of `{ id, name, kind, baseUrl }`, `kind` one
+of `lm-studio` / `openrouter` / `deepseek` / `custom`), `aiDefaultProviderId`, and one
+assignment per use case — `reviewProviderId` (Story review & excerpts) and
+`captionProviderId` (Photo descriptions: alt text and media details) — where `null` follows
+the default. Validation guarantees every reference resolves; a hand-edited dangling id is
+repaired on load and logged by field name. Postgres `app_secrets` holds one AES-256-GCM key
+per remote provider under `ai_provider_key:<id>`; local providers never hold one.
+
+| Route | Auth | Purpose |
+|---|---|---|
+| `GET` / `POST /settings` | admin | registry + assignments + kept fields; presence only (`hasApiKey`) |
+| `POST /ai-providers`, `PUT` / `DELETE /ai-providers/:id` | admin | provider CRUD with optional key set/replace/remove |
+| `GET /ai-providers/:id/credential` | admin | key for Settings' model lookup and **Test** (browser calls only `<baseUrl>/models`) |
+| `GET /ai-config[?purpose=caption]` | author | resolved provider + that provider's key, consumer shape unchanged |
+
+Default `GET /ai-config` returns the review provider's `kind` as `aiProvider`, its base URL as
+`aiBaseUrl`, and its own key. Local caption config never queries or decrypts secrets and does
+not wait on the settings queue, so a broken remote credential cannot break local captions.
+Remote reads serialize with settings writes and fail closed on secret errors. Every config and
+settings surface is `Cache-Control: no-store`. The first boot of this release migrates a
+pre-registry `settings.json` (deterministic ids, `settings.json.pre-ai-registry` kept) and
+copies the legacy `ai_api_key` envelope to the providers that used it before deleting it.
+See [the design](docs/superpowers/specs/2026-10-19-ai-provider-registry-design.md).
+
+The master key is optional bootstrap `ENCRYPTION_KEY` (32 bytes / 64 hex characters),
+forwarded explicitly by Compose. Missing means local-only startup remains available;
+supplied malformed values fail before schema work. No secret is stored in settings.json.
+Settings and provider writes serialize, validate first, commit the secret, then atomically
+rename settings.json. **This is not a transaction across both stores:** a file failure
+can leave a new key with the old URL. The API reports partial failure and the UI
+clears its input and reloads; saving never runs inference. A key follows its provider's
+URL; the UI confirms before an edit moves a stored key to a new URL.
+See [the #214 design](docs/superpowers/specs/2026-09-19-encrypted-ai-review-secrets-design.md)
+for trust boundaries, failure semantics, key escrow, rotation, and rollback.
+
 ## Data model (Postgres)
 
 Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 
 - **`users`** — `id`, `username` (unique, case-insensitive), `password_hash` (scrypt), `is_admin`, `created_at`.
 - **`sessions`** — `id` (SHA-256 of the random token), `user_id` (FK, cascade), `expires_at`. Expired rows are swept hourly.
-- **`app_secrets`** — `key` primary key, `ciphertext`, `iv`, `tag` (hex-encoded AES-256-GCM envelope), `updated_at`. The master key and plaintext credentials never enter this table.
+- **`app_secrets`** — `key` primary key, `ciphertext`, `iv`, `tag` (hex-encoded AES-256-GCM envelope), `updated_at`. One row per remote AI provider (`ai_provider_key:<id>`). The master key and plaintext credentials never enter this table.
 - **`posts`** — one row per (`translation_key`, `locale`); `slug`, `title`, `date`, `country`, `country_code`, `region`, `excerpt`, `hero_image` (jsonb), `coordinates` (jsonb), optional `stops`/`route`/`key_facts`, `body_markdown`, `images` (jsonb), `status` (`draft`/`published`), `featured` (boolean, "use as homepage cover" — a SHARED value written to both locale rows, deliberately not unique: the homepage takes the newest flagged story and falls back to the newest story), `comments_enabled` (boolean, SHARED, default `true` — the per-post switch; the site-wide `settings.commentsEnabled`, default `false`, is the real gate). Unique on (`locale`, `slug`) **where `slug <> ''`** — an empty slug means "not set yet" (a DE-first draft without an EN title), so any number of such drafts may coexist; `validateForPublish` requires a real slug per locale (#119).
   Optional **`title_image`** (nullable jsonb) holds an independent per-locale story banner.
   It uses the hero's image shape, including format and focal point. The story header and
@@ -403,7 +425,7 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   Older application versions reject v9 rather than silently dropping the new selection.
   The CLI names replacement versus preservation and its pre-restore undo dump includes
   current encrypted secrets. Pause AI/settings edits during restore and reconcile the
-  provider in settings.json before resuming: that file is not part of a logical DB dump.
+  providers in settings.json before resuming: that file is not part of a logical DB dump.
   Two ordering details the naive version gets wrong: `media` and `media_folders` are deleted
   **before** `users` (`media.uploaded_by` is `ON DELETE SET NULL`, so the other order silently
   nulls every attribution), and `tags` is `text[]`, which cannot round-trip through the

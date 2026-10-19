@@ -207,7 +207,8 @@ interface Stored extends PostPair {
 }
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
-const REGIONS = ['europe', 'north-america', 'south-america'];
+/** db.ts `REGIONS` (which the posts CHECK is built from), widened so untrusted strings can be tested against it. */
+const REGION_KEYS: readonly string[] = REGIONS;
 
 /** True for a slug safe to use in a URL and as a storage path segment. */
 export function isSafeSlug(slug: string): boolean {
@@ -265,7 +266,7 @@ export function validateDraft(pair: unknown): asserts pair is PostPair {
     if (typeof shared.countryCode !== 'string' || !COUNTRY_CODE_RE.test(shared.countryCode)) throw new PostError('shared.countryCode must be 2 letters');
   }
   if (shared.region !== undefined && shared.region !== '') {
-    if (typeof shared.region !== 'string' || !REGIONS.includes(shared.region)) throw new PostError(`shared.region must be one of ${REGIONS.join(', ')}`);
+    if (typeof shared.region !== 'string' || !REGION_KEYS.includes(shared.region)) throw new PostError(`shared.region must be one of ${REGIONS.join(', ')}`);
   }
   if (shared.coordinates !== undefined) {
     const c = shared.coordinates;
@@ -345,7 +346,7 @@ function bodyHasH1(body: string): boolean {
 export function validateForPublish(pair: PostPair): void {
   const s = pair.shared;
   if (s.countryCode.length !== 2) throw new PostError('countryCode must be 2 letters');
-  if (!REGIONS.includes(s.region)) throw new PostError(`region must be one of ${REGIONS.join(', ')}`);
+  if (!REGION_KEYS.includes(s.region)) throw new PostError(`region must be one of ${REGIONS.join(', ')}`);
   if (typeof s.coordinates?.lat !== 'number' || typeof s.coordinates?.lng !== 'number') {
     throw new PostError('coordinates must be numbers');
   }
@@ -668,7 +669,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
   };
 }
 
-import { POST_SNAPSHOT_SQL, type DbClient, type DbPool } from './db.js';
+import { POST_SNAPSHOT_SQL, REGIONS, type DbClient, type DbPool } from './db.js';
 
 interface PostRow {
   translation_key: string; locale: Locale; slug: string; title: string; date: Date | string;
