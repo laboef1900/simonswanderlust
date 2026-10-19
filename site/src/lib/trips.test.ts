@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { useTranslations } from '../i18n/ui';
+import { regions } from './paths';
 import {
   byLocale,
   entryNumberOf,
@@ -7,6 +8,7 @@ import {
   localeOf,
   pathOf,
   slugOf,
+  liveRegions,
   regionCounts,
   statsLine,
   translationOf,
@@ -126,22 +128,55 @@ describe('regionCounts', () => {
     fakeWithPlace('de/c', 'EC', 'south-america'),
   ];
 
-  it('counts stories per region for the chip labels', () => {
-    expect(regionCounts(trips)).toEqual({
+  it('counts stories per region, with a key for every region', () => {
+    expect(regionCounts([...trips, fakeWithPlace('de/d', 'JP', 'asia')])).toEqual({
       europe: 2,
+      asia: 1,
+      africa: 0,
       'north-america': 0,
       'south-america': 1,
+      oceania: 0,
+      antarctica: 0,
     });
   });
 
   it('reports an honest 0 for a region with no stories rather than omitting it', () => {
-    // The chip row is built from `regions`, so a missing key would render blank.
-    expect(regionCounts([])).toEqual({ europe: 0, 'north-america': 0, 'south-america': 0 });
+    const counts = regionCounts([]);
+    expect(Object.keys(counts)).toEqual([...regions]);
+    expect(Object.values(counts).every((n) => n === 0)).toBe(true);
   });
 
   it('ignores a region value outside the enum instead of inventing a bucket', () => {
-    const stray = [...trips, fakeWithPlace('de/d', 'AQ', 'antarctica')];
-    expect(regionCounts(stray)).toEqual({ europe: 2, 'north-america': 0, 'south-america': 1 });
+    const stray = [...trips, fakeWithPlace('de/d', 'XX', 'atlantis')];
+    expect(regionCounts(stray)).toEqual(regionCounts(trips));
+    expect(regionCounts(stray)).not.toHaveProperty('atlantis');
+  });
+});
+
+describe('liveRegions', () => {
+  const trips = [
+    fakeWithPlace('de/a', 'NZ', 'oceania'),
+    fakeWithPlace('de/b', 'GR', 'europe'),
+    fakeWithPlace('de/c', 'KE', 'africa'),
+    fakeWithPlace('en/a', 'NZ', 'oceania'),
+  ];
+
+  it('returns only regions with a story in that locale, in display order', () => {
+    expect(liveRegions(trips, 'de')).toEqual(['europe', 'africa', 'oceania']);
+  });
+
+  it('counts each locale on its own — a story in the other locale does not make a page', () => {
+    expect(liveRegions(trips, 'en')).toEqual(['oceania']);
+  });
+
+  it('excludes every region when there are no stories', () => {
+    expect(liveRegions([], 'de')).toEqual([]);
+  });
+
+  it('always includes the kept (active) region, in its display position', () => {
+    expect(liveRegions(trips, 'en', 'antarctica')).toEqual(['oceania', 'antarctica']);
+    expect(liveRegions(trips, 'en', 'europe')).toEqual(['europe', 'oceania']);
+    expect(liveRegions(trips, 'de', 'europe')).toEqual(['europe', 'africa', 'oceania']);
   });
 });
 

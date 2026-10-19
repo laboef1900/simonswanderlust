@@ -59,6 +59,47 @@ maybe('encrypted secrets and current backups (Postgres)', () => {
     }
   });
 
+  it('migrates the legacy key without a master key, keeps an existing target, deletes the legacy row and reruns idempotently', async () => {
+    const store = pgSecretsStore(pool, key);
+    await store.set('ai_api_key', 'shared-fixture');
+    await store.set('ai_provider_key:deepseek', 'existing-fixture');
+    const envelope = "SELECT ciphertext, iv, tag, updated_at FROM app_secrets WHERE key = $1";
+    const legacyRow = (await pool.query(envelope, ['ai_api_key'])).rows[0];
+    const existingRow = (await pool.query(envelope, ['ai_provider_key:deepseek'])).rows[0];
+    const keyless = pgSecretsStore(pool, undefined);
+    const targets = ['ai_provider_key:openrouter', 'ai_provider_key:deepseek'];
+    expect(await keyless.migrateLegacyKey('ai_api_key', targets)).toBe(true);
+    // A copy of the envelope, not a re-encryption: no decryption happened.
+    const copied = (await pool.query(envelope, ['ai_provider_key:openrouter'])).rows[0];
+    expect({ ...copied, updated_at: undefined }).toEqual({ ...legacyRow, updated_at: undefined });
+    expect((await pool.query(envelope, ['ai_provider_key:deepseek'])).rows[0]).toEqual(existingRow);
+    expect(await store.has('ai_api_key')).toBe(false);
+    // No AAD: the copied envelope decrypts under its new name with the master key.
+    expect(await store.get('ai_provider_key:openrouter')).toBe('shared-fixture');
+    expect(await store.get('ai_provider_key:deepseek')).toBe('existing-fixture');
+    const before = (await pool.query('SELECT * FROM app_secrets ORDER BY key')).rows;
+    expect(await keyless.migrateLegacyKey('ai_api_key', targets)).toBe(false);
+    expect((await pool.query('SELECT * FROM app_secrets ORDER BY key')).rows).toEqual(before);
+  });
+
+  it('rolls the whole migration back when one copy fails, and sanitizes the error', async () => {
+    const store = pgSecretsStore(pool, key);
+    await store.set('ai_api_key', 'shared-fixture');
+    await pool.query("ALTER TABLE app_secrets ADD CONSTRAINT test_reject_copy CHECK (key <> 'ai_provider_key:custom')");
+    try {
+      const failure = await pgSecretsStore(pool, undefined)
+        .migrateLegacyKey('ai_api_key', ['ai_provider_key:openrouter', 'ai_provider_key:custom'])
+        .then(() => null, (e: unknown) => e);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toBe('AI credential storage is unavailable. Reload settings before retrying.');
+      expect((failure as Error).cause).toBeUndefined();
+      expect(await store.get('ai_api_key')).toBe('shared-fixture');
+      expect(await store.has('ai_provider_key:openrouter')).toBe(false);
+    } finally {
+      await pool.query('ALTER TABLE app_secrets DROP CONSTRAINT test_reject_copy');
+    }
+  });
+
   it('restores ciphertext and timestamps without a master key, then decrypts with the original key', async () => {
     const store = pgSecretsStore(pool, key);
     await store.set('ai_api_key', 'roundtrip-fixture');

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { memoryPostStore, normalizeBodyImages, PostError, REVISION_CAP, validateDraft, validateForPublish, type PostPair } from '../src/posts.js';
 import { renderPostToMdx } from '../src/export.js';
 import { imageUsage } from '../src/media-files.js';
+import { REGIONS } from '../src/db.js';
+import { regions as siteRegions } from '../../site/src/lib/paths.js';
 
 function pair(overrides: Partial<PostPair> = {}): PostPair {
   const loc = (locale: 'de' | 'en', slug: string, title: string, country: string) => ({
@@ -533,6 +535,23 @@ describe('post validation', () => {
     // country is per-locale (issue #87) — each locale needs its own to publish.
     expect(() => validateForPublish(pair({ de: { ...pair().de, country: '' } }))).toThrow(/de: country required/);
     expect(() => validateForPublish(pair({ en: { ...pair().en, country: '' } }))).toThrow(/en: country required/);
+  });
+  // Spec 2026-10-19-new-regions-design.md: the four new keys are accepted at
+  // both boundaries, an unknown one still is not.
+  it('accepts every region key at draft and publish, and rejects an unknown one', () => {
+    for (const region of ['asia', 'africa', 'oceania', 'antarctica']) {
+      expect(() => validateDraft(pair({ shared: { ...pair().shared, region } })), region).not.toThrow();
+      expect(() => validateForPublish(pair({ shared: { ...pair().shared, region } })), region).not.toThrow();
+    }
+    expect(() => validateDraft(pair({ shared: { ...pair().shared, region: 'atlantis' } }))).toThrow(/shared\.region must be one of/);
+    expect(() => validateForPublish(pair({ shared: { ...pair().shared, region: 'atlantis' } }))).toThrow(/region must be one of/);
+    // Case and spelling are exact: the site's Zod enum would fail the build.
+    expect(() => validateForPublish(pair({ shared: { ...pair().shared, region: 'Asia' } }))).toThrow(PostError);
+  });
+  it('keeps the region set identical to the site, which derives its Zod enum from it', () => {
+    // Separate tsconfigs, so the two lists are declared twice; a key only one
+    // side knows either fails the build or is unpickable.
+    expect([...REGIONS]).toEqual([...siteRegions]);
   });
   it('publish rejects Markdown and raw-HTML body H1s with the locale named', () => {
     expect(() => validateForPublish(pair({

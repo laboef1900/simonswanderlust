@@ -6,7 +6,8 @@ import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } f
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
-import { normalizeProcessOptions, outputFormatForExtension, probeImage } from './pipeline.js';
+import { encodeVariant, normalizeProcessOptions, outputFormatForExtension, probeImage, type ImageProbe } from './pipeline.js';
+import { WIDTHS } from './variants.js';
 import { contentHashKey, storeOriginal, heroSnippet, assertSafeKey } from './storage.js';
 import { deleteMedia, imageUsage, VARIANT_FILE_RE } from './media-files.js';
 import {
@@ -26,6 +27,10 @@ import {
 } from './authn.js';
 import { SettingsError, validate as validateSettings, type Settings, type SettingsStore } from './settings.js';
 import { SecretsError, type SecretsStore } from './secrets.js';
+import {
+  isProviderId, isProviderKind, isRemoteKind, newProviderId, providerNameError, providerUrlError, resolveProvider, slotFor,
+  type AiProvider, type AiProviderKind,
+} from './ai-providers.js';
 import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale } from './posts.js';
 import { foreignImageUrls } from './publish-gate.js';
 import { auditAltText } from './alt-audit.js';
@@ -186,7 +191,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
     const route = req.routeOptions.url;
-    if (route === '/settings' || route === '/ai-config') reply.header('Cache-Control', 'no-store');
+    if (route === '/settings' || route === '/ai-config' || route?.startsWith('/ai-providers')) reply.header('Cache-Control', 'no-store');
     if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
       reply.header('Referrer-Policy', 'no-referrer');
@@ -757,28 +762,42 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     settingsTail = result.then(() => {}, () => {});
     return result;
   }
-  function providerBaseUrl(provider: Settings['aiProvider'], custom: string, local: string) {
-    return provider === 'lm-studio' ? local
-      : provider === 'openrouter' ? 'https://openrouter.ai/api/v1'
-        : provider === 'deepseek' ? 'https://api.deepseek.com/v1' : custom;
-  }
-  function captionConfig(s: Settings) {
+  function captionConfig(s: Settings, provider: AiProvider) {
     return {
-      lmBaseUrl: s.lmBaseUrl, lmModel: s.lmModel, captionPrompt: s.captionPrompt,
+      lmModel: s.lmModel, captionPrompt: s.captionPrompt,
       captionTimeoutMs: s.captionTimeoutMs, captionMaxEdge: s.captionMaxEdge,
       captionMaxTokens: s.captionMaxTokens,
-      captionProvider: s.captionProvider, captionCustomBaseUrl: s.captionCustomBaseUrl,
+      captionProvider: provider.kind, captionBaseUrl: provider.baseUrl,
     };
   }
-  function settingsResponse(s: Settings, hasAiApiKey: boolean) {
+  type ProviderView = AiProvider & { hasApiKey: boolean };
+  /**
+   * Key presence per provider via `has` (no decryption, ≤ 20 queries). Local
+   * providers never touch the store; `known` supplies the presence of a slot
+   * this request is about to change. Runs BEFORE any write, so a store failure
+   * leaves both stores untouched.
+   */
+  async function providerViews(providers: readonly AiProvider[], known = new Map<string, boolean>()): Promise<ProviderView[]> {
+    const views: ProviderView[] = [];
+    for (const p of providers) {
+      const hasApiKey = isRemoteKind(p.kind) ? known.get(p.id) ?? await cfg.secrets.has(slotFor(p.id)) : false;
+      views.push({ id: p.id, name: p.name, kind: p.kind, baseUrl: p.baseUrl, hasApiKey });
+    }
+    return views;
+  }
+  /** Explicit shape: never a key, never a ciphertext, never a raw settings object. */
+  function settingsResponse(s: Settings, aiProviders: ProviderView[]) {
     return {
-      ...captionConfig(s), backupSchedule: s.backupSchedule, backupRetention: s.backupRetention,
+      aiProviders, aiDefaultProviderId: s.aiDefaultProviderId,
+      reviewProviderId: s.reviewProviderId, captionProviderId: s.captionProviderId,
+      aiModel: s.aiModel, reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs,
+      lmModel: s.lmModel, captionPrompt: s.captionPrompt,
+      captionTimeoutMs: s.captionTimeoutMs, captionMaxTokens: s.captionMaxTokens, captionMaxEdge: s.captionMaxEdge,
+      backupSchedule: s.backupSchedule, backupRetention: s.backupRetention,
       convertJpeg: s.convertJpeg, webpQuality: s.webpQuality, avifQuality: s.avifQuality,
       importDelayMs: s.importDelayMs, importRetries: s.importRetries,
-    commentsEnabled: s.commentsEnabled,
+      commentsEnabled: s.commentsEnabled,
       geocodingSearchUrl: s.geocodingSearchUrl,
-      aiProvider: s.aiProvider, aiModel: s.aiModel, aiCustomBaseUrl: s.aiCustomBaseUrl,
-      reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs, hasAiApiKey,
     };
   }
   // No raw database/crypto error reaches the global logger (driver detail can
@@ -787,13 +806,74 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const safe = error instanceof SecretsError ? error : new SecretsError('ai_secret_store_unavailable');
     return { error: safe.message, code: safe.code };
   }
+  /** Validate a candidate; a fixed-message 400 (or sanitized 500) is sent and `null` returned on refusal. */
+  function checkCandidate(candidate: Settings, reply: FastifyReply): Settings | null {
+    try {
+      return validateSettings(candidate);
+    } catch (e) {
+      void reply.code(e instanceof SettingsError ? 400 : 500)
+        .send({ error: e instanceof SettingsError ? e.message : 'Settings could not be read.' });
+      return null;
+    }
+  }
+  type KeyChange = { op: 'keep' } | { op: 'set'; value: string } | { op: 'remove' };
+  /**
+   * Own-property semantics (#214): omitted keeps, `''`/`null` removes, a
+   * non-empty string replaces. A local provider never holds a key, so removal
+   * there is a no-op and a value is refused. A string return is the fixed 400.
+   */
+  function apiKeyChange(b: Record<string, unknown>, kind: AiProviderKind): KeyChange | string {
+    if (!Object.hasOwn(b, 'apiKey')) return { op: 'keep' };
+    const key = b.apiKey;
+    if (key === null || key === '') return isRemoteKind(kind) ? { op: 'remove' } : { op: 'keep' };
+    if (typeof key !== 'string' || /\p{C}/u.test(key)) return 'API key must be a string without control characters, or null.';
+    if (!isRemoteKind(kind)) return 'Local LM Studio providers do not use an API key.';
+    return { op: 'set', value: key };
+  }
+  /**
+   * Secret first, settings second (#214 §6); every check already ran. A
+   * settings failure after a committed secret change is reported as partial —
+   * never as "nothing saved", since the key change is live.
+   */
+  async function commitAiChange(
+    reply: FastifyReply, partial: Partial<Settings>, views: ProviderView[], status: 200 | 201,
+    secret?: { slot: string; change: KeyChange; partialError: string },
+  ) {
+    const keyChange = secret && secret.change.op !== 'keep' ? secret : undefined;
+    if (keyChange) {
+      try {
+        if (keyChange.change.op === 'set') await cfg.secrets.set(keyChange.slot, keyChange.change.value);
+        else await cfg.secrets.delete(keyChange.slot);
+      } catch (e) {
+        return reply.code(503).send(secretFailure(e));
+      }
+    }
+    let next: Settings;
+    try {
+      next = Object.keys(partial).length ? cfg.settings.update(partial) : cfg.settings.get();
+    } catch {
+      return reply.code(500).send(keyChange
+        ? { code: 'settings_partial_failure', error: keyChange.partialError }
+        : { code: 'settings_write_failed', error: 'Settings were not saved. Reload settings before retrying.' });
+    }
+    return reply.code(status).send(settingsResponse(next, views));
+  }
+  /** Ids from a URL are matched against the registry before any slot name is built. */
+  function findProvider(s: Settings, id: unknown): AiProvider | undefined {
+    return isProviderId(id) ? s.aiProviders.find((p) => p.id === id) : undefined;
+  }
+  const KEY_PARTIAL = 'API key change saved, but settings were not saved. Reload settings before retrying.';
+  const PROVIDER_NOT_FOUND = { error: 'AI provider not found.' };
 
   app.get('/settings', { preHandler: requireAdmin }, async (_req, reply) => settingsOperation(async () => {
+    const s = cfg.settings.get();
+    let views: ProviderView[];
     try {
-      return reply.send(settingsResponse(cfg.settings.get(), await cfg.secrets.has('ai_api_key')));
+      views = await providerViews(s.aiProviders);
     } catch (e) {
       return reply.code(503).send(secretFailure(e));
     }
+    return reply.send(settingsResponse(s, views));
   }));
 
   app.post('/settings', { preHandler: requireAdmin }, async (req, reply) => settingsOperation(async () => {
@@ -801,8 +881,10 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       return reply.code(400).send({ error: 'Settings must be a JSON object.' });
     }
     const b = req.body as Record<string, unknown>;
+    // An old client must not believe it saved a key or a provider list.
+    if (Object.hasOwn(b, 'aiApiKey')) return reply.code(400).send({ error: 'API keys are managed per provider.' });
+    if (Object.hasOwn(b, 'aiProviders')) return reply.code(400).send({ error: 'Providers are managed with /ai-providers.' });
     const partial: Record<string, unknown> = {};
-    if (b.lmBaseUrl !== undefined) partial.lmBaseUrl = String(b.lmBaseUrl).trim();
     if (b.lmModel !== undefined) partial.lmModel = String(b.lmModel).trim();
     if (b.captionTimeoutMs !== undefined) partial.captionTimeoutMs = Number(b.captionTimeoutMs);
     if (b.captionMaxTokens !== undefined) partial.captionMaxTokens = b.captionMaxTokens;
@@ -817,67 +899,141 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (b.commentsEnabled !== undefined) partial.commentsEnabled = b.commentsEnabled;
     if (b.webpQuality !== undefined) partial.webpQuality = Number(b.webpQuality);
     if (b.avifQuality !== undefined) partial.avifQuality = Number(b.avifQuality);
-    for (const field of ['captionProvider', 'captionCustomBaseUrl', 'aiProvider', 'aiModel', 'aiCustomBaseUrl', 'reviewPrompt', 'reviewTimeoutMs'] as const) {
+    for (const field of [
+      'aiDefaultProviderId', 'reviewProviderId', 'captionProviderId', 'aiModel', 'reviewPrompt', 'reviewTimeoutMs',
+    ] as const) {
       if (Object.hasOwn(b, field)) partial[field] = b[field];
     }
     if (Object.hasOwn(b, 'geocodingSearchUrl')) partial.geocodingSearchUrl = b.geocodingSearchUrl;
-    const changesSecret = Object.hasOwn(b, 'aiApiKey');
-    const key = b.aiApiKey;
-    if (changesSecret && key !== null && (typeof key !== 'string' || /[\p{C}]/u.test(key))) {
-      return reply.code(400).send({ error: 'API key must be a string without control characters, or null.' });
-    }
-    let next: Settings;
+    const next = checkCandidate({ ...cfg.settings.get(), ...partial }, reply);
+    if (!next) return reply;
+    let views: ProviderView[];
     try {
-      next = validateSettings({ ...cfg.settings.get(), ...partial });
-    } catch (e) {
-      if (e instanceof SettingsError) return reply.code(400).send({ error: e.message });
-      return reply.code(500).send({ error: 'Settings could not be read.' });
-    }
-    let hasAiApiKey: boolean;
-    try {
-      if (changesSecret) {
-        if (typeof key === 'string' && key !== '') {
-          await cfg.secrets.set('ai_api_key', key);
-          hasAiApiKey = true;
-        } else {
-          await cfg.secrets.delete('ai_api_key');
-          hasAiApiKey = false;
-        }
-      } else {
-        hasAiApiKey = await cfg.secrets.has('ai_api_key');
-      }
+      views = await providerViews(next.aiProviders);
     } catch (e) {
       return reply.code(503).send(secretFailure(e));
     }
-    try {
-      if (Object.keys(partial).length) next = cfg.settings.update(partial);
-    } catch {
-      // @ai-warning Secret commit already succeeded. Do not pretend rollback or
-      // send "nothing saved"; a replacement key can now meet the OLD endpoint.
-      return reply.code(500).send(changesSecret
-        ? { code: 'settings_partial_failure', error: 'API key change saved, but settings were not saved. Reload settings before retrying.' }
-        : { code: 'settings_write_failed', error: 'Settings were not saved. Reload settings before retrying.' });
-    }
-    return reply.send(settingsResponse(next, hasAiApiKey));
+    return commitAiChange(reply, partial, views, 200);
   }));
 
+  app.post('/ai-providers', { preHandler: requireAdmin }, async (req, reply) => settingsOperation(async () => {
+    if (typeof req.body !== 'object' || req.body === null || Array.isArray(req.body)) {
+      return reply.code(400).send({ error: 'AI provider must be a JSON object.' });
+    }
+    const b = req.body as Record<string, unknown>;
+    if (!isProviderKind(b.kind)) {
+      return reply.code(400).send({ error: 'AI provider kind must be lm-studio, openrouter, deepseek, or custom.' });
+    }
+    const name = typeof b.name === 'string' ? b.name.trim() : '';
+    const baseUrl = typeof b.baseUrl === 'string' ? b.baseUrl.trim() : '';
+    const invalid = providerNameError(name) ?? providerUrlError(baseUrl);
+    if (invalid) return reply.code(400).send({ error: invalid });
+    const change = apiKeyChange(b, b.kind);
+    if (typeof change === 'string') return reply.code(400).send({ error: change });
+    const current = cfg.settings.get();
+    const provider: AiProvider = { id: newProviderId(current.aiProviders), name, kind: b.kind, baseUrl };
+    const aiProviders = [...current.aiProviders, provider];
+    if (!checkCandidate({ ...current, aiProviders }, reply)) return reply;
+    let views: ProviderView[];
+    try {
+      views = await providerViews(aiProviders, change.op === 'set' ? new Map([[provider.id, true]]) : undefined);
+    } catch (e) {
+      return reply.code(503).send(secretFailure(e));
+    }
+    // A fresh id has no slot to remove: only a supplied key touches the store.
+    return commitAiChange(reply, { aiProviders }, views, 201, change.op === 'set'
+      ? { slot: slotFor(provider.id), change, partialError: KEY_PARTIAL } : undefined);
+  }));
+
+  app.put('/ai-providers/:id', { preHandler: requireAdmin }, async (req, reply) => settingsOperation(async () => {
+    const current = cfg.settings.get();
+    const existing = findProvider(current, (req.params as Record<string, unknown>).id);
+    if (!existing) return reply.code(404).send(PROVIDER_NOT_FOUND);
+    if (typeof req.body !== 'object' || req.body === null || Array.isArray(req.body)) {
+      return reply.code(400).send({ error: 'AI provider must be a JSON object.' });
+    }
+    const b = req.body as Record<string, unknown>;
+    if (Object.hasOwn(b, 'kind') && b.kind !== existing.kind) {
+      return reply.code(400).send({ error: 'A provider\'s kind cannot change.' });
+    }
+    const name = !Object.hasOwn(b, 'name') ? existing.name : typeof b.name === 'string' ? b.name.trim() : '';
+    const baseUrl = !Object.hasOwn(b, 'baseUrl') ? existing.baseUrl : typeof b.baseUrl === 'string' ? b.baseUrl.trim() : '';
+    const invalid = providerNameError(name) ?? providerUrlError(baseUrl);
+    if (invalid) return reply.code(400).send({ error: invalid });
+    const change = apiKeyChange(b, existing.kind);
+    if (typeof change === 'string') return reply.code(400).send({ error: change });
+    const aiProviders = current.aiProviders.map((p) => (p.id === existing.id ? { ...existing, name, baseUrl } : p));
+    if (!checkCandidate({ ...current, aiProviders }, reply)) return reply;
+    let views: ProviderView[];
+    try {
+      views = await providerViews(aiProviders, change.op === 'keep' ? undefined : new Map([[existing.id, change.op === 'set']]));
+    } catch (e) {
+      return reply.code(503).send(secretFailure(e));
+    }
+    return commitAiChange(reply, { aiProviders }, views, 200, { slot: slotFor(existing.id), change, partialError: KEY_PARTIAL });
+  }));
+
+  app.delete('/ai-providers/:id', { preHandler: requireAdmin }, async (req, reply) => settingsOperation(async () => {
+    const current = cfg.settings.get();
+    const existing = findProvider(current, (req.params as Record<string, unknown>).id);
+    if (!existing) return reply.code(404).send(PROVIDER_NOT_FOUND);
+    if (existing.id === current.aiDefaultProviderId) {
+      return reply.code(409).send({ code: 'provider_is_default', error: 'The default AI provider cannot be deleted. Choose another default first.' });
+    }
+    const useCases: ('review' | 'caption')[] = [];
+    if (current.reviewProviderId === existing.id) useCases.push('review');
+    if (current.captionProviderId === existing.id) useCases.push('caption');
+    if (useCases.length) {
+      return reply.code(409).send({ code: 'provider_in_use', error: 'This AI provider is assigned to a use case. Assign another provider first.', useCases });
+    }
+    const aiProviders = current.aiProviders.filter((p) => p.id !== existing.id);
+    if (!checkCandidate({ ...current, aiProviders }, reply)) return reply;
+    let views: ProviderView[];
+    let hadKey: boolean;
+    try {
+      views = await providerViews(aiProviders);
+      // Only an existing row is removed, so a remote provider that never held
+      // a key stays deletable without the master key.
+      hadKey = isRemoteKind(existing.kind) && await cfg.secrets.has(slotFor(existing.id));
+    } catch (e) {
+      return reply.code(503).send(secretFailure(e));
+    }
+    // Slot first, provider second: a partial failure leaves a provider showing
+    // "No key" — the safe direction.
+    return commitAiChange(reply, { aiProviders }, views, 200, hadKey ? {
+      slot: slotFor(existing.id), change: { op: 'remove' },
+      partialError: 'The provider\'s API key was removed, but the provider was not deleted. Reload settings before retrying.',
+    } : undefined);
+  }));
+
+  // Admin-only, for the Settings page's Test action: the admin entered this key.
+  app.get('/ai-providers/:id/credential', { preHandler: requireAdmin }, async (req, reply) => settingsOperation(async () => {
+    const provider = findProvider(cfg.settings.get(), (req.params as Record<string, unknown>).id);
+    if (!provider) return reply.code(404).send(PROVIDER_NOT_FOUND);
+    if (!isRemoteKind(provider.kind)) return reply.send({ apiKey: null });
+    try {
+      return reply.send({ apiKey: await cfg.secrets.get(slotFor(provider.id)) });
+    } catch (e) {
+      return reply.code(503).send(secretFailure(e));
+    }
+  }));
+
+  // @ai-warning A key is only ever returned together with the base URL of the
+  // provider that owns it (spec §4.2); the consumer response shape is pinned.
   app.get('/ai-config', { preHandler: requireAuth }, async (req, reply) => {
     const purpose = (req.query as Record<string, unknown>).purpose;
     if (purpose === 'caption') {
       const current = cfg.settings.get();
-      if (current.captionProvider === 'lm-studio') {
-        return reply.send({ ...captionConfig(current), captionBaseUrl: current.lmBaseUrl, captionApiKey: null });
-      }
+      const local = resolveProvider(current, current.captionProviderId);
+      // Local captions: immediately, outside the queue, never touching the secrets store.
+      if (!isRemoteKind(local.kind)) return reply.send({ ...captionConfig(current, local), captionApiKey: null });
       return settingsOperation(async () => {
+        // Re-resolve after queued saves; a switch back to local must not decrypt.
         const s = cfg.settings.get();
-        const captionBaseUrl = providerBaseUrl(s.captionProvider, s.captionCustomBaseUrl, s.lmBaseUrl);
-        if (!captionBaseUrl) return reply.code(400).send({
-          code: 'invalid_caption_configuration', error: 'Configure a custom alt-text base URL first.',
-        });
+        const provider = resolveProvider(s, s.captionProviderId);
         try {
-          // Re-read after queued saves; a switch back to local must not decrypt.
-          const captionApiKey = s.captionProvider === 'lm-studio' ? null : await cfg.secrets.get('ai_api_key');
-          return reply.send({ ...captionConfig(s), captionBaseUrl, captionApiKey });
+          const captionApiKey = isRemoteKind(provider.kind) ? await cfg.secrets.get(slotFor(provider.id)) : null;
+          return reply.send({ ...captionConfig(s, provider), captionApiKey });
         } catch (e) {
           return reply.code(503).send(secretFailure(e));
         }
@@ -886,21 +1042,95 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (purpose !== undefined) return reply.code(400).send({ error: 'Unknown AI configuration purpose.' });
     return settingsOperation(async () => {
       const s = cfg.settings.get();
-      const aiBaseUrl = providerBaseUrl(s.aiProvider, s.aiCustomBaseUrl, s.lmBaseUrl);
-      if (!aiBaseUrl) return reply.code(400).send({ code: 'invalid_review_configuration', error: 'Configure a custom review base URL first.' });
+      const caption = resolveProvider(s, s.captionProviderId);
+      const review = resolveProvider(s, s.reviewProviderId);
       try {
-        // get() checks encryption availability even when no row exists. Local
-        // review never decrypts or receives a remotely configured key.
-        const aiApiKey = s.aiProvider === 'lm-studio' ? null : await cfg.secrets.get('ai_api_key');
-        const hasAiApiKey = s.aiProvider === 'lm-studio' ? await cfg.secrets.has('ai_api_key') : aiApiKey !== null;
+        // get() checks encryption availability even when no row exists. A
+        // local review provider cannot hold a key, so it never reaches the store.
+        const aiApiKey = isRemoteKind(review.kind) ? await cfg.secrets.get(slotFor(review.id)) : null;
         return reply.send({
-          ...captionConfig(s), aiProvider: s.aiProvider, aiBaseUrl, aiModel: s.aiModel,
-          reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs, hasAiApiKey, aiApiKey,
+          ...captionConfig(s, caption), aiProvider: review.kind, aiBaseUrl: review.baseUrl, aiModel: s.aiModel,
+          reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs, hasAiApiKey: aiApiKey !== null, aiApiKey,
         });
       } catch (e) {
         return reply.code(503).send(secretFailure(e));
       }
     });
+  });
+
+  // Settings → Images "Compare quality": encode one test photo at a candidate
+  // quality with the REAL variant encoder and send the bytes straight back.
+  // Nothing touches disk, the database or the log (not even the filename),
+  // and the output carries no EXIF at all — not even the allow-list, since it
+  // is never published. The multipart limits are the global ones /upload uses
+  // (25 MiB, one file part: a second file part is a 413).
+  // @ai-note Single-flight per process and under the shared work-lock, like
+  // every other encode: a waiting site build preempts it, and a second preview
+  // is refused rather than queued beside sharp's ~2 GB peak.
+  let previewRunning = false;
+  const PREVIEW_QUALITY_RE = /^\d{1,3}$/;
+  const PREVIEW_MAX_WIDTH = Math.max(...WIDTHS);
+  app.post('/settings/image-preview', { preHandler: requireAdmin }, async (req, reply) => {
+    if (previewRunning) {
+      return reply.code(429).send({ error: 'A preview is already running. Try again in a moment.' });
+    }
+    previewRunning = true;
+    try {
+      let buf: Buffer | undefined;
+      let format = '';
+      let quality = '';
+      for await (const part of req.parts()) {
+        if (part.type === 'file') {
+          if (part.fieldname === 'file') buf = await part.toBuffer();
+          else part.file.resume();
+        } else if (part.fieldname === 'format') {
+          format = String(part.value);
+        } else if (part.fieldname === 'quality') {
+          quality = String(part.value);
+        }
+      }
+      if (format !== 'webp' && format !== 'avif') {
+        return reply.code(400).send({ error: 'Format must be webp or avif.' });
+      }
+      const previewFormat: 'webp' | 'avif' = format;
+      const q = PREVIEW_QUALITY_RE.test(quality) ? Number(quality) : NaN;
+      if (!Number.isInteger(q) || q < 1 || q > 100) {
+        return reply.code(400).send({ error: 'Quality must be a whole number from 1 to 100.' });
+      }
+      if (!buf) return reply.code(400).send({ error: 'Choose an image to preview.' });
+      const input = buf;
+      let original: ImageProbe;
+      try {
+        original = await probeImage(input);
+      } catch {
+        return reply.code(400).send({ error: 'Could not read that image.' });
+      }
+      if (!original.width || !original.height) {
+        return reply.code(400).send({ error: 'Could not read that image.' });
+      }
+      const width = Math.min(original.width, PREVIEW_MAX_WIDTH);
+      const profile = normalizeProcessOptions(previewFormat === 'webp' ? { webpQuality: q } : { avifQuality: q });
+      // No keepExif argument: the preview output has no EXIF block.
+      const encode = () => encodeVariant(input, width, previewFormat, profile);
+      let data: Buffer;
+      let encoded: ImageProbe;
+      try {
+        data = cfg.workLock ? await cfg.workLock.runShared(encode) : await encode();
+        encoded = await probeImage(data);
+      } catch {
+        return reply.code(400).send({ error: 'Could not read that image.' });
+      }
+      return reply
+        .type(previewFormat === 'webp' ? 'image/webp' : 'image/avif')
+        .header('Cache-Control', 'no-store')
+        .header('X-Preview-Width', String(encoded.width))
+        .header('X-Preview-Height', String(encoded.height))
+        .header('X-Original-Width', String(original.width))
+        .header('X-Original-Height', String(original.height))
+        .send(data);
+    } finally {
+      previewRunning = false;
+    }
   });
 
   app.get('/login', (_req, reply) => reply.sendFile('login.html'));

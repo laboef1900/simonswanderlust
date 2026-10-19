@@ -1,9 +1,11 @@
 ---
+import { getCollection } from 'astro:content';
 import RegionPage from '../../../components/pages/RegionPage.astro';
-import { regionSlugs, regions } from '../../../lib/paths';
+import { regionSlugs } from '../../../lib/paths';
+import { liveRegions } from '../../../lib/trips';
 
-export function getStaticPaths() {
-  return regions.map((region) => ({
+export async function getStaticPaths() {
+  return liveRegions(await getCollection('trips'), 'en').map((region) => ({
     params: { region: regionSlugs[region].en },
     props: { region },
   }));

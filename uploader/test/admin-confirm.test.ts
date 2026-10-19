@@ -6,7 +6,6 @@ const src = readFileSync('public/admin-confirm.js', 'utf8');
 
 interface Api {
   ask(opts: { title?: string; body?: string; confirmLabel?: string; danger?: boolean; typed?: string }): Promise<boolean>;
-  askFields(opts: { title?: string; body?: string; confirmLabel?: string; fields: { name: string; label?: string; value?: string }[] }): Promise<Record<string, string> | null>;
   liveUrls(slugs: { de?: string; en?: string }): { de: string; en: string };
   urlsPlain(slugs: { de?: string; en?: string }): string;
 }
@@ -83,25 +82,5 @@ describe('AdminConfirm.ask typed fallback', () => {
   it('rejects a mismatched token', async () => {
     const { api } = load({ prompt: () => 'delete' });
     await expect(api.ask({ title: 'Delete?', typed: 'DELETE' })).resolves.toBe(false);
-  });
-});
-
-describe('AdminConfirm.askFields fallback', () => {
-  it('returns both slug values', async () => {
-    const { api } = load({ prompt: (_msg, def) => (def === 'a-kopie' ? 'a-kopie' : 'b-copy') });
-    await expect(api.askFields({
-      title: 'New from this one',
-      fields: [
-        { name: 'de', label: 'DE slug', value: 'a-kopie' },
-        { name: 'en', label: 'EN slug', value: 'b-copy' },
-      ],
-    })).resolves.toEqual({ de: 'a-kopie', en: 'b-copy' });
-  });
-  it('returns null when the first field is cancelled', async () => {
-    const { api } = load({ prompt: () => null });
-    await expect(api.askFields({
-      title: 'New from this one',
-      fields: [{ name: 'de', value: 'x' }, { name: 'en', value: 'y' }],
-    })).resolves.toBeNull();
   });
 });

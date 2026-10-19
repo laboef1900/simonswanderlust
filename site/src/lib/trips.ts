@@ -71,9 +71,9 @@ export interface TripStats {
  *
  * @ai-warning These were once hardcoded ("20 REISEN · 10 LÄNDER · 3 KONTINENTE")
  * and went stale the moment a post was published. Always derive them here.
- * @ai-note `region` doubles as the continent axis (the Zod enum is
- * europe / north-america / south-america), and countries are counted by
- * `countryCode` so spelling differences between locales cannot inflate them.
+ * @ai-note `region` doubles as the continent axis (the Zod enum is `regions`
+ * in paths.ts), and countries are counted by `countryCode` so spelling
+ * differences between locales cannot inflate them.
  */
 export function tripStats(trips: Trip[]): TripStats {
   return {
@@ -86,9 +86,8 @@ export function tripStats(trips: Trip[]): TripStats {
 /**
  * Story count per region for one locale's set, for the region chips.
  *
- * @ai-note Every region gets a key, including zero-count ones: the chip row is
- * built from `regions` (paths.ts), so a missing key would render a chip with a
- * blank count rather than an honest 0.
+ * @ai-note Every region gets a key, including zero-count ones, so a caller
+ * indexing by any `Region` reads an honest 0 rather than `undefined`.
  */
 export function regionCounts(trips: Trip[]): Record<Region, number> {
   const counts = Object.fromEntries(regions.map((r) => [r, 0])) as Record<Region, number>;
@@ -97,6 +96,22 @@ export function regionCounts(trips: Trip[]): Record<Region, number> {
     if (region in counts) counts[region] += 1;
   }
   return counts;
+}
+
+/**
+ * The regions that have a page in `locale`, in display order: those with at
+ * least one published story there. `keep` (the region whose page is being
+ * rendered) is always included.
+ *
+ * @ai-warning This is the ONE rule for "which region pages exist". The region
+ * routes' `getStaticPaths`, the destination links and the hreflang alternates
+ * all read it, so a region that is linked is always a region that is built —
+ * and a region without stories never becomes a thin, empty public page.
+ * @ai-context docs/superpowers/specs/2026-10-19-new-regions-design.md §2
+ */
+export function liveRegions(trips: Trip[], locale: Locale, keep?: Region): Region[] {
+  const counts = regionCounts(trips.filter((t) => localeOf(t) === locale));
+  return regions.filter((region) => region === keep || counts[region] > 0);
 }
 
 /** "20 REISEN · 10 LÄNDER · 3 KONTINENTE" — the expedition-log stat line. */

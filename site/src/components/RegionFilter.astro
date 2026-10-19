@@ -1,8 +1,8 @@
 ---
 import { getCollection } from 'astro:content';
 import { useTranslations, type Locale, type UIKey } from '../i18n/ui';
-import { homePath, regionPath, regions, type Region } from '../lib/paths';
-import { byLocale, regionCounts } from '../lib/trips';
+import { homePath, regionPath, type Region } from '../lib/paths';
+import { byLocale, liveRegions, regionCounts } from '../lib/trips';
 
 interface Props {
   locale: Locale;
@@ -31,8 +31,12 @@ const t = useTranslations(locale);
 
   The counts stay: a visitor used to jump blind from nine stories to two.
 */
-const trips = byLocale(await getCollection('trips'), locale);
+const all = await getCollection('trips');
+const trips = byLocale(all, locale);
 const counts = regionCounts(trips);
+// Only regions whose page is built (≥1 story in this locale); a link to an
+// ungenerated region page would 404, and an empty one would be a thin page.
+const shown = liveRegions(all, locale, active);
 
 /*
   @ai-note "Alle" appears only on a region page. On the home page it was an
@@ -80,7 +84,7 @@ const count = 'tabular-nums text-brand-red';
       </svg>
     </a>
   )}
-  {regions.map((region) =>
+  {shown.map((region) =>
     active === region ? (
       <span aria-current="true" class={current}>
         <span>{t(`region.${region}` as UIKey)}</span>

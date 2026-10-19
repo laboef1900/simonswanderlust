@@ -1351,13 +1351,21 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
 .skip-link:focus { transform: none; }
 
 /* Editorial desk: the admin is a quiet operating surface, distinct from the
-   public journal. Tokens live on :root. */
+   public journal. Tokens live on :root.
+   The shell is exactly the viewport: masthead and sidebar never scroll away,
+   the canvas gutter stays visible, and .cms-workspace is the one scroll
+   container. --cms-workspace-h is that scroller's height, for sticky
+   descendants that size themselves to it (the editor inspector). */
 .cms-app-shell {
+  --cms-masthead-h: 4rem;
+  --cms-shell-gutter: 1rem;
+  --cms-workspace-h: calc(100dvh - var(--cms-masthead-h) - var(--cms-shell-gutter));
   display: grid;
   grid-template-columns: 13rem minmax(0, 1fr);
-  grid-template-rows: auto 1fr;
-  min-height: 100dvh;
-  padding: 0 1rem 1rem 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100dvh;
+  overflow: hidden;
+  padding: 0 var(--cms-shell-gutter) var(--cms-shell-gutter) 0;
   background: var(--canvas);
   color: var(--ink);
 }
@@ -1414,7 +1422,7 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
   display: flex;
   align-items: center;
   gap: 2rem;
-  min-height: 4rem;
+  min-height: var(--cms-masthead-h);
   padding: 0 0.5rem 0 1.25rem;
 }
 .cms-masthead .cms-brand {
@@ -1440,37 +1448,16 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
 .cms-brand-title { font-size: 0.9rem; font-weight: 650; }
 .cms-brand-text { display: flex; flex-direction: column; gap: 0.3rem; }
 .cms-brand-sub { color: var(--muted); font-size: 0.75rem; }
-.cms-workspace-nav { display: flex; align-self: stretch; gap: 1.5rem; }
-.cms-workspace-nav a {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-height: 2.75rem;
-  border-bottom: 2px solid transparent;
-  color: var(--muted);
-  font-size: 0.85rem;
-  text-decoration: none;
-}
-.cms-workspace-nav svg { width: 1rem; height: 1rem; }
-.cms-workspace-nav a.is-active {
-  border-bottom-color: var(--studio-accent);
-  color: var(--ink);
-}
 .cms-masthead-right { margin-left: auto; display: flex; align-items: center; gap: 1.25rem; }
+/* A grid cell filling its row; the nav list scrolls inside it. Transparent
+   on desktop, so the workspace's ambient shadow shows along its left edge. */
 .cms-sidebar {
-  position: sticky;
-  top: 0;
-  align-self: start;
-  height: calc(100dvh - 4rem);
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--canvas);
+  min-height: 0;
   color: var(--ink);
-  z-index: 100;
 }
-.cms-sidebar-header { flex-shrink: 0; padding: 0.5rem 1.2rem 1.25rem; }
-.cms-journal-title { font-size: 0.85rem; font-weight: 550; }
 .cms-nav-close {
   display: none;
   align-items: center;
@@ -1491,7 +1478,7 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
   flex-direction: column;
   gap: 0.2rem;
   min-height: 0;
-  padding: 0.25rem 0.65rem 1rem;
+  padding: 0.75rem 0.65rem 1rem;
   overflow-y: auto;
 }
 .cms-nav-heading {
@@ -1527,6 +1514,7 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
 .cms-logout-btn:active { background: var(--studio-accent-soft); color: var(--ink); }
 .cms-nav-item svg { width: 1.1rem; height: 1.1rem; flex-shrink: 0; }
 .cms-nav-item:focus-visible,
+.cms-account-menu__trigger:focus-visible,
 .cms-logout-btn:focus-visible,
 .cms-nav-close:focus-visible,
 .cms-menu-btn:focus-visible,
@@ -1536,16 +1524,65 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
   outline-offset: 2px;
 }
 .cms-sidebar-footer {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0.65rem;
   flex-shrink: 0;
   margin: 0 1rem;
   padding: 1rem 0 0;
   border-top: 1px solid var(--line);
 }
-.cms-user-badge { display: flex; align-items: center; gap: 0.65rem; min-width: 0; }
+/* The account menu is the admin's menu shape (editor More actions): an
+   outlined trigger with a drawn chevron and a floating panel — here opening
+   upward, since the trigger sits at the foot of the sidebar, and spanning the
+   footer so it never leaves the sidebar. */
+.cms-account-menu { position: relative; }
+/* Child-qualified so the global `summary:focus-visible` radius cannot win. */
+.cms-account-menu > .cms-account-menu__trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 2.75rem;
+  padding: 0.375rem 0.75rem 0.375rem 0.375rem;
+  border: 1px solid var(--line-control);
+  border-radius: var(--control-radius);
+  list-style: none;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+.cms-account-menu__trigger::-webkit-details-marker { display: none; }
+/* Points up while closed (the way the panel opens), down while open. */
+.cms-account-menu__trigger::after {
+  content: '';
+  flex-shrink: 0;
+  width: 0.375rem;
+  height: 0.375rem;
+  margin-left: auto;
+  margin-top: 0.2rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(225deg);
+}
+.cms-account-menu[open] .cms-account-menu__trigger::after {
+  margin-top: -0.2rem;
+  transform: rotate(45deg);
+}
+.cms-account-menu__trigger:hover,
+.cms-account-menu[open] .cms-account-menu__trigger {
+  border-color: var(--studio-accent);
+  background: var(--studio-accent-soft);
+}
+.cms-account-menu__panel {
+  position: absolute;
+  z-index: 1;
+  right: 0;
+  bottom: calc(100% + 0.375rem);
+  left: 0;
+  display: grid;
+  gap: 0.125rem;
+  padding: 0.375rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  box-shadow: 0 12px 28px -8px rgb(20 42 66 / 22%);
+}
+.cms-user-info { display: flex; flex-direction: column; min-width: 0; }
 .cms-avatar {
   display: grid;
   place-items: center;
@@ -1558,31 +1595,46 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
   font-size: 0.8rem;
   font-weight: 550;
 }
-.cms-user-info { display: flex; flex-direction: column; min-width: 0; }
 .cms-user-name { font-size: 0.85rem; font-weight: 550; overflow-wrap: anywhere; }
 .cms-user-role { color: var(--muted); font-size: 0.75rem; }
 .cms-logout-btn {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: 0.5rem;
+  width: 100%;
   min-height: 2.75rem;
   margin: 0;
-  padding: 0.5rem 0;
+  padding: 0.5rem 0.625rem;
   border: 0;
+  border-radius: 0.35rem;
   background: transparent;
-  color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 450;
+  color: var(--ink);
+  font-size: 0.8125rem;
+  font-weight: 500;
 }
 .cms-logout-btn svg { width: 1.1rem; height: 1.1rem; }
 .cms-workspace {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-radius: 0.8rem;
   background: #fff;
-  box-shadow: 0 2px 8px rgb(23 37 53 / 4%);
+  /* Ambient on every side, plus a slight downward key; no border. */
+  box-shadow: 0 0 0 1px rgb(23 37 53 / 4%), 0 0 14px rgb(23 37 53 / 6%), 0 2px 4px rgb(23 37 53 / 4%);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+/* Engines without scrollbar-color (Safari) draw the same quiet thumb. */
+.cms-workspace::-webkit-scrollbar { width: 0.625rem; }
+.cms-workspace::-webkit-scrollbar-track { background: transparent; }
+.cms-workspace::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: var(--line-strong) padding-box;
 }
 .cms-topbar {
   position: relative;
@@ -1642,25 +1694,30 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
   .cms-topbar { flex-wrap: wrap; }
 }
 @media (max-width: 900px) {
-  .cms-app-shell { display: block; padding: 0 0.75rem 0.75rem; }
+  .cms-app-shell {
+    --cms-shell-gutter: 0.75rem;
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0 var(--cms-shell-gutter) var(--cms-shell-gutter);
+  }
   .cms-masthead { padding: 0; gap: 0.75rem; }
   .cms-masthead .cms-brand { margin-right: auto; }
-  .cms-workspace-nav { display: none; }
   .cms-masthead-right { margin-left: 0; }
   .cms-menu-btn { display: inline-flex; }
-  .cms-workspace { width: 100%; min-height: calc(100dvh - 5rem); }
   .cms-sidebar {
     position: fixed;
     inset: 0 auto 0 0;
+    z-index: 100;
     width: min(17rem, calc(100vw - 2.75rem));
     height: 100dvh;
+    background: var(--canvas);
     transform: translateX(-110%);
     visibility: hidden;
     pointer-events: none;
     transition: transform 160ms ease, visibility 160ms ease;
   }
   .cms-sidebar.is-open { transform: none; visibility: visible; pointer-events: auto; }
-  .cms-sidebar-header { padding: 1.25rem 4rem 1.25rem 1.25rem; }
+  /* Clears the close button (0.65rem + 2.75rem) above the first heading. */
+  .cms-nav-group { padding-top: 4rem; }
   .cms-sidebar-footer { padding-bottom: 0.75rem; }
   .cms-nav-close { display: inline-flex; position: absolute; top: 0.65rem; right: 0.65rem; }
   .cms-nav-scrim:not([hidden]) { display: block; position: fixed; inset: 0; background: rgb(20 42 66 / 45%); z-index: 90; }
@@ -1732,46 +1789,210 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
   .desk-next-card { grid-template-columns: 1fr; }
 }
 
-/* Settings are one document with a quiet index, not competing cards. */
-body.settings-page .cms-content { max-width: 64rem; }
+/* Settings are one flat document per tab beside a quiet vertical index, not
+   competing cards. */
+body.settings-page .cms-content { max-width: 68rem; }
 body.settings-page .cms-topbar { position: static; }
+.settings-title-tab { color: var(--muted); font-weight: 450; }
 body.settings-page .settings-layout {
   display: grid;
-  grid-template-columns: 11rem minmax(0, 46rem);
+  grid-template-columns: 11rem minmax(0, 52rem);
   gap: 2.5rem;
   align-items: start;
 }
-.settings-nav {
+.settings-tabs {
   position: sticky;
   top: 1.5rem;
   display: grid;
   gap: 0.125rem;
 }
-.settings-nav a {
-  display: flex;
-  align-items: center;
+.settings-tabs [role='tab'] {
+  justify-content: flex-start;
   min-height: var(--control-h-sm);
   padding: 0.25rem 0.625rem;
-  border-radius: var(--control-radius);
+  border: 0;
+  background: none;
   color: var(--muted);
-  font-size: 0.8125rem;
   font-weight: 500;
-  text-decoration: none;
+  text-align: left;
 }
-.settings-nav a:hover,
-.settings-nav a:active { background: var(--studio-accent-soft); color: var(--ink); }
+.settings-tabs [role='tab']:where(:not(:disabled)):hover { background: var(--canvas); color: var(--ink); }
+.settings-tabs [role='tab'][aria-selected='true'],
+.settings-tabs [role='tab'][aria-selected='true']:where(:not(:disabled)):hover {
+  background: var(--studio-accent-soft);
+  color: var(--studio-accent-hover);
+  font-weight: 600;
+}
 .settings-sections { min-width: 0; }
-body.settings-page .card { scroll-margin-top: 1.5rem; }
-.settings-intro { margin: 0 0 0.75rem; max-width: 70ch; }
 body.settings-page .muted { max-width: 70ch; overflow-wrap: anywhere; }
 .settings-field-pair {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0 1rem;
 }
+/* A section heading with its one command at the right (Providers + Add). */
+.settings-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  margin-bottom: 0.25rem;
+}
+.settings-section-head .card-heading { margin: 0; }
+
+/* Providers: hairline rows — name and badge, kind and key state, the base URL
+   in mono (it is data), and quiet text actions at the right. */
+.provider-list { list-style: none; margin: 1rem 0 0; padding: 0; border-top: 1px solid var(--line); }
+.provider-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem 1.5rem;
+  align-items: center;
+  padding: 0.875rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.provider-main { min-width: 0; }
+.provider-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.provider-default { background: var(--studio-accent-soft); color: #2e5274; }
+.provider-meta { margin: 0.125rem 0 0; color: var(--muted); font-size: 0.75rem; }
+.provider-url {
+  margin: 0.125rem 0 0;
+  color: var(--muted);
+  font: 400 0.75rem/1.5 var(--mono);
+  overflow-wrap: anywhere;
+}
+.provider-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 1rem; }
+.provider-action {
+  min-height: var(--control-h-sm);
+  padding: 0 0.125rem;
+  border: 0;
+  background: none;
+  color: var(--studio-accent);
+}
+.provider-action:where(:not(:disabled)):hover {
+  background: none;
+  color: var(--studio-accent-hover);
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+.provider-action--danger { color: var(--red); }
+.provider-action--danger:where(:not(:disabled)):hover { color: var(--red-hover); }
+.provider-note,
+.provider-row > .page-status { grid-column: 1 / -1; margin: 0; }
+.provider-note { color: var(--muted); font-size: 0.75rem; }
+/* The inline add/edit form: a tinted surface, not a card in the card. */
+.provider-form {
+  grid-column: 1 / -1;
+  margin-top: 0.75rem;
+  padding: 1rem 1.25rem 1.25rem;
+  border-radius: 0.5rem;
+  background: var(--canvas);
+}
+.provider-form .section-label { margin-top: 0; }
+#providerFormSlot > .provider-form { margin-top: 1rem; }
+
+/* Use case assignments: one lightly bordered panel, a row per feature —
+   name | provider | model, then the model-list status, the resolved
+   provider / model and URL. Fields align at the top because the model cell
+   grows when "Other model ID…" reveals its input. */
+.use-case-panel { margin-top: 1rem; border: 1px solid var(--line); border-radius: 0.5rem; }
+.use-case-row {
+  display: grid;
+  grid-template-columns: 10rem minmax(0, 14rem) minmax(0, 1fr);
+  gap: 0.375rem 1rem;
+  align-items: start;
+  padding: 1rem 1.25rem;
+}
+.use-case-row + .use-case-row { border-top: 1px solid var(--line); }
+.use-case-name {
+  /* Centred on the first control row: label (0.75rem × 1.4 + 0.25rem) plus
+     half the control's free height. */
+  margin: calc(1.3rem + (var(--control-h) - 1.225rem) / 2) 0 0;
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.use-case-field label { margin: 0 0 0.25rem; color: var(--muted); font-size: 0.75rem; font-weight: 500; }
+.use-case-models,
+.use-case-resolved,
+.use-case-row > .notice-warn { grid-column: 2 / -1; margin: 0; }
+.use-case-models,
+.use-case-resolved { color: var(--muted); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.use-case-models:empty { display: none; }
+.use-case-url { font-family: var(--mono); font-size: 0.75rem; }
+.model-picker { display: flex; gap: 0.375rem; }
+.model-picker select { flex: 1 1 auto; min-width: 0; }
+.model-picker select[aria-busy='true'] { color: var(--muted); }
+.model-reload { flex: 0 0 auto; width: var(--control-h); padding: 0; }
+.model-reload svg { width: 1rem; height: 1rem; }
+.model-picker:has(select[aria-busy='true']) .model-reload svg { animation: model-reload-spin 900ms linear infinite; }
+@keyframes model-reload-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .model-picker:has(select[aria-busy='true']) .model-reload svg { animation: none; }
+}
+.use-case-field .model-other label { margin-top: 0.5rem; }
+
+/* Compare quality (Images): a test photo through the real encoder, the
+   original and the result side by side in equal boxes. "1:1 pixels" draws
+   both at the preview's width inside scroll boxes that move together. */
+.quality-preview { margin-top: 1.75rem; padding-top: 1.75rem; border-top: 1px solid var(--line); }
+.quality-preview .section-label { margin-top: 0; }
+.quality-preview-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem 1rem;
+  margin-top: 1rem;
+}
+.quality-preview-file { flex: 1 1 18rem; min-width: 0; }
+.quality-preview-file label { margin-top: 0; }
+.quality-preview-label { margin: 0 0 0.375rem; color: var(--ink); font-size: 0.8125rem; font-weight: 600; line-height: 1.4; }
+.quality-compare { margin-top: 1rem; }
+.quality-compare .check-field { margin-top: 0; }
+.quality-compare-panes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+.quality-pane { min-width: 0; margin: 0; }
+.quality-pane-box {
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border-radius: 0.5rem;
+  background: var(--canvas);
+}
+.quality-pane-box:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+.quality-pane-box img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.quality-compare.is-actual .quality-pane-box {
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+.quality-compare.is-actual .quality-pane-box img { max-width: none; height: auto; object-fit: fill; }
+.quality-pane figcaption {
+  margin-top: 0.375rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 72rem) {
   body.settings-page .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
-  .settings-nav {
+  .settings-tabs {
     position: static;
     display: flex;
     flex-wrap: wrap;
@@ -1779,6 +2000,16 @@ body.settings-page .muted { max-width: 70ch; overflow-wrap: anywhere; }
     padding-bottom: 1rem;
     border-bottom: 1px solid var(--line);
   }
+}
+@media (max-width: 48rem) {
+  .provider-row { grid-template-columns: minmax(0, 1fr); }
+  .provider-actions { justify-content: flex-start; }
+  .use-case-row { grid-template-columns: minmax(0, 1fr); }
+  .use-case-name { margin-top: 0; }
+  .use-case-models,
+  .use-case-resolved,
+  .use-case-row > .notice-warn { grid-column: auto; }
+  .quality-compare-panes { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 36rem) {
   .settings-field-pair { grid-template-columns: minmax(0, 1fr); }
@@ -1793,19 +2024,38 @@ body.settings-page .muted { max-width: 70ch; overflow-wrap: anywhere; }
 body.editor-page {
   --editor-gutter: clamp(0.75rem, 1.6vw, 1.5rem);
   --editor-inspector-width: clamp(18rem, 22vw, 19.5rem);
+  /* The collapsed inspector keeps only its toggle: one control plus room for
+     its focus ring inside the rail's clipped edges. */
+  --editor-rail-width: calc(var(--control-h) + 1rem);
   --editor-commandbar-height: 0px;
+  --editor-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   overflow-x: clip;
+}
+
+/* The editor scrolls inside the shell's workspace; a stray wide child must
+   not add a horizontal scrollbar there either, and anything scrolled into
+   view (a focused field, a jump target) clears the sticky command bar. */
+body.editor-page .cms-workspace {
+  overflow-x: hidden;
+  scroll-padding-top: var(--editor-commandbar-height);
 }
 
 body.editor-page input,
 body.editor-page textarea,
 body.editor-page select { min-width: 0; }
 
+/* The command bar is the editor's persistent title row, so the shell's page
+   heading stays in the accessibility tree (the page's one h1) but takes no
+   space. Nothing else lives in the editor's topbar. */
 body.editor-page .cms-topbar {
-  /* The command bar is the persistent editor control. Keeping the shell
-     header in normal flow lets sticky positioning survive zoom and wrapping
-     without a guessed fixed offset. */
-  position: static;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 body.editor-page .cms-content {
@@ -1825,7 +2075,10 @@ body.editor-page input[type='number'] {
   font-variant-numeric: tabular-nums;
 }
 
-/* Persistent actions replace the old fixed, multi-row footer. */
+/* Persistent actions replace the old fixed, multi-row footer. With the page
+   title gone it is the top edge of the white workspace, so it wears the
+   workspace's surface and only a bottom rule; a canvas fill here read as the
+   shell gutter running into the panel. */
 body.editor-page .editor-commandbar {
   position: sticky;
   top: 0;
@@ -1836,8 +2089,8 @@ body.editor-page .editor-commandbar {
   gap: 0.5rem 0.75rem;
   min-width: 0;
   padding: 0.5rem var(--editor-gutter);
-  border-block: 1px solid var(--line);
-  background: var(--canvas);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
 }
 
 body.editor-page .editor-commandbar__nav,
@@ -2005,6 +2258,7 @@ body.editor-page .editor-workspace {
   width: min(100%, 90rem);
   margin: 0 auto;
   padding: var(--editor-gutter);
+  transition: grid-template-columns 280ms var(--editor-ease-out);
 }
 
 body.editor-page .editor-canvas {
@@ -2248,13 +2502,15 @@ body.editor-page .hero-focus output { color: var(--muted); }
 /* The manuscript body gets more height than About's. */
 body.editor-page .EasyMDEContainer .CodeMirror { min-height: clamp(22rem, 52vh, 38rem); }
 
-/* The inspector supports a sticky desktop column and a focus-managed drawer
-   at narrow widths. Its groups are divided by rules rather than nested cards. */
+/* The inspector is a sticky column beside the manuscript that collapses to a
+   slim rail on desktop, and a focus-managed drawer at narrow widths. Its
+   groups are divided by rules rather than nested cards. It is sized to the
+   shell's scrolling workspace, not the viewport. */
 body.editor-page .editor-inspector {
   position: sticky;
   top: calc(var(--editor-commandbar-height) + var(--editor-gutter));
   min-width: 0;
-  max-height: calc(100dvh - var(--editor-commandbar-height) - 2 * var(--editor-gutter));
+  max-height: calc(var(--cms-workspace-h) - var(--editor-commandbar-height) - 2 * var(--editor-gutter));
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -2265,7 +2521,8 @@ body.editor-page .editor-inspector {
   border-left: 1px solid var(--line);
 }
 
-body.editor-page .editor-inspector > * {
+body.editor-page .editor-inspector > *,
+body.editor-page .editor-inspector__content > * {
   min-width: 0;
 }
 
@@ -2275,7 +2532,6 @@ body.editor-page .editor-inspector__header {
   z-index: 1;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 0.75rem;
   padding: 0.25rem 0.25rem 0.625rem;
   border-bottom: 1px solid var(--line);
@@ -2290,11 +2546,38 @@ body.editor-page .editor-inspector__header h2 {
   line-height: 1.3;
 }
 
-body.editor-page .editor-inspector-close {
-  min-height: var(--control-h-sm);
-  padding: 0.25rem 0.75rem;
-  font-size: 0.75rem;
+/* Square icon controls: the inspector's collapse/close toggle and the
+   drawer opener. --control-h is 2.75rem on coarse pointers. */
+body.editor-page .editor-icon-btn {
+  flex-shrink: 0;
+  width: var(--control-h);
+  min-height: var(--control-h);
+  padding: 0;
 }
+
+body.editor-page .editor-icon-btn svg {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+/* Right-aligned in every state, so the rail's control never moves while the
+   panel slides. */
+body.editor-page .editor-inspector-close {
+  margin-left: auto;
+  border-color: transparent;
+  background-color: transparent;
+  color: var(--muted);
+}
+
+body.editor-page .editor-inspector-close:where(:not(:disabled)):hover {
+  border-color: transparent;
+  background-color: var(--studio-accent-soft);
+  color: var(--ink);
+}
+
+/* One drawn panel glyph; its chevron points where the panel will go. */
+body.editor-page .editor-inspector-close[aria-expanded='true'] .panel-icon__open,
+body.editor-page .editor-inspector-close[aria-expanded='false'] .panel-icon__close { display: none; }
 
 body.editor-page .editor-inspector-group {
   margin: 0;
@@ -2349,9 +2632,51 @@ body.editor-page .editor-field-help:empty { display: none; }
 
 body.editor-page .editor-inspector-scrim { display: none; }
 
-body.editor-inspector-collapsed .editor-workspace { grid-template-columns: minmax(0, 1fr); }
+@media not all and (max-width: 74rem) {
+  body.editor-inspector-collapsed .editor-workspace {
+    grid-template-columns: minmax(0, 1fr) var(--editor-rail-width);
+  }
 
-body.editor-inspector-collapsed .editor-inspector { display: none; }
+  /* The rail: the panel's edge and its toggle, nothing to scroll. */
+  body.editor-inspector-collapsed .editor-inspector {
+    overflow: hidden;
+    padding-left: 0;
+  }
+
+  body.editor-inspector-collapsed .editor-inspector__header {
+    padding-left: 0;
+    border-bottom-color: transparent;
+  }
+
+  /* The toggle keeps the accessible name; the heading leaves the rail. */
+  body.editor-inspector-collapsed .editor-inspector__header h2 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  body.editor-page .editor-inspector__content {
+    transition:
+      opacity 200ms var(--editor-ease-out) 80ms,
+      transform 280ms var(--editor-ease-out);
+  }
+
+  /* Held at its open width so the narrowing column clips it instead of
+     reflowing it: the panel reads as sliding out to the right. */
+  body.editor-inspector-collapsed .editor-inspector__content {
+    width: calc(var(--editor-inspector-width) - 1.25rem - 1px);
+    opacity: 0;
+    transform: translateX(1rem);
+    visibility: hidden;
+    transition:
+      opacity 120ms ease-out,
+      transform 280ms var(--editor-ease-out),
+      visibility 0s linear 280ms;
+  }
+}
 
 body.editor-page .keyfact-row,
 body.editor-page .stop-row { min-width: 0; }
@@ -2388,8 +2713,7 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
     grid-template-columns: minmax(0, 1fr);
   }
 
-  body.editor-page .editor-inspector,
-  body.editor-inspector-collapsed .editor-inspector {
+  body.editor-page .editor-inspector {
     position: fixed;
     z-index: 110;
     top: 0;
@@ -2411,7 +2735,8 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
 
   body.editor-page .editor-inspector__header { background: var(--canvas); }
 
-  body.editor-inspector-open {
+  /* The drawer is modal: the workspace behind the scrim stops scrolling. */
+  body.editor-inspector-open .cms-workspace {
     overflow: hidden;
   }
 
@@ -2480,10 +2805,6 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
 }
 
 @media (max-width: 52rem) {
-  body.editor-page .cms-topbar {
-    padding-block: 0.65rem;
-  }
-
   body.editor-page .editor-commandbar {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2501,21 +2822,6 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
   body.editor-page .editor-commandbar__actions > button {
     padding-inline: 0.5rem;
     font-size: 0.75rem;
-  }
-
-  body.editor-page .editor-commandbar__actions > .editor-inspector-toggle {
-    width: 3.5rem;
-    padding-inline: 0.25rem;
-    overflow: hidden;
-    color: transparent;
-    font-size: 0;
-  }
-
-  body.editor-page .editor-inspector-toggle::before {
-    content: 'Details';
-    color: var(--ink);
-    font-size: 0.75rem;
-    font-weight: 600;
   }
 
   body.editor-page .editor-actions-menu__trigger {

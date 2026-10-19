@@ -21,6 +21,30 @@ export function createPool(connectionString: string): DbPool {
 }
 
 /**
+ * The closed region set a post may carry, in display order. The `posts`
+ * CHECK constraint below is built from it, and posts.ts validates against it.
+ * @ai-warning Mirrored by hand where this module cannot be imported:
+ * site/src/lib/paths.ts `regions` (separate tsconfig), public/posts-filter.js
+ * `REGIONS` and the editor's region `<select>` in public/editor.html — the
+ * uploader tests pin the two browser copies to this constant. Widening it also
+ * needs the site's Zod enum (derived from `regions`), labels and slugs.
+ * @ai-context docs/superpowers/specs/2026-10-19-new-regions-design.md
+ */
+export const REGIONS = [
+  'europe',
+  'asia',
+  'africa',
+  'north-america',
+  'south-america',
+  'oceania',
+  'antarctica',
+] as const;
+export type Region = (typeof REGIONS)[number];
+
+/** `'europe','asia',…` — the IN list of the region CHECK. Constants only, never input. */
+const REGION_SQL_LIST = REGIONS.map((r) => `'${r}'`).join(',');
+
+/**
  * SQL fragment building the published-snapshot jsonb from a posts row's own
  * working columns. Shared by the ensureSchema backfill and pgPostStore.publish.
  * (Post revisions — issue #28 — snapshot the whole pair in the editor's
@@ -65,7 +89,7 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       id uuid PRIMARY KEY, translation_key text NOT NULL, locale text NOT NULL CHECK (locale IN ('de','en')),
       slug text NOT NULL, title text NOT NULL, date date NOT NULL, country text NOT NULL,
       country_code text NOT NULL CHECK (char_length(country_code)=2),
-      region text NOT NULL CHECK (region IN ('europe','north-america','south-america')),
+      region text NOT NULL CONSTRAINT posts_region_check CHECK (region IN (${REGION_SQL_LIST})),
       excerpt text NOT NULL, hero_image jsonb NOT NULL, coordinates jsonb NOT NULL,
       title_image jsonb,
       stops jsonb, route text, key_facts jsonb, body_markdown text NOT NULL,
@@ -402,4 +426,38 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   // Orphan sweep (M13): comments whose post is gone — e.g. a dump restored
   // over a database whose posts it no longer contains. No-op when consistent.
   await pool.query(`DELETE FROM comments c WHERE NOT EXISTS (SELECT 1 FROM posts p WHERE p.translation_key = c.translation_key)`);
+
+  // @ai-note Region set widening (spec 2026-10-19-new-regions-design.md §4).
+  // The region CHECK is WRITE-ONCE like the media/comments ones: databases
+  // created before 2026-10-19 carry the three-value IN list (auto-named
+  // posts_region_check). The lookup is by table and definition, not by name,
+  // so a differently named check is replaced too rather than left in place
+  // beside the new one. One DO block = one transaction: the table is never
+  // without a region check, and a failure aborts boot loudly. Idempotent: a
+  // single posts_region_check that already admits every region is left alone,
+  // so repeated boots do not churn. Only widens — no row is rewritten.
+  const allowsEveryRegion = REGIONS.map((r) => `pg_get_constraintdef(oid) LIKE '%''${r}''%'`).join(' AND ');
+  await pool.query(`
+    DO $$
+    DECLARE
+      con record;
+      n integer;
+      up_to_date boolean;
+    BEGIN
+      SELECT count(*), coalesce(bool_and(conname = 'posts_region_check' AND ${allowsEveryRegion}), false)
+        INTO n, up_to_date
+        FROM pg_constraint
+       WHERE conrelid = 'posts'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%region%';
+      IF n = 1 AND up_to_date THEN
+        RETURN;
+      END IF;
+      FOR con IN
+        SELECT conname FROM pg_constraint
+         WHERE conrelid = 'posts'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%region%'
+      LOOP
+        EXECUTE format('ALTER TABLE posts DROP CONSTRAINT %I', con.conname);
+      END LOOP;
+      ALTER TABLE posts ADD CONSTRAINT posts_region_check CHECK (region IN (${REGION_SQL_LIST}));
+    END $$;
+  `);
 }

@@ -1,15 +1,23 @@
-// Responsive editor inspector: collapsible beside the canvas on desktop and a
-// focus-managed, dialog-like drawer on compact screens.
+// Responsive editor inspector. On desktop it is a column beside the canvas
+// that collapses into a slim rail keeping only its header toggle; on compact
+// screens it is a focus-managed, dialog-like drawer opened from the command
+// bar. The header button is the one panel control in both modes.
 window.EditorInspector = (function () {
   'use strict';
 
   var FOCUSABLE = 'a[href], button:not([disabled]), summary, input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  var LABEL = {
+    collapse: 'Collapse story details',
+    expand: 'Expand story details',
+    close: 'Close story details',
+  };
 
   function wire(options) {
     var body = options.body;
     var inspector = options.inspector;
+    var content = options.content;
     var toggle = options.toggle;
-    var closeButton = options.closeButton;
+    var headerButton = options.headerButton;
     var scrim = options.scrim;
     var writingSurface = options.writingSurface;
     var commandbar = options.commandbar;
@@ -54,6 +62,24 @@ window.EditorInspector = (function () {
       });
     }
 
+    // The collapsed rail keeps its toggle operable, so only the content after
+    // the header leaves the focus order and the accessibility tree.
+    function setContentHidden(on) {
+      if (on) {
+        content.setAttribute('inert', '');
+        content.setAttribute('aria-hidden', 'true');
+      } else {
+        content.removeAttribute('inert');
+        content.removeAttribute('aria-hidden');
+      }
+    }
+
+    function setHeaderButton(expanded, label) {
+      headerButton.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      headerButton.setAttribute('aria-label', label);
+      headerButton.title = label;
+    }
+
     function applyDesktop() {
       body.classList.remove('editor-inspector-open');
       body.classList.toggle('editor-inspector-collapsed', desktopCollapsed);
@@ -61,11 +87,12 @@ window.EditorInspector = (function () {
       setBackgroundInert(false);
       inspector.removeAttribute('role');
       inspector.removeAttribute('aria-modal');
-      inspector.setAttribute('aria-hidden', desktopCollapsed ? 'true' : 'false');
-      if (desktopCollapsed) inspector.setAttribute('inert', '');
-      else inspector.removeAttribute('inert');
-      toggle.setAttribute('aria-expanded', desktopCollapsed ? 'false' : 'true');
-      toggle.hidden = !desktopCollapsed;
+      inspector.removeAttribute('aria-hidden');
+      inspector.removeAttribute('inert');
+      setContentHidden(desktopCollapsed);
+      setHeaderButton(!desktopCollapsed, desktopCollapsed ? LABEL.expand : LABEL.collapse);
+      // The rail toggle is the desktop control; the drawer opener never shows.
+      toggle.hidden = true;
       restoreFocus = null;
     }
 
@@ -75,30 +102,34 @@ window.EditorInspector = (function () {
       body.classList.add('editor-inspector-open');
       scrim.hidden = false;
       inspector.removeAttribute('inert');
+      setContentHidden(false);
       inspector.setAttribute('role', 'dialog');
       inspector.setAttribute('aria-modal', 'true');
       inspector.setAttribute('aria-hidden', 'false');
       toggle.setAttribute('aria-expanded', 'true');
+      setHeaderButton(true, LABEL.close);
       setBackgroundInert(true);
       if (target) {
         openDetailsFor(target);
         target.focus();
       } else {
-        closeButton.focus();
+        headerButton.focus();
       }
     }
 
     function closeMobile(shouldRestore) {
       var wasOpen = body.classList.contains('editor-inspector-open');
-      body.classList.remove('editor-inspector-open');
+      body.classList.remove('editor-inspector-open', 'editor-inspector-collapsed');
       scrim.hidden = true;
       setBackgroundInert(false);
       inspector.removeAttribute('role');
       inspector.removeAttribute('aria-modal');
       inspector.setAttribute('aria-hidden', 'true');
       inspector.setAttribute('inert', '');
+      setContentHidden(false);
       toggle.setAttribute('aria-expanded', 'false');
       toggle.hidden = false;
+      setHeaderButton(false, LABEL.close);
       if (shouldRestore && (wasOpen || inspector.contains(document.activeElement))) (restoreFocus || toggle).focus();
       restoreFocus = null;
     }
@@ -109,11 +140,12 @@ window.EditorInspector = (function () {
         closeMobile(false);
         if (moveFocus) toggle.focus();
       } else {
-        var inspectorFocused = inspector.contains(document.activeElement);
         var toggleFocused = document.activeElement === toggle;
+        var contentFocused = content.contains(document.activeElement);
         applyDesktop();
-        if (desktopCollapsed && inspectorFocused) toggle.focus();
-        else if (!desktopCollapsed && toggleFocused) closeButton.focus();
+        // The opener is hidden on desktop and collapsed content is inert; the
+        // rail toggle is what remains to hold focus.
+        if (toggleFocused || (desktopCollapsed && contentFocused)) headerButton.focus();
       }
     }
 
@@ -128,22 +160,16 @@ window.EditorInspector = (function () {
     }
 
     toggle.addEventListener('click', function () {
+      if (isMobile()) openMobile();
+    });
+    headerButton.addEventListener('click', function () {
       if (isMobile()) {
-        if (body.classList.contains('editor-inspector-open')) closeMobile(true);
-        else openMobile();
+        closeMobile(true);
         return;
       }
-      desktopCollapsed = false;
+      desktopCollapsed = !desktopCollapsed;
       applyDesktop();
-      closeButton.focus();
-    });
-    closeButton.addEventListener('click', function () {
-      if (isMobile()) closeMobile(true);
-      else {
-        desktopCollapsed = true;
-        applyDesktop();
-        toggle.focus();
-      }
+      headerButton.focus();
     });
     scrim.addEventListener('click', function () { closeMobile(true); });
     document.addEventListener('keydown', function (event) {
@@ -157,7 +183,7 @@ window.EditorInspector = (function () {
         if (event.key === 'Escape') {
           setTimeout(function () {
             if (body.classList.contains('editor-inspector-open')
-                && !inspector.contains(document.activeElement)) closeButton.focus();
+                && !inspector.contains(document.activeElement)) headerButton.focus();
           }, 0);
         }
         return;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { REGIONS } from '../src/db.js';
 
 // posts-filter.js is a plain browser IIFE (window.PostsFilter) holding the
 // posts list's pure search/filter/sort and thumbnail-URL logic. Run it in a vm
@@ -122,7 +123,9 @@ describe('PostsFilter.apply — filtering', () => {
   });
 
   it('exposes the closed region set — country is free text and must come from the rows', () => {
-    expect(api.REGIONS).toEqual(['europe', 'north-america', 'south-america']);
+    // The browser copy cannot import db.ts; this keeps it in lockstep with the
+    // constant the posts CHECK and validateForPublish are built from.
+    expect(api.REGIONS).toEqual([...REGIONS]);
   });
 
   it('filters the two editorial readiness states without changing draft/published semantics', () => {

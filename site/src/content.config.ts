@@ -2,6 +2,7 @@ import { defineCollection } from 'astro:content';
 import { z } from 'astro/zod';
 import { postgresTripsLoader } from './lib/postgres-loader';
 import { postgresPagesLoader } from './lib/pages-loader';
+import { regions } from './lib/paths';
 
 const storyImage = z.object({
   src: z.url(),
@@ -20,7 +21,7 @@ const trips = defineCollection({
       date: z.coerce.date(),
       country: z.string(),
       countryCode: z.string().length(2),
-      region: z.enum(['europe', 'north-america', 'south-america']),
+      region: z.enum(regions),
       translationKey: z.string(),
       excerpt: z.string(),
       heroImage: storyImage,

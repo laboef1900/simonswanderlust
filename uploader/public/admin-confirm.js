@@ -1,5 +1,5 @@
 // Designed confirm for high-stakes admin actions (Publish, Rebuild, Unpublish,
-// Delete, Duplicate). Native <dialog> when the browser has it; window.confirm /
+// Delete). Native <dialog> when the browser has it; window.confirm /
 // prompt otherwise so vm tests and older browsers still get a real yes/no
 // instead of a silent no-op.
 window.AdminConfirm = (function () {
@@ -92,68 +92,5 @@ window.AdminConfirm = (function () {
     });
   }
 
-  // Returns a map of field name → value, or null if cancelled.
-  function askFields(opts) {
-    const o = opts || {};
-    const fields = o.fields || [];
-    const dlg = ensureDialog();
-    if (!dlg || typeof dlg.showModal !== 'function') {
-      const values = {};
-      for (let i = 0; i < fields.length; i++) {
-        const f = fields[i];
-        const v = window.prompt((o.title || 'Confirm') + '\n' + (f.label || f.name), f.value || '');
-        if (v === null) return Promise.resolve(null);
-        values[f.name] = v;
-      }
-      return Promise.resolve(values);
-    }
-    const extra = fillChrome(dlg, o);
-    const inputs = {};
-    fields.forEach(function (f) {
-      const lab = document.createElement('label');
-      lab.setAttribute('for', 'adminConfirmField-' + f.name);
-      lab.textContent = f.label || f.name;
-      extra.appendChild(lab);
-      if (f.prefix) {
-        const row = document.createElement('div');
-        row.className = 'slug-preview';
-        const prefix = document.createElement('span');
-        prefix.className = 'slug-base';
-        prefix.textContent = f.prefix;
-        const input = document.createElement('input');
-        input.id = 'adminConfirmField-' + f.name;
-        input.type = 'text';
-        input.value = f.value || '';
-        input.autocomplete = 'off';
-        row.appendChild(prefix);
-        row.appendChild(input);
-        extra.appendChild(row);
-        inputs[f.name] = input;
-      } else {
-        const input = document.createElement('input');
-        input.id = 'adminConfirmField-' + f.name;
-        input.type = 'text';
-        input.value = f.value || '';
-        input.autocomplete = 'off';
-        extra.appendChild(input);
-        inputs[f.name] = input;
-      }
-    });
-    return new Promise(function (resolve) {
-      function onClose() {
-        dlg.removeEventListener('close', onClose);
-        if (dlg.returnValue !== 'ok') { resolve(null); return; }
-        const values = {};
-        Object.keys(inputs).forEach(function (name) { values[name] = inputs[name].value; });
-        resolve(values);
-      }
-      dlg.addEventListener('close', onClose);
-      dlg.showModal();
-      const first = fields[0] && inputs[fields[0].name];
-      if (first) first.focus();
-      else dlg.querySelector('#adminConfirmOk').focus();
-    });
-  }
-
-  return { ask, askFields, liveUrls, urlsPlain };
+  return { ask, liveUrls, urlsPlain };
 })();
