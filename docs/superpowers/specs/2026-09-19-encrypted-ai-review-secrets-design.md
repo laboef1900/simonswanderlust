@@ -6,6 +6,7 @@
 **Final-HEAD human merge approval:** Separately required after verification and independent reviews; the exact-HEAD decision is recorded on [PR #224](https://github.com/laboef1900/simonswanderlust/pull/224), not inferred from this specification.
 **Branch:** `feature/214-encrypted-ai-secrets`  
 **Scope:** #214 implementation follows this approved contract. Verification and independent security review are required before the separate final-HEAD human merge decision.
+**Superseded in part (2026-10-19):** the single `ai_api_key` slot, provider resolution, the `POST /settings` key semantics, the settings UI contract and §13's shared key are replaced by per-provider keys in [the AI provider registry design](2026-10-19-ai-provider-registry-design.md). Crypto, master key, backup v6 and restore contracts below still apply.
 
 ## 1. Authority, dependency, and approval gate
 

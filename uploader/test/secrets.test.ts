@@ -80,4 +80,31 @@ describe('encrypted secrets', () => {
     expect(await store.get('ai_api_key')).toBeNull();
     expect(await store.has('ai_api_key')).toBe(false);
   });
+
+  it('memory migrateLegacyKey copies to every free target, keeps an existing one, and deletes the legacy slot', async () => {
+    const store = memorySecretsStore();
+    expect(await store.migrateLegacyKey('ai_api_key', ['ai_provider_key:openrouter'])).toBe(false);
+    expect(await store.has('ai_provider_key:openrouter')).toBe(false);
+    await store.set('ai_api_key', 'shared-fixture');
+    await store.set('ai_provider_key:deepseek', 'existing-fixture');
+    expect(await store.migrateLegacyKey('ai_api_key', ['ai_provider_key:openrouter', 'ai_provider_key:deepseek'])).toBe(true);
+    expect(await store.get('ai_provider_key:openrouter')).toBe('shared-fixture');
+    expect(await store.get('ai_provider_key:deepseek')).toBe('existing-fixture');
+    expect(await store.has('ai_api_key')).toBe(false);
+    // Rerun: nothing left to copy, nothing changes.
+    expect(await store.migrateLegacyKey('ai_api_key', ['ai_provider_key:openrouter'])).toBe(false);
+    expect(await store.get('ai_provider_key:openrouter')).toBe('shared-fixture');
+    // No targets: the legacy slot is still removed.
+    await store.set('ai_api_key', 'unused-fixture');
+    expect(await store.migrateLegacyKey('ai_api_key', [])).toBe(true);
+    expect(await store.has('ai_api_key')).toBe(false);
+  });
+
+  it('pg migrateLegacyKey fails closed with a sanitized error when the database is unreachable', async () => {
+    const pool = createPool('postgres://invalid:invalid@127.0.0.1:1/unused');
+    try {
+      await expect(pgSecretsStore(pool, undefined).migrateLegacyKey('ai_api_key', ['ai_provider_key:openrouter']))
+        .rejects.toThrow('AI credential storage is unavailable');
+    } finally { await pool.end(); }
+  });
 });

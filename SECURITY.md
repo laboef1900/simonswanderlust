@@ -380,9 +380,11 @@ contains only the review contract, schema, prompt and parser.
 
 Review, excerpt, caption and model-discovery clients scope optional Bearer keys to individual
 requests; local LM Studio receives none. Excerpts reuse the review provider/model/timeout and
-the existing `/ai-config` authorization contract; there is no additional secret endpoint.
-Remote captions and reviews intentionally use the same encrypted key, even with different
-selected destinations (owner approval, 2026-10-17, §13 of the #214 spec). Requests omit cookies/referrers and refuse redirects,
+the existing `/ai-config` authorization contract. The only other secret read is the admin-only
+`GET /ai-providers/:id/credential` behind the Settings page's Test action. Since the provider
+registry (2026-10-19) each provider has its own encrypted key, so Story review and Photo
+descriptions on different providers send different keys, each only to its own provider's URL
+(this replaces the 2026-10-17 shared-key approval, §13 of the #214 spec). Requests omit cookies/referrers and refuse redirects,
 preventing credentials from being forwarded to a different endpoint. OpenRouter attribution uses
 exact URL hostname equality, not a string/prefix match. Provider errors and abort reasons
 are not surfaced verbatim, since they may echo credentials or unpublished content.
@@ -641,38 +643,57 @@ preview even though the live site would load it.
 - The rebuild trigger (`POST /rebuild`) and the DB backup routes (`GET`/`POST /backups`,
   `GET /backups/:name`) are gated by `requireAdmin` — no separate shared secret; the retired
   `BUILD_SECRET` / `x-build-secret` mechanism no longer exists.
-- **AI review credentials (#214):** one `app_secrets.ai_api_key` slot uses AES-256-GCM,
-  random 12-byte IVs, and 16-byte authentication tags. Hex-encoded envelopes are stored in
-  Postgres; the 32-byte `ENCRYPTION_KEY` stays in private bootstrap configuration. Missing
+- **AI provider credentials (#214, registry 2026-10-19):** one `app_secrets` row per remote
+  provider, `ai_provider_key:<id>`, AES-256-GCM with random 12-byte IVs and 16-byte
+  authentication tags. Slot names are built only from a server-assigned, regex-validated id
+  that exists in the registry — never from a client string. Hex-encoded envelopes are stored
+  in Postgres; the 32-byte `ENCRYPTION_KEY` stays in private bootstrap configuration. Missing
   encryption configuration leaves local workflows available; malformed supplied values
   stop boot before schema work. Wrong keys/tampering fail closed with fixed sanitized
   errors, without logging raw crypto/driver errors or credential-bearing request bodies.
-- **Author disclosure is deliberate:** admin-only settings writes manage the shared key,
-  while authenticated `GET /ai-config` and `?purpose=caption` return plaintext in browser
-  memory when the respective feature selects a remote provider. `GET/POST /settings`
-  return presence only, never key/ciphertext. All use `Cache-Control: no-store`.
+- **Keys are bound to their provider:** each provider (name, kind, base URL in
+  `settings.json`) owns its own key, and `/ai-config` only ever returns a key together with
+  the base URL of the provider that owns it. Switching a use case to another provider sends
+  that provider's key, never the previous one. A key moves only when an admin edits its
+  provider's base URL, which the UI warns about and confirms, naming both URLs. Local LM
+  Studio providers cannot hold a key (400). The provider is deletable only when it is neither
+  the default nor assigned; deleting it removes its key first.
+- **Author disclosure is deliberate:** admin-only routes (`POST/PUT/DELETE /ai-providers*`,
+  `POST /settings`) manage providers and keys, while authenticated `GET /ai-config` and
+  `?purpose=caption` return plaintext in browser memory for the provider assigned to Story
+  review or Photo descriptions when it is remote — up to two different keys, never the key of
+  an unassigned provider. Admin-only `GET /ai-providers/:id/credential` returns one remote
+  provider's key to the admin's browser for the Settings **Test** action. `GET/POST /settings`
+  return presence (`hasApiKey` per provider) only, never key/ciphertext; `POST /settings`
+  refuses `aiApiKey` and `aiProviders` with 400. All use `Cache-Control: no-store`.
   Never persist keys in browser storage, draft backups, URLs, logs, or rendered output.
   TLS at the proxy remains required.
-  Every author can copy the returned key; session revocation cannot retract it. Revoke at
+  Every author can copy a returned key; session revocation cannot retract it. Revoke at
   the provider after suspected exposure and use provider-side access/spend limits.
 - **No server AI egress:** the server never fetches provider URLs. The caption-only query
-  `GET /ai-config?purpose=caption` resolves its independent provider/model. For local
-  captions it performs no secret lookup or wait, so remote crypto failures do not
-  disable local alt text. Remote captions send a resized JPEG and prompt from the
-  browser using the same shared key as review; remote config fails closed on secret
-  errors. Presets and custom HTTP(S) destinations are admin authority. A retained key
-  follows either destination change; replacing/removing it affects both features.
-  UI warnings do not bind keys to providers. Custom HTTP can expose key/content on the
-  network; prefer HTTPS and never add a proxy to work around CORS/mixed-content failures.
-- **Settings failure residual:** settings.json and Postgres cannot commit together. The
-  serialized save prevalidates everything, commits the secret first, then writes settings.
-  A subsequent failure can leave a new key with the old endpoint; responses explicitly
-  report partial or unknown outcomes. Reload and deliberately reconcile before inference.
-  The UI clears its typed key, reloads presence/settings, and never runs inference on save.
+  `GET /ai-config?purpose=caption` resolves the photo provider. For a local provider it
+  performs no secret lookup or wait, so remote crypto failures do not disable local alt
+  text. Remote captions send a resized JPEG and prompt from the browser with that provider's
+  key; remote config fails closed on secret errors. Presets and custom HTTP(S) destinations
+  are admin authority. Custom HTTP can expose key/content on the network; prefer HTTPS and
+  never add a proxy to work around CORS/mixed-content failures.
+- **Settings failure residual:** settings.json and Postgres cannot commit together. Every
+  serialized provider/settings write prevalidates everything, commits the secret first, then
+  writes settings. A subsequent failure can leave a new key with the old URL, or a removed key
+  on a provider that still exists; responses explicitly report partial or unknown outcomes.
+  Reload and deliberately reconcile before inference. The UI clears its typed key, reloads
+  presence/settings, and never runs inference on save.
+- **Registry migration:** the first boot of the registry release copies the legacy shared
+  `ai_api_key` envelope to every provider that already received it (the remote providers the
+  two features had selected) and deletes the legacy row, in one Postgres transaction, without
+  decrypting; then it writes `settings.json.pre-ai-registry` (non-secret rollback copy) and the
+  new settings. A legacy row restored later from an old dump is never read.
 - Encryption at rest does not isolate secrets from a compromised host/app/browser,
-  replay of an older valid DB row, Docker-inspection privileges, or the existing build
-  child's inherited environment. Explicit owner implementation approval and recovery:
-  `docs/superpowers/specs/2026-09-19-encrypted-ai-review-secrets-design.md`.
+  replay of an older valid DB row, swapping envelopes between provider slots (no AAD binds a
+  row to its slot), Docker-inspection privileges, or the existing build child's inherited
+  environment. Explicit owner implementation approvals and recovery:
+  `docs/superpowers/specs/2026-09-19-encrypted-ai-review-secrets-design.md` and
+  `docs/superpowers/specs/2026-10-19-ai-provider-registry-design.md`.
 
 ## Single app container
 

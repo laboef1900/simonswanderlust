@@ -168,7 +168,6 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
             '.cms-brand-mark': makeElement(),
             '.cms-brand-title': makeElement(),
             '.cms-masthead-right > .cms-brand-sub': makeElement(),
-            '.cms-workspace-nav': makeElement(),
             '.cms-journal-title': makeElement(),
             '.cms-sidebar-header .cms-brand-sub': makeElement(),
             '#cmsSidebar': sidebar,
@@ -275,10 +274,6 @@ function expectDrawerClosed(shell: DrawerParts) {
   expect(shell.workspace.inert).toBe(false);
 }
 
-const workspaceLinks = (html: string) =>
-  [...html.matchAll(/href="([^"]+)" class="cms-workspace-link( is-active)?"/g)]
-    .map(([, href, active]) => ({ href, active: Boolean(active) }));
-
 describe('Auth navigation shell', () => {
   it('marks the logical current page, including editor as part of Posts', () => {
     const desk = shellSandbox('/admin/index.html');
@@ -290,27 +285,19 @@ describe('Auth navigation shell', () => {
     expect(editor.html).toMatch(/href="\/admin\/posts\.html" class="cms-nav-item" aria-current="page"/);
   });
 
-  it('highlights the masthead workspace that owns the current page', () => {
-    const active = (pathname: string) =>
-      workspaceLinks(shellSandbox(pathname).html).filter((link) => link.active).map((link) => link.href);
-    expect(active('/admin/editor.html')).toEqual(['/admin/posts.html']);
-    expect(active('/admin/')).toEqual(['/admin/posts.html']);
-    expect(active('/admin/media.html')).toEqual(['/admin/media.html']);
-    expect(active('/admin/users.html')).toEqual(['/admin/settings.html']);
-  });
+  it('offers the admin pages in the sidebar to admins only', () => {
+    const adminOnly = ['about', 'comments', 'import', 'settings', 'users']
+      .map((page) => '/admin/' + page + '.html');
+    const [admin, author] = [true, false].map((isAdmin) => shellSandbox('/admin/', { isAdmin }));
+    const [adminLinks, authorLinks] = [admin!, author!].map((shell) =>
+      [...shell.html.matchAll(/href="([^"]+)" class="cms-nav-item"/g)].map(([, href]) => href));
 
-  it('offers Manage and the admin pages to admins only', () => {
-    const admin = shellSandbox('/admin/', { isAdmin: true });
-    expect(workspaceLinks(admin.html).map((link) => link.href))
-      .toEqual(['/admin/posts.html', '/admin/media.html', '/admin/settings.html']);
+    expect(adminLinks).toEqual(expect.arrayContaining(adminOnly));
+    expect(admin!.part('.cms-user-role').textContent).toBe('Admin');
 
-    const author = shellSandbox('/admin/', { isAdmin: false });
-    expect(workspaceLinks(author.html).map((link) => link.href))
-      .toEqual(['/admin/posts.html', '/admin/media.html']);
-    for (const page of ['about', 'comments', 'import', 'settings', 'users']) {
-      expect(author.html).not.toContain('href="/admin/' + page + '.html"');
-    }
-    expect(author.part('.cms-user-role').textContent).toBe('Author');
+    expect(authorLinks).toEqual(['/admin/', '/admin/posts.html', '/admin/media.html']);
+    for (const href of adminOnly) expect(author!.html).not.toContain('href="' + href + '"');
+    expect(author!.part('.cms-user-role').textContent).toBe('Author');
   });
 
   it('keeps the page heading as the workspace h1 and moves page commands into the title row', () => {
@@ -321,9 +308,8 @@ describe('Auth navigation shell', () => {
     expect(shell.part('.cms-content').children).toEqual([shell.main]);
   });
 
-  it('labels the workspace nav and sets the username as text', () => {
+  it('names the journal and sets the username as text', () => {
     const shell = shellSandbox('/admin/');
-    expect(shell.part('.cms-workspace-nav').getAttribute('aria-label')).toBe(shell.copy.shellWorkspaceNav);
     expect(shell.part('.cms-journal-title').textContent).toBe(shell.copy.shellJournal);
     expect(shell.part('.cms-user-name').textContent).toBe('simon');
     expect(shell.html).not.toContain('simon');

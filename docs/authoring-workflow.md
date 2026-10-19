@@ -82,15 +82,17 @@ text by hand.
 The in-admin editor at `/admin/posts.html` is the authoring interface — no GitHub or `curl`
 needed. Content is stored in **Postgres**; MDX files are generated automatically as backups.
 
-The editor opens on the title and story body. Long titles wrap and grow to show
-the whole title; the saved title remains a single line. On desktop, the left main
-menu stays in place while the page scrolls. **Story details** stays below the top
-command bar and scrolls independently; its header and compact **Close** button remain visible.
+The editor opens on the title and story body; the command bar sits at the top of the
+workspace (there is no separate page title). Long titles wrap and grow to show
+the whole title; the saved title remains a single line. The masthead and left main
+menu never scroll; only the white workspace does. On desktop, **Story details** stays
+below the top command bar and scrolls independently; its header keeps a panel icon visible.
 The panel holds the active language's country, permalink, summary, key facts, hero
-image and optional title image; expedition details and taxonomy are shared. Use
-**Close** inside the panel for more writing space, then **Story details** in the
-command bar to reopen it. On phones, **Details** opens a keyboard-managed drawer.
-Switching DE/EN preserves both languages' unsaved edits.
+image and optional title image; expedition details and taxonomy are shared. Select the
+panel icon (**Collapse story details**) to slide the panel to the right into a slim rail
+for more writing space; the same icon in the rail (**Expand story details**) brings it
+back. On phones, the panel icon at the end of the command bar opens a keyboard-managed
+drawer. Switching DE/EN preserves both languages' unsaved edits.
 
 **Save draft**, **Publish** and **Review story** stay in the top command bar.
 **More actions** (or **More** on phones) contains Preview and, for published posts,
@@ -162,8 +164,8 @@ Save draft to keep the result.
 ### Generate an excerpt
 
 In the active language's story details, select **Generate excerpt with AI**. It uses
-**Settings → Story review & excerpts**: the same provider, model, timeout, and shared
-remote API key as Story Review. Review instructions supply editorial guidance; the
+**Settings → AI models → Story review & excerpts**: the same provider, model, timeout,
+and that provider's API key as Story Review. Review instructions supply editorial guidance; the
 generator requests a short plain-text excerpt in the active language from the unsaved
 title and manuscript. It does not need the other language to be complete.
 
@@ -317,7 +319,7 @@ operable (arrows move, `Space` toggles, `Shift`+arrow extends, `Ctrl/Cmd`+`A` se
 The detail panel on the right edits title, both alt texts, both captions, tags and folder;
 camera, lens and capture date are read-only, read from the photo's EXIF.
 
-**Generate details with AI.** Uses **Settings → Photo descriptions** (the same vision
+**Generate details with AI.** Uses **Settings → AI models → Photo descriptions** (the same vision
 model as the editor's alt-text suggestions); the browser sends each photo's display image
 straight to that provider, so its charges and privacy policy apply.
 

@@ -37,13 +37,6 @@
           <button id="saveDraft" type="button">Save draft</button>
           <button id="publishBtn" type="button" class="btn-primary-publish">Publish</button>
           <button id="reviewStory" type="button" class="btn-secondary" aria-haspopup="dialog" aria-controls="storyReviewDialog">Review story</button>
-          <button
-            id="inspectorToggle"
-            type="button"
-            class="btn-secondary editor-inspector-toggle"
-            aria-controls="editorInspector"
-            aria-expanded="true"
-          >Story details</button>
           <details class="editor-actions-menu" id="editorActionsMenu">
             <summary class="btn-secondary editor-actions-menu__trigger">More actions</summary>
             <div class="editor-actions-menu__panel">
@@ -55,6 +48,18 @@
               <button id="unpublishBtn" type="button" class="btn-secondary" hidden>Unpublish</button>
             </div>
           </details>
+          <!-- Drawer opener at narrow widths only; on desktop the inspector's
+               own rail toggle is the control, so this stays hidden. -->
+          <button
+            id="inspectorToggle"
+            type="button"
+            class="btn-secondary editor-icon-btn"
+            aria-controls="editorInspector"
+            aria-expanded="false"
+            aria-label="Open story details"
+            title="Open story details"
+            hidden
+          ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m10 15-3-3 3-3"/></svg></button>
         </div>
       </div>
 
@@ -138,8 +143,18 @@
         >
           <header class="editor-inspector__header">
             <h2 id="inspectorHeading">Story details</h2>
-            <button type="button" class="btn-secondary editor-inspector-close" id="inspectorClose" aria-labelledby="inspectorClose inspectorHeading">Close</button>
+            <button
+              type="button"
+              class="editor-icon-btn editor-inspector-close"
+              id="inspectorClose"
+              aria-controls="inspectorContent"
+              aria-expanded="true"
+              aria-label="Collapse story details"
+              title="Collapse story details"
+            ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path class="panel-icon__close" d="m8 9 3 3-3 3"/><path class="panel-icon__open" d="m10 15-3-3 3-3"/></svg></button>
           </header>
+
+          <div class="editor-inspector__content" id="inspectorContent">
 
           <section class="editor-inspector-locale" data-inspector-locale="de" aria-labelledby="deStoryDetailsHeading">
             <div class="editor-inspector-group" id="deStoryDetails">
@@ -375,6 +390,7 @@
             <ul id="revisionsList" class="revisions-list"></ul>
             <p id="revisionsEmpty" class="muted" hidden>No revisions yet.</p>
           </details>
+          </div>
         </aside>
       </div>
     </main>
@@ -579,8 +595,9 @@
       const inspectorApi = EditorInspector.wire({
         body: document.body,
         inspector: $('editorInspector'),
+        content: $('inspectorContent'),
         toggle: $('inspectorToggle'),
-        closeButton: $('inspectorClose'),
+        headerButton: $('inspectorClose'),
         scrim: $('inspectorScrim'),
         writingSurface: $('editorWritingSurface'),
         commandbar: $('editorCommandbar'),

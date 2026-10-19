@@ -327,7 +327,7 @@ describe('editor.html inline script against its own markup', () => {
 
 
   it('syncs locale inspector visibility without changing either locale values', () => {
-    const { api, el, document } = loadEditor();
+    const { api, el } = loadEditor();
     api.populateForm(fullPair());
     const before = api.buildPayload();
     expect(el('editorInspector').querySelector('[data-inspector-locale=\"de\"]')!.hidden).toBe(false);
@@ -335,26 +335,62 @@ describe('editor.html inline script against its own markup', () => {
     el('tabbtn-en').click();
     expect(el('editorInspector').querySelector('[data-inspector-locale=\"de\"]')!.hidden).toBe(true);
     expect(el('editorInspector').querySelector('[data-inspector-locale=\"en\"]')!.hidden).toBe(false);
-    expect(el('inspectorToggle').hidden).toBe(true);
-    el('inspectorClose').focus();
-    el('inspectorClose').click();
-    expect(document.body!.classList.contains('editor-inspector-collapsed')).toBe(true);
-    expect(el('editorInspector').getAttribute('aria-hidden')).toBe('true');
-    expect(el('editorInspector').hasAttribute('inert')).toBe(true);
-    expect(el('inspectorToggle').hidden).toBe(false);
-    expect(document.activeElement).toBe(el('inspectorToggle'));
-    el('inspectorToggle').click();
-    expect(document.body!.classList.contains('editor-inspector-collapsed')).toBe(false);
-    expect(el('editorInspector').hasAttribute('inert')).toBe(false);
-    expect(el('inspectorToggle').hidden).toBe(true);
-    expect(document.activeElement).toBe(el('inspectorClose'));
     el('tabbtn-de').click();
     expect(api.buildPayload()).toEqual(before);
+  });
+
+  it('collapses the desktop inspector into a rail that keeps its own toggle', () => {
+    const { el, document } = loadEditor();
+    const panelButton = el('inspectorClose');
+    const content = el('inspectorContent');
+    expect(el('inspectorToggle').hidden).toBe(true);
+    expect(panelButton.getAttribute('aria-expanded')).toBe('true');
+    expect(panelButton.getAttribute('aria-label')).toBe('Collapse story details');
+
+    panelButton.focus();
+    panelButton.click();
+    expect(document.body!.classList.contains('editor-inspector-collapsed')).toBe(true);
+    expect(panelButton.getAttribute('aria-expanded')).toBe('false');
+    expect(panelButton.getAttribute('aria-label')).toBe('Expand story details');
+    expect(content.hasAttribute('inert')).toBe(true);
+    expect(content.getAttribute('aria-hidden')).toBe('true');
+    expect(el('editorInspector').hasAttribute('inert')).toBe(false);
+    expect(el('editorInspector').hasAttribute('aria-hidden')).toBe(false);
+    expect(el('inspectorToggle').hidden).toBe(true);
+    expect(document.activeElement).toBe(panelButton);
+
+    panelButton.click();
+    expect(document.body!.classList.contains('editor-inspector-collapsed')).toBe(false);
+    expect(panelButton.getAttribute('aria-expanded')).toBe('true');
+    expect(content.hasAttribute('inert')).toBe(false);
+    expect(content.hasAttribute('aria-hidden')).toBe(false);
+    expect(el('inspectorToggle').hidden).toBe(true);
+    expect(document.activeElement).toBe(panelButton);
+  });
+
+  it('expands the desktop rail to reveal a missing inspector field', () => {
+    const { api, el, document } = loadEditor();
+    const pair = fullPair();
+    pair.en.country = '';
+    api.populateForm(pair);
+    el('inspectorClose').click();
+    expect(el('inspectorContent').hasAttribute('inert')).toBe(true);
+
+    el('localeChip').querySelectorAll('button')
+      .find((button) => button.textContent.startsWith('EN missing country'))!.click();
+    expect(document.body!.classList.contains('editor-inspector-collapsed')).toBe(false);
+    expect(el('inspectorContent').hasAttribute('inert')).toBe(false);
+    expect(el('inspectorClose').getAttribute('aria-expanded')).toBe('true');
+    expect(document.activeElement).toBe(el('enCountry'));
   });
 
   it('opens a focus-managed mobile inspector and restores focus when it closes', () => {
     const { el, document } = loadEditor({ mobile: true });
     const toggle = el('inspectorToggle');
+    // The drawer opener follows More actions, never precedes it.
+    expect(toggle.hidden).toBe(false);
+    expect(toggle.parentElement!.children.at(-1)).toBe(toggle);
+    expect(toggle.getAttribute('aria-label')).toBe('Open story details');
     toggle.focus();
     toggle.click();
     expect(document.body!.classList.contains('editor-inspector-open')).toBe(true);
@@ -362,6 +398,7 @@ describe('editor.html inline script against its own markup', () => {
     expect(el('editorInspector').getAttribute('aria-modal')).toBe('true');
     expect(el('inspectorScrim').hidden).toBe(false);
     expect(el('editorWritingSurface').hasAttribute('inert')).toBe(true);
+    expect(el('inspectorClose').getAttribute('aria-label')).toBe('Close story details');
     expect(document.activeElement).toBe(el('inspectorClose'));
 
     el('taxonomyDetails').open = true;
@@ -377,23 +414,31 @@ describe('editor.html inline script against its own markup', () => {
 
   it('keeps focus on visible panel controls across desktop and drawer transitions', () => {
     const { el, document, setMobile } = loadEditor({ mobile: true });
-    el('inspectorToggle').focus();
+    const toggle = el('inspectorToggle');
+    const panelButton = el('inspectorClose');
+    toggle.focus();
     setMobile(false);
-    expect(document.activeElement).toBe(el('inspectorClose'));
-    expect(el('inspectorToggle').hidden).toBe(true);
+    expect(document.activeElement).toBe(panelButton);
+    expect(toggle.hidden).toBe(true);
 
-    el('inspectorClose').click();
+    panelButton.click();
     setMobile(true);
-    el('inspectorToggle').click();
-    expect(document.activeElement).toBe(el('inspectorClose'));
+    expect(document.activeElement).toBe(toggle);
+    expect(document.body!.classList.contains('editor-inspector-collapsed')).toBe(false);
+    toggle.click();
+    expect(document.activeElement).toBe(panelButton);
+    expect(el('inspectorContent').hasAttribute('inert')).toBe(false);
+    // Back on desktop the remembered rail returns and its toggle keeps focus.
     setMobile(false);
-    expect(document.activeElement).toBe(el('inspectorToggle'));
-    expect(el('editorInspector').hasAttribute('inert')).toBe(true);
+    expect(document.activeElement).toBe(panelButton);
+    expect(document.body!.classList.contains('editor-inspector-collapsed')).toBe(true);
+    expect(el('inspectorContent').hasAttribute('inert')).toBe(true);
+    expect(el('editorInspector').hasAttribute('inert')).toBe(false);
 
-    el('inspectorToggle').click();
+    panelButton.click();
     setMobile(true);
-    expect(document.activeElement).toBe(el('inspectorToggle'));
-    expect(el('inspectorToggle').hidden).toBe(false);
+    expect(document.activeElement).toBe(toggle);
+    expect(toggle.hidden).toBe(false);
     expect(el('editorInspector').getAttribute('aria-hidden')).toBe('true');
   });
 

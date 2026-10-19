@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import vm from 'node:vm';
-import { createSettingsStore, defaultSettings, type Settings } from '../src/settings.js';
+import { createSettingsStore, defaultSettings } from '../src/settings.js';
 import { buildServer } from '../src/server.js';
 import { memoryUserStore } from '../src/users.js';
 import { memorySessionStore } from '../src/sessions.js';
@@ -37,10 +37,13 @@ interface Element {
   open: boolean;
   focused: boolean;
   className: string;
+  tabIndex: number;
+  dataset: Record<string, string>;
   style: Record<string, string>;
   attrs: Record<string, string>;
   options: { value: string }[];
   children: Element[];
+  classList: { toggle(name: string, on?: boolean): void; contains(name: string): boolean };
   add(option: { value: string }): void;
   remove(index: number): void;
   listeners: Record<string, ((event?: Record<string, unknown>) => Promise<void> | void)[]>;
@@ -52,15 +55,25 @@ interface Element {
   replaceChildren(): void;
   contains(node: unknown): boolean;
   setAttribute(name: string, value: string): void;
+  getAttribute(name: string): string | null;
+  querySelectorAll(selector: string): Element[];
   focus(): void;
 }
 
 function element(): Element {
   const listeners: Element['listeners'] = {};
-  return {
+  const e: Element = {
     id: '', value: '', textContent: '', innerHTML: '', href: '', hidden: false, disabled: false, checked: false,
-    indeterminate: false, open: false, focused: false, className: '',
+    indeterminate: false, open: false, focused: false, className: '', tabIndex: 0, dataset: {},
     style: {}, attrs: {}, listeners, options: [], children: [],
+    classList: {
+      toggle(name, on) {
+        const names = new Set(e.className.split(/\s+/).filter(Boolean));
+        if (on ?? !names.has(name)) names.add(name); else names.delete(name);
+        e.className = [...names].join(' ');
+      },
+      contains(name) { return e.className.split(/\s+/).includes(name); },
+    },
     add(option) { this.options.push(option); },
     remove(index) { this.options.splice(index, 1); },
     addEventListener(type, fn) { (listeners[type] ??= []).push(fn); },
@@ -73,8 +86,11 @@ function element(): Element {
     replaceChildren() { this.children.length = 0; },
     contains(node) { return node === this || this.children.some((child) => child.contains(node)); },
     setAttribute(name, value) { this.attrs[name] = value; },
+    getAttribute(name) { return this.attrs[name] ?? null; },
+    querySelectorAll() { return []; },
     focus() { this.focused = true; },
   };
+  return e;
 }
 
 const NETWORK_DOWN = new TypeError('Failed to fetch');
@@ -82,23 +98,48 @@ const EDITOR_COPY = Object.fromEntries(Object.entries(ui.en)
   .filter(([key]) => key.startsWith('editor.chrome.'))
   .map(([key, value]) => [key.slice('editor.chrome.'.length), value]));
 
-function loadPage(file: string, extraGlobals: Record<string, unknown>): { ctx: Record<string, unknown>; el: (id: string) => Element } {
+type Listener = (event?: Record<string, unknown>) => Promise<void> | void;
+
+function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: string[] = []): {
+  ctx: Record<string, unknown>; el: (id: string) => Element; windowListeners: Record<string, Listener[]>;
+} {
   const html = readFileSync(file, 'utf8');
   const scriptStart = html.lastIndexOf('<script>');
   const script = html.slice(scriptStart + '<script>'.length, html.lastIndexOf('</script>'));
-  const ids = new Set([...html.slice(0, scriptStart).matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
+  const markup = html.slice(0, scriptStart);
+  const ids = new Set([...markup.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
   const elements = new Map<string, Element>();
   const el = (id: string): Element => {
     if (!ids.has(id)) throw new Error('no element #' + id + ' in ' + file);
     let e = elements.get(id);
-    if (!e) { e = element(); elements.set(id, e); }
+    if (!e) { e = element(); e.id = id; elements.set(id, e); }
     return e;
   };
+  // ARIA tabs carry their state in markup that tabs.js reads; mirror just that.
+  const attr = (tag: string, name: string): string | undefined => new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
+  const tabs = [...markup.matchAll(/<button\b[^>]*\brole="tab"[^>]*>/g)].map(([tag]) => {
+    const tab = el(attr(tag, 'id')!);
+    tab.dataset.tab = attr(tag, 'data-tab') ?? '';
+    for (const name of ['aria-controls', 'aria-selected']) tab.attrs[name] = attr(tag, name) ?? '';
+    tab.tabIndex = attr(tag, 'tabindex') === '-1' ? -1 : 0;
+    return tab;
+  });
+  for (const [tag] of markup.matchAll(/<[a-z]+\b[^>]*\brole="tablist"[^>]*>/g)) {
+    const list = el(attr(tag, 'id')!);
+    const orientation = attr(tag, 'aria-orientation');
+    if (orientation) list.attrs['aria-orientation'] = orientation;
+    list.querySelectorAll = () => tabs;
+  }
+  for (const [tag] of markup.matchAll(/<section\b[^>]*\brole="tabpanel"[^>]*>/g)) {
+    el(attr(tag, 'id')!).hidden = /\shidden[\s>]/.test(tag);
+  }
+  const windowListeners: Record<string, Listener[]> = {};
   const ctx: Record<string, unknown> = {
     // An element itself, so a page can listen on the document (outside-click
     // dismissal) and a test can fire there with an explicit target.
     document: Object.assign(element(), {
       referrer: '',
+      title: '',
       getElementById: (id: string): Element | null => (ids.has(id) ? el(id) : null),
       createElement: () => element(),
     }),
@@ -107,9 +148,12 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>): { ctx: R
       origin: 'http://localhost',
       pathname: '/admin/posts.html',
       search: '',
+      hash: '',
       protocol: 'http:',
     },
     history: { replaceState() {} },
+    addEventListener: (type: string, fn: Listener) => { (windowListeners[type] ??= []).push(fn); },
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
     URL,
     URLSearchParams,
     fetch: () => Promise.reject(NETWORK_DOWN),
@@ -123,8 +167,9 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>): { ctx: R
   };
   ctx.window = ctx;
   vm.createContext(ctx);
+  for (const dependency of scripts) vm.runInContext(readFileSync(dependency, 'utf8'), ctx, { filename: dependency });
   vm.runInContext(script, ctx);
-  return { ctx, el };
+  return { ctx, el, windowListeners };
 }
 
 function loadPosts(extraGlobals: Record<string, unknown> = {}) {
@@ -532,225 +577,672 @@ describe('posts.html status views and language states', () => {
   });
 });
 
-describe('settings.html actions survive a dropped connection', () => {
-  const loadSettings = () => loadPage('public/settings.html', { LLM: { mixedContentWarning: () => '' } });
+// ---- settings.html ------------------------------------------------------------
+// Fixtures mirror the AI provider registry contract (spec 2026-10-19 §4): the
+// settings response every /settings and /ai-providers route answers with.
 
+type ProviderKind = 'lm-studio' | 'openrouter' | 'deepseek' | 'custom';
+interface ProviderView { id: string; name: string; kind: ProviderKind; baseUrl: string; hasApiKey: boolean }
+interface SettingsResponse {
+  aiProviders: ProviderView[];
+  aiDefaultProviderId: string;
+  reviewProviderId: string | null;
+  captionProviderId: string | null;
+  aiModel: string;
+  reviewPrompt: string;
+  reviewTimeoutMs: number;
+  lmModel: string;
+  captionPrompt: string;
+  captionTimeoutMs: number;
+  captionMaxEdge: number;
+  backupSchedule: 'off' | 'daily' | 'weekly';
+  backupRetention: number;
+  convertJpeg: boolean;
+  webpQuality: number;
+  avifQuality: number;
+  importDelayMs: number;
+  importRetries: number;
+  commentsEnabled: boolean;
+  geocodingSearchUrl: string;
+}
+interface Question { title: string; body: string; confirmLabel?: string; danger?: boolean }
+interface ApiRequest { url: string; method: string; body?: Record<string, unknown> }
+
+const LOCAL: ProviderView = { id: 'lm-studio', name: 'Local LM Studio', kind: 'lm-studio', baseUrl: 'http://localhost:1234/v1', hasApiKey: false };
+const ROUTER: ProviderView = { id: 'openrouter', name: 'OpenRouter', kind: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', hasApiKey: true };
+const DEEPSEEK: ProviderView = { id: 'deepseek', name: 'DeepSeek', kind: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', hasApiKey: false };
+
+function settingsResponse(overrides: Partial<SettingsResponse> = {}): SettingsResponse {
+  return {
+    aiProviders: [LOCAL], aiDefaultProviderId: 'lm-studio', reviewProviderId: null, captionProviderId: null,
+    aiModel: 'review-model', reviewPrompt: 'Review prompt', reviewTimeoutMs: 60000,
+    lmModel: 'vision-model', captionPrompt: 'Caption prompt', captionTimeoutMs: 60000, captionMaxEdge: 768,
+    backupSchedule: 'off', backupRetention: 14, convertJpeg: true, webpQuality: 75, avifQuality: 55,
+    importDelayMs: 1200, importRetries: 3, commentsEnabled: false,
+    geocodingSearchUrl: 'https://nominatim.openstreetmap.org/search',
+    ...overrides,
+  };
+}
+
+function loadSettingsPage(extra: Record<string, unknown> = {}) {
+  return loadPage('public/settings.html', {
+    LLM: { mixedContentWarning: () => '', listModels: async () => [] },
+    AbortController, AbortSignal, setTimeout, clearTimeout,
+    ...extra,
+  }, ['public/tabs.js']);
+}
+
+/** Calls a top-level function the page script declared (vm puts it on the context). */
+async function callPage(ctx: Record<string, unknown>, name: string, ...args: unknown[]): Promise<void> {
+  const fn = ctx[name];
+  if (typeof fn !== 'function') throw new Error('settings.html declares no ' + name + '()');
+  await fn(...args);
+}
+
+const descendants = (node: Element): Element[] => node.children.flatMap((child) => [child, ...descendants(child)]);
+
+function providerRow(el: (id: string) => Element, name: string): Element {
+  const row = el('providerList').children
+    .find((li) => descendants(li).some((n) => n.className === 'provider-name' && n.textContent === name));
+  if (!row) throw new Error('no provider row for ' + name);
+  return row;
+}
+
+function rowButton(row: Element, label: string): Element {
+  const button = descendants(row).find((n) => n.className.startsWith('provider-action') && n.textContent === label);
+  if (!button) throw new Error('no ' + label + ' action in the row');
+  return button;
+}
+
+function rowStatus(row: Element): string {
+  return descendants(row).find((n) => n.className.includes('provider-test-out'))?.textContent ?? '';
+}
+
+/** Every place the page writes text a person or a screen reader can see. */
+function pageText(el: (id: string) => Element): string {
+  return [
+    'providersOut', 'providerFormOut', 'providerKeyHelp', 'providerKeyMoveWarning', 'providerUrlWarning',
+    'reviewResolved', 'reviewDestination', 'captionResolved', 'captionDestination', 'aiOut', 'reviewTestOut', 'out',
+  ].map((id) => el(id).textContent).concat(descendants(el('providerList')).map((n) => n.textContent)).join('\n');
+}
+
+/** settings.html over a contract-shaped fake API. `route` answers first; /settings is served from `state`. */
+async function apiPage(initial: SettingsResponse, opts: {
+  confirm?: (question: Question) => boolean;
+  route?: (request: ApiRequest, setState: (next: SettingsResponse) => void) => Response | undefined;
+  listModels?: (baseUrl: string, apiKey: string | null) => Promise<string[]>;
+  mixedContentWarning?: (url: string, protocol: string) => string;
+} = {}) {
+  let state = initial;
+  const setState = (next: SettingsResponse) => { state = next; };
+  const requests: ApiRequest[] = [];
+  const questions: Question[] = [];
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    const request: ApiRequest = {
+      url, method: init?.method ?? 'GET',
+      ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) as Record<string, unknown> } : {}),
+    };
+    requests.push(request);
+    const routed = opts.route?.(request, setState);
+    if (routed) return routed;
+    if (url === '/settings' && request.method === 'POST') state = { ...state, ...(request.body as Partial<SettingsResponse>) };
+    if (url === '/settings') return Response.json(state);
+    return Response.json({ error: 'Unexpected request in this test.' }, { status: 500 });
+  });
+  const listedByDefault = async (_baseUrl: string, _apiKey: string | null): Promise<string[]> => ['model-a', 'model-b'];
+  const listModels = vi.fn(opts.listModels ?? listedByDefault);
+  const page = loadSettingsPage({
+    fetch: fetcher,
+    LLM: { mixedContentWarning: opts.mixedContentWarning ?? (() => ''), listModels },
+    AdminConfirm: {
+      ask: async (question: Question) => { questions.push(question); return opts.confirm ? opts.confirm(question) : true; },
+    },
+  });
+  await callPage(page.ctx, 'fill', state);
+  return { ...page, requests, questions, listModels, fetcher };
+}
+
+const calls = (requests: ApiRequest[]) => requests.map((r) => r.method + ' ' + r.url);
+
+describe('settings.html tabs', () => {
+  const PANELS = ['panel-ai-models', 'panel-images', 'panel-comments', 'panel-site'];
+
+  function tabsPage(hash = '', narrow = false) {
+    const replaced: string[] = [];
+    const location = {
+      href: 'http://localhost/admin/settings.html' + hash, origin: 'http://localhost',
+      pathname: '/admin/settings.html', search: '', hash, protocol: 'http:',
+    };
+    const page = loadSettingsPage({
+      location,
+      history: { replaceState: (_state: unknown, _title: string, url: string) => { replaced.push(url); } },
+      matchMedia: () => ({ matches: narrow, addEventListener() {} }),
+    });
+    const visible = () => PANELS.filter((id) => !page.el(id).hidden);
+    const title = () => page.el('settingsTabTitle').textContent;
+    return { ...page, location, replaced, visible, title };
+  }
+
+  it.each(['', '#', '#nope', '#__proto__'])('opens AI models for hash %j without rewriting the URL', (hash) => {
+    const t = tabsPage(hash);
+    expect(t.visible()).toEqual(['panel-ai-models']);
+    expect(t.title()).toBe(' · AI models');
+    expect(t.el('tabbtn-ai-models').attrs['aria-selected']).toBe('true');
+    expect(t.replaced).toEqual([]);
+  });
+
+  it('opens a deep-linked tab with the roving tabindex and the title on it', () => {
+    const t = tabsPage('#comments');
+    expect(t.visible()).toEqual(['panel-comments']);
+    expect(t.title()).toBe(' · Comments');
+    expect(t.el('tabbtn-comments').tabIndex).toBe(0);
+    expect(t.el('tabbtn-ai-models').tabIndex).toBe(-1);
+  });
+
+  it('a vertical index moves with Up/Down, Home/End, and mirrors the tab in the hash and title', async () => {
+    const t = tabsPage();
+    expect(t.el('settingsTabs').attrs['aria-orientation']).toBe('vertical');
+    await t.el('tabbtn-ai-models').fire('keydown', { key: 'ArrowRight' });
+    expect(t.visible()).toEqual(['panel-ai-models']);
+    await t.el('tabbtn-ai-models').fire('keydown', { key: 'ArrowDown' });
+    expect(t.visible()).toEqual(['panel-images']);
+    expect(t.el('tabbtn-images').focused).toBe(true);
+    expect(t.title()).toBe(' · Images');
+    await t.el('tabbtn-images').fire('keydown', { key: 'End' });
+    expect(t.visible()).toEqual(['panel-site']);
+    expect(t.title()).toBe(' · Site & backups');
+    await t.el('tabbtn-site').fire('keydown', { key: 'ArrowDown' });
+    expect(t.visible()).toEqual(['panel-ai-models']);
+    await t.el('tabbtn-ai-models').fire('keydown', { key: 'ArrowUp' });
+    await t.el('tabbtn-site').fire('keydown', { key: 'Home' });
+    expect(t.replaced).toEqual(['#images', '#site', '#ai-models', '#site', '#ai-models']);
+  });
+
+  it('a click selects the tab and a hashchange (back/forward, edited URL) selects it too', async () => {
+    const t = tabsPage();
+    await t.el('tabbtn-site').click();
+    expect(t.visible()).toEqual(['panel-site']);
+    expect(t.replaced).toEqual(['#site']);
+    t.location.hash = '#images';
+    for (const fn of t.windowListeners.hashchange ?? []) await fn();
+    expect(t.visible()).toEqual(['panel-images']);
+    expect(t.title()).toBe(' · Images');
+    expect(t.el('tabbtn-images').attrs['aria-selected']).toBe('true');
+  });
+
+  it('below 72rem the strip is horizontal and its arrow keys follow', async () => {
+    const t = tabsPage('', true);
+    expect(t.el('settingsTabs').attrs['aria-orientation']).toBe('horizontal');
+    await t.el('tabbtn-ai-models').fire('keydown', { key: 'ArrowDown' });
+    expect(t.visible()).toEqual(['panel-ai-models']);
+    await t.el('tabbtn-ai-models').fire('keydown', { key: 'ArrowRight' });
+    expect(t.visible()).toEqual(['panel-images']);
+  });
+});
+
+describe('settings.html actions survive a dropped connection', () => {
   it('Back up now re-enables its button and names the failure in the backup status', async () => {
-    const { el } = loadSettings();
+    const { el } = loadSettingsPage();
     await el('backupNow').click();
     expect(el('backupNow').disabled).toBe(false);
     expect(el('backupStatus').textContent).toBe('Backup failed: TypeError: Failed to fetch');
   });
 
   it('Rebuild site now re-enables its button and names the failure', async () => {
-    const { el } = loadSettings();
+    const { el } = loadSettingsPage();
     await el('rebuild').click();
     expect(el('rebuild').disabled).toBe(false);
     expect(el('out').textContent).toBe('Rebuild failed: TypeError: Failed to fetch');
   });
 
   it('Rebuild does not start when the confirm is declined', async () => {
-    const { el } = loadPage('public/settings.html', {
-      LLM: { mixedContentWarning: () => '' },
-      AdminConfirm: { ask: async () => false },
-    });
+    const { el } = loadSettingsPage({ AdminConfirm: { ask: async () => false } });
     await el('rebuild').click();
     expect(el('rebuild').disabled).toBe(false);
     expect(el('out').textContent).not.toMatch(/Rebuilding|Rebuilt|failed/);
   });
 });
 
-describe('settings.html shared review key lifecycle', () => {
-  function loadReview(fetch: (url: string, init?: { body?: string; method?: string }) => Promise<unknown>, confirm = async (_question: unknown) => true) {
-    const state = { ...defaultSettings(), aiProvider: 'openrouter', hasAiApiKey: true };
-    const page = loadPage('public/settings.html', {
-      LLM: { mixedContentWarning: () => '' },
-      Option: class { constructor(public text: string, public value: string) {} },
-      fetch,
-      AdminConfirm: { ask: confirm },
+describe('settings.html providers', () => {
+  it('renders names and URLs as text only, with the default badge, kind and key state', async () => {
+    const hostile = '<img src=x onerror=alert(1)>';
+    const { el } = await apiPage(settingsResponse({
+      aiProviders: [LOCAL, { ...ROUTER, name: hostile, baseUrl: 'https://router.example/<b>/v1' }, DEEPSEEK],
+    }));
+    const router = providerRow(el, hostile);
+    const routerText = descendants(router).map((n) => n.textContent);
+    expect(routerText).toContain('https://router.example/<b>/v1');
+    expect(routerText).toContain('OpenRouter · Key stored');
+    expect(descendants(providerRow(el, 'DeepSeek')).map((n) => n.textContent)).toContain('DeepSeek · No key');
+    expect(descendants(el('providerList')).every((n) => n.innerHTML === '')).toBe(true);
+    expect(rowButton(router, 'Delete').attrs['aria-label']).toBe('Delete ' + hostile);
+
+    const local = providerRow(el, 'Local LM Studio');
+    const localNodes = descendants(local);
+    expect(localNodes.some((n) => n.className.includes('provider-default') && n.textContent === 'default')).toBe(true);
+    expect(localNodes.map((n) => n.textContent)).toContain('Local LM Studio · Local — no key');
+    expect(rowButton(local, 'Set default').disabled).toBe(true);
+    expect(rowButton(local, 'Delete').disabled).toBe(true);
+    expect(localNodes.find((n) => n.className === 'provider-note')?.textContent).toMatch(/make another provider the default/);
+    expect(rowButton(router, 'Set default').disabled).toBe(false);
+    expect(rowButton(router, 'Delete').disabled).toBe(false);
+  });
+
+  it('Add pre-fills per kind, posts name, kind, URL and the typed key, then clears the key and reloads', async () => {
+    const created: ProviderView = { id: 'p-1a2b3c4d', name: 'Router two', kind: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', hasApiKey: true };
+    const page = await apiPage(settingsResponse(), {
+      route: (request, setState) => {
+        if (request.method !== 'POST' || request.url !== '/ai-providers') return undefined;
+        const next = settingsResponse({ aiProviders: [LOCAL, created] });
+        setState(next);
+        return Response.json(next, { status: 201 });
+      },
     });
-    (page.ctx.fill as (state: unknown) => void)(state);
-    return { ...page, state };
-  }
-
-  it('leaves an untouched blank key out of the save and never sends a provider request', async () => {
-    const requests: { url: string; body?: Record<string, unknown> }[] = [];
-    const state = { ...defaultSettings(), aiProvider: 'openrouter', hasAiApiKey: true };
-    const { el } = loadReview(async (url, init) => {
-      requests.push({ url, body: init?.body ? JSON.parse(init.body) : undefined });
-      return { ok: true, status: 200, json: async () => state };
+    const { el } = page;
+    await el('addProvider').click();
+    expect(el('providerForm').hidden).toBe(false);
+    expect(el('providerKindField').hidden).toBe(false);
+    expect(el('providerKind').value).toBe('openrouter');
+    expect(el('providerName').value).toBe('OpenRouter');
+    expect(el('providerBaseUrl').value).toBe('https://openrouter.ai/api/v1');
+    expect(el('providerKeyField').hidden).toBe(false);
+    expect(el('providerKeyHelp').textContent).toContain('OpenRouter requires an API key');
+    el('providerName').value = 'Router two';
+    el('providerApiKey').value = 'fixture-new-key';
+    await el('providerForm').fire('submit');
+    expect(calls(page.requests)).toEqual(['POST /ai-providers', 'GET /settings']);
+    expect(page.requests[0]!.body).toEqual({
+      name: 'Router two', kind: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'fixture-new-key',
     });
-    await el('saveReview').click();
-    expect(requests.map((r) => r.url)).toEqual(['/settings', '/settings']);
-    expect(requests[0]!.body).not.toHaveProperty('aiApiKey');
-    expect(el('aiKeyStatus').textContent).toBe('Configured');
-    expect(el('aiApiKey').value).toBe('');
-    expect(el('saveReview').disabled).toBe(false);
+    expect(el('providerApiKey').value).toBe('');
+    expect(el('providerForm').hidden).toBe(true);
+    expect(el('providersOut').textContent).toContain('Added “Router two”');
+    expect(descendants(providerRow(el, 'Router two')).map((n) => n.textContent)).toContain('OpenRouter · Key stored');
+    expect(pageText(el)).not.toContain('fixture-new-key');
   });
 
-  it('preserves a pending review destination and replacement key when caption settings are saved', async () => {
-    const state = { ...defaultSettings(), aiProvider: 'openrouter', hasAiApiKey: true };
-    const { el } = loadReview(async () => ({ ok: true, status: 200, json: async () => state }));
-    el('aiProvider').value = 'deepseek';
-    el('aiModel').value = 'pending-review-model';
-    el('aiApiKey').value = 'pending-provider-key';
-    await el('aiProvider').listeners.change![0]!();
-    await el('saveAi').click();
-    expect(el('aiProvider').value).toBe('deepseek');
-    expect(el('aiModel').value).toBe('pending-review-model');
-    expect(el('aiApiKey').value).toBe('pending-provider-key');
-    expect(el('reviewKeyWarning').hidden).toBe(false);
+  it('changing the kind pre-fills URL and name without clobbering typed values, and a local kind drops the key', async () => {
+    const { el } = await apiPage(settingsResponse());
+    await el('addProvider').click();
+    el('providerKind').value = 'deepseek';
+    await el('providerKind').fire('change');
+    expect(el('providerName').value).toBe('DeepSeek');
+    expect(el('providerBaseUrl').value).toBe('https://api.deepseek.com/v1');
+    el('providerName').value = 'Proxy';
+    el('providerBaseUrl').value = 'https://proxy.example/v1';
+    el('providerKind').value = 'custom';
+    await el('providerKind').fire('change');
+    expect(el('providerName').value).toBe('Proxy');
+    expect(el('providerBaseUrl').value).toBe('https://proxy.example/v1');
+    expect(el('providerKeyHelp').textContent).toContain('Only needed if your endpoint requires one');
+    el('providerApiKey').value = 'fixture-typed';
+    el('providerKind').value = 'lm-studio';
+    await el('providerKind').fire('change');
+    expect(el('providerApiKey').value).toBe('');
+    expect(el('providerKeyField').hidden).toBe(true);
   });
 
-  it('preserves pending caption edits when review settings are saved', async () => {
-    const state = { ...defaultSettings(), aiProvider: 'openrouter', hasAiApiKey: true };
-    const { el } = loadReview(async () => ({ ok: true, status: 200, json: async () => state }));
-    el('baseUrl').value = 'http://localhost:1235/v1';
-    el('prompt').value = 'Unsaved caption instructions';
-    await el('saveReview').click();
-    expect(el('baseUrl').value).toBe('http://localhost:1235/v1');
-    expect(el('prompt').value).toBe('Unsaved caption instructions');
-  });
-
-  it('shows the saved local review destination rather than an unsaved caption URL', async () => {
-    const state = { ...defaultSettings(), aiProvider: 'openrouter', hasAiApiKey: true };
-    const { el } = loadReview(async () => ({ ok: true, status: 200, json: async () => state }));
-    el('baseUrl').value = 'http://localhost:1235/v1';
-    el('aiProvider').value = 'lm-studio';
-    await el('aiProvider').listeners.change![0]!();
-    expect(el('reviewDestination').textContent).toContain(state.lmBaseUrl);
-    expect(el('reviewDestination').textContent).not.toContain('http://localhost:1235/v1');
-  });
-
-  it('clears the entered secret and reloads the old destination after a partial failure', async () => {
-    const state = { ...defaultSettings(), aiProvider: 'openrouter', hasAiApiKey: true };
-    const { el } = loadReview(async (_url, init) => init?.method === 'POST'
-      ? { ok: false, status: 500, json: async () => ({ code: 'settings_partial_failure', error: 'API key change saved, but settings were not saved.' }) }
-      : { ok: true, status: 200, json: async () => state });
-    el('aiApiKey').value = 'disposable-ui-fixture';
-    el('prompt').value = 'Unsaved caption instructions';
-    el('aiProvider').value = 'deepseek';
-    await el('aiProvider').listeners.change![0]!();
-    expect(el('reviewKeyWarning').textContent).toContain('https://api.deepseek.com/v1');
-    await el('saveReview').click();
-    expect(el('aiApiKey').value).toBe('');
-    expect(el('aiProvider').value).toBe('openrouter');
-    expect(el('reviewOut').textContent).toContain('API key change saved');
-    expect(el('reviewOut').textContent).not.toContain('disposable-ui-fixture');
-    expect(el('removeAiKey').disabled).toBe(false);
-    expect(el('prompt').value).toBe('Unsaved caption instructions');
-  });
-
-  it('requires removal confirmation, then sends null rather than erasing an untouched blank field', async () => {
-    const bodies: Record<string, unknown>[] = [];
+  it('editing the URL of a provider with a stored key warns, and saving asks with both URLs named', async () => {
     let approve = false;
-    const state = { ...defaultSettings(), hasAiApiKey: false };
-    const { el } = loadReview(async (_url, init) => {
-      if (init?.body) bodies.push(JSON.parse(init.body));
-      return { ok: true, status: 200, json: async () => state };
-    }, async () => approve);
-    await el('removeAiKey').click();
-    expect(bodies).toEqual([]);
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER], reviewProviderId: 'openrouter' });
+    const page = await apiPage(state, {
+      confirm: () => approve,
+      route: (request) => (request.method === 'PUT' ? Response.json(state) : undefined),
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, 'OpenRouter'), 'Edit').click();
+    expect(el('providerKindField').hidden).toBe(true);
+    expect(el('providerName').value).toBe('OpenRouter');
+    expect(el('providerBaseUrl').value).toBe(ROUTER.baseUrl);
+    expect(el('providerApiKey').value).toBe('');
+    expect(el('removeProviderKey').hidden).toBe(false);
+    expect(providerRow(el, 'OpenRouter').children).toContain(el('providerForm'));
+
+    el('providerBaseUrl').value = 'https://proxy.example/v1';
+    await el('providerBaseUrl').fire('input');
+    expect(el('providerKeyMoveWarning').hidden).toBe(false);
+    expect(el('providerKeyMoveWarning').textContent).toContain('https://proxy.example/v1');
+    expect(el('providerKeyMoveWarning').textContent).toContain(ROUTER.baseUrl);
+
+    await el('providerForm').fire('submit');
+    expect(page.questions).toHaveLength(1);
+    expect(page.questions[0]!.body).toContain('https://proxy.example/v1');
+    expect(page.questions[0]!.body).toContain(ROUTER.baseUrl);
+    expect(page.questions[0]!.body).toContain(EDITOR_COPY.settingsWriting);
+    expect(page.requests).toEqual([]);
+    expect(el('providerForm').hidden).toBe(false);
+
     approve = true;
-    await el('removeAiKey').click();
-    expect(bodies).toEqual([{ aiApiKey: null }]);
-    expect(el('aiKeyStatus').textContent).toBe('Not configured');
-    expect(el('removeAiKey').disabled).toBe(true);
+    await el('providerForm').fire('submit');
+    expect(page.requests[0]).toEqual({
+      url: '/ai-providers/openrouter', method: 'PUT', body: { name: 'OpenRouter', baseUrl: 'https://proxy.example/v1' },
+    });
   });
 
-  it('names unknown outcome and failed reload without retaining the typed key', async () => {
-    const { el } = loadReview(async () => { throw NETWORK_DOWN; });
-    el('aiApiKey').value = 'disposable-ui-fixture';
-    await el('saveReview').click();
-    expect(el('aiApiKey').value).toBe('');
-    expect(el('reviewOut').textContent).toContain('outcome is unknown');
-    expect(el('reviewOut').textContent).toContain('Reload failed');
-    expect(el('aiKeyStatus').textContent).toBe('Unknown — reload');
+  it('a typed replacement key travels with the new URL, so nothing stored moves and no confirm is needed', async () => {
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER] });
+    const page = await apiPage(state, { route: (request) => (request.method === 'PUT' ? Response.json(state) : undefined) });
+    const { el } = page;
+    await rowButton(providerRow(el, 'OpenRouter'), 'Edit').click();
+    el('providerBaseUrl').value = 'https://proxy.example/v1';
+    el('providerApiKey').value = 'fixture-replacement';
+    await el('providerApiKey').fire('input');
+    expect(el('providerKeyMoveWarning').hidden).toBe(true);
+    await el('providerForm').fire('submit');
+    expect(page.questions).toEqual([]);
+    expect(page.requests[0]!.body).toEqual({ name: 'OpenRouter', baseUrl: 'https://proxy.example/v1', apiKey: 'fixture-replacement' });
+    expect(el('providerApiKey').value).toBe('');
+  });
+
+  it('warns about plain HTTP for remote kinds only, and passes mixed-content warnings through', async () => {
+    const { el } = await apiPage(settingsResponse(), {
+      mixedContentWarning: (url) => (url.startsWith('http://lan.example') ? 'fixture mixed content' : ''),
+    });
+    await el('addProvider').click();
+    el('providerKind').value = 'custom';
+    await el('providerKind').fire('change');
+    el('providerBaseUrl').value = 'http://192.168.1.5:8080/v1';
+    await el('providerBaseUrl').fire('input');
+    expect(el('providerUrlWarning').hidden).toBe(false);
+    expect(el('providerUrlWarning').textContent).toContain('Plain HTTP');
+    el('providerBaseUrl').value = 'http://localhost:8080/v1';
+    await el('providerBaseUrl').fire('input');
+    expect(el('providerUrlWarning').hidden).toBe(true);
+    el('providerKind').value = 'lm-studio';
+    await el('providerKind').fire('change');
+    el('providerBaseUrl').value = 'http://192.168.1.5:1234/v1';
+    await el('providerBaseUrl').fire('input');
+    expect(el('providerUrlWarning').hidden).toBe(true);
+    el('providerBaseUrl').value = 'http://lan.example:1234/v1';
+    await el('providerBaseUrl').fire('input');
+    expect(el('providerUrlWarning').textContent).toBe('fixture mixed content');
+  });
+
+  it('Delete refuses an assigned provider without a request, and confirms the scope before deleting another', async () => {
+    let approve = false;
+    const keyed = { ...DEEPSEEK, hasApiKey: true };
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER, keyed], reviewProviderId: 'openrouter' });
+    const page = await apiPage(state, {
+      confirm: () => approve,
+      route: (request, setState) => {
+        if (request.method !== 'DELETE') return undefined;
+        const next = { ...state, aiProviders: [LOCAL, ROUTER] };
+        setState(next);
+        return Response.json(next);
+      },
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, 'OpenRouter'), 'Delete').click();
+    expect(page.questions).toEqual([]);
+    expect(page.requests).toEqual([]);
+    expect(el('providersOut').textContent).toContain('“OpenRouter” is assigned to ' + EDITOR_COPY.settingsWriting);
+
+    await rowButton(providerRow(el, 'DeepSeek'), 'Delete').click();
+    expect(page.questions[0]).toMatchObject({ title: 'Delete “DeepSeek”?', confirmLabel: 'Delete provider', danger: true });
+    expect(page.questions[0]!.body).toContain(DEEPSEEK.baseUrl);
+    expect(page.questions[0]!.body).toContain('stored API key');
+    expect(page.requests).toEqual([]);
+
+    approve = true;
+    await rowButton(providerRow(el, 'DeepSeek'), 'Delete').click();
+    expect(calls(page.requests)).toEqual(['DELETE /ai-providers/deepseek', 'GET /settings']);
+    expect(el('providersOut').textContent).toBe('Deleted “DeepSeek”.');
+    expect(() => providerRow(el, 'DeepSeek')).toThrow();
+  });
+
+  it('surfaces the server\'s provider_in_use refusal with the use cases named', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }), {
+      route: (request) => (request.method === 'DELETE' ? Response.json({
+        code: 'provider_in_use', error: 'This provider is assigned to a use case.', useCases: ['caption', '__proto__'],
+      }, { status: 409 }) : undefined),
+    });
+    await rowButton(providerRow(page.el, 'OpenRouter'), 'Delete').click();
+    expect(calls(page.requests)).toEqual(['DELETE /ai-providers/openrouter', 'GET /settings']);
+    expect(page.el('providersOut').textContent).toBe(
+      '“OpenRouter” is assigned to ' + EDITOR_COPY.settingsCaptions + '. Assign another provider there first, then delete it.');
+    expect(providerRow(page.el, 'OpenRouter')).toBeDefined();
+  });
+
+  it('Set default confirms when a use case following the default would move, and posts only the default', async () => {
+    let approve = false;
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }), { confirm: () => approve });
+    const { el } = page;
+    await rowButton(providerRow(el, 'OpenRouter'), 'Set default').click();
+    expect(page.questions).toHaveLength(1);
+    for (const part of [EDITOR_COPY.settingsWriting, EDITOR_COPY.settingsCaptions, ROUTER.baseUrl, LOCAL.baseUrl]) {
+      expect(page.questions[0]!.body).toContain(part);
+    }
+    expect(page.requests).toEqual([]);
+
+    approve = true;
+    await rowButton(providerRow(el, 'OpenRouter'), 'Set default').click();
+    expect(calls(page.requests)).toEqual(['POST /settings', 'GET /settings']);
+    expect(page.requests[0]!.body).toEqual({ aiDefaultProviderId: 'openrouter' });
+    expect(rowButton(providerRow(el, 'OpenRouter'), 'Set default').disabled).toBe(true);
+    expect(el('reviewProviderId').children[0]!.textContent).toBe('Default — OpenRouter');
+  });
+
+  it('Set default does not ask when every use case is explicitly assigned', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], reviewProviderId: 'lm-studio', captionProviderId: 'lm-studio' }));
+    await rowButton(providerRow(page.el, 'OpenRouter'), 'Set default').click();
+    expect(page.questions).toEqual([]);
+    expect(page.requests[0]).toEqual({ url: '/settings', method: 'POST', body: { aiDefaultProviderId: 'openrouter' } });
+  });
+
+  it('Remove stored key is its own confirmed action that sends apiKey null', async () => {
+    let approve = false;
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER], reviewProviderId: 'openrouter' });
+    const page = await apiPage(state, {
+      confirm: () => approve,
+      route: (request, setState) => {
+        if (request.method !== 'PUT') return undefined;
+        const next = { ...state, aiProviders: [LOCAL, { ...ROUTER, hasApiKey: false }] };
+        setState(next);
+        return Response.json(next);
+      },
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, 'OpenRouter'), 'Edit').click();
+    await el('removeProviderKey').click();
+    expect(page.questions[0]).toMatchObject({ confirmLabel: 'Remove key', danger: true });
+    expect(page.questions[0]!.body).toContain(EDITOR_COPY.settingsWriting);
+    expect(page.questions[0]!.body).toContain(ROUTER.baseUrl);
+    expect(page.requests).toEqual([]);
+
+    approve = true;
+    await el('removeProviderKey').click();
+    expect(page.requests[0]).toEqual({ url: '/ai-providers/openrouter', method: 'PUT', body: { apiKey: null } });
+    expect(el('providerForm').hidden).toBe(true);
+    expect(el('providersOut').textContent).toBe('Removed the stored key for “OpenRouter”.');
+    expect(descendants(providerRow(el, 'OpenRouter')).map((n) => n.textContent)).toContain('OpenRouter · No key');
+  });
+
+  it('a partial failure shows the server text once, clears the typed key and reloads', async () => {
+    const error = 'API key change saved, but settings were not saved. Reload settings before retrying.';
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }), {
+      route: (request) => (request.method === 'PUT'
+        ? Response.json({ code: 'settings_partial_failure', error }, { status: 500 }) : undefined),
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, 'OpenRouter'), 'Edit').click();
+    el('providerName').value = 'Renamed';
+    el('providerApiKey').value = 'fixture-partial-key';
+    await el('providerForm').fire('submit');
+    expect(calls(page.requests)).toEqual(['PUT /ai-providers/openrouter', 'GET /settings']);
+    expect(el('providerApiKey').value).toBe('');
+    expect(el('providerForm').hidden).toBe(true);
+    expect(el('providersOut').textContent).toBe(error);
+    expect(pageText(el)).not.toContain('fixture-partial-key');
+  });
+
+  it('a refused save keeps the form for a fix but still clears the key and reloads', async () => {
+    const page = await apiPage(settingsResponse(), {
+      route: (request) => (request.method === 'POST' && request.url === '/ai-providers'
+        ? Response.json({ error: 'A provider with that name already exists.' }, { status: 400 }) : undefined),
+    });
+    const { el } = page;
+    await el('addProvider').click();
+    el('providerApiKey').value = 'fixture-refused-key';
+    await el('providerForm').fire('submit');
+    expect(calls(page.requests)).toEqual(['POST /ai-providers', 'GET /settings']);
+    expect(el('providerForm').hidden).toBe(false);
+    expect(el('providerFormOut').textContent).toBe('A provider with that name already exists.');
+    expect(el('providerApiKey').value).toBe('');
+  });
+
+  it('names an unknown outcome and the reload guidance after a dropped connection', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }), {
+      route: (request) => { if (request.method === 'PUT') throw NETWORK_DOWN; return undefined; },
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, 'OpenRouter'), 'Edit').click();
+    el('providerApiKey').value = 'fixture-lost-key';
+    await el('providerForm').fire('submit');
+    expect(el('providersOut').textContent).toBe('The outcome is unknown. Reload settings before retrying.');
+    expect(el('providerApiKey').value).toBe('');
+  });
+
+  it('Test loads a remote provider\'s stored key via /credential, lists models with it and keeps it out of the page', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], captionProviderId: 'openrouter' }), {
+      route: (request) => (request.url === '/ai-providers/openrouter/credential' ? Response.json({ apiKey: 'fixture-stored-key' }) : undefined),
+      listModels: async () => ['vision-a', 'vision-b'],
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, 'OpenRouter'), 'Test').click();
+    expect(calls(page.requests)).toEqual(['GET /ai-providers/openrouter/credential']);
+    expect(page.listModels.mock.calls).toEqual([[ROUTER.baseUrl, 'fixture-stored-key']]);
+    expect(rowStatus(providerRow(el, 'OpenRouter'))).toBe('Reachable from this browser · 2 models listed.');
+    expect(el('captionModels').children.map((o) => o.value)).toEqual(['vision-a', 'vision-b']);
+    expect(el('reviewModels').children).toEqual([]);
+    expect(pageText(el)).not.toContain('fixture-stored-key');
+    expect(el('providerApiKey').value).toBe('');
+  });
+
+  it('Test with the form open uses the typed key, and never sends the stored key to an unsaved URL', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }));
+    const { el } = page;
+    await rowButton(providerRow(el, 'OpenRouter'), 'Edit').click();
+    el('providerApiKey').value = 'fixture-typed-key';
+    await rowButton(providerRow(el, 'OpenRouter'), 'Test').click();
+    expect(page.listModels.mock.calls).toEqual([[ROUTER.baseUrl, 'fixture-typed-key']]);
+    expect(page.requests).toEqual([]);
+
+    el('providerApiKey').value = '';
+    el('providerBaseUrl').value = 'https://proxy.example/v1';
+    await el('testProviderForm').click();
+    expect(el('providerFormOut').textContent).toContain('Save the new URL before testing it with the stored key');
+    expect(page.requests).toEqual([]);
+    expect(page.listModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('Test refuses a key-requiring provider without a key, and reports an unreachable one', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, DEEPSEEK] }), {
+      listModels: async () => { throw new Error('fixture-provider-detail'); },
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, 'DeepSeek'), 'Test').click();
+    expect(rowStatus(providerRow(el, 'DeepSeek'))).toBe('DeepSeek needs an API key. Edit the provider to add one.');
+    expect(page.listModels).not.toHaveBeenCalled();
+    await rowButton(providerRow(el, 'Local LM Studio'), 'Test').click();
+    expect(page.listModels.mock.calls).toEqual([[LOCAL.baseUrl, null]]);
+    expect(rowStatus(providerRow(el, 'Local LM Studio'))).toMatch(/^Could not list models/);
+    expect(page.requests).toEqual([]);
+  });
+
+  it('loading lists local models once without a key and never tests a remote provider', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }));
+    await callPage(page.ctx, 'init');
+    expect(calls(page.requests)).toEqual(['GET /settings']);
+    expect(page.listModels.mock.calls).toEqual([[LOCAL.baseUrl, null]]);
+    expect(page.el('reviewModels').children.map((o) => o.value)).toEqual(['model-a', 'model-b']);
   });
 });
 
-describe('settings.html caption providers', () => {
-  function setup(overrides: Record<string, unknown> = {}, approve = true) {
-    let state = { ...defaultSettings(), hasAiApiKey: true, ...overrides };
-    const requests: string[] = [];
-    const confirm = vi.fn(async (_question: unknown) => approve);
-    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-      requests.push(url);
-      if (url === '/settings') {
-        if (init?.body) state = { ...state, ...JSON.parse(String(init.body)) };
-        return Response.json(state);
-      }
-      if (url === '/ai-config?purpose=caption') return Response.json({
-        ...state, captionBaseUrl: 'https://vision.example/v1', captionApiKey: 'fixture-stored-caption-key',
-      });
-      return Response.json({ data: [{ id: 'vision-model' }] });
-    });
-    const page = loadPage('public/settings.html', {
-      fetch: fetcher, AbortController, AbortSignal, setTimeout, clearTimeout,
-      Option: class { constructor(public text: string, public value: string) {} },
-      AdminConfirm: { ask: confirm },
-    });
-    vm.runInContext(readFileSync('public/llm.js', 'utf8'), page.ctx);
-    (page.ctx.fill as (state: unknown) => void)(state);
-    return { ...page, fetcher, requests, confirm, state: () => state };
-  }
+describe('settings.html use case assignments', () => {
+  it('offers Default — <name> first, and the resolved line follows the selection and model live', async () => {
+    const { el } = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], captionProviderId: 'openrouter' }));
+    const options = el('reviewProviderId').children;
+    expect(options.map((o) => [o.value, o.textContent])).toEqual([
+      ['', 'Default — Local LM Studio'], ['lm-studio', 'Local LM Studio'], ['openrouter', 'OpenRouter'],
+    ]);
+    expect(el('reviewProviderId').value).toBe('');
+    expect(el('captionProviderId').value).toBe('openrouter');
+    expect(el('reviewResolved').textContent).toBe('→ Local LM Studio / review-model');
+    expect(el('reviewDestination').textContent).toBe(LOCAL.baseUrl);
+    expect(el('captionResolved').textContent).toBe('→ OpenRouter / vision-model');
 
-  it('requires consent before sending an existing shared key to a new caption destination', async () => {
-    const { el, requests, confirm, state } = setup({}, false);
-    el('captionProvider').value = 'custom';
-    el('captionCustomBaseUrl').value = 'https://vision.example/v1';
-    await el('captionProvider').fire('change');
-    expect(el('customCaptionFields').hidden).toBe(false);
-    expect(el('captionKeyWarning').hidden).toBe(false);
-    expect(el('captionKeyWarning').textContent).toContain('https://vision.example/v1');
+    el('reviewProviderId').value = 'openrouter';
+    await el('reviewProviderId').fire('change');
+    expect(el('reviewResolved').textContent).toBe('→ OpenRouter / review-model');
+    expect(el('reviewDestination').textContent).toBe(ROUTER.baseUrl);
+    el('aiModel').value = '';
+    await el('aiModel').fire('input');
+    expect(el('reviewResolved').textContent).toBe('→ OpenRouter / no model set');
+  });
+
+  it('warns when the assigned provider needs a key it does not have', async () => {
+    const { el } = await apiPage(settingsResponse({ aiProviders: [LOCAL, DEEPSEEK], captionProviderId: 'deepseek' }));
+    expect(el('captionProviderWarn').hidden).toBe(false);
+    expect(el('captionProviderWarn').textContent).toContain('“DeepSeek” has no stored API key');
+    expect(el('reviewProviderWarn').hidden).toBe(true);
+  });
+
+  it('Save AI settings posts exactly the AI fields, with null for Default', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], captionProviderId: 'openrouter' }));
+    const { el } = page;
+    el('reviewProviderId').value = 'openrouter';
+    el('captionProviderId').value = '';
+    el('aiModel').value = ' review-2 ';
+    el('lmModel').value = 'vision-2';
+    el('reviewPrompt').value = 'R';
+    el('reviewTimeoutMs').value = '45000';
+    el('captionPrompt').value = 'C';
+    el('captionTimeoutMs').value = '30000';
+    el('captionMaxEdge').value = '1024';
     await el('saveAi').click();
-    expect(confirm).toHaveBeenCalledOnce();
-    expect(requests).toEqual([]);
-    expect(state().captionProvider).toBe('lm-studio');
+    expect(calls(page.requests)).toEqual(['POST /settings']);
+    expect(page.requests[0]!.body).toEqual({
+      reviewProviderId: 'openrouter', captionProviderId: null, aiModel: 'review-2', lmModel: 'vision-2',
+      reviewPrompt: 'R', reviewTimeoutMs: 45000, captionPrompt: 'C', captionTimeoutMs: 30000, captionMaxEdge: 1024,
+    });
+    expect(el('aiOut').textContent).toBe(EDITOR_COPY.writingSaved);
+    expect(el('reviewProviderId').value).toBe('openrouter');
+    expect(el('captionProviderId').value).toBe('');
+    expect(el('saveAi').disabled).toBe(false);
   });
 
-  it('persists caption selection without saving pending review edits or changing the shared key', async () => {
-    const { el, state, ctx } = setup();
-    el('captionProvider').value = 'custom';
-    el('captionCustomBaseUrl').value = 'https://vision.example/v1';
-    el('modelManual').value = 'vision-model';
-    el('aiProvider').value = 'deepseek';
-    el('aiApiKey').value = 'unsaved-key';
+  it('a refused AI save keeps the pending edits and reloads the registry', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }), {
+      route: (request) => (request.method === 'POST' && request.url === '/settings'
+        ? Response.json({ error: 'Review timeout is out of range.' }, { status: 400 }) : undefined),
+    });
+    const { el } = page;
+    el('aiModel').value = 'pending-model';
+    el('reviewProviderId').value = 'openrouter';
     await el('saveAi').click();
-    expect(state()).toMatchObject({
-      captionProvider: 'custom', captionCustomBaseUrl: 'https://vision.example/v1',
-      lmModel: 'vision-model', aiProvider: 'lm-studio', hasAiApiKey: true,
-    });
-    expect(state()).not.toHaveProperty('aiApiKey');
-    expect(el('aiProvider').value).toBe('deepseek');
-    expect(el('aiApiKey').value).toBe('unsaved-key');
-    (ctx.fill as (state: unknown) => void)(state());
-    expect(el('captionProvider').value).toBe('custom');
-    expect(el('captionKeyWarning').hidden).toBe(true);
+    expect(calls(page.requests)).toEqual(['POST /settings', 'GET /settings']);
+    expect(el('aiOut').textContent).toBe('Review timeout is out of range.');
+    expect(el('aiModel').value).toBe('pending-model');
+    expect(el('reviewProviderId').value).toBe('openrouter');
   });
 
-  it('does no remote discovery on load; explicit connection test uses saved caption credentials without filling the key field', async () => {
-    const { el, ctx, requests, fetcher } = setup({
-      captionProvider: 'custom', captionCustomBaseUrl: 'https://vision.example/v1', lmModel: 'vision-model',
-    });
-    await (ctx.loadModels as () => Promise<void>)();
-    expect(requests).toEqual([]);
-    await el('test').click();
-    expect(requests).toEqual(['/ai-config?purpose=caption', 'https://vision.example/v1/models']);
-    expect(new Headers(fetcher.mock.calls[1]![1]?.headers).get('authorization')).toBe('Bearer fixture-stored-caption-key');
-    expect(el('captionOut').textContent).toMatch(/Reachable/);
-    expect(el('captionOut').textContent).not.toContain('fixture-stored-caption-key');
-    expect(el('aiApiKey').value).toBe('');
-    expect(el('test').disabled).toBe(false);
+  it('provider actions keep pending assignment edits', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], captionProviderId: 'lm-studio' }));
+    const { el } = page;
+    el('reviewProviderId').value = 'openrouter';
+    el('aiModel').value = 'pending-model';
+    await rowButton(providerRow(el, 'OpenRouter'), 'Set default').click();
+    expect(el('reviewProviderId').value).toBe('openrouter');
+    expect(el('aiModel').value).toBe('pending-model');
+    expect(el('captionProviderId').children[0]!.textContent).toBe('Default — OpenRouter');
   });
 
-  it('never sends a saved key to an unsaved test destination', async () => {
-    const { el, requests } = setup({ captionProvider: 'custom', captionCustomBaseUrl: 'https://vision.example/v1' });
-    el('captionCustomBaseUrl').value = 'https://other.example/v1';
-    await el('test').click();
-    expect(requests).toEqual(['/ai-config?purpose=caption']);
-    expect(el('captionOut').textContent).toContain('Save the alt-text provider settings');
-    expect(el('test').disabled).toBe(false);
+  it('Save settings on the site tab posts only the site fields', async () => {
+    const page = await apiPage(settingsResponse());
+    page.el('backupSchedule').value = 'weekly';
+    await page.el('save').click();
+    expect(Object.keys(page.requests[0]!.body ?? {}).sort()).toEqual(['backupRetention', 'backupSchedule', 'importDelayMs', 'importRetries']);
+    expect(page.el('out').textContent).toBe('Saved.');
   });
 });
 
@@ -763,40 +1255,129 @@ describe('settings.html review configuration test', () => {
     internalLinks: { status: 'info', linkOpportunities: [] },
   };
   const completion = () => Response.json({ choices: [{ message: { content: JSON.stringify(validReview) } }] });
-  function setup(provider = 'openrouter', stored = false, network: typeof fetch = async () => completion()) {
+  const storedKey = async (url: string) => (url.endsWith('/credential') ? Response.json({ apiKey: 'fixture-stored' }) : completion());
+
+  async function reviewPage(provider: ProviderView, network: (url: string, init?: RequestInit) => Promise<Response> = storedKey) {
     const fetcher = vi.fn(network);
-    const page = loadPage('public/settings.html', {
-      fetch: fetcher, AbortController, setTimeout, clearTimeout,
-      Option: class { constructor(public text: string, public value: string) {} },
-    });
+    const page = loadSettingsPage({ fetch: fetcher });
     vm.runInContext(readFileSync('public/llm.js', 'utf8'), page.ctx);
-    (page.ctx.fill as (state: unknown) => void)({
-      ...defaultSettings(), aiProvider: provider, aiModel: 'selected-model', hasAiApiKey: stored,
-    });
+    await callPage(page.ctx, 'fill', settingsResponse({
+      aiProviders: provider.id === LOCAL.id ? [LOCAL] : [LOCAL, provider],
+      reviewProviderId: provider.id, aiModel: 'selected-model',
+    }));
     return { ...page, fetcher };
   }
 
+  it('uses the selected remote provider\'s stored key from /credential, without saving', async () => {
+    const { el, fetcher } = await reviewPage(ROUTER);
+    await el('testReview').click();
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/ai-providers/openrouter/credential', 'https://openrouter.ai/api/v1/chat/completions']);
+    expect(fetcher.mock.calls[1]![1]?.headers).toMatchObject({ Authorization: 'Bearer fixture-stored' });
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({ model: 'selected-model' });
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestSuccess);
+    expect(el('testReview').disabled).toBe(false);
+  });
+
+  it('tests an unsaved selection against that provider and its own key', async () => {
+    const keyed = { ...DEEPSEEK, hasApiKey: true };
+    const { el, ctx, fetcher } = await reviewPage(LOCAL);
+    await callPage(ctx, 'fill', settingsResponse({ aiProviders: [LOCAL, keyed], aiModel: 'selected-model' }));
+    el('reviewProviderId').value = 'deepseek';
+    await el('reviewProviderId').fire('change');
+    await el('testReview').click();
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/ai-providers/deepseek/credential', 'https://api.deepseek.com/v1/chat/completions']);
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestSuccess);
+  });
+
+  it.each([DEEPSEEK, { ...ROUTER, hasApiKey: false }])('requires a stored key before contacting $name', async (provider) => {
+    const { el, fetcher } = await reviewPage(provider);
+    await el('testReview').click();
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestMissingKey);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('keeps local tests free of any key and of the credential route', async () => {
+    const { el, fetcher } = await reviewPage(LOCAL);
+    await el('testReview').click();
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['http://localhost:1234/v1/chat/completions']);
+    expect(fetcher.mock.calls[0]![1]?.headers).not.toHaveProperty('Authorization');
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestSuccess);
+  });
+
+  it('requires a model id before contacting anyone', async () => {
+    const { el, fetcher } = await reviewPage(LOCAL);
+    el('aiModel').value = ' ';
+    await el('testReview').click();
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestModel);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [401, 'reviewTestAuthentication'], [402, 'reviewTestCredits'],
+    [429, 'reviewTestRateLimit'], [503, 'reviewTestFailed'],
+  ] as const)('reports HTTP %s without leaking provider response content', async (status, message) => {
+    const { el } = await reviewPage(ROUTER, async (url) => (url.endsWith('/credential')
+      ? Response.json({ apiKey: 'fixture-key' }) : new Response('fixture-secret-in-error', { status })));
+    await el('testReview').click();
+    expect(el('testReview').disabled).toBe(false);
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY[message]);
+  });
+
+  it('does not mistake an HTTP success with invalid model output for a working review configuration', async () => {
+    const { el } = await reviewPage(LOCAL, async () => Response.json({ choices: [{ message: { content: 'hello' } }] }));
+    await el('testReview').click();
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestFailed);
+  });
+
+  it('does not contact a provider when the stored key cannot be loaded', async () => {
+    const { el, fetcher } = await reviewPage(ROUTER, async () => new Response('', { status: 503 }));
+    await el('testReview').click();
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/ai-providers/openrouter/credential']);
+    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestKeyUnavailable);
+  });
+
+  it('cancels an in-flight test when fields change and discards its result', async () => {
+    const pending = Promise.withResolvers<Response>();
+    const { el, fetcher } = await reviewPage(LOCAL, async () => pending.promise);
+    const testing = el('testReview').click();
+    await el('reviewProviderId').fire('change');
+    pending.resolve(completion());
+    await testing;
+    expect(fetcher.mock.calls[0]![1]?.signal?.aborted).toBe(true);
+    expect(el('reviewTestOut').textContent).toBe('');
+    expect(el('testReview').disabled).toBe(false);
+  });
+
+  it('bounds a stalled provider request and leaves the button usable', async () => {
+    vi.useFakeTimers();
+    try {
+      const { el } = await reviewPage(LOCAL, async () => new Promise<Response>(() => {}));
+      el('reviewTimeoutMs').value = '5000';
+      const testing = el('testReview').click();
+      await vi.advanceTimersByTimeAsync(5000);
+      await testing;
+      expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestTimedOut);
+      expect(el('testReview').disabled).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+});
+
+// Real authenticated /settings, /ai-providers and /ai-config handlers behind
+// the page: a fabricated response once hid a key-isolation rule (#214).
+describe('settings.html against the real settings and provider routes', () => {
   let closeServer: (() => Promise<void>) | undefined;
   afterEach(async () => {
     await closeServer?.();
     closeServer = undefined;
   });
 
-  // Use actual authenticated /settings and /ai-config handlers: a fabricated
-  // key response hid the local-to-remote transition's isolation rule.
-  async function setupStoredKey(provider: Settings['aiProvider'] = 'lm-studio') {
-    const dir = await mkdtemp(join(tmpdir(), 'settings-review-'));
-    const settings = createSettingsStore({
-      path: join(dir, 'settings.json'),
-      defaults: { ...defaultSettings(), aiProvider: provider, aiModel: 'selected-model', captionProvider: 'openrouter' },
-      log: () => {},
-    });
+  async function realPage(confirm: (question: Question) => boolean = () => true) {
+    const dir = await mkdtemp(join(tmpdir(), 'settings-providers-'));
+    const settings = createSettingsStore({ path: join(dir, 'settings.json'), defaults: defaultSettings(), log: () => {} });
     const secrets = memorySecretsStore();
-    await secrets.set('ai_api_key', 'fixture-stored');
-    const getSecret = vi.spyOn(secrets, 'get');
     const users = memoryUserStore();
     const sessions = memorySessionStore();
-    const user = await users.create({ username: 'review-fixture', password: 'password123456', isAdmin: true });
+    const user = await users.create({ username: 'settings-fixture', password: 'password123456', isAdmin: true });
     const cookies = { sid: await sessions.create(user.id, 60_000) };
     const media = memoryMediaStore({ baseUrl: 'https://images.example' });
     const queue = createEncodeQueue({ store: media, storageDir: dir, lock: createWorkLock() });
@@ -814,177 +1395,117 @@ describe('settings.html review configuration test', () => {
       await queue.drain();
       await rm(dir, { recursive: true, force: true });
     };
-    const page = setup(provider, true, async (input, init) => {
+    const questions: Question[] = [];
+    const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
       const url = String(input);
-      if (!url.startsWith('/')) return completion();
+      // Anything off-origin is the provider: a model list, never a real request.
+      if (!url.startsWith('/')) return Response.json({ data: [{ id: 'remote-model' }] });
       const response = await app.inject({
-        url, method: init?.method === 'POST' ? 'POST' : 'GET', cookies,
+        url, method: (init?.method ?? 'GET') as 'GET' | 'POST' | 'PUT' | 'DELETE', cookies,
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
         payload: typeof init?.body === 'string' ? init.body : undefined,
       });
-      return new Response(response.body, { status: response.statusCode });
+      return new Response(response.statusCode === 204 ? null : response.body, { status: response.statusCode });
     });
-    const response = await app.inject({ url: '/settings', cookies });
-    expect(response.statusCode).toBe(200);
-    (page.ctx.fill as (state: unknown) => void)(response.json());
-    return { ...page, app, cookies, settings, secrets, getSecret };
+    const page = loadSettingsPage({
+      fetch: fetcher,
+      AdminConfirm: { ask: async (question: Question) => { questions.push(question); return confirm(question); } },
+    });
+    vm.runInContext(readFileSync('public/llm.js', 'utf8'), page.ctx);
+    const refill = async () => callPage(page.ctx, 'fill', (await app.inject({ url: '/settings', cookies })).json<SettingsResponse>());
+    await refill();
+    const createProvider = async (apiKey: string): Promise<ProviderView> => {
+      const response = await app.inject({
+        url: '/ai-providers', method: 'POST', cookies,
+        payload: { name: 'Router', kind: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', apiKey },
+      });
+      expect(response.statusCode).toBe(201);
+      const created = response.json<SettingsResponse>().aiProviders.find((p) => p.name === 'Router');
+      if (!created) throw new Error('provider was not created');
+      return created;
+    };
+    return { ...page, app, cookies, settings, secrets, fetcher, questions, refill, createProvider };
   }
 
-  it.each(['openrouter', 'deepseek', 'custom'])('requires an entered key for an unsaved local-to-%s switch, without reading the stored key', async (provider) => {
-    const { el, fetcher, app, cookies, settings, getSecret } = await setupStoredKey();
-    const config = await app.inject({ url: '/ai-config', cookies });
-    expect(config.json()).toMatchObject({ aiProvider: 'lm-studio', hasAiApiKey: true, aiApiKey: null });
-    el('aiProvider').value = provider;
-    el('aiCustomBaseUrl').value = 'https://review.example/v1';
-    await el('aiProvider').fire('change');
-    await el('testReview').click();
-    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestLocalKey);
-    expect(el('testReview').disabled).toBe(false);
-    expect(fetcher).not.toHaveBeenCalled();
-    expect(getSecret).not.toHaveBeenCalled();
+  it('a provider added with a key and assigned to review is what /ai-config hands out, and only to review', async () => {
+    const { el, app, cookies, settings, secrets } = await realPage();
+    await el('addProvider').click();
+    el('providerName').value = 'Router';
+    el('providerApiKey').value = 'fixture-created-key';
+    await el('providerForm').fire('submit');
+    const created = settings.get().aiProviders.find((p) => p.name === 'Router');
+    expect(created).toMatchObject({ kind: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1' });
+    expect(await secrets.get('ai_provider_key:' + created!.id)).toBe('fixture-created-key');
+    expect(el('providerApiKey').value).toBe('');
+    expect(pageText(el)).not.toContain('fixture-created-key');
 
-    el('aiApiKey').value = 'fixture-entered';
-    await el('aiApiKey').fire('input');
-    await el('testReview').click();
-    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestSuccess);
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher.mock.calls[0]![1]?.headers).toMatchObject({ Authorization: 'Bearer fixture-entered' });
-    expect(settings.get()).toMatchObject({ aiProvider: 'lm-studio', captionProvider: 'openrouter' });
-    expect(getSecret).not.toHaveBeenCalled();
+    el('reviewProviderId').value = created!.id;
+    await el('reviewProviderId').fire('change');
+    el('aiModel').value = 'remote-review-model';
+    await el('saveAi').click();
+    expect(settings.get()).toMatchObject({ reviewProviderId: created!.id, captionProviderId: null, aiModel: 'remote-review-model' });
+
+    const config = (await app.inject({ url: '/ai-config', cookies })).json();
+    expect(config).toMatchObject({
+      aiProvider: 'openrouter', aiBaseUrl: 'https://openrouter.ai/api/v1', hasAiApiKey: true, aiApiKey: 'fixture-created-key',
+    });
+    const caption = (await app.inject({ url: '/ai-config?purpose=caption', cookies })).json();
+    expect(caption).toMatchObject({ captionProvider: 'lm-studio', captionApiKey: null });
   });
 
-  it('can save the remote provider first, then test with the existing stored key', async () => {
-    const { el, fetcher, settings, secrets } = await setupStoredKey();
-    el('aiProvider').value = 'deepseek';
-    await el('aiProvider').fire('change');
-    await el('saveReview').click();
-    expect(settings.get()).toMatchObject({ aiProvider: 'deepseek', captionProvider: 'openrouter' });
-    expect(await secrets.get('ai_api_key')).toBe('fixture-stored');
-    fetcher.mockClear();
-    await el('testReview').click();
-    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/ai-config', 'https://api.deepseek.com/v1/chat/completions']);
-    expect(fetcher.mock.calls[1]![1]?.headers).toMatchObject({ Authorization: 'Bearer fixture-stored' });
-    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestSuccess);
-    expect(el('aiApiKey').value).toBe('');
+  it('editing the URL of a provider with a stored key changes nothing until the admin confirms', async () => {
+    let approve = false;
+    const { el, settings, secrets, questions, refill, createProvider } = await realPage(() => approve);
+    const created = await createProvider('fixture-key');
+    await refill();
+    await rowButton(providerRow(el, 'Router'), 'Edit').click();
+    el('providerBaseUrl').value = 'https://proxy.example/v1';
+    await el('providerForm').fire('submit');
+    expect(questions).toHaveLength(1);
+    expect(settings.get().aiProviders.find((p) => p.id === created.id)?.baseUrl).toBe('https://openrouter.ai/api/v1');
+
+    approve = true;
+    await el('providerForm').fire('submit');
+    expect(settings.get().aiProviders.find((p) => p.id === created.id)?.baseUrl).toBe('https://proxy.example/v1');
+    expect(await secrets.get('ai_provider_key:' + created.id)).toBe('fixture-key');
   });
 
-  it('respects a switch back to local made after this settings page loaded', async () => {
-    const { el, fetcher, settings, getSecret } = await setupStoredKey('openrouter');
-    settings.update({ aiProvider: 'lm-studio' });
-    await el('testReview').click();
-    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/ai-config']);
-    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestLocalKey);
-    expect(el('testReview').disabled).toBe(false);
-    expect(getSecret).not.toHaveBeenCalled();
+  it('deleting a provider assigned since the page loaded surfaces the server\'s refusal', async () => {
+    const { el, app, cookies, settings, secrets, refill, createProvider } = await realPage();
+    const created = await createProvider('fixture-key');
+    await refill();
+    const assigned = await app.inject({ url: '/settings', method: 'POST', cookies, payload: { reviewProviderId: created.id } });
+    expect(assigned.statusCode).toBe(200);
+    await rowButton(providerRow(el, 'Router'), 'Delete').click();
+    expect(el('providersOut').textContent).toContain(EDITOR_COPY.settingsWriting);
+    expect(settings.get().aiProviders.some((p) => p.id === created.id)).toBe(true);
+    expect(await secrets.get('ai_provider_key:' + created.id)).toBe('fixture-key');
   });
 
-  it.each(['openrouter', 'deepseek'])('requires a key before contacting %s', async (provider) => {
-    const { el, fetcher } = setup(provider);
-    await el('testReview').click();
-    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestMissingKey);
-    expect(fetcher).not.toHaveBeenCalled();
-  });
-
-  it('tests an unsaved replacement against the selected destination without saving or loading the old key', async () => {
-    const { el, fetcher } = setup('openrouter', true);
-    el('aiProvider').value = 'deepseek';
-    el('aiApiKey').value = ' fixture-replacement';
-    await el('aiProvider').fire('change');
-    await el('testReview').click();
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    const [url, init] = fetcher.mock.calls[0]!;
-    expect(url).toBe('https://api.deepseek.com/v1/chat/completions');
-    expect(init?.headers).toMatchObject({ Authorization: 'Bearer  fixture-replacement' });
-    expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'selected-model' });
-    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestSuccess);
-    expect(el('aiApiKey').value).toBe(' fixture-replacement');
-    await el('aiModel').fire('input');
-    expect(el('reviewTestOut').textContent).toBe('');
-  });
-
-  it('loads a stored key only on explicit test and never puts it into the form', async () => {
-    const { el, fetcher } = setup('openrouter', true, async (url) =>
-      url === '/ai-config' ? Response.json({ aiApiKey: 'fixture-stored' }) : completion());
-    expect(fetcher).not.toHaveBeenCalled();
-    await el('testReview').click();
-    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/ai-config', 'https://openrouter.ai/api/v1/chat/completions']);
-    expect(fetcher.mock.calls[1]![1]?.headers).toMatchObject({ Authorization: 'Bearer fixture-stored' });
-    expect(el('aiApiKey').value).toBe('');
-    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestSuccess);
-  });
-
-  it('keeps local tests independent of the stored remote key', async () => {
-    const { el, fetcher } = setup('lm-studio', true);
-    el('aiApiKey').value = 'unused-fixture';
-    await el('testReview').click();
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher.mock.calls[0]![1]?.headers).not.toHaveProperty('Authorization');
-    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestSuccess);
-  });
-
-  it.each([
-    [401, 'reviewTestAuthentication'], [402, 'reviewTestCredits'],
-    [429, 'reviewTestRateLimit'], [503, 'reviewTestFailed'],
-  ] as const)('reports HTTP %s without leaking provider response content', async (status, message) => {
-    const { el } = setup('deepseek', false, async () => new Response('fixture-secret-in-error', { status }));
-    el('aiApiKey').value = 'fixture-key';
-    await el('testReview').click();
-    expect(el('testReview').disabled).toBe(false);
-    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY[message]);
-  });
-
-  it('does not mistake an HTTP success with invalid model output for a working review configuration', async () => {
-    const { el } = setup('lm-studio', false, async () => Response.json({ choices: [{ message: { content: 'hello' } }] }));
-    await el('testReview').click();
-    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestFailed);
-  });
-
-  it('does not contact a provider when the stored key cannot be loaded', async () => {
-    const { el, fetcher } = setup('deepseek', true, async () => new Response('', { status: 503 }));
-    await el('testReview').click();
-    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/ai-config']);
-    expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestKeyUnavailable);
-  });
-
-  it('cancels an in-flight test when fields change and discards its result', async () => {
-    const pending = Promise.withResolvers<Response>();
-    const { el, fetcher } = setup('lm-studio', false, async () => pending.promise);
-    const testing = el('testReview').click();
-    await el('aiProvider').fire('change');
-    pending.resolve(completion());
-    await testing;
-    expect(fetcher.mock.calls[0]![1]?.signal?.aborted).toBe(true);
-    expect(el('reviewTestOut').textContent).toBe('');
-    expect(el('testReview').disabled).toBe(false);
-  });
-
-  it('bounds a stalled provider request and leaves the button usable', async () => {
-    vi.useFakeTimers();
-    try {
-      const { el } = setup('lm-studio', false, async () => new Promise<Response>(() => {}));
-      el('reviewTimeoutMs').value = '5000';
-      const testing = el('testReview').click();
-      await vi.advanceTimersByTimeAsync(5000);
-      await testing;
-      expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestTimedOut);
-      expect(el('testReview').disabled).toBe(false);
-    } finally { vi.useRealTimers(); }
+  it('Test reads the key through /credential for that one request and leaves it nowhere', async () => {
+    const { el, fetcher, refill, createProvider } = await realPage();
+    const created = await createProvider('fixture-key');
+    await refill();
+    await rowButton(providerRow(el, 'Router'), 'Test').click();
+    expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+      '/ai-providers/' + created.id + '/credential', 'https://openrouter.ai/api/v1/models',
+    ]);
+    expect(new Headers(fetcher.mock.calls[1]![1]?.headers).get('authorization')).toBe('Bearer fixture-key');
+    expect(rowStatus(providerRow(el, 'Router'))).toBe('Reachable from this browser · 1 model listed.');
+    expect(el('providerApiKey').value).toBe('');
+    expect(pageText(el)).not.toContain('fixture-key');
   });
 });
 
 describe('settings.html image controls', () => {
-  function loadImageSettings(fetch?: (url: string, init?: { body?: string }) => Promise<unknown>) {
-    const page = loadPage('public/settings.html', {
-      LLM: { mixedContentWarning: () => '' },
-      Option: class { constructor(public text: string, public value: string) {} },
-      ...(fetch ? { fetch } : {}),
-    });
-    (page.ctx.fill as (state: unknown) => void)({ ...defaultSettings(), hasAiApiKey: false });
+  async function loadImageSettings(fetch?: (url: string, init?: { body?: string }) => Promise<unknown>) {
+    const page = loadSettingsPage(fetch ? { fetch } : {});
+    await callPage(page.ctx, 'fill', settingsResponse());
     return page;
   }
 
   it('keeps pending values and allows retry after a dropped save connection', async () => {
-    const { el } = loadImageSettings();
+    const { el } = await loadImageSettings();
     el('convertJpeg').checked = false;
     el('webpQuality').value = '86';
     el('avifQuality').value = '64';
@@ -997,12 +1518,12 @@ describe('settings.html image controls', () => {
   });
 
   it('saves only image preferences without overwriting pending AI or backup edits', async () => {
-    let persisted = { ...defaultSettings(), hasAiApiKey: false };
-    const { el } = loadImageSettings(async (_url, init) => {
+    let persisted = settingsResponse();
+    const { el } = await loadImageSettings(async (_url, init) => {
       persisted = { ...persisted, ...JSON.parse(init?.body ?? '{}') };
       return { ok: true, status: 200, json: async () => persisted };
     });
-    el('baseUrl').value = 'http://localhost:1235/v1';
+    el('captionPrompt').value = 'Unsaved caption instructions';
     el('backupSchedule').value = 'weekly';
     el('aiModel').value = 'unsaved-review-model';
     el('convertJpeg').checked = false;
@@ -1010,9 +1531,9 @@ describe('settings.html image controls', () => {
     await el('imageSettings').fire('submit');
     expect(persisted).toMatchObject({
       convertJpeg: false, webpQuality: 86, avifQuality: 55,
-      lmBaseUrl: defaultSettings().lmBaseUrl, backupSchedule: 'off',
+      captionPrompt: 'Caption prompt', backupSchedule: 'off',
     });
-    expect(el('baseUrl').value).toBe('http://localhost:1235/v1');
+    expect(el('captionPrompt').value).toBe('Unsaved caption instructions');
     expect(el('backupSchedule').value).toBe('weekly');
     expect(el('aiModel').value).toBe('unsaved-review-model');
     expect(el('saveImages').disabled).toBe(false);

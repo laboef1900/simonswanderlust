@@ -33,26 +33,17 @@ window.Auth = (function () {
     menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>',
   };
 
-  // Single source of truth for the admin main menu. `area` names the
-  // masthead workspace a page belongs to; `admin` is the role gate shared by
-  // the sidebar and the masthead.
+  // Single source of truth for the admin main menu. `admin` is the role gate
+  // for pages only an admin may open.
   const NAV = [
-    { group: 'Journal', label: 'Desk', href: '/admin/', icon: ICON.desk, area: 'content' },
-    { group: 'Journal', label: 'Posts', href: '/admin/posts.html', icon: ICON.posts, area: 'content' },
-    { group: 'Journal', label: 'Media', href: '/admin/media.html', icon: ICON.media, area: 'media' },
-    { group: 'Journal', label: 'About', href: '/admin/about.html', admin: true, icon: ICON.about, area: 'content' },
-    { group: 'Journal', label: 'Comments', href: '/admin/comments.html', admin: true, icon: ICON.comments, area: 'content' },
-    { group: 'Site', label: 'Import', href: '/admin/import.html', admin: true, icon: ICON.import, area: 'manage' },
-    { group: 'Site', label: 'Settings', href: '/admin/settings.html', admin: true, icon: ICON.settings, area: 'manage' },
-    { group: 'Site', label: 'Users', href: '/admin/users.html', admin: true, icon: ICON.users, area: 'manage' },
-  ];
-
-  // Masthead workspaces. Each one lands on a page of its own area, and Manage
-  // carries the same admin gate as every page inside it.
-  const WORKSPACES = [
-    { area: 'content', copy: 'shellContent', href: '/admin/posts.html', icon: ICON.posts },
-    { area: 'media', copy: 'shellMedia', href: '/admin/media.html', icon: ICON.media },
-    { area: 'manage', copy: 'shellManage', href: '/admin/settings.html', admin: true, icon: ICON.settings },
+    { group: 'Journal', label: 'Desk', href: '/admin/', icon: ICON.desk },
+    { group: 'Journal', label: 'Posts', href: '/admin/posts.html', icon: ICON.posts },
+    { group: 'Journal', label: 'Media', href: '/admin/media.html', icon: ICON.media },
+    { group: 'Journal', label: 'About', href: '/admin/about.html', admin: true, icon: ICON.about },
+    { group: 'Journal', label: 'Comments', href: '/admin/comments.html', admin: true, icon: ICON.comments },
+    { group: 'Site', label: 'Import', href: '/admin/import.html', admin: true, icon: ICON.import },
+    { group: 'Site', label: 'Settings', href: '/admin/settings.html', admin: true, icon: ICON.settings },
+    { group: 'Site', label: 'Users', href: '/admin/users.html', admin: true, icon: ICON.users },
   ];
 
   const drawerMedia = window.matchMedia('(max-width: 900px)');
@@ -82,19 +73,6 @@ window.Auth = (function () {
       const current = item.href === here ? ' aria-current="page"' : '';
       html += '<a href="' + item.href + '" class="cms-nav-item"' + current + '>' +
         item.icon + '<span>' + item.label + '</span></a>';
-    }
-    return html;
-  }
-
-  function workspaceMarkup(s, here) {
-    const page = NAV.find((item) => item.href === here);
-    const area = page ? page.area : '';
-    let html = '';
-    for (const ws of WORKSPACES) {
-      if (ws.admin && !s.isAdmin) continue;
-      const active = ws.area === area ? ' is-active' : '';
-      html += '<a href="' + ws.href + '" class="cms-workspace-link' + active + '">' +
-        ws.icon + '<span>' + EditorCopy.en[ws.copy] + '</span></a>';
     }
     return html;
   }
@@ -166,9 +144,6 @@ window.Auth = (function () {
           '<span class="cms-brand-mark" aria-hidden="true"></span>' +
           '<span class="cms-brand-title"></span>' +
         '</a>' +
-        '<nav class="cms-workspace-nav">' +
-          workspaceMarkup(s, here) +
-        '</nav>' +
         '<div class="cms-masthead-right">' +
           '<span class="cms-brand-sub"></span>' +
           '<a href="/" target="_blank" rel="noopener" class="cms-btn-ghost">View site</a>' +
@@ -213,7 +188,6 @@ window.Auth = (function () {
     shell.querySelector('.cms-brand-mark').textContent = copy.studioName.charAt(0);
     shell.querySelector('.cms-brand-title').textContent = copy.studioName;
     shell.querySelector('.cms-masthead-right > .cms-brand-sub').textContent = copy.studioDescriptor;
-    shell.querySelector('.cms-workspace-nav').setAttribute('aria-label', copy.shellWorkspaceNav);
     shell.querySelector('.cms-journal-title').textContent = copy.shellJournal;
     shell.querySelector('.cms-sidebar-header .cms-brand-sub').textContent = copy.studioDescriptor;
 

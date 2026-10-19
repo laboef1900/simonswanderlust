@@ -594,6 +594,38 @@ describe('settings.html import pacing fields', () => {
   });
 });
 
+/**
+ * The AI provider registry (spec 2026-10-19 §6) replaced the single shared key.
+ * The behaviour lives in admin-actions-dom.test.ts; these pin what a markup or
+ * script edit could silently bring back or weaken.
+ */
+describe('settings.html AI provider registry', () => {
+  const html = readFileSync('public/settings.html', 'utf8');
+  const markup = html.slice(0, html.indexOf('<script'));
+
+  it('has no legacy shared-key controls left', () => {
+    for (const id of ['aiApiKey', 'removeAiKey', 'aiProvider', 'captionProvider', 'aiCustomBaseUrl', 'captionCustomBaseUrl', 'baseUrl', 'model', 'modelManual', 'aiKeyStatus', 'saveReview']) {
+      expect(markup).not.toContain(`id="${id}"`);
+    }
+    expect(html).not.toMatch(/aiApiKey|hasAiApiKey|lmBaseUrl/);
+  });
+
+  it('takes a provider key only in a masked, never-autofilled field', () => {
+    expect(markup).toMatch(/<input id="providerApiKey" type="password" autocomplete="new-password"/);
+  });
+
+  it('keeps keys out of storage and logs', () => {
+    expect(html).not.toMatch(/localStorage|sessionStorage|console\./);
+  });
+
+  it('pairs each use case with a provider select, a model input and its model suggestions', () => {
+    expect(markup).toMatch(/<select id="reviewProviderId"/);
+    expect(markup).toMatch(/<input id="aiModel"[^>]*list="reviewModels"/);
+    expect(markup).toMatch(/<select id="captionProviderId"/);
+    expect(markup).toMatch(/<input id="lmModel"[^>]*list="captionModels"/);
+  });
+});
+
 describe('import.html recovery copy', () => {
   const html = readFileSync('public/import.html', 'utf8');
 
