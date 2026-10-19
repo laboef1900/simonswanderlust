@@ -3,13 +3,18 @@ import {
   BREAKOUT_WIDTH,
   COLUMN_WIDTH,
   GALLERY_MODES,
+  MAX_GALLERY_TEXT,
   MIN_ROW_HEIGHT,
   ROW_GAP,
   containerWidthFor,
+  escapeMeta,
   galleryHeightAt,
   partitionRows,
+  readCaptionOverride,
+  readCaptionsVisible,
   readLayoutMode,
   rowHeightAt,
+  unescapeMeta,
 } from './gallery-layout.js';
 
 const LANDSCAPE = 3000 / 2000; // 1.5
@@ -86,6 +91,54 @@ describe('readLayoutMode', () => {
 
   it('leaves other comment lines alone', () => {
     expect(readLayoutMode('# just a note\n#layout: column')).toBe('column');
+  });
+});
+
+describe('readCaptionsVisible', () => {
+  it('shows captions unless the first #captions: line says hidden', () => {
+    expect(readCaptionsVisible('https://img/a')).toBe(true);
+    expect(readCaptionsVisible('#captions: hidden\nhttps://img/a')).toBe(false);
+    expect(readCaptionsVisible('  # Captions :  HIDDEN  ')).toBe(false);
+    expect(readCaptionsVisible('#captions: visible\n#captions: hidden')).toBe(true);
+    expect(readCaptionsVisible('#captions: hidden\n#captions: visible')).toBe(false);
+  });
+
+  it('treats an unknown, empty or malformed value as visible', () => {
+    for (const text of ['#captions: off', '#captions:', '#captions', '#captions: hidden extra', '']) {
+      expect(readCaptionsVisible(text)).toBe(true);
+    }
+  });
+
+  it('ignores a directive-looking string that is not a whole line', () => {
+    expect(readCaptionsVisible('https://img/a | caption-override="#captions: hidden"')).toBe(true);
+    expect(readCaptionsVisible(`https://img/a | caption-override="${escapeMeta('x\n#captions: hidden')}"`)).toBe(true);
+  });
+});
+
+describe('readCaptionOverride', () => {
+  it('distinguishes an absent override (inherit) from an empty one (clear)', () => {
+    expect(readCaptionOverride('https://img/a')).toBeUndefined();
+    expect(readCaptionOverride('https://img/a | 30x20 | caption="Library copy"')).toBeUndefined();
+    expect(readCaptionOverride('https://img/a | caption-override=""')).toBe('');
+  });
+
+  it('unescapes the shared entities, caps the length and lets the last field win', () => {
+    const text = 'a "b" | <c> & d\ne';
+    expect(readCaptionOverride(`https://img/a | caption-override="${escapeMeta(text)}"`)).toBe(text);
+    expect(readCaptionOverride(`https://img/a | caption-override="${'x'.repeat(1200)}"`)).toHaveLength(MAX_GALLERY_TEXT);
+    expect(readCaptionOverride('https://img/a | caption-override="one" | caption-override="two"')).toBe('two');
+  });
+
+  it('never reads the URL field or a malformed attribute as an override', () => {
+    expect(readCaptionOverride('caption-override="x"')).toBeUndefined();
+    expect(readCaptionOverride('https://img/a | caption-override=x')).toBeUndefined();
+    expect(readCaptionOverride('https://img/a | caption-override="a"b"')).toBeUndefined();
+  });
+
+  it('round-trips through the escape pair', () => {
+    for (const s of ['', '&amp;quot;', 'pipe | and\r\nnewline', '<b>"x"</b>']) {
+      expect(unescapeMeta(escapeMeta(s))).toBe(s.replace(/\r\n/g, '\n'));
+    }
   });
 });
 

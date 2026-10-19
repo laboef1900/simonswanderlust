@@ -73,8 +73,9 @@ interface BodyRef { src: string; kind: 'body' | 'gallery'; alt: string | undefin
  *
  * Both readers are the existing ones — `rewriteFences` (the scanner that
  * decides what a gallery is) and `markdownImages` (the CommonMark subset
- * Turndown can produce, issue #125) — rather than a third parser of the same
- * grammar.
+ * Turndown can produce, issue #125, read only OUTSIDE gallery fences so a
+ * gallery-local caption that reads like an image is not audited as a photo)
+ * — rather than a third parser of the same grammar.
  *
  * Restricted to keys the `images` map carries: that is the contract's scope,
  * and it is also what the renderer resolves — `body-images.ts` skips a gallery

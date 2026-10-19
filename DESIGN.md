@@ -961,6 +961,13 @@ and the `<dialog>`s appended to `<body>` share one set:
   visually hidden, so the command bar opens the workspace. The command bar separates
   primary actions from the full-width save/readiness status row. Error/status text
   wraps instead of disappearing behind ellipses.
+- The gallery picker keeps caption controls with the ordered selection: a native
+  **Show captions** checkbox beside Layout and a locale-labelled textarea beneath
+  each selected photo. **Use default caption** removes the local override and resumes
+  Media inheritance. Text stays editable while hidden; the setting also hides public
+  lightbox captions. Edits apply only to this gallery in the active locale, commit with
+  Insert/Update gallery, and Cancel discards them. The manuscript widget marks hidden
+  captions explicitly. On phones, each reset button sits below its textarea.
 - Story details sits beside the manuscript on desktop. Its header carries one
   icon-only panel toggle (`panel-right-close` / `panel-right-open`, named Collapse /
   Expand story details); collapsing slides the panel right into a slim rail that

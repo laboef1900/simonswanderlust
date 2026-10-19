@@ -159,6 +159,18 @@ describe('auditAltText — body and gallery photos', () => {
       title: 'Rhodos', bodyMarkdown: 'Nur Text.', images: { [`${IMG}/trips/rhodos/old`]: dims },
     })).count).toBe(0);
   });
+
+  // Gallery-local captions (2026-10-19): caption text that reads like an
+  // inline image puts no photo on the page, so it has no alt to audit.
+  it('does not read image-like text in a gallery caption override as a body photo', () => {
+    const g1 = `${IMG}/trips/rhodos/g1`;
+    const stale = `${IMG}/trips/rhodos/old`;
+    expect(auditAltText(post({
+      title: 'Rhodos',
+      bodyMarkdown: '```gallery\n' + `${g1} | caption-override="Wie ![](${stale})"\n` + '```',
+      images: { [g1]: { ...dims, alt: 'Hafen bei Nacht' }, [stale]: dims },
+    })).count).toBe(0);
+  });
 });
 
 describe('auditAltText — locales', () => {

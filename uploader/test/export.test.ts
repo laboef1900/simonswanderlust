@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { exportPost, renderPostToMdx } from '../src/export.js';
 import { normalizeBodyImages, type PostPair } from '../src/posts.js';
+import { escapeMeta } from '../../site/src/lib/gallery-layout.js';
 
 const pair: PostPair = {
   translationKey: 'k1', status: 'published',
@@ -128,6 +129,41 @@ describe('renderPostToMdx', () => {
     // The exact inverse: pasting the exported body back reproduces the map.
     const body = mdx.slice(mdx.indexOf('Intro'));
     expect(normalizeBodyImages(body, {}).images).toEqual(images);
+  });
+
+  // Gallery-local captions (2026-10-19): the backup must carry a caption
+  // override's exact text, even when that text reads like an inline image of
+  // a photo the post hosts — the inline pass would otherwise turn it into a
+  // <BodyImage> tag whose quotes break the field, and re-import would drop it.
+  it('round-trips gallery-local captions and image-like gallery text through export → normalize', () => {
+    const a = 'https://img/g/a-1a2b3c4d';
+    const b = 'https://img/g/b-9f8e7d6c';
+    const override = `Wie ![Gasse](${a}) und <BodyImage src={${a}} width={1} height={1} /> | "zitiert"`;
+    const alt = `Alt ![Gasse](${a})`;
+    const images = {
+      [a]: { width: 3000, height: 2000, alt },
+      [b]: { width: 2000, height: 3000, caption: 'Library fallback' },
+    };
+    const stored = `Intro\n\n![Gasse](${a})\n\n\`\`\`gallery\n#captions: hidden\n`
+      + `${a} | caption-override="${escapeMeta(override)}"\n${b} | caption-override=""\n${b}\n\`\`\`\n`;
+    const withOverrides: PostPair = { ...pair, de: { ...pair.de, bodyMarkdown: stored, images } };
+    const mdx = renderPostToMdx(withOverrides, 'de');
+    // The inline image outside the fence still becomes a tag…
+    expect(mdx).toContain(`<BodyImage src="${a}" width={3000} height={2000} alt="Gasse" />`);
+    // …while every gallery line keeps its text, override last.
+    expect(mdx).toContain([
+      '```gallery',
+      '#captions: hidden',
+      `${a} | 3000x2000 | alt="${escapeMeta(alt)}" | caption-override="${escapeMeta(override)}"`,
+      `${b} | 2000x3000 | caption="Library fallback" | caption-override=""`,
+      `${b} | 2000x3000 | caption="Library fallback"`,
+      '```',
+    ].join('\n'));
+    expect(mdx.match(/<BodyImage/g)).toHaveLength(1);
+
+    const back = normalizeBodyImages(mdx.slice(mdx.indexOf('Intro')), {});
+    expect(back.bodyMarkdown).toBe(stored);
+    expect(back.images).toEqual(images);
   });
 
   it('round-trips a bracketed alt: escaped in the body, plain in the tag, escaped again on paste-back (#140)', () => {

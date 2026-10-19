@@ -802,6 +802,24 @@ describe('normalizeBodyImages', () => {
     expect(braced.images).toEqual({ 'https://img/b/r': { width: 10, height: 20 } });
   });
 
+  // Gallery-local captions (2026-10-19): a gallery line's text is content.
+  // The <BodyImage> pass must not reach into a fence and rewrite a caption
+  // that happens to read like a tag or an inline image.
+  it('never rewrites image- or tag-like text inside a gallery caption override', () => {
+    const a = 'https://img/g/a';
+    const c = 'https://img/g/c';
+    const text = `![x](${a}) <BodyImage src={${a}} width={1} height={1} />`;
+    const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // `c` has no dimensions anywhere, so its line is kept exactly as typed — raw `<` included.
+    const typed = `${c} | caption-override="<BodyImage src={${c}} width={5} height={5} />"`;
+    const body = `<BodyImage src="${a}" width={10} height={20} alt="out" />\n\n\`\`\`gallery\n`
+      + `${a} | 10x20 | caption-override="${text}"\n${typed}\n\`\`\``;
+    const out = normalizeBodyImages(body, {});
+    expect(out.bodyMarkdown).toBe(`![out](${a})\n\n\`\`\`gallery\n${a} | caption-override="${escaped}"\n${typed}\n\`\`\``);
+    expect(out.images).toEqual({ [a]: { width: 10, height: 20 } });
+    expect(normalizeBodyImages(out.bodyMarkdown, out.images)).toEqual(out);
+  });
+
   it('leaves malformed tags untouched rather than truncating (pinned rejected shapes)', () => {
     const nonSelfClosing = 'a <BodyImage src="https://img/x/y"></BodyImage> b';
     expect(normalizeBodyImages(nonSelfClosing, {}).bodyMarkdown).toBe(nonSelfClosing);

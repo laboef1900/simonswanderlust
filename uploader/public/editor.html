@@ -1086,6 +1086,11 @@
           if (typeof caption === 'string') postMeta[line.src].caption = caption;
           if (format === 'jpeg') postMeta[line.src].format = format;
         });
+        const captionOverrides = Object.fromEntries(current.lines
+          .filter((line) => typeof line.captionOverride === 'string')
+          .map((line) => [line.src, line.captionOverride]));
+        const captionFallback = Object.fromEntries(current.lines
+          .map((line) => [line.src, postMeta[line.src]?.caption ?? '']));
 
         // An unterminated fence's extent runs to end-of-post, so there is no
         // safe range to replace. Say so instead of eating the rest of the body.
@@ -1133,20 +1138,25 @@
           resolve: resolveFromMedia,
           layouts: GALLERY_LAYOUTS,
           layout: GalleryFence.layoutOf(current.directives),
+          captions: {
+            locale,
+            visible: GalleryFence.captionsVisible(current.directives),
+            overrides: captionOverrides,
+            fallback: captionFallback,
+          },
           confirmLabel: existing ? 'Update gallery' : 'Insert gallery',
           emptyHint: existing
             ? 'Nothing selected — confirming now removes this gallery.'
             : 'Nothing selected yet — click photos above.',
           onUnauthed: () => guard.redirectToLogin(),
           onPick: (items, opts) => {
-            // Only the LAYOUT directive is rewritten; every other `#` line the
-            // author typed is carried through verbatim, and a gallery whose
-            // layout was not touched comes back byte-identical (withLayout
-            // writes nothing for the default mode).
-            const directives = GalleryFence.withLayout(current.directives, (opts || {}).layout);
+            // Rewrite only our controls, retaining unrelated author directives.
+            const captions = opts.captions;
+            const directives = GalleryFence.withCaptions(
+              GalleryFence.withLayout(current.directives, opts.layout), captions.visible);
             // An empty selection means "remove the block", so emit no fence.
             const fence = items.length
-              ? GalleryFence.serialize(items, locale, directives, postMeta)
+              ? GalleryFence.serialize(items, locale, directives, postMeta, captions.overrides)
               : '';
             const out = GalleryFence.replaceFenceAt(body, cursor, fence);
             if (out.blocked === 'unterminated') {

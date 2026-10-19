@@ -3,7 +3,7 @@ import { parseWxr, type ParsedPost } from './wxr-parse.js';
 import { htmlToMarkdown, markdownImages } from './wp-content.js';
 import { rehostImage, type RehostResult, type RehostResume } from './wp-images.js';
 import { isSafeSlug, PostError, type ImageDims, type PostLocale, type PostPair, type PostStatus, type PostStore, type PostSummary, type StoredPostPair } from './posts.js';
-import { rewriteFences } from './body-content.js';
+import { rewriteFences, rewriteOutsideGalleries } from './body-content.js';
 import { FetchError } from './safe-fetch.js';
 import { insufficientSpaceForImport, type DiskSpace } from './disk.js';
 import type { WorkLock } from './work-lock.js';
@@ -473,7 +473,11 @@ function rehostPlan(de: ParsedPost, en: ParsedPost, attachments: Map<string, str
  * @ai-warning: reuse `rewriteFences` rather than matching fences here. #75
  * already had to pin a second scanner (public/gallery-fence.js) against it
  * with gallery-fence-parity.test.ts; a third copy would silently disagree
- * about where a fence ends and drop or corrupt an author's photos.
+ * about where a fence ends and drop or corrupt an author's photos. The inline
+ * substitution is likewise confined to text OUTSIDE gallery fences
+ * (`rewriteOutsideGalleries`): a gallery-local caption that reads like an
+ * inline image is the author's text, and only the line's own URL field is
+ * ever re-hosted.
  */
 function applyRehosts(body: string, rehosted: ReadonlyMap<string, RehostResult>, images: Record<string, ImageDims>): string {
   // The store lifts a gallery line's `| alt= | caption=` into `images[url]` on
@@ -495,12 +499,16 @@ function applyRehosts(body: string, rehosted: ReadonlyMap<string, RehostResult>,
     images[r.src] = image;
     if (from !== r.src) delete images[from];
   };
-  for (const { full, alt, url } of markdownImages(body)) {
-    const r = rehosted.get(url);
-    if (!r) continue;
-    body = body.replaceAll(full, `![${alt}](${r.src})`);
-    record(url, r);
-  }
+  body = rewriteOutsideGalleries(body, (text) => {
+    let out = text;
+    for (const { full, alt, url } of markdownImages(text)) {
+      const r = rehosted.get(url);
+      if (!r) continue;
+      out = out.replaceAll(full, `![${alt}](${r.src})`);
+      record(url, r);
+    }
+    return out;
+  });
   return rewriteFences(body, (line) => {
     const fields = line.split('|').map((f) => f.trim());
     const url = fields[0] ?? '';

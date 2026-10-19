@@ -19,11 +19,14 @@ interface PickedItem {
   alt?: { de?: string; en?: string }; caption?: { de?: string; en?: string };
 }
 interface Resolved { rows: PickedItem[]; failed: number }
+interface CaptionOptions { locale: 'de' | 'en'; visible: boolean; overrides: Record<string, string>; fallback: Record<string, string> }
+interface PickResult { layout: string | null; captions?: { visible: boolean; overrides: Record<string, string> } | null }
 interface PickerOptions {
   multiple?: boolean;
   preselect?: PickedItem[];
   resolve?(srcs: string[]): Promise<Resolved>;
-  onPick(item: PickedItem | PickedItem[]): void;
+  captions?: CaptionOptions;
+  onPick(item: PickedItem | PickedItem[], options: PickResult): void;
 }
 interface Picker { open(options: PickerOptions): void }
 type Entry = { row?: PickedItem; missing?: true; error?: unknown };
@@ -34,12 +37,20 @@ interface PageOptions {
   compact?: boolean;
   /** Resolve seeded photos through the real GalleryLibrary, as editor.html does. */
   resolveFromLibrary?: boolean;
+  /** Gallery-local caption controls (2026-10-19 spec, "Gallery-local caption controls"). */
+  captions?: CaptionOptions;
   folders?(): Promise<Response>;
   list?(url: URL, response: Response): Promise<Response>;
   item?(key: string, response: Response): Promise<Response>;
 }
 type PostMeta = Record<string, { alt?: string; caption?: string; format?: 'jpeg' }>;
-interface FenceApi { serialize(items: PickedItem[], locale: 'de' | 'en', directives?: string[], postMeta?: PostMeta): string }
+interface ParsedLine { src: string; alt?: string; caption?: string; captionOverride?: string }
+interface FenceApi {
+  serialize(items: PickedItem[], locale: 'de' | 'en', directives?: string[], postMeta?: PostMeta,
+    captionOverrides?: Record<string, string>): string;
+  parse(text: string): { directives: string[]; lines: ParsedLine[] };
+  withCaptions(directives: string[], visible: boolean): string[];
+}
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 const add = (store: MediaStore, key: string, folder: string, title = key, status: NewMediaItem['status'] = 'ready') =>
   store.upsert({ key, folder, title, status, width: 640, height: 480, origBytes: 100, exif: noExif, uploadedBy: null });
@@ -61,8 +72,11 @@ function openPicker(store: MediaStore, options: PageOptions = {}) {
   const trigger = dom.document.getElementById('trigger')!;
   trigger.focus();
   const picked: (PickedItem | PickedItem[])[] = [];
+  const pickedOptions: PickResult[] = [];
+  const methods: string[] = [];
   const timers: { run(): void; cancelled: boolean }[] = [];
-  const fetcher = async (input: string) => {
+  const fetcher = async (input: string, init: RequestInit = {}) => {
+    methods.push(init.method ?? 'GET');
     const url = new URL(input, 'https://app.example');
     if (url.pathname === '/media/folders') return options.folders ? options.folders() : response(await store.folders());
     if (url.pathname.startsWith('/media/items/')) {
@@ -108,7 +122,8 @@ function openPicker(store: MediaStore, options: PageOptions = {}) {
     })
     : undefined;
   mediaPicker.open({
-    multiple: options.multiple, preselect: options.preselect, resolve, onPick: (item) => picked.push(item),
+    multiple: options.multiple, preselect: options.preselect, resolve, captions: options.captions,
+    onPick: (item, picks) => { picked.push(item); pickedOptions.push(picks); },
   });
   const dialog = dom.document.querySelector('dialog')!;
   const required = (selector: string) => {
@@ -117,9 +132,40 @@ function openPicker(store: MediaStore, options: PageOptions = {}) {
     return element;
   };
   const buttons = required('.admin-modal__foot').querySelectorAll('button');
+  const rows = () => dialog.querySelectorAll('.picker-strip__item');
+  /** The caption textarea of each strip row, in gallery order. */
+  const captionFields = () => rows().map((row) => {
+    const wrapper = row.querySelector('.picker-strip__caption');
+    const field = wrapper?.tagName === 'TEXTAREA' ? wrapper : wrapper?.querySelector('textarea');
+    if (!field) throw new Error('Missing caption field in strip row');
+    return field;
+  });
   return {
-    dom, dialog, trigger, picked, required, galleryFence,
-    next: buttons[1]!, cancel: buttons[2]!, choose: buttons[3]!,
+    dom, dialog, trigger, picked, pickedOptions, methods, required, galleryFence, rows, captionFields,
+    next: buttons[1]!, prev: buttons[0]!, cancel: buttons[2]!, choose: buttons[3]!,
+    captions: () => captionFields().map((field) => field.value),
+    typeCaption(index: number, value: string) {
+      const field = captionFields()[index]!;
+      field.focus();
+      field.value = value;
+      field.fire('input');
+    },
+    resetCaption(index: number) {
+      const button = rows()[index]?.querySelector('[data-act="caption-reset"]');
+      if (!button) throw new Error('Missing caption reset in row ' + index);
+      button.click();
+    },
+    resetDisabled: () => rows().map((row) => row.querySelector('[data-act="caption-reset"]')!.disabled),
+    visibility() {
+      const wrapper = required('.picker-strip__visibility');
+      return wrapper.tagName === 'INPUT' ? wrapper : wrapper.querySelector('input')!;
+    },
+    setVisible(visible: boolean) {
+      const box = this.visibility();
+      box.checked = visible;
+      box.fire('input');
+      box.fire('change');
+    },
     folder(path: string) {
       const button = dialog.querySelectorAll('.folder-btn').find((node) => node.dataset.folder === path);
       if (!button) throw new Error('Missing folder ' + path);
@@ -341,5 +387,192 @@ describe('gallery picker sources the gallery’s own photos from Media', () => {
     page.choose.click();
     const de = normalizeGalleryFences(page.galleryFence.serialize(pickedGallery(page), 'de', [], postMeta), copied).images;
     expect(de).toEqual(copied);
+  });
+});
+
+// docs/superpowers/specs/2026-10-19-gallery-library-metadata-design.md,
+// "Gallery-local caption controls": captions are edited for THIS gallery only,
+// buffered until confirm, and never written to Media.
+describe('gallery-local caption controls in the picker', () => {
+  const athens = baseUrl + '/athens';
+  const rhodes = baseUrl + '/rhodes';
+  const gone = baseUrl + '/imported/gone';
+  const settleAll = async (page: { settle(): Promise<unknown> }) => { for (let i = 0; i < 12; i++) await page.settle(); };
+  const offPage = async (url: URL, result: Response) =>
+    url.searchParams.get('pageSize') === '1' ? result : response({ total: 0, items: [] });
+  const seed = (src: string) => ({ src, width: 640, height: 480, fromPost: true });
+  const fallback = { [athens]: 'Copied caption', [rhodes]: 'Copied harbour', [gone]: 'Imported caption' };
+  const captions = (overrides: Record<string, string> = {}, visible = true, locale: 'de' | 'en' = 'en'): CaptionOptions =>
+    ({ locale, visible, overrides, fallback });
+  async function library() {
+    const store = await seededStore();
+    await store.patch('athens', { caption: { de: '', en: 'Morning' } });
+    await store.patch('rhodes', { caption: { de: 'Hafen', en: 'Harbour' } });
+    return store;
+  }
+  function confirmed(page: { pickedOptions: PickResult[] }) {
+    const [options] = page.pickedOptions;
+    if (!options?.captions) throw new Error('the picker confirmed without its caption state');
+    return options.captions;
+  }
+
+  it('offers no caption controls unless the caller asks for them', async () => {
+    const page = openPicker(await library(), { multiple: true, preselect: [seed(athens)] });
+    await settleAll(page);
+    expect(page.dialog.querySelector('.picker-strip__caption')).toBeNull();
+    expect(page.dialog.querySelector('.picker-strip__visibility')).toBeNull();
+    page.choose.click();
+    expect(page.pickedOptions[0]?.captions ?? null).toBeNull();
+  });
+
+  it('shows each photo’s inherited caption in the active locale: Media row first, the post’s copy without one', async () => {
+    const page = openPicker(await library(), {
+      multiple: true, resolveFromLibrary: true, list: offPage, preselect: [seed(athens), seed(gone)], captions: captions({}, true, 'de'),
+    });
+    await settleAll(page);
+    // Athens has a row with an EMPTY DE caption: that, not the copied text and
+    // not its EN "Morning", is what this gallery inherits.
+    expect(page.captions()).toEqual(['', 'Imported caption']);
+    expect(page.visibility().checked).toBe(true);
+    expect(page.resetDisabled()).toEqual([true, true]);
+    page.choose.click();
+    expect(confirmed(page)).toEqual({ visible: true, overrides: {} });
+  });
+
+  it('buffers edits and the visibility toggle until confirm; Cancel discards them without touching Media', async () => {
+    const store = await library();
+    const options = captions({});
+    const page = openPicker(store, { multiple: true, resolveFromLibrary: true, list: offPage, preselect: [seed(athens)], captions: options });
+    await settleAll(page);
+    page.typeCaption(0, 'Only in this gallery');
+    page.setVisible(false);
+    expect(page.picked).toEqual([]);
+    page.cancel.click();
+    expect(page.picked).toEqual([]);
+    expect(page.dom.document.querySelector('dialog')).toBeNull();
+    expect(options).toEqual(captions({})); // the caller's state is not the buffer
+    expect((await store.get('athens'))?.caption).toEqual({ de: '', en: 'Morning' });
+    expect(page.methods.every((method) => method === 'GET')).toBe(true);
+  });
+
+  it('returns only explicit edits, an intentional empty caption included, and serializes them on the photo line', async () => {
+    const store = await library();
+    const hostile = 'Local <b>|</b> "quoted"\n```gallery';
+    const page = openPicker(store, {
+      multiple: true, resolveFromLibrary: true, list: offPage, preselect: [seed(athens), seed(rhodes), seed(gone)],
+      captions: captions({ [gone]: '' }),
+    });
+    await settleAll(page);
+    expect(page.captions()).toEqual(['Morning', 'Harbour', '']);
+    expect(page.resetDisabled()).toEqual([true, true, false]);
+    page.typeCaption(0, hostile);
+    page.choose.click();
+    const picks = confirmed(page);
+    expect(picks).toEqual({ visible: true, overrides: { [athens]: hostile, [gone]: '' } });
+    expect((await store.get('athens'))?.caption).toEqual({ de: '', en: 'Morning' });
+    expect(page.methods.every((method) => method === 'GET')).toBe(true);
+
+    const items = page.picked[0] as PickedItem[];
+    const fence = page.galleryFence.serialize(items, 'en', [], {}, picks.overrides);
+    expect(fence.split('\n')).toHaveLength(items.length + 2); // fence, one line per photo, fence
+    expect(page.galleryFence.parse(fence).lines.map((line) => [line.src, line.captionOverride]))
+      .toEqual([[athens, hostile], [rhodes, undefined], [gone, '']]);
+    // The URL-keyed images map still holds Media's caption, so another gallery
+    // using the same photo cannot pick up this gallery's edit.
+    const saved = normalizeGalleryFences(fence, {});
+    expect(saved.images[athens]?.caption).toBe('Morning');
+    expect(JSON.stringify(saved.images)).not.toContain('Local');
+  });
+
+  it('resets a photo to its current Media caption, or to the post’s copy when it has no row', async () => {
+    const page = openPicker(await library(), {
+      multiple: true, resolveFromLibrary: true, list: offPage, preselect: [seed(athens), seed(gone)],
+      captions: captions({ [athens]: 'Old local', [gone]: 'Old local too' }),
+    });
+    await settleAll(page);
+    expect(page.captions()).toEqual(['Old local', 'Old local too']);
+    page.resetCaption(0);
+    page.resetCaption(1);
+    expect(page.captions()).toEqual(['Morning', 'Imported caption']);
+    expect(page.resetDisabled()).toEqual([true, true]);
+    expect(page.dom.document.activeElement).toBe(page.captionFields()[1]);
+    page.choose.click();
+    expect(confirmed(page)).toEqual({ visible: true, overrides: {} });
+  });
+
+  it('keeps hidden captions editable, and showing them again keeps the author’s text', async () => {
+    const page = openPicker(await library(), {
+      multiple: true, resolveFromLibrary: true, list: offPage, preselect: [seed(athens)], captions: captions({ [athens]: 'Kept' }, false),
+    });
+    await settleAll(page);
+    expect(page.visibility().checked).toBe(false);
+    const [field] = page.captionFields();
+    expect([field!.disabled, field!.readOnly, field!.value]).toEqual([false, false, 'Kept']);
+    page.typeCaption(0, 'Written while hidden');
+    page.setVisible(true);
+    page.setVisible(false);
+    page.setVisible(true);
+    expect(page.captions()).toEqual(['Written while hidden']);
+    page.choose.click();
+    expect(confirmed(page)).toEqual({ visible: true, overrides: { [athens]: 'Written while hidden' } });
+  });
+
+  it('keeps an edit with its photo through reordering and removing another photo', async () => {
+    const page = openPicker(await library(), {
+      multiple: true, resolveFromLibrary: true, list: offPage, preselect: [seed(athens), seed(gone), seed(rhodes)], captions: captions(),
+    });
+    await settleAll(page);
+    page.typeCaption(0, 'Athens, mine');
+    page.rows()[0]!.querySelector('[data-act="down"]')!.click();
+    expect(page.captions()).toEqual(['Imported caption', 'Athens, mine', 'Harbour']);
+    page.rows()[0]!.querySelector('[data-act="remove"]')!.click();
+    expect(page.captions()).toEqual(['Athens, mine', 'Harbour']);
+    page.choose.click();
+    expect((page.picked[0] as PickedItem[]).map((item) => item.src)).toEqual([athens, rhodes]);
+    // The removed photo had no edit; nothing is reported for it.
+    expect(confirmed(page)).toEqual({ visible: true, overrides: { [athens]: 'Athens, mine' } });
+  });
+
+  it('lets a late Media answer fill inherited captions without overwriting an edit or moving the caret', async () => {
+    const late = Promise.withResolvers<void>();
+    const page = openPicker(await library(), {
+      multiple: true, resolveFromLibrary: true, list: offPage, preselect: [seed(athens), seed(rhodes)], captions: captions(),
+      item: async (key, result) => key === 'athens' ? late.promise.then(() => result) : result,
+    });
+    await settleAll(page);
+    expect(page.choose.disabled).toBe(true);
+    expect(page.captions()).toEqual(['Copied caption', 'Copied harbour']);
+    page.typeCaption(1, 'Typed before Media answered');
+    page.captionFields()[1]!.setSelectionRange(5, 11);
+    late.resolve();
+    await settleAll(page);
+    expect(page.choose.disabled).toBe(false);
+    expect(page.captions()).toEqual(['Morning', 'Typed before Media answered']);
+    const focused = page.dom.document.activeElement;
+    expect(focused).toBe(page.captionFields()[1]);
+    expect([focused?.selectionStart, focused?.selectionEnd]).toEqual([5, 11]);
+    page.choose.click();
+    expect(confirmed(page)).toEqual({ visible: true, overrides: { [rhodes]: 'Typed before Media answered' } });
+  });
+
+  it('keeps an edit on a photo the library only pages into view later', async () => {
+    const store = await library();
+    const athensRow = await store.get('athens');
+    const quitoRow = await store.get('quito');
+    const page = openPicker(store, {
+      multiple: true, preselect: [seed(athens), seed(rhodes)], captions: captions(),
+      list: async (url) => response({ total: 41, items: [url.searchParams.get('page') === '2' ? athensRow : quitoRow] }),
+    });
+    await settleAll(page);
+    expect(page.dialog.querySelectorAll('.picker-strip__pending')).toHaveLength(2);
+    page.typeCaption(0, 'Edited as a placeholder');
+    page.next.click();
+    await settleAll(page);
+    expect(page.dialog.querySelectorAll('.picker-strip__pending')).toHaveLength(1); // athens adopted its row
+    page.prev.click();
+    await settleAll(page);
+    expect(page.captions()).toEqual(['Edited as a placeholder', 'Copied harbour']);
+    page.choose.click();
+    expect(confirmed(page)).toEqual({ visible: true, overrides: { [athens]: 'Edited as a placeholder' } });
   });
 });

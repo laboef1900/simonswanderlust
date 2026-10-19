@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { transformBodyImages } from './body-images.js';
+import { escapeMeta } from './gallery-layout.js';
+import { renderMarkdown } from './render-markdown.js';
 
 const ORIGIN = 'https://img.simonswanderlust.com';
 /** ```gallery survives sanitize as this — see MARKDOWN_OPTIONS in render-markdown.ts. */
@@ -33,6 +35,72 @@ describe('gallery library descriptions', () => {
     expect(out).not.toContain('<script');
     expect(out).not.toContain('evil.example');
     expect(out).not.toContain('Foreign metadata');
+  });
+});
+
+describe('gallery-local caption controls', () => {
+  const src = `${ORIGIN}/trips/photo`;
+  const stored = { [src]: { width: 1600, height: 1000, alt: 'Stored alt', caption: 'Stored caption' } };
+  const library = new Map([[src, { alt: 'Library alt', caption: 'Library caption' }]]);
+  const captions = (html: string) =>
+    [...html.matchAll(/<figcaption class="jgal__cap">([^<]*)<\/figcaption>/g)].map((m) => m[1]);
+
+  it('lets a line override win over the library, in that gallery only', () => {
+    const out = transformBodyImages(
+      fence(`${src} | caption-override="Only here"`) + fence(src), stored, ORIGIN, library);
+    // Same URL, two galleries: the second still follows the library.
+    expect(captions(out)).toEqual(['Only here', 'Library caption']);
+    // Alt is never taken from the line — it stays library-authoritative.
+    expect(out).not.toContain('Stored alt');
+    expect(out.match(/alt="Library alt"/g)).toHaveLength(2);
+  });
+
+  it('treats an empty override as a deliberate clear and a missing one as inherit', () => {
+    const out = transformBodyImages(fence(`${src} | caption-override=""\n${src}`), stored, ORIGIN, library);
+    expect(captions(out)).toEqual(['Library caption']);
+    // No library row: inherit falls back to the stored caption.
+    expect(captions(transformBodyImages(fence(src), stored, ORIGIN))).toEqual(['Stored caption']);
+  });
+
+  it('hides every caption of a #captions: hidden gallery, overrides included, and only that gallery', () => {
+    const hidden = fence(`#captions: hidden\n${src} | caption-override="Kept text"\n${src}`);
+    const out = transformBodyImages(hidden + fence(src), stored, ORIGIN, library);
+    expect(captions(out)).toEqual(['Library caption']); // the second gallery only
+    expect(out).not.toContain('Kept text');
+    expect(out).not.toContain('#captions');
+    // The lightbox reads `.jgal__cap` back out of each figure, so no figcaption = none there.
+    expect(transformBodyImages(hidden, stored, ORIGIN, library)).not.toContain('figcaption');
+  });
+
+  it('restores the retained override when the directive is removed', () => {
+    const out = transformBodyImages(fence(`${src} | caption-override="Kept text"`), stored, ORIGIN, library);
+    expect(captions(out)).toEqual(['Kept text']);
+  });
+
+  it('treats unknown values as visible and lets the first directive win', () => {
+    for (const directives of ['#captions: off', '#captions:', '#captions: shown\n#captions: hidden']) {
+      const out = transformBodyImages(fence(`${directives}\n${src}`), stored, ORIGIN, library);
+      expect(captions(out)).toEqual(['Library caption']);
+    }
+    const out = transformBodyImages(fence(`#CAPTIONS : Hidden\n#captions: visible\n${src}`), stored, ORIGIN, library);
+    expect(out).not.toContain('figcaption');
+  });
+
+  it('renders HTML and fence syntax in an override as text, through the real Markdown pipeline', async () => {
+    const hostile = 'a <img src=x onerror=alert(1)> & "q" | ```\nb';
+    const body = ['```gallery', `${src} | caption-override="${escapeMeta(hostile)}"`, '```'].join('\n');
+    const out = transformBodyImages(await renderMarkdown(body), stored, ORIGIN, library);
+    expect(out).not.toContain('<img src="x"');
+    expect(out).not.toContain('<img src=x');
+    expect(out).toContain('<figcaption class="jgal__cap">a &#x3C;img src=x onerror=alert(1)> &#x26; "q" | ```\nb</figcaption>');
+  });
+
+  it('never lets an override smuggle a photo past the URL guards', () => {
+    const evil = 'https://img.simonswanderlust.com.evil.example/trips/photo';
+    const out = transformBodyImages(fence(`${evil} | caption-override="Foreign"`),
+      { [evil]: stored[src] }, ORIGIN, library);
+    expect(out).not.toContain('jgal');
+    expect(out).not.toContain('<figcaption');
   });
 });
 
