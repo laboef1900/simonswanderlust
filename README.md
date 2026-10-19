@@ -78,11 +78,22 @@ docker compose pull && docker compose up -d
 
 ### Cutting a release
 
-**Current release: v0.14.1.** Fixes since v0.14.0:
+**Current release: v0.15.0.** Highlights since v0.14.1:
 
-- AI photo details and hosted-image alt-text suggestions no longer fail with "Photo
-  download failed" in browsers that cached a thumbnail before the image host sent
-  CORS headers; the suggestion fetch now bypasses that stale cached copy.
+- **Take Back up now before deploying.** The first boot migrates `settings.json` and the
+  stored AI key into the new AI provider registry and keeps `settings.json.pre-ai-registry`;
+  rolling back needs the older image, that dump, and that file.
+- AI provider registry: Settings → AI models lists providers, each with its own encrypted
+  key, and assigns a provider and model per use case, with model dropdowns filled from each
+  provider's `/models`.
+- New regions: Asia, Africa, Oceania and Antarctica. A region page is generated only once
+  its locale has a published story; the existing region slugs are unchanged.
+- Admin shell: the workspace is the only scroll container, Log out lives in the account
+  menu, Settings uses vertical tabs, and the editor's Story details collapses to a rail.
+- Settings → Images can preview an AVIF/WebP quality setting on a sample photo.
+- The photo-description output token budget is configurable (default 8,000), so reasoning
+  models no longer exhaust it before returning metadata.
+- The posts list's "New from this one" duplicate action is removed.
 
 1. On a `feature/*` branch from `dev`, update both apps' `package.json` and
    `package-lock.json` versions, plus the `IMAGE_TAG` defaults in `docker-compose.yml`
@@ -93,8 +104,8 @@ docker compose pull && docker compose up -d
 
 ```bash
 git fetch origin main
-git tag -a v0.14.1 origin/main -m "Release v0.14.1"
-git push origin v0.14.1
+git tag -a v0.15.0 origin/main -m "Release v0.15.0"
+git push origin v0.15.0
 ```
 
 Never push directly to `dev` or `main`, tag an unmerged feature branch, or replace a
