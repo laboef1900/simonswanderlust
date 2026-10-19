@@ -766,6 +766,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return {
       lmBaseUrl: s.lmBaseUrl, lmModel: s.lmModel, captionPrompt: s.captionPrompt,
       captionTimeoutMs: s.captionTimeoutMs, captionMaxEdge: s.captionMaxEdge,
+      captionMaxTokens: s.captionMaxTokens,
       captionProvider: s.captionProvider, captionCustomBaseUrl: s.captionCustomBaseUrl,
     };
   }
@@ -804,6 +805,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (b.lmBaseUrl !== undefined) partial.lmBaseUrl = String(b.lmBaseUrl).trim();
     if (b.lmModel !== undefined) partial.lmModel = String(b.lmModel).trim();
     if (b.captionTimeoutMs !== undefined) partial.captionTimeoutMs = Number(b.captionTimeoutMs);
+    if (b.captionMaxTokens !== undefined) partial.captionMaxTokens = b.captionMaxTokens;
     if (b.captionMaxEdge !== undefined) partial.captionMaxEdge = Number(b.captionMaxEdge);
     if (b.captionPrompt !== undefined) partial.captionPrompt = String(b.captionPrompt);
     if (b.backupSchedule !== undefined) partial.backupSchedule = String(b.backupSchedule);

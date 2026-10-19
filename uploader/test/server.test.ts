@@ -997,6 +997,7 @@ describe('AI credential boundaries', () => {
       expect(caption.json()).toEqual({
         lmBaseUrl: SETTINGS.lmBaseUrl, lmModel: SETTINGS.lmModel, captionPrompt: SETTINGS.captionPrompt,
         captionTimeoutMs: SETTINGS.captionTimeoutMs, captionMaxEdge: SETTINGS.captionMaxEdge,
+        captionMaxTokens: SETTINGS.captionMaxTokens,
         captionProvider: 'lm-studio', captionCustomBaseUrl: '',
         captionBaseUrl: SETTINGS.lmBaseUrl, captionApiKey: null,
       });

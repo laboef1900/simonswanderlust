@@ -6,7 +6,7 @@ const script = readFileSync('public/alt-suggest.js', 'utf8');
 
 describe('local alt text remains separate from remote review credentials', () => {
   function setup(status = 200) {
-    const config = { captionProvider: 'lm-studio', captionBaseUrl: 'http://localhost:1234/v1', captionApiKey: null, lmModel: 'local-vision', captionPrompt: 'describe', captionTimeoutMs: 60000, captionMaxEdge: 768 };
+    const config = { captionProvider: 'lm-studio', captionBaseUrl: 'http://localhost:1234/v1', captionApiKey: null, lmModel: 'local-vision', captionPrompt: 'describe', captionTimeoutMs: 60000, captionMaxTokens: 8000, captionMaxEdge: 768 };
     const fetch = vi.fn(async () => ({ status, ok: status === 200, json: async () => config }));
     const caption = vi.fn(async () => ({ altDe: 'Ein Berg', altEn: 'A mountain' }));
     const prepImage = vi.fn(async () => ({ dataUrl: 'data:image/jpeg;base64,fixture' }));
@@ -51,6 +51,7 @@ describe('hosted gallery captions', () => {
       captionBaseUrl: remote ? 'https://openrouter.ai/api/v1' : 'http://localhost:1234/v1',
       captionApiKey: remote ? 'fixture-shared-key' : null,
       lmModel: 'vision', captionPrompt: 'Describe', captionMaxEdge: 768, captionTimeoutMs: 5000,
+      captionMaxTokens: 8000,
     };
     const ctx: Record<string, unknown> = {
       URL, AbortController, AbortSignal, setTimeout, clearTimeout,

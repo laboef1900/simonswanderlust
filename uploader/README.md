@@ -257,8 +257,8 @@ Author-facing detail is in [`../docs/authoring-workflow.md`](../docs/authoring-w
 
 Settings → **Photo descriptions** has the same provider choices as **Story review & excerpts**:
 Local LM Studio (default), OpenRouter, DeepSeek, or a custom HTTP(S) OpenAI-compatible
-endpoint. Caption provider/model/prompt/timeout are independent of review. Select a
-**vision-capable model**; a provider's model list does not guarantee image support.
+endpoint. Caption provider/model/prompt/timeout/output budget are independent of review.
+Select a **vision-capable model**; a provider's model list does not guarantee image support.
 
 The editor and photo uploader send a resized JPEG and caption prompt directly from
 the browser to that provider. The app server never contacts the model. Remote captions
@@ -272,8 +272,17 @@ Save remote provider changes first. It sends no photo and does not verify vision
 no remote discovery runs automatically. Custom providers must allow browser CORS.
 Local LM Studio uses `lmBaseUrl` and never receives the shared key.
 
+**Maximum output tokens** sets the per-photo output ceiling for both editor/uploader
+alt-text suggestions and media-library AI details (single and bulk). Default **8,000**;
+allowed range **256–32,768**, whole numbers only. Reasoning models spend this same budget
+on thinking and the final answer: DeepSeek exhausted the former fixed 1,000-token
+photo-details limit before returning any metadata. A higher ceiling permits more work
+and may increase provider charges and latency; the chosen model must support it.
+This does not toggle thinking or change the separate caption timeout. Existing settings
+files without the field use 8,000; saved values survive restart.
+
 Non-secret caption settings (`captionProvider`, `captionCustomBaseUrl`, `lmBaseUrl`,
-`lmModel`, `captionTimeoutMs`, `captionMaxEdge`, `captionPrompt`) live in settings.json.
+`lmModel`, `captionTimeoutMs`, `captionMaxTokens`, `captionMaxEdge`, `captionPrompt`) live in settings.json.
 Authenticated `GET /ai-config?purpose=caption` resolves `captionBaseUrl` and provides
 `captionApiKey` only for remote captions. Local captions remain usable with broken or
 missing remote credentials. Editor suggestions fill editable alt text, never autosave/publish.
