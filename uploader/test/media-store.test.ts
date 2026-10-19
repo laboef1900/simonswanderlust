@@ -274,6 +274,18 @@ describe('memoryMediaStore', () => {
     expect([...out].sort()).toEqual(['bad-key', 'busy-key']);
   });
 
+  it('descriptions returns only localized alt/caption for known keys, blanks included', async () => {
+    const s = store();
+    await add(s, 'lib', { title: 'Label', alt: { de: 'A', en: 'B' }, caption: { de: 'C', en: '' } });
+    await add(s, 'bare');
+    const out = await s.descriptions(['lib', 'bare', 'never-heard-of-it']);
+    expect([...out]).toEqual([
+      ['lib', { alt: { de: 'A', en: 'B' }, caption: { de: 'C', en: '' } }],
+      ['bare', { alt: { de: '', en: '' }, caption: { de: '', en: '' } }],
+    ]);
+    expect((await s.descriptions([])).size).toBe(0);
+  });
+
   it('setStatus clears the error when leaving failed', async () => {
     const s = store();
     await add(s, 'k');

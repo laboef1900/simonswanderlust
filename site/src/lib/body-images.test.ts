@@ -5,6 +5,37 @@ const ORIGIN = 'https://img.simonswanderlust.com';
 /** ```gallery survives sanitize as this — see MARKDOWN_OPTIONS in render-markdown.ts. */
 const fence = (lines: string) => `<pre><code class="language-gallery">${lines}\n</code></pre>`;
 
+describe('gallery library descriptions', () => {
+  const src = `${ORIGIN}/trips/photo`;
+  const stored = { [src]: { width: 1600, height: 1000, alt: 'Stored alt', caption: 'Stored caption' } };
+
+  it('uses library text only for galleries, including deliberate clears', () => {
+    const html = fence(src) + `<p><img src="${src}" alt="Inline alt"></p>`;
+    const metadata = new Map([[src, { alt: '', caption: '' }]]);
+    const out = transformBodyImages(html, stored, ORIGIN, metadata);
+    expect(out).toContain('alt=""');
+    expect(out).toContain('alt="Inline alt"');
+    expect(out).not.toContain('Stored alt');
+    expect(out).not.toContain('<figcaption');
+    expect(stored[src].alt).toBe('Stored alt');
+  });
+
+  it('escapes library descriptions after sanitization and does not relax URL guards', () => {
+    const evil = 'https://img.simonswanderlust.com.evil.example/trips/photo';
+    const metadata = new Map([
+      [src, { alt: '" onerror="alert(1)', caption: '<script>alert(1)</script>' }],
+      [evil, { alt: 'Foreign metadata', caption: 'Foreign caption' }],
+    ]);
+    const out = transformBodyImages(fence(`${src}\n${evil}`),
+      { ...stored, [evil]: stored[src] }, ORIGIN, metadata);
+    expect(out).toContain('alt="&#x22; onerror=&#x22;alert(1)"');
+    expect(out).toContain('&#x3C;script>alert(1)&#x3C;/script>');
+    expect(out).not.toContain('<script');
+    expect(out).not.toContain('evil.example');
+    expect(out).not.toContain('Foreign metadata');
+  });
+});
+
 describe('transformBodyImages — sanitization', () => {
   it('strips <script> from author body HTML', () => {
     const out = transformBodyImages('<p>hello</p><script>alert(1)</script>', {}, ORIGIN);
@@ -203,7 +234,7 @@ describe('transformBodyImages — gallery layout modes', () => {
   it('caps a lone portrait at the square, as a container percentage', () => {
     const portrait = { [`${ORIGIN}/trips/x/tall`]: { width: 2000, height: 3000, alt: 'tall' } };
     const out = transformBodyImages(fence(`${ORIGIN}/trips/x/tall`), portrait, ORIGIN);
-    // 960 tall × 2/3 = 640 wide of 960 — as wide as it is tall. A percentage,
+    // 1056 tall × 2/3 = 704 wide of 1056 — as wide as it is tall. A percentage,
     // not pixels, so it stays square-bounded as the container resizes.
     expect(out).toContain('--jgal-maxw:66.67%');
   });
@@ -213,7 +244,7 @@ describe('transformBodyImages — gallery layout modes', () => {
     expect(wide).toContain('class="jgal jgal--breakout not-prose"');
     // The wider container asks the browser for a wider source per photo.
     expect(wide).toContain('(min-width: 1112px) 550px');
-    expect(transformBodyImages(manyFence(), many, ORIGIN)).toContain('(min-width: 960px) 312px');
+    expect(transformBodyImages(manyFence(), many, ORIGIN)).toContain('(min-width: 1056px) 344px');
   });
 
   it('renders a keyboard-scrollable track with hidden controls on #layout: slider', () => {

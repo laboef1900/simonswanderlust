@@ -223,7 +223,7 @@ function loadEditor(options: EditorOptions = {}) {
     guard.redirectToLogin = () => { redirects += 1; redirect(); };
     return guard;
   };
-  for (const file of ['waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
+  for (const file of ['waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
     vm.runInContext(readFileSync('public/' + file, 'utf8'), ctx, { filename: file });
   }
   if (options.review) (ctx.LLM as { reviewStory: Review }).reviewStory = options.review;
@@ -1287,12 +1287,34 @@ describe('inline gallery editing', () => {
     return pair;
   }
 
-  it('edits every gallery occurrence in one locale, clears alt on save, and preserves metadata on reload', () => {
-    const h = loadEditor();
+  interface MediaRow { key: string; src: string; title: string; alt: { de: string; en: string }; caption: { de: string; en: string } }
+  const mediaRow = (key: string, alt: MediaRow['alt'], caption: MediaRow['caption']): MediaRow =>
+    ({ key, src: 'https://img/' + key, title: 'Market at dawn', alt, caption });
+  // The resolver reads the image base off any library row, so the probe always
+  // answers with an unrelated one; `rows` decides which gallery photos exist.
+  const anchor = mediaRow('anchor', { de: '', en: '' }, { de: '', en: '' });
+  function mediaNetwork(rows: MediaRow[]): Fetch {
+    return async (url) => {
+      if (url.startsWith('/media?')) return response({ total: rows.length + 1, items: [anchor] });
+      if (url.startsWith('/media/items/')) {
+        const row = rows.find((candidate) => candidate.key === url.slice('/media/items/'.length));
+        return row ? response(row) : response({ error: 'image not found' }, 404);
+      }
+      throw new Error('no network in test: ' + url);
+    };
+  }
+  const settleAll = async () => { for (let i = 0; i < 12; i++) await settle(); };
+
+  it('keeps post-local alt editing for photos with no Media row: every occurrence, clears on save, survives reload', async () => {
+    const h = loadEditor({ fetch: mediaNetwork([]) });
     const pair = pairWithGallery();
     h.api.populateForm(pair);
+    await settleAll();
     const fields = h.document.querySelectorAll('.editor-gallery__alt');
     expect(fields.map((field) => field.value)).toEqual(['Original', 'Original', 'English', 'English']);
+    expect(fields.map((field) => field.readOnly)).toEqual([false, false, false, false]);
+    expect(h.document.querySelectorAll('.editor-gallery__local').map((note) => note.hidden)).toEqual([false, false, false, false]);
+    expect(h.document.querySelectorAll('.editor-gallery__source').map((note) => note.hidden)).toEqual([true, true, true, true]);
     fields[0]!.value = 'A \"quote\" | and\nnewline';
     fields[0]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
     expect(fields[1]!.value).toBe(fields[0]!.value);
@@ -1313,8 +1335,9 @@ describe('inline gallery editing', () => {
   it('requires explicit AI acceptance and ignores a late answer after manual input or a locale change', async () => {
     let pending = Promise.withResolvers<string>();
     const calls: { lang: string; signal: AbortSignal }[] = [];
-    const h = loadEditor({ caption: (options) => { calls.push(options); return pending.promise; } });
+    const h = loadEditor({ fetch: mediaNetwork([]), caption: (options) => { calls.push(options); return pending.promise; } });
     h.api.populateForm(pairWithGallery());
+    await settleAll();
     const field = h.document.querySelector('.editor-gallery__alt')!;
     const suggest = h.document.querySelector('.editor-gallery__suggest')!;
     suggest.click();
@@ -1341,6 +1364,108 @@ describe('inline gallery editing', () => {
     pending.resolve('Wrong locale answer');
     await settle();
     expect(field.value).toBe('My current edit');
+  });
+
+  it('shows current Media alt and caption per locale read-only, links to Media, and never edits the article', async () => {
+    const row = mediaRow('photo', { de: 'Neu aus der Mediathek', en: 'Fresh from Media' }, { de: '', en: 'Morning light' });
+    const h = loadEditor({ fetch: mediaNetwork([row]) });
+    const pair = pairWithGallery();
+    h.api.populateForm(pair);
+    const before = h.api.buildPayload();
+    // Until Media answers nobody knows which text applies, so nothing is editable.
+    expect(h.document.querySelectorAll('.editor-gallery__alt').map((field) => field.readOnly)).toEqual([true, true, true, true]);
+    expect(h.document.querySelector('.editor-gallery__lookup')!.textContent).toBe(ui.de['editor.gallery.checking']);
+    await settleAll();
+    const fields = h.document.querySelectorAll('.editor-gallery__alt');
+    expect(fields.map((field) => field.value))
+      .toEqual(['Neu aus der Mediathek', 'Neu aus der Mediathek', 'Fresh from Media', 'Fresh from Media']);
+    expect(fields.map((field) => field.readOnly)).toEqual([true, true, true, true]);
+    // The empty DE Media caption overrides the post's copied "Caption".
+    expect(h.document.querySelectorAll('.editor-gallery__caption').map((caption) => caption.hidden ? null : caption.textContent))
+      .toEqual([null, null, 'Morning light', 'Morning light']);
+    const links = h.document.querySelectorAll('.editor-gallery__media-link');
+    expect(links.map((link) => [link.getAttribute('href'), link.target, link.rel, link.parentElement!.hidden]))
+      .toEqual(Array(4).fill(['/admin/media.html', '_blank', 'noopener', false]));
+    expect(h.document.querySelectorAll('.editor-gallery__source')[0]!.textContent)
+      .toContain(ui.de['editor.gallery.fromMedia'] + ' Market at dawn');
+    expect(h.document.querySelectorAll('.editor-gallery__suggest').map((button) => button.hidden)).toEqual([true, true, true, true]);
+    expect(h.document.querySelectorAll('.editor-gallery__local').map((note) => note.hidden)).toEqual([true, true, true, true]);
+    expect(h.document.querySelector('.editor-gallery__lookup')!.textContent).toBe('');
+    fields[0]!.value = 'Typed into a locked field';
+    fields[0]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    expect(h.api.buildPayload()).toEqual(before);
+    // Four occurrences across two locales, one request; and only reads.
+    expect(h.requests.filter((request) => request.url === '/media/items/photo')).toHaveLength(1);
+    expect(h.requests.every((request) => (request.options.method ?? 'GET') === 'GET')).toBe(true);
+
+    // Reopening the article after a Media edit shows the edit.
+    row.alt.de = 'Später in der Mediathek geändert';
+    h.api.populateForm(pair);
+    await settleAll();
+    expect(h.document.querySelector('.editor-gallery__alt')!.value).toBe('Später in der Mediathek geändert');
+  });
+
+  it('locks alt text and says so when Media cannot answer, and recovers on retry', async () => {
+    const row = mediaRow('photo', { de: 'Aus der Mediathek', en: 'From Media' }, { de: '', en: '' });
+    let failing = true;
+    const network = mediaNetwork([row]);
+    const h = loadEditor({ fetch: async (url, init) => failing && url.startsWith('/media/items/')
+      ? response({ error: 'database unavailable' }, 500) : network(url, init) });
+    h.api.populateForm(pairWithGallery());
+    await settleAll();
+    const fields = h.document.querySelectorAll('.editor-gallery__alt');
+    expect(fields.map((field) => [field.value, field.readOnly]))
+      .toEqual([['Original', true], ['Original', true], ['English', true], ['English', true]]);
+    const [deStatus, enStatus] = h.document.querySelectorAll('.editor-gallery__lookup');
+    expect(deStatus!.textContent).toBe(ui.de['editor.gallery.mediaFailed']);
+    expect(enStatus!.textContent).toBe(ui.en['editor.gallery.mediaFailed']);
+    expect(h.document.querySelectorAll('.editor-gallery__suggest').every((button) => button.hidden)).toBe(true);
+    failing = false;
+    const retry = h.document.querySelector('.editor-gallery__retry')!;
+    expect(retry.hidden).toBe(false);
+    retry.click();
+    await settleAll();
+    expect(fields.map((field) => field.value)).toEqual(['Aus der Mediathek', 'Aus der Mediathek', 'English', 'English']);
+    expect(retry.hidden).toBe(true);
+    expect(deStatus!.textContent).toBe('');
+  });
+
+  it('ignores a late Media answer that belongs to an earlier load of the article', async () => {
+    const late = Promise.withResolvers<Response>();
+    let calls = 0;
+    const network = mediaNetwork([]);
+    const h = loadEditor({ fetch: async (url, init) => {
+      if (!url.startsWith('/media/items/')) return network(url, init);
+      calls += 1;
+      return calls === 1 ? late.promise : response({ error: 'image not found' }, 404);
+    } });
+    const pair = pairWithGallery();
+    h.api.populateForm(pair);
+    await settleAll();
+    h.api.populateForm(pair);
+    await settleAll();
+    late.resolve(response(mediaRow('photo', { de: 'Veraltet', en: 'Stale' }, { de: '', en: '' })));
+    await settleAll();
+    expect(h.document.querySelectorAll('.editor-gallery__alt').map((field) => [field.value, field.readOnly]))
+      .toEqual([['Original', false], ['Original', false], ['English', false], ['English', false]]);
+  });
+
+  it('lets Review Story judge gallery alt text by the current Media description', async () => {
+    const row = mediaRow('photo', { de: '', en: 'From Media' }, { de: '', en: '' });
+    const h = loadEditor({ fetch: mediaNetwork([row]) });
+    const pair = pairWithGallery();
+    h.api.populateForm(pair);
+    await settleAll();
+    h.el('reviewStory').click();
+    // The post still carries a copied alt, but Media's empty one is what renders.
+    expect(h.el('reviewInstant').textContent).toContain('Add alt text to this gallery image.');
+    h.el('closeReview').click();
+    row.alt.de = 'Beschreibung aus der Mediathek';
+    pair.de.images = { 'https://img/photo': { width: 900, height: 600, alt: '' } };
+    h.api.populateForm(pair);
+    await settleAll();
+    h.el('reviewStory').click();
+    expect(h.el('reviewInstant').textContent).not.toContain('Add alt text to this gallery image.');
   });
 
   it('leaves nested examples and unfinished fences editable, and cancels previews when showing raw Markdown', () => {

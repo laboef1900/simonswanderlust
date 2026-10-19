@@ -765,9 +765,11 @@ changes" was wrong: the *arity* is unchanged, the value type is not.
 
 Galleries are supported in `pages` bodies (the About page) on the same terms.
 
-Values are **denormalized from the library at insert time**, so a published snapshot stays
-self-contained and editing a post cannot leak live before publish (issue #20). A "Sync captions
-from library" action re-pulls current values on demand.
+**Superseded for article galleries on 2026-10-19:** current Media-library alt/caption
+override the stored copies at build and draft-preview time, including empty values.
+Missing library rows retain the stored descriptions. Article text and structure still
+come from published snapshots. See
+`2026-10-19-gallery-library-metadata-design.md` for the owner-approved next-rebuild behavior.
 
 ### MDX export round-trip
 

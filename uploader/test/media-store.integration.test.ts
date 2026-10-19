@@ -120,6 +120,16 @@ maybe('pgMediaStore (integration)', () => {
     expect([...out]).toEqual(['busy-key']);
   });
 
+  it('descriptions reads only alt/caption of known keys in one query, blanks included', async () => {
+    await add('lib', { title: 'Label', alt: { de: 'A', en: 'B' }, caption: { de: 'C', en: '' } });
+    await add('bare');
+    const out = await store.descriptions(['lib', 'bare', 'never-uploaded']);
+    expect(out.get('lib')).toEqual({ alt: { de: 'A', en: 'B' }, caption: { de: 'C', en: '' } });
+    expect(out.get('bare')).toEqual({ alt: { de: '', en: '' }, caption: { de: '', en: '' } });
+    expect(out.has('never-uploaded')).toBe(false);
+    expect((await store.descriptions([])).size).toBe(0);
+  });
+
   // The query encodeQueue.recover() re-seeds the backlog from.
   it('lists processing rows oldest-first for queue recovery', async () => {
     await add('new', { status: 'processing' });

@@ -450,6 +450,7 @@
     <script src="/admin/editor-title-image.js"></script>
     <script src="/admin/waypoint-copy.js"></script>
     <script src="/admin/waypoint-lookup.js"></script>
+    <script src="/admin/gallery-library.js"></script>
     <script src="/admin/editor-galleries.js"></script>
     <script>
       'use strict';
@@ -679,6 +680,9 @@
             markdown: (activeTab === 'en' ? enMDE : deMDE).value(),
             heroAlt: $(activeTab + 'HeroAlt').value,
             heroSrc: $(activeTab + 'HeroSrc').value,
+            // Local quick checks only: llm.js sends the provider an explicit
+            // field list that does not include this.
+            galleryAlt: galleryEditors[activeTab].altContext(),
           },
         }),
         isCurrent: (snapshot) => snapshot.identity === currentTk && snapshot.story.locale === activeTab,
@@ -1062,11 +1066,12 @@
         const existing = GalleryFence.fenceAt(body, cursor);
         const current = existing ? GalleryFence.parse(existing.text) : { directives: [], lines: [] };
 
-        // What this post already says about each photo, which must survive a
-        // re-serialize: the fence's own metadata if the author typed some and
-        // has not saved yet, otherwise the `images` entry it was lifted into.
-        // Without this, post-specific alt/caption and the JPEG-only marker can
-        // be overwritten or dropped when the picker refreshes from the library.
+        // What this post already says about each photo: the fence's own
+        // metadata if the author typed some and has not saved yet, otherwise
+        // the `images` entry it was lifted into. serialize keeps it for a photo
+        // with no Media row, keeps the JPEG-only marker always, and uses it to
+        // know when a now-empty Media alt/caption must be written explicitly
+        // so the save cannot fall back to this older copy (gallery-fence.js).
         const images = locale === 'de' ? deImages : enImages;
         const status = $(locale + 'BodyImgStatus');
         const postMeta = {};
@@ -1107,9 +1112,25 @@
           };
         });
 
+        // The gallery's own photos are looked up in Media directly, not only as
+        // the author happens to page past them: serialize writes a library
+        // row's CURRENT alt/caption (blank included) and keeps the post's text
+        // only for a photo with no row. A failed lookup leaves that photo a
+        // placeholder, so its post text survives rather than being guessed.
+        const resolveFromMedia = (srcs) => galleryLibrary.lookup(srcs, { fresh: true }).then((entries) => {
+          const rows = [];
+          let failed = 0;
+          entries.forEach((entry) => {
+            if (entry.row) rows.push(entry.row);
+            else if (entry.error) failed += 1;
+          });
+          return { rows, failed };
+        });
+
         MediaPicker.open({
           multiple: true,
           preselect,
+          resolve: resolveFromMedia,
           layouts: GALLERY_LAYOUTS,
           layout: GalleryFence.layoutOf(current.directives),
           confirmLabel: existing ? 'Update gallery' : 'Insert gallery',
@@ -1151,11 +1172,16 @@
       $('deGallery').addEventListener('click', () => galleryFor('de'));
       $('enGallery').addEventListener('click', () => galleryFor('en'));
 
+      const galleryLibrary = GalleryLibrary.create({
+        client: MediaApi.makeClient({ onUnauthed: () => guard.redirectToLogin() }),
+        imageOrigin: EditorGalleryImageOrigin,
+      });
       for (const locale of ['de', 'en']) {
         galleryEditors[locale] = EditorGalleries.attach({
           cm: (locale === 'de' ? deMDE : enMDE).codemirror,
           locale,
           images: () => locale === 'de' ? deImages : enImages,
+          library: galleryLibrary,
           imageOrigin: EditorGalleryImageOrigin,
           toggle: $(locale + 'GalleryView'),
           copy: EditorGalleryCopy[locale],
@@ -1836,6 +1862,9 @@
       function populateForm(post) {
         storyReview?.invalidate();
         excerptAssist?.invalidate();
+        // A (re)loaded post shows what Media says now, not what an earlier
+        // load of this page saw — the author may have just edited it there.
+        galleryLibrary.forget();
         // Every shared field is written unconditionally (with '' fallbacks):
         // buildPayload() deletes cleared/empty keys from the stash, so applying
         // a restore over an already-loaded post must not resurrect values the

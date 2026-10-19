@@ -159,9 +159,11 @@ window.MediaApi = (function () {
         init.body = JSON.stringify(body);
       }
       var res = await fetchImpl(url, init);
-      if (res.status === 401) { onUnauthed(); throw new Error('unauthorized'); }
+      if (res.status === 401) { onUnauthed(); throw Object.assign(new Error('unauthorized'), { status: 401 }); }
       var parsed = await res.json().catch(function () { return {}; });
-      if (!res.ok) throw new Error(parsed.error || ('HTTP ' + res.status));
+      // The status rides along so a caller can tell "no such row" (404) from a
+      // failure without parsing a server message.
+      if (!res.ok) throw Object.assign(new Error(parsed.error || ('HTTP ' + res.status)), { status: res.status });
       return parsed;
     }
 

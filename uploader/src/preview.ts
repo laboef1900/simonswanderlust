@@ -10,7 +10,7 @@
 // (@astrojs/markdown-satteri, unified, rehype-*) resolve from site/node_modules,
 // so typecheck/tests here need `npm ci` in site/ too (CI does this).
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
-import { transformBodyImages } from '../../site/src/lib/body-images.js';
+import { transformBodyImages, type GalleryMetadata } from '../../site/src/lib/body-images.js';
 import { SHIKI_CSS } from '../../site/src/lib/shiki-classes.js';
 import { focusPosition, sourceFormats, srcset, fallbackSrc } from '../../site/src/lib/images.js';
 import { coordsLabel, dateLabel } from '../../site/src/lib/format.js';
@@ -174,11 +174,19 @@ export function previewCsp(imageOrigin: string): string {
  *   Sourcing it from the app's own config (instead of the site build's
  *   `PUBLIC_BASE_URL` fallback) is what makes draft galleries work on a dev
  *   machine as well as in production.
+ * @param galleryMetadata this locale's CURRENT Media-library gallery alt/caption
+ *   (`loadGalleryMetadata`), so a draft preview shows what the next site build
+ *   will. Only galleries consult it; hero and inline alt stay the post's own.
  */
-export async function renderPreviewHtml(pair: PostPair, locale: Locale, imageOrigin: string): Promise<string> {
+export async function renderPreviewHtml(
+  pair: PostPair,
+  locale: Locale,
+  imageOrigin: string,
+  galleryMetadata?: GalleryMetadata,
+): Promise<string> {
   const post = pair[locale];
   const shared = pair.shared;
-  const body = transformBodyImages(await renderMarkdown(post.bodyMarkdown), post.images, imageOrigin);
+  const body = transformBodyImages(await renderMarkdown(post.bodyMarkdown), post.images, imageOrigin, galleryMetadata);
 
   const parsedDate = shared.date ? new Date(shared.date) : undefined;
   const metaParts = [

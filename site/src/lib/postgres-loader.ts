@@ -19,6 +19,12 @@ interface PostRow {
   featured?: boolean;
 }
 
+interface MediaDescriptionRow {
+  key: string;
+  alt_de: string; alt_en: string;
+  caption_de: string; caption_en: string;
+}
+
 /**
  * pg parses a `date` column to a LOCAL-midnight JS Date; the published-snapshot
  * jsonb carries 'YYYY-MM-DD' text instead (see POST_SNAPSHOT_SQL in
@@ -92,21 +98,30 @@ export function postgresTripsLoader(): Loader {
       const pool = loaderPool(url);
       try {
         store.clear();
-        // @ai-warning: build ONLY from the published snapshot (written by the
-        // uploader's publish action — see uploader/src/db.ts POST_SNAPSHOT_SQL),
-        // never from the working columns: a draft save over a published post
-        // must not go live on an unrelated rebuild (issue #20). The snapshot's
-        // keys mirror PostRow; `date` arrives as a 'YYYY-MM-DD' string, which
-        // rowToEntryInput already handles.
+        // @ai-warning: article content still comes ONLY from published snapshots,
+        // never working columns (#20). Current library gallery descriptions are
+        // the sole approved exception; they do not mutate the stored snapshot.
         const { rows } = await pool.query<{ published_snapshot: PostRow }>(
           `SELECT published_snapshot
              FROM posts WHERE status = 'published' AND published_snapshot IS NOT NULL`,
         );
+        const { rows: media } = await pool.query<MediaDescriptionRow>(
+          'SELECT key, alt_de, alt_en, caption_de, caption_en FROM media',
+        );
+        const descriptions = {
+          de: new Map<string, { alt: string; caption: string }>(),
+          en: new Map<string, { alt: string; caption: string }>(),
+        };
+        for (const photo of media) {
+          const src = `${galleryOrigin}/${photo.key}`;
+          descriptions.de.set(src, { alt: photo.alt_de, caption: photo.caption_de });
+          descriptions.en.set(src, { alt: photo.alt_en, caption: photo.caption_en });
+        }
         for (const { published_snapshot: row } of rows) {
           const input = rowToEntryInput(row, galleryOrigin);
           const data = await parseData({ id: input.id, data: input.data });
           const rendered = await renderMarkdown(input.body);
-          rendered.html = transformBodyImages(rendered.html, input.images, galleryOrigin);
+          rendered.html = transformBodyImages(rendered.html, input.images, galleryOrigin, descriptions[row.locale]);
           store.set({ id: input.id, data, body: input.body, rendered });
         }
         logger.info(`postgres-trips: loaded ${rows.length} published entries`);

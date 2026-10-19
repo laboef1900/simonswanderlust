@@ -95,6 +95,41 @@ describe('auditAltText — body and gallery photos', () => {
     ]);
   });
 
+  // 2026-10-19 gallery-library-metadata spec: a library photo renders with the
+  // Media alt, so auditing the stale copy on the post would ask the author to
+  // repair text no reader sees — and miss a library alt that was cleared.
+  it('judges a library gallery photo by its current Media alt, per locale, and a missing row by the post copy', () => {
+    const g1 = `${IMG}/trips/rhodos/g1`;
+    const g2 = `${IMG}/trips/rhodos/g2`;
+    const g3 = `${IMG}/trips/rhodes/g3`;
+    const inline = `${IMG}/trips/rhodos/b1`;
+    const body = '```gallery\n' + `${g1}\n${g2}\n` + '```\n\n' + `![Rhodos](${inline})`;
+    const pair = post(
+      {
+        title: 'Rhodos', bodyMarkdown: body,
+        images: {
+          [g1]: { ...dims, alt: 'Rhodos' },                  // stale copy; library fixed it
+          [g2]: { ...dims, alt: 'Ziegen auf der Straße' },   // copy fine; library cleared it
+          [inline]: dims,
+        },
+      },
+      { title: 'Rhodes', bodyMarkdown: '```gallery\n' + `${g3}\n` + '```', images: { [g3]: { ...dims, alt: 'Rhodes' } } },
+    );
+    const audit = auditAltText(pair, {
+      de: new Map([
+        [g1, { alt: 'Fischerboote im Hafen', caption: '' }],
+        [g2, { alt: '', caption: 'Unterschrift' }],
+        [inline, { alt: 'never consulted for inline', caption: '' }],
+      ]),
+      en: new Map(), // no row for g3 → its stored copy is what renders
+    });
+    expect(audit.images).toEqual([
+      { locale: 'de', kind: 'gallery', src: g2, reason: 'empty' },
+      { locale: 'de', kind: 'body', src: inline, reason: 'repeats-title' },
+      { locale: 'en', kind: 'gallery', src: g3, reason: 'repeats-title' },
+    ]);
+  });
+
   it('reads an inline body image\'s alt from the Markdown label, not from the images map', () => {
     // The trap: an `images` entry for an inline photo holds only width/height,
     // so treating a missing `images[src].alt` as "undescribed" would report

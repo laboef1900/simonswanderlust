@@ -159,6 +159,14 @@ window.EditorLinter = (function () {
     inline.forEach(function (item) {
       if (item.image && !item.alt.trim()) findings.push({ code: 'missing-alt', message: 'Add alt text to this inline image.', line: item.line, target: 'inline' });
     });
+    // `galleryAlt` (optional) says what the build will actually use: a photo
+    // with a Media row renders its current Media alt over anything in the post,
+    // and a saved bare line falls back to the post's stored `images` alt
+    // (docs/superpowers/specs/2026-10-19-gallery-library-metadata-design.md).
+    var known = input.galleryAlt || {};
+    var fromLibrary = known.library || {};
+    var stored = known.stored || {};
+    var own = function (map, key) { return Object.prototype.hasOwnProperty.call(map, key); };
     doc.blocks.forEach(function (block) {
       if (!block.isGallery) return;
       var firstLine = lineAt(doc.starts, block.start);
@@ -168,7 +176,11 @@ window.EditorLinter = (function () {
         // Parse each line through the picker's metadata decoder, preserving the
         // original line even when blank/directive lines occur between photos.
         var photo = window.GalleryFence.parse(lines[i]).lines[0];
-        if (photo && !text(photo.alt).trim()) findings.push({ code: 'missing-alt', message: 'Add alt text to this gallery image.', line: firstLine + i, target: 'gallery' });
+        if (!photo) continue;
+        var alt = own(fromLibrary, photo.src) ? fromLibrary[photo.src]
+          : photo.alt !== undefined ? photo.alt
+            : own(stored, photo.src) ? stored[photo.src] : '';
+        if (!text(alt).trim()) findings.push({ code: 'missing-alt', message: 'Add alt text to this gallery image.', line: firstLine + i, target: 'gallery' });
       }
     });
     findings.sort(function (a, b) { return (a.line || 0) - (b.line || 0); });

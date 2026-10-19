@@ -90,6 +90,41 @@ describe('renderPreviewHtml', () => {
     expect(html).not.toContain(`${src}-640.webp`);
   });
 
+  // 2026-10-19 gallery-library-metadata spec: the preview resolves the same
+  // library overlay the site build does and hands it to the same renderer.
+  it('shows library gallery alt/caption (blank included), keeps a missing row\'s copy, and leaves hero/inline alt alone', async () => {
+    const p = pair();
+    const lib = `${ORIGIN}/trips/bukarest/lib`;
+    const blank = `${ORIGIN}/trips/bukarest/blank`;
+    const legacy = `${ORIGIN}/trips/bukarest/legacy`;
+    const inline = `${ORIGIN}/trips/bukarest/inline`;
+    p.de.bodyMarkdown = '```gallery\n' + [lib, blank, legacy].join('\n') + '\n```\n\n' + `![Inline alt](${inline})`;
+    p.de.images = {
+      [lib]: { width: 1600, height: 1200, alt: 'Alt kopiert', caption: 'Kopie' },
+      [blank]: { width: 1600, height: 1200, alt: 'Veraltet', caption: 'Veraltete Unterschrift' },
+      [legacy]: { width: 1600, height: 1200, alt: 'WordPress-Alt', caption: 'WordPress-Text' },
+      [inline]: { width: 1600, height: 1200 },
+    };
+    const metadata = new Map([
+      [lib, { alt: 'Neu aus der Bibliothek', caption: 'Neue Unterschrift' }],
+      [blank, { alt: '', caption: '' }],
+      [p.de.heroImage.src, { alt: 'must not reach the hero', caption: '' }],
+      [inline, { alt: 'must not reach inline', caption: '' }],
+    ]);
+    const html = await renderPreviewHtml(p, 'de', ORIGIN, metadata);
+    expect(html).toContain('alt="Neu aus der Bibliothek"');
+    expect(html).toContain('Neue Unterschrift');
+    expect(html).not.toContain('Alt kopiert');
+    expect(html).not.toContain('Veraltet');
+    expect(html).toContain('alt="WordPress-Alt"');
+    expect(html).toContain('WordPress-Text');
+    expect(html).toContain('alt="Inline alt"');
+    expect(html).toContain('alt="Altstadt"');
+    expect(html).not.toContain('must not reach');
+    // Without the overlay the stored copy still renders (unchanged contract).
+    expect(await renderPreviewHtml(p, 'de', ORIGIN)).toContain('Alt kopiert');
+  });
+
   it('sanitizes the body: strips <script>, inline handlers and javascript: URLs', async () => {
     const p = pair();
     p.de.bodyMarkdown = [
