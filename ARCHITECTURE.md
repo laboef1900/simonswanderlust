@@ -116,9 +116,13 @@ immediately — no rebuild on every boot.
 ## Image pipeline
 
 By default, the app optimizes each photo into AVIF + WebP at fixed widths (640/1280/1920 plus
-the source width, never upscaled). **Settings → Image conversion** can keep new JPEG inputs
+the source width, never upscaled). **Settings → Images** can keep new JPEG inputs
 as responsive JPEG variants instead; other input formats still produce AVIF + WebP.
 WebP and AVIF quality are configurable (1–100, defaults 75 and 55); JPEG output uses quality 90.
+Its **Compare quality** preview (admin-only `POST /settings/image-preview`) runs one test photo
+through the same per-variant encoder (`encodeVariant` in `pipeline.ts`, shared with
+`processImage`) at `min(width, 1920)` px, in memory, without EXIF, under the shared work-lock
+and single-flight, and returns the bytes for a side-by-side comparison.
 Metadata is **not** copied wholesale: `pipeline.ts` re-injects only an
 EXIF **allow-list** (camera make/model/lens, capture time, exposure, aperture, ISO, focal length)
 built by `uploader/src/exif.ts`, plus the ICC profile — GPS, XMP, IPTC and `Orientation` never
@@ -287,7 +291,7 @@ per remote provider under `ai_provider_key:<id>`; local providers never hold one
 |---|---|---|
 | `GET` / `POST /settings` | admin | registry + assignments + kept fields; presence only (`hasApiKey`) |
 | `POST /ai-providers`, `PUT` / `DELETE /ai-providers/:id` | admin | provider CRUD with optional key set/replace/remove |
-| `GET /ai-providers/:id/credential` | admin | key for the Settings **Test** action |
+| `GET /ai-providers/:id/credential` | admin | key for Settings' model lookup and **Test** (browser calls only `<baseUrl>/models`) |
 | `GET /ai-config[?purpose=caption]` | author | resolved provider + that provider's key, consumer shape unchanged |
 
 Default `GET /ai-config` returns the review provider's `kind` as `aiProvider`, its base URL as

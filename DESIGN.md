@@ -918,7 +918,7 @@ and the `<dialog>`s appended to `<body>` share one set:
   (`--line`), never as cards inside the workspace card. Simple form pages (Users, Import)
   keep fields at a `34rem` measure.
 - **Menus and disclosures** share one shape: outlined trigger with a drawn chevron and a
-  floating panel (the editor's More actions, the Posts row's More actions); inline
+  floating panel (the editor's More actions, the Posts row's admin-only More actions); inline
   disclosures (alt-text review, bulk selection, picker folders) use the same chevron in
   place of the UA triangle. A floating panel closes like a menu: Escape returns focus to
   its trigger, and a click outside it dismisses it.
@@ -929,12 +929,15 @@ and the `<dialog>`s appended to `<body>` share one set:
 
 - A full-width 4rem masthead (brand on the left; descriptor and View site on the right)
   sits above a 13rem sidebar and a single rounded white workspace. The sidebar holds
-  all page navigation and account controls; admin-only pages appear in it for admins
-  only. Roles and server authorization are unchanged. Publish and destructive actions
-  retain their existing red treatment.
+  all page navigation (no journal header above it) and, at its foot, the account menu: the
+  user badge (avatar, name, role, chevron) is a menu trigger whose panel opens upward with
+  **Log out**, closing like every admin menu (Escape, outside click). Admin-only pages appear
+  in the sidebar for admins only. Roles and server authorization are unchanged. Publish and
+  destructive actions retain their existing red treatment.
 - The shell is exactly the viewport and the workspace is its only scroll container:
   masthead, sidebar and the canvas gutter around the workspace never scroll away. The
-  workspace carries a minimal two-layer offset shadow (no border) and a thin scrollbar
+  workspace carries a minimal shadow that surrounds it on every side — an ambient blur plus a
+  slight downward key shadow, no border — and a thin scrollbar
   drawn in `--line-strong`. Sticky children (the editor command bar and inspector,
   the Settings index) stick inside it, and anything sized to the visible area uses
   `--cms-workspace-h`, not the viewport. No script reads or sets window scroll.
@@ -982,9 +985,14 @@ and the `<dialog>`s appended to `<body>` share one set:
   the base URL in mono, and right-aligned text actions Edit · Set default · Test ·
   Delete (Delete red, disabled actions dimmed with a stated reason) under an **Add
   provider** primary; add/edit is an inline tinted form, never a card — then a lightly
-  bordered **Use case assignments** panel (use case | provider | model, then a muted
-  `→ Provider / model` line with the URL), each feature's prompt and timeout below it,
-  and one **Save AI settings**. Tabs still save independently.
+  bordered **Use case assignments** panel (use case | provider | model dropdown with a
+  small reload icon, then a muted `→ Provider / model` line with the URL), each feature's
+  prompt and timeout below it, and one **Save AI settings**. Model dropdowns fill from the
+  provider's own list; a saved model it does not list stays as "(saved, not listed)", and
+  **Other model ID…** reveals a text field. Images ends with **Compare quality**: a photo
+  picker, a WebP/AVIF segmented choice and **Preview**, then the original and the result in
+  two equal panes (stacked below 48rem) captioned with format, pixels, file size and saving,
+  with a synchronized **1:1 pixels** view. Tabs still save independently.
 - Below 72rem the index becomes a horizontal, wrapping strip above the panel (its arrow
   keys follow) and paired fields stack; provider rows and use-case rows stack below
   48rem. The topbar stays in normal flow.

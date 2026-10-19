@@ -563,7 +563,7 @@ blog/
     ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · settings · posts · pages · body-content · build · backup · export · preview · wxr-parse · wp-content · wp-images · wp-import
     │                              #   media-files (disk) · media-store (database) · media-sync (reconcile) · encode-queue · work-lock · disk · exif
     ├── public/                    #   index.html (hero upload) · import.html (WordPress import) · editor/posts/about/settings/users
-    │                              #   media.html + media-api/media-ai/media-ai-dialog/media-browser/media-picker.js · posts-filter.js · posts-duplicate.js
+    │                              #   media.html + media-api/media-ai/media-ai-dialog/media-browser/media-picker.js · posts-filter.js
     ├── test/                      #   Vitest suites (integration suites run when TEST_DATABASE_URL is set)
     └── .env.example · README.md
 ```
@@ -996,18 +996,29 @@ blog/
 - **Done:** Admin shell + AI provider registry (2026-10-19, branch `feature/admin-ui-shell`).
   The admin shell is exactly the viewport: masthead and sidebar never scroll, the gray canvas
   gutter stays visible, and `.cms-workspace` is the one scroll container (`--cms-workspace-h`
-  sizes sticky descendants such as the editor inspector), with a minimal two-layer shadow.
-  The masthead's Content/Media/Manage links are gone (the sidebar is the navigation). The
-  editor's page title is visually hidden (still the page's `h1`); Story details collapses with a
-  panel icon into a slim right-hand rail on desktop, and on phones the drawer opener is the last
-  command-bar action — never left of More actions. Settings became vertical tabs (AI models ·
-  Images · Comments · Site & backups, mirrored in the URL hash). **HIGH risk, owner-approved:**
-  the single shared `ai_api_key` was replaced by a provider registry — named providers with
-  their own base URL and their own encrypted key, a default, and per-use-case assignments —
-  with a boot migration that copies the old key envelope to the providers that used it (no
-  decryption) and keeps `settings.json.pre-ai-registry`. `/ai-config`'s consumer shape is
-  unchanged. See `docs/superpowers/specs/2026-10-19-ai-provider-registry-design.md`,
-  `SECURITY.md` (*Secrets*) and `DESIGN.md` (Admin authoring).
+  sizes sticky descendants such as the editor inspector), with a minimal shadow on every side.
+  The masthead's Content/Media/Manage links and the sidebar's "My journal" header are gone; Log
+  out lives in an account menu on the user badge at the sidebar's foot. The editor's page title
+  is visually hidden (still the page's `h1`); Story details collapses with a panel icon into a
+  slim right-hand rail on desktop, and on phones the drawer opener is the last command-bar
+  action — never left of More actions. Settings became vertical tabs (AI models · Images ·
+  Comments · Site & backups, mirrored in the URL hash); Images gained **Compare quality**
+  (admin-only `POST /settings/image-preview`, in-memory, no EXIF, work-lock + single-flight —
+  `docs/superpowers/specs/2026-10-19-image-quality-preview-design.md`). The posts list's "New
+  from this one" duplicate (#70) was removed, and with it `posts-duplicate.js` and
+  `AdminConfirm.askFields`. **HIGH risk, owner-approved:** the single shared `ai_api_key` was
+  replaced by a provider registry — named providers with their own base URL and their own
+  encrypted key, a default, and per-use-case assignments — with a boot migration that copies the
+  old key envelope to the providers that used it (no decryption) and keeps
+  `settings.json.pre-ai-registry`. Model fields are dropdowns filled automatically from each
+  assigned provider's `/models` (owner decision). `/ai-config`'s consumer shape is unchanged. See
+  `docs/superpowers/specs/2026-10-19-ai-provider-registry-design.md`, `SECURITY.md` (*Secrets*)
+  and `DESIGN.md` (Admin authoring). **HIGH risk, owner-approved:** four new regions — Asia,
+  Africa, Oceania, Antarctica (DE/EN slugs `asien`/`asia`, `afrika`/`africa`,
+  `ozeanien`/`oceania`, `antarktis`/`antarctica`) — with an idempotent widening of
+  `posts_region_check`; a region page is built and linked only once its locale has a published
+  story (`liveRegions` in `site/src/lib/trips.ts`). See
+  `docs/superpowers/specs/2026-10-19-new-regions-design.md`.
 - **In progress:** Reader comments (epic #202, spec #203) — design spec landed 2026-09-14
   (`docs/superpowers/specs/2026-09-14-comments-design.md`, incl. an ASVS L1 exception record).
   #205 admin moderation queue landed: `uploader/public/comments.html` (served at

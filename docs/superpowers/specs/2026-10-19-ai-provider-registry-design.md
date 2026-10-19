@@ -200,16 +200,27 @@ workspace; no cards inside the card.
   naming old and new URL ("the stored key will be sent to …"). Delete confirms with scope.
 - **Test** lists models from the browser (`LLM.listModels`): typed key if the form is open, else
   the stored key via `/credential` for remote kinds; reports reachable + model count; fills the
-  model suggestions of every use case on that provider. The open form has its own **Test
+  model dropdowns of every use case on that provider. The open form has its own **Test
   connection** (a provider being added has no row yet); with the key blank and the URL changed it
-  refuses rather than send a stored key to an unsaved URL. It never runs on page load for remote
-  kinds; local providers auto-list once on load.
+  refuses rather than send a stored key to an unsaved URL.
 - **Use case assignments**: rows *Story review & excerpts* and *Photo descriptions* — provider
-  select (first option `Default — <name>`), model input with a `<datalist>` of tested models, and
-  a live `→ <Provider> / <model>` line plus the destination URL. Each feature's prompt, timeout
-  (and max edge for photos) follows the panel in its own subsection. One **Save AI settings** for
-  the assignments and prompts.
-  **Test review** stays (#214 refinement): selected provider + model + prompt + timeout with the
+  select (first option `Default — <name>`), a model **dropdown** filled from that provider's
+  model list, and a live `→ <Provider> / <model>` line plus the destination URL. A saved model the
+  provider does not list stays selectable ("saved, not listed"); **Other model ID…** reveals a text
+  field for an unlisted model or a provider whose list cannot be read. Each feature's prompt,
+  timeout (and max edge for photos) follows the panel in its own subsection. One **Save AI
+  settings** for the assignments and prompts.
+- **Automatic model lookup — refinement (owner decision, 2026-10-19, "Automatically").** This
+  supersedes the earlier "never on page load for remote kinds" rule here and in #214 §13. When
+  the AI models tab is shown, the page lists models (`GET <baseUrl>/models`) for every provider
+  assigned to a use case — explicitly or via the default — and again whenever a row's provider
+  changes or its refresh button is pressed. Remote kinds fetch their key from `/credential` into
+  a request-local variable that is cleared afterwards. Lists are cached per provider for the page
+  load, concurrent lookups are deduplicated, and stale results are dropped. Only `/models` is ever
+  called automatically, never a completion, so no draft or photo leaves the browser and no usage
+  is billed. The added exposure: opening Settings now sends the stored key of each assigned remote
+  provider to that provider — its own URL — without a click.
+- **Test review** stays (#214 refinement): selected provider + model + prompt + timeout with the
   built-in sample, key = stored provider key via `/credential`, never saving.
 - Set default confirms when it moves a use case that follows the default to another destination.
 - Copy explains: keys are stored encrypted per provider; every signed-in author's browser receives

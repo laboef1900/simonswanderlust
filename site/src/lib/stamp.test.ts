@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { regions } from './paths';
 import { regionShape, stampStyle } from './stamp';
 
 const INKS = ['#1a1a2e', '#1e3a6e', '#c0311e', '#6b3d9e', '#1e5c30'];
@@ -6,9 +7,9 @@ const BORDERS = ['single', 'double', 'dashed'];
 
 describe('regionShape', () => {
   it('maps europe to rect, other regions to circle', () => {
-    expect(regionShape('europe')).toBe('rect');
-    expect(regionShape('north-america')).toBe('circle');
-    expect(regionShape('south-america')).toBe('circle');
+    for (const region of regions) {
+      expect(regionShape(region)).toBe(region === 'europe' ? 'rect' : 'circle');
+    }
     expect(regionShape('whatever')).toBe('circle');
   });
 });

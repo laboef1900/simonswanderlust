@@ -48,10 +48,14 @@ window.Auth = (function () {
 
   const drawerMedia = window.matchMedia('(max-width: 900px)');
 
+  // A closed menu's items are not focusable; its <summary> trigger always is.
   function drawerFocusables(sidebar) {
     return Array.from(sidebar.querySelectorAll(
-      'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    ));
+      'a[href], button:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+    )).filter((el) => {
+      const menu = el.closest('details');
+      return !menu || menu.open || el.tagName === 'SUMMARY';
+    });
   }
 
   function currentNavHref() {
@@ -151,12 +155,6 @@ window.Auth = (function () {
       '</header>' +
       '<div class="cms-nav-scrim" id="cmsNavScrim" hidden></div>' +
       '<aside class="cms-sidebar" id="cmsSidebar">' +
-        '<div class="cms-sidebar-header">' +
-          '<div class="cms-brand-text">' +
-            '<span class="cms-journal-title"></span>' +
-            '<span class="cms-brand-sub"></span>' +
-          '</div>' +
-        '</div>' +
         '<button type="button" class="cms-nav-close" id="cmsNavClose" aria-label="Close menu">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
         '</button>' +
@@ -164,17 +162,21 @@ window.Auth = (function () {
           navMarkup(s, here) +
         '</nav>' +
         '<div class="cms-sidebar-footer">' +
-          '<div class="cms-user-badge">' +
-            '<div class="cms-avatar" aria-hidden="true"></div>' +
-            '<div class="cms-user-info">' +
-              '<span class="cms-user-name"></span>' +
-              '<span class="cms-user-role"></span>' +
+          '<details class="cms-account-menu" id="cmsAccountMenu">' +
+            '<summary class="cms-account-menu__trigger">' +
+              '<span class="cms-avatar" aria-hidden="true"></span>' +
+              '<span class="cms-user-info">' +
+                '<span class="cms-user-name"></span>' +
+                '<span class="cms-user-role"></span>' +
+              '</span>' +
+            '</summary>' +
+            '<div class="cms-account-menu__panel">' +
+              '<button type="button" id="cmsLogoutBtn" class="cms-logout-btn">' +
+                '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>' +
+                '<span>Log out</span>' +
+              '</button>' +
             '</div>' +
-          '</div>' +
-          '<button type="button" id="cmsLogoutBtn" class="cms-logout-btn">' +
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>' +
-            '<span>Log out</span>' +
-          '</button>' +
+          '</details>' +
         '</div>' +
       '</aside>' +
       '<div class="cms-workspace">' +
@@ -188,11 +190,11 @@ window.Auth = (function () {
     shell.querySelector('.cms-brand-mark').textContent = copy.studioName.charAt(0);
     shell.querySelector('.cms-brand-title').textContent = copy.studioName;
     shell.querySelector('.cms-masthead-right > .cms-brand-sub').textContent = copy.studioDescriptor;
-    shell.querySelector('.cms-journal-title').textContent = copy.shellJournal;
-    shell.querySelector('.cms-sidebar-header .cms-brand-sub').textContent = copy.studioDescriptor;
 
     // Username is the one user-controlled string in this shell; set as text
-    // AFTER the parse so it can never be markup (#131).
+    // and as an attribute value AFTER the parse so it can never be markup (#131).
+    const accountTrigger = shell.querySelector('.cms-account-menu__trigger');
+    accountTrigger.setAttribute('aria-label', 'Account menu for ' + s.username);
     shell.querySelector('.cms-avatar').textContent = (s.username[0] || '?').toUpperCase();
     shell.querySelector('.cms-user-name').textContent = s.username;
     shell.querySelector('.cms-user-role').textContent = s.isAdmin ? 'Admin' : 'Author';
@@ -224,6 +226,18 @@ window.Auth = (function () {
       e.preventDefault();
       logout();
     });
+    // The account menu closes like every admin menu: on Escape (focus back to
+    // its trigger, and the drawer stays open) or on a click outside it.
+    const accountMenu = document.getElementById('cmsAccountMenu');
+    accountMenu.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || !accountMenu.open) return;
+      e.preventDefault();
+      accountMenu.open = false;
+      accountTrigger.focus();
+    });
+    document.addEventListener('click', (e) => {
+      if (accountMenu.open && !accountMenu.contains(e.target)) accountMenu.open = false;
+    });
 
     const menuBtn = document.getElementById('cmsMenuBtn');
     const scrim = document.getElementById('cmsNavScrim');
@@ -238,6 +252,8 @@ window.Auth = (function () {
       const sidebar = shell.querySelector('#cmsSidebar');
       if (!drawerMedia.matches || !sidebar.classList.contains('is-open')) return;
       if (e.key === 'Escape') {
+        // An open menu inside the drawer already took this Escape.
+        if (e.defaultPrevented) return;
         e.preventDefault();
         closeNav(shell, true);
         return;

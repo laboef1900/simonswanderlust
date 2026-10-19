@@ -38,6 +38,11 @@ interface Element {
   focused: boolean;
   className: string;
   tabIndex: number;
+  src: string;
+  alt: string;
+  scrollLeft: number;
+  scrollTop: number;
+  files: File[];
   dataset: Record<string, string>;
   style: Record<string, string>;
   attrs: Record<string, string>;
@@ -65,6 +70,7 @@ function element(): Element {
   const e: Element = {
     id: '', value: '', textContent: '', innerHTML: '', href: '', hidden: false, disabled: false, checked: false,
     indeterminate: false, open: false, focused: false, className: '', tabIndex: 0, dataset: {},
+    src: '', alt: '', scrollLeft: 0, scrollTop: 0, files: [],
     style: {}, attrs: {}, listeners, options: [], children: [],
     classList: {
       toggle(name, on) {
@@ -162,7 +168,7 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
     prompt: () => 'DELETE',
     Auth: { ensureAuthed: async () => null, renderHeader() {} },
     EditorCopy: { en: EDITOR_COPY },
-    AdminConfirm: { ask: async () => true, askFields: async () => null, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
+    AdminConfirm: { ask: async () => true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     ...extraGlobals,
   };
   ctx.window = ctx;
@@ -183,7 +189,6 @@ function loadPosts(extraGlobals: Record<string, unknown> = {}) {
       thumbUrl: () => null,
       toSearch: () => '',
     },
-    PostsDuplicate: {},
     ...extraGlobals,
   });
 }
@@ -285,7 +290,6 @@ describe('posts.html selection, recovery and disclosures', () => {
           mutateSelection();
           return true;
         },
-        askFields: async () => null,
       },
       fetch: async (url: string, init?: { body?: string }) => {
         if (url === '/posts/bulk') {
@@ -577,6 +581,31 @@ describe('posts.html status views and language states', () => {
   });
 });
 
+describe('posts.html row actions', () => {
+  const rowActions = (ctx: Record<string, unknown>, el: (id: string) => Element, isAdmin: boolean, rows: unknown[]) => {
+    vm.runInContext(`me = { isAdmin: ${isAdmin} }`, ctx);
+    (vm.runInContext('renderRows', ctx) as (posts: unknown[]) => void)(rows);
+    return el('postsList').children.map((row) => {
+      const actions = row.children.find((td) => td.className === 'col-actions')!.children[0]!;
+      return actions.children.map((child) => child.className === 'post-more'
+        ? child.children[1]!.children.map((button) => button.textContent)
+        : child.textContent);
+    });
+  };
+
+  it('gives an author Edit alone, never an empty More actions menu', () => {
+    const { ctx, el } = loadPosts();
+    expect(rowActions(ctx, el, false, [post, { ...post, translationKey: 'd', status: 'draft' }]))
+      .toEqual([['Edit'], ['Edit']]);
+  });
+
+  it('gives an admin Unpublish on a live trip and Delete on every trip', () => {
+    const { ctx, el } = loadPosts();
+    expect(rowActions(ctx, el, true, [post, { ...post, translationKey: 'd', status: 'draft' }]))
+      .toEqual([['Edit', ['Unpublish', 'Delete']], ['Edit', ['Delete']]]);
+  });
+});
+
 // ---- settings.html ------------------------------------------------------------
 // Fixtures mirror the AI provider registry contract (spec 2026-10-19 §4): the
 // settings response every /settings and /ai-providers route answers with.
@@ -663,7 +692,19 @@ function pageText(el: (id: string) => Element): string {
   return [
     'providersOut', 'providerFormOut', 'providerKeyHelp', 'providerKeyMoveWarning', 'providerUrlWarning',
     'reviewResolved', 'reviewDestination', 'captionResolved', 'captionDestination', 'aiOut', 'reviewTestOut', 'out',
+    'reviewModelStatus', 'captionModelStatus',
   ].map((id) => el(id).textContent).concat(descendants(el('providerList')).map((n) => n.textContent)).join('\n');
+}
+
+/** A model select's option labels, in order. */
+const modelOptions = (el: (id: string) => Element, id: string) => el(id).children.map((o) => o.textContent);
+
+/** Picks the option with this label, as a person would. */
+async function chooseModel(el: (id: string) => Element, id: string, label: string): Promise<void> {
+  const option = el(id).children.find((o) => o.textContent === label);
+  if (!option) throw new Error('no ' + label + ' option in #' + id);
+  el(id).value = option.value;
+  await el(id).fire('change');
 }
 
 /** settings.html over a contract-shaped fake API. `route` answers first; /settings is served from `state`. */
@@ -672,6 +713,7 @@ async function apiPage(initial: SettingsResponse, opts: {
   route?: (request: ApiRequest, setState: (next: SettingsResponse) => void) => Response | undefined;
   listModels?: (baseUrl: string, apiKey: string | null) => Promise<string[]>;
   mixedContentWarning?: (url: string, protocol: string) => string;
+  hash?: string;
 } = {}) {
   let state = initial;
   const setState = (next: SettingsResponse) => { state = next; };
@@ -697,6 +739,12 @@ async function apiPage(initial: SettingsResponse, opts: {
     AdminConfirm: {
       ask: async (question: Question) => { questions.push(question); return opts.confirm ? opts.confirm(question) : true; },
     },
+    ...(opts.hash === undefined ? {} : {
+      location: {
+        href: 'http://localhost/admin/settings.html' + opts.hash, origin: 'http://localhost',
+        pathname: '/admin/settings.html', search: '', hash: opts.hash, protocol: 'http:',
+      },
+    }),
   });
   await callPage(page.ctx, 'fill', state);
   return { ...page, requests, questions, listModels, fetcher };
@@ -1112,8 +1160,10 @@ describe('settings.html providers', () => {
     expect(calls(page.requests)).toEqual(['GET /ai-providers/openrouter/credential']);
     expect(page.listModels.mock.calls).toEqual([[ROUTER.baseUrl, 'fixture-stored-key']]);
     expect(rowStatus(providerRow(el, 'OpenRouter'))).toBe('Reachable from this browser · 2 models listed.');
-    expect(el('captionModels').children.map((o) => o.value)).toEqual(['vision-a', 'vision-b']);
-    expect(el('reviewModels').children).toEqual([]);
+    // The result fills the dropdown of every use case on that provider.
+    expect(modelOptions(el, 'lmModel')).toEqual(['vision-model (saved, not listed)', 'vision-a', 'vision-b', 'Other model ID…']);
+    expect(el('captionModelStatus').textContent).toBe('2 models listed by OpenRouter.');
+    expect(modelOptions(el, 'aiModel')).toEqual(['review-model', 'Other model ID…']);
     expect(pageText(el)).not.toContain('fixture-stored-key');
     expect(el('providerApiKey').value).toBe('');
   });
@@ -1148,13 +1198,148 @@ describe('settings.html providers', () => {
     expect(rowStatus(providerRow(el, 'Local LM Studio'))).toMatch(/^Could not list models/);
     expect(page.requests).toEqual([]);
   });
+});
 
-  it('loading lists local models once without a key and never tests a remote provider', async () => {
-    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }));
+describe('settings.html model lists', () => {
+  const CUSTOM: ProviderView = { id: 'p-custom', name: 'Custom', kind: 'custom', baseUrl: 'https://custom.example/v1', hasApiKey: false };
+  const storedKey = (request: ApiRequest) => (request.url === '/ai-providers/openrouter/credential'
+    ? Response.json({ apiKey: 'fixture-stored-key' }) : undefined);
+
+  /** A listModels whose answers the test releases per base URL. */
+  function deferredLists() {
+    const pending = new Map<string, PromiseWithResolvers<string[]>>();
+    const forUrl = (baseUrl: string) => {
+      let entry = pending.get(baseUrl);
+      if (!entry) { entry = Promise.withResolvers<string[]>(); pending.set(baseUrl, entry); }
+      return entry;
+    };
+    return { listModels: (baseUrl: string) => forUrl(baseUrl).promise, forUrl };
+  }
+
+  it('showing AI models lists every assigned provider once — local without a key, remote with its stored key', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK], captionProviderId: 'openrouter' }), {
+      route: storedKey,
+      listModels: async (baseUrl) => (baseUrl === LOCAL.baseUrl
+        ? ['b-model', 'review-model', 'a-model', 'A-model', 'b-model'] : ['vision-b', 'Vision-a']),
+    });
+    const { el } = page;
     await callPage(page.ctx, 'init');
-    expect(calls(page.requests)).toEqual(['GET /settings']);
-    expect(page.listModels.mock.calls).toEqual([[LOCAL.baseUrl, null]]);
-    expect(page.el('reviewModels').children.map((o) => o.value)).toEqual(['model-a', 'model-b']);
+    // DeepSeek is assigned to nothing, so it is never contacted.
+    expect(calls(page.requests)).toEqual(['GET /settings', 'GET /ai-providers/openrouter/credential']);
+    expect(page.listModels.mock.calls).toEqual([[LOCAL.baseUrl, null], [ROUTER.baseUrl, 'fixture-stored-key']]);
+    // Sorted case-insensitively and de-duplicated; a listed saved model is just selected.
+    expect(modelOptions(el, 'aiModel')).toEqual(['A-model', 'a-model', 'b-model', 'review-model', 'Other model ID…']);
+    expect(el('aiModel').value).toBe('review-model');
+    expect(el('reviewModelStatus').textContent).toBe('4 models listed by Local LM Studio.');
+    expect(modelOptions(el, 'lmModel')).toEqual(['vision-model (saved, not listed)', 'Vision-a', 'vision-b', 'Other model ID…']);
+    expect(el('lmModel').value).toBe('vision-model');
+    expect(el('lmModel').attrs['aria-busy']).toBe('false');
+    expect(el('captionModelsReload').attrs['aria-label']).toBe('Reload models from OpenRouter');
+    expect(pageText(el)).not.toContain('fixture-stored-key');
+  });
+
+  it('two use cases on one provider share a single lookup', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], aiDefaultProviderId: 'openrouter' }), { route: storedKey });
+    await callPage(page.ctx, 'init');
+    expect(calls(page.requests)).toEqual(['GET /settings', 'GET /ai-providers/openrouter/credential']);
+    expect(page.listModels).toHaveBeenCalledTimes(1);
+    expect(modelOptions(page.el, 'aiModel')).toEqual(['review-model (saved, not listed)', 'model-a', 'model-b', 'Other model ID…']);
+    expect(modelOptions(page.el, 'lmModel')).toEqual(['vision-model (saved, not listed)', 'model-a', 'model-b', 'Other model ID…']);
+  });
+
+  it('a page opened on another tab looks models up when AI models is shown, once per page load', async () => {
+    const page = await apiPage(settingsResponse(), { hash: '#images' });
+    await callPage(page.ctx, 'init');
+    expect(page.listModels).not.toHaveBeenCalled();
+    await page.el('tabbtn-ai-models').click();
+    await callPage(page.ctx, 'ensureModels');
+    expect(page.listModels).toHaveBeenCalledTimes(1);
+    await page.el('tabbtn-images').click();
+    await page.el('tabbtn-ai-models').click();
+    await callPage(page.ctx, 'ensureModels');
+    expect(page.listModels).toHaveBeenCalledTimes(1);
+    expect(modelOptions(page.el, 'aiModel')).toEqual(['review-model (saved, not listed)', 'model-a', 'model-b', 'Other model ID…']);
+  });
+
+  it('shows the saved model while loading, and a slower lookup never lands in a row that moved on', async () => {
+    const lists = deferredLists();
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, CUSTOM] }), { listModels: lists.listModels });
+    const { el, ctx } = page;
+    const localLookup = callPage(ctx, 'ensureModels');
+    expect(el('aiModel').attrs['aria-busy']).toBe('true');
+    expect(el('reviewModelStatus').textContent).toBe('Loading models…');
+    expect(modelOptions(el, 'aiModel')).toEqual(['review-model', 'Other model ID…']);
+    expect(el('aiModel').value).toBe('review-model');
+    expect(el('reviewModelsReload').disabled).toBe(true);
+
+    el('reviewProviderId').value = CUSTOM.id;
+    await el('reviewProviderId').fire('change');
+    expect(page.listModels.mock.calls).toEqual([[LOCAL.baseUrl, null], [CUSTOM.baseUrl, null]]);
+    lists.forUrl(CUSTOM.baseUrl).resolve(['c-1']);
+    // Drain the microtask queue (no clock involved): the page awaits a promise from
+    // this realm, which takes extra turns to settle across the vm boundary.
+    const drained = Promise.withResolvers<void>();
+    setImmediate(drained.resolve);
+    await drained.promise;
+    expect(modelOptions(el, 'aiModel')).toEqual(['review-model (saved, not listed)', 'c-1', 'Other model ID…']);
+    expect(el('reviewModelStatus').textContent).toBe('1 model listed by Custom.');
+
+    lists.forUrl(LOCAL.baseUrl).resolve(['l-1']);
+    await localLookup;
+    expect(modelOptions(el, 'aiModel')).toEqual(['review-model (saved, not listed)', 'c-1', 'Other model ID…']);
+    expect(modelOptions(el, 'lmModel')).toEqual(['vision-model (saved, not listed)', 'l-1', 'Other model ID…']);
+  });
+
+  it('a pick the next provider does not list moves to “Other model ID…” instead of vanishing', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, CUSTOM] }), {
+      listModels: async (baseUrl) => (baseUrl === LOCAL.baseUrl ? ['model-a'] : ['c-1']),
+    });
+    const { el, ctx } = page;
+    await callPage(ctx, 'ensureModels');
+    await chooseModel(el, 'aiModel', 'model-a');
+    el('reviewProviderId').value = CUSTOM.id;
+    await el('reviewProviderId').fire('change');
+    await callPage(ctx, 'ensureModels');
+    expect(el('reviewModelOther').hidden).toBe(false);
+    expect(el('aiModelOther').value).toBe('model-a');
+    expect(el('reviewResolved').textContent).toBe('→ Custom / model-a');
+    expect(modelOptions(el, 'aiModel')).toEqual(['review-model (saved, not listed)', 'c-1', 'Other model ID…']);
+  });
+
+  it('a failed lookup keeps the saved model and Other, and names the likely causes without provider text', async () => {
+    const page = await apiPage(settingsResponse(), {
+      listModels: async () => { throw new Error('fixture-provider-detail'); },
+    });
+    const { el } = page;
+    await callPage(page.ctx, 'init');
+    expect(modelOptions(el, 'aiModel')).toEqual(['review-model', 'Other model ID…']);
+    expect(el('aiModel').value).toBe('review-model');
+    expect(el('aiModel').attrs['aria-busy']).toBe('false');
+    expect(el('reviewModelStatus').textContent).toMatch(/^Could not list models from Local LM Studio\. .*API key.*CORS.*online/);
+    expect(pageText(el)).not.toContain('fixture-provider-detail');
+  });
+
+  it('a stored key that cannot be loaded, or a missing required key, fails without asking the provider', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK], reviewProviderId: 'openrouter', captionProviderId: 'deepseek' }), {
+      route: (request) => (request.url.endsWith('/credential') ? Response.json({ error: 'Secrets unavailable.' }, { status: 503 }) : undefined),
+    });
+    const { el } = page;
+    await callPage(page.ctx, 'init');
+    expect(page.listModels).not.toHaveBeenCalled();
+    expect(el('reviewModelStatus').textContent).toMatch(/^Could not list models from OpenRouter\./);
+    expect(el('captionModelStatus').textContent).toBe('DeepSeek needs an API key to list its models. Edit the provider to add one, or choose “Other model ID…”.');
+    expect(el('lmModel').attrs['aria-busy']).toBe('false');
+  });
+
+  it('the row\'s reload button lists again, even after a successful lookup', async () => {
+    let round = 0;
+    const page = await apiPage(settingsResponse(), { listModels: async () => (++round === 1 ? ['model-a'] : ['model-a', 'model-new']) });
+    const { el } = page;
+    await callPage(page.ctx, 'init');
+    expect(el('reviewModelsReload').attrs['aria-label']).toBe('Reload models from Local LM Studio');
+    await el('reviewModelsReload').click();
+    expect(page.listModels).toHaveBeenCalledTimes(2);
+    expect(modelOptions(el, 'aiModel')).toEqual(['review-model (saved, not listed)', 'model-a', 'model-new', 'Other model ID…']);
   });
 });
 
@@ -1175,9 +1360,13 @@ describe('settings.html use case assignments', () => {
     await el('reviewProviderId').fire('change');
     expect(el('reviewResolved').textContent).toBe('→ OpenRouter / review-model');
     expect(el('reviewDestination').textContent).toBe(ROUTER.baseUrl);
-    el('aiModel').value = '';
-    await el('aiModel').fire('input');
+    await chooseModel(el, 'aiModel', 'Other model ID…');
+    expect(el('reviewModelOther').hidden).toBe(false);
+    expect(el('aiModelOther').focused).toBe(true);
     expect(el('reviewResolved').textContent).toBe('→ OpenRouter / no model set');
+    el('aiModelOther').value = ' typed-model ';
+    await el('aiModelOther').fire('input');
+    expect(el('reviewResolved').textContent).toBe('→ OpenRouter / typed-model');
   });
 
   it('warns when the assigned provider needs a key it does not have', async () => {
@@ -1187,13 +1376,20 @@ describe('settings.html use case assignments', () => {
     expect(el('reviewProviderWarn').hidden).toBe(true);
   });
 
-  it('Save AI settings posts exactly the AI fields, with null for Default', async () => {
-    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], captionProviderId: 'openrouter' }));
+  it('Save AI settings posts exactly the AI fields — the picked model, or the trimmed Other ID — with null for Default', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], captionProviderId: 'openrouter' }), {
+      route: (request) => (request.url === '/ai-providers/openrouter/credential' ? Response.json({ apiKey: 'fixture-stored-key' }) : undefined),
+      listModels: async () => ['vision-2'],
+    });
     const { el } = page;
+    await callPage(page.ctx, 'ensureModels');
+    page.requests.length = 0;
+    await chooseModel(el, 'lmModel', 'vision-2');
+    await chooseModel(el, 'aiModel', 'Other model ID…');
+    el('aiModelOther').value = ' review-2 ';
+    await el('aiModelOther').fire('input');
     el('reviewProviderId').value = 'openrouter';
     el('captionProviderId').value = '';
-    el('aiModel').value = ' review-2 ';
-    el('lmModel').value = 'vision-2';
     el('reviewPrompt').value = 'R';
     el('reviewTimeoutMs').value = '45000';
     el('captionPrompt').value = 'C';
@@ -1205,6 +1401,9 @@ describe('settings.html use case assignments', () => {
       reviewProviderId: 'openrouter', captionProviderId: null, aiModel: 'review-2', lmModel: 'vision-2',
       reviewPrompt: 'R', reviewTimeoutMs: 45000, captionPrompt: 'C', captionTimeoutMs: 30000, captionMaxEdge: 1024,
     });
+    // The saved values come back as the new "saved" models; Other closes.
+    expect(el('aiModel').value).toBe('review-2');
+    expect(el('reviewModelOther').hidden).toBe(true);
     expect(el('aiOut').textContent).toBe(EDITOR_COPY.writingSaved);
     expect(el('reviewProviderId').value).toBe('openrouter');
     expect(el('captionProviderId').value).toBe('');
@@ -1218,6 +1417,7 @@ describe('settings.html use case assignments', () => {
     });
     const { el } = page;
     el('aiModel').value = 'pending-model';
+    await el('aiModel').fire('change');
     el('reviewProviderId').value = 'openrouter';
     await el('saveAi').click();
     expect(calls(page.requests)).toEqual(['POST /settings', 'GET /settings']);
@@ -1231,6 +1431,7 @@ describe('settings.html use case assignments', () => {
     const { el } = page;
     el('reviewProviderId').value = 'openrouter';
     el('aiModel').value = 'pending-model';
+    await el('aiModel').fire('change');
     await rowButton(providerRow(el, 'OpenRouter'), 'Set default').click();
     expect(el('reviewProviderId').value).toBe('openrouter');
     expect(el('aiModel').value).toBe('pending-model');
@@ -1284,8 +1485,15 @@ describe('settings.html review configuration test', () => {
     await callPage(ctx, 'fill', settingsResponse({ aiProviders: [LOCAL, keyed], aiModel: 'selected-model' }));
     el('reviewProviderId').value = 'deepseek';
     await el('reviewProviderId').fire('change');
+    await callPage(ctx, 'ensureModels');
+    // Picking the provider listed its models with its own key: /models only, never a completion.
+    expect(fetcher.mock.calls.map(([url]) => String(url)).sort()).toEqual([
+      '/ai-providers/deepseek/credential', 'http://localhost:1234/v1/models', 'https://api.deepseek.com/v1/models',
+    ]);
+    fetcher.mockClear();
     await el('testReview').click();
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/ai-providers/deepseek/credential', 'https://api.deepseek.com/v1/chat/completions']);
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({ model: 'selected-model' });
     expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestSuccess);
   });
 
@@ -1306,7 +1514,9 @@ describe('settings.html review configuration test', () => {
 
   it('requires a model id before contacting anyone', async () => {
     const { el, fetcher } = await reviewPage(LOCAL);
-    el('aiModel').value = ' ';
+    await chooseModel(el, 'aiModel', 'Other model ID…');
+    el('aiModelOther').value = ' ';
+    await el('aiModelOther').fire('input');
     await el('testReview').click();
     expect(el('reviewTestOut').textContent).toBe(EDITOR_COPY.reviewTestModel);
     expect(fetcher).not.toHaveBeenCalled();
@@ -1428,7 +1638,7 @@ describe('settings.html against the real settings and provider routes', () => {
   }
 
   it('a provider added with a key and assigned to review is what /ai-config hands out, and only to review', async () => {
-    const { el, app, cookies, settings, secrets } = await realPage();
+    const { el, ctx, fetcher, app, cookies, settings, secrets } = await realPage();
     await el('addProvider').click();
     el('providerName').value = 'Router';
     el('providerApiKey').value = 'fixture-created-key';
@@ -1441,9 +1651,13 @@ describe('settings.html against the real settings and provider routes', () => {
 
     el('reviewProviderId').value = created!.id;
     await el('reviewProviderId').fire('change');
-    el('aiModel').value = 'remote-review-model';
+    await callPage(ctx, 'ensureModels');
+    const listing = fetcher.mock.calls.find(([url]) => String(url) === 'https://openrouter.ai/api/v1/models');
+    expect(new Headers(listing?.[1]?.headers).get('authorization')).toBe('Bearer fixture-created-key');
+    expect(pageText(el)).not.toContain('fixture-created-key');
+    await chooseModel(el, 'aiModel', 'remote-model');
     await el('saveAi').click();
-    expect(settings.get()).toMatchObject({ reviewProviderId: created!.id, captionProviderId: null, aiModel: 'remote-review-model' });
+    expect(settings.get()).toMatchObject({ reviewProviderId: created!.id, captionProviderId: null, aiModel: 'remote-model' });
 
     const config = (await app.inject({ url: '/ai-config', cookies })).json();
     expect(config).toMatchObject({
@@ -1537,5 +1751,174 @@ describe('settings.html image controls', () => {
     expect(el('backupSchedule').value).toBe('weekly');
     expect(el('aiModel').value).toBe('unsaved-review-model');
     expect(el('saveImages').disabled).toBe(false);
+  });
+});
+
+describe('settings.html Compare quality', () => {
+  const KB = 1024;
+  const photo = (bytes = 400 * KB) => new File([new Uint8Array(bytes)], 'secret-place.jpg', { type: 'image/jpeg' });
+  const encodedResponse = (bytes = 100 * KB, type = 'image/webp') => new Response(new Uint8Array(bytes), {
+    headers: {
+      'content-type': type, 'X-Preview-Width': '1920', 'X-Preview-Height': '1280',
+      'X-Original-Width': '6000', 'X-Original-Height': '4000',
+    },
+  });
+
+  async function previewPage(respond: (body: FormData) => Promise<Response> | Response = () => encodedResponse()) {
+    const sent: FormData[] = [];
+    const created: string[] = [];
+    const revoked: string[] = [];
+    // Object URLs are the page's to create and revoke; record both.
+    const PageURL = Object.assign(class extends URL {}, {
+      createObjectURL: (_object: Blob) => {
+        const url = 'blob:preview-' + (created.length + 1);
+        created.push(url);
+        return url;
+      },
+      revokeObjectURL: (url: string) => { revoked.push(url); },
+    });
+    const location = {
+      href: 'http://localhost/admin/settings.html', origin: 'http://localhost',
+      pathname: '/admin/settings.html', search: '', hash: '', protocol: 'http:',
+    };
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url !== '/settings/image-preview' || init?.method !== 'POST' || !(init.body instanceof FormData)) {
+        throw new Error('Unexpected request in this test.');
+      }
+      sent.push(init.body);
+      return respond(init.body);
+    });
+    const page = loadSettingsPage({ fetch, URL: PageURL, FormData, location });
+    await callPage(page.ctx, 'fill', settingsResponse());
+    return { ...page, sent, created, revoked, fetch, location };
+  }
+
+  it('sends the photo, the chosen format and the current, unsaved quality for that format', async () => {
+    const { el, sent } = await previewPage();
+    el('previewFile').files = [photo()];
+    el('webpQuality').value = '62';
+    el('avifQuality').value = '41';
+    await el('previewRun').click();
+    expect(sent[0]!.get('format')).toBe('webp');
+    expect(sent[0]!.get('quality')).toBe('62');
+    const file = sent[0]!.get('file');
+    expect(file instanceof File ? file.name : null).toBe('secret-place.jpg');
+
+    await el('previewFormatAvif').click();
+    expect(el('previewFormatAvif').attrs['aria-pressed']).toBe('true');
+    expect(el('previewFormatWebp').attrs['aria-pressed']).toBe('false');
+    expect(el('previewFormatAvif').classList.contains('active')).toBe(true);
+    await el('previewRun').click();
+    expect([sent[1]!.get('format'), sent[1]!.get('quality')]).toEqual(['avif', '41']);
+  });
+
+  it('disables Preview while the encode runs', async () => {
+    const answer = Promise.withResolvers<Response>();
+    const { el } = await previewPage(() => answer.promise);
+    el('previewFile').files = [photo()];
+    const running = el('previewRun').click();
+    expect(el('previewRun').disabled).toBe(true);
+    expect(el('previewOut').textContent).toBe('Encoding a WebP preview at quality 75…');
+    answer.resolve(encodedResponse());
+    await running;
+    expect(el('previewRun').disabled).toBe(false);
+  });
+
+  it('shows original and result side by side, captioned with format, pixels, size and the saving', async () => {
+    const { el, created } = await previewPage();
+    el('previewFile').files = [photo()];
+    await el('previewRun').click();
+    expect(el('previewResult').hidden).toBe(false);
+    expect([el('previewOriginal').src, el('previewEncoded').src]).toEqual(created);
+    expect(el('previewOriginalCaption').textContent).toBe('Original · JPEG · 6000 × 4000 px · 400 KB');
+    expect(el('previewEncodedCaption').textContent).toBe('WebP quality 75 · 1920 × 1280 px · 100 KB · 75% smaller than the original');
+    expect(el('previewEncoded').alt).toBe('Test photo encoded as WebP at quality 75');
+    expect(el('previewOut').textContent).toBe('WebP at quality 75: 100 KB, 75% smaller than the original.');
+  });
+
+  it.each([
+    [3 * KB * KB, 450 * KB, '3.0 MB', '450 KB · 85% smaller than the original'],
+    [400 * KB, 500 * KB, '400 KB', '500 KB · 25% larger than the original'],
+    [400 * KB, 401 * KB, '400 KB', '401 KB · about the same size as the original'],
+  ])('reports a %i-byte original against a %i-byte result', async (original, encoded, originalSize, result) => {
+    const { el } = await previewPage(() => encodedResponse(encoded));
+    el('previewFile').files = [photo(original)];
+    await el('previewRun').click();
+    expect(el('previewOriginalCaption').textContent).toBe('Original · JPEG · 6000 × 4000 px · ' + originalSize);
+    expect(el('previewEncodedCaption').textContent).toBe('WebP quality 75 · 1920 × 1280 px · ' + result);
+  });
+
+  it('revokes the previous object URLs on a new result and when another photo is chosen', async () => {
+    const { el, created, revoked } = await previewPage();
+    el('previewFile').files = [photo()];
+    await el('previewRun').click();
+    await el('previewRun').click();
+    expect(created).toEqual(['blob:preview-1', 'blob:preview-2', 'blob:preview-3', 'blob:preview-4']);
+    expect(revoked).toEqual(['blob:preview-1', 'blob:preview-2']);
+    await el('previewFile').fire('change');
+    expect(revoked).toEqual(['blob:preview-1', 'blob:preview-2', 'blob:preview-3', 'blob:preview-4']);
+    expect(el('previewResult').hidden).toBe(true);
+  });
+
+  it.each([
+    [429, { error: 'A preview is already running. Try again in a moment.' }, 'A preview is already running. Try again in a moment.'],
+    [400, { error: 'Could not read that image.' }, 'Could not read that image.'],
+    [413, { error: 'request file too big' }, 'That photo is over the 25 MB upload limit. Choose a smaller one.'],
+    [500, {}, 'The preview failed (HTTP 500). Try again.'],
+  ])('names a %i refusal and keeps the last result', async (status, body, message) => {
+    let refuse = false;
+    const { el, created } = await previewPage(() => (refuse ? Response.json(body, { status }) : encodedResponse()));
+    el('previewFile').files = [photo()];
+    await el('previewRun').click();
+    refuse = true;
+    await el('previewRun').click();
+    expect(el('previewOut').textContent).toBe(message);
+    expect(el('previewRun').disabled).toBe(false);
+    expect(el('previewResult').hidden).toBe(false);
+    expect(created).toHaveLength(2);
+  });
+
+  it('sends a signed-out admin to the login page, and survives a dropped connection', async () => {
+    let answer: () => Response = () => new Response(null, { status: 401 });
+    const { el, location } = await previewPage(() => answer());
+    el('previewFile').files = [photo()];
+    await el('previewRun').click();
+    expect(location.href).toBe('/login');
+    answer = () => { throw NETWORK_DOWN; };
+    await el('previewRun').click();
+    expect(el('previewOut').textContent).toBe('Could not reach the server. Check your connection and try again.');
+    expect(el('previewRun').disabled).toBe(false);
+  });
+
+  it('asks for a photo and a valid quality before sending anything', async () => {
+    const { el, fetch } = await previewPage();
+    await el('previewRun').click();
+    expect(el('previewOut').textContent).toBe('Choose a test photo first.');
+    el('previewFile').files = [photo()];
+    for (const quality of ['0', '101', '7.5', '']) {
+      el('webpQuality').value = quality;
+      await el('previewRun').click();
+      expect(el('previewOut').textContent).toBe('Set the WebP quality to a whole number from 1 to 100 first.');
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('1:1 pixels draws both panes at the preview width and scrolls them together', async () => {
+    const { el } = await previewPage();
+    el('previewFile').files = [photo()];
+    await el('previewRun').click();
+    expect([el('previewOriginal').style.width, el('previewEncoded').style.width]).toEqual(['', '']);
+    el('previewActual').checked = true;
+    await el('previewActual').fire('change');
+    expect(el('previewResult').classList.contains('is-actual')).toBe(true);
+    expect([el('previewOriginal').style.width, el('previewEncoded').style.width]).toEqual(['1920px', '1920px']);
+    el('previewEncodedBox').scrollLeft = 300;
+    el('previewEncodedBox').scrollTop = 120;
+    await el('previewEncodedBox').fire('scroll');
+    expect([el('previewOriginalBox').scrollLeft, el('previewOriginalBox').scrollTop]).toEqual([300, 120]);
+    el('previewActual').checked = false;
+    await el('previewActual').fire('change');
+    expect(el('previewResult').classList.contains('is-actual')).toBe(false);
+    expect(el('previewOriginal').style.width).toBe('');
   });
 });

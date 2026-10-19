@@ -6,6 +6,7 @@ import type { EditorialReviewResult } from '../src/editorial-review.js';
 import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { normalizeGalleryFences } from '../src/body-content.js';
+import { REGIONS } from '../src/db.js';
 import type { AltAudit } from '../src/alt-audit.js';
 
 // editor.html's inline script is plain top-level browser code. Run it in a vm
@@ -1589,5 +1590,15 @@ describe('country and excerpt assistance in the real editor', () => {
     expect(required(h.el('deExcerptAssist'), '.excerpt-assist__suggestion').hidden).toBe(true);
     expect(h.api.buildPayload().de.excerpt).toBe('x');
     expect(h.requests.find(({ url }) => url === providerUrl)!.options.signal?.aborted).toBe(true);
+  });
+});
+
+describe('editor region select', () => {
+  it('offers exactly the closed region set, in display order, after the blank prompt', () => {
+    // The page cannot import db.ts; a missing option would make a region the
+    // server accepts unpickable, an extra one a save the server rejects.
+    const select = /<select id="fmRegion">([\s\S]*?)<\/select>/.exec(markup)?.[1] ?? '';
+    const values = [...select.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1]);
+    expect(values).toEqual(['', ...REGIONS]);
   });
 });

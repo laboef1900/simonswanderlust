@@ -278,6 +278,13 @@ arbitrary file extension. Persisted encoding profiles keep retries/recovery inde
 later settings changes. New upload keys include the encoding profile, preventing a quality
 or format change from overwriting an existing immutable URL.
 
+The admin-only **Compare quality** preview (`POST /settings/image-preview`) encodes a test photo
+through the same `encodeVariant` helper, in memory only: nothing reaches `/data` or Postgres, no
+filename is logged, and the returned image carries **no** EXIF at all (not even the allow-list),
+so an uploaded original's GPS never leaves the request. It reuses `/upload`'s multipart limits
+(25 MiB, one file part), runs under the shared work-lock so a site build preempts it, and is
+single-flight (a concurrent preview gets 429), bounding sharp's memory under `mem_limit`.
+
 **Widening this list is a privacy change, not a refactor.** `audit-exif`
 (`docker compose exec app node --import tsx src/cli.ts audit-exif`) is a
 read-only scan of the stored corpus reporting how many variants carry EXIF
@@ -381,7 +388,7 @@ contains only the review contract, schema, prompt and parser.
 Review, excerpt, caption and model-discovery clients scope optional Bearer keys to individual
 requests; local LM Studio receives none. Excerpts reuse the review provider/model/timeout and
 the existing `/ai-config` authorization contract. The only other secret read is the admin-only
-`GET /ai-providers/:id/credential` behind the Settings page's Test action. Since the provider
+`GET /ai-providers/:id/credential` behind the Settings page's model lookup and Test. Since the provider
 registry (2026-10-19) each provider has its own encrypted key, so Story review and Photo
 descriptions on different providers send different keys, each only to its own provider's URL
 (this replaces the 2026-10-17 shared-key approval, §13 of the #214 spec). Requests omit cookies/referrers and refuse redirects,
@@ -663,7 +670,9 @@ preview even though the live site would load it.
   `?purpose=caption` return plaintext in browser memory for the provider assigned to Story
   review or Photo descriptions when it is remote — up to two different keys, never the key of
   an unassigned provider. Admin-only `GET /ai-providers/:id/credential` returns one remote
-  provider's key to the admin's browser for the Settings **Test** action. `GET/POST /settings`
+  provider's key to the admin's browser for Settings' model dropdowns and **Test**; opening the AI
+  models tab looks up models automatically for each assigned provider (owner decision 2026-10-19),
+  calling only that provider's `/models`, never a completion. `GET/POST /settings`
   return presence (`hasApiKey` per provider) only, never key/ciphertext; `POST /settings`
   refuses `aiApiKey` and `aiProviders` with 400. All use `Cache-Control: no-store`.
   Never persist keys in browser storage, draft backups, URLs, logs, or rendered output.

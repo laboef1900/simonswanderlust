@@ -47,6 +47,10 @@ export const LEGACY_REDIRECTS: ReadonlyArray<readonly [string, string]> = [
   ['/en/feed/rdf', '/en/rss.xml'],
   ['/en/comments/feed', '/en/rss.xml'],
   // WP auto category archives → region pages (slugs from paths.ts regionSlugs).
+  // Only these three regions existed on WordPress; asia/africa/oceania/
+  // antarctica (2026-10-19) never had a /category/ URL, so they get no entry.
+  // A target is only built while its region has a published story in that
+  // locale (site `liveRegions`) — an empty region's archive 301s into a 404.
   ['/category/europa', '/reiseziele/europa/'],
   ['/category/nordamerika', '/reiseziele/nordamerika/'],
   ['/category/suedamerika', '/reiseziele/suedamerika/'],

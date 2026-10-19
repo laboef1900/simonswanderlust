@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -19,7 +19,7 @@ import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { memoryPageStore, type PageStore } from '../src/pages.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
 import { BacklogFullError, createEncodeQueue, type EncodeQueue } from '../src/encode-queue.js';
-import { createWorkLock } from '../src/work-lock.js';
+import { createWorkLock, type WorkLock } from '../src/work-lock.js';
 import { fixedWindowLimiter, accountLockoutLimiter } from '../src/rate-limit.js';
 import type { SiteBuilder, BuildOutcome } from '../src/build.js';
 import { memorySecretsStore, SecretsError } from '../src/secrets.js';
@@ -3294,5 +3294,141 @@ describe('editor geocoding boundary', () => {
       expect((await change('')).statusCode).toBe(200);
       expect((await b.app.inject({ method: 'POST', url: '/geocode', cookies: cookie, payload: { query: 'Cancun' } })).statusCode).toBe(503);
     } finally { await b.app.close(); }
+  });
+});
+
+describe('POST /settings/image-preview', () => {
+  /** A JPEG with camera tags AND a GPS IFD (see pipeline.test.ts). */
+  async function gpsJpeg(width: number, height: number): Promise<Buffer> {
+    return sharp({ create: { width, height, channels: 3, background: '#5a7' } })
+      .withExif({
+        IFD0: { Make: 'Leica Camera AG', Model: 'LEICA Q2' },
+        IFD3: {
+          GPSLatitudeRef: 'N', GPSLatitude: '63/1 4/1 3312/100',
+          GPSLongitudeRef: 'E', GPSLongitude: '10/1 23/1 1944/100',
+        },
+      })
+      .jpeg()
+      .toBuffer();
+  }
+
+  async function preview(
+    b: Pick<Built, 'app'>,
+    cookie: { sid: string } | undefined,
+    fields: { format?: string; quality?: string },
+    img?: Buffer,
+    extraFile?: Buffer,
+  ) {
+    const form = new FormData();
+    if (fields.format !== undefined) form.append('format', fields.format);
+    if (fields.quality !== undefined) form.append('quality', fields.quality);
+    form.append('file', img ?? await gpsJpeg(400, 300), { filename: 'secret-place.jpg', contentType: 'image/jpeg' });
+    if (extraFile) form.append('file', extraFile, { filename: 'b.jpg', contentType: 'image/jpeg' });
+    return b.app.inject({
+      method: 'POST', url: '/settings/image-preview',
+      headers: form.getHeaders(), ...(cookie ? { cookies: cookie } : {}), payload: form,
+    });
+  }
+
+  it('is admin-only: 401 anonymous, 403 author, 200 admin', async () => {
+    const b = build();
+    expect((await preview(b, undefined, { format: 'webp', quality: '75' })).statusCode).toBe(401);
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+    expect((await preview(b, author.cookie, { format: 'webp', quality: '75' })).statusCode).toBe(403);
+    const admin = await authed(b, { username: 'admin' });
+    expect((await preview(b, admin.cookie, { format: 'webp', quality: '75' })).statusCode).toBe(200);
+  });
+
+  it('returns the encoded WebP at the largest standard width, with size headers and no-store', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await preview(b, cookie, { format: 'webp', quality: '60' }, await gpsJpeg(2400, 1200));
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('image/webp');
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['x-preview-width']).toBe('1920');
+    expect(res.headers['x-preview-height']).toBe('960');
+    expect(res.headers['x-original-width']).toBe('2400');
+    expect(res.headers['x-original-height']).toBe('1200');
+    const meta = await sharp(res.rawPayload).metadata();
+    expect({ format: meta.format, width: meta.width, height: meta.height }).toEqual({ format: 'webp', width: 1920, height: 960 });
+  });
+
+  it('returns AVIF at the intrinsic width when the photo is smaller, never upscaling', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await preview(b, cookie, { format: 'avif', quality: '55' }, await gpsJpeg(400, 300));
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('image/avif');
+    expect([res.headers['x-preview-width'], res.headers['x-preview-height']]).toEqual(['400', '300']);
+    const meta = await sharp(res.rawPayload).metadata();
+    expect({ format: meta.format, width: meta.width, height: meta.height }).toEqual({ format: 'heif', width: 400, height: 300 });
+  });
+
+  it('strips all EXIF, GPS included, and writes nothing to disk or the media library', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const before = await readdir(dir);
+    for (const format of ['webp', 'avif']) {
+      const res = await preview(b, cookie, { format, quality: '50' });
+      expect(res.statusCode).toBe(200);
+      expect((await sharp(res.rawPayload).metadata()).exif, `${format} carried EXIF`).toBeUndefined();
+    }
+    expect(await readdir(dir)).toEqual(before);
+    expect((await b.media.list({})).items).toEqual([]);
+  });
+
+  it('accepts quality 1 and 100, and refuses anything else with a fixed message', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    for (const quality of ['1', '100']) {
+      expect((await preview(b, cookie, { format: 'webp', quality })).statusCode).toBe(200);
+    }
+    for (const quality of ['0', '101', '50.5', '-5', 'abc', '']) {
+      const res = await preview(b, cookie, { format: 'webp', quality });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'Quality must be a whole number from 1 to 100.' });
+    }
+    for (const format of ['jpeg', 'WEBP', '']) {
+      const res = await preview(b, cookie, { format, quality: '50' });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'Format must be webp or avif.' });
+    }
+  });
+
+  it('400s an undecodable file without echoing anything about it', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await preview(b, cookie, { format: 'webp', quality: '75' }, Buffer.from('not an image at all'));
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'Could not read that image.' });
+  });
+
+  it('413s a second file part, like /upload', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const res = await preview(b, cookie, { format: 'webp', quality: '75' }, await gpsJpeg(100, 100), await gpsJpeg(100, 100));
+    expect(res.statusCode).toBe(413);
+  });
+
+  it('waits on the shared work-lock and refuses a concurrent preview with 429', async () => {
+    const gate = Promise.withResolvers<void>();
+    const reached = Promise.withResolvers<void>();
+    const real = createWorkLock();
+    const workLock: WorkLock = {
+      ...real,
+      runShared: async (fn) => { reached.resolve(); await gate.promise; return real.runShared(fn); },
+    };
+    const b = build({ workLock });
+    const { cookie } = await authed(b);
+    const first = preview(b, cookie, { format: 'webp', quality: '75' });
+    await reached.promise;
+    const second = await preview(b, cookie, { format: 'webp', quality: '75' });
+    expect(second.statusCode).toBe(429);
+    expect(second.json()).toEqual({ error: 'A preview is already running. Try again in a moment.' });
+    gate.resolve();
+    expect((await first).statusCode).toBe(200);
+    // The slot is released once the first finishes.
+    expect((await preview(b, cookie, { format: 'webp', quality: '75' })).statusCode).toBe(200);
   });
 });

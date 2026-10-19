@@ -6,7 +6,8 @@ import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } f
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
-import { normalizeProcessOptions, outputFormatForExtension, probeImage } from './pipeline.js';
+import { encodeVariant, normalizeProcessOptions, outputFormatForExtension, probeImage, type ImageProbe } from './pipeline.js';
+import { WIDTHS } from './variants.js';
 import { contentHashKey, storeOriginal, heroSnippet, assertSafeKey } from './storage.js';
 import { deleteMedia, imageUsage, VARIANT_FILE_RE } from './media-files.js';
 import {
@@ -1053,6 +1054,81 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         return reply.code(503).send(secretFailure(e));
       }
     });
+  });
+
+  // Settings → Images "Compare quality": encode one test photo at a candidate
+  // quality with the REAL variant encoder and send the bytes straight back.
+  // Nothing touches disk, the database or the log (not even the filename),
+  // and the output carries no EXIF at all — not even the allow-list, since it
+  // is never published. The multipart limits are the global ones /upload uses
+  // (25 MiB, one file part: a second file part is a 413).
+  // @ai-note Single-flight per process and under the shared work-lock, like
+  // every other encode: a waiting site build preempts it, and a second preview
+  // is refused rather than queued beside sharp's ~2 GB peak.
+  let previewRunning = false;
+  const PREVIEW_QUALITY_RE = /^\d{1,3}$/;
+  const PREVIEW_MAX_WIDTH = Math.max(...WIDTHS);
+  app.post('/settings/image-preview', { preHandler: requireAdmin }, async (req, reply) => {
+    if (previewRunning) {
+      return reply.code(429).send({ error: 'A preview is already running. Try again in a moment.' });
+    }
+    previewRunning = true;
+    try {
+      let buf: Buffer | undefined;
+      let format = '';
+      let quality = '';
+      for await (const part of req.parts()) {
+        if (part.type === 'file') {
+          if (part.fieldname === 'file') buf = await part.toBuffer();
+          else part.file.resume();
+        } else if (part.fieldname === 'format') {
+          format = String(part.value);
+        } else if (part.fieldname === 'quality') {
+          quality = String(part.value);
+        }
+      }
+      if (format !== 'webp' && format !== 'avif') {
+        return reply.code(400).send({ error: 'Format must be webp or avif.' });
+      }
+      const previewFormat: 'webp' | 'avif' = format;
+      const q = PREVIEW_QUALITY_RE.test(quality) ? Number(quality) : NaN;
+      if (!Number.isInteger(q) || q < 1 || q > 100) {
+        return reply.code(400).send({ error: 'Quality must be a whole number from 1 to 100.' });
+      }
+      if (!buf) return reply.code(400).send({ error: 'Choose an image to preview.' });
+      const input = buf;
+      let original: ImageProbe;
+      try {
+        original = await probeImage(input);
+      } catch {
+        return reply.code(400).send({ error: 'Could not read that image.' });
+      }
+      if (!original.width || !original.height) {
+        return reply.code(400).send({ error: 'Could not read that image.' });
+      }
+      const width = Math.min(original.width, PREVIEW_MAX_WIDTH);
+      const profile = normalizeProcessOptions(previewFormat === 'webp' ? { webpQuality: q } : { avifQuality: q });
+      // No keepExif argument: the preview output has no EXIF block.
+      const encode = () => encodeVariant(input, width, previewFormat, profile);
+      let data: Buffer;
+      let encoded: ImageProbe;
+      try {
+        data = cfg.workLock ? await cfg.workLock.runShared(encode) : await encode();
+        encoded = await probeImage(data);
+      } catch {
+        return reply.code(400).send({ error: 'Could not read that image.' });
+      }
+      return reply
+        .type(previewFormat === 'webp' ? 'image/webp' : 'image/avif')
+        .header('Cache-Control', 'no-store')
+        .header('X-Preview-Width', String(encoded.width))
+        .header('X-Preview-Height', String(encoded.height))
+        .header('X-Original-Width', String(original.width))
+        .header('X-Original-Height', String(original.height))
+        .send(data);
+    } finally {
+      previewRunning = false;
+    }
   });
 
   app.get('/login', (_req, reply) => reply.sendFile('login.html'));

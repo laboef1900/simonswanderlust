@@ -27,7 +27,7 @@ made from this version onward; earlier uploads exist as variants only.
 
 ### Image conversion settings
 
-Open **Settings → Image conversion**:
+Open **Settings → Images**:
 
 - **Convert JPG images to WebP and AVIF** is on by default. Turn it off to create responsive
   JPEG variants from new JPG uploads. JPEG output still corrects orientation, strips GPS and
@@ -38,6 +38,13 @@ Open **Settings → Image conversion**:
 - **Save image settings** saves this section independently of pending AI or backup edits.
   No redeploy is needed. Existing photos are not automatically reprocessed, and queued uploads
   retain their captured settings through retries/restarts. The CLI reads the same settings store.
+- **Compare quality** encodes one test photo with the current (possibly unsaved) WebP or AVIF
+  quality through the same encoder as real uploads, at `min(photo width, 1920)` px, and shows
+  the original and the result side by side with pixel size, file size and the saving (plus a
+  synchronized **1:1 pixels** view). Admin-only `POST /settings/image-preview`; nothing is
+  stored, logged or added to the library, the result carries no EXIF, and the encode runs under
+  the shared work-lock (a site build goes first) with one preview at a time (429 otherwise).
+  See `docs/superpowers/specs/2026-10-19-image-quality-preview-design.md`.
 
 New import work uses the settings; complete body/gallery variant sets are reused regardless
 of the current preference. The importer's explicit **overwrite existing drafts** option still
@@ -267,12 +274,16 @@ the browser to that provider, with that provider's own key. The app server never
 the model. Use only photos you intend to share with the selected provider; usage charges may
 apply.
 
-**Test** on a provider row (or **Test connection** in its edit form) explicitly lists models
-from the browser, using the typed key or the stored key via the admin-only
-`GET /ai-providers/:id/credential`. It sends no photo and does not verify vision support;
-remote providers are never tested automatically, local ones are listed once on load, and the
-listed models become suggestions in the use-case model fields. Custom providers must allow
-browser CORS. Local LM Studio providers never hold or receive a key.
+The use-case **Model** fields are dropdowns filled from the provider's own model list. When the
+AI models tab opens, and whenever a row's provider changes (or its refresh button is pressed),
+the browser lists models (`GET <baseUrl>/models` only — never a completion) for each assigned
+provider; remote providers use their stored key, fetched request-locally from the admin-only
+`GET /ai-providers/:id/credential`. A saved model the provider does not list stays selectable,
+and **Other model ID…** takes any ID by hand (for example when browser CORS blocks the list).
+**Test** on a provider row (or **Test connection** in its edit form) lists models on demand,
+with the typed key if one is entered. Listing sends no photo and does not verify vision
+support. Custom providers must allow browser CORS. Local LM Studio providers never hold or
+receive a key.
 
 Non-secret settings (`aiProviders`, `aiDefaultProviderId`, `captionProviderId`, `lmModel`,
 `captionTimeoutMs`, `captionMaxEdge`, `captionPrompt`) live in settings.json.

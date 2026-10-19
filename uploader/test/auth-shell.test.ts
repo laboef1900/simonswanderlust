@@ -9,6 +9,7 @@ type BrowserEvent = {
   key?: string;
   shiftKey?: boolean;
   matches?: boolean;
+  target?: StubElement;
   defaultPrevented?: boolean;
   preventDefault?: () => void;
 };
@@ -16,13 +17,18 @@ type Listener = (event: BrowserEvent) => void;
 
 interface StubElement {
   id: string;
+  tagName: string;
   className: string;
   textContent: string;
   hidden: boolean;
   inert: boolean;
+  /** A `<details>` element's open state. */
+  open: boolean;
   focused: boolean;
   /** Ancestor whose `inert` blocks focus, as a browser would. */
   inertRoot: StubElement | null;
+  /** Nearest modelled ancestor: key events bubble through it, `closest` walks it. */
+  parent: StubElement | null;
   children: StubElement[];
   classList: {
     add(name: string): void;
@@ -36,8 +42,12 @@ interface StubElement {
   addEventListener(type: string, listener: Listener): void;
   querySelector(selector: string): StubElement | null;
   querySelectorAll(selector: string): StubElement[];
+  /** Tag-name selectors only (`closest('details')`). */
+  closest(selector: string): StubElement | null;
+  contains(other: StubElement | null | undefined): boolean;
   focus(): void;
   remove(): void;
+  dispatch(type: string, event: BrowserEvent): void;
   fire(type: string, event?: BrowserEvent): BrowserEvent;
 }
 
@@ -61,7 +71,7 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
   let shellHtml = '';
   const selectorsOf = new Map<StubElement, Map<string, StubElement>>();
 
-  const makeElement = (id = ''): StubElement => {
+  const makeElement = (id = '', tagName = 'DIV'): StubElement => {
     const attrs = new Map<string, string>();
     const classes = new Set<string>();
     const listeners = new Map<string, Listener[]>();
@@ -69,12 +79,15 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
     let focusables: StubElement[] = [];
     const element: StubElement = {
       id,
+      tagName,
       className: '',
       textContent: '',
       hidden: false,
       inert: false,
+      open: false,
       focused: false,
       inertRoot: null,
+      parent: null,
       children: [],
       classList: {
         add(name) { classes.add(name); },
@@ -92,6 +105,16 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
       },
       querySelector(selector) { return selectors.get(selector) ?? null; },
       querySelectorAll() { return focusables; },
+      closest(selector) {
+        for (let node: StubElement | null = element; node; node = node.parent) {
+          if (node.tagName.toLowerCase() === selector) return node;
+        }
+        return null;
+      },
+      contains(other) {
+        for (let node = other ?? null; node; node = node.parent) if (node === element) return true;
+        return false;
+      },
       focus() {
         if (element.inertRoot?.inert) return;
         if (activeElement) activeElement.focused = false;
@@ -99,10 +122,13 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
         element.focused = true;
       },
       remove() {},
+      dispatch(type, event) {
+        for (const listener of listeners.get(type) ?? []) listener(event);
+      },
       fire(type, event = {}) {
         const fired: BrowserEvent = { ...event, defaultPrevented: false };
         fired.preventDefault = () => { fired.defaultPrevented = true; };
-        for (const listener of listeners.get(type) ?? []) listener(fired);
+        element.dispatch(type, fired);
         return fired;
       },
     };
@@ -160,16 +186,20 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
           const scrim = makeElement('cmsNavScrim');
           scrim.hidden = true;
           const workspace = makeElement();
-          const close = makeElement('cmsNavClose');
-          const logout = makeElement('cmsLogoutBtn');
-          sidebar.setFocusables([close, logout]);
+          const close = makeElement('cmsNavClose', 'BUTTON');
+          const accountMenu = makeElement('cmsAccountMenu', 'DETAILS');
+          const accountTrigger = makeElement('', 'SUMMARY');
+          accountTrigger.parent = accountMenu;
+          const logout = makeElement('cmsLogoutBtn', 'BUTTON');
+          logout.parent = accountMenu;
+          sidebar.setFocusables([close, accountTrigger, logout]);
           shell.setSelectors({
             '.cms-masthead': masthead,
             '.cms-brand-mark': makeElement(),
             '.cms-brand-title': makeElement(),
             '.cms-masthead-right > .cms-brand-sub': makeElement(),
-            '.cms-journal-title': makeElement(),
-            '.cms-sidebar-header .cms-brand-sub': makeElement(),
+            '#cmsAccountMenu': accountMenu,
+            '.cms-account-menu__trigger': accountTrigger,
             '#cmsSidebar': sidebar,
             '#cmsMenuBtn': menu,
             '#cmsNavScrim': scrim,
@@ -196,11 +226,23 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
   const copy = Object.fromEntries(Object.entries(ui.en)
     .filter(([key]) => key.startsWith('editor.chrome.'))
     .map(([key, value]) => [key.slice('editor.chrome.'.length), value]));
+  const navigation = Promise.withResolvers<string>();
+  let href = '';
+  const location = {
+    pathname,
+    search: '',
+    get href() { return href; },
+    set href(next: string) { href = next; navigation.resolve(next); },
+  };
+  const requests: { url: string; method: string | undefined }[] = [];
   const context: Record<string, unknown> = {
     EditorCopy: { en: copy },
     document: documentStub,
-    location: { pathname, search: '', href: '' },
-    fetch: async () => ({ json: async () => ({}) }),
+    location,
+    fetch: async (url: string, init?: { method?: string }) => {
+      requests.push({ url, method: init?.method });
+      return { json: async () => ({}) };
+    },
     matchMedia: () => media,
   };
   context.window = context;
@@ -217,30 +259,40 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
     return found;
   };
   const sidebar = part('#cmsSidebar');
-  const focusables = sidebar.querySelectorAll('a, button');
+  const accountTrigger = part('.cms-account-menu__trigger');
 
   return {
-    copy,
     main,
     heading,
     lede,
     actions,
     part,
     sidebar,
+    navigated: navigation.promise,
+    requests,
     menu: part('#cmsMenuBtn'),
     scrim: part('#cmsNavScrim'),
     masthead: part('.cms-masthead'),
     workspace: part('.cms-workspace'),
-    first: focusables[0]!,
-    last: focusables.at(-1)!,
+    accountMenu: part('#cmsAccountMenu'),
+    accountTrigger,
+    logout: ids.get('cmsLogoutBtn')!,
+    first: sidebar.querySelectorAll('a, button')[0]!,
+    /** The drawer's last focusable while the account menu is closed. */
+    last: accountTrigger,
     html: shellHtml,
     get renders() { return renders; },
     renderAgain() { Auth.renderHeader({ username: 'simon', isAdmin }); },
+    /** A keydown on the focused element, bubbling through its ancestors to the document. */
     key(key: string, shiftKey = false) {
       const event: BrowserEvent = { key, shiftKey, defaultPrevented: false };
       event.preventDefault = () => { event.defaultPrevented = true; };
+      for (let node = activeElement; node; node = node.parent) node.dispatch('keydown', event);
       for (const listener of documentListeners.get('keydown') ?? []) listener(event);
       return event;
+    },
+    click(target: StubElement) {
+      for (const listener of documentListeners.get('click') ?? []) listener({ target });
     },
     resizeToDesktop() {
       media.matches = false;
@@ -308,11 +360,57 @@ describe('Auth navigation shell', () => {
     expect(shell.part('.cms-content').children).toEqual([shell.main]);
   });
 
-  it('names the journal and sets the username as text', () => {
+  it('sets the username as text and names the account menu after it', () => {
     const shell = shellSandbox('/admin/');
-    expect(shell.part('.cms-journal-title').textContent).toBe(shell.copy.shellJournal);
     expect(shell.part('.cms-user-name').textContent).toBe('simon');
+    expect(shell.accountTrigger.getAttribute('aria-label')).toBe('Account menu for simon');
     expect(shell.html).not.toContain('simon');
+  });
+
+  it('puts the open account menu in the drawer Tab trap, and Escape closes it before the drawer', () => {
+    const shell = shellSandbox('/admin/');
+    shell.menu.fire('click');
+    // The <summary> toggles the <details> natively.
+    shell.accountMenu.open = true;
+
+    shell.logout.focus();
+    expect(shell.key('Tab').defaultPrevented).toBe(true);
+    expect(shell.first.focused).toBe(true);
+    expect(shell.key('Tab', true).defaultPrevented).toBe(true);
+    expect(shell.logout.focused).toBe(true);
+
+    expect(shell.key('Escape').defaultPrevented).toBe(true);
+    expect(shell.accountMenu.open).toBe(false);
+    expect(shell.accountTrigger.focused).toBe(true);
+    expectDrawerOpen(shell);
+
+    shell.key('Escape');
+    expectDrawerClosed(shell);
+    expect(shell.menu.focused).toBe(true);
+  });
+
+  it('closes the account menu on Escape and on a click outside it on desktop', () => {
+    const shell = shellSandbox('/admin/');
+    shell.resizeToDesktop();
+    shell.accountMenu.open = true;
+    shell.click(shell.logout);
+    expect(shell.accountMenu.open).toBe(true);
+    shell.click(shell.main);
+    expect(shell.accountMenu.open).toBe(false);
+
+    shell.accountMenu.open = true;
+    shell.accountTrigger.focus();
+    expect(shell.key('Escape').defaultPrevented).toBe(true);
+    expect(shell.accountMenu.open).toBe(false);
+    expect(shell.accountTrigger.focused).toBe(true);
+  });
+
+  it('logs out from the account menu', async () => {
+    const shell = shellSandbox('/admin/');
+    shell.accountMenu.open = true;
+    expect(shell.logout.fire('click').defaultPrevented).toBe(true);
+    expect(await shell.navigated).toBe('/login');
+    expect(shell.requests).toEqual([{ url: '/logout', method: 'POST' }]);
   });
 
   it('renders the shell only once', () => {

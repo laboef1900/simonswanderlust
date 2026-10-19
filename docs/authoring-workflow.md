@@ -134,7 +134,7 @@ can still be running when the upload returns: wait until the photo is ready befo
    | **Date** | Publication / travel date (YYYY-MM-DD) |
    | **Country** | Localized country name |
    | **Country code** | ISO-3166 alpha-2 (e.g. `GR`) |
-   | **Region** | `europe` \| `north-america` \| `south-america` |
+   | **Region** | `europe` \| `asia` \| `africa` \| `north-america` \| `south-america` \| `oceania` \| `antarctica` — a region's destination page appears once it has a published story |
    | **Excerpt** | 1-2 sentence summary |
    | **Hero image** | Open Story details → **Replace photo**, then **Upload hero** or **Choose from library**; edit alt text beside the preview and use **Adjust framing** for the focal point |
    | **Title image (optional)** | A separate wide photograph for the story header; choose/upload in Story details, add alt text and adjust framing. Leave empty to use the hero |
@@ -208,28 +208,6 @@ changes the live site — rebuilds of any kind (publishing another post, saving 
 list marks such posts with an **Unpublished changes** badge and the editor status line shows
 *has unpublished changes*. Your edits go live only when you hit **Publish** again, which
 refreshes the snapshot.
-
-### Duplicating a post ("New from this one")
-
-Trips in the same region repeat a lot of structure — key facts, stops, route, region, country
-code — so each Posts row has **More actions → Duplicate**.
-
-It asks for the **DE and EN slugs up front**, before anything is created, and refuses if either
-is blank, malformed, or already taken (you get a plain "already in use" error rather than a
-silently different URL). That is deliberate: slugs are an SEO contract, and a derived one is the
-kind of thing that gets published by accident.
-
-**Structure copies, identity resets.**
-
-| Carried over | Reset |
-|---|---|
-| Title, excerpt, body, hero image and optional title image | Trip date → today |
-| The `images` map (mandatory — without it the body's photos silently stop rendering) | Coordinates → unset |
-| Key facts, stops, route, region, country, country code | Status → always draft |
-
-The copy opens straight in the editor, because it still needs a new title, date and coordinates
-before it can be published. The original is untouched — it keeps its own slugs, and a published
-source stays published.
 
 ### Finding posts, and acting on several at once
 

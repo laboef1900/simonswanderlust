@@ -38,7 +38,8 @@ describe('admin outcome messages are announced (SC 4.1.3)', () => {
   const liveRoles = /role="(status|alert)"/;
   const cases: [typeof PAGES[number], string[]][] = [
     ['posts', ['out']], ['media', ['out']], ['import', ['out']], ['login', ['out', 'err']],
-    ['users', ['out', 'pwout']], ['settings', ['out', 'backupStatus']],
+    ['users', ['out', 'pwout']],
+    ['settings', ['out', 'backupStatus', 'reviewModelStatus', 'captionModelStatus', 'previewOut']],
     // Audit and draft-state announcements are exercised with editor interactions
     // in editor-dom.test.ts rather than pinned to a particular HTML tag.
     ['editor', ['actionStatus', 'actionError', 'deHeroStatus', 'enHeroStatus', 'deBodyImgStatus', 'enBodyImgStatus']],

@@ -3,7 +3,7 @@ import {
   variantWidths, formatsFor, JPEG_FORMAT, DEFAULT_PROCESS_OPTIONS,
   type ImageFormat, type ImageOutputFormat,
 } from './variants.js';
-import { allowedExif } from './exif.js';
+import { allowedExif, type AllowedExif } from './exif.js';
 
 export interface Variant {
   width: number;
@@ -120,6 +120,37 @@ export async function probeImage(input: Buffer): Promise<ImageProbe> {
 }
 
 /**
+ * One variant: orient, keep the ICC profile, downscale to `width`, encode.
+ * The single encoder behind `processImage` AND the Settings quality preview,
+ * so the preview can never drift from what an upload really produces.
+ *
+ * @ai-warning `keepExif` is the ONLY metadata a variant may carry (see
+ * `processImage`); omit it and the output has no EXIF block at all. Never
+ * add `.withMetadata()` here.
+ */
+export async function encodeVariant(
+  input: Buffer,
+  width: number,
+  format: ImageFormat,
+  profile: Pick<Required<ProcessOptions>, 'avifQuality' | 'webpQuality'>,
+  keepExif?: AllowedExif | null,
+): Promise<Buffer> {
+  let base = sharp(input, { failOn: 'none' })
+    .rotate()             // applies EXIF orientation to the PIXELS
+    .keepIccProfile()     // colour accuracy; an ICC profile carries no location
+    .resize({ width, withoutEnlargement: true });
+  // withExif() REPLACES the EXIF block wholesale, which is exactly the
+  // point: anything not in the allow-list cannot survive. Skipped entirely
+  // when the source had nothing worth keeping, leaving the variant clean.
+  if (keepExif) base = base.withExif(keepExif);
+  return format === 'avif'
+    ? base.avif({ quality: profile.avifQuality }).toBuffer()
+    : format === 'webp'
+      ? base.webp({ quality: profile.webpQuality }).toBuffer()
+      : base.jpeg({ quality: 90 }).toBuffer();
+}
+
+/**
  * Auto-orients via EXIF, re-injects ONLY the allow-listed camera metadata,
  * and encodes the selected AVIF+WebP or JPEG-only contract at each width without upscaling.
  *
@@ -133,7 +164,6 @@ export async function processImage(
   opts: ProcessOptions = {},
 ): Promise<ProcessResult> {
   const profile = normalizeProcessOptions(opts);
-  const { avifQuality, webpQuality } = profile;
 
   // One metadata-only probe supplies the orientation-corrected size, the
   // original's extension and the EXIF block. The full decode + rotate +
@@ -151,30 +181,19 @@ export async function processImage(
   // Parsed once: the source EXIF is the same for every variant.
   const keepExif = allowedExif(exif);
 
-  // @ai-warning Deliberately a fresh `sharp(input)` per variant, NOT a base
-  // pipeline `.clone()`d per variant as #136 first suggested: sharp 0.35's
-  // clone() runs `structuredClone(options)`, which deep-copies the input
-  // Buffer — eight extra copies of a 25 MiB upload — while a fresh instance
-  // holds the same Buffer by reference. Each awaited encode runs its own
-  // libvips pipeline either way, so only one variant's pixels are live at a
-  // time; the decode is not shared and cannot be without materialising the
-  // full-resolution raw image across all encodes (a larger peak, not a smaller one).
+  // @ai-warning Deliberately a fresh `sharp(input)` per variant (inside
+  // `encodeVariant`), NOT a base pipeline `.clone()`d per variant as #136
+  // first suggested: sharp 0.35's clone() runs `structuredClone(options)`,
+  // which deep-copies the input Buffer — eight extra copies of a 25 MiB
+  // upload — while a fresh instance holds the same Buffer by reference. Each
+  // awaited encode runs its own libvips pipeline either way, so only one
+  // variant's pixels are live at a time; the decode is not shared and cannot
+  // be without materialising the full-resolution raw image across all encodes
+  // (a larger peak, not a smaller one).
   const variants: Variant[] = [];
   for (const w of variantWidths(width)) {
     for (const variantFormat of formatsFor(format)) {
-      let base = sharp(input, { failOn: 'none' })
-        .rotate()             // applies EXIF orientation to the PIXELS
-        .keepIccProfile()     // colour accuracy; an ICC profile carries no location
-        .resize({ width: w, withoutEnlargement: true });
-      // withExif() REPLACES the EXIF block wholesale, which is exactly the
-      // point: anything not in the allow-list cannot survive. Skipped entirely
-      // when the source had nothing worth keeping, leaving the variant clean.
-      if (keepExif) base = base.withExif(keepExif);
-      const data = variantFormat === 'avif'
-        ? await base.avif({ quality: avifQuality }).toBuffer()
-        : variantFormat === 'webp'
-          ? await base.webp({ quality: webpQuality }).toBuffer()
-          : await base.jpeg({ quality: 90 }).toBuffer();
+      const data = await encodeVariant(input, w, variantFormat, profile, keepExif);
       variants.push({ width: w, format: variantFormat, data });
     }
   }
