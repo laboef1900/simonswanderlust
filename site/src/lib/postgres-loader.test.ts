@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Loader } from 'astro/loaders';
 import { postgresTripsLoader, rowToEntryInput } from './postgres-loader';
+import { renderMarkdown } from './render-markdown.js';
 
 // Shared fake-DB state for the mocked `pg` module (hoisted with the mock).
-const db = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[], sql: [] as string[] }));
+const db = vi.hoisted(() => ({
+  rows: [] as Record<string, unknown>[],
+  media: [] as Record<string, unknown>[],
+  sql: [] as string[],
+}));
 
 // The loader creates its own pool (`loaderPool`, over `pg`), so mock `pg` and act
 // like Postgres for exactly the predicates under test: the loader only receives
@@ -15,6 +20,7 @@ vi.mock('pg', () => ({
     Pool: class {
       async query(sql: string): Promise<{ rows: Record<string, unknown>[] }> {
         db.sql.push(sql);
+        if (/\bFROM media\b/.test(sql)) return { rows: db.media };
         let rows = db.rows;
         if (/status\s*=\s*'published'/.test(sql)) rows = rows.filter((r) => r.status === 'published');
         if (/published_snapshot\s+IS\s+NOT\s+NULL/.test(sql)) {
@@ -117,7 +123,7 @@ function fakeLoadContext(): { entries: Map<string, StoredEntry>; ctx: LoaderCont
       set: (entry: StoredEntry) => { entries.set(entry.id, entry); return true; },
     },
     parseData: async ({ data }: { id: string; data: Record<string, unknown> }) => data,
-    renderMarkdown: async (md: string) => ({ html: `<p>${md}</p>` }),
+    renderMarkdown: async (md: string) => ({ html: await renderMarkdown(md) }),
     logger: { info: () => { /* quiet */ } },
   };
   return { entries, ctx: ctx as unknown as LoaderContext };
@@ -127,6 +133,7 @@ describe('postgresTripsLoader load()', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     db.rows = [];
+    db.media = [];
     db.sql = [];
   });
 
@@ -159,5 +166,50 @@ describe('postgresTripsLoader load()', () => {
     expect(entry?.body).toBe('LIVE body');
     expect(entry?.rendered?.html).toContain('LIVE body');
     expect(entry?.rendered?.html).not.toContain('WORKING-EDIT');
+  });
+
+  it('refreshes localized library descriptions on rebuild without publishing working edits', async () => {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    vi.stubEnv('PUBLIC_BASE_URL', 'https://img');
+    const src = 'http://localhost:3000/trips/lima/photo';
+    const snapshot = {
+      ...row, date: '2024-10-03',
+      body_markdown: `Published opening\n\n\`\`\`gallery\n${src}\n\`\`\``,
+      images: { [src]: { width: 1600, height: 1000, alt: 'Old alt', caption: 'Old caption', format: 'jpeg' } },
+    };
+    db.rows = ['de', 'en'].map((locale) => ({
+      ...snapshot, locale, body_markdown: 'Unpublished working edit',
+      status: 'published', published_snapshot: { ...snapshot, locale },
+    }));
+    db.media = [{
+      key: 'trips/lima/photo', alt_de: 'Lima am Abend', alt_en: 'Lima at dusk',
+      caption_de: 'Blick über Lima', caption_en: 'View over Lima',
+    }];
+    const { entries, ctx } = fakeLoadContext();
+    const loader = postgresTripsLoader();
+    await loader.load(ctx);
+    const html = (locale: string) => entries.get(`${locale}/${row.slug}`)?.rendered?.html ?? '';
+    expect(html('de')).toContain('alt="Lima am Abend"');
+    expect(html('de')).toContain('Blick über Lima</figcaption>');
+    expect(html('en')).toContain('alt="Lima at dusk"');
+    expect(html('en')).toContain('View over Lima</figcaption>');
+    expect(html('en')).not.toContain('Lima am Abend');
+    expect(html('de')).toContain('Published opening');
+    expect(html('de')).not.toContain('Unpublished working edit');
+    expect(html('de')).toContain('https://img/trips/lima/photo-1280.jpeg');
+
+    db.media[0]!.alt_de = '';
+    db.media[0]!.caption_de = '';
+    db.media[0]!.alt_en = 'Updated English description';
+    await loader.load(ctx);
+    expect(html('de')).toContain('alt=""');
+    expect(html('de')).not.toContain('<figcaption');
+    expect(html('en')).toContain('alt="Updated English description"');
+    expect(snapshot.images[src].alt).toBe('Old alt');
+
+    db.media = [];
+    await loader.load(ctx);
+    expect(html('de')).toContain('alt="Old alt"');
+    expect(html('de')).toContain('Old caption</figcaption>');
   });
 });

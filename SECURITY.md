@@ -80,6 +80,17 @@ change about the security posture.
   one statement and a delete is unrecoverable, which is why those two sit on the other side.
   `POST /media/retry` is session-level for the same reason: it re-encodes from the retained
   original, and the encode queue's `MAX_BACKLOG`/concurrency caps bound what it can cost.
+  **Owner-approved gallery-description change (2026-10-19):** current library alt/caption
+  now feed article galleries on the next admin-triggered build, even for already-published
+  stories. An author's session-level Media edits can therefore change those descriptions
+  without a separate per-article Publish; they cannot trigger the build themselves.
+  This is the sole exception to frozen article snapshots, not permission to publish draft
+  bodies, reorder galleries or change image URLs. The build reads only media key and
+  localized alt/caption; preview/audit use the same metadata-only projection. GPS, EXIF,
+  uploader identity and library titles never enter the public overlay. Existing gallery
+  origin equality, dimension/format validation and post-sanitize string coercion/escaping
+  remain mandatory. See the
+  [approved contract and rollback](docs/superpowers/specs/2026-10-19-gallery-library-metadata-design.md).
 - **Post revisions die with the post** (#137). `post_revisions` (up to 20 full-body snapshots per
   post, readable by any authenticated author via `GET /posts/:tk/revisions/:id`) has no foreign
   key — `posts` is keyed `(translation_key, locale)` — so a delete used to leave the snapshots of a

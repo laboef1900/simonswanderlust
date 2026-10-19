@@ -58,6 +58,12 @@ export interface NewMediaItem {
 
 export type MediaPatch = Partial<Pick<NewMediaItem, 'folder' | 'title' | 'alt' | 'caption' | 'tags'>>;
 
+/** The library's localized gallery text for one photo (see `MediaStore.descriptions`). */
+export interface MediaDescriptions {
+  alt: { de: string; en: string };
+  caption: { de: string; en: string };
+}
+
 export interface MediaQuery {
   folder?: string; recursive?: boolean;
   q?: string; tag?: string; status?: MediaStatus;
@@ -75,6 +81,12 @@ export interface MediaStore {
   remove(key: string): Promise<void>;
   /** Publish gate: which of these keys are not `ready` (unknown keys are NOT returned). */
   notReadyKeys(keys: string[]): Promise<Set<string>>;
+  /**
+   * Current localized alt/caption of these keys, one query; unknown keys are
+   * absent. Reads ONLY the four description columns — never EXIF, GPS or
+   * uploader identity — because the result feeds rendered gallery markup.
+   */
+  descriptions(keys: string[]): Promise<Map<string, MediaDescriptions>>;
   /** Set a row's status; `e` is stored only for `failed` and cleared otherwise. */
   setStatus(key: string, s: MediaStatus, e?: MediaError): Promise<void>;
   setVariantBytes(key: string, bytes: number): Promise<void>;
@@ -384,6 +396,14 @@ export function memoryMediaStore(opts: MediaStoreOptions): MediaStore {
       }
       return out;
     },
+    async descriptions(keys) {
+      const out = new Map<string, MediaDescriptions>();
+      for (const k of keys) {
+        const r = rows.get(k);
+        if (r) out.set(k, { alt: { ...r.alt }, caption: { ...r.caption } });
+      }
+      return out;
+    },
     async setStatus(key, s, e) {
       const r = rows.get(key);
       if (!r) return;
@@ -660,6 +680,19 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
         `SELECT key FROM media WHERE key = ANY($1::text[]) AND status <> 'ready'`, [keys],
       );
       return new Set(rows.map((r) => r.key));
+    },
+    async descriptions(keys) {
+      const out = new Map<string, MediaDescriptions>();
+      if (keys.length === 0) return out;
+      const { rows } = await pool.query<{
+        key: string; alt_de: string; alt_en: string; caption_de: string; caption_en: string;
+      }>(
+        `SELECT key, alt_de, alt_en, caption_de, caption_en FROM media WHERE key = ANY($1::text[])`, [keys],
+      );
+      for (const r of rows) {
+        out.set(r.key, { alt: { de: r.alt_de, en: r.alt_en }, caption: { de: r.caption_de, en: r.caption_en } });
+      }
+      return out;
     },
     async setStatus(key, s, e) {
       await pool.query(`UPDATE media SET status = $1, error = $2 WHERE key = $3`, [s, s === 'failed' ? e ?? null : null, key]);

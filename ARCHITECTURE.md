@@ -84,6 +84,14 @@ Plus the **`pgdata`** volume — Postgres data.
    fence's per-line `| WIDTHxHEIGHT | alt="…" | caption="…"` metadata is lifted into the row's
    `images` map at save time by `uploader/src/body-content.ts`, and re-attached by the MDX
    exporter so a backup round-trips.
+   For **article galleries**, current localized Media alt/caption override those saved
+   copies at render time, even when blank; missing library rows retain the saved copy.
+   The trips loader selects only media keys and the four description columns once per
+   load. Draft preview and the alt audit use a batched metadata-only store lookup.
+   Article bodies/order/dimensions/formats still come from the published snapshot;
+   editing Media alone does not trigger a build. Hero/title images, ordinary inline
+   images and About-page composition are unchanged. See the
+   [approved contract](docs/superpowers/specs/2026-10-19-gallery-library-metadata-design.md).
 5. **Release** — the build lands in a fresh `releases/<timestamp>` dir under `/data/site` (built
    into a CWD-local tmp dir first to dodge an `EXDEV` rename across the volume boundary, then
    `cp`'d into a dot-prefixed staging dir and renamed into place, so a release dir is either

@@ -194,7 +194,7 @@ If lookup is unavailable, enter coordinates manually.
 ### Publish
 
 Click **Publish** — this marks both locale rows as published, takes a **published snapshot** of
-the current content (the exact version the live site will serve), and runs the rebuild
+the article content, and runs the rebuild
 in-process, awaiting it before the request returns. Wait for the confirmation toast, then verify
 the post is live at `/<slug>/` and `/en/<slug>/`.
 
@@ -208,6 +208,10 @@ changes the live site — rebuilds of any kind (publishing another post, saving 
 list marks such posts with an **Unpublished changes** badge and the editor status line shows
 *has unpublished changes*. Your edits go live only when you hit **Publish** again, which
 refreshes the snapshot.
+
+Gallery descriptions are the exception: alt text and captions for photos in the Media
+library use the current library values on the next rebuild, without republishing each
+article. This does not publish any draft text or change gallery order.
 
 ### Finding posts, and acting on several at once
 
@@ -313,8 +317,14 @@ straight to that provider, so its charges and privacy policy apply.
   overwrites the chosen fields and cannot be undone; it has to be ticked for every run.
   Failed photos are listed with a reason; three failures in a row stop the run.
 
-Library details do not change published stories. They become the defaults when you
-insert the photo into a story; always review generated alt text and captions there.
+For **article galleries**, Media is the source of truth for each language's alt text and
+caption. Save details, then reopen the article to see the current descriptions; Preview
+also uses them immediately. The public galleries update on the next **Rebuild site now**
+or publication-triggered rebuild. You do not need to republish each affected article.
+Clearing a Media field clears it in the galleries too. Review generated descriptions
+before saving: they can appear in every article gallery using that photo.
+The title labels the photo in the library/editor; it does not replace alt text.
+Hero/title-image and ordinary inline-image descriptions remain article-specific.
 
 > Photo GPS is stored for you but is **never published** — image variants carry an EXIF
 > allow-list with no location at all, and the API hides coordinates from non-admin accounts.
@@ -336,19 +346,19 @@ Create, rename, and delete folders on the Media page, not in the picker.
 
 ### Galleries
 
-**Inline editing.** Complete gallery blocks appear as photo previews inside the
-article's writing area. Each photo has an editable **Alt text** field. Clearing it
-explicitly saves an empty alt; captions, image order and layout stay unchanged.
-Changes belong to the active language of this article, not to the media library.
-Repeated uses of the same image URL in that language share alt text, so editing
-one gallery occurrence updates the others. Click **Save draft** to keep changes.
+**Gallery previews.** Complete gallery blocks appear as photo previews inside the
+article's writing area. For a library photo, the active language's **Alt text** field
+is read-only, the current caption appears underneath, and **Edit in Media** opens the
+library in another tab without losing your unsaved article. Change descriptions there
+(including AI suggestions), then reopen the article to refresh the previews.
+A failed library lookup locks the field and offers **Try again** rather than pretending
+the saved copy is current.
 
-For AI assistance, click **Suggest alt text with AI** beside a photo. This uses
-the existing local vision-model caption settings and sends a resized display
-variant directly from your browser; it does not use the Review Story provider or
-its API key. Review the result, then choose **Use suggestion** or **Dismiss**.
-An arriving suggestion never overwrites your draft. Typing or changing context
-cancels stale requests. If the model is unavailable, manual editing still works.
+Photos no longer present in the library keep their article-specific descriptions.
+Their alt fields remain editable, including **Suggest alt text with AI**. Repeated uses
+of the same image URL in one language share that local alt text; clearing it explicitly
+saves an empty alt. Review AI suggestions before applying them, and click **Save draft**
+to keep these article-local changes. Captions, order and layout are preserved.
 
 Use **Edit photos and layout** in the preview to open the existing gallery picker.
 **Show gallery Markdown** above the writing area exposes the underlying fence for

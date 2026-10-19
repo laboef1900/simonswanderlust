@@ -194,38 +194,58 @@ describe('serialize', () => {
     expect(photoLines[0]).toContain('/ok');
   });
 
-  // @ai-warning The picker re-serializes from MEDIA LIBRARY rows, but the stored
-  // fence is bare URLs — the post's own alt/caption live in its `images` map.
-  // Without postMeta winning here, adding one photo to a gallery silently
-  // overwrote every other photo's post-specific text with the library default,
-  // because normalizeGalleryFences lets a value on the line beat the stored one.
-  describe('postMeta — what this post already says wins over the library row', () => {
+  // docs/superpowers/specs/2026-10-19-gallery-library-metadata-design.md: a
+  // library row's current alt/caption is authoritative (blank included) — the
+  // site renders it over the post's copy on every build. The post's metadata
+  // (`postMeta`) still carries the JPEG-only marker, and is the whole story for
+  // a photo with no library row.
+  describe('postMeta — the library row wins, the post fills what the library cannot', () => {
     const meta: PostMeta = {
-      'https://img.example.com/trips/x/a': { alt: 'Hand-tuned alt', caption: 'Hand-tuned caption' },
+      'https://img.example.com/trips/x/a': { alt: 'Stale post alt', caption: 'Stale post caption', format: 'jpeg' },
     };
 
-    it('emits the post metadata instead of the library alt and caption', () => {
+    it('emits the library row’s current text over the post’s older copy, keeping the JPEG marker', () => {
       const out = G.serialize([item()], 'de', [], meta);
-      expect(out).toContain('alt="Hand-tuned alt" | caption="Hand-tuned caption"');
-      expect(out).not.toContain('Berg');
+      expect(out).toContain('3000x2000 | format="jpeg" | alt="Berg" | caption="Am Morgen"');
+      expect(out).not.toContain('Stale');
     });
 
-    it('respects a deliberately cleared value rather than refilling it', () => {
-      const out = G.serialize([item()], 'de', [], { 'https://img.example.com/trips/x/a': { alt: '' } });
+    it('writes a blank library alt and caption explicitly, so the save cannot fall back to the stale copy', () => {
+      const out = G.serialize([item({ alt: { de: '', en: 'Mountain' }, caption: { de: '', en: '' } })], 'de', [], meta);
+      expect(out).toContain('format="jpeg" | alt="" | caption=""');
       const saved = normalizeGalleryFences(out, {
-        'https://img.example.com/trips/x/a': { width: 3000, height: 2000, alt: 'Old saved alt' },
+        'https://img.example.com/trips/x/a': {
+          width: 3000, height: 2000, alt: 'Stale post alt', caption: 'Stale post caption', format: 'jpeg',
+        },
       });
-      expect(saved.images['https://img.example.com/trips/x/a']?.alt).toBe('');
-      expect(saved.images['https://img.example.com/trips/x/a']?.caption).toBe('Am Morgen');
+      expect(saved.images['https://img.example.com/trips/x/a']).toEqual({
+        width: 3000, height: 2000, alt: '', caption: '', format: 'jpeg',
+      });
     });
 
-    it('falls back to the library row for a photo the post has never seen', () => {
-      const out = G.serialize([item({ src: 'https://img.example.com/new' })], 'de', [], meta);
-      expect(out).toContain('alt="Berg"');
+    it('keeps locales independent: the EN row text never fills a blank DE field', () => {
+      const out = G.serialize([item({ alt: { de: '', en: 'Mountain' }, caption: { en: 'Morning' } })], 'de');
+      expect(out).not.toContain('Mountain');
+      expect(out).not.toContain('Morning');
+    });
+
+    it('keeps the post’s metadata for a seeded photo whose library row was never found', () => {
+      const out = G.serialize(
+        [{ src: 'https://img.example.com/trips/x/a', width: 3000, height: 2000, fromPost: true }], 'de', [], meta,
+      );
+      expect(out).toContain('format="jpeg" | alt="Stale post alt" | caption="Stale post caption"');
+    });
+
+    it('respects a deliberately cleared value on an unresolved photo rather than refilling it', () => {
+      const src = 'https://img.example.com/trips/x/a';
+      const out = G.serialize([{ src, width: 3000, height: 2000, fromPost: true }], 'de', [], { [src]: { alt: '', caption: '' } });
+      const saved = normalizeGalleryFences(out, { [src]: { width: 3000, height: 2000, alt: 'Old saved alt', caption: 'Old caption' } });
+      expect(saved.images[src]?.alt).toBe('');
+      expect(saved.images[src]?.caption).toBe('');
     });
 
     it('escapes post metadata exactly as it escapes library metadata', () => {
-      const out = G.serialize([item()], 'de', [], {
+      const out = G.serialize([{ src: 'https://img.example.com/trips/x/a', width: 3000, height: 2000, fromPost: true }], 'de', [], {
         'https://img.example.com/trips/x/a': { alt: 'a | b', caption: 'two\nlines' },
       });
       expect(out.split('\n')).toHaveLength(3);
@@ -331,28 +351,11 @@ describe('the server accepts what the picker emits', () => {
     expect(bodyMarkdown).not.toContain('alt=');
   });
 
-  // The full "edit an existing gallery" loop, which is where metadata is lost if
-  // anything in the chain forgets the post's own text: the stored fence is bare
-  // URLs, so `parse` yields no alt/caption, and the picker re-serializes from
-  // library rows. `postMeta` is what carries the post's `images` entry across.
-  it('re-editing a gallery keeps the post’s alt, caption and JPEG format', () => {
-    const stored = '```gallery\nhttps://i/a\n```';
-    const storedImages: Record<string, { width: number; height: number; alt?: string; caption?: string; format?: 'jpeg' }> = {
-      'https://i/a': {
-        width: 10, height: 20, alt: 'Hand-tuned alt', caption: 'Hand-tuned caption', format: 'jpeg',
-      },
-    };
-    const libraryRow = {
-      src: 'https://i/a',
-      width: 10,
-      height: 20,
-      alt: { de: 'Library alt' },
-      caption: { de: 'Library caption' },
-    };
-
-    // What editor.html does: parse the fence, layer the post's images map under it.
-    const parsed = G.parse(stored);
-    expect(parsed.lines).toEqual([{ src: 'https://i/a' }]); // nothing to recover from the line itself
+  // The full "edit an existing gallery" loop: the stored fence is bare URLs, so
+  // `parse` yields no alt/caption; editor.html layers the post's `images` map
+  // into `postMeta`, and the picker supplies library rows for the photos it
+  // found. After the save, the stored fallback must agree with Media.
+  function postMetaFor(parsed: { lines: ParsedLine[] }, storedImages: Record<string, { alt?: string; caption?: string; format?: 'jpeg' }>) {
     const postMeta: PostMeta = {};
     for (const line of parsed.lines) {
       postMeta[line.src] = {
@@ -361,31 +364,38 @@ describe('the server accepts what the picker emits', () => {
         format: line.format ?? storedImages[line.src]?.format,
       };
     }
+    return postMeta;
+  }
 
-    const fence = G.serialize([libraryRow], 'de', parsed.directives, postMeta);
+  it('re-editing a gallery stores the library’s current text, blank caption included, and keeps JPEG', () => {
+    const stored = '```gallery\nhttps://i/a\n```';
+    const storedImages: Record<string, { width: number; height: number; alt?: string; caption?: string; format?: 'jpeg' }> = {
+      'https://i/a': {
+        width: 10, height: 20, alt: 'Copied alt', caption: 'Copied caption', format: 'jpeg',
+      },
+    };
+    const libraryRow = { src: 'https://i/a', width: 10, height: 20, alt: { de: 'Edited in Media' }, caption: { de: '' } };
+
+    const parsed = G.parse(stored);
+    expect(parsed.lines).toEqual([{ src: 'https://i/a' }]); // nothing to recover from the line itself
+    const fence = G.serialize([libraryRow], 'de', parsed.directives, postMetaFor(parsed, storedImages));
     const { images } = normalizeGalleryFences(fence, storedImages);
-    expect(images['https://i/a']).toEqual({
-      width: 10,
-      height: 20,
-      alt: 'Hand-tuned alt',
-      caption: 'Hand-tuned caption',
-      format: 'jpeg',
-    });
+    expect(images['https://i/a']).toEqual({ width: 10, height: 20, alt: 'Edited in Media', caption: '', format: 'jpeg' });
   });
 
-  it('a photo added to an existing gallery still gets the library metadata', () => {
-    const fence = G.serialize(
-      [
-        { src: 'https://i/a', width: 10, height: 20, alt: { de: 'Library A' } },
-        { src: 'https://i/new', width: 30, height: 40, alt: { de: 'Library new' } },
-      ],
-      'de',
-      [],
-      { 'https://i/a': { alt: 'Hand-tuned' } },
-    );
-    const { images } = normalizeGalleryFences(fence, { 'https://i/a': { width: 10, height: 20, alt: 'Hand-tuned' } });
-    expect(images['https://i/a']?.alt).toBe('Hand-tuned');
-    expect(images['https://i/new']?.alt).toBe('Library new');
+  it('re-editing keeps the post’s text for a photo with no library row, beside one that has a row', () => {
+    const storedImages = {
+      'https://i/a': { width: 10, height: 20, alt: 'Copied A' },
+      'https://i/gone': { width: 30, height: 40, alt: 'Imported alt', caption: 'Imported caption', format: 'jpeg' as const },
+    };
+    const parsed = G.parse('```gallery\nhttps://i/a\nhttps://i/gone\n```');
+    const fence = G.serialize([
+      { src: 'https://i/a', width: 10, height: 20, alt: { de: 'Library A' }, caption: { de: '' } },
+      { src: 'https://i/gone', width: 30, height: 40, fromPost: true },
+    ], 'de', parsed.directives, postMetaFor(parsed, storedImages));
+    const { images } = normalizeGalleryFences(fence, storedImages);
+    expect(images['https://i/a']).toEqual({ width: 10, height: 20, alt: 'Library A' });
+    expect(images['https://i/gone']).toEqual(storedImages['https://i/gone']);
   });
 
   it('survives a fence carrying a #66 layout directive', () => {

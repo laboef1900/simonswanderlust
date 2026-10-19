@@ -2979,6 +2979,11 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
 .editor-gallery__status:empty { display: none; }
 .editor-gallery__suggestion { padding-block: 0.5rem; border-top: 1px solid var(--line-strong); }
 .editor-gallery__suggestion button { margin-right: 0.5rem; }
+/* Media-backed descriptions are shown, not edited, here: a visibly inert field
+   plus the line naming where they are edited. */
+.editor-gallery__photo textarea[readonly] { background-color: var(--canvas); }
+.editor-gallery__source, .editor-gallery__local { margin-block: 0 0.5rem; overflow-wrap: anywhere; }
+.editor-gallery__retry { margin-bottom: 0.75rem; }
 
 
 /* ---- media library: AI photo details (media-ai.js, media-ai-dialog.js) ----

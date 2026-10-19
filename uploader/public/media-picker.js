@@ -29,7 +29,7 @@ window.MediaPicker = (function () {
   }
 
   /**
-   * open({ onPick, onUnauthed, multiple, preselect, layouts, layout })
+   * open({ onPick, onUnauthed, multiple, preselect, resolve, layouts, layout })
    *
    * Resolves through onPick with the chosen media item — the full row, so the
    * caller gets src/width/height/alt without a second request. With
@@ -40,6 +40,13 @@ window.MediaPicker = (function () {
    * The whole selection therefore exists before the first library request, which
    * is what stops a photo the library never pages into view from being dropped
    * on confirm. See the @ai-warning in picker-selection.js.
+   *
+   * `resolve(srcs)` (optional) looks up the preselected photos' CURRENT library
+   * rows directly and answers `{ rows, failed }`; the rows are adopted like a
+   * page's. Confirming waits for it, because a gallery written from a seed
+   * placeholder keeps the post's older text where the library has a row
+   * (docs/superpowers/specs/2026-10-19-gallery-library-metadata-design.md).
+   * Photos it cannot resolve stay placeholders and keep the post's metadata.
    *
    * With `multiple: true`, `onPick` may also receive an EMPTY array — the author
    * cleared the selection, which for a gallery means "remove this block".
@@ -55,7 +62,8 @@ window.MediaPicker = (function () {
     var multiple = !!o.multiple;
     var client = api.makeClient({ onUnauthed: o.onUnauthed || function () { location.href = '/login'; } });
     var copy = window.EditorCopy.en;
-    var state = { items: [], total: 0, q: '', folder: '', page: 1, pageSize: 40, loading: false, failed: false, closed: false };
+    var state = { items: [], total: 0, q: '', folder: '', page: 1, pageSize: 40, loading: false, failed: false, closed: false,
+      resolving: false, resolveFailed: 0 };
     var compact = window.matchMedia('(max-width: 640px)');
     var picked = window.PickerSelection.create({ preselect: o.preselect });
 
@@ -256,9 +264,11 @@ window.MediaPicker = (function () {
         ? ''
         : total + ' photo(s)'
           + (offscreen ? ' — ' + offscreen + ' not in this view, still in the gallery' : '');
+      var media = state.resolving ? copy.pickerMediaChecking
+        : state.resolveFailed ? copy.pickerMediaFailed.replace('{count}', String(state.resolveFailed)) : '';
       // The action, then the standing count — so the announcement says what
       // changed and the text left on screen still says where things stand.
-      stripCount.textContent = [announce, summary].filter(Boolean).join(' ');
+      stripCount.textContent = [announce, summary, media].filter(Boolean).join(' ');
       announce = '';
       if (!total) {
         stripList.appendChild(el('li', 'muted', o.emptyHint || 'Nothing selected yet — click photos above.'));
@@ -345,7 +355,8 @@ window.MediaPicker = (function () {
       prev.disabled = state.loading || state.page <= 1;
       next.disabled = state.loading || state.page * state.pageSize >= state.total;
       // Multi-select may commit an empty selection: that removes the gallery.
-      choose.disabled = !multiple && picked.size() === 0;
+      // Nothing commits while the gallery's own rows are still being looked up.
+      choose.disabled = state.resolving || (!multiple && picked.size() === 0);
       if (!state.items.length) {
         grid.appendChild(el('p', 'muted media-picker__empty',
           state.loading ? copy.pickerPhotosLoading : state.failed ? copy.pickerPhotosFailed : copy.pickerPhotosEmpty));
@@ -467,7 +478,7 @@ window.MediaPicker = (function () {
       var items = picked.items();
       // Single-select has nothing to say with an empty selection; multi-select
       // does — "no photos" is how an author removes a gallery.
-      if (!multiple && !items.length) return;
+      if (state.resolving || (!multiple && !items.length)) return;
       // Read the mode BEFORE close() removes the dialog from the document.
       var layout = layoutSelect ? layoutSelect.value : null;
       close();
@@ -489,7 +500,30 @@ window.MediaPicker = (function () {
 
     dialog.showModal();
     loadFolders();
+    resolveSeeded();
     load();
+
+    /** Adopt the current library rows of the preselected photos, whatever page they sort on. */
+    function resolveSeeded() {
+      if (typeof o.resolve !== 'function') return;
+      var srcs = picked.items().filter(function (_item, i) { return !picked.isResolved(i); })
+        .map(function (item) { return item.src; });
+      if (!srcs.length) return;
+      state.resolving = true;
+      render();
+      Promise.resolve().then(function () { return o.resolve(srcs); }).then(function (result) {
+        if (state.closed) return;
+        picked.adopt(result && Array.isArray(result.rows) ? result.rows : []);
+        state.resolveFailed = result && typeof result.failed === 'number' ? result.failed : 0;
+      }, function () {
+        if (state.closed) return;
+        state.resolveFailed = srcs.length;
+      }).then(function () {
+        if (state.closed) return;
+        state.resolving = false;
+        render();
+      });
+    }
   }
 
   return { open: open };
