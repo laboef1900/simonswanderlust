@@ -1,14 +1,11 @@
 /* Gallery widgets are a view of Markdown, never a second draft or image store.
  *
- * @ai-note A photo with a Media row takes its alt text and caption from Media
- * on the next build, in this locale, empty strings included
- * (docs/superpowers/specs/2026-10-19-gallery-library-metadata-design.md). Its
- * fields here are therefore read-only and point to Media: an editable field
- * would offer an override the build ignores, and writing to Media from an
- * article would be a hidden side effect. Only a photo with no row keeps the
- * post-local alt editing (and AI suggestion) it always had. While the lookup
- * is pending or has failed nobody knows which case applies, so the field stays
- * locked and the failure is said out loud with a retry. */
+ * @ai-note Media remains authoritative for alt text. Captions inherit Media
+ * unless explicitly overridden on this gallery's photo line; #captions: hidden
+ * suppresses their display without deleting text. Editing captions happens in
+ * the gallery picker, never as a hidden Media write. Unresolved photos retain
+ * post-local alt editing; pending/failed lookups keep alt locked with a retry.
+ * See docs/superpowers/specs/2026-10-19-gallery-library-metadata-design.md. */
 window.EditorGalleries = (function () {
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -84,8 +81,10 @@ window.EditorGalleries = (function () {
       const head = el('div', 'editor-gallery__head');
       const title = el('h3', null, copy.gallery + ' ' + number);
       const mode = GalleryFence.layoutOf(parsed.directives);
+      const showCaptions = GalleryFence.captionsVisible(parsed.directives);
       head.appendChild(title);
       head.appendChild(el('span', 'muted', copy[mode]));
+      if (!showCaptions) head.appendChild(el('span', 'muted', copy.captionsHidden));
       const edit = el('button', 'btn-secondary', copy.edit);
       edit.type = 'button';
       edit.addEventListener('click', () => {
@@ -112,7 +111,8 @@ window.EditorGalleries = (function () {
         const stored = images()[line.src] || {};
         const photo = { ...stored, ...line };
         const postAlt = typeof photo.alt === 'string' ? photo.alt : '';
-        const postCaption = typeof photo.caption === 'string' ? photo.caption : '';
+        const localCaption = typeof line.captionOverride === 'string' ? line.captionOverride : undefined;
+        const postCaption = localCaption ?? (typeof photo.caption === 'string' ? photo.caption : '');
         const card = el('li', 'editor-gallery__photo');
         const image = el('img', 'editor-gallery__image');
         image.alt = postAlt;
@@ -144,7 +144,7 @@ window.EditorGalleries = (function () {
         label.appendChild(labelText);
         label.appendChild(input);
         const caption = el('p', 'editor-gallery__caption', postCaption);
-        caption.hidden = postCaption === '';
+        caption.hidden = !showCaptions || postCaption === '';
         card.appendChild(caption);
         // Library-backed photos: where the text comes from, and where to change it.
         // A new tab, so following the link cannot discard this unsaved draft.
@@ -209,8 +209,8 @@ window.EditorGalleries = (function () {
               labelText.textContent = copy.photo + ' ' + (index + 1) + ' · ' + copy.altFromMedia;
               input.value = current.alt;
               image.alt = current.alt;
-              caption.textContent = current.caption;
-              caption.hidden = current.caption === '';
+              caption.textContent = localCaption ?? current.caption;
+              caption.hidden = !showCaptions || caption.textContent === '';
               sourceText.textContent = copy.fromMedia + ' ' + (current.title || fileName(current.key));
             } else {
               labelText.textContent = copy.photo + ' ' + (index + 1) + ' · ' + copy.alt;

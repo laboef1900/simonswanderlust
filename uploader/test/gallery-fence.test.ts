@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { escapeMeta, unescapeMeta, normalizeGalleryFences, galleryFencesToMdx } from '../src/body-content.js';
+import { normalizeGalleryFences, galleryFencesToMdx } from '../src/body-content.js';
 // Cross-tree, exactly as preview.ts imports the render pipeline: the renderer's
 // directive reader is the authority the picker's copy is measured against.
 import {
   DEFAULT_GALLERY_MODE,
   GALLERY_MODES,
+  escapeMeta,
+  readCaptionOverride,
+  readCaptionsVisible,
   readLayoutMode,
+  unescapeMeta,
 } from '../../site/src/lib/gallery-layout.js';
 
 // gallery-fence.js is a plain browser IIFE (window.GalleryFence) holding the
@@ -15,11 +19,11 @@ import {
 // precedent as posts-filter.js — so the behaviour is covered without a browser.
 //
 // @ai-warning The escape rule is implemented TWICE: here in browser JS and in
-// `src/body-content.ts` as `escapeMeta`/`unescapeMeta`. They are not importable
-// from one another (browser IIFE vs. an ESM module in a different tsconfig), so
-// the parity tests below are the ONLY thing keeping them in step. A silent
-// divergence corrupts alt text and captions containing `|`, a newline or a
-// quote — and does so on save, where the author cannot see it happen.
+// `site/src/lib/gallery-layout.ts` as `escapeMeta`/`unescapeMeta`. They are not
+// importable from one another (browser IIFE vs. an ESM module in a different
+// tsconfig), so the parity tests below are the ONLY thing keeping them in step.
+// A silent divergence corrupts alt text and captions containing `|`, a newline
+// or a quote — and does so on save, where the author cannot see it happen.
 const src = readFileSync('public/gallery-fence.js', 'utf8');
 
 interface PickedItem {
@@ -37,6 +41,7 @@ interface ParsedLine {
   height?: number;
   alt?: string;
   caption?: string;
+  captionOverride?: string;
   format?: 'jpeg';
 }
 type PostMeta = Record<string, { alt?: string; caption?: string; format?: 'jpeg' }>;
@@ -54,6 +59,7 @@ interface Api {
     locale: 'de' | 'en',
     directives?: string[],
     postMeta?: PostMeta,
+    captionOverrides?: Record<string, string>,
   ): string;
   parse(text: string): { directives: string[]; lines: ParsedLine[] };
   withAlt(text: string, src: string, value: string): string;
@@ -64,6 +70,8 @@ interface Api {
   DEFAULT_LAYOUT: string;
   layoutOf(directives: string[]): string;
   withLayout(directives: string[], mode: string): string[];
+  captionsVisible(directives: string[]): boolean;
+  withCaptions(directives: string[], visible: boolean): string[];
 }
 
 /** What `cm.replaceRange(text, from, to)` does, so tests can assert on the result. */
@@ -93,7 +101,7 @@ const TRICKY = [
   'ünïcödé äöü',
 ];
 
-describe('escape parity with body-content.ts', () => {
+describe('escape parity with gallery-layout.ts', () => {
   it('escapeMeta matches the server implementation exactly', () => {
     for (const s of TRICKY) {
       expect(G.escapeMeta(s), `escapeMeta(${JSON.stringify(s)})`).toBe(escapeMeta(s));
@@ -116,7 +124,7 @@ describe('escape parity with body-content.ts', () => {
   it('normalizes CRLF to LF — and the server does the same', () => {
     // `escapeMeta` maps /\r?\n/ to a single `&#10;`, so a CRLF cannot survive a
     // round trip: it comes back as LF. That is the *server's* behaviour too
-    // (body-content.ts uses the same pattern), and normalizing line endings in
+    // (gallery-layout.ts uses the same pattern), and normalizing line endings in
     // alt text is desirable — but it means the pair is an exact inverse only
     // for LF input. Asserted here so the asymmetry is deliberate and shared,
     // rather than looking like browser-side drift the next time it surprises
@@ -710,5 +718,149 @@ describe('#layout: directive — the picker\'s half of the rule (#66)', () => {
     expect(out.bodyMarkdown).toContain('#layout: slider');
     expect(readLayoutMode(out.bodyMarkdown)).toBe('slider');
     expect(Object.keys(out.images)).toEqual(['https://img.test/a']);
+  });
+});
+
+// docs/superpowers/specs/2026-10-19-gallery-library-metadata-design.md,
+// "Gallery-local caption controls": `#captions: hidden` and a per-line
+// `caption-override="…"` belong to ONE gallery and must never leak into the
+// URL-keyed images map, which every gallery using that photo shares.
+describe('#captions: directive — the picker\'s half of the rule', () => {
+  // @ai-warning Parity guard, like the #layout one above: the browser copy and
+  // readCaptionsVisible must agree, or the picker shows "Show captions" ticked
+  // for a gallery the site renders without them.
+  it('reads visibility exactly as the renderer does', () => {
+    const corpus = [
+      '#captions: hidden', '#captions:hidden', '# captions : hidden', '   #CAPTIONS:  Hidden   ',
+      '#captions: visible', '#captions: shown', '#captions: off', '#captions:', '#captions',
+      '#captions: hidden extra', '#captionsx: hidden', '# note about hidden captions', '',
+    ];
+    for (const line of corpus) {
+      expect(G.captionsVisible([line]), line).toBe(readCaptionsVisible(line));
+    }
+    expect(G.captionsVisible(['#captions: hidden'])).toBe(false);
+    expect(G.captionsVisible(['#captions: off'])).toBe(true); // unknown ⇒ visible
+  });
+
+  it('lets the first matching directive win, as the renderer does', () => {
+    for (const lines of [
+      ['#layout: slider', '#captions: hidden', '#captions: visible'],
+      ['#captions: visible', '#captions: hidden'],
+      ['#captions: unknown', '#captions: hidden'],
+    ]) {
+      expect(G.captionsVisible(lines), lines.join(' / ')).toBe(readCaptionsVisible(lines.join('\n')));
+    }
+    expect(G.captionsVisible(['#captions: visible', '#captions: hidden'])).toBe(true);
+  });
+
+  it('defaults to visible, and showing captions writes no directive', () => {
+    expect(G.captionsVisible([])).toBe(true);
+    expect(G.withCaptions([], true)).toEqual([]);
+  });
+
+  it('hides with one directive and shows by removing every captions directive, keeping the rest in order', () => {
+    const authored = ['#layout: slider', '# shot on the pass'];
+    const hidden = G.withCaptions(authored, false);
+    expect(G.captionsVisible(hidden)).toBe(false);
+    expect(hidden.filter((line) => line !== '#captions: hidden')).toEqual(authored);
+    expect(G.withCaptions(hidden, false).filter((line) => /captions/i.test(line))).toHaveLength(1);
+    // A second, later hidden line would win once the first is gone.
+    const twice = ['#captions: hidden', '#layout: slider', '#CAPTIONS: Hidden', '# shot on the pass'];
+    const shown = G.withCaptions(twice, true);
+    expect(shown).toEqual(authored);
+    expect(readCaptionsVisible(G.serialize([], 'de', shown))).toBe(true);
+  });
+
+  it('survives layout changes and normalizeGalleryFences', () => {
+    const directives = G.withLayout(G.withCaptions(['#layout: slider'], false), 'column');
+    expect(G.captionsVisible(directives)).toBe(false);
+    const fence = G.serialize([{ src: 'https://img.test/a', width: 30, height: 20 }], 'de', directives);
+    const saved = normalizeGalleryFences(fence, {});
+    expect(readCaptionsVisible(saved.bodyMarkdown)).toBe(false);
+    expect(readLayoutMode(saved.bodyMarkdown)).toBe('column');
+    expect(Object.keys(saved.images)).toEqual(['https://img.test/a']);
+  });
+});
+
+describe('caption-override="…" — a gallery-local caption on the photo line', () => {
+  const a = 'https://img.example.com/trips/x/a';
+  const b = 'https://img.example.com/trips/x/b';
+  const row = (src: string, caption: string): PickedItem =>
+    ({ src, width: 30, height: 20, alt: { de: 'Alt ' + src.slice(-1) }, caption: { de: caption } });
+
+  it('parses an override as the renderer does: escaped, empty, absent, capped, last one wins', () => {
+    const corpus = [
+      a,
+      a + ' | caption-override=""',
+      a + ' | caption-override="x &#124; y &quot;z&quot;&#10;two &lt;b&gt; &amp;amp;"',
+      a + ' | 30x20 | caption="Library" | caption-override="Local"',
+      a + ' | caption-override="first" | caption-override="second"',
+      a + ' |caption-override="tight"|alt="A"',
+      a + ' | caption-override=unquoted',
+      a + ' | Caption-Override="case"',
+      a + ' | caption-override="' + 'x'.repeat(1200) + '"',
+    ];
+    for (const line of corpus) {
+      expect(G.parse(line).lines[0]?.captionOverride, line).toBe(readCaptionOverride(line));
+    }
+    const [absent, empty, escaped] = corpus.map((line) => G.parse(line).lines[0]!);
+    expect('captionOverride' in absent!).toBe(false);
+    expect(empty!.captionOverride).toBe('');
+    expect(escaped!.captionOverride).toBe('x | y "z"\ntwo <b> &amp;');
+    expect(G.parse(corpus[8]!).lines[0]?.captionOverride).toHaveLength(1000);
+  });
+
+  it('writes explicit overrides, empty included, only for the photos that have one', () => {
+    const fence = G.serialize([row(a, 'Library A'), row(b, 'Library B')], 'de', [], {}, { [a]: '' });
+    const [lineA, lineB] = G.parse(fence).lines;
+    expect(lineA).toMatchObject({ src: a, caption: 'Library A', captionOverride: '' });
+    expect(lineB).toMatchObject({ src: b, caption: 'Library B' });
+    expect('captionOverride' in lineB!).toBe(false);
+    expect(G.serialize([row(a, 'Library A')], 'de', [], {})).not.toContain('caption-override');
+  });
+
+  it('round-trips text that would otherwise break the line or the fence, capped at 1000 characters', () => {
+    for (const value of [...TRICKY.filter((text) => !text.includes('\r')), '```\n#captions: visible\n<script>x</script>', 'y'.repeat(1500)]) {
+      const fence = G.serialize([row(a, 'Library A')], 'de', [], {}, { [a]: value });
+      expect(fence.split('\n'), value).toHaveLength(3);
+      expect(G.captionsVisible(G.parse(fence).directives)).toBe(true);
+      expect(G.parse(fence).lines[0]?.captionOverride, value).toBe(value.slice(0, 1000));
+      expect(readCaptionOverride(fence.split('\n')[1]!), value).toBe(value.slice(0, 1000));
+    }
+  });
+
+  it('ignores an override for a photo that is not in the gallery', () => {
+    const fence = G.serialize([row(a, 'Library A')], 'de', [], {}, { [b]: 'Stray' });
+    expect(G.parse(fence).lines.map((line) => line.src)).toEqual([a]);
+    expect(fence).not.toContain('Stray');
+  });
+
+  it('stays on its own gallery’s line through save and export, never in the shared images map', () => {
+    const local = 'Nur hier | "lokal"';
+    const first = G.serialize([row(a, 'Library A')], 'de', G.withCaptions([], false), {}, { [a]: local });
+    const second = G.serialize([row(a, 'Library A')], 'de', [], {});
+    const saved = normalizeGalleryFences(first + '\n\nBetween\n\n' + second, {});
+    expect(saved.images).toEqual({ [a]: { width: 30, height: 20, alt: 'Alt a', caption: 'Library A' } });
+    const [stored1, stored2] = G.scanFences(saved.bodyMarkdown)
+      .map((block) => G.parse(saved.bodyMarkdown.slice(block.start, block.end)));
+    expect(stored1).toEqual({ directives: ['#captions: hidden'], lines: [{ src: a, captionOverride: local }] });
+    expect(stored2).toEqual({ directives: [], lines: [{ src: a }] });
+
+    // Saving again (a re-save of the stored form) changes nothing.
+    expect(normalizeGalleryFences(saved.bodyMarkdown, saved.images)).toEqual(saved);
+
+    const exported = galleryFencesToMdx(saved.bodyMarkdown, saved.images);
+    const [mdx1, mdx2] = G.scanFences(exported).map((block) => G.parse(exported.slice(block.start, block.end)));
+    expect(mdx1?.lines).toEqual([{ src: a, width: 30, height: 20, alt: 'Alt a', caption: 'Library A', captionOverride: local }]);
+    expect(G.captionsVisible(mdx1!.directives)).toBe(false);
+    expect(mdx2?.lines).toEqual([{ src: a, width: 30, height: 20, alt: 'Alt a', caption: 'Library A' }]);
+    // And re-importing the export restores the same stored form.
+    expect(normalizeGalleryFences(exported, {})).toEqual(saved);
+  });
+
+  it('leaves an override alone when the author edits the photo’s alt in the widget', () => {
+    const fence = G.serialize([row(a, 'Library A')], 'de', [], {}, { [a]: 'Local' });
+    const edited = G.parse(G.withAlt(fence, a, 'New alt')).lines[0];
+    expect(edited).toMatchObject({ alt: 'New alt', caption: 'Library A', captionOverride: 'Local' });
   });
 });

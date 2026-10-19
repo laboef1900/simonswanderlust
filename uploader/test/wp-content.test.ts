@@ -159,6 +159,24 @@ describe('markdownImages', () => {
   it('ignores a plain link and an empty destination', () => {
     expect(markdownImages('[text](https://wp/a.jpg) ![](  )')).toEqual([]);
   });
+
+  // Gallery-local captions (2026-10-19): a gallery line's text is never an
+  // inline image, however it reads — every caller would otherwise re-host,
+  // audit or back-fill a caption as if it were a photo.
+  it('skips gallery fences, including image-like caption text, but not other code fences', () => {
+    const md = [
+      '![a](https://wp/a.jpg)',
+      '```gallery',
+      '#captions: hidden',
+      'https://img/g | caption-override="![b](https://wp/b.jpg)" | alt="![c](https://wp/c.jpg)"',
+      '```',
+      '````',
+      '![d](https://wp/d.jpg)',
+      '````',
+      '![e](https://wp/e.jpg)',
+    ].join('\n');
+    expect(markdownImages(md).map((i) => i.url)).toEqual(['https://wp/a.jpg', 'https://wp/d.jpg', 'https://wp/e.jpg']);
+  });
 });
 
 describe('htmlToMarkdown classic shortcodes', () => {

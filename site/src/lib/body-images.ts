@@ -10,6 +10,8 @@ import {
   ROW_GAP,
   containerWidthFor,
   partitionRows,
+  readCaptionOverride,
+  readCaptionsVisible,
   readLayoutMode,
   type GalleryMode,
 } from './gallery-layout.js';
@@ -165,7 +167,9 @@ function textOf(node: unknown): string {
  *  2. alt/caption are coerced with String(). The images map is untyped JSON,
  *     and hastscript treats a node-shaped object in a children array AS A NODE
  *     — `{type:'raw', value:'<script>…'}` would emit a live script tag,
- *     because the stringifier runs with allowDangerousHtml.
+ *     because the stringifier runs with allowDangerousHtml. A gallery-local
+ *     `caption-override` is fence TEXT the sanitizer never saw; it only ever
+ *     becomes a hast text node, so HTML or fence syntax in it stays text.
  *  3. Dimensions are checked before any arithmetic reaches markup.
  *
  * Nothing disappears silently: a URL with no `images` entry is skipped, and if
@@ -179,13 +183,21 @@ function textOf(node: unknown): string {
  */
 type GalleryPhoto = { image: RemoteHeroImage; caption: string };
 
-/** Photos a fence resolves to, in order, after the three guards above. */
+/**
+ * Photos a fence resolves to, in order, after the three guards above.
+ *
+ * Caption precedence (gallery-local caption controls): a hidden gallery shows
+ * none; otherwise the line's own `caption-override` (an empty one included)
+ * wins; otherwise the current library caption, then the stored one. Alt is
+ * never overridden by the line — it stays library-authoritative.
+ */
 function galleryPhotos(
   fenceText: string,
   images: Record<string, ImageDims>,
   allowedOrigin: string,
   metadata?: GalleryMetadata,
 ): GalleryPhoto[] {
+  const captionsVisible = readCaptionsVisible(fenceText);
   const photos: GalleryPhoto[] = [];
   for (const line of fenceText.split('\n')) {
     // Tolerate the export format's `url | 3000x2000 | alt="…"` trailing
@@ -207,7 +219,9 @@ function galleryPhotos(
     // retain the snapshot's descriptions; ordinary inline images never consult it.
     const description = metadata?.get(raw) ?? d;
     const alt = String(description.alt ?? '');
-    const caption = String(description.caption ?? '');
+    const caption = captionsVisible
+      ? String(readCaptionOverride(line) ?? description.caption ?? '')
+      : '';
     photos.push({
       image: { src: raw, alt, width: w, height: hgt, ...(d.format === 'jpeg' ? { format: d.format } : {}) },
       caption,

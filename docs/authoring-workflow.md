@@ -441,6 +441,34 @@ that should stay wide needs an explicit `#layout: breakout`, which the picker wr
 In the justified modes the last row is capped at the height of the row above it, so a short final
 row can't leave one photo towering over the rest.
 
+#### Captions for this gallery only
+
+By default a gallery shows each photo's caption from the Media library (or the caption saved with
+the post for a photo that is no longer in the library). The gallery picker's **Show captions**
+switch and its per-photo caption fields change that **for this gallery, in this language, only** —
+never in Media, and never in another gallery that uses the same photo. Edits apply when you
+confirm the picker; cancelling changes nothing. Resetting a caption makes the photo follow the
+library again. By hand it looks like this:
+
+````
+```gallery
+#captions: hidden
+https://img.simonswanderlust.com/trips/rhodes-2021/a-1a2b3c4d | caption-override="Nur in dieser Galerie"
+https://img.simonswanderlust.com/trips/rhodes-2021/b-9f8e7d6c | caption-override=""
+https://img.simonswanderlust.com/trips/rhodes-2021/c-0a1b2c3d
+```
+````
+
+- `#captions: hidden` hides every caption of this gallery, including in the lightbox. The text
+  is kept, so removing the line brings it back. Like `#layout:`, it must be a whole line inside the
+  fence and the first one wins; any other value (or none) means captions are shown.
+- `caption-override="…"` sets this photo's caption here. An empty value deliberately shows no
+  caption; leaving the field out follows the library. It uses the same escaping and 1,000-character
+  limit as `alt="…"`, and it is the one field **not** lifted into the images map on save — it
+  stays on its line (`URL | caption-override="…"`) so it cannot spread to other galleries. Export
+  writes it last on the photo line, after the dimensions, alt and caption.
+- Alt text is unaffected: it always follows the library for library photos.
+
 Galleries work in **page** bodies (the About page) on the same terms. Clicking any photo opens a
 lightbox, in all three modes. The draft preview renders galleries but **not** the lightbox — it is
 a separate island that only runs on the built site.

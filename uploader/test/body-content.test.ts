@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  escapeMeta, unescapeMeta, galleryFencesToMdx, imagesMapError, normalizeGalleryFences,
+  galleryFencesToMdx, imagesMapError, normalizeGalleryFences, rewriteOutsideGalleries,
   heroImageError, escapeAltText, unescapeAltText, imageMarkdown,
   type ImageMeta,
 } from '../src/body-content.js';
+import { escapeMeta, unescapeMeta } from '../../site/src/lib/gallery-layout.js';
 import type { ImageDims } from '../../site/src/lib/body-images.js';
 
 const A = 'https://img.example.com/trips/x/a-1a2b3c4d';
@@ -278,5 +279,102 @@ describe('galleryFencesToMdx', () => {
     const mdx = galleryFencesToMdx(fence(A), hostile);
     expect(mdx.split('\n')).toHaveLength(3); // fence open, one photo line, fence close
     expect(normalizeGalleryFences(mdx, {}).images[A]).toEqual(hostile[A]);
+  });
+});
+
+// Gallery-local caption controls (2026-10-19 spec). The override belongs to
+// ONE occurrence of a photo in ONE gallery; the `images` map is keyed by URL,
+// so lifting it there would leak it into every other gallery of that photo.
+describe('gallery-local captions through save and export', () => {
+  const override = (text: string) => `caption-override="${escapeMeta(text)}"`;
+
+  it('keeps the override on its line and out of the images map', () => {
+    const body = fence(`${A} | 3000x2000 | alt="Sunrise" | caption="Day 3" | ${override('Only here')}`);
+    const out = normalizeGalleryFences(body, {});
+    expect(out.bodyMarkdown).toBe(fence(`${A} | ${override('Only here')}`));
+    expect(out.images[A]).toEqual({ width: 3000, height: 2000, alt: 'Sunrise', caption: 'Day 3' });
+    expect(JSON.stringify(out.images)).not.toContain('Only here');
+  });
+
+  it('isolates the same URL in two galleries', () => {
+    const body = `${fence(`${A} | 800x600 | ${override('First gallery')}`)}\n\ntext\n\n${fence(A)}`;
+    const out = normalizeGalleryFences(body, {});
+    expect(out.bodyMarkdown).toBe(`${fence(`${A} | ${override('First gallery')}`)}\n\ntext\n\n${fence(A)}`);
+    expect(out.images[A]?.caption).toBeUndefined();
+  });
+
+  it('keeps an explicit empty override distinct from an absent one', () => {
+    const out = normalizeGalleryFences(fence(`${A} | 800x600 | caption-override=""\n${B} | 100x200`), {});
+    expect(out.bodyMarkdown).toBe(fence(`${A} | caption-override=""\n${B}`));
+  });
+
+  it('re-escapes HTML, quotes, separators and newlines canonically and caps the length', () => {
+    const hostile = '<img src=x onerror=alert(1)> | "q" & ```\n#captions: hidden';
+    const out = normalizeGalleryFences(fence(`${A} | 800x600 | ${override(hostile)}`), {});
+    const line = out.bodyMarkdown.split('\n')[1] ?? '';
+    expect(line).toBe(`${A} | ${override(hostile)}`);
+    expect(line).not.toMatch(/[<>\n]/);
+    expect(out.bodyMarkdown.split('\n')).toHaveLength(3);
+    const long = normalizeGalleryFences(fence(`${A} | 800x600 | caption-override="${'x'.repeat(1200)}"`), {});
+    expect(long.bodyMarkdown).toBe(fence(`${A} | caption-override="${'x'.repeat(1000)}"`));
+  });
+
+  it('is idempotent over its own output, so re-saves change nothing', () => {
+    const first = normalizeGalleryFences(fence(`#captions: hidden\n${A} | 800x600 | ${override('a | b')}`), {});
+    const second = normalizeGalleryFences(first.bodyMarkdown, first.images);
+    expect(second).toEqual(first);
+    expect(first.bodyMarkdown).toContain('#captions: hidden');
+  });
+
+  it('leaves an override line with no resolvable dimensions untouched', () => {
+    const body = fence(`${A} | ${override('Typed')}`);
+    expect(normalizeGalleryFences(body, {}).bodyMarkdown).toBe(body);
+  });
+
+  it('exports the override last on the line and round-trips through save', () => {
+    const images: Record<string, ImageMeta> = { [A]: { width: 3000, height: 2000, alt: 'Sunrise', caption: 'Day 3' } };
+    const stored = fence(`#captions: hidden\n${A} | ${override('Local "x" | y')}\n${A}\n${A} | caption-override=""`);
+    const mdx = galleryFencesToMdx(stored, images);
+    expect(mdx).toBe(fence([
+      '#captions: hidden',
+      `${A} | 3000x2000 | alt="Sunrise" | caption="Day 3" | ${override('Local "x" | y')}`,
+      `${A} | 3000x2000 | alt="Sunrise" | caption="Day 3"`,
+      `${A} | 3000x2000 | alt="Sunrise" | caption="Day 3" | caption-override=""`,
+    ].join('\n')));
+    const back = normalizeGalleryFences(mdx, {});
+    expect(back.bodyMarkdown).toBe(stored);
+    expect(back.images).toEqual(images);
+  });
+
+  it('leaves a line that already carries other metadata to export as typed', () => {
+    const body = fence(`${A} | not-dimensions | ${override('Typed')}`);
+    expect(galleryFencesToMdx(body, { [A]: { width: 8, height: 6 } })).toBe(body);
+  });
+});
+
+describe('rewriteOutsideGalleries', () => {
+  const mark = (text: string) => text.replace(/!\[x\]/g, 'IMG');
+
+  it('hands every non-gallery run to the callback and returns gallery lines verbatim', () => {
+    const line = `${A} | caption-override="![x](${A})"`;
+    const body = `![x](a)\n\n\`\`\`gallery\n#captions: hidden\n# ![x] note\n${line}\n\`\`\`\nmid ![x](b)\n${fence(`${B}`)}\r\n![x](c)`;
+    expect(rewriteOutsideGalleries(body, mark)).toBe(
+      `IMG(a)\n\n\`\`\`gallery\n#captions: hidden\n# ![x] note\n${line}\n\`\`\`\nmid IMG(b)\n${fence(`${B}`)}\r\nIMG(c)`,
+    );
+  });
+
+  it('treats an unterminated gallery as running to the end, like the renderer', () => {
+    const body = `![x](a)\n\`\`\`gallery\n${A} | caption-override="![x](a)"`;
+    expect(rewriteOutsideGalleries(body, mark)).toBe(`IMG(a)\n\`\`\`gallery\n${A} | caption-override="![x](a)"`);
+  });
+
+  it('does not protect a gallery example nested inside another fence — it is code, not a gallery', () => {
+    const body = `\`\`\`\`\n\`\`\`gallery\n![x](a)\n\`\`\`\n\`\`\`\``;
+    expect(rewriteOutsideGalleries(body, mark)).toBe(body.replace('![x]', 'IMG'));
+  });
+
+  it('returns the body unchanged when the callback is the identity', () => {
+    const body = `a\r\n${fence(`${A} | caption-override=""`)}\n\nb\n`;
+    expect(rewriteOutsideGalleries(body, (t) => t)).toBe(body);
   });
 });
