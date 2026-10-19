@@ -37,11 +37,11 @@ export const BREAKOUT_WIDTH = 1112;
 /**
  * The design width a `column` gallery is partitioned and source-hinted for:
  * the centred story body below the opening spread (`--container-story-wide`,
- * 960px). In the 624px reading column beside the rail the same rows simply
+ * 1056px). In the 720px reading column beside the rail the same rows simply
  * render narrower — the partition is scale-invariant bar the 12px gap, and a
  * `sizes` hint sized for the wider of the two never under-fetches.
  */
-export const COLUMN_WIDTH = 960;
+export const COLUMN_WIDTH = 1056;
 
 /** Gap between photos, in CSS px. MUST match the `gap` in global.css. */
 export const ROW_GAP = 12;
@@ -51,8 +51,8 @@ export const ROW_GAP = 12;
  * px. The square rule alone would cut a 37-photo gallery into 134px-tall
  * rows — a contact sheet — so a row is only admitted when it clears this, and
  * a big gallery grows taller than it is wide instead. At 168 the column
- * (960) takes three landscapes a row (208px) and the break-out (1112) four
- * (179px); a lone photo in its own row is always admitted, or a panorama
+ * (1056) and the break-out (1112) both admit four landscapes a row (170px
+ * and 179px); a lone photo in its own row is always admitted, or a panorama
  * could have no legal partition at all.
  */
 export const MIN_ROW_HEIGHT = 168;
@@ -186,7 +186,7 @@ function evenestRows(ratios: readonly number[], width: number, k: number): numbe
  * is wide rather than shrinking its photos to thumbnails.
  *
  * The choice of row count is scale-invariant apart from the fixed gap and the
- * floor, so the same photos partition much the same way in the 960px column
+ * floor, so the same photos partition much the same way in the 1056px column
  * and the 1112px break-out; what the width mainly changes is how large the
  * square is.
  *
