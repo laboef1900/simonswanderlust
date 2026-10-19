@@ -321,8 +321,8 @@ allowed to speak.
   follow the mosaic, with a two-line clamp and a full `title` attribute.
 - **Body** (400, `16px`, line-height 1.5): the document default, `ink` on canvas.
 - **Body Long** (400, `18px`, line-height 1.778): the story article, via
-  `prose prose-lg`. Beside the rail the column is **624px** of measure; below
-  the opening spread the body runs **960px** (`--container-story-wide`).
+  `prose prose-lg`. Beside the rail the column is up to **720px** of measure;
+  below the opening spread the body runs **1056px** (`--container-story-wide`).
   `max-w-none` overrides the typography plugin's 65ch cap, so the measure is
   set by the container, not by the prose.
 - **Body Small** (400, `14px`, line-height 1.43): excerpts, footer links, nav
@@ -379,10 +379,10 @@ pixel `sizes`.
 
 **The story spread.** From `lg` a story opens as its first section beside a
 rail, and the spread and the body below it share **one measure**:
-`--container-story-wide`, `60rem` (960px), centred in the 1112px content
-box. Inside the spread the rail is a fixed `18rem`, the gap `3rem`, and the
-column takes the remainder — `39rem` (624px, ~64 characters of prose-lg) —
-so the three always sum to exactly the spread
+`--container-story-wide`, `66rem` (1056px), centred in the 1112px content
+box — 10% wider at the owner's request (2026-10-19). Inside the spread the
+rail is a fixed `18rem`, the gap `3rem`, and the column takes the available
+remainder — up to `45rem` (720px) — so the three always sum to the spread
 (`--container-story-column` / `--container-story-rail`). The rail holds
 the story's furniture — contents, key facts, the route map — open in a stack
 that stays `0.5rem` from the viewport top while the *opening* is in view.
@@ -392,20 +392,20 @@ spread's height and stays put.
 The opening is the body's first section — everything before the first
 top-level heading that has content in front of it (`story-opening.ts`), so
 an intro heading, its paragraphs and its first photograph sit beside the
-rail. The rest of the story then runs **centred on the same 960px** (~98
-characters of prose-lg — the owner's call, 2026-09-20: the matched edge
-outranks the shorter line; the previous 1112 → 800 step read as a wide opening
-over a narrower body), with the route divider and pagination on the same
-measure. The spread wrapper is a
+rail. The rest of the story then runs **centred on the same 1056px**, with
+the route divider and pagination on the same measure. Matching the edges
+and the owner's requested wider reading area take precedence over a
+shorter line measure. The spread wrapper is a
 **float** container, not a grid, because the opening is one rendered section
 that is not split further, and a wide gallery in it must not run under the
 rail: `clear: right` on the wide modes drops such a gallery below the rail.
 Below `lg` the spread and rail wrappers are `display: contents`, so the same
 three disclosures stack above one continuous article and the sticky contents
 strip keeps the whole story as its containing block.
-The title block is the spread's own 960px box, the text keeping the column's
-width so its left edge meets the opening's, and the arrival stamp moves to the
-top-right corner above the rail. This is what the WordPress site's opening row was for (intro, facts,
+The title block shares the spread's 1056px measure and left edge, but reserves
+only the arrival stamp's intrinsic width plus a 3rem gap on the right:
+the title uses all remaining space, not just the opening column's width.
+The stamp stays top-right above the rail. This is what the WordPress site's opening row was for (intro, facts,
 contents and a photograph in the first screen); what it got wrong was setting
 the body at the same 1140px, ~140 characters a line.
 
@@ -455,10 +455,10 @@ classic scrollbar. It is centred with `margin-inline`, never
 `transform: translateX(-50%)`, because a transform would make the gallery a
 containing block and trap the lightbox dialog inside it. From `lg` a wide
 gallery *in the opening* spans the whole spread (`100cqw` of `.story-spread`,
-960px) from the column's left edge instead — centred on a column that sits
+1056px) from the column's left edge instead — centred on a column that sits
 left of centre, it would cross the viewport's left edge. In the centred body
-below the spread the default centring holds, and 960 + 24rem clips to the
-full 1112px, overhanging the body by 76px a side. Break-out is opt-in (`#layout: breakout`); the default gallery is
+below the spread the default centring holds, and 1056 + 24rem clips to the
+full 1112px, overhanging the body by 28px a side. Break-out is opt-in (`#layout: breakout`); the default gallery is
 `column`, aligned with the text as the WordPress galleries were.
 
 ### Named Rules
@@ -686,9 +686,9 @@ homepage hero keeps it. The translation link is a secondary action in the
 site's link register: 14px medium navy on canvas (**14.114:1**), with the red
 accent reserved for hover and active states; its 44px hit box and arrow
 remain. Below `lg` the title and body share the `768px` container with `20px`
-gutters and the stamp sits beside the translation link. From `lg` the block is
-the spread's grid: the text keeps the reading column's width, and the stamp is
-placed top-right above the rail — one element, two grid placements, no
+gutters and the stamp sits beside the translation link. From `lg` the block
+shares the spread's measure, with the text filling the space left of the
+stamp's intrinsic-width grid column — one element, two grid placements, no
 duplicate markup. Responsive source hints account for the photograph's actual
 aspect ratio when desktop cover cropping needs a wider source. Mobile retains
 the whole frame, including portrait photographs. No title clamp or
@@ -788,7 +788,7 @@ Hand-written CSS classes, not utilities, because the draft preview inlines its
 own copy and the justified layout drives per-photo flex ratios from computed
 custom properties. Three modes: justified rows at break-out or column width, and
 a cropping slider. Photos take `8px` corners and captions are 12.8px at
-`#4a5563`. Row *membership* is fixed at build time for a 1112px or 960px
+`#4a5563`. Row *membership* is fixed at build time for a 1112px or 1056px
 container; only justification within a row is fluid.
 
 **A gallery is a square.** Rows are cut so the block stacks as close to as tall
@@ -797,8 +797,8 @@ whichever lands nearest the width, and within that count the rows are the most
 even (`gallery-layout.ts`, a small DP). Every row fills the width — there is no
 ragged remainder, and two landscapes stack rather than sit as a wide, short
 pair. The square yields to a floor: no row of two or more photos may be shorter
-than **168px** at design width (three landscapes a row in the column, four in
-the break-out), so a 37-photo gallery grows taller than it is wide instead of
+than **168px** at design width (up to four landscapes a row in either mode),
+so a 37-photo gallery grows taller than it is wide instead of
 becoming a contact sheet. The one cap left is on a row that would stand taller
 than the square — a lone portrait — held at the square's own height as a
 **percentage** of the container so it scales with it.
