@@ -224,14 +224,19 @@ integration tests need a separate `TEST_DATABASE_URL`.
 
 ### Cutting a release
 
-**Current release: v0.15.0.** Before upgrading from v0.14.1, take **Back up now**. First
-boot migrates `settings.json` and the stored AI key into the provider registry, keeping
-`settings.json.pre-ai-registry`. Rolling back needs the older image, the dump and that file.
+**Current release: v0.15.1.** Highlights since v0.15.0:
 
-The v0.15.0 release adds per-provider AI credentials and model assignments, four additional
-regions, the updated admin shell and Settings navigation, image-quality comparison, and
-a configurable photo-description output token budget (default 8,000). It removes the
-posts list's “New from this one” action.
+- Article titles use the available space beside the arrival stamp; the shared reading
+  measure grows from 960px to 1056px while retaining mobile gutters and the sidebar.
+- Article galleries use current Media-library alt text and captions per locale, including
+  explicitly empty descriptions. Editor galleries, draft preview and story checks agree.
+- **Rebuild the site after deploying** to refresh published gallery descriptions and article
+  layout. Rebuilding does not publish draft article text. Hero, inline-image and About-page
+  descriptions are unchanged.
+
+Upgrading from before v0.15.0: take **Back up now** before deploying. First boot migrates
+`settings.json` and the stored AI key into the provider registry, keeping
+`settings.json.pre-ai-registry`. Rolling back needs the older image, the dump and that file.
 
 1. On a `feature/*` branch from `dev`, update both apps' package and lockfile versions,
    plus `IMAGE_TAG` defaults in `docker-compose.yml` and `uploader/.env.example`. Update
@@ -241,8 +246,8 @@ posts list's “New from this one” action.
 
 ```bash
 git fetch origin main
-git tag -a v0.15.0 origin/main -m "Release v0.15.0"
-git push origin v0.15.0
+git tag -a v0.15.1 origin/main -m "Release v0.15.1"
+git push origin v0.15.1
 ```
 
 Never push directly to protected branches, tag an unmerged feature branch or replace a
