@@ -1,4 +1,14 @@
-/* Gallery widgets are a view of Markdown, never a second draft or image store. */
+/* Gallery widgets are a view of Markdown, never a second draft or image store.
+ *
+ * @ai-note A photo with a Media row takes its alt text and caption from Media
+ * on the next build, in this locale, empty strings included
+ * (docs/superpowers/specs/2026-10-19-gallery-library-metadata-design.md). Its
+ * fields here are therefore read-only and point to Media: an editable field
+ * would offer an override the build ignores, and writing to Media from an
+ * article would be a hidden side effect. Only a photo with no row keeps the
+ * post-local alt editing (and AI suggestion) it always had. While the lookup
+ * is pending or has failed nobody knows which case applies, so the field stays
+ * locked and the failure is said out loud with a retry. */
 window.EditorGalleries = (function () {
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -7,7 +17,9 @@ window.EditorGalleries = (function () {
     return node;
   }
 
-  function attach({ cm, locale, images, imageOrigin, toggle, copy, onEdit, onUnauthed }) {
+  function fileName(key) { return String(key || '').split('/').pop() || String(key || ''); }
+
+  function attach({ cm, locale, images, imageOrigin, library, toggle, copy, onEdit, onUnauthed }) {
     let previews = true;
     let editing = false;
     let controllers = [];
@@ -67,7 +79,7 @@ window.EditorGalleries = (function () {
       const root = el('section', 'editor-gallery');
       root.setAttribute('lang', locale);
       root.setAttribute('aria-label', copy.gallery + ' ' + number);
-      const controller = { text, root, alive: true, fields: [], marker: null, widget: null, observer: null,
+      const controller = { text, root, alive: true, fields: [], marker: null, widget: null, observer: null, lookups: 0,
         cancel() { this.fields.forEach((field) => field.cancel()); } };
       const head = el('div', 'editor-gallery__head');
       const title = el('h3', null, copy.gallery + ' ' + number);
@@ -83,6 +95,15 @@ window.EditorGalleries = (function () {
       head.appendChild(edit);
       root.appendChild(head);
       root.appendChild(el('p', 'muted editor-gallery__help', copy.help));
+      // One live region per gallery, not per photo: a 30-photo gallery must not
+      // announce "loading" thirty times.
+      const lookupStatus = el('p', 'muted editor-gallery__status editor-gallery__lookup');
+      lookupStatus.setAttribute('role', 'status');
+      const retry = el('button', 'btn-secondary editor-gallery__retry', copy.retry);
+      retry.type = 'button';
+      retry.hidden = true;
+      root.appendChild(lookupStatus);
+      root.appendChild(retry);
       const list = el('ol', 'editor-gallery__photos');
       root.appendChild(list);
       if (!parsed.lines.length) list.appendChild(el('li', 'muted', copy.empty));
@@ -90,9 +111,11 @@ window.EditorGalleries = (function () {
       parsed.lines.forEach((line, index) => {
         const stored = images()[line.src] || {};
         const photo = { ...stored, ...line };
+        const postAlt = typeof photo.alt === 'string' ? photo.alt : '';
+        const postCaption = typeof photo.caption === 'string' ? photo.caption : '';
         const card = el('li', 'editor-gallery__photo');
         const image = el('img', 'editor-gallery__image');
-        image.alt = photo.alt || '';
+        image.alt = postAlt;
         image.loading = 'lazy';
         image.decoding = 'async';
         const url = previewUrl(photo);
@@ -108,19 +131,41 @@ window.EditorGalleries = (function () {
         image.addEventListener('load', () => controller.widget?.changed());
         card.appendChild(image);
         card.appendChild(unavailable);
-        const label = el('label', null, copy.photo + ' ' + (index + 1) + ' · ' + copy.alt);
+        const label = el('label');
+        const labelText = el('span', null, copy.photo + ' ' + (index + 1) + ' · ' + copy.alt);
         const input = el('textarea', 'editor-gallery__alt');
         input.rows = 3;
         input.maxLength = 1000;
-        input.value = typeof photo.alt === 'string' ? photo.alt : '';
+        input.value = postAlt;
+        input.readOnly = true;
         card.appendChild(label);
         // CodeMirror clones widgets while measuring them. Implicit labels avoid
         // duplicate IDs targeting an invisible measurement copy.
+        label.appendChild(labelText);
         label.appendChild(input);
-        if (photo.caption) card.appendChild(el('p', 'editor-gallery__caption', String(photo.caption)));
+        const caption = el('p', 'editor-gallery__caption', postCaption);
+        caption.hidden = postCaption === '';
+        card.appendChild(caption);
+        // Library-backed photos: where the text comes from, and where to change it.
+        // A new tab, so following the link cannot discard this unsaved draft.
+        const source = el('p', 'muted editor-gallery__source');
+        const sourceText = el('span');
+        const mediaLink = el('a', 'editor-gallery__media-link', copy.editInMedia);
+        mediaLink.href = '/admin/media.html';
+        mediaLink.target = '_blank';
+        mediaLink.rel = 'noopener';
+        source.appendChild(sourceText);
+        source.appendChild(document.createTextNode(' '));
+        source.appendChild(mediaLink);
+        source.hidden = true;
+        card.appendChild(source);
+        const localNote = el('p', 'muted editor-gallery__local', copy.notInMedia);
+        localNote.hidden = true;
+        card.appendChild(localNote);
         const suggest = el('button', 'btn-secondary editor-gallery__suggest', copy.suggest);
         suggest.type = 'button';
         suggest.disabled = !url;
+        suggest.hidden = true;
         const status = el('p', 'muted editor-gallery__status');
         status.setAttribute('role', 'status');
         const suggestion = el('div', 'editor-gallery__suggestion');
@@ -138,7 +183,7 @@ window.EditorGalleries = (function () {
         list.appendChild(card);
         let request;
         let version = 0;
-        const field = { src: line.src, input, image,
+        const field = { src: line.src, input, image, state: 'pending',
           cancel() {
             version += 1;
             request?.abort();
@@ -149,17 +194,41 @@ window.EditorGalleries = (function () {
             suggest.disabled = !url;
             suggest.textContent = copy.suggest;
             controller.widget?.changed();
+          },
+          /** Show what the build will use for this photo. */
+          apply(entry) {
+            const state = !library ? 'missing' : !entry ? 'pending' : entry.row ? 'library' : entry.missing ? 'missing' : 'error';
+            if (state !== 'missing') field.cancel();
+            field.state = state;
+            input.readOnly = state !== 'missing';
+            suggest.hidden = state !== 'missing';
+            localNote.hidden = state !== 'missing';
+            source.hidden = state !== 'library';
+            if (state === 'library') {
+              const current = GalleryLibrary.describe(entry.row, locale);
+              labelText.textContent = copy.photo + ' ' + (index + 1) + ' · ' + copy.altFromMedia;
+              input.value = current.alt;
+              image.alt = current.alt;
+              caption.textContent = current.caption;
+              caption.hidden = current.caption === '';
+              sourceText.textContent = copy.fromMedia + ' ' + (current.title || fileName(current.key));
+            } else {
+              labelText.textContent = copy.photo + ' ' + (index + 1) + ' · ' + copy.alt;
+            }
+            controller.widget?.changed();
           } };
         controller.fields.push(field);
-        input.addEventListener('input', () => writeAlt(line.src, input.value));
+        input.addEventListener('input', () => {
+          if (field.state === 'missing') writeAlt(line.src, input.value);
+        });
         dismiss.addEventListener('click', () => { field.cancel(); suggest.focus(); });
         use.addEventListener('click', () => {
-          if (!controller.alive || suggestion.hidden) return;
+          if (!controller.alive || suggestion.hidden || field.state !== 'missing') return;
           writeAlt(line.src, suggestedText.textContent);
           input.focus();
         });
         suggest.addEventListener('click', async () => {
-          if (!url || request) return;
+          if (!url || request || field.state !== 'missing') return;
           field.cancel();
           const current = version;
           request = new AbortController();
@@ -186,6 +255,40 @@ window.EditorGalleries = (function () {
             }
           }
         });
+      });
+
+      function summarize() {
+        const failed = controller.fields.some((field) => field.state === 'error');
+        const pending = controller.fields.some((field) => field.state === 'pending');
+        lookupStatus.textContent = failed ? copy.mediaFailed : pending ? copy.checking : '';
+        retry.hidden = !failed;
+        controller.widget?.changed();
+      }
+
+      /** Resolve the given fields; a response for a superseded pass is dropped. */
+      function resolve(fields) {
+        const ticket = ++controller.lookups;
+        fields.forEach((field) => field.apply(undefined));
+        summarize();
+        library.lookup(fields.map((field) => field.src)).then((entries) => {
+          if (!controller.alive || controller.lookups !== ticket) return;
+          fields.forEach((field) => field.apply(entries.get(field.src)));
+          summarize();
+        });
+      }
+
+      // Settled answers render at once, so re-creating a widget for an edit
+      // elsewhere in the fence does not flash "loading" or refetch.
+      const unknown = [];
+      controller.fields.forEach((field) => {
+        const entry = library ? library.peek(field.src) : undefined;
+        if (entry || !library) field.apply(entry);
+        else unknown.push(field);
+      });
+      if (unknown.length) resolve(unknown);
+      retry.addEventListener('click', () => {
+        const failed = controller.fields.filter((field) => field.state === 'error');
+        if (failed.length) resolve(failed);
       });
 
       controller.marker = cm.markText(cm.posFromIndex(block.start), cm.posFromIndex(block.end), {
@@ -271,6 +374,29 @@ window.EditorGalleries = (function () {
           const range = controller.marker.find();
           return range && line >= range.from.line && line <= range.to.line;
         })) toggle.click();
+      },
+      /**
+       * What Review Story's quick checks should treat as each gallery photo's
+       * alt text in this locale, independent of the preview toggle: the current
+       * Media alt for a photo known to have a row, and the post's stored alt
+       * (the `images` entry a bare saved line falls back to) otherwise.
+       * Null-prototype maps, so a URL can never collide with an inherited key.
+       */
+      altContext() {
+        const fromLibrary = Object.create(null);
+        const stored = Object.create(null);
+        const body = cm.getValue();
+        const map = images();
+        GalleryFence.scanFences(body).forEach((block) => {
+          if (!block.isGallery) return;
+          GalleryFence.parse(body.slice(block.start, block.end)).lines.forEach((line) => {
+            const entry = library ? library.peek(line.src) : undefined;
+            if (entry && entry.row) fromLibrary[line.src] = GalleryLibrary.describe(entry.row, locale).alt;
+            const saved = Object.prototype.hasOwnProperty.call(map, line.src) ? map[line.src] : undefined;
+            if (saved && typeof saved.alt === 'string') stored[line.src] = saved.alt;
+          });
+        });
+        return { library: fromLibrary, stored };
       },
     };
   }

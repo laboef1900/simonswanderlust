@@ -2156,6 +2156,39 @@ describe('alt-text audit (advisory, never a gate)', () => {
     expect(res.json().count).toBe(3);
   });
 
+  // 2026-10-19 gallery-library-metadata spec: a library gallery photo renders
+  // with its CURRENT Media alt, so that — not the stale copy on the post — is
+  // what the audit judges; a photo with no media row is judged by its copy.
+  it('judges library gallery photos by their current Media alt, before and after publishing', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const exif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+    await b.media.upsert({ key: 'trips/rhodos/g1', status: 'ready', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null,
+      alt: { de: 'Fischerboote im Hafen', en: 'Fishing boats' } });
+    const pair = {
+      ...undescribedPair,
+      de: {
+        ...undescribedPair.de,
+        heroImage: { ...undescribedPair.de.heroImage, alt: 'Altstadt bei Nacht' },
+        bodyMarkdown: '```gallery\n' + `${IMG}/trips/rhodos/g1 | 30x20 | alt="Rhodos"\n` + `${IMG}/trips/rhodos/g2 | 30x20 | alt="Rhodos"\n` + '```',
+        images: {},
+      },
+      en: { ...undescribedPair.en, heroImage: { ...undescribedPair.en.heroImage, alt: 'Old town at night' } },
+    };
+    const tk = (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: pair })).json().translationKey;
+    const expected = { count: 1, images: [{ locale: 'de', kind: 'gallery', src: `${IMG}/trips/rhodos/g2`, reason: 'repeats-title' }] };
+    const before = await b.app.inject({ method: 'GET', url: `/posts/${tk}/alt-audit`, cookies: cookie });
+    expect(before.json()).toEqual(expected);
+    // Clearing the library alt is reported, even though the post copy is filled in.
+    await b.media.patch('trips/rhodos/g1', { alt: { de: '' } });
+    const cleared = await b.app.inject({ method: 'GET', url: `/posts/${tk}/alt-audit`, cookies: cookie });
+    expect(cleared.json().images).toContainEqual({ locale: 'de', kind: 'gallery', src: `${IMG}/trips/rhodos/g1`, reason: 'empty' });
+    await b.media.patch('trips/rhodos/g1', { alt: { de: 'Fischerboote im Hafen' } });
+    const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    expect(published.statusCode).toBe(200);
+    expect(published.json().altAudit).toEqual(expected);
+  });
+
   it('is silent for a post whose photos are described', async () => {
     const b = build();
     const { cookie } = await authed(b);
@@ -3260,6 +3293,88 @@ describe('GET /posts/:tk/preview', () => {
     // Other admin JSON routes stay without one — the policy is preview-specific.
     const list = await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie });
     expect(list.headers['content-security-policy']).toBeUndefined();
+  });
+
+  // 2026-10-19 gallery-library-metadata spec: the draft preview shows the
+  // CURRENT Media alt/caption for library gallery photos, like the next build.
+  describe('gallery descriptions follow the Media library', () => {
+    const IMG = 'https://img.simonswanderlust.com';
+    const lib = `${IMG}/trips/gal/lib`;
+    const legacy = `${IMG}/trips/gal/legacy`;
+    const withGallery = () => {
+      const p = draft();
+      p.de.bodyMarkdown = '```gallery\n'
+        + `${lib} | 1600x1200 | alt="Kopie DE" | caption="Kopie Text DE"\n`
+        + `${legacy} | 1600x1200 | alt="WordPress DE" | caption="WordPress Text DE"\n`
+        + '```';
+      p.en.bodyMarkdown = '```gallery\n' + `${lib} | 1600x1200 | alt="Copy EN" | caption="Copy text EN"\n` + '```';
+      return p;
+    };
+    const seedLib = (media: MediaStore) => media.upsert({
+      key: 'trips/gal/lib', status: 'ready', width: 1600, height: 1200, origBytes: 1, uploadedBy: 'simon',
+      exif: { takenAt: null, camera: 'SECRET-CAM', lens: null, lat: 63.0759, lng: 10.3887 },
+      title: 'Library title only', alt: { de: 'Bibliothek DE', en: 'Library EN' }, caption: { de: 'Text DE', en: 'Text EN' },
+    });
+
+    it('renders library text per locale, keeps a missing row\'s copy, and follows a Media patch without a post save', async () => {
+      const b = build();
+      const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+      await seedLib(b.media);
+      const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: withGallery() });
+      expect(created.statusCode).toBe(200);
+      const tk = created.json().translationKey;
+      const preview = async (locale: 'de' | 'en') =>
+        (await b.app.inject({ method: 'GET', url: `/posts/${tk}/preview?locale=${locale}`, cookies: cookie })).body;
+
+      const de = await preview('de');
+      expect(de).toContain('alt="Bibliothek DE"');
+      expect(de).toContain('>Text DE</figcaption>');
+      expect(de).not.toContain('Kopie');
+      expect(de).toContain('alt="WordPress DE"'); // no media row → stored copy
+      expect(de).toContain('WordPress Text DE');
+      expect(de).toContain('alt="a"');             // hero alt is the post's own
+      expect(de).not.toMatch(/Library title only|SECRET-CAM|63\.07|Library EN/);
+      const en = await preview('en');
+      expect(en).toContain('alt="Library EN"');
+      expect(en).toContain('>Text EN</figcaption>');
+      expect(en).not.toMatch(/Copy|Bibliothek DE/);
+
+      // Blank the DE library fields in Media only — no post save in between.
+      const patched = await b.app.inject({
+        method: 'PATCH', url: '/media/items/trips/gal/lib', cookies: cookie,
+        headers: { 'content-type': 'application/json' },
+        payload: { alt: { de: '' }, caption: { de: '' } },
+      });
+      expect(patched.statusCode).toBe(200);
+      const after = await preview('de');
+      expect(after).not.toContain('Bibliothek DE');
+      expect(after).not.toContain('>Text DE</figcaption>');
+      expect(after).not.toContain('Kopie');          // a blank library field is not a fallback trigger
+      expect(after).toContain('alt="WordPress DE"');
+      expect(await preview('en')).toContain('alt="Library EN"');
+      // Nothing was written back to the post.
+      const stored = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
+      expect(stored.de.images[lib]).toMatchObject({ alt: 'Kopie DE', caption: 'Kopie Text DE' });
+    });
+
+    it('answers a sanitized 500 when the media store fails, never stale copies or the raw error', async () => {
+      const media = memoryMediaStore({ baseUrl: IMG });
+      const failing: MediaStore = { ...media, descriptions: async () => { throw new Error('connect ECONNREFUSED 10.0.0.5:5432'); } };
+      const b = build({ media: failing });
+      const { cookie } = await authed(b);
+      const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: withGallery() });
+      const tk = created.json().translationKey;
+      const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const res = await b.app.inject({ method: 'GET', url: `/posts/${tk}/preview?locale=de`, cookies: cookie });
+        expect(res.statusCode).toBe(500);
+        expect(res.json()).toEqual({ error: 'internal server error' });
+        expect(res.body).not.toMatch(/Kopie|ECONNREFUSED|10\.0\.0\.5/);
+        const audit = await b.app.inject({ method: 'GET', url: `/posts/${tk}/alt-audit`, cookies: cookie });
+        expect(audit.statusCode).toBe(500);
+        expect(audit.body).not.toContain('ECONNREFUSED');
+      } finally { quiet.mockRestore(); }
+    });
   });
 });
 

@@ -53,6 +53,9 @@ export class EditorElement {
   private inputValue = '';
   private previousFocus: EditorElement | null = null;
   checked = false;
+  readOnly = false;
+  target = '';
+  rel = '';
   selectionStart = 0;
   selectionEnd = 0;
 

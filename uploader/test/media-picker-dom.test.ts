@@ -4,28 +4,42 @@ import vm from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 import { ui } from '../../site/src/i18n/ui.js';
 import { memoryMediaStore, type MediaQuery, type MediaStore, type NewMediaItem } from '../src/media-store.js';
+import { normalizeGalleryFences, type ImageMeta } from '../src/body-content.js';
 import { editorDocument } from './editor-dom-harness.js';
 
-const scripts = ['media-api', 'picker-selection', 'media-picker'].map((name) => readFileSync('public/' + name + '.js', 'utf8'));
+const scripts = ['media-api', 'picker-selection', 'media-picker', 'gallery-library', 'gallery-fence']
+  .map((name) => readFileSync('public/' + name + '.js', 'utf8'));
 const copy = Object.fromEntries(Object.entries(ui.en)
   .filter(([key]) => key.startsWith('editor.chrome.'))
   .map(([key, value]) => [key.slice('editor.chrome.'.length), value]));
 const baseUrl = 'https://images.example';
 const noExif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
-interface PickedItem { src: string; title?: string; width?: number; height?: number }
+interface PickedItem {
+  src: string; title?: string; width?: number; height?: number; fromPost?: boolean; format?: string;
+  alt?: { de?: string; en?: string }; caption?: { de?: string; en?: string };
+}
+interface Resolved { rows: PickedItem[]; failed: number }
 interface PickerOptions {
   multiple?: boolean;
   preselect?: PickedItem[];
+  resolve?(srcs: string[]): Promise<Resolved>;
   onPick(item: PickedItem | PickedItem[]): void;
 }
 interface Picker { open(options: PickerOptions): void }
+type Entry = { row?: PickedItem; missing?: true; error?: unknown };
+interface Library { lookup(srcs: string[], options?: { fresh?: boolean }): Promise<Map<string, Entry>> }
 interface PageOptions {
   multiple?: boolean;
   preselect?: PickedItem[];
   compact?: boolean;
+  /** Resolve seeded photos through the real GalleryLibrary, as editor.html does. */
+  resolveFromLibrary?: boolean;
   folders?(): Promise<Response>;
   list?(url: URL, response: Response): Promise<Response>;
+  item?(key: string, response: Response): Promise<Response>;
 }
+type PostMeta = Record<string, { alt?: string; caption?: string; format?: 'jpeg' }>;
+interface FenceApi { serialize(items: PickedItem[], locale: 'de' | 'en', directives?: string[], postMeta?: PostMeta): string }
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 const add = (store: MediaStore, key: string, folder: string, title = key, status: NewMediaItem['status'] = 'ready') =>
   store.upsert({ key, folder, title, status, width: 640, height: 480, origBytes: 100, exif: noExif, uploadedBy: null });
@@ -51,6 +65,12 @@ function openPicker(store: MediaStore, options: PageOptions = {}) {
   const fetcher = async (input: string) => {
     const url = new URL(input, 'https://app.example');
     if (url.pathname === '/media/folders') return options.folders ? options.folders() : response(await store.folders());
+    if (url.pathname.startsWith('/media/items/')) {
+      const key = url.pathname.slice('/media/items/'.length);
+      const row = await store.get(key);
+      const result = row ? response(row) : response({ error: 'image not found' }, 404);
+      return options.item ? options.item(key, result) : result;
+    }
     if (url.pathname !== '/media') throw new Error('Unexpected route ' + url.pathname);
     const params = url.searchParams;
     const query: MediaQuery = {
@@ -63,7 +83,7 @@ function openPicker(store: MediaStore, options: PageOptions = {}) {
     return options.list ? options.list(url, result) : result;
   };
   const ctx: Record<string, unknown> = {
-    document: dom.document, EditorCopy: { en: copy }, fetch: fetcher,
+    document: dom.document, EditorCopy: { en: copy }, fetch: fetcher, URL,
     matchMedia: () => ({ matches: options.compact ?? false }),
     location: { href: '' },
     setTimeout: (run: () => void) => { timers.push({ run, cancelled: false }); return timers.length; },
@@ -72,7 +92,24 @@ function openPicker(store: MediaStore, options: PageOptions = {}) {
   ctx.window = ctx;
   vm.createContext(ctx);
   scripts.forEach((script) => vm.runInContext(script, ctx));
-  (ctx.MediaPicker as Picker).open({ multiple: options.multiple, preselect: options.preselect, onPick: (item) => picked.push(item) });
+  // vm globals are untyped: these are the browser IIFEs evaluated just above.
+  const mediaApi = ctx.MediaApi as { makeClient(options: object): unknown };
+  const galleryLibrary = ctx.GalleryLibrary as { create(options: object): Library };
+  const mediaPicker = ctx.MediaPicker as Picker;
+  const galleryFence = ctx.GalleryFence as FenceApi;
+  const library = galleryLibrary.create({ client: mediaApi.makeClient({}), imageOrigin: baseUrl });
+  // The same adapter editor.html passes as `resolve`.
+  const resolve = options.resolveFromLibrary
+    ? (srcs: string[]) => library.lookup(srcs, { fresh: true }).then((entries) => {
+      const rows: PickedItem[] = [];
+      let failed = 0;
+      entries.forEach((entry) => { if (entry.row) rows.push(entry.row); else if (entry.error) failed += 1; });
+      return { rows, failed };
+    })
+    : undefined;
+  mediaPicker.open({
+    multiple: options.multiple, preselect: options.preselect, resolve, onPick: (item) => picked.push(item),
+  });
   const dialog = dom.document.querySelector('dialog')!;
   const required = (selector: string) => {
     const element = dialog.querySelector(selector);
@@ -81,7 +118,7 @@ function openPicker(store: MediaStore, options: PageOptions = {}) {
   };
   const buttons = required('.admin-modal__foot').querySelectorAll('button');
   return {
-    dom, dialog, trigger, picked, required,
+    dom, dialog, trigger, picked, required, galleryFence,
     next: buttons[1]!, cancel: buttons[2]!, choose: buttons[3]!,
     folder(path: string) {
       const button = dialog.querySelectorAll('.folder-btn').find((node) => node.dataset.folder === path);
@@ -241,5 +278,68 @@ describe('media picker folders', () => {
     expect(page.folder(hostile).textContent).toBe(hostile);
     expect(page.cell(hostile).querySelector('svg')).toBeNull();
     expect(page.required('.folder-tree').querySelector('svg')).toBeNull();
+  });
+});
+
+describe('gallery picker sources the gallery’s own photos from Media', () => {
+  const athens = baseUrl + '/athens';
+  const gone = baseUrl + '/imported/gone';
+  const settleAll = async (page: { settle(): Promise<unknown> }) => { for (let i = 0; i < 12; i++) await page.settle(); };
+  // The library page in view carries none of the gallery's photos, so only the
+  // direct lookup can find them (the resolver's base probe is pageSize=1).
+  const offPage = async (url: URL, result: Response) =>
+    url.searchParams.get('pageSize') === '1' ? result : response({ total: 0, items: [] });
+  const copied: Record<string, ImageMeta> = {
+    [athens]: { width: 640, height: 480, alt: 'Copied alt', caption: 'Copied caption', format: 'jpeg' },
+    [gone]: { width: 300, height: 200, alt: 'Imported alt', caption: 'Imported caption' },
+  };
+  const postMeta: PostMeta = {
+    [athens]: { alt: 'Copied alt', caption: 'Copied caption', format: 'jpeg' },
+    [gone]: { alt: 'Imported alt', caption: 'Imported caption' },
+  };
+  const preselect = [
+    { src: athens, width: 640, height: 480, fromPost: true, format: 'jpeg' },
+    { src: gone, width: 300, height: 200, fromPost: true },
+  ];
+  function pickedGallery(page: { picked: (PickedItem | PickedItem[])[] }): PickedItem[] {
+    const [items] = page.picked;
+    if (!Array.isArray(items)) throw new Error('the gallery picker did not confirm an ordered list');
+    return items;
+  }
+  async function editedLibrary() {
+    const store = await seededStore();
+    await store.patch('athens', { alt: { de: 'Markt in Athen', en: 'Athens market stalls' }, caption: { de: '', en: 'Morning' } });
+    return store;
+  }
+
+  it('waits for current rows, then writes them over the copied text while keeping JPEG and photos without a row', async () => {
+    const page = openPicker(await editedLibrary(), { multiple: true, resolveFromLibrary: true, list: offPage, preselect });
+    expect(page.choose.disabled).toBe(true);
+    expect(page.required('[aria-live]').textContent).toContain(copy.pickerMediaChecking);
+    page.choose.click();
+    expect(page.picked).toEqual([]);
+    await settleAll(page);
+    expect(page.choose.disabled).toBe(false);
+    expect(page.dialog.querySelectorAll('.picker-strip__pending')).toHaveLength(1);
+    page.choose.click();
+    const items = pickedGallery(page);
+    expect(items.map((item) => item.src)).toEqual([athens, gone]);
+    const de = normalizeGalleryFences(page.galleryFence.serialize(items, 'de', [], postMeta), copied).images;
+    expect(de[athens]).toEqual({ width: 640, height: 480, alt: 'Markt in Athen', caption: '', format: 'jpeg' });
+    expect(de[gone]).toEqual(copied[gone]);
+    const en = normalizeGalleryFences(page.galleryFence.serialize(items, 'en', [], postMeta), copied).images;
+    expect(en[athens]).toEqual({ width: 640, height: 480, alt: 'Athens market stalls', caption: 'Morning', format: 'jpeg' });
+  });
+
+  it('preserves post metadata and permits confirmation when a library lookup fails', async () => {
+    const page = openPicker(await editedLibrary(), {
+      multiple: true, resolveFromLibrary: true, list: offPage, preselect,
+      item: async (key, result) => key === 'athens' ? response({ error: 'database unavailable' }, 500) : result,
+    });
+    await settleAll(page);
+    expect(page.choose.disabled).toBe(false);
+    page.choose.click();
+    const de = normalizeGalleryFences(page.galleryFence.serialize(pickedGallery(page), 'de', [], postMeta), copied).images;
+    expect(de).toEqual(copied);
   });
 });

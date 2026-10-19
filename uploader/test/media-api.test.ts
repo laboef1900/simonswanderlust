@@ -240,9 +240,11 @@ describe('MediaApi fetch client', () => {
       fetch: async () => responses[i++],
       XMLHttpRequest: class {},
     });
-    await expect(client.list!({} as never)).rejects.toThrow('unauthorized');
+    await expect(client.list!({} as never)).rejects.toMatchObject({ message: 'unauthorized', status: 401 });
     expect(unauthed).toBe(1);
-    await expect(client.deleteFolder!('x' as never)).rejects.toThrow('folder is not empty');
+    // The status rides along so a caller can tell "no such row" from a failure
+    // without parsing the server's message (gallery-library.js relies on 404).
+    await expect(client.deleteFolder!('x' as never)).rejects.toMatchObject({ message: 'folder is not empty', status: 409 });
   });
 
   it('sends JSON bodies and builds item URLs from the key', async () => {

@@ -30,6 +30,9 @@ import {
  * `site`-only check (`astro check` alone) still will not catch it.
  */
 export interface ImageDims { width: number; height: number; alt?: string; caption?: string; format?: 'jpeg' }
+
+/** Current localized library descriptions, keyed by the photo's full base URL. */
+export type GalleryMetadata = ReadonlyMap<string, { alt: string; caption: string }>;
 const SIZES = '(min-width: 768px) 720px, 100vw';
 
 /**
@@ -181,6 +184,7 @@ function galleryPhotos(
   fenceText: string,
   images: Record<string, ImageDims>,
   allowedOrigin: string,
+  metadata?: GalleryMetadata,
 ): GalleryPhoto[] {
   const photos: GalleryPhoto[] = [];
   for (const line of fenceText.split('\n')) {
@@ -199,8 +203,11 @@ function galleryPhotos(
     const hgt = d.height;
     if (!Number.isInteger(w) || w <= 0 || !Number.isInteger(hgt) || hgt <= 0) continue;
     if (d.format !== undefined && d.format !== 'jpeg') continue;
-    const alt = String(d.alt ?? '');
-    const caption = String(d.caption ?? '');
+    // A present library row wins even when deliberately blank. Missing rows
+    // retain the snapshot's descriptions; ordinary inline images never consult it.
+    const description = metadata?.get(raw) ?? d;
+    const alt = String(description.alt ?? '');
+    const caption = String(description.caption ?? '');
     photos.push({
       image: { src: raw, alt, width: w, height: hgt, ...(d.format === 'jpeg' ? { format: d.format } : {}) },
       caption,
@@ -293,6 +300,7 @@ function galleryNode(
   fenceText: string,
   images: Record<string, ImageDims>,
   imageOrigin: string,
+  metadata?: GalleryMetadata,
 ): ReturnType<typeof h> | null {
   let allowedOrigin: string;
   try {
@@ -300,7 +308,7 @@ function galleryNode(
   } catch {
     return null; // no usable origin ⇒ allow nothing
   }
-  const photos = galleryPhotos(fenceText, images, allowedOrigin);
+  const photos = galleryPhotos(fenceText, images, allowedOrigin, metadata);
   if (photos.length === 0) return null;
   const mode = readLayoutMode(fenceText);
   const children = mode === 'slider' ? sliderNode(photos) : justifiedRows(photos, mode);
@@ -316,11 +324,13 @@ function galleryNode(
  *   runs both under `astro build` (where `import.meta.env` exists) and under
  *   the uploader's tsx runtime via `preview.ts` (where it does not). Keep it
  *   pure and env-free.
+ * @param galleryMetadata current library alt/caption; only galleries consult it.
  */
 export function transformBodyImages(
   html: string,
   images: Record<string, ImageDims>,
   imageOrigin: string,
+  galleryMetadata?: GalleryMetadata,
 ): string {
   // @ai-warning: post body HTML is rendered from DB-stored Markdown authored
   // through the admin editor (untrusted-ish). Sanitize it FIRST — stripping
@@ -334,7 +344,7 @@ export function transformBodyImages(
     if (node.tagName === 'pre') {
       const code = galleryCode(node);
       if (!code) return;
-      const gallery = galleryNode(textOf(code), images, imageOrigin);
+      const gallery = galleryNode(textOf(code), images, imageOrigin, galleryMetadata);
       // No resolvable photo ⇒ keep the sanitized <pre> so the URLs stay
       // visible rather than the block vanishing without a trace.
       if (!gallery) return SKIP;

@@ -35,6 +35,7 @@ import { validateDraft, validateForPublish, PostError, type PostStore, type Post
 import { foreignImageUrls } from './publish-gate.js';
 import { auditAltText } from './alt-audit.js';
 import { renderPreviewHtml, previewCsp } from './preview.js';
+import { loadGalleryMetadata } from './gallery-metadata.js';
 import { type PageStore, type PagePair, type PageContent, type ImageDims, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
@@ -1428,7 +1429,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   app.get('/posts/:tk/alt-audit', { preHandler: requireAuth }, async (req, reply) => {
     const pair = await posts.get((req.params as { tk: string }).tk);
     if (!pair) return reply.code(404).send({ error: 'post not found' });
-    const audit = auditAltText(pair);
+    const audit = auditAltText(pair, await loadGalleryMetadata(pair, cfg.media, imageBase));
     return reply.send({ count: audit.count, images: audit.images });
   });
 
@@ -1437,6 +1438,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // are author territory, so requireAuth — publishing stays admin-only. The
   // reply carries a deny-by-default CSP (#124): author markup renders here on
   // the admin origin, so nothing but images and the page's own styles may load.
+  // Galleries show the CURRENT library descriptions, exactly as the next site
+  // build will; a media-store failure is a sanitized 500, never stale text.
   app.get('/posts/:tk/preview', { preHandler: requireAuth }, async (req, reply) => {
     const q = (req.query ?? {}) as { locale?: unknown };
     const locale = q.locale === undefined ? 'de' : String(q.locale);
@@ -1445,11 +1448,12 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     }
     const pair = await posts.get((req.params as { tk: string }).tk);
     if (!pair) return reply.code(404).send({ error: 'post not found' });
+    const galleryMetadata = await loadGalleryMetadata(pair, cfg.media, imageBase);
     return reply
       .type('text/html; charset=utf-8')
       .header('cache-control', 'no-store')
       .header('content-security-policy', previewPolicy)
-      .send(await renderPreviewHtml(pair, locale, imageBase));
+      .send(await renderPreviewHtml(pair, locale, imageBase, galleryMetadata[locale]));
   });
 
   const upsert = async (req: { body: unknown }, reply: FastifyReply, tk: string) => {
@@ -1572,6 +1576,10 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         notReady,
       });
     }
+    // Read BEFORE publishing: the audit below must judge the library text the
+    // live page will show, and a failed read must refuse here rather than turn
+    // an already-published post into a 500 (publishing changes no media row).
+    const galleryMetadata = await loadGalleryMetadata(pair, cfg.media, imageBase);
     await posts.publish(tk);
     const published = await posts.get(tk);
     const build = await cfg.builder.build();
@@ -1584,7 +1592,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     // altAudit rides along so the editor can name the photos that went live
     // undescribed (src/alt-audit.ts) without a second round trip. It is
     // reported AFTER the publish succeeded, on purpose: it never gates one.
-    const audit = auditAltText(published ?? pair);
+    const audit = auditAltText(published ?? pair, galleryMetadata);
     return reply.send({
       published: true,
       build,

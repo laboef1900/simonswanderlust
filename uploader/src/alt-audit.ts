@@ -19,6 +19,7 @@
  */
 import { rewriteFences, unescapeAltText } from './body-content.js';
 import { markdownImages } from './wp-content.js';
+import type { LocaleGalleryMetadata } from './gallery-metadata.js';
 import type { Locale, PostLocale, PostPair } from './posts.js';
 
 /** Where the photo sits in the post — the author fixes each in a different place. */
@@ -64,7 +65,9 @@ interface BodyRef { src: string; kind: 'body' | 'gallery'; alt: string | undefin
  * would report described photos as undescribed:
  *
  *  • a ```gallery line is a bare URL and its alt sits in `images[src].alt`
- *    (`normalizeGalleryFences` lifts it off the line at save time);
+ *    (`normalizeGalleryFences` lifts it off the line at save time) — unless
+ *    the photo has a Media-library row, whose CURRENT alt the renderer shows
+ *    instead (an empty library alt included), so that is what is audited;
  *  • an inline `![alt](src)` carries its alt in the Markdown label, and its
  *    `images` entry holds only width/height.
  *
@@ -77,7 +80,7 @@ interface BodyRef { src: string; kind: 'body' | 'gallery'; alt: string | undefin
  * and it is also what the renderer resolves — `body-images.ts` skips a gallery
  * line with no entry. A duplicate reference is reported once.
  */
-function bodyRefs(l: PostLocale): BodyRef[] {
+function bodyRefs(l: PostLocale, gallery: ReadonlyMap<string, { alt: string }> | undefined): BodyRef[] {
   const out: BodyRef[] = [];
   const seen = new Set<string>();
   const add = (src: string, kind: 'body' | 'gallery', alt: string | undefined): void => {
@@ -87,7 +90,8 @@ function bodyRefs(l: PostLocale): BodyRef[] {
   };
   rewriteFences(l.bodyMarkdown, (line) => {
     const src = (line.split('|')[0] ?? '').trim();
-    add(src, 'gallery', l.images[src]?.alt);
+    const live = gallery?.get(src);
+    add(src, 'gallery', live ? live.alt : l.images[src]?.alt);
     return line;
   });
   for (const img of markdownImages(l.bodyMarkdown)) add(img.url, 'body', unescapeAltText(img.alt));
@@ -95,11 +99,16 @@ function bodyRefs(l: PostLocale): BodyRef[] {
 }
 
 /**
- * Pure: takes the stored pair, returns the undescribed photos of both locales
+ * Takes the stored pair, returns the undescribed photos of both locales
  * in a stable, author-visible order — DE before EN, each locale's hero first,
  * then its gallery photos, then its inline body photos. No store, no I/O.
+ *
+ * @param galleryMetadata the library's current gallery descriptions
+ *   (`loadGalleryMetadata`). Every server caller passes it: without it the
+ *   audit judges the copy stored on the post, which the rendered page no
+ *   longer shows for a library photo.
  */
-export function auditAltText(pair: Pick<PostPair, 'de' | 'en'>): AltAudit {
+export function auditAltText(pair: Pick<PostPair, 'de' | 'en'>, galleryMetadata?: LocaleGalleryMetadata): AltAudit {
   const images: UndescribedImage[] = [];
   for (const locale of ['de', 'en'] as const) {
     const l = pair[locale];
@@ -114,7 +123,7 @@ export function auditAltText(pair: Pick<PostPair, 'de' | 'en'>): AltAudit {
       const reason = issueFor(l.heroImage.alt, title);
       if (reason) images.push({ locale, kind: 'hero', src: heroSrc, reason });
     }
-    for (const ref of bodyRefs(l)) {
+    for (const ref of bodyRefs(l, galleryMetadata?.[locale])) {
       const reason = issueFor(ref.alt, title);
       if (reason) images.push({ locale, kind: ref.kind, src: ref.src, reason });
     }

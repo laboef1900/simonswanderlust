@@ -17,6 +17,7 @@ interface Story {
   markdown?: string;
   heroSrc?: string;
   heroAlt?: string;
+  galleryAlt?: { library?: Record<string, string>; stored?: Record<string, string> };
 }
 interface StoryResult {
   title: LengthCheck;
@@ -31,7 +32,7 @@ interface Api {
   lintTitle(text?: string): LengthCheck;
   lintExcerpt(text?: string): LengthCheck;
   lintHeadings(markdown?: string): Findings;
-  lintAltText(input: Pick<Story, 'heroSrc' | 'heroAlt' | 'markdown'>): Findings;
+  lintAltText(input: Pick<Story, 'heroSrc' | 'heroAlt' | 'markdown' | 'galleryAlt'>): Findings;
   lintInternalLinks(markdown?: string): Findings;
   lintStory(input?: Story): StoryResult;
   findImage(markdown: string, src: string): { start: number; end: number; line: number } | null;
@@ -153,6 +154,28 @@ describe('missing alt text', () => {
       { code: 'missing-alt', line: 5, target: 'gallery' },
       { code: 'missing-alt', line: 6, target: 'gallery' },
       { code: 'missing-alt', line: 7, target: 'gallery' },
+    ]);
+  });
+
+  // docs/superpowers/specs/2026-10-19-gallery-library-metadata-design.md: a
+  // photo with a Media row renders its current Media alt, empty included, over
+  // anything the post says; a saved bare line falls back to the stored alt.
+  it('judges gallery alt by what the build renders: Media first, then the line, then the stored entry', () => {
+    const markdown = ['```gallery',
+      'https://images.example/media-filled | 3x2 | alt=""',
+      'https://images.example/media-cleared | 3x2 | alt="Stale post copy"',
+      'https://images.example/saved',
+      'https://images.example/saved-empty',
+      'https://images.example/__proto__',
+      '```'].join('\n');
+    const galleryAlt = {
+      library: { 'https://images.example/media-filled': 'Current Media alt', 'https://images.example/media-cleared': '' },
+      stored: { 'https://images.example/saved': 'Stored alt', 'https://images.example/saved-empty': ' ' },
+    };
+    expect(locations(L.lintAltText({ markdown, galleryAlt }))).toEqual([
+      { code: 'missing-alt', line: 3, target: 'gallery' },
+      { code: 'missing-alt', line: 5, target: 'gallery' },
+      { code: 'missing-alt', line: 6, target: 'gallery' },
     ]);
   });
 

@@ -111,6 +111,17 @@ window.GalleryFence = (function () {
   }
 
   /**
+   * A row from the media library carries its localized descriptions as
+   * `{ de, en }` maps. A placeholder seeded from the post (`fromPost`, no row
+   * found yet) carries none — the shape, not a flag, says which one this is.
+   */
+  function isLibraryRow(item) {
+    return !!item && (
+      (item.alt !== null && typeof item.alt === 'object')
+      || (item.caption !== null && typeof item.caption === 'object'));
+  }
+
+  /**
    * serialize(items, locale, directives?, postMeta?) → a complete ```gallery block.
    *
    * `directives` are `#`-prefixed lines carried through from an existing fence
@@ -119,14 +130,24 @@ window.GalleryFence = (function () {
    * gallery must not silently discard them.
    *
    * `postMeta` maps a photo URL to the metadata already recorded FOR THIS POST
-   * (its `images` entry, plus anything hand-typed on the fence line). It wins
-   * over the media library's own alt/caption/format.
+   * (its `images` entry, plus anything hand-typed on the fence line).
    *
-   * @ai-warning `postMeta` is load-bearing, not a nicety. `normalizeGalleryFences`
-   * lets a value present on the line beat the stored `images` entry
-   * (src/body-content.ts), and the stored fence is bare URLs — so without this,
-   * re-serializing from library rows silently overwrites post-specific text or
-   * drops the JPEG-only marker at save time, where the author cannot see it.
+   * Precedence (docs/superpowers/specs/2026-10-19-gallery-library-metadata-design.md):
+   * a LIBRARY ROW's alt and caption are authoritative, empty strings included —
+   * the site renders them over the post's copy on every build, so writing the
+   * post's older text here would only make the stored fallback disagree with
+   * what the author just confirmed. A photo with no library row (an unresolved
+   * placeholder) keeps the post's metadata exactly. The JPEG-only marker
+   * describes the stored variants, so the post's recorded `format` is kept in
+   * both cases.
+   *
+   * @ai-warning `postMeta` is load-bearing in two ways. `normalizeGalleryFences`
+   * lets a value present on the line beat the stored `images` entry, and keeps
+   * the stored entry when the line says nothing (src/body-content.ts). So for an
+   * unresolved photo it is what carries the post's text across; and for a
+   * library row whose alt/caption is now EMPTY, a prior value in `postMeta` is
+   * what forces an explicit `alt=""`/`caption=""` — omitting the attribute would
+   * let the save resurrect the stale copy as the stored fallback.
    */
   function serialize(items, locale, directives, postMeta) {
     var lines = [];
@@ -153,14 +174,16 @@ window.GalleryFence = (function () {
       if (hasDimensions) parts.push(item.width + 'x' + item.height);
       var format = typeof prior.format === 'string' ? prior.format : item.format;
       if (format === 'jpeg') parts.push('format="jpeg"');
-      // An empty string in `postMeta` is a deliberate clear and is respected;
-      // only an absent key falls back to the library row.
-      var alt = (typeof prior.alt === 'string' ? prior.alt : pickLocale(item.alt, locale)).slice(0, MAX_TEXT);
-      var caption = (typeof prior.caption === 'string'
-        ? prior.caption
-        : pickLocale(item.caption, locale)).slice(0, MAX_TEXT);
+      var library = isLibraryRow(item);
+      var alt = (library ? pickLocale(item.alt, locale)
+        : typeof prior.alt === 'string' ? prior.alt : '').slice(0, MAX_TEXT);
+      var caption = (library ? pickLocale(item.caption, locale)
+        : typeof prior.caption === 'string' ? prior.caption : '').slice(0, MAX_TEXT);
+      // An empty value is written only when it must replace something the post
+      // recorded: a deliberate clear on an unresolved photo, or a library value
+      // that is now empty over an older post copy.
       if (alt !== '' || typeof prior.alt === 'string') parts.push('alt="' + escapeMeta(alt) + '"');
-      if (caption !== '') parts.push('caption="' + escapeMeta(caption) + '"');
+      if (caption !== '' || typeof prior.caption === 'string') parts.push('caption="' + escapeMeta(caption) + '"');
       lines.push(parts.join(' | '));
     });
 
