@@ -60,6 +60,8 @@ describe('hosted gallery captions', () => {
         if (url === 'https://images.example/photo-640.webp') {
           expect(options.credentials).toBe('omit');
           expect(options.redirect).toBe('error');
+          // A cached pre-CORS copy of an immutable variant must not be reused.
+          expect(options.cache).toBe('reload');
           return new Response(new Blob(['display variant']));
         }
         if (url === config.captionBaseUrl + '/chat/completions') {

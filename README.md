@@ -78,17 +78,11 @@ docker compose pull && docker compose up -d
 
 ### Cutting a release
 
-**Current release: v0.14.0.** Highlights since v0.13.0:
+**Current release: v0.14.1.** Fixes since v0.14.0:
 
-- Generate photo title, DE/EN alt text and captions, and tags with AI on the Media
-  page, for one photo or in bulk; bulk runs fill only empty fields unless overwrite is
-  chosen, and the server still never contacts a model.
-- One control vocabulary across the admin: shared input heights, labels, selects,
-  four button roles, flat sections, and tidier Posts, Editor, About, Users, Comments,
-  and Media pages.
-- Homepage polish: a lighter hero panel over the photo, overlay captions on story
-  cards, a taller map band with smaller pins, and a compact footer.
-- Story cards always show the country beside the date.
+- AI photo details and hosted-image alt-text suggestions no longer fail with "Photo
+  download failed" in browsers that cached a thumbnail before the image host sent
+  CORS headers; the suggestion fetch now bypasses that stale cached copy.
 
 1. On a `feature/*` branch from `dev`, update both apps' `package.json` and
    `package-lock.json` versions, plus the `IMAGE_TAG` defaults in `docker-compose.yml`
@@ -99,8 +93,8 @@ docker compose pull && docker compose up -d
 
 ```bash
 git fetch origin main
-git tag -a v0.14.0 origin/main -m "Release v0.14.0"
-git push origin v0.14.0
+git tag -a v0.14.1 origin/main -m "Release v0.14.1"
+git push origin v0.14.1
 ```
 
 Never push directly to `dev` or `main`, tag an unmerged feature branch, or replace a
