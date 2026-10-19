@@ -60,7 +60,7 @@ describe('llm.js mixedContentWarning', () => {
 describe('browser caption credentials', () => {
   function client(fetcher: typeof fetch) {
     const window: { LLM?: {
-      caption(base: string, model: string, prompt: string, image: string, timeout: number, signal?: AbortSignal, key?: string): Promise<{ altEn: string }>;
+      caption(base: string, model: string, prompt: string, image: string, timeout: number, maxTokens: number, signal?: AbortSignal, key?: string): Promise<{ altEn: string }>;
       listModels(base: string, key?: string): Promise<string[]>;
     } } = {};
     new Function('window', 'fetch', src)(window, fetcher);
@@ -72,10 +72,10 @@ describe('browser caption credentials', () => {
       ? Response.json({ data: [{ id: 'vision' }] })
       : Response.json({ choices: [{ message: { content: '{"altEn":"A mountain","altDe":"Ein Berg"}' } }] }));
     const llm = client(fetcher);
-    expect(await llm.caption('https://vision.example/v1', 'vision', 'describe', 'data:image/jpeg;base64,AA==', 5000, undefined, 'fixture-key'))
+    expect(await llm.caption('https://vision.example/v1', 'vision', 'describe', 'data:image/jpeg;base64,AA==', 5000, 8000, undefined, 'fixture-key'))
       .toEqual({ altEn: 'A mountain', altDe: 'Ein Berg' });
     expect(await llm.listModels('https://vision.example/v1', 'fixture-key')).toEqual(['vision']);
-    await llm.caption('http://localhost:1234/v1', 'vision', 'describe', 'data:image/jpeg;base64,AA==', 5000);
+    await llm.caption('http://localhost:1234/v1', 'vision', 'describe', 'data:image/jpeg;base64,AA==', 5000, 8000);
     await llm.listModels('http://localhost:1234/v1');
     expect(fetcher.mock.calls.map(([, options]) => new Headers(options?.headers).get('authorization')))
       .toEqual(['Bearer fixture-key', 'Bearer fixture-key', null, null]);
@@ -87,10 +87,10 @@ describe('browser caption credentials', () => {
   it('refuses credential-bearing endpoints before any request and sanitizes remote transport failures', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => { throw new Error('fixture-secret-from-provider'); });
     const llm = client(fetcher);
-    await expect(llm.caption('https://user:password@example.test/v1', 'vision', 'describe', 'data:image/jpeg;base64,AA==', 5000))
+    await expect(llm.caption('https://user:password@example.test/v1', 'vision', 'describe', 'data:image/jpeg;base64,AA==', 5000, 8000))
       .rejects.toThrow('Invalid caption endpoint');
     expect(fetcher).not.toHaveBeenCalled();
-    await expect(llm.caption('https://vision.example/v1', 'vision', 'describe', 'data:image/jpeg;base64,AA==', 5000, undefined, 'fixture-key'))
+    await expect(llm.caption('https://vision.example/v1', 'vision', 'describe', 'data:image/jpeg;base64,AA==', 5000, 8000, undefined, 'fixture-key'))
       .rejects.toThrow('Caption request failed');
     await expect(llm.listModels('https://vision.example/v1', 'fixture-key')).rejects.not.toThrow('fixture-secret');
   });

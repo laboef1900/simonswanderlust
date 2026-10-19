@@ -149,6 +149,9 @@
               <input id="captionMaxEdge" type="number" min="256" max="4096" />
             </div>
           </div>
+          <label for="captionMaxTokens" id="captionMaxTokensLabel"></label>
+          <input id="captionMaxTokens" type="number" min="256" max="32768" step="1" required aria-describedby="captionMaxTokensHelp" />
+          <p id="captionMaxTokensHelp" class="muted"></p>
           <label for="captionPrompt">Photo description prompt</label>
           <textarea id="captionPrompt" rows="8"></textarea>
 
@@ -348,6 +351,7 @@
         reviewDetailsHeading: 'settingsWriting', captionDetailsHeading: 'settingsCaptions',
         reviewPrivacy: 'writingPrivacy', reviewTimeoutLabel: 'writingTimeout', reviewPromptLabel: 'writingInstructions',
         reviewPromptHelp: 'writingInstructionsHelp', testReview: 'reviewTestLabel',
+        captionMaxTokensLabel: 'captionMaxTokensLabel', captionMaxTokensHelp: 'captionMaxTokensHelp',
       })) $(id).textContent = copy[key];
       $('settingsTabs').setAttribute('aria-label', copy.settingsNav);
 
@@ -1002,6 +1006,7 @@
           $('captionPrompt').value = s.captionPrompt;
           $('captionTimeoutMs').value = s.captionTimeoutMs;
           $('captionMaxEdge').value = s.captionMaxEdge;
+          $('captionMaxTokens').value = s.captionMaxTokens ?? '';
         }
         renderProviders();
         renderUseCaseSelects(fillFields ? { review: s.reviewProviderId, caption: s.captionProviderId } : null);
@@ -1042,6 +1047,7 @@
           captionPrompt: $('captionPrompt').value,
           captionTimeoutMs: Number($('captionTimeoutMs').value),
           captionMaxEdge: Number($('captionMaxEdge').value),
+          captionMaxTokens: Number($('captionMaxTokens').value),
         };
         $('saveAi').disabled = true;
         $('aiOut').textContent = 'Saving…';
@@ -1188,6 +1194,7 @@
           res = await fetch('/settings', {
             method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
+
               backupSchedule: $('backupSchedule').value,
               backupRetention: Number($('backupRetention').value),
               importDelayMs: Number($('importDelayMs').value),

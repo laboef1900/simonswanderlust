@@ -623,6 +623,7 @@ interface SettingsResponse {
   lmModel: string;
   captionPrompt: string;
   captionTimeoutMs: number;
+  captionMaxTokens: number;
   captionMaxEdge: number;
   backupSchedule: 'off' | 'daily' | 'weekly';
   backupRetention: number;
@@ -645,7 +646,7 @@ function settingsResponse(overrides: Partial<SettingsResponse> = {}): SettingsRe
   return {
     aiProviders: [LOCAL], aiDefaultProviderId: 'lm-studio', reviewProviderId: null, captionProviderId: null,
     aiModel: 'review-model', reviewPrompt: 'Review prompt', reviewTimeoutMs: 60000,
-    lmModel: 'vision-model', captionPrompt: 'Caption prompt', captionTimeoutMs: 60000, captionMaxEdge: 768,
+    lmModel: 'vision-model', captionPrompt: 'Caption prompt', captionTimeoutMs: 60000, captionMaxTokens: 8000, captionMaxEdge: 768,
     backupSchedule: 'off', backupRetention: 14, convertJpeg: true, webpQuality: 75, avifQuality: 55,
     importDelayMs: 1200, importRetries: 3, commentsEnabled: false,
     geocodingSearchUrl: 'https://nominatim.openstreetmap.org/search',
@@ -1395,11 +1396,13 @@ describe('settings.html use case assignments', () => {
     el('captionPrompt').value = 'C';
     el('captionTimeoutMs').value = '30000';
     el('captionMaxEdge').value = '1024';
+    el('captionMaxTokens').value = '4096';
     await el('saveAi').click();
     expect(calls(page.requests)).toEqual(['POST /settings']);
     expect(page.requests[0]!.body).toEqual({
       reviewProviderId: 'openrouter', captionProviderId: null, aiModel: 'review-2', lmModel: 'vision-2',
       reviewPrompt: 'R', reviewTimeoutMs: 45000, captionPrompt: 'C', captionTimeoutMs: 30000, captionMaxEdge: 1024,
+      captionMaxTokens: 4096,
     });
     // The saved values come back as the new "saved" models; Other closes.
     expect(el('aiModel').value).toBe('review-2');
@@ -1447,7 +1450,7 @@ describe('settings.html use case assignments', () => {
   });
 });
 
-describe('settings.html review configuration test', () => {
+describe('settings.html AI configuration', () => {
   const validReview = {
     title: { status: 'pass', critique: '' },
     excerpt: { status: 'pass', critique: '' },
@@ -1665,6 +1668,23 @@ describe('settings.html against the real settings and provider routes', () => {
     });
     const caption = (await app.inject({ url: '/ai-config?purpose=caption', cookies })).json();
     expect(caption).toMatchObject({ captionProvider: 'lm-studio', captionApiKey: null });
+  });
+
+  it('saves the photo output budget, refuses an invalid one without saving, and reloads the saved value', async () => {
+    const { el, app, cookies, settings, refill } = await realPage();
+    el('captionMaxTokens').value = '4096';
+    await el('saveAi').click();
+    expect(settings.get().captionMaxTokens).toBe(4096);
+    expect((await app.inject({ url: '/ai-config?purpose=caption', cookies })).json().captionMaxTokens).toBe(4096);
+
+    el('captionMaxTokens').value = '255';
+    await el('saveAi').click();
+    expect(settings.get().captionMaxTokens).toBe(4096);
+    expect(el('aiOut').textContent).toBe('Maximum output tokens must be a whole number between 256 and 32768.');
+    expect(el('captionMaxTokens').value).toBe('255');
+
+    await refill();
+    expect(Number(el('captionMaxTokens').value)).toBe(4096);
   });
 
   it('editing the URL of a provider with a stored key changes nothing until the admin confirms', async () => {

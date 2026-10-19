@@ -8,8 +8,9 @@ optionally for several or all photos.
 
 Reuses the existing caption provider (Settings → Photo descriptions), its
 `GET /ai-config?purpose=caption` contract and request-local key, the hosted display
-variant, and the existing `PATCH /media/items/*`. No new route, setting, schema, secret,
-server egress or dependency. Media metadata is library data: it reaches a story only
+variant, and the existing `PATCH /media/items/*`. No new route, schema, secret,
+server egress or dependency. The output-budget setting added below is shared with alt
+text. Media metadata is library data: it reaches a story only
 when an author inserts the photo and saves, so no published page changes.
 
 ## Interaction
@@ -57,7 +58,7 @@ outside the per-photo bookkeeping still ends with a closable dialog and a grid r
 
 ## Model contract
 
-`LLM.describePhoto(baseUrl, model, guidance, dataUrl, timeoutMs, signal, apiKey)` shares
+`LLM.describePhoto(baseUrl, model, guidance, dataUrl, timeoutMs, maxTokens, signal, apiKey)` shares
 the caption transport (`visionChat`): one user message with text + image, request-local
 Bearer key, `credentials: 'omit'`, `redirect: 'error'`, `no-referrer`, the caption
 timeout, cancellation. Failures are fixed categories (`HTTP <status>`, connection,
@@ -73,10 +74,44 @@ word boundary (title 120, alt 300, caption 500 UTF-16 units, never ending on a l
 surrogate). Tags: list or comma string, split on commas, `#` dropped, case-insensitively
 de-duplicated, at most 10 of 40 units (the store's own limit). Missing fields are empty.
 
+## Configurable output budget (2026-10-19)
+
+Owner requested a persisted **Maximum output tokens** control under Settings → Photo
+descriptions after a live DeepSeek comparison. With thinking enabled, a failed photo
+spent the entire old 1,000-token ceiling on reasoning and returned no metadata.
+With an 8,000-token ceiling, both modes completed all 12 requests per mode across six
+photos; thinking used up to 1,849 output tokens and showed a modest quality advantage.
+
+- `Settings.captionMaxTokens`: whole number from **256 through 32,768**, default **8,000**.
+  Existing settings files without the field inherit that default. A malformed on-disk
+  value uses the existing per-field fallback without discarding other settings.
+- Admin-only `POST /settings` validates and persists the field; invalid saves leave
+  the previous value intact. `GET /settings` and authenticated `/ai-config` responses
+  include it. Existing authorization, secret handling and no-store behavior are unchanged.
+- Both `LLM.caption` and `LLM.describePhoto` receive the configured ceiling and send it
+  as `max_tokens`. It applies to local-file and hosted editor alt suggestions and single
+  and bulk media details. A bulk run uses the configuration loaded for that run.
+- No new thinking toggle, retries, provider-specific override, or timeout change.
+  The UI explains reasoning-token consumption, provider limits, and cost/latency impact.
+  New label/help copy lives in the existing DE/EN `editor.chrome` dictionary.
+- Recovery: lower the setting for a provider with a smaller supported output budget.
+  Raising it permits more generation; it does not reserve or automatically consume the
+  full allowance. No blog rebuild is needed when changing the setting.
+
+Verification: uploader typecheck and 75 test files / 1,784 tests passed, including
+Postgres integration suites against an isolated database; site 24 files / 290 tests
+passed; `astro check` reported zero errors, warnings or hints. Browser smoke against
+the actual Settings routes and file-backed settings store verified the 8,000 default,
+save/reload at 4,096, refusal of 255 without losing the saved value, and desktop/mobile
+layout. Real browser JPEG preparation and HTTP requests to an isolated fixture provider
+confirmed 4,096 on media details, hosted alt text, and local-file alt text, with no
+thinking override. No deployed settings or photo metadata were changed.
+
+
 ## Risk and recovery
 
-Normal risk: client-only, through existing authenticated routes and the caption config
-already disclosed to authors (#214 §13). Bulk is the one place an AI value is saved
+Normal risk: browser-direct model calls through existing authenticated routes and the
+caption config already disclosed to authors (#214 §13). Bulk is the one place an AI value is saved
 without per-item review; the documented "suggestions never autosave" rule is narrowed to
 the editor accordingly. Overwrite is opt-in, named on the button ("Generate and
 overwrite") and never remembered. There is no undo for overwritten library text beyond a

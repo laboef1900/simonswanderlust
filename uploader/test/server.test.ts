@@ -915,6 +915,7 @@ function registry(providers: AiProvider[], extra: Partial<Settings> = {}): Setti
 const LOCAL_CAPTION = {
   lmModel: SETTINGS.lmModel, captionPrompt: SETTINGS.captionPrompt,
   captionTimeoutMs: SETTINGS.captionTimeoutMs, captionMaxEdge: SETTINGS.captionMaxEdge,
+  captionMaxTokens: SETTINGS.captionMaxTokens,
   captionProvider: 'lm-studio', captionBaseUrl: 'http://localhost:1234/v1',
 };
 const NAME_ERROR = 'AI provider name must be 1–60 characters without control characters.';

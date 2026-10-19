@@ -22,6 +22,8 @@ export interface Settings {
   captionProviderId: string | null;
   lmModel: string;
   captionTimeoutMs: number;
+  /** Shared output ceiling for alt text and media details, including model reasoning. */
+  captionMaxTokens: number;
   captionMaxEdge: number;
   captionPrompt: string;
   aiModel: string;
@@ -75,6 +77,7 @@ export function defaultSettings(): Settings {
     captionProviderId: null,
     lmModel: 'qwen/qwen3-vl-4b',
     captionTimeoutMs: 60000,
+    captionMaxTokens: 8000,
     captionMaxEdge: 768,
     captionPrompt: DEFAULT_PROMPT,
     aiModel: 'qwen2.5-7b-instruct',
@@ -117,6 +120,8 @@ const FIELD_CHECKS: { [K in keyof Settings]: (v: unknown) => string | null } = {
   lmModel: (v) => (typeof v === 'string' && v.trim() !== '' ? null : 'Model is required.'),
   captionTimeoutMs: (v) =>
     intInRange(v, 1000, 600000) ? null : 'Timeout must be a whole number of milliseconds between 1000 and 600000.',
+  captionMaxTokens: (v) =>
+    intInRange(v, 256, 32768) ? null : 'Maximum output tokens must be a whole number between 256 and 32768.',
   captionMaxEdge: (v) =>
     intInRange(v, 256, 4096) ? null : 'Max edge must be a whole number between 256 and 4096 pixels.',
   captionPrompt: (v) => (typeof v === 'string' && v.trim() !== '' ? null : 'Prompt is required.'),

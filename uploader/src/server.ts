@@ -766,6 +766,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return {
       lmModel: s.lmModel, captionPrompt: s.captionPrompt,
       captionTimeoutMs: s.captionTimeoutMs, captionMaxEdge: s.captionMaxEdge,
+      captionMaxTokens: s.captionMaxTokens,
       captionProvider: provider.kind, captionBaseUrl: provider.baseUrl,
     };
   }
@@ -791,7 +792,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       reviewProviderId: s.reviewProviderId, captionProviderId: s.captionProviderId,
       aiModel: s.aiModel, reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs,
       lmModel: s.lmModel, captionPrompt: s.captionPrompt,
-      captionTimeoutMs: s.captionTimeoutMs, captionMaxEdge: s.captionMaxEdge,
+      captionTimeoutMs: s.captionTimeoutMs, captionMaxTokens: s.captionMaxTokens, captionMaxEdge: s.captionMaxEdge,
       backupSchedule: s.backupSchedule, backupRetention: s.backupRetention,
       convertJpeg: s.convertJpeg, webpQuality: s.webpQuality, avifQuality: s.avifQuality,
       importDelayMs: s.importDelayMs, importRetries: s.importRetries,
@@ -886,6 +887,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const partial: Record<string, unknown> = {};
     if (b.lmModel !== undefined) partial.lmModel = String(b.lmModel).trim();
     if (b.captionTimeoutMs !== undefined) partial.captionTimeoutMs = Number(b.captionTimeoutMs);
+    if (b.captionMaxTokens !== undefined) partial.captionMaxTokens = b.captionMaxTokens;
     if (b.captionMaxEdge !== undefined) partial.captionMaxEdge = Number(b.captionMaxEdge);
     if (b.captionPrompt !== undefined) partial.captionPrompt = String(b.captionPrompt);
     if (b.backupSchedule !== undefined) partial.backupSchedule = String(b.backupSchedule);

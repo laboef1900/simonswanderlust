@@ -73,7 +73,8 @@ Added:
 | `captionProviderId` | `null` | `null` (= follow default) or a provider id |
 
 Kept unchanged: `aiModel` (review model), `lmModel` (photo model), `reviewPrompt`,
-`reviewTimeoutMs`, `captionPrompt`, `captionTimeoutMs`, `captionMaxEdge`.
+`reviewTimeoutMs`, `captionPrompt`, `captionTimeoutMs`, `captionMaxEdge`, and `captionMaxTokens`
+(#268, merged from `dev`; part of the caption config and the settings response).
 
 Use cases are the two features that exist: **Story review & excerpts** (`reviewProviderId`,
 `aiModel`, prompt, timeout) and **Photo descriptions** — alt text and media details

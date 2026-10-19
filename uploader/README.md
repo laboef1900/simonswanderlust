@@ -266,7 +266,8 @@ Settings → **AI models** keeps a **Providers** list (Local LM Studio by defaul
 OpenRouter, DeepSeek, or any custom HTTP(S) OpenAI-compatible endpoint, each with its own
 name, base URL and, for remote providers, its own encrypted API key) and a **Use case
 assignments** grid. **Photo descriptions** (alt text and media details) picks a provider —
-or follows the default — and a model; its prompt/timeout/max edge are independent of review.
+or follows the default — and a model; its prompt/timeout/output budget/max edge are independent
+of review.
 Select a **vision-capable model**; a provider's model list does not guarantee image support.
 
 The editor and photo uploader send a resized JPEG and caption prompt directly from
@@ -285,8 +286,17 @@ with the typed key if one is entered. Listing sends no photo and does not verify
 support. Custom providers must allow browser CORS. Local LM Studio providers never hold or
 receive a key.
 
+**Maximum output tokens** sets the per-photo output ceiling for both editor/uploader
+alt-text suggestions and media-library AI details (single and bulk). Default **8,000**;
+allowed range **256–32,768**, whole numbers only. Reasoning models spend this same budget
+on thinking and the final answer: DeepSeek exhausted the former fixed 1,000-token
+photo-details limit before returning any metadata. A higher ceiling permits more work
+and may increase provider charges and latency; the chosen model must support it.
+This does not toggle thinking or change the separate caption timeout. Existing settings
+files without the field use 8,000; saved values survive restart.
+
 Non-secret settings (`aiProviders`, `aiDefaultProviderId`, `captionProviderId`, `lmModel`,
-`captionTimeoutMs`, `captionMaxEdge`, `captionPrompt`) live in settings.json.
+`captionTimeoutMs`, `captionMaxTokens`, `captionMaxEdge`, `captionPrompt`) live in settings.json.
 Authenticated `GET /ai-config?purpose=caption` resolves `captionBaseUrl` and provides
 `captionApiKey` only for a remote photo provider. Local captions remain usable with broken or
 missing remote credentials. Editor suggestions fill editable alt text, never autosave/publish.
