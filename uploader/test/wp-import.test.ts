@@ -528,6 +528,27 @@ describe('importWxr re-run merge', () => {
     expect(healed.images['https://wp/g2.jpg']).toBeUndefined();
   });
 
+  // Gallery-local captions (2026-10-19): only a gallery line's URL field is
+  // re-hosted. Caption text that reads like an inline image of a WordPress
+  // photo this run re-hosts is the author's, and must come back unchanged.
+  it('heals a gallery line\'s URL but leaves image-like text in its local caption alone', async () => {
+    const store = memoryPostStore();
+    const { h, nextRun } = flaky('g2.jpg');
+    await run(export1, h, {}, store);
+    const tk = (await store.list())[0]!.translationKey;
+    const p = (await store.get(tk))!;
+    const local = 'caption-override="Wie ![x](https://wp/a.jpg)"';
+    await store.upsertDraft({ ...p, de: { ...p.de, bodyMarkdown: p.de.bodyMarkdown.replace('https://wp/g2.jpg', `https://wp/g2.jpg | 640x400 | ${local}`) } });
+    expect((await store.get(tk))!.de.bodyMarkdown).toContain(`https://wp/g2.jpg | ${local}`);
+    nextRun();
+    h.calls.length = 0;
+    await run(export1, h, {}, store);
+    expect(h.calls.sort()).toEqual(['https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/g1.jpg', 'https://wp/g2.jpg']);
+    const healed = (await store.get(tk))!.de;
+    expect(healed.bodyMarkdown).toContain(`${SRC('de-1', 'https://wp/g2.jpg')} | ${local}`);
+    expect(healed.images['https://wp/g2.jpg']).toBeUndefined();
+  });
+
   it('keeps gallery metadata when the same hot-link occurs twice (second substitution must not clobber the first)', async () => {
     const store = memoryPostStore();
     const { h, nextRun } = flaky('g2.jpg');

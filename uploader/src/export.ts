@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { galleryFencesToMdx, unescapeAltText } from './body-content.js';
+import { galleryFencesToMdx, rewriteOutsideGalleries, unescapeAltText } from './body-content.js';
 import { markdownImages } from './wp-content.js';
 import type { HeroImage, Locale, PostLocale, PostPair } from './posts.js';
 
@@ -26,24 +26,30 @@ function imageYaml(name: string, image: HeroImage): string[] {
  * Without the gallery pass a backup would keep the fence text but lose every
  * gallery photo's metadata, and re-importing it would yield a gallery the
  * renderer skips entirely. Exact inverse of posts.ts `normalizeBodyImages`.
+ *
+ * The inline pass runs only OUTSIDE gallery fences (`rewriteOutsideGalleries`):
+ * a gallery line's text — a `caption-override` above all — may read like an
+ * inline image and must reach the backup byte-for-byte.
  */
 function bodyToMdx(p: PostLocale): string {
-  let out = galleryFencesToMdx(p.bodyMarkdown, p.images);
-  // `markdownImages` reads the label with its backslash escapes (posts.ts
-  // writes `\[`/`\]` via `imageMarkdown`); a naive `[^\]]*` stopped at the
-  // first escaped bracket and exported the photo without its dimensions.
-  for (const img of markdownImages(out)) {
-    const dims = p.images[img.url];
-    if (!dims) continue;
-    // Escape &, ", <, > (& first) so posts.ts normalizeBodyImages can decode the exact
-    // inverse — a raw '>' in alt would otherwise defeat its tag regex on paste-back.
-    const escapedAlt = unescapeAltText(img.alt)
-      .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const tag = `<BodyImage src="${img.url}" width={${dims.width}} height={${dims.height}} alt="${escapedAlt}"${dims.format === 'jpeg' ? ' format="jpeg"' : ''} />`;
-    // Callback form: a string replacement would read `$&`/`$1` in the alt as tokens.
-    out = out.replaceAll(img.full, () => tag);
-  }
-  return out;
+  return rewriteOutsideGalleries(galleryFencesToMdx(p.bodyMarkdown, p.images), (text) => {
+    let out = text;
+    // `markdownImages` reads the label with its backslash escapes (posts.ts
+    // writes `\[`/`\]` via `imageMarkdown`); a naive `[^\]]*` stopped at the
+    // first escaped bracket and exported the photo without its dimensions.
+    for (const img of markdownImages(text)) {
+      const dims = p.images[img.url];
+      if (!dims) continue;
+      // Escape &, ", <, > (& first) so posts.ts normalizeBodyImages can decode the exact
+      // inverse — a raw '>' in alt would otherwise defeat its tag regex on paste-back.
+      const escapedAlt = unescapeAltText(img.alt)
+        .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const tag = `<BodyImage src="${img.url}" width={${dims.width}} height={${dims.height}} alt="${escapedAlt}"${dims.format === 'jpeg' ? ' format="jpeg"' : ''} />`;
+      // Callback form: a string replacement would read `$&`/`$1` in the alt as tokens.
+      out = out.replaceAll(img.full, () => tag);
+    }
+    return out;
+  });
 }
 
 export function renderPostToMdx(pair: PostPair, locale: Locale): string {

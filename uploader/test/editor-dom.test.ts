@@ -6,6 +6,7 @@ import type { EditorialReviewResult } from '../src/editorial-review.js';
 import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { normalizeGalleryFences } from '../src/body-content.js';
+import { readCaptionOverride, readCaptionsVisible } from '../../site/src/lib/gallery-layout.js';
 import { REGIONS } from '../src/db.js';
 import type { AltAudit } from '../src/alt-audit.js';
 
@@ -45,6 +46,13 @@ interface EditorOptions {
   pickImage?: { src: string; width: number; height: number; alt: { de: string; en: string }; format?: 'jpeg' };
   caption?: (options: { url: string; lang: string; signal: AbortSignal }) => Promise<string>;
 }
+/** What editor.html passes to MediaPicker.open for a gallery, as far as these tests read it. */
+interface GalleryPicker {
+  multiple: true;
+  captions?: { locale: 'de' | 'en'; visible: boolean; overrides: Record<string, string>; fallback: Record<string, string> };
+  onPick(items: unknown[], options: { layout: string | null; captions?: { visible: boolean; overrides: Record<string, string> } }): void;
+}
+type PickerSettings = GalleryPicker | { multiple?: false; onPick?: (item: EditorOptions['pickImage']) => void };
 interface EditorApi {
   populateForm(post: unknown): void;
   loadPost(translationKey: string): Promise<boolean>;
@@ -66,6 +74,7 @@ function loadEditor(options: EditorOptions = {}) {
     addEventListener(_type: string, listener: () => void) { mediaChanged = listener; },
   };
   const requests: { url: string; options: RequestInit }[] = [];
+  const galleryPickers: GalleryPicker[] = [];
   const el = (id: string): Element => {
     const element = dom.document.getElementById(id);
     if (!element) throw new Error('no element #' + id + ' in editor.html');
@@ -180,8 +189,11 @@ function loadEditor(options: EditorOptions = {}) {
     },
     Auth: { ensureAuthed: async () => options.isAdmin === undefined ? null : { isAdmin: options.isAdmin }, renderHeader() {} },
     AdminConfirm: { ask: async () => options.confirm === true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
-    MediaPicker: { open(settings: { onPick?: (item: EditorOptions['pickImage']) => void }) {
-      if (options.pickImage) settings.onPick?.(options.pickImage);
+    MediaPicker: { open(settings: PickerSettings) {
+      // A gallery picker is kept for the test to drive; a single-photo picker
+      // answers with `pickImage` at once, as it always has.
+      if (settings.multiple === true) galleryPickers.push(settings);
+      else if (options.pickImage) settings.onPick?.(options.pickImage);
     } },
     WaypointCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
       locale, Object.fromEntries(Object.entries(strings)
@@ -230,7 +242,7 @@ function loadEditor(options: EditorOptions = {}) {
   vm.runInContext(script, ctx);
   const api = vm.runInContext('({ populateForm, buildPayload, loadPost, doSaveDraft, renderAltAudit })', ctx) as EditorApi;
   return {
-    api, el, editors, created: dom.created, document: dom.document, requests, local,
+    api, el, editors, created: dom.created, document: dom.document, requests, local, galleryPickers,
     flushDialogEvents: dom.flushDialogEvents,
     setMobile(mobile: boolean) { media.matches = mobile; mediaChanged?.(); },
     dirtyCalls: () => dirty, redirects: () => redirects,
@@ -1479,6 +1491,116 @@ describe('inline gallery editing', () => {
     expect(h.api.buildPayload().de.bodyMarkdown).toBe(pair.de.bodyMarkdown);
     h.el('deGalleryView').click();
     expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(2);
+  });
+
+  // docs/superpowers/specs/2026-10-19-gallery-library-metadata-design.md,
+  // "Gallery-local caption controls": the widget must show what the build
+  // renders — hidden gallery → nothing; line override → it, empty included;
+  // otherwise the current Media caption — per occurrence, not per URL.
+  const shownCaptions = (h: { document: { querySelectorAll(selector: string): Element[] } }) =>
+    h.document.querySelectorAll('.editor-gallery__caption').map((caption) => caption.hidden ? null : caption.textContent);
+
+  it('shows a gallery-local caption over Media, and none in a gallery whose captions are hidden', async () => {
+    const row = mediaRow('photo', { de: 'Markt', en: 'Market' }, { de: 'Aus der Mediathek', en: 'Morning light' });
+    const h = loadEditor({ fetch: mediaNetwork([row]) });
+    const pair = fullPair();
+    pair.de.bodyMarkdown = [
+      '```gallery', '#captions: hidden', 'https://img/photo', '```', '',
+      '```gallery', 'https://img/photo | caption-override="Nur hier &#124; &quot;lokal&quot; &lt;b&gt;"', '```', '',
+      '```gallery', 'https://img/photo | caption-override=""', '```', '',
+      '```gallery', 'https://img/photo', '```',
+    ].join('\n');
+    pair.de.images = { 'https://img/photo': { width: 900, height: 600, alt: 'Kopie', caption: 'Kopie' } };
+    pair.en.bodyMarkdown = '```gallery\nhttps://img/photo\n```';
+    pair.en.images = { 'https://img/photo': { width: 900, height: 600 } };
+    h.api.populateForm(pair);
+    const before = h.api.buildPayload();
+    // Neither a local caption nor a hidden gallery waits for Media.
+    expect(shownCaptions(h).slice(0, 3)).toEqual([null, 'Nur hier | "lokal" <b>', null]);
+    await settleAll();
+    expect(shownCaptions(h)).toEqual([null, 'Nur hier | "lokal" <b>', null, 'Aus der Mediathek', 'Morning light']);
+    expect(h.document.querySelectorAll('.editor-gallery__caption').flatMap((caption) => caption.querySelectorAll('b'))).toEqual([]);
+    expect(h.document.querySelectorAll('.editor-gallery')
+      .map((gallery) => gallery.textContent.includes(ui.de['editor.gallery.captionsHidden'])))
+      .toEqual([true, false, false, false, false]);
+    expect(h.api.buildPayload()).toEqual(before);
+  });
+
+  it('edits captions for one gallery through the picker, and a save and reopen keep them on that gallery only', async () => {
+    const photo = 'https://img/photo';
+    const other = 'https://img/other';
+    const row = { ...mediaRow('photo', { de: 'Markt', en: 'Market' }, { de: 'Aus der Mediathek', en: 'From Media' }), width: 900, height: 600 };
+    const placeholder = { src: other, width: 300, height: 200, fromPost: true };
+    const h = loadEditor({ fetch: mediaNetwork([row]) });
+    const pair = fullPair();
+    pair.de.bodyMarkdown = [
+      'Intro', '', '```gallery', '#layout: slider', '# shot on the pass', photo + ' | caption-override=""', other, '```',
+      '', 'Middle', '', '```gallery', photo, '```',
+    ].join('\n');
+    pair.de.images = {
+      [photo]: { width: 900, height: 600, alt: 'Kopie', caption: 'Kopie' },
+      [other]: { width: 300, height: 200, alt: 'Andere', caption: 'Gespeichert' },
+    };
+    h.api.populateForm(pair);
+    await settleAll();
+    const editGallery = (index: number) => {
+      h.document.querySelectorAll('.editor-gallery')[index]!.querySelector('.editor-gallery__head')!.querySelector('button')!.click();
+      const picker = h.galleryPickers.at(-1);
+      if (!picker) throw new Error('Edit did not open the gallery picker');
+      return picker;
+    };
+    const fences = (body: string) => body.split(/\n\n(?:Middle\n\n)?/).filter((part) => part.startsWith('```gallery'));
+    const lineOf = (fence: string, src: string) => fence.split('\n').find((line) => line.split('|')[0]!.trim() === src) ?? '';
+
+    const first = editGallery(0);
+    expect(first.captions).toMatchObject({ locale: 'de', visible: true, overrides: { [photo]: '' } });
+    expect(first.captions?.fallback[other]).toBe('Gespeichert');
+    // The author resets the photo to Media, edits the other one, and hides captions.
+    const local = 'Nur | "hier"\nzwei';
+    first.onPick([row, placeholder], { layout: 'slider', captions: { visible: false, overrides: { [other]: local } } });
+
+    const edited = h.api.buildPayload().de;
+    const saved = normalizeGalleryFences(edited.bodyMarkdown, edited.images);
+    // The shared images map keeps Media's / the stored caption: the edit is not in it.
+    expect(saved.images[other]).toEqual({ width: 300, height: 200, alt: 'Andere', caption: 'Gespeichert' });
+    expect(saved.images[photo]).toMatchObject({ alt: 'Markt', caption: 'Aus der Mediathek' });
+    const [hiddenFence, otherFence] = fences(saved.bodyMarkdown);
+    expect(readCaptionsVisible(hiddenFence!)).toBe(false);
+    expect(hiddenFence).toContain('#layout: slider');
+    expect(hiddenFence).toContain('# shot on the pass');
+    expect(readCaptionOverride(lineOf(hiddenFence!, photo))).toBeUndefined();
+    expect(readCaptionOverride(lineOf(hiddenFence!, other))).toBe(local);
+    expect(readCaptionsVisible(otherFence!)).toBe(true);
+    expect(readCaptionOverride(lineOf(otherFence!, photo))).toBeUndefined();
+
+    // Reopen the saved article: the hidden gallery stays hidden, the other follows Media.
+    h.api.populateForm({ ...pair, de: { ...pair.de, ...saved } });
+    await settleAll();
+    expect(shownCaptions(h)).toEqual([null, null, 'Aus der Mediathek']);
+    const reopened = editGallery(0);
+    expect(reopened.captions).toMatchObject({ locale: 'de', visible: false, overrides: { [other]: local } });
+    expect(reopened.captions?.overrides).not.toHaveProperty(photo);
+
+    // Showing captions again removes only the captions directive and keeps the text.
+    reopened.onPick([row, placeholder], { layout: 'slider', captions: { visible: true, overrides: { [other]: local } } });
+    const [shownFence] = fences(h.api.buildPayload().de.bodyMarkdown);
+    expect(readCaptionsVisible(shownFence!)).toBe(true);
+    expect(shownFence).not.toMatch(/#\s*captions/i);
+    expect(shownFence).toContain('#layout: slider');
+    expect(shownFence).toContain('# shot on the pass');
+    expect(readCaptionOverride(lineOf(shownFence!, other))).toBe(local);
+    await settleAll();
+    // CodeMirror owns widget placement; the harness appends recreated widgets.
+    // Assert caption membership by gallery identity, not DOM insertion order.
+    const captionsIn = (label: string) => {
+      const gallery = h.document.querySelectorAll('.editor-gallery')
+        .find((node) => node.getAttribute('aria-label') === label)!;
+      return gallery.querySelectorAll('.editor-gallery__caption')
+        .map((caption) => caption.hidden ? null : caption.textContent);
+    };
+    expect(captionsIn('Galerie 1')).toEqual(['Aus der Mediathek', local]);
+    expect(captionsIn('Galerie 2')).toEqual(['Aus der Mediathek']);
+    expect(h.requests.every((request) => (request.options.method ?? 'GET') === 'GET')).toBe(true);
   });
 });
 

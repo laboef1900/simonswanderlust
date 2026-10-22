@@ -1324,6 +1324,18 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
 .picker-strip__item .thumb-placeholder { width: 2.5rem; height: 2.5rem; border: 0; border-radius: 0.25rem; flex: none; background: var(--canvas); }
 /* A photo carried in from the post whose library row has not been paged in yet. */
 .picker-strip__pending { flex: none; color: var(--muted); font-size: 0.75rem; }
+.picker-strip__visibility { margin: 0; }
+.picker-strip__help { margin: 0 0 0.75rem; font-size: 0.8125rem; }
+.picker-strip--captions .picker-strip__list { max-height: 18rem; }
+.picker-strip--captions .picker-strip__item { flex-wrap: wrap; padding: 0.5rem; }
+.picker-strip__caption { display: flex; flex: 1 0 100%; align-items: end; gap: 0.5rem; min-width: 0; }
+.picker-strip__caption label { flex: 1; min-width: 0; margin: 0; font-size: 0.8125rem; }
+.picker-strip__caption textarea { min-height: 4rem; font-size: 0.875rem; }
+.picker-strip__caption button { padding-inline: 0.5rem; }
+@media (max-width: 640px) {
+  .picker-strip__caption { flex-direction: column; align-items: stretch; }
+  .picker-strip__caption button { align-self: start; }
+}
 
 /* Position badge on a selected grid cell, so grid and strip agree at a glance.
    `.media-cell` carries the `position: relative` this anchors to. */

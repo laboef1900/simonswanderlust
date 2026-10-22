@@ -618,6 +618,26 @@ protections, so they carry their own:
   matters is that hastscript treats a node-shaped object in a children array **as a node**, so a
   caption of `{"type":"raw","value":"<script>…</script>"}` would emit a live script tag — the
   render boundary additionally coerces with `String()` as a backstop.
+- **Gallery-local captions are fence text, rendered as text** (2026-10-19, owner-approved). A
+  photo line's `caption-override="…"` and the fence's `#captions: hidden` directive are read by
+  `readCaptionOverride` / `readCaptionsVisible` in `site/src/lib/gallery-layout.ts` — the same
+  readers the save normalizer and MDX exporter in `uploader/src/body-content.ts` use. The override
+  is author-controlled text the sanitizer never sees, so it only ever becomes a hast **text node**
+  (`String()`-coerced, entity-escaped on output): HTML or fence syntax in it renders literally.
+  On the line it is stored `escapeMeta`-encoded and capped at 1,000 characters, so it can neither
+  end the photo line, add a `|` field, nor fake a directive line. It changes only the caption:
+  the URL is still read from the line's first field and passes the same origin, dimension and
+  format guards before any override is consulted, and alt stays library/`images`-map
+  authoritative. It is never lifted into the URL-keyed `images` map, so it cannot leak into
+  another gallery using the same photo, and it creates no Media write. Precedence: hidden
+  gallery → no caption (and so none in the lightbox, which reads `.jgal__cap` back out of the
+  figure); line override (empty included) → that text; otherwise library caption, then the
+  stored one. Body-wide image passes run only outside gallery fences, through the one fence
+  scanner (`rewriteOutsideGalleries`, which `markdownImages` itself uses): the save-time
+  `<BodyImage>` conversion, the MDX exporter's inline pass, the WXR importer's re-host scan,
+  pre-flight count and merge substitution, the alt audit and media-sync's alt backfill. Gallery
+  text that looks like an image or a tag therefore keeps its exact text through save, export,
+  re-import and import re-runs, and is never fetched, audited or copied into Media.
 
 Why this is not merely theoretical: `GET /posts/:tk/preview` is `requireAuth` (**any** author, not
 just admins), runs the identical transform, and is served same-origin with `/admin/*`. A non-admin

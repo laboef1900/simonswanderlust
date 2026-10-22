@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { heroImageError, imageMarkdown, imagesMapError, normalizeGalleryFences, type ImageMeta } from './body-content.js';
+import { heroImageError, imageMarkdown, imagesMapError, normalizeGalleryFences, rewriteOutsideGalleries, type ImageMeta } from './body-content.js';
 
 export type Locale = 'de' | 'en';
 /**
@@ -417,8 +417,10 @@ export function normalizeBodyImages(
   const merged: Record<string, ImageDims> = { ...gal.images };
   // Attrs are consumed in disjoint chunks — "quoted", {braced}, or any char that opens
   // neither and isn't '>' — so a '>' or '/>' inside a quoted value can't terminate the tag.
+  // Only outside gallery fences: a gallery line's text (a gallery-local caption above
+  // all) is content, never a tag to convert.
   const tagRe = /<BodyImage\s+((?:"[^"]*"|\{[^}]*\}|[^>"{])*?)\/>/g;
-  const normalized = bodyMarkdown.replace(tagRe, (match, attrs: string) => {
+  const normalized = rewriteOutsideGalleries(bodyMarkdown, (text) => text.replace(tagRe, (match, attrs: string) => {
     const get = (name: string): string | undefined => {
       const quoted = attrs.match(new RegExp(`${name}="([^"]*)"`));
       if (quoted?.[1] !== undefined) return quoted[1];
@@ -442,7 +444,7 @@ export function normalizeBodyImages(
       };
     }
     return imageMarkdown(alt, src);
-  });
+  }));
   return { bodyMarkdown: normalized, images: merged };
 }
 

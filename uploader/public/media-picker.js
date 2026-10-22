@@ -56,6 +56,10 @@ window.MediaPicker = (function () {
    * argument to `onPick` (`{layout}`); it is `null` when no list was passed.
    * The picker treats the values as opaque — deciding what a mode means, and
    * writing it into the fence, is the caller's job.
+   * `captions: {locale, visible, overrides, fallback}` enables gallery-local
+   * caption editing. Only explicit edits enter `overrides`; unchanged fields
+   * inherit Media. Buffered values return as `{captions: {visible, overrides}}`
+   * on confirm, never through a Media write.
    */
   function open(opts) {
     var o = opts || {};
@@ -66,6 +70,16 @@ window.MediaPicker = (function () {
       resolving: false, resolveFailed: 0 };
     var compact = window.matchMedia('(max-width: 640px)');
     var picked = window.PickerSelection.create({ preselect: o.preselect });
+    var captionOptions = multiple && o.captions;
+    var captionOverrides = Object.assign(Object.create(null), captionOptions ? captionOptions.overrides : {});
+
+    function inheritedCaption(item) {
+      if (item.caption && typeof item.caption === 'object') {
+        return typeof item.caption[captionOptions.locale] === 'string' ? item.caption[captionOptions.locale] : '';
+      }
+      var fallback = captionOptions.fallback && captionOptions.fallback[item.src];
+      return typeof fallback === 'string' ? fallback : '';
+    }
 
     var dialog = document.createElement('dialog');
     dialog.className = 'admin-modal media-picker';
@@ -174,6 +188,7 @@ window.MediaPicker = (function () {
     var stripList = null;
     var stripCount = null;
     var layoutSelect = null;
+    var captionsVisible = null;
     if (multiple) {
       strip = el('div', 'picker-strip');
       var stripHead = el('div', 'picker-strip__head');
@@ -215,8 +230,19 @@ window.MediaPicker = (function () {
         layoutWrap.appendChild(layoutSelect);
         stripHead.appendChild(layoutWrap);
       }
+      if (captionOptions) {
+        strip.classList.add('picker-strip--captions');
+        var visibilityLabel = el('label', 'check-field picker-strip__visibility');
+        captionsVisible = document.createElement('input');
+        captionsVisible.type = 'checkbox';
+        captionsVisible.checked = captionOptions.visible !== false;
+        visibilityLabel.appendChild(captionsVisible);
+        visibilityLabel.appendChild(el('span', null, copy.pickerShowCaptions));
+        stripHead.appendChild(visibilityLabel);
+      }
 
       strip.appendChild(stripHead);
+      if (captionOptions) strip.appendChild(el('p', 'muted picker-strip__help', copy.pickerCaptionsHelp));
       stripList = el('ol', 'picker-strip__list');
       stripList.setAttribute('aria-label', 'Selected photos, in gallery order');
       strip.appendChild(stripList);
@@ -257,6 +283,10 @@ window.MediaPicker = (function () {
 
     function renderStrip() {
       if (!multiple) return;
+      // A late library/page response must not discard the focused caption or caret.
+      var active = document.activeElement;
+      var focusCaption = active && active.className === 'picker-strip__caption-input'
+        ? { src: active.dataset.src, start: active.selectionStart, end: active.selectionEnd } : null;
       stripList.innerHTML = '';
       var total = picked.size();
       var offscreen = picked.unresolved();
@@ -323,8 +353,50 @@ window.MediaPicker = (function () {
         });
 
         [up, down, drop].forEach(function (b) { li.appendChild(b); });
+        if (captionOptions) {
+          var captionField = el('div', 'picker-strip__caption');
+          var captionLabel = el('label');
+          captionLabel.appendChild(el('span', null, copy.pickerCaption.replace('{locale}', captionOptions.locale.toUpperCase())));
+          var captionInput = document.createElement('textarea');
+          captionInput.className = 'picker-strip__caption-input';
+          captionInput.dataset.src = item.src;
+          captionInput.lang = captionOptions.locale;
+          captionInput.rows = 2;
+          captionInput.maxLength = 1000;
+          var overridden = typeof captionOverrides[item.src] === 'string';
+          captionInput.value = overridden ? captionOverrides[item.src] : inheritedCaption(item);
+          captionLabel.appendChild(captionInput);
+          captionField.appendChild(captionLabel);
+          var reset = el('button', 'btn-secondary', copy.pickerCaptionReset);
+          reset.type = 'button';
+          reset.dataset.act = 'caption-reset';
+          reset.disabled = !overridden;
+          captionInput.addEventListener('input', function () {
+            captionOverrides[item.src] = captionInput.value;
+            reset.disabled = false;
+          });
+          reset.addEventListener('click', function () {
+            delete captionOverrides[item.src];
+            captionInput.value = inheritedCaption(item);
+            reset.disabled = true;
+            captionInput.focus();
+          });
+          captionField.appendChild(reset);
+          li.appendChild(captionField);
+        }
         stripList.appendChild(li);
       });
+      if (focusCaption) {
+        var fields = stripList.querySelectorAll('.picker-strip__caption-input');
+        for (var n = 0; n < fields.length; n++) {
+          if (fields[n].dataset.src !== focusCaption.src) continue;
+          fields[n].focus();
+          if (typeof fields[n].setSelectionRange === 'function') {
+            fields[n].setSelectionRange(focusCaption.start, focusCaption.end);
+          }
+          break;
+        }
+      }
     }
 
     var foot = el('div', 'admin-modal__foot');
@@ -481,8 +553,16 @@ window.MediaPicker = (function () {
       if (state.resolving || (!multiple && !items.length)) return;
       // Read the mode BEFORE close() removes the dialog from the document.
       var layout = layoutSelect ? layoutSelect.value : null;
+      var options = { layout: layout };
+      if (captionOptions) {
+        var overrides = Object.create(null);
+        items.forEach(function (item) {
+          if (typeof captionOverrides[item.src] === 'string') overrides[item.src] = captionOverrides[item.src];
+        });
+        options.captions = { visible: captionsVisible.checked, overrides: overrides };
+      }
       close();
-      if (o.onPick) o.onPick(multiple ? items : items[0], { layout: layout });
+      if (o.onPick) o.onPick(multiple ? items : items[0], options);
     }
 
     search.addEventListener('input', api.debounce(function () {

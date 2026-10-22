@@ -13,7 +13,7 @@
 // data path — and needs no server change at all.
 //
 // @ai-warning The escape rule below duplicates `escapeMeta`/`unescapeMeta` in
-// src/body-content.ts. They cannot import one another (browser IIFE vs. an ESM
+// site/src/lib/gallery-layout.ts. They cannot import one another (browser IIFE vs. an ESM
 // module in a different tsconfig), so `test/gallery-fence.test.ts` asserts they
 // agree character for character. Change one and you MUST change the other: a
 // divergence corrupts alt text and captions containing `|`, a newline or a
@@ -21,7 +21,7 @@
 //
 // Same rules as media-picker.js: textContent only, one state object, no innerHTML.
 window.GalleryFence = (function () {
-  // Mirrors src/body-content.ts. Order is load-bearing in both directions:
+  // Mirrors site/src/lib/gallery-layout.ts. Order is load-bearing in both directions:
   // `&` is escaped FIRST so that a literal `&quot;` in the source round-trips,
   // and `&amp;` is unescaped LAST for the same reason.
   function escapeMeta(s) {
@@ -85,9 +85,25 @@ window.GalleryFence = (function () {
     return ['#layout: ' + value].concat(kept);
   }
 
+  // Mirrors the renderer's caption directive: first match wins, unknown is visible.
+  var CAPTIONS_RE = /^\s*#\s*captions\s*:\s*(\S*)\s*$/i;
+  function captionsVisible(directives) {
+    var lines = directives || [];
+    for (var i = 0; i < lines.length; i++) {
+      var match = CAPTIONS_RE.exec(String(lines[i]));
+      if (match) return String(match[1]).toLowerCase() !== 'hidden';
+    }
+    return true;
+  }
+
+  function withCaptions(directives, visible) {
+    var kept = (directives || []).filter(function (d) { return !CAPTIONS_RE.test(String(d)); });
+    return visible === false ? ['#captions: hidden'].concat(kept) : kept;
+  }
+
   // Mirrors DIMS_RE / ATTR_RE and MAX_TEXT in src/body-content.ts.
   var DIMS_RE = /^(\d{1,6})x(\d{1,6})$/;
-  var ATTR_RE = /^(alt|caption|format)="([^"]*)"$/;
+  var ATTR_RE = /^(alt|caption|caption-override|format)="([^"]*)"$/;
   var MAX_TEXT = 1000;
 
   // Mirrors FENCE_OPEN_RE in src/body-content.ts: up to 3 spaces of indent
@@ -122,7 +138,7 @@ window.GalleryFence = (function () {
   }
 
   /**
-   * serialize(items, locale, directives?, postMeta?) → a complete ```gallery block.
+   * serialize(items, locale, directives?, postMeta?, captionOverrides?) → a complete ```gallery block.
    *
    * `directives` are `#`-prefixed lines carried through from an existing fence
    * (e.g. #66's `#layout: slider`). They are emitted first and never parsed —
@@ -140,6 +156,8 @@ window.GalleryFence = (function () {
    * placeholder) keeps the post's metadata exactly. The JPEG-only marker
    * describes the stored variants, so the post's recorded `format` is kept in
    * both cases.
+   * `captionOverrides` holds explicit gallery-local edits, including empty text.
+   * These stay on the photo line rather than entering the URL-keyed images map.
    *
    * @ai-warning `postMeta` is load-bearing in two ways. `normalizeGalleryFences`
    * lets a value present on the line beat the stored `images` entry, and keeps
@@ -149,7 +167,7 @@ window.GalleryFence = (function () {
    * what forces an explicit `alt=""`/`caption=""` — omitting the attribute would
    * let the save resurrect the stale copy as the stored fallback.
    */
-  function serialize(items, locale, directives, postMeta) {
+  function serialize(items, locale, directives, postMeta, captionOverrides) {
     var lines = [];
     (directives || []).forEach(function (d) {
       var t = String(d).trim();
@@ -184,6 +202,9 @@ window.GalleryFence = (function () {
       // that is now empty over an older post copy.
       if (alt !== '' || typeof prior.alt === 'string') parts.push('alt="' + escapeMeta(alt) + '"');
       if (caption !== '' || typeof prior.caption === 'string') parts.push('caption="' + escapeMeta(caption) + '"');
+      if (captionOverrides && typeof captionOverrides[src] === 'string') {
+        parts.push('caption-override="' + escapeMeta(captionOverrides[src].slice(0, MAX_TEXT)) + '"');
+      }
       lines.push(parts.join(' | '));
     });
 
@@ -224,6 +245,7 @@ window.GalleryFence = (function () {
           var value = unescapeMeta(attr[2] || '').slice(0, MAX_TEXT);
           if (attr[1] === 'alt') out.alt = value;
           else if (attr[1] === 'caption') out.caption = value;
+          else if (attr[1] === 'caption-override') out.captionOverride = value;
           else if (value === 'jpeg') out.format = value;
         }
       });
@@ -433,7 +455,7 @@ window.GalleryFence = (function () {
   return {
     // escapeMeta/unescapeMeta have no caller in the page — serialize and parse
     // use them internally. They are exported so test/gallery-fence.test.ts can
-    // compare them character for character against src/body-content.ts's pair,
+    // compare them character for character against gallery-layout.ts's pair,
     // which is the only thing keeping the duplicated rule honest. Do not drop
     // them as dead exports; that deletes the test's handle on the invariant.
     escapeMeta: escapeMeta,
@@ -442,6 +464,8 @@ window.GalleryFence = (function () {
     DEFAULT_LAYOUT: DEFAULT_LAYOUT,
     layoutOf: layoutOf,
     withLayout: withLayout,
+    captionsVisible: captionsVisible,
+    withCaptions: withCaptions,
     serialize: serialize,
     parse: parse,
     withAlt: withAlt,

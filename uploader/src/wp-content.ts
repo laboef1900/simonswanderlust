@@ -1,5 +1,6 @@
 import TurndownService from 'turndown';
-import { escapeMeta } from './body-content.js';
+import { escapeMeta } from '../../site/src/lib/gallery-layout.js';
+import { rewriteOutsideGalleries } from './body-content.js';
 
 const td = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced' });
 td.remove(['script', 'style', 'noscript', 'iframe']);
@@ -155,15 +156,29 @@ export interface MarkdownImage {
  */
 const IMAGE_RE = /!\[((?:\\.|[^\]\\])*)\]\(\s*(?:<([^<>\n]*)>|((?:\\.|[^\s()\\]|\((?:\\.|[^\s()\\])*\))*))(?:\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?\s*\)/g;
 
+/**
+ * Every inline Markdown image OUTSIDE ```gallery fences, in body order.
+ *
+ * @ai-warning Gallery lines are skipped on purpose (gallery-local caption
+ * controls, 2026-10-19): their `alt=`/`caption=`/`caption-override=` values
+ * are author text that may legitimately read `![x](https://…)`, and every
+ * caller — the WXR re-host scan and its pre-flight count, the export's
+ * <BodyImage> pass, the alt audit, media-sync's alt backfill — would otherwise
+ * misread that caption as a photo. Gallery photos are read from the fence
+ * lines themselves (`rewriteFences`), never from here.
+ */
 export function markdownImages(md: string): MarkdownImage[] {
   const out: MarkdownImage[] = [];
-  for (const m of md.matchAll(IMAGE_RE)) {
-    // Backslash escapes apply to ASCII punctuation only (CommonMark §2.4); a
-    // backslash before anything else is literal.
-    const raw = m[2] ?? m[3] ?? '';
-    const url = raw.replace(/\\([!-/:-@[-`{-~])/g, '$1');
-    if (url) out.push({ full: m[0], alt: m[1] ?? '', url });
-  }
+  rewriteOutsideGalleries(md, (text) => {
+    for (const m of text.matchAll(IMAGE_RE)) {
+      // Backslash escapes apply to ASCII punctuation only (CommonMark §2.4); a
+      // backslash before anything else is literal.
+      const raw = m[2] ?? m[3] ?? '';
+      const url = raw.replace(/\\([!-/:-@[-`{-~])/g, '$1');
+      if (url) out.push({ full: m[0], alt: m[1] ?? '', url });
+    }
+    return text;
+  });
   return out;
 }
 

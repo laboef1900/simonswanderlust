@@ -151,6 +151,14 @@ describe('harvestAlt', () => {
       .toEqual({ de: 'Blick [Norwegen]', en: '' });
   });
 
+  // Gallery-local captions (2026-10-19): caption text that reads like an
+  // inline image is not that photo's alt and must never seed the library.
+  it('ignores image-like text inside a gallery caption override', () => {
+    const src = `${BASE}/trips/a/pic`;
+    const body = '```gallery\n' + `${BASE}/trips/a/g | caption-override="![Not an alt](${src})"\n` + '```';
+    expect(harvestAlt(src, [row({ locale: 'de', bodyMarkdown: body })])).toEqual({ de: '', en: '' });
+  });
+
   // @ai-warning: exact URL matches only. A mis-attribution would silently
   // poison the library and then denormalize into every future post.
   it('is exact-match only — a prefix or variant URL does not count', () => {
