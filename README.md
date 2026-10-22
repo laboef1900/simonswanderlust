@@ -224,15 +224,15 @@ integration tests need a separate `TEST_DATABASE_URL`.
 
 ### Cutting a release
 
-**Current release: v0.15.1.** Highlights since v0.15.0:
+**Current release: v0.16.0.** Highlights since v0.15.1:
 
-- Article titles use the available space beside the arrival stamp; the shared reading
-  measure grows from 960px to 1056px while retaining mobile gutters and the sidebar.
-- Article galleries use current Media-library alt text and captions per locale, including
-  explicitly empty descriptions. Editor galleries, draft preview and story checks agree.
-- **Rebuild the site after deploying** to refresh published gallery descriptions and article
-  layout. Rebuilding does not publish draft article text. Hero, inline-image and About-page
-  descriptions are unchanged.
+- Gallery captions can be edited per photo, gallery and locale without changing shared
+  Media-library descriptions. Reset an override to inherit the Media default again.
+- A per-gallery **Show captions** toggle controls captions in both the gallery and its
+  lightbox; captions remain editable while hidden.
+- Local overrides and visibility survive save, export, import, draft preview and publish.
+  Deploying does not publish drafts or rebuild the live blog; publish edited stories to
+  apply their new caption settings.
 
 Upgrading from before v0.15.0: take **Back up now** before deploying. First boot migrates
 `settings.json` and the stored AI key into the provider registry, keeping
@@ -246,8 +246,8 @@ Upgrading from before v0.15.0: take **Back up now** before deploying. First boot
 
 ```bash
 git fetch origin main
-git tag -a v0.15.1 origin/main -m "Release v0.15.1"
-git push origin v0.15.1
+git tag -a v0.16.0 origin/main -m "Release v0.16.0"
+git push origin v0.16.0
 ```
 
 Never push directly to protected branches, tag an unmerged feature branch or replace a
