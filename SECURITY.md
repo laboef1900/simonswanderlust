@@ -18,6 +18,42 @@ change about the security posture.
 - **Out of scope:** DDoS, host/OS hardening, and a fully DNS-rebind-proof SSRF filter (see
   *Known limitations*).
 
+## GPX routes — planned security change (#311)
+
+The [2026-10-23 GPX specification](docs/superpowers/specs/2026-10-23-gpx-route-import-design.md)
+is **owner-approved as a design** (PR #326, 2026-10-23); this section records planned impact,
+not implemented protection. #313 adds bounded XML import/private storage; #314 adds public
+artifacts and snapshot isolation. Both are high-risk, owner-reviewed changes.
+
+- GPX originals and attached draft coordinates, elevation and timestamps are sensitive.
+  Any authenticated author may read them, unlike media GPS redaction. Only an admin may
+  Publish. Originals live outside every public/static root, with guarded attachment-only
+  downloads; private responses and failures are `no-store`.
+- Trimming protects **publication**, not private retention. The owner chose to keep the
+  latest attached original through detachment, delete it on replacement/post deletion,
+  and retain full private route state in DB dumps with a manifest-matched private route
+  archive. Those backups deliberately contain removed points/times until normal expiry.
+  Public route geometry in HTML/JSON/assets and MDX is only the approved 2D artifact.
+  Damaged sources may be protected from automatic cleanup by a retained degraded
+  manifest, but explicit replacement/post deletion override that protection. Durable
+  deletion intents retry failed unlink operations; a pending retry is not physical erasure.
+- Strict decoding precedes DOCTYPE/entity refusal in every supported encoding. Parsing
+  runs in a terminable, resource-bounded worker; a timer beside synchronous parsing is
+  insufficient. Malformed coordinates cannot be skipped into a new connecting line.
+- No private GPX preview/point arrays go to third-party tiles, geocoders, AI or browser draft
+  storage. **Owner decision after review:** explicitly selected waypoints keep exact GPX
+  coordinates as ordinary shared stops, with an unchecked selection and a warning that
+  stops publish independently of track trimming. They follow existing stop metadata/stash
+  rules. Track rounding (four decimals) and simplification (25 m) are not anonymization;
+  neither they nor a z8 basemap protect those separately approved stop coordinates.
+- Route edits/detachment remain draft-only until Publish; private route state never enters
+  text revisions. Public leak verification decodes artifacts separately from private-backup
+  preservation/access tests. Reverting code does not erase already-built public HTML:
+  containment requires an owner-authorized safe rebuild/release switch and cache assessment.
+
+The specification defines transaction/file ordering, original cleanup, paired restore,
+misuse cases and required failure-path evidence. No safety gate is waived by this plan.
+
 ## Authentication & sessions
 
 - **Passwords** are hashed with **scrypt** (`N=16384, r=8, p=1`, 64-byte key, per-user random salt)
