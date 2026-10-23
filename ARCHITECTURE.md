@@ -68,7 +68,9 @@ shared stops and the free-text `route` label.
   file-lifecycle gate protects originals during mutation/backup. A process-lifetime
   PostgreSQL advisory lock and app-session drain check exclude concurrent restore.
   Lease loss latches writes/jobs off and closes the pool without stopping static serving;
-  an explicit app restart is required to resume writes. Cleanup never queues behind backup.
+  health reports `storageWritable: false`; an explicit app restart resumes writes.
+  Cleanup never queues behind backup. Transactional operational `route_cleanup` intents
+  retry failed explicit removals across restart without targeting current/restored sources.
 - #314 creates a bounded public `track` artifact from the trimmed private route and copies
   it into both locale snapshots only on explicit Publish. The Content Layer and MDX route
   export read those snapshots, never the current private route row. Rebuilds cannot reveal
@@ -79,8 +81,9 @@ shared stops and the free-text `route` label.
   Explicitly degraded sets preserve the database/available originals when a source is
   missing, corrupt, unreadable or oversized; they never promise to recover unavailable
   bytes. Retained degraded manifests pin unreadable/oversized local sources against
-  cleanup for possible recovery. Offline restore validates the set, stages new identities,
-  then commits database state transactionally. Legacy dumps restore without routes.
+  automatic reclamation, but explicit replacement/post deletion override those pins.
+  Offline restore validates the set, stages new identities, then commits database state
+  transactionally. Legacy dumps restore without routes.
 - The admin's self-hosted map is context only; point/distance controls and a blank-grid
   preview work without basemap data. Public route text remains available without JS/WebGL.
   No journey reuse or third-party location transfer is implemented by this work.

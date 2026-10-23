@@ -34,6 +34,9 @@ artifacts and snapshot isolation. Both are high-risk, owner-reviewed changes.
   and retain full private route state in DB dumps with a manifest-matched private route
   archive. Those backups deliberately contain removed points/times until normal expiry.
   Public route geometry in HTML/JSON/assets and MDX is only the approved 2D artifact.
+  Damaged sources may be protected from automatic cleanup by a retained degraded
+  manifest, but explicit replacement/post deletion override that protection. Durable
+  deletion intents retry failed unlink operations; a pending retry is not physical erasure.
 - Strict decoding precedes DOCTYPE/entity refusal in every supported encoding. Parsing
   runs in a terminable, resource-bounded worker; a timer beside synchronous parsing is
   insufficient. Malformed coordinates cannot be skipped into a new connecting line.
