@@ -53,6 +53,36 @@ Plus the **`pgdata`** volume — Postgres data.
                                └──────────────┘
 ```
 
+## Planned GPX route boundary (#311)
+
+The [2026-10-23 GPX specification](docs/superpowers/specs/2026-10-23-gpx-route-import-design.md)
+is proposed, **not implemented or owner-approved yet**. It preserves existing story URLs,
+shared stops and the free-text `route` label.
+
+- #313 adds one private `post_routes` row per translation pair, a dedicated authenticated
+  attach API, and `/data/routes` beside—not inside—images/site/static roots. A route
+  version token protects edits; detach retains the latest original for explicit recovery.
+  GPX arrays stay outside ordinary post JSON, text revisions and browser draft backups.
+- Pair-wide transaction locks serialize save/attach/publish/delete against the two-locale
+  schema; `translation_key` is not itself a unique parent key on `posts`. A separate
+  file-lifecycle gate protects originals during mutation and backup capture.
+- #314 creates a bounded public `track` artifact from the trimmed private route and copies
+  it into both locale snapshots only on explicit Publish. The Content Layer and MDX route
+  export read those snapshots, never the current private route row. Rebuilds cannot reveal
+  subsequent route edits or detachment. Overview maps stay pin-only.
+- Private dump v10 includes route rows; a full, manifest-matched private route archive
+  includes retained originals. The archive is completed before the matching dump becomes
+  visible, and they expire together. Confirmed offline restore validates the set, stages
+  new original identities, then commits all database state transactionally. Legacy dumps
+  restore without routes rather than inheriting current private data.
+- The admin's self-hosted map is context only; point/distance controls and a blank-grid
+  preview work without basemap data. Public route text remains available without JS/WebGL.
+  No journey reuse or third-party location transfer is implemented by this work.
+
+Rollback leaves additive storage inert; removing a public line requires an authorized
+rebuild, not merely an image redeploy. Full failure/recovery contracts and approval gates
+are in the specification.
+
 ## Content pipeline (keyboard → published page)
 
 1. **Author** writes a post (DE + EN) in the in-admin editor (`/admin/editor.html`, EasyMDE). Body
