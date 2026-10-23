@@ -21,8 +21,8 @@ change about the security posture.
 ## GPX routes — planned security change (#311)
 
 The [2026-10-23 GPX specification](docs/superpowers/specs/2026-10-23-gpx-route-import-design.md)
-is **pending explicit owner approval**; this section records the proposed impact, not
-implemented protection. #313 adds bounded XML import/private storage; #314 adds public
+is **owner-approved as a design** (PR #326, 2026-10-23); this section records planned impact,
+not implemented protection. #313 adds bounded XML import/private storage; #314 adds public
 artifacts and snapshot isolation. Both are high-risk, owner-reviewed changes.
 
 - GPX originals and attached draft coordinates, elevation and timestamps are sensitive.

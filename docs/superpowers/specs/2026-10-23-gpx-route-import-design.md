@@ -3,7 +3,7 @@
 **Date:** 2026-10-23  
 **Issues:** [#312](https://github.com/laboef1900/simonswanderlust/issues/312), part of [#311](https://github.com/laboef1900/simonswanderlust/issues/311); implementation [#313](https://github.com/laboef1900/simonswanderlust/issues/313), then [#314](https://github.com/laboef1900/simonswanderlust/issues/314).  
 **Risk:** HIGH — untrusted XML, location privacy, schema, backup/restore and publication.  
-**Status:** Proposed; explicit owner approval of this completed specification is required before implementation. Issue labels and automated reviews do not grant approval. Each implementation PR also requires owner approval; merging, deployment and publishing real content require separate authorization.
+**Status:** Owner-approved specification, 2026-10-23, at reviewed PR #326 head `99263ca0ce88c4ab619c5d32507a441a06dfae1a`; implementation has not yet landed. The owner separately authorized merging #326 after green CI, including this approval-record-only update. Each implementation PR still requires owner approval and separate merge authorization; no deployment or real-content publication is authorized.
 
 ## 1. Scope, decisions and baseline
 
@@ -320,5 +320,6 @@ Prefer sequential PRs into `dev`. If the owner approves specification/implementa
 ## Approval record
 
 - Specific retention, private-backup classification and public precision choices: owner answers recorded 2026-10-23, as above.
-- Completed specification approval: **pending explicit owner approval on the reviewed PR/head**.
+- Completed specification: the owner explicitly selected **“Approve completed specification”** for reviewed PR #326 head `99263ca0ce88c4ab619c5d32507a441a06dfae1a` on 2026-10-23, after both independent reviews cleared and both required CI jobs passed.
+- Merge #326 only: the owner separately selected **“Authorize #326 merge”**, after recording approval and verifying CI on this metadata-only update. This authorizes the specification merge into `dev`, not later implementation merges, deployment or publication.
 - Implementation PR approvals and merge authorizations: **not granted by this document**.

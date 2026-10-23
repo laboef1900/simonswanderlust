@@ -56,7 +56,7 @@ Plus the **`pgdata`** volume — Postgres data.
 ## Planned GPX route boundary (#311)
 
 The [2026-10-23 GPX specification](docs/superpowers/specs/2026-10-23-gpx-route-import-design.md)
-is proposed, **not implemented or owner-approved yet**. It preserves existing story URLs,
+is **owner-approved but not implemented yet** (PR #326, 2026-10-23). It preserves story URLs,
 shared stops and the free-text `route` label.
 
 - #313 adds one private `post_routes` row per translation pair, a dedicated authenticated
