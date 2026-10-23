@@ -65,16 +65,19 @@ shared stops and the free-text `route` label.
   GPX arrays stay outside ordinary post JSON, text revisions and browser draft backups.
 - Pair-wide transaction locks serialize save/attach/publish/delete against the two-locale
   schema; `translation_key` is not itself a unique parent key on `posts`. A separate
-  file-lifecycle gate protects originals during mutation and backup capture.
+  file-lifecycle gate protects originals during mutation/backup, and a process-lifetime
+  PostgreSQL advisory lock excludes simultaneous app/restore processes.
 - #314 creates a bounded public `track` artifact from the trimmed private route and copies
   it into both locale snapshots only on explicit Publish. The Content Layer and MDX route
   export read those snapshots, never the current private route row. Rebuilds cannot reveal
   subsequent route edits or detachment. Overview maps stay pin-only.
 - Private dump v10 includes route rows; a full, manifest-matched private route archive
   includes retained originals. The archive is completed before the matching dump becomes
-  visible, and they expire together. Confirmed offline restore validates the set, stages
-  new original identities, then commits all database state transactionally. Legacy dumps
-  restore without routes rather than inheriting current private data.
+  visible; manifest references pair retention independently of filename timestamps.
+  Explicitly degraded sets preserve the database/available originals when a source is
+  already missing; they never promise to recover unavailable files. Offline restore
+  validates the set, stages new identities, then commits database state transactionally.
+  Legacy dumps restore without routes rather than inheriting current private data.
 - The admin's self-hosted map is context only; point/distance controls and a blank-grid
   preview work without basemap data. Public route text remains available without JS/WebGL.
   No journey reuse or third-party location transfer is implemented by this work.

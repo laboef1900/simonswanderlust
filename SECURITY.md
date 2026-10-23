@@ -33,13 +33,16 @@ artifacts and snapshot isolation. Both are high-risk, owner-reviewed changes.
   latest attached original through detachment, delete it on replacement/post deletion,
   and retain full private route state in DB dumps with a manifest-matched private route
   archive. Those backups deliberately contain removed points/times until normal expiry.
-  Public HTML/JSON/assets and MDX receive only the approved 2D artifact, never raw data.
+  Public route geometry in HTML/JSON/assets and MDX is only the approved 2D artifact.
 - Strict decoding precedes DOCTYPE/entity refusal in every supported encoding. Parsing
   runs in a terminable, resource-bounded worker; a timer beside synchronous parsing is
   insufficient. Malformed coordinates cannot be skipped into a new connecting line.
-- No GPX data goes to third-party tiles, geocoders, AI or browser draft storage. Explicitly
-  adopted ordinary stops keep the existing shared metadata contract. Public rounding
-  (four decimals) and simplification (25 m) are not anonymization, nor is a z8 basemap.
+- No private GPX preview/point arrays go to third-party tiles, geocoders, AI or browser draft
+  storage. **Owner decision after review:** explicitly selected waypoints keep exact GPX
+  coordinates as ordinary shared stops, with an unchecked selection and a warning that
+  stops publish independently of track trimming. They follow existing stop metadata/stash
+  rules. Track rounding (four decimals) and simplification (25 m) are not anonymization;
+  neither they nor a z8 basemap protect those separately approved stop coordinates.
 - Route edits/detachment remain draft-only until Publish; private route state never enters
   text revisions. Public leak verification decodes artifacts separately from private-backup
   preservation/access tests. Reverting code does not erase already-built public HTML:
