@@ -187,7 +187,11 @@ export function createGpxService({ pool, files, worker, backupDir: _backupDir, i
     original: (tk) => files.gate.runExclusive(() => original(tk)),
     importUpload,
     importBytes: (author, bytes, signal) => importUpload(author, async () => bytes, signal),
-    reimport: (author, tk, signal) => importUpload(author, async () => files.gate.runExclusive(() => original(tk)), signal),
+    reimport: (author, tk, signal) => importUpload(author, async () => {
+      const loaded = await files.gate.tryRunExclusive(() => original(tk));
+      if (!loaded.acquired) throw new GpxError('gpx_busy', 429);
+      return loaded.value;
+    }, signal),
     async cancel(author, id) {
       writable();
       const entry = pending.get(id);

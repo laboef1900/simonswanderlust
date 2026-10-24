@@ -325,7 +325,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // routes that declare one of these preHandlers resolve `req.authUser`.
   app.decorateRequest('authUser', null);
   const { optionalAuth, requireAuth, requireAdmin } = createAuthn(users, sessions);
-  if (cfg.gpx) registerGpxRoutes(app, { gpx: cfg.gpx, requireAuth, baseUrl: cfg.baseUrl });
+  if (cfg.gpx) registerGpxRoutes(app, { gpx: cfg.gpx, requireAuth });
   app.get('/admin/gpx-copy.js', async (_req, reply) =>
     reply.type('application/javascript; charset=utf-8').header('cache-control', 'no-store').send(renderGpxCopy()));
 
@@ -1760,7 +1760,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
     try {
       await posts.unpublish(tk);
     } catch (e) {
-      if (e instanceof PostError) return reply.code(404).send({ error: e.message });
+      if (e instanceof PostError) {
+        if (e.code === 'storage_read_only') return readOnly(reply);
+        return reply.code(404).send({ error: e.message });
+      }
       throw e;
     }
     const build = await cfg.builder.build();

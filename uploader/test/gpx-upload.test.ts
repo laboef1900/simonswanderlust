@@ -103,7 +103,8 @@ describe('admitted GPX multipart ingestion over real HTTP', () => {
     const padded = Buffer.concat([envelope, Buffer.alloc(GPX_LIMITS.fileBytes + 16 * 1024 - envelope.length, 32)]);
     const response = await send(f.address, padded, { 'transfer-encoding': 'chunked' });
     expect(response.status).toBe(201);
-    expect(f.received()).toEqual(exact);
+    // Native byte equality avoids enumerating five million Buffer properties.
+    expect(f.received()?.equals(exact)).toBe(true);
   // The real ingress budget is 15s, followed by the worker's bounded parse.
   // A 5s test deadline incorrectly rejects an admitted transfer under suite load.
   }, 20_000);

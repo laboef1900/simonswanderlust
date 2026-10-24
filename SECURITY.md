@@ -30,6 +30,10 @@ Implementation approval and merge authorization remain separate from design appr
   Any authenticated author may read them, unlike media GPS redaction. Only an admin may
   Publish. Originals live outside every public/static root, with guarded attachment-only
   downloads; private responses and failures are `no-store`.
+  GPX mutations compare a supplied Origin to the admin request's scheme and verbatim
+  forwarded `Host`, not `PUBLIC_BASE_URL` (the separate image origin).
+  `X-Forwarded-Host` is not used; the existing proxy must preserve `Host` and set
+  `X-Forwarded-Proto`. Missing/malformed authority fails closed.
 - Trimming protects **publication**, not private retention. The owner chose to keep the
   latest attached original through detachment, delete it on replacement/post deletion,
   and retain full private route state in DB dumps with a manifest-matched private route

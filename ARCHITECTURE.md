@@ -220,8 +220,10 @@ take the same lock as shared holders (#95; its fetches do not). A waiting build 
 backlog at the next job boundary rather than queueing behind it, because Publish awaits the
 rebuild synchronously in the editor. That mutual exclusion is why `docker-compose.yml`'s
 `mem_limit` is sized as `max(build, encode) + baseline` rather than their sum.
-`createShutdown` drains the queue between closing the HTTP server and ending the pg pool, so
-in-flight jobs can still write their final status.
+On shutdown, `main.ts` closes HTTP admission and quiesces background work together,
+then ends the pool and releases storage ownership. Quiescence cancels further file/status
+publication and waits for admitted work; abandoned encode rows remain `processing` for
+`recover()` on the next boot. Lease loss uses the same quiescence without closing static HTTP.
 
 **Disk headroom (#73):** roughly **17.5 MB per photo** (6.9 MB of variants + the 10.7 MB retained
 original) ≈ **1.75 GB per 100 photos**, plus roughly the same again under `/data/backup` because

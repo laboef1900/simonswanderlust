@@ -8,9 +8,10 @@ import { BACKUP_FILE_RE, BackupError, dumpDatabase, readDump, resolveBackupDir, 
 import { passwordPolicyViolation, type UserStore } from './users.js';
 import type { SessionStore } from './sessions.js';
 import { createSettingsStore, defaultSettings } from './settings.js';
-import { acquireStorageOwner } from './storage-owner.js';
+import { acquireStorageOwner, StorageReadOnlyError, type StorageOwner } from './storage-owner.js';
 import { createGpxFiles } from './gpx-files.js';
 import { verifyRouteArchive, routeRecoverySummary } from './gpx-backup.js';
+import type { DbPool } from './db.js';
 
 /** Reusable: process an in-memory image and store its variants.
  * Keys are content-hash versioned like POST /upload, so a re-upload mints a
@@ -108,16 +109,20 @@ async function restoreMain(args: string[]): Promise<void> {
     post_routes: dump.tables.post_routes?.length ?? 0,
   };
   const { createPool } = await import('./db.js');
-  const owner = await acquireStorageOwner(databaseUrl, { role: 'restore' });
-  const pool = createPool(databaseUrl, owner.applicationName);
-  const routeFiles = createGpxFiles({ storageDir: process.env.STORAGE_DIR ?? '/data/images', isWritable: owner.isWritable });
-  const assertOwner = async () => {
-    owner.assertWritable();
-    await owner.assertNoAppSessions();
-    owner.assertWritable();
-  };
+  let owner: StorageOwner | undefined;
+  let pool: DbPool | undefined;
+  let admitted = false;
   try {
+    const lease = owner = await acquireStorageOwner(databaseUrl, { role: 'restore' });
+    const assertOwner = async () => {
+      lease.assertWritable();
+      await lease.assertNoAppSessions();
+      lease.assertWritable();
+    };
     await assertOwner();
+    admitted = true;
+    pool = createPool(databaseUrl, lease.applicationName);
+    const routeFiles = createGpxFiles({ storageDir: process.env.STORAGE_DIR ?? '/data/images', isWritable: lease.isWritable });
     const live = {} as RowCounts;
     for (const t of RESTORE_TABLES) {
       live[t] = Number((await pool.query(`SELECT count(*) AS n FROM ${t}`)).rows[0].n);
@@ -163,8 +168,14 @@ async function restoreMain(args: string[]): Promise<void> {
     console.log(counts.appSecrets === null ? 'app_secrets preserved.' : `restored ${counts.appSecrets} encrypted app_secrets rows.`);
     console.log(`to undo: restore --yes ${preDump}`);
     console.log('Restart the app with the same data/settings configuration, then rebuild through /admin/settings.html → \"Rebuild site now\".');
+  } catch (e) {
+    // Only admission is guaranteed not to have written anything. Later restore
+    // failures may have created an undo set or staged originals.
+    if (!(e instanceof StorageReadOnlyError) || admitted) throw e;
+    console.error(`refusing to restore ${file}: exclusive storage ownership and drained app database sessions could not be confirmed. Stop the app, wait for it to exit and its database sessions to drain, check database availability, then retry. nothing was changed.`);
+    process.exitCode = 1;
   } finally {
-    try { await pool.end(); } finally { await owner.close(); }
+    try { await pool?.end(); } finally { await owner?.close(); }
   }
 }
 

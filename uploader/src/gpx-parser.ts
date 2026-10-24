@@ -68,7 +68,7 @@ function decode(bytes: Uint8Array): string {
     if (start < 0) break;
     if (rest.startsWith('<!--', start)) {
       const end = rest.indexOf('-->', start + 4);
-      if (end < 0 || rest.slice(start + 4, end).includes('--') || rest[end - 1] === '-') xmlFailure();
+      if (end < 0 || rest.slice(start + 4, end).includes('--') || (end > start + 4 && rest[end - 1] === '-')) xmlFailure();
       position = end + 3;
     } else if (rest.startsWith('<![CDATA[', start)) {
       const end = rest.indexOf(']]>', start + 9);

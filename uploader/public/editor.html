@@ -1685,8 +1685,8 @@
       // ---- save draft ----
       // Persists the current on-screen form. Returns true on success so Publish
       // can save first and validate exactly what's on screen.
-      async function doSaveDraft() {
-        if (!guardGpxAction()) return false;
+      async function doSaveDraft({ gpxAttach = false } = {}) {
+        if (!gpxAttach && !gpxEditor.guardAction()) return false;
         showErr('');
         setStatus('');
         const snap = guard.snapshot(); // edits typed after this point must survive markClean
@@ -2064,7 +2064,7 @@
       // normal Save (slug-lock + validation apply, and the overwritten state
       // gets its own revision) — there is no direct server-side restore.
       async function restoreRevision(id) {
-        if (!guardGpxAction()) return;
+        if (!gpxEditor.guardAction()) return;
         showErr('');
         const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/revisions/' + encodeURIComponent(id));
         if (res.status === 401) { guard.redirectToLogin(); return; }
@@ -2090,18 +2090,10 @@
         gpxEditor.revisionNotice();
       }
 
-      let gpxAttachSaving = false;
-      function guardGpxAction() {
-        if (gpxAttachSaving) return true;
-        return gpxEditor.guardAction();
-      }
       const gpxEditor = GpxEditor.wire({
         getPost: () => ({ tk: currentTk, baseUpdatedAt: loadedUpdatedAt }),
-        saveDraft: async () => {
-          gpxAttachSaving = true;
-          try { return await doSaveDraft(); }
-          finally { gpxAttachSaving = false; }
-        },
+        saveDraft: () => doSaveDraft({ gpxAttach: true }),
+        saveError: () => $('actionError').textContent,
         setBaseUpdatedAt: (value) => { loadedUpdatedAt = value; },
         adoptStops: (stops) => {
           if (!Array.isArray(stops) || stops.some((stop) => !stop.name || !Number.isFinite(stop.lat) || !Number.isFinite(stop.lng))) throw new Error('invalid stops');

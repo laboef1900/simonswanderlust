@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { Header } from 'tar';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createRouteManifestPinReader, listBackups, listRouteArchives, pruneBackups, readDump, sweepOrphanRouteArchives, type Dump } from '../src/backup.js';
+import { createDbBackup, createRouteManifestPinReader, listBackups, listRouteArchives, pruneBackups, readDump, sweepOrphanRouteArchives, type Connectable, type Dump } from '../src/backup.js';
 import { createRouteArchive, routeRecoverySummary, verifyRouteArchive, type RouteArchiveManifest, type RouteDumpRow } from '../src/gpx-backup.js';
 import { createGpxFiles, safePairHash, sourceDigest, type GpxFiles } from '../src/gpx-files.js';
 import { GPX_LIMITS } from '../public/gpx-geometry.js';
@@ -26,6 +26,11 @@ function dump(rows: RouteDumpRow[], routeArchive?: RouteArchiveManifest): Dump {
   return { version: 10, createdAt: now.toISOString(), tables: { users: [],
     posts: rows.flatMap((row) => ['de', 'en'].map((locale) => ({ translation_key: row.translation_key, locale }))),
     post_routes: rows }, ...(routeArchive ? { routeArchive } : {}) };
+}
+function database(rows: RouteDumpRow[]): Connectable {
+  const query = async (sql: string) => ({ rows: sql.includes('FROM post_routes') ? rows.map((row) => ({ ...row }))
+    : sql.includes('FROM posts') ? dump(rows).tables.posts : [] });
+  return { query, connect: async () => ({ query, release() {} }) };
 }
 
 let root: string;
@@ -52,6 +57,83 @@ async function recoverySet() {
 }
 
 describe('private route recovery archives and retained-manifest pins', () => {
+  it('clears the previous recovery claim during a failed new dump and restores it after a successful retry', async () => {
+    const row = route();
+    await files.writeOriginal(source(row), original);
+    const db = database([row]);
+    const backup = createDbBackup({ db, dir, routeFiles: files, retention: () => 5 });
+    const successful = await backup.runNow();
+    expect(successful.lastError).toBeUndefined();
+    expect(successful.routeRecovery).toEqual({ status: 'complete', present: 1, missing: 0, corrupt: 0, unreadable: 0, oversized: 0 });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const connect = vi.spyOn(db, 'connect').mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      throw new Error('synthetic database unavailable');
+    });
+    const failedAttempt = backup.runNow();
+    await entered.promise;
+    const during = backup.state();
+    release.resolve();
+    const failed = await failedAttempt;
+    expect(during.routeRecovery).toBeUndefined();
+    expect(failed.lastError).toBe('synthetic database unavailable');
+    expect(failed.lastSuccessAt).toBe(successful.lastSuccessAt);
+    expect(failed.routeRecovery).toBeUndefined();
+    expect(backup.state().routeRecovery).toBeUndefined();
+    expect(backup.list()).toHaveLength(1);
+    expect(backup.listRouteArchives()).toHaveLength(1);
+    connect.mockRestore();
+    const retried = await backup.runNow();
+    expect(retried.lastError).toBeUndefined();
+    expect(retried.routeRecovery).toEqual(successful.routeRecovery);
+    expect(backup.state().routeRecovery).toEqual(successful.routeRecovery);
+    expect(backup.list()).toHaveLength(2);
+  });
+
+  it.each(['complete', 'degraded'] as const)('preserves this run’s %s recovery evidence when later retention fails', async (status) => {
+    const row = route();
+    await files.writeOriginal(source(row), original);
+    if (status === 'degraded') await files.removeOriginal(source(row));
+    const backup = createDbBackup({
+      db: database([row]), dir, routeFiles: files,
+      retention: () => { throw new Error('synthetic retention failure'); },
+    });
+    const result = await backup.runNow();
+    expect(result.lastError).toBe('prune failed: synthetic retention failure');
+    expect(result.lastSuccessAt).toBeTruthy();
+    expect(result.routeRecovery).toEqual({
+      status, present: status === 'complete' ? 1 : 0, missing: status === 'degraded' ? 1 : 0,
+      corrupt: 0, unreadable: 0, oversized: 0,
+    });
+    expect(backup.state().routeRecovery).toEqual(result.routeRecovery);
+    const saved = backup.list();
+    expect(saved).toHaveLength(1);
+    const path = join(dir, saved[0]!.name);
+    const manifest = readDump(path).routeArchive!;
+    await verifyRouteArchive(path, manifest, [row]);
+  });
+
+  it('retains completed recovery evidence when ownership is lost immediately after dump publication', async () => {
+    const row = route();
+    await files.writeOriginal(source(row), original);
+    let writable = true;
+    const gate = files.gate.runExclusive.bind(files.gate);
+    files.gate.runExclusive = async <T>(fn: () => Promise<T>): Promise<T> => {
+      const result = await gate(fn);
+      writable = false;
+      return result;
+    };
+    const backup = createDbBackup({ db: database([row]), dir, routeFiles: files, retention: () => 5, isWritable: () => writable });
+    const result = await backup.runNow();
+    expect(result.lastError).toBe('storage_read_only');
+    expect(result.lastSuccessAt).toBeTruthy();
+    expect(result.routeRecovery).toEqual({ status: 'complete', present: 1, missing: 0, corrupt: 0, unreadable: 0, oversized: 0 });
+    const path = join(dir, backup.list()[0]!.name);
+    await verifyRouteArchive(path, readDump(path).routeArchive!, [row]);
+  });
+
   it('preserves bounded corrupt and empty bytes, omits unavailable bytes, and pins only unarchived salvageable sources', async () => {
     const rows = Array.from({ length: 6 }, route);
     for (const row of rows) await files.writeOriginal(source(row), original);

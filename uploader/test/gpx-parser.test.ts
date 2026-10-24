@@ -58,6 +58,13 @@ describe('strict encoding and XML boundary', () => {
     failure(encoded(`<?xml version="1.0" encoding="UTF-16BE"?>${gpx(track())}`, 'utf-16le'), 'gpx_invalid_encoding');
   });
 
+  it.each(['utf-8', 'utf-16le', 'utf-16be'] as const)('accepts empty XML comments in %s without changing route geometry', (encoding) => {
+    const xml = `<!---->${gpx(`<!---->${track(point() + '<!---->' + point('1'))}<!---->`)}<!---->`;
+    expect(parseGpx(encoded(xml, encoding)).geometry).toEqual({
+      version: 1, segments: [{ points: [{ lng: 0, lat: 0 }, { lng: 1, lat: 0 }] }],
+    });
+  });
+
   it('rejects malformed XML, comments, extra roots and conservatively declaration-looking text', () => {
     for (const xml of ['', '<gpx', gpx(track()) + gpx(''), gpx(track()) + '<extra/>',
       gpx(track() + '<!-- invalid -- comment -->'), gpx(track() + '<!-- invalid --->'),

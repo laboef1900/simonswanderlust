@@ -143,7 +143,7 @@ function check(h: GpxTestHarness, id: string, value = true) {
 }
 /** Run the real editor serializer, DraftGuard, host callbacks and GPX controller.
  * Only browser/vendor facilities and network responses are substituted. */
-function fullEditor(candidate: typeof preview) {
+function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fetch']) {
   const dom = gpxDocument();
   const requests: RequestRecord[] = [];
   const values = new Map<string, string>();
@@ -184,6 +184,8 @@ function fullEditor(candidate: typeof preview) {
     sessionStorage: local,
     fetch: async (url: string, options: RequestInit = {}) => {
       requests.push({ url, options });
+      const overridden = await fetchOverride?.(url, options);
+      if (overridden) return overridden;
       if (url === '/gpx/imports') return response(candidate, 201);
       if (url.startsWith('/gpx/imports/') && options.method === 'DELETE') return response({}, 204);
       if (url === '/posts' && options.method === 'POST') return response({
@@ -500,6 +502,37 @@ describe('private GPX editor lifecycle', () => {
     expect(h.element('gpxAttach').disabled).toBe(false);
   });
 
+  it.each([{ status: 404, newPost: false }, { status: 409, newPost: true }])('invalidates an unavailable preview ($status) instead of retrying its stale token', async ({ status, newPost }) => {
+    const h = setup({ newPost, fetch: async (url, request) =>
+      url.endsWith('/route') && request.method === 'PUT' ? response({ error: 'gpx_import_unavailable' }, status) : undefined });
+    await importPreview(h);
+    h.element('gpxAttach').click();
+    await settle();
+    expect(h.api.hasPreview()).toBe(false);
+    expect(h.element('gpxAttach').disabled).toBe(true);
+    expect(h.element('gpxFile').disabled).toBe(false);
+    expect(h.element('gpxError').hidden).toBe(false);
+    expect(h.focused).toBe(h.element('gpxError'));
+    h.element('gpxAttach').click();
+    await settle();
+    expect(routeWrites(h)).toHaveLength(1);
+    expect(h.state.tk).toBe(newPost ? 'new-pair' : 'pair-1');
+  });
+
+  it.each([true, false])('returns focus to a visible action after detaching (original available: %s)', async (originalAvailable) => {
+    const h = setup({ route: attachedRoute, fetch: async (url, request) =>
+      url.endsWith('/route') && request.method === 'DELETE'
+        ? response({ ...emptyRoute, version: 'd'.repeat(36), originalAvailable, updatedAt: '2026-10-24T10:02:00.000Z' }) : undefined });
+    await h.api.refresh();
+    h.element('gpxDetach').focus();
+    h.element('gpxDetach').click();
+    await settle();
+    expect(h.element('gpxDetach').hidden).toBe(true);
+    expect(h.focused).toBe(h.element(originalAvailable ? 'gpxReimport' : 'gpxImportOpen'));
+    expect(h.focused?.hidden).toBe(false);
+    expect(h.focused?.disabled).toBe(false);
+  });
+
   it.each([
     ['PUT', 'server'], ['DELETE', 'server'], ['PUT', 'network'], ['DELETE', 'network'],
   ])('refreshes an unknown %s outcome (%s), blocks retries, and leaves unsaved text alone', async (method, failure) => {
@@ -608,6 +641,41 @@ describe('private GPX editor lifecycle', () => {
 });
 
 describe('GPX privacy through the real editor save and stash boundary', () => {
+  it('keeps a failed first-save reason visible in the modal without attaching or discarding its preview', async () => {
+    const h = fullEditor(preview, async (url, request) =>
+      url === '/posts' && request.method === 'POST' ? response({ error: 'duplicate_slug: synthetic-walk' }, 409) : undefined);
+    await settle();
+    await importPreview(h);
+    h.element('gpxAttach').click();
+    await settle();
+    expect(h.state.tk).toBeNull();
+    expect(routeWrites(h)).toEqual([]);
+    expect(h.api.hasPreview()).toBe(true);
+    expect(h.element('gpxDialog').open).toBe(true);
+    expect(h.element('gpxError').textContent).toContain('duplicate_slug: synthetic-walk');
+    expect(h.element('gpxAttach').disabled).toBe(false);
+  });
+
+  it('does not start a second first-save when Ctrl+S is pressed during Save and attach', async () => {
+    const pending = Promise.withResolvers<Reply>();
+    const h = fullEditor(preview, async (url, request) =>
+      url === '/posts' && request.method === 'POST' ? pending.promise : undefined);
+    await settle();
+    await importPreview(h);
+    h.element('gpxAttach').click();
+    await settle();
+    try {
+      expect(h.saveCalls).toBe(1);
+      h.element('gpxAttach').dispatchEvent(new EditorEvent('keydown', { bubbles: true, cancelable: true, key: 's', ctrlKey: true }));
+      await settle();
+      expect(h.saveCalls).toBe(1);
+    } finally {
+      pending.resolve(response({ translationKey: 'saved-pair', updatedAt: '2026-10-24T10:00:30.000Z', de: { slug: 'private-walk' }, en: { slug: '' } }));
+      await settle();
+    }
+    expect(routeWrites(h)).toHaveLength(1);
+  });
+
   it('keeps private preview data out of first-save, retry-save and DraftGuard while appending only explicitly adopted stops', async () => {
     const candidate = {
       ...preview,

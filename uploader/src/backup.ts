@@ -587,16 +587,21 @@ export function createDbBackup(
       settled = completion.promise;
       const state = readState(opts.dir);
       state.lastAttemptAt = new Date().toISOString();
+      // Recovery completeness belongs to this attempt, not the previous dump.
+      // Repopulate only once this run has published its DB + originals set.
+      delete state.routeRecovery;
       // Persist the attempt up front so `state()` reports THIS run's start
       // while it is in flight (the UI shows it next to "Running…"), and a
       // SIGKILLed run leaves an attempt newer than its last success behind.
       try { writeState(opts.dir, state); } catch { /* recorded again at the end */ }
       try {
         const dumpName = await dumpDatabase(opts.db, opts.dir, new Date(), { routeFiles: opts.routeFiles, isWritable: writable });
-        if (!writable()) throw new BackupError('storage_read_only');
         state.routeRecovery = routeRecoverySummary(readDump(join(opts.dir, dumpName)).routeArchive);
         state.lastSuccessAt = new Date().toISOString();
         delete state.lastError;
+        // The recovery set is already complete even if ownership is lost before
+        // images or retention work. Preserve that evidence alongside the failure.
+        if (!writable()) throw new BackupError('storage_read_only');
         // Best-effort incremental images archive after a successful dump. The
         // cutoff for the NEXT run is this run's walk-start time (>= compare),
         // so files written mid-archive land again in the next tar — duplicates

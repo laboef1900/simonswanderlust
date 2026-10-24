@@ -59,10 +59,10 @@ maybe('private GPX API and real PostgreSQL transactions', () => {
     const locale = (locale: 'de' | 'en'): PostLocale => ({ locale, slug: `${locale}-${slug}`, title: 'Synthetic story', excerpt: '', country: 'Test', heroImage: { src: '', width: 1, height: 1, alt: '' }, bodyMarkdown: 'Synthetic text only', images: {} });
     const pair = await pgPostStore(pool).upsertDraft({ translationKey: '', status: 'draft', shared: { date: '2026-01-01', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 2 } }, de: locale('de'), en: locale('en') });
     const users = pgUserStore(pool); const sessions = pgSessionStore(pool);
-    const app = Fastify({ logger: false });
+    const app = Fastify({ logger: false, trustProxy: 1 });
     await app.register(cookie); await app.register(multipart);
     app.decorateRequest('authUser', null);
-    registerGpxRoutes(app, { gpx: service, requireAuth: createAuthn(users, sessions).requireAuth, baseUrl: 'https://blog.test' });
+    registerGpxRoutes(app, { gpx: service, requireAuth: createAuthn(users, sessions).requireAuth });
     const result = { app, service, files, tk: pair.translationKey, token: pair.updatedAt.toISOString(), root, pins, manifests,
       author: { sid: await sessions.create(authorId, 60_000) }, other: { sid: await sessions.create(otherId, 60_000) } };
     fixtures.push(result); return result;
@@ -70,7 +70,7 @@ maybe('private GPX API and real PostgreSQL transactions', () => {
   async function upload(f: Fixture): Promise<ImportPreview> {
     const boundary = 'synthetic-boundary';
     const response = await f.app.inject({ method: 'POST', url: '/gpx/imports', cookies: f.author,
-      headers: { 'content-type': `multipart/form-data; boundary=${boundary}`, origin: 'https://blog.test' },
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}`, origin: 'http://localhost' },
       payload: Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="private.gpx"\r\nContent-Type: application/octet-stream\r\n\r\n`), xml, Buffer.from(`\r\n--${boundary}--\r\n`)]) });
     expect(response.statusCode, response.body).toBe(201);
     expect(response.headers['cache-control']).toBe('no-store');
@@ -97,6 +97,40 @@ maybe('private GPX API and real PostgreSQL transactions', () => {
     expect(foreign.statusCode).toBe(403);
   });
 
+  it('binds mutation Origin to the admin request authority, not the image origin or forwarded host', async () => {
+    const f = await fixture();
+    for (const headers of [
+      { host: 'localhost:80', origin: 'http://localhost' },
+      { host: 'journal.test:443', origin: 'https://journal.test', 'x-forwarded-proto': 'https' },
+    ]) {
+      const result = await f.app.inject({ method: 'DELETE', url: '/gpx/imports/unknown', cookies: f.author, headers });
+      expect(result.statusCode, result.body).toBe(204);
+    }
+    for (const origin of ['https://blog.test', 'https://journal.test.attacker.test', 'null', 'https://journal.test/path']) {
+      const result = await f.app.inject({ method: 'DELETE', url: '/gpx/imports/unknown', cookies: f.author,
+        headers: { host: 'journal.test', 'x-forwarded-proto': 'https', origin } });
+      expect(result.statusCode).toBe(403);
+    }
+    const spoofed = await f.app.inject({ method: 'DELETE', url: '/gpx/imports/unknown', cookies: f.author,
+      headers: { host: 'journal.test', 'x-forwarded-proto': 'https', 'x-forwarded-host': 'attacker.test', origin: 'https://attacker.test' } });
+    expect(spoofed.statusCode).toBe(403);
+    const malformedHost = await f.app.inject({ method: 'DELETE', url: '/gpx/imports/unknown', cookies: f.author,
+      headers: { host: 'a b', origin: 'http://localhost' } });
+    expect(malformedHost.statusCode).toBe(403);
+    // light-my-request supplies localhost for an empty Host; use a real HTTP
+    // request to cover Node's missing-Host rejection instead of testing the shim.
+    const address = await f.app.listen({ host: '127.0.0.1', port: 0 });
+    const missingHost = Promise.withResolvers<number>();
+    const request = httpRequest(address + '/gpx/imports/unknown', { method: 'DELETE', setHost: false,
+      headers: { cookie: `sid=${f.author.sid}`, origin: address } }, (response) => {
+      response.resume();
+      response.once('end', () => missingHost.resolve(response.statusCode!));
+    });
+    request.once('error', missingHost.reject);
+    request.end();
+    expect(await missingHost.promise).toBe(400);
+  });
+
   it('admits a real HTTP upload after asynchronous inventory and stages its validated original', async () => {
     const f = await fixture();
     const entered = Promise.withResolvers<void>();
@@ -114,7 +148,7 @@ maybe('private GPX API and real PostgreSQL transactions', () => {
     const sent = Promise.withResolvers<void>();
     const request = httpRequest(address + '/gpx/imports', { method: 'POST', headers: {
       cookie: `sid=${f.author.sid}`, 'content-type': `multipart/form-data; boundary=${boundary}`,
-      'content-length': String(payload.length), origin: 'https://blog.test',
+      'content-length': String(payload.length), origin: address,
     } }, (response) => {
       const chunks: Buffer[] = [];
       response.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -204,6 +238,39 @@ maybe('private GPX API and real PostgreSQL transactions', () => {
     expect(await f.files.listPending()).toHaveLength(2);
     release.resolve(); await capture; await f.service.reconcile();
     expect(await f.files.listPending()).toHaveLength(0);
+  });
+
+  it('refuses re-import immediately during backup capture without occupying upload admission', async () => {
+    const f = await fixture();
+    const preview = await f.service.importBytes(authorId, xml);
+    await f.service.attach(authorId, f.tk, { importId: preview.importId, baseVersion: null, baseUpdatedAt: f.token, selection, confirmReplace: false });
+    const entered = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();
+    const capture = f.files.gate.runExclusive(async () => { entered.resolve(); await release.promise; });
+    await entered.promise;
+    const gateAttempted = Promise.withResolvers<void>();
+    let attempts = 0;
+    const noteAttempt = () => { if (++attempts === 2) gateAttempted.resolve(); };
+    const run = f.files.gate.runExclusive.bind(f.files.gate);
+    const tryRun = f.files.gate.tryRunExclusive.bind(f.files.gate);
+    vi.spyOn(f.files.gate, 'runExclusive').mockImplementation(<T>(fn: () => Promise<T>) => { noteAttempt(); return run(fn); });
+    vi.spyOn(f.files.gate, 'tryRunExclusive').mockImplementation(<T>(fn: () => Promise<T>) => { noteAttempt(); return tryRun(fn); });
+    const attempted = f.service.reimport(authorId, f.tk).then(
+      (value) => ({ value }), (error: unknown) => ({ error }));
+    await gateAttempted.promise;
+    // Drain the already-enqueued admission continuation, not a guessed clock delay.
+    const turn = Promise.withResolvers<void>();
+    setImmediate(turn.resolve);
+    await turn.promise;
+    try {
+      const uploaded = await f.service.importBytes(authorId, xml);
+      expect(uploaded.geometry.segments[0]?.points).toEqual([
+        { lat: 1, lng: 2 }, { lat: 1.001, lng: 2.001 }, { lat: 1.002, lng: 2.002 },
+      ]);
+      expect(await attempted).toMatchObject({ error: { code: 'gpx_busy' } });
+    } finally {
+      release.resolve(); await capture;
+      await attempted;
+    }
   });
 
   it('missing or corrupt original does not discard saved geometry and cannot be downloaded or reparsed', async () => {

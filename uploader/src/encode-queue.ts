@@ -52,16 +52,15 @@ export interface EncodeQueue {
    */
   recover(): Promise<number>;
   /**
-   * The shutdown hook: stop dequeuing and resolve once the in-flight jobs have
-   * finished. The backlog is left for `recover()` on the next boot — starting
-   * more ~19 s jobs while Docker's grace period runs out would only manufacture
-   * the partial writes the drain exists to avoid. One-way: the queue never
-   * pumps again afterwards.
+   * Gracefully finish in-flight jobs for isolated queue clients/test cleanup,
+   * without starting the backlog. The app uses quiesce() instead, preventing
+   * further publication after storage ownership is withdrawn. One-way: the queue
+   * never pumps again afterwards; recover() re-seeds pending rows on next boot.
    */
   drain(): Promise<void>;
   /** Cancel publication and wait for all admitted work, including recovery reads. */
   quiesce(): Promise<void>;
-  /** Resolves when nothing is queued or in flight. Test seam — production only drains. */
+  /** Resolves when nothing is queued or in flight. Test seam — the app quiesces. */
   idle(): Promise<void>;
   stats(): { pending: number; running: number };
 }
@@ -119,7 +118,7 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
   const pending: string[] = [];
   const inFlight = new Set<string>();
   let idleWaiters: (() => void)[] = [];
-  /** Set by drain(): pump() stops dequeuing; only in-flight jobs finish. */
+  /** Set by stop()/drain(): pump() stops dequeuing while admitted jobs settle. */
   let draining = false;
 
   const stop = () => { draining = true; pending.length = 0; settleIfIdle(); };

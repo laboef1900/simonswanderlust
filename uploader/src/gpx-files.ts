@@ -142,6 +142,16 @@ export function createGpxFiles({ storageDir, isWritable = () => true }: { storag
     try { await directory(path, false); return await readdir(path); }
     catch (error) { if (errno(error, 'ENOENT')) return []; throw error; }
   }
+  async function inventoryFile(path: string) {
+    let stat;
+    try { stat = await lstat(path); }
+    catch (error) { if (errno(error, 'ENOENT')) return undefined; throw error; }
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('gpx_unsafe_file');
+    return stat;
+  }
+  function reportUnknownEntries(count: number): void {
+    if (count) console.error('gpx_unknown_entries', { count: Math.min(count, 1000), capped: count >= 1000 });
+  }
   return {
     root, gate,
     async inspectOriginal(source: OriginalSource): Promise<OriginalInspection> {
@@ -169,51 +179,66 @@ export function createGpxFiles({ storageDir, isWritable = () => true }: { storag
     readPending: async (id: string) => readBounded(pendingPath(id)),
     removePending: async (id: string) => remove(pendingPath(id)),
     async cleanupTemporaryFiles(kind: 'pending' | 'originals'): Promise<void> {
-      const directories = kind === 'pending' ? [join(root, 'pending')] : [];
-      if (kind === 'originals') {
-        for (const hash of await entries(join(root, 'originals'))) {
-          if (!HASH_RE.test(hash)) throw new Error('gpx_unknown_entry');
-          directories.push(join(root, 'originals', hash));
+      let unknown = 0;
+      try {
+        const directories = kind === 'pending' ? [join(root, 'pending')] : [];
+        if (kind === 'originals') {
+          for (const hash of await entries(join(root, 'originals'))) {
+            if (!HASH_RE.test(hash)) { unknown++; continue; }
+            directories.push(join(root, 'originals', hash));
+          }
         }
-      }
-      const pattern = kind === 'pending' ? PENDING_TEMP_RE : ORIGINAL_TEMP_RE;
-      for (const path of directories) {
-        for (const name of await entries(path)) {
-          if (!pattern.test(name)) continue;
-          const file = join(path, name);
-          const stat = await lstat(file);
-          if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('gpx_unsafe_file');
-          if (Date.now() - stat.mtimeMs >= 60 * 60 * 1000) await remove(file);
+        const pattern = kind === 'pending' ? PENDING_TEMP_RE : ORIGINAL_TEMP_RE;
+        for (const path of directories) {
+          for (const name of await entries(path)) {
+            if (!pattern.test(name)) {
+              const recognized = kind === 'pending' ? /^[0-9a-f]{64}\.gpx$/.test(name)
+                : name.endsWith('.gpx') && SOURCE_ID_RE.test(name.slice(0, -4));
+              if (!recognized) unknown++;
+              continue;
+            }
+            const file = join(path, name);
+            const stat = await inventoryFile(file);
+            if (stat && Date.now() - stat.mtimeMs >= 60 * 60 * 1000) await remove(file);
+          }
         }
-      }
+      } finally { reportUnknownEntries(unknown); }
     },
     async listPending(): Promise<Array<{ id: string; bytes: number; mtimeMs: number; temporary?: boolean }>> {
       const result = [];
-      for (const name of await entries(join(root, 'pending'))) {
-        const temporary = PENDING_TEMP_RE.test(name);
-        if (!temporary && !/^[0-9a-f]{64}\.gpx$/.test(name)) throw new Error('gpx_unknown_entry');
-        const stat = await lstat(join(root, 'pending', name));
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('gpx_unsafe_file');
-        result.push({ id: name.slice(0, 64), bytes: stat.size, mtimeMs: stat.mtimeMs, ...(temporary ? { temporary: true } : {}) });
-      }
-      return result;
+      let unknown = 0;
+      try {
+        for (const name of await entries(join(root, 'pending'))) {
+          const temporary = PENDING_TEMP_RE.test(name);
+          if (!temporary && !/^[0-9a-f]{64}\.gpx$/.test(name)) { unknown++; continue; }
+          // Admission intentionally does not hold the gate: Attach/cancel/expiry
+          // may remove a listed file before its stat without invalidating admission.
+          const stat = await inventoryFile(join(root, 'pending', name));
+          if (!stat) continue;
+          result.push({ id: name.slice(0, 64), bytes: stat.size, mtimeMs: stat.mtimeMs, ...(temporary ? { temporary: true } : {}) });
+        }
+        return result;
+      } finally { reportUnknownEntries(unknown); }
     },
     async listOriginals(onlyPairHash?: string): Promise<StoredOriginal[]> {
       const result: StoredOriginal[] = [];
       if (onlyPairHash !== undefined && !HASH_RE.test(onlyPairHash)) throw new Error('gpx_unsafe_path');
-      const pairs = onlyPairHash === undefined ? await entries(join(root, 'originals')) : [onlyPairHash];
-      for (const pairHash of pairs) {
-        if (!HASH_RE.test(pairHash)) throw new Error('gpx_unknown_entry');
-        for (const name of await entries(join(root, 'originals', pairHash))) {
-          if (ORIGINAL_TEMP_RE.test(name)) continue;
-          const sourceId = name.slice(0, -4);
-          if (!name.endsWith('.gpx') || !SOURCE_ID_RE.test(sourceId)) throw new Error('gpx_unknown_entry');
-          const stat = await lstat(originalPath({ pairHash, sourceId }));
-          if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('gpx_unsafe_file');
-          result.push({ pairHash, sourceId, mtimeMs: stat.mtimeMs });
+      let unknown = 0;
+      try {
+        const pairs = onlyPairHash === undefined ? await entries(join(root, 'originals')) : [onlyPairHash];
+        for (const pairHash of pairs) {
+          if (!HASH_RE.test(pairHash)) { unknown++; continue; }
+          for (const name of await entries(join(root, 'originals', pairHash))) {
+            if (ORIGINAL_TEMP_RE.test(name)) continue;
+            const sourceId = name.slice(0, -4);
+            if (!name.endsWith('.gpx') || !SOURCE_ID_RE.test(sourceId)) { unknown++; continue; }
+            const stat = await inventoryFile(originalPath({ pairHash, sourceId }));
+            if (!stat) continue;
+            result.push({ pairHash, sourceId, mtimeMs: stat.mtimeMs });
+          }
         }
-      }
-      return result;
+        return result;
+      } finally { reportUnknownEntries(unknown); }
     },
   };
 }

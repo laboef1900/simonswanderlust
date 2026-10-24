@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 const script = await readFile(join(import.meta.dirname, '../public/gpx-map.js'), 'utf8');
 
-function harness(webgl: 'ready' | 'unavailable' | 'partial' | 'throws' = 'ready') {
+function harness(webgl: 'ready' | 'unavailable' | 'partial' | 'throws' = 'ready', deferLoads = false) {
   const sources: Record<string, unknown> = {};
   const layers: Record<string, unknown> = {};
   const map = {
@@ -34,8 +34,13 @@ function harness(webgl: 'ready' | 'unavailable' | 'partial' | 'throws' = 'ready'
   const windowState: Record<string, unknown> = { setTimeout };
   const gl = { Map: class { constructor() { if (webgl === 'throws') throw new Error('WebGL2 unavailable'); Object.assign(this, map); } }, NavigationControl: class {}, addProtocol: vi.fn() };
   const pm = { Protocol: class { tile = () => {}; } };
+  const loads: (() => void)[] = [];
   const document = {
-    head: { appendChild(el: { src?: string; onload?: () => void }) { if (el.src) windowState[el.src.includes('maplibre') ? 'maplibregl' : 'pmtiles'] = el.src.includes('maplibre') ? gl : pm; queueMicrotask(() => el.onload?.()); } },
+    head: { appendChild(el: { src?: string; onload?: () => void }) {
+      if (el.src) windowState[el.src.includes('maplibre') ? 'maplibregl' : 'pmtiles'] = el.src.includes('maplibre') ? gl : pm;
+      const loaded = () => el.onload?.();
+      if (deferLoads) loads.push(loaded); else queueMicrotask(loaded);
+    } },
     createElement: (tag: string) => tag === 'canvas'
       ? Object.assign(new Element(), { getContext: () => webgl === 'unavailable' ? null : { getExtension: () => ({ loseContext() {} }) } })
       : new Element(),
@@ -44,7 +49,7 @@ function harness(webgl: 'ready' | 'unavailable' | 'partial' | 'throws' = 'ready'
   };
   const ResizeObserver = class { observe() {} disconnect() {} };
   new Function('window', 'document', 'location', 'ResizeObserver', script)(windowState, document, { href: 'http://localhost/admin/', origin: 'http://localhost' }, ResizeObserver);
-  return { window: windowState, map, sources, container, status };
+  return { window: windowState, map, sources, container, status, finishLoads: () => loads.splice(0).forEach((loaded) => loaded()) };
 }
 
 const copy = { loading: 'Loading', routeLabel: 'Route', kept: 'Kept', removed: 'Removed', waypoints: 'Waypoints', noGeometry: 'Empty', webglFallback: 'Fallback', basemapMissing: 'No basemap' };
@@ -52,6 +57,23 @@ const segment = (...points: { lng: number; lat: number }[]) => ({ points });
 const featureSource = (value: unknown) => value as { data: { geometry: { type: string; coordinates: number[][][] } } };
 
 describe('GPX preview map', () => {
+  it('cancels an initializing preview without letting its stale teardown erase the replacement route', async () => {
+    const h = harness('unavailable', true);
+    const maps = h.window.GpxMap as { create: (options: unknown) => Promise<{ render(data: unknown): void; destroy(): void }> };
+    const controller = new AbortController();
+    const oldPending = maps.create({ container: h.container, statusElement: h.status, copy, signal: controller.signal });
+    controller.abort();
+    const nextPending = maps.create({ container: h.container, statusElement: h.status, copy });
+    h.finishLoads();
+    const [old, next] = await Promise.all([oldPending, nextPending]);
+    next.render({ geometry: { version: 1, segments: [segment({ lng: 1, lat: 2 }, { lng: 3, lat: 4 })] }, kept: { version: 1, segments: [segment({ lng: 1, lat: 2 }, { lng: 3, lat: 4 })] } });
+    old.destroy();
+    expect(h.container.innerHTML).toContain('<polyline');
+    expect(h.container.parentNode?.children).toHaveLength(2);
+    next.destroy();
+    expect(h.container.innerHTML).toBe('');
+  });
+
   it('renders independent route runs and exact selected waypoint coordinates', async () => {
     const h = harness();
     const api = await (h.window.GpxMap as { create: (options: unknown) => Promise<{ render(data: unknown): void; resize(): void; destroy(): void }> }).create({ container: h.container, statusElement: h.status, copy });

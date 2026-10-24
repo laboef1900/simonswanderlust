@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -110,7 +110,7 @@ maybe('private GPX production composition and lease-loss containment', () => {
     const port = await freePort(); base = `http://127.0.0.1:${port}`;
     const { ENCRYPTION_KEY: _unused, ...inherited } = process.env;
     env = {
-      ...inherited, DATABASE_URL: databaseUrl, HOST: '127.0.0.1', PORT: String(port), PUBLIC_BASE_URL: base,
+      ...inherited, DATABASE_URL: databaseUrl, HOST: '127.0.0.1', PORT: String(port), PUBLIC_BASE_URL: 'https://images.gpx.test',
       IMG_HOST: `images.gpx.test:${port}`, STORAGE_DIR: join(root, 'images'), SETTINGS_PATH: join(root, 'settings.json'),
       SITE_DIR: join(root, 'site'), SITE_APP_DIR: join(root, 'deliberately-unavailable-site-app'),
       BACKUP_DIR: join(root, 'backup'), MAP_DIR: join(root, 'map'), PGOPTIONS: '',
@@ -184,13 +184,19 @@ maybe('private GPX production composition and lease-loss containment', () => {
     const otherPort = await freePort();
     const rival = launch('main.ts', [], { PORT: String(otherPort) });
     expect((await exitedWithin(rival)).code).not.toBe(0);
-    expect(rival.log()).toContain('StorageReadOnlyError');
-    expect(rival.log()).not.toContain(`app listening on :${otherPort}`);
-    const restoreWhileOwned = launch('cli.ts', ['restore', '--yes', restoreInput]);
-    expect((await exitedWithin(restoreWhileOwned)).code).not.toBe(0);
-    expect(restoreWhileOwned.log()).toContain('StorageReadOnlyError');
     expect(await readdir(join(root, 'backup/db'))).toEqual(backupBefore);
     expect(await pgPostStore(pool).get(tk)).toEqual(before);
+    expect(await pgGpxStore(pool).get(tk)).toEqual(record);
+    expect(rival.log()).not.toContain(`app listening on :${otherPort}`);
+    const restoreWhileOwned = launch('cli.ts', ['restore', '--yes', restoreInput]);
+    expect((await exitedWithin(restoreWhileOwned)).code).toBe(1);
+    expect(restoreWhileOwned.log()).toMatch(/refusing to restore .*Stop the app, wait for it to exit and its database sessions to drain.*nothing was changed\./);
+    expect(restoreWhileOwned.log()).not.toMatch(/StorageReadOnlyError|^\s+at |restart/i);
+    expect(restoreWhileOwned.log()).not.toContain('pre-restore recovery set verified');
+    expect(await readdir(join(root, 'backup/db'))).toEqual(backupBefore);
+    expect(await pgPostStore(pool).get(tk)).toEqual(before);
+    expect(await pgGpxStore(pool).get(tk)).toEqual(record);
+    expect(await (await fetch(`${base}/posts/${tk}/route/original`, { headers: { cookie } })).text()).toBe(xml);
 
     // Identify only this successfully booted child's dedicated two-int lease.
     // Its pool has the same tag, so application_name alone is NOT a safe target.
@@ -221,11 +227,14 @@ maybe('private GPX production composition and lease-loss containment', () => {
         return true;
       }, app.log);
       const restoreWhileDraining = launch('cli.ts', ['restore', '--yes', restoreInput]);
-      expect((await exitedWithin(restoreWhileDraining)).code).not.toBe(0);
-      expect(restoreWhileDraining.log()).toContain('StorageReadOnlyError');
+      expect((await exitedWithin(restoreWhileDraining)).code).toBe(1);
+      expect(restoreWhileDraining.log()).toMatch(/refusing to restore .*Stop the app, wait for it to exit and its database sessions to drain.*nothing was changed\./);
+      expect(restoreWhileDraining.log()).not.toMatch(/StorageReadOnlyError|^\s+at |restart/i);
       expect(restoreWhileDraining.log()).not.toContain('pre-restore recovery set verified');
       expect(await readdir(join(root, 'backup/db'))).toEqual(backupBefore);
       expect(await pgPostStore(pool).get(tk)).toEqual(before);
+      expect(await pgGpxStore(pool).get(tk)).toEqual(record);
+      expect(await readFile(join(root, 'routes', privateFile), 'utf8')).toBe(xml);
       // Restore did not terminate the app's still-draining transaction.
       expect((await observer.query('SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event=\'advisory\'', [lease.application_name])).rowCount).toBe(1);
       await blocker.query('ROLLBACK');

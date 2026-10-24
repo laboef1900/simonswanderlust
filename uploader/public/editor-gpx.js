@@ -68,10 +68,10 @@
       error.hidden = true; error.textContent = '';
       feedback.hidden = true; feedback.textContent = '';
     }
-    function fail(key, moveFocus = true) {
+    function fail(key, moveFocus = true, detail = '') {
       errorCode = key;
       const target = dialog.open ? error : feedback;
-      target.textContent = msg(key); target.hidden = false;
+      target.textContent = [msg(key), detail].filter(Boolean).join(' '); target.hidden = false;
       target.className = 'err'; target.setAttribute('role', 'alert');
       status.textContent = '';
       if (moveFocus) target.focus();
@@ -98,7 +98,7 @@
       return body;
     }
     function errorKey(e) {
-      const table = { gpx_conflict: 'conflict', gpx_outcome_unknown: 'unknown', gpx_import_unavailable: 'unavailable', gpx_busy: 'busy', gpx_quota: 'quota', gpx_timeout: 'timeout', gpx_too_large: 'fileTooLarge', gpx_invalid_xml: 'invalidFile', gpx_invalid_points: 'invalidFile', gpx_invalid_encoding: 'invalidFile', gpx_invalid_request: 'invalidFile', gpx_limit: 'limitExceeded', gpx_invalid_geometry: 'invalidFile', gpx_invalid_selection: 'invalidFile', gpx_empty_selection: 'allTrimmed', gpx_empty: 'invalidEmpty', gpx_unavailable: 'unavailable', gpx_worker_failed: 'workerFailed', gpx_forbidden_origin: 'failed', gpx_aborted: 'failed', gpx_original_unavailable: 'unavailable', gpx_route_not_found: 'missingRoute', gpx_post_not_found: 'missingPost', gpx_invalid_source: 'invalidFile', gpx_replace_unconfirmed: 'replaceUnconfirmed', gpx_detach_unconfirmed: 'failed', gpx_cleanup_pending: 'cleanupPending', storage_read_only: 'storageReadOnly', track_empty_after_rounding: 'allTrimmed' };
+      const table = { gpx_conflict: 'conflict', gpx_outcome_unknown: 'unknown', gpx_import_unavailable: 'previewExpired', gpx_busy: 'busy', gpx_quota: 'quota', gpx_timeout: 'timeout', gpx_too_large: 'fileTooLarge', gpx_invalid_xml: 'invalidFile', gpx_invalid_points: 'invalidFile', gpx_invalid_encoding: 'invalidFile', gpx_invalid_request: 'invalidFile', gpx_limit: 'limitExceeded', gpx_invalid_geometry: 'invalidFile', gpx_invalid_selection: 'invalidFile', gpx_empty_selection: 'allTrimmed', gpx_empty: 'invalidEmpty', gpx_unavailable: 'unavailable', gpx_worker_failed: 'workerFailed', gpx_forbidden_origin: 'failed', gpx_aborted: 'failed', gpx_original_unavailable: 'unavailable', gpx_route_not_found: 'missingRoute', gpx_post_not_found: 'missingPost', gpx_invalid_source: 'invalidFile', gpx_replace_unconfirmed: 'replaceUnconfirmed', gpx_detach_unconfirmed: 'failed', gpx_cleanup_pending: 'cleanupPending', storage_read_only: 'storageReadOnly', track_empty_after_rounding: 'allTrimmed' };
       return table[e && e.code] || 'failed';
     }
     function setBusy(value) {
@@ -235,7 +235,7 @@
       $('gpxPrivacy').hidden = pointsOnly;
       try {
         if (host.map) {
-          const created = await host.map.create({ container: $('gpxMap'), statusElement: $('gpxMapStatus'), copy: host.mapCopy });
+          const created = await host.map.create({ container: $('gpxMap'), statusElement: $('gpxMapStatus'), copy: host.mapCopy, signal: controller?.signal });
           if (expectedEpoch !== epoch) { created.destroy(); return; }
           map = created;
         }
@@ -313,9 +313,11 @@
       let savedNewPost = false;
       try {
         if (!existing) {
-          if (!await host.saveDraft()) { fail('failed'); return; }
+          if (!await host.saveDraft() || !host.getPost().tk) {
+            fail('saveFailedNotAttached', true, host.saveError?.() || '');
+            return;
+          }
           savedNewPost = true;
-          if (!host.getPost().tk) { fail('failed'); return; }
         }
         const tokens = host.getPost();
         const body = { importId: preview.importId, baseVersion: route.version, baseUpdatedAt: tokens.baseUpdatedAt, selection, confirmReplace: true };
@@ -330,6 +332,9 @@
           outcomeUnknown = true;
           try { route = await request(postUrl(''), { method: 'GET' }); renderRoute(); } catch (_) { /* Keep attach disabled until reload. */ }
           fail('unknown');
+        } else if (e.code === 'gpx_import_unavailable') {
+          teardownPreview();
+          fail(savedNewPost ? 'attachFailureSaved' : 'previewExpired', true, savedNewPost ? msg('previewExpired') : '');
         } else fail(savedNewPost ? 'attachFailureSaved' : errorKey(e));
       } finally { mutationPending = false; setBusy(false); }
     }
@@ -338,16 +343,21 @@
       const ok = await host.confirm({ title: msg('detachTitle'), body: msg('detachBody'), confirmLabel: msg('detachLabel'), danger: true });
       if (!ok) return;
       mutationPending = true; setBusy(true); clearError();
+      let detached = false;
       try {
         const tokens = host.getPost();
         const result = await request(postUrl(''), { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ baseVersion: route.version, baseUpdatedAt: tokens.baseUpdatedAt, confirmDetach: true }) }, true);
         host.setBaseUpdatedAt(result.updatedAt); route = result; renderRoute();
+        detached = true;
         if (result.cleanupPending) fail('cleanupPending'); else say('detachSuccess');
       } catch (e) {
         if (e.code === 'gpx_outcome_unknown') { outcomeUnknown = true; await refreshRoute(); fail('unknown'); }
         else fail(errorKey(e));
       }
-      finally { mutationPending = false; setBusy(false); }
+      finally {
+        mutationPending = false; setBusy(false);
+        if (detached && !errorCode) $($('gpxReimport').hidden ? 'gpxImportOpen' : 'gpxReimport').focus();
+      }
     }
     async function adopt() {
       if (busy || outcomeUnknown || !preview) return;

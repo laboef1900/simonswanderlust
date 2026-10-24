@@ -230,6 +230,12 @@ if attachment fails afterwards, keep the saved draft and retry the preview. A co
 requires reloading current state. An unknown network outcome blocks further changes
 until reload rather than risking a second replacement.
 
+If the first draft save fails, its reason appears inside the GPX dialog; the preview
+remains available for retry and nothing is attached. Closing to correct the form
+discards that preview, so choose the file again afterwards. An expired, cancelled or
+restart-lost preview cannot be retried: choose the local file again, or close and use
+**Load original again** when a retained original exists.
+
 **Discard preview** / Close leaves the current attachment unchanged and requests deletion
 of staging; unsuccessful cleanup is shown and retried automatically. Abandoned previews
 expire after one hour and are not recovered from browser draft storage.

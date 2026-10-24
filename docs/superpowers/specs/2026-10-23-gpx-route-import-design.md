@@ -198,6 +198,10 @@ Reconciliation is attempted at startup, before import admission, at each pending
 
 Every route below uses `requireAuth`; authors have the same route read/write access as admins. Session-store failure stays a sanitized error, not anonymous access. Publish remains `requireAdmin`. Responses/errors are `no-store`; request-body/XML/geometry logging is disabled and error classes carry codes/counts only. A route-scoped error boundary must also sanitize Fastify JSON/multipart/content-type/body-limit errors before the handler: the global handler echoes 4xx messages and logs 5xx exception details, so catching `XMLParser` alone is insufficient. Reject foreign Origin on GPX mutations using same-origin equality when Origin is present, in addition to existing strict session cookies. No public route endpoint is introduced.
 
+Same-origin here means the admin request scheme plus the proxy-preserved `Host`.
+`PUBLIC_BASE_URL` names the image origin and can differ; `X-Forwarded-Host` is not an
+authority source for this check. The existing `X-Forwarded-Proto` proxy contract applies.
+
 | Endpoint | Contract |
 |---|---|
 | `POST /gpx/imports` | One bounded multipart file. Validate in worker, stage valid original only, bind opaque import ID to author and one-hour expiry; return normalized preview, waypoints, counts and expiry. Does not create/save a post. |

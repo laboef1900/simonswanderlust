@@ -149,10 +149,27 @@
     });
     if (container.parentNode) container.parentNode.insertBefore(legend, container.nextSibling);
     var fallbackKey = 'webglFallback';
+    function destroy() {
+      if (dead) return;
+      dead = true;
+      if (options.signal) options.signal.removeEventListener('abort', destroy);
+      if (observer) observer.disconnect();
+      removeMap();
+      delete container.dataset.gpxNoBasemap;
+      container.replaceChildren();
+      legend.remove();
+    }
+    var api = { render: render, resize: function () { if (map && !dead) map.resize(); }, destroy: destroy };
+    // Cancel before shared vendor loads finish, not after a newer preview has mounted.
+    if (options.signal) {
+      options.signal.addEventListener('abort', destroy, { once: true });
+      if (options.signal.aborted) destroy();
+    }
+    if (dead) return api;
     status.textContent = copyText(copy, 'loading');
     try { await Promise.all([loadCss(), loadScript(maplibreUrl), loadScript(pmtilesUrl)]); }
     catch (_) { failed = true; }
-    if (dead) return { render: function () {}, destroy: function () {}, resize: function () {} };
+    if (dead) return api;
     var gl = window.maplibregl;
     var pm = window.pmtiles;
     if (!gl || !pm || typeof gl.Map !== 'function' || typeof pm.Protocol !== 'function') {
@@ -200,6 +217,7 @@
       }
     }
     function render(data) {
+      if (dead) return;
       latestData = data;
       var retained = runsOf(data.kept), removed = removedRuns(runsOf(data.geometry), retained);
       var selected = new Set(Array.isArray(data.selectedWaypointIndices) ? data.selectedWaypointIndices : []);
@@ -229,7 +247,7 @@
     }
     observer = map && typeof ResizeObserver === 'function' ? new ResizeObserver(function () { if (map && !dead) map.resize(); }) : null;
     if (observer) observer.observe(container);
-    return { render: render, resize: function () { if (map && !dead) map.resize(); }, destroy: function () { if (dead) return; dead = true; if (observer) observer.disconnect(); removeMap(); delete container.dataset.gpxNoBasemap; container.replaceChildren(); legend.remove(); } };
+    return api;
   }
   window.GpxMap = { create: create };
 })();

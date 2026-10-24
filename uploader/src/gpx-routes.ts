@@ -36,8 +36,7 @@ function params(request: FastifyRequest): { tk: string; id: string } {
   return { tk: value.tk ?? '', id: value.id ?? '' };
 }
 
-export function registerGpxRoutes(app: FastifyInstance, { gpx, requireAuth, baseUrl }: { gpx: GpxService; requireAuth: AuthGuard; baseUrl: string }): void {
-  const origin = new URL(baseUrl).origin;
+export function registerGpxRoutes(app: FastifyInstance, { gpx, requireAuth }: { gpx: GpxService; requireAuth: AuthGuard }): void {
   app.register(async (routes) => {
     routes.setErrorHandler((error: unknown, _request, reply) => {
       if (error instanceof GpxError) {
@@ -56,8 +55,15 @@ export function registerGpxRoutes(app: FastifyInstance, { gpx, requireAuth, base
       if (!request.authUser) return reply.code(401).send({ error: 'unauthorized' });
       if (!['GET', 'HEAD'].includes(request.method) && request.headers.origin !== undefined) {
         let supplied: string;
-        try { supplied = new URL(request.headers.origin).origin; } catch { throw new GpxError('gpx_forbidden_origin', 403); }
-        if (supplied !== origin || request.headers.origin !== supplied) throw new GpxError('gpx_forbidden_origin', 403);
+        let own: string;
+        try {
+          if (!request.headers.host) throw new Error('missing host');
+          supplied = new URL(request.headers.origin).origin;
+          // The proxy preserves Host and sets X-Forwarded-Proto (SECURITY.md).
+          // PUBLIC_BASE_URL is the image origin; X-Forwarded-Host is not trusted here.
+          own = new URL(`${request.protocol}://${request.headers.host}`).origin;
+        } catch { throw new GpxError('gpx_forbidden_origin', 403); }
+        if (supplied !== own || request.headers.origin !== supplied) throw new GpxError('gpx_forbidden_origin', 403);
       }
     });
     // Body/parser errors are contained by this plugin, never the application's logging boundary.
