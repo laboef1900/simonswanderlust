@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, readdir, readFile } from 'node:fs/promises';
+import { readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { assertSafeKey, contentHashKey, storeVariants, storeOriginal, storeVariantFiles, isOriginalFile, MAX_KEY_LEN, MAX_KEY_DEPTH } from '../src/storage.js';
@@ -23,6 +24,33 @@ beforeEach(async () => {
 });
 
 describe('storeVariants', () => {
+  it('refuses original and variant writes when storage is already read-only', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(storeVariants('a', '', result, {
+      storageDir: dir, baseUrl: 'https://img', signal: controller.signal,
+    })).rejects.toMatchObject({ code: 'storage_read_only' });
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  it('does not rename a completed temporary variant or clean it up after lease loss', async () => {
+    const original = result.variants[0]!;
+    await storeVariantFiles('photo', [original], { storageDir: dir });
+    const controller = new AbortController();
+    // Latch at the first guard after the real temporary file was written.
+    const isWritable = () => {
+      if (readdirSync(dir).some((name) => name.includes('.part-'))) controller.abort();
+      return !controller.signal.aborted;
+    };
+    await expect(storeVariantFiles('photo', [
+      { ...original, data: Buffer.from('replacement') }, result.variants[1]!,
+    ], { storageDir: dir, signal: controller.signal, isWritable })).rejects.toMatchObject({ code: 'storage_read_only' });
+    expect(await readFile(join(dir, 'photo-640.avif'), 'utf8')).toBe('a');
+    const names = await readdir(dir);
+    expect(names).toHaveLength(2);
+    expect(names.some((name) => name.startsWith('photo-640.avif.part-'))).toBe(true);
+    expect(names).not.toContain('photo-640.webp');
+  });
   it('writes one file per variant plus the original under the key path', async () => {
     const stored = await storeVariants('trips/bucharest-2024/hero', 'Old town', result, {
       storageDir: dir,

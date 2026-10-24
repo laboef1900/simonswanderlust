@@ -24,6 +24,7 @@ import { assertSafeKey, storeVariantFiles } from './storage.js';
 import { deleteMedia } from './media-files.js';
 import type { MediaError, MediaItem, MediaStore } from './media-store.js';
 import type { WorkLock } from './work-lock.js';
+import { createWorkCancellation, type WorkCancellationOptions } from './work-cancellation.js';
 
 /**
  * The measured throughput plateau: N=6 bought +12% throughput for +47% memory.
@@ -58,6 +59,8 @@ export interface EncodeQueue {
    * pumps again afterwards.
    */
   drain(): Promise<void>;
+  /** Cancel publication and wait for all admitted work, including recovery reads. */
+  quiesce(): Promise<void>;
   /** Resolves when nothing is queued or in flight. Test seam — production only drains. */
   idle(): Promise<void>;
   stats(): { pending: number; running: number };
@@ -67,7 +70,7 @@ export class BacklogFullError extends Error {
   constructor() { super('the encode queue is full — wait for the current batch to finish'); }
 }
 
-export interface EncodeQueueOptions {
+export interface EncodeQueueOptions extends WorkCancellationOptions {
   store: MediaStore;
   storageDir: string;
   /** Shared with the site builder so a build and encoding never overlap. */
@@ -106,6 +109,8 @@ function escapeRe(s: string): string {
 }
 
 export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
+  const work = createWorkCancellation(opts);
+  const recoveries = new Set<Promise<number>>();
   const concurrency = opts.concurrency ?? ENCODE_CONCURRENCY;
   const maxBacklog = opts.maxBacklog ?? MAX_BACKLOG;
   const log = opts.log ?? ((m: string) => console.log(m));
@@ -117,11 +122,13 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
   /** Set by drain(): pump() stops dequeuing; only in-flight jobs finish. */
   let draining = false;
 
+  const stop = () => { draining = true; pending.length = 0; settleIfIdle(); };
   const encodeOne = opts.encodeOne ?? (async (key: string, profile: Pick<MediaItem, 'format' | 'encoding'>) => {
     const buf = await readOriginal(opts.storageDir, key);
+    work.assertWritable();
     const result = await processImage(buf, profile.encoding);
     if (result.format !== profile.format) throw new Error('stored image encoding profile does not match its format');
-    const { bytes } = await storeVariantFiles(key, result.variants, { storageDir: opts.storageDir });
+    const { bytes } = await storeVariantFiles(key, result.variants, { storageDir: opts.storageDir, ...work });
     return { bytes };
   });
 
@@ -154,15 +161,20 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
 
   async function runJob(key: string): Promise<void> {
     try {
+      work.assertWritable();
       const item = await opts.store.get(key);
       if (!item) return;
       // Shared: several encodes may run together, but never during a build.
       // The immutable row snapshot, not mutable global settings, drives retries
       // and boot recovery.
-      const { bytes } = await opts.lock.runShared(() => encodeOne(key, {
-        ...(item.format ? { format: item.format } : {}),
-        ...(item.encoding ? { encoding: item.encoding } : {}),
-      }));
+      const { bytes } = await opts.lock.runShared(() => {
+        work.assertWritable();
+        return encodeOne(key, {
+          ...(item.format ? { format: item.format } : {}),
+          ...(item.encoding ? { encoding: item.encoding } : {}),
+        });
+      });
+      work.assertWritable();
       // The row can vanish during the encode — a delete that slipped
       // past the `processing` gate, or a rescan-inserted row removed out of
       // band. Anything written for a deleted key is a time bomb: media-sync
@@ -170,19 +182,23 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
       // the delete would silently undo itself (#116). Unlink and walk away;
       // the bare UPDATEs below would affect 0 rows and hide that.
       if (!(await opts.store.get(key))) {
-        const removed = await deleteMedia(opts.storageDir, key);
+        work.assertWritable();
+        const removed = await deleteMedia(opts.storageDir, key, work);
         log(`encode discarded for ${key}: row deleted mid-encode (${removed} file(s) removed)`);
         return;
       }
+      work.assertWritable();
       await opts.store.setVariantBytes(key, bytes);
+      work.assertWritable();
       await opts.store.setStatus(key, 'ready');
     } catch (err) {
+      if (!work.isWritable()) return;
       const code = classify(err);
       logError(`encode failed for ${key} (${code}):`, err);
       // An encode failure must NEVER crash the app — a bad photo is a normal
       // input. Even recording the failure is best-effort: if the database is
       // the thing that is down, media-sync's next pass will pick the row up.
-      await opts.store.setStatus(key, 'failed', code).catch((e) => logError(`could not record encode failure for ${key}:`, e));
+      if (work.isWritable()) await opts.store.setStatus(key, 'failed', code).catch((e) => logError(`could not record encode failure for ${key}:`, e));
     } finally {
       inFlight.delete(key);
       pump();
@@ -190,7 +206,8 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
   }
 
   function pump(): void {
-    while (!draining && inFlight.size < concurrency && pending.length > 0) {
+    if (!work.isWritable()) stop();
+    while (!draining && work.isWritable() && inFlight.size < concurrency && pending.length > 0) {
       const key = pending.shift();
       if (key === undefined) break;
       if (inFlight.has(key)) continue; // already encoding — drop the duplicate
@@ -200,35 +217,56 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
     settleIfIdle();
   }
 
+  work.signal.addEventListener('abort', stop, { once: true });
+  if (!work.isWritable()) stop();
   return {
     enqueue(key) {
+      work.assertWritable();
+      if (draining) throw new Error('the encode queue is draining');
       if (inFlight.has(key) || pending.includes(key)) return; // idempotent
       if (pending.length >= maxBacklog) throw new BacklogFullError();
       pending.push(key);
       pump();
     },
-    async recover() {
-      // Re-seed everything a crash left `processing`. Re-encoding is
-      // idempotent — it overwrites the same deterministic filenames — so a job
-      // interrupted mid-write self-heals rather than needing cleanup.
-      const { items, total } = await opts.store.list({
-        status: 'processing', sort: 'uploaded', order: 'asc', page: 1, pageSize: maxBacklog,
-      });
-      const queued = new Set<string>([...pending, ...inFlight]);
-      let n = 0;
-      for (const item of items) {
-        if (queued.has(item.key) || pending.length >= maxBacklog) continue;
-        pending.push(item.key);
-        queued.add(item.key);
-        n++;
-      }
-      if (n > 0) log(`encode queue: recovered ${n} unfinished upload(s)`);
-      // No silent truncation: say so when the cap left work behind. The rest
-      // is picked up by the next reconcile pass (POST /media/rescan or a
-      // restart) — NOT by POST /media/retry, which skips `processing` rows.
-      if (total > n) log(`encode queue: ${total - n} more still pending — re-run recovery after this batch`);
-      pump();
-      return n;
+    recover() {
+      const recovery = (async () => {
+        work.assertWritable();
+        if (draining) throw new Error('the encode queue is draining');
+        // Re-seed everything a crash left `processing`. Re-encoding is
+        // idempotent — it overwrites the same deterministic filenames — so a job
+        // interrupted mid-write self-heals rather than needing cleanup.
+        const { items, total } = await opts.store.list({
+          status: 'processing', sort: 'uploaded', order: 'asc', page: 1, pageSize: maxBacklog,
+        });
+        work.assertWritable();
+        if (draining) throw new Error('the encode queue is draining');
+        const queued = new Set<string>([...pending, ...inFlight]);
+        let n = 0;
+        for (const item of items) {
+          if (queued.has(item.key) || pending.length >= maxBacklog) continue;
+          pending.push(item.key);
+          queued.add(item.key);
+          n++;
+        }
+        if (n > 0) log(`encode queue: recovered ${n} unfinished upload(s)`);
+        // No silent truncation: say so when the cap left work behind. The rest
+        // is picked up by the next reconcile pass (POST /media/rescan or a
+        // restart) — NOT by POST /media/retry, which skips `processing` rows.
+        if (total > n) log(`encode queue: ${total - n} more still pending — re-run recovery after this batch`);
+        pump();
+        return n;
+      })();
+      recoveries.add(recovery);
+      void recovery.then(() => recoveries.delete(recovery), () => recoveries.delete(recovery));
+      return recovery;
+    },
+    async quiesce() {
+      work.stop();
+      await Promise.allSettled([...recoveries]);
+      if (isIdle()) return;
+      const { promise, resolve } = Promise.withResolvers<void>();
+      idleWaiters.push(resolve);
+      await promise;
     },
     async drain() {
       // Stop pulling from the backlog: every job started DURING the drain is

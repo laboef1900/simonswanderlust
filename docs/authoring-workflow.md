@@ -213,6 +213,42 @@ Gallery descriptions are the exception: alt text and captions for photos in the 
 library use the current library values on the next rebuild, without republishing each
 article. This does not publish any draft text or change gallery order.
 
+### Import and trim a private GPX route
+
+Open **Story details → GPX route → Import GPX** and choose a local `.gpx` file
+(maximum 5 MiB). The map is context, not an anonymization tool: inspect the route,
+then choose **Point count** or **Distance** under **Trim using**, or remove whole segments.
+Only the selected method applies; switching methods uses that method's entered values.
+Distance is measured along the remaining segments, never across their gaps.
+Removed sections stay visually distinct; separate runs are never connected. If tiles
+or WebGL are unavailable, the grid/SVG and numeric controls still work. Removing every
+usable run disables attachment; use **Detach route** to remove an existing attachment.
+
+**Attach route** is explicit. For an existing post it does not save unsaved story text
+or other fields. For a new post, **Save draft and attach route** first saves the form;
+if attachment fails afterwards, keep the saved draft and retry the preview. A conflict
+requires reloading current state. An unknown network outcome blocks further changes
+until reload rather than risking a second replacement.
+
+**Discard preview** / Close leaves the current attachment unchanged and requests deletion
+of staging; unsuccessful cleanup is shown and retried automatically. Abandoned previews
+expire after one hour and are not recovered from browser draft storage.
+**Load original again** starts a new preview with reset trimming and replacement consent.
+**Detach route** retains the latest original; replacing the route or deleting the post
+removes that original. Older private backups remain until their normal retention expiry.
+
+Waypoints are a separate choice: check only the stops you want, edit their shared names,
+and confirm before adding them. **These stops keep exact coordinates and publish
+independently of track trimming.** Closing the preview does not undo adopted stops;
+remove sensitive stops separately and save the ordinary draft.
+
+Private originals and paired database/route-archive backups deliberately retain removed
+locations, elevation, timestamps and source metadata. Treat them as confidential.
+The private workflow is delivered in #313; public route rendering and published-only
+route export remain #314's dependent work. Until that lands, GPX geometry is not emitted
+into the blog or MDX.
+
+
 ### Finding posts, and acting on several at once
 
 The Posts list shows a hero thumbnail per post plus its country and trip date, and has a
@@ -250,6 +286,11 @@ The **Export MDX to server backup** button (Posts list) writes MDX backup files 
 `/data/backup` on the server. Exports contain the **working copies** (what you see in the
 editor) — including draft edits not yet published. These are reference copies — Postgres is the
 source of truth.
+
+GPX originals/private geometry are excluded from MDX. Recovery requires the private v10
+database dump **and its manifest-matched route archive**, available to admins in Settings.
+The images archive does not contain GPX originals. See
+[Database dumps](../ARCHITECTURE.md#database-dumps) for the offline restore procedure.
 
 ### Body images
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { chmod, mkdtemp, mkdir, readFile, readlink, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +14,7 @@ beforeEach(async () => {
   siteApp = join(root, 'siteapp');
   await mkdir(siteApp, { recursive: true });
 });
+afterEach(() => { vi.unstubAllEnvs(); });
 
 // Fake astro build: writes a marker file into the requested outDir.
 const fakeBuild = (marker: string) => async (outDir: string) => {
@@ -29,6 +30,54 @@ const makeGate = () => {
 };
 
 describe('createSiteBuilder', () => {
+  it('quiesces active and queued builds without changing the current release', async () => {
+    const releases = join(root, 'site');
+    const initial = createSiteBuilder({ siteAppDir: siteApp, releasesRoot: releases, runBuild: fakeBuild('live') });
+    expect((await initial.build()).ok).toBe(true);
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    let calls = 0;
+    const builder = createSiteBuilder({
+      siteAppDir: siteApp, releasesRoot: releases, signal: controller.signal,
+      runBuild: async (outDir) => {
+        calls++;
+        await fakeBuild('unpublished')(outDir);
+        entered.resolve();
+        await finish.promise;
+      },
+    });
+    const active = builder.build();
+    await entered.promise;
+    const queued = builder.build();
+    controller.abort();
+    let settled = false;
+    const stopped = builder.quiesce().then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish.resolve();
+    await stopped;
+    expect((await active).ok).toBe(false);
+    expect((await queued).ok).toBe(false);
+    expect((await builder.build()).ok).toBe(false);
+    expect(calls).toBe(1);
+    expect(await readFile(join(releases, 'current', 'index.html'), 'utf8')).toBe('live');
+    // Cancellation leaves scratch untouched; a fresh owner sweeps it and recovers.
+    const recovered = createSiteBuilder({ siteAppDir: siteApp, releasesRoot: releases, runBuild: fakeBuild('recovered') });
+    expect((await recovered.build()).ok).toBe(true);
+    expect(await readFile(join(releases, 'current', 'index.html'), 'utf8')).toBe('recovered');
+  });
+
+  it('refuses a build while storage is read-only even without a signal', async () => {
+    let calls = 0;
+    const builder = createSiteBuilder({
+      siteAppDir: siteApp, releasesRoot: join(root, 'readonly'), isWritable: () => false,
+      runBuild: async () => { calls++; },
+    });
+    expect((await builder.build()).ok).toBe(false);
+    expect(calls).toBe(0);
+    await expect(readdir(join(root, 'readonly'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
   it('has no release before the first build', () => {
     const b = createSiteBuilder({ siteAppDir: siteApp, releasesRoot: join(root, 'site'), runBuild: fakeBuild('v1') });
     expect(b.hasRelease()).toBe(false);
@@ -212,6 +261,28 @@ describe('createSiteBuilder', () => {
 describe('runChildBuild', () => {
   const node = process.execPath;
 
+  it('kills and reaps the active child when storage ownership is lost', async () => {
+    const controller = new AbortController();
+    let pid: number | undefined;
+    // A real child exercises process reaping; abort fires synchronously, without a timed wait.
+    const run = runChildBuild(node, ['-e', 'setInterval(() => {}, 1000)'], root, 10_000,
+      (child) => { pid = child.pid; controller.abort(); }, { signal: controller.signal });
+    await expect(run).rejects.toMatchObject({ code: 'storage_read_only' });
+    expect(pid).toBeGreaterThan(0);
+    expect(() => process.kill(pid!, 0)).toThrow();
+  });
+
+  it('tags child database sessions even when DATABASE_URL contains another application_name', async () => {
+    vi.stubEnv('DATABASE_URL', 'postgres://localhost/test?application_name=old');
+    const applicationName = 'swl-app:test-instance:build';
+    const script = `require('node:fs').writeFileSync('tag.json', JSON.stringify({
+      url: new URL(process.env.DATABASE_URL).searchParams.get('application_name'),
+      env: process.env.PGAPPNAME
+    }));`;
+    await runChildBuild(node, ['-e', script], root, 10_000, undefined, { applicationName });
+    expect(JSON.parse(await readFile(join(root, 'tag.json'), 'utf8'))).toEqual({ url: applicationName, env: applicationName });
+  });
+
   it('kills a child that outlives the deadline and rejects with BuildTimeoutError only once it is dead', async () => {
     // Real clock on purpose: the deadline is exercised against a real spawned
     // process, which fake timers cannot drive.
@@ -254,12 +325,31 @@ describe('runChildBuild', () => {
 });
 
 describe('bootstrapRelease', () => {
+  it('cancels the retry wait without starting another build', async () => {
+    const controller = new AbortController();
+    const waiting = Promise.withResolvers<void>();
+    const sleep = Promise.withResolvers<void>();
+    let calls = 0;
+    const run = bootstrapRelease({
+      hasRelease: () => false,
+      build: async () => { calls++; return { ok: false, error: 'temporary' }; },
+    }, {
+      log: () => {}, signal: controller.signal,
+      sleep: () => { waiting.resolve(); return sleep.promise; },
+    });
+    await waiting.promise;
+    controller.abort();
+    await run;
+    expect(calls).toBe(1);
+    sleep.resolve();
+  });
   // A builder scripted with per-call outcomes; `released` flips hasRelease().
   function scripted(outcomes: BuildOutcome[]) {
     let calls = 0;
     const state = { released: false };
     const builder: SiteBuilder = {
       hasRelease: () => state.released,
+      quiesce: async () => {},
       build: async () => {
         const r = outcomes[calls++] ?? { ok: false, error: 'unscripted' };
         if (r.ok) state.released = true;

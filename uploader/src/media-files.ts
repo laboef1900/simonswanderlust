@@ -3,6 +3,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { assertSafeKey } from './storage.js';
 import type { PostUsageRow } from './posts.js';
 import type { PagePair } from './pages.js';
+import { assertWorkWritable, type WorkCancellationOptions } from './work-cancellation.js';
 
 // The variant filename contract: `${key}-${width}.${format}` (see storage.ts /
 // variants.ts). Everything under storageDir that matches this is a variant of
@@ -102,7 +103,8 @@ export function imageUsage(src: string, posts: PostUsageRow[], pages: PagePair[]
  * the variant suffix — sibling keys sharing a prefix are untouched).
  * Returns the number of files removed; 0 when the key has none.
  */
-export async function deleteMedia(storageDir: string, key: string): Promise<number> {
+export async function deleteMedia(storageDir: string, key: string, opts: WorkCancellationOptions = {}): Promise<number> {
+  assertWorkWritable(opts);
   assertSafeKey(key); // path-traversal guard — same chokepoint as every write
   const root = resolve(storageDir);
   const dir = join(root, dirname(key));
@@ -123,6 +125,7 @@ export async function deleteMedia(storageDir: string, key: string): Promise<numb
     const isVariant = VARIANT_FILE_RE.test(d.name) && d.name.replace(VARIANT_FILE_RE, '') === base;
     const isOriginal = ORIGINAL_FILE_RE.test(d.name) && d.name.replace(ORIGINAL_FILE_RE, '') === base;
     if (isVariant || isOriginal) {
+      assertWorkWritable(opts);
       await unlink(join(dir, d.name));
       removed++;
     }

@@ -215,6 +215,9 @@ function loadEditor(options: EditorOptions = {}) {
         .filter(([key]) => key.startsWith('editor.chrome.'))
         .map(([key, value]) => [key.slice('editor.chrome.'.length), value])),
     ])),
+    GpxCopy: { en: new Proxy({}, { get: (_target, key) => String(key) }) },
+    GpxMap: { create: async () => ({ render() {}, destroy() {}, resize() {} }) },
+    GpxEditor: { wire: () => ({ refresh: async () => {}, hasPreview: () => false, discard() {}, revisionNotice() {}, guardAction: () => true }) },
     EditorGalleryImageOrigin: 'https://img',
     AltSuggest: { wire() {}, suggestHosted: options.caption ?? (() => Promise.reject(new Error('no model in test'))) },
   };
@@ -297,6 +300,12 @@ describe('editor.html inline script against its own markup', () => {
   ])('keeps the Posts fallback for an unsafe or absent return destination: %s', (returnTo) => {
     const h = loadEditor({ search: '?returnTo=' + encodeURIComponent(returnTo) });
     expect(h.el('backToPosts').getAttribute('href')).toBe('/admin/posts.html');
+  });
+  it('keeps private GPX geometry and import tokens out of ordinary post serialization', () => {
+    const { api } = loadEditor();
+    api.populateForm(fullPair());
+    const payload = api.buildPayload();
+    expect(JSON.stringify(payload)).not.toMatch(/\"(?:geometry|importId|baseVersion|selection|waypoints|sourceBytes)\"/);
   });
 
   it('selects an independent title image, round-trips framing, and clears it on removal or old revision restore', () => {

@@ -18,12 +18,13 @@ change about the security posture.
 - **Out of scope:** DDoS, host/OS hardening, and a fully DNS-rebind-proof SSRF filter (see
   *Known limitations*).
 
-## GPX routes — planned security change (#311)
+## GPX routes — private workflow (#313)
 
 The [2026-10-23 GPX specification](docs/superpowers/specs/2026-10-23-gpx-route-import-design.md)
-is **owner-approved as a design** (PR #326, 2026-10-23); this section records planned impact,
-not implemented protection. #313 adds bounded XML import/private storage; #314 adds public
-artifacts and snapshot isolation. Both are high-risk, owner-reviewed changes.
+is owner-approved as a design (PR #326). #313 implements bounded XML import, private route
+storage and recovery. **Public route artifacts and snapshot rendering remain #314's scope**;
+the private route table is not serialized into ordinary posts, builds or MDX exports.
+Implementation approval and merge authorization remain separate from design approval.
 
 - GPX originals and attached draft coordinates, elevation and timestamps are sensitive.
   Any authenticated author may read them, unlike media GPS redaction. Only an admin may
@@ -33,26 +34,40 @@ artifacts and snapshot isolation. Both are high-risk, owner-reviewed changes.
   latest attached original through detachment, delete it on replacement/post deletion,
   and retain full private route state in DB dumps with a manifest-matched private route
   archive. Those backups deliberately contain removed points/times until normal expiry.
-  Public route geometry in HTML/JSON/assets and MDX is only the approved 2D artifact.
+  #314 must expose only the approved 2D artifact in public HTML/JSON/assets and MDX.
   Damaged sources may be protected from automatic cleanup by a retained degraded
   manifest, but explicit replacement/post deletion override that protection. Durable
   deletion intents retry failed unlink operations; a pending retry is not physical erasure.
-- Strict decoding precedes DOCTYPE/entity refusal in every supported encoding. Parsing
-  runs in a terminable, resource-bounded worker; a timer beside synchronous parsing is
-  insufficient. Malformed coordinates cannot be skipped into a new connecting line.
+- Strict UTF-8 / BOM-marked UTF-16 decoding precedes DOCTYPE/entity refusal. The 5 MiB
+  file and 5 MiB + 16 KiB multipart caps are enforced while streaming; uploads have a
+  15-second admission deadline. Decoding, validation and normalization run in a terminable
+  2-second worker with bounded heap/output, not on the request event loop. One import/attach
+  worker is admitted without queuing. Limits also cover nesting, points, segments and
+  waypoints. Malformed coordinates cannot be skipped into a new connecting line.
 - No private GPX preview/point arrays go to third-party tiles, geocoders, AI or browser draft
   storage. **Owner decision after review:** explicitly selected waypoints keep exact GPX
   coordinates as ordinary shared stops, with an unchecked selection and a warning that
   stops publish independently of track trimming. They follow existing stop metadata/stash
   rules. Track rounding (four decimals) and simplification (25 m) are not anonymization;
   neither they nor a z8 basemap protect those separately approved stop coordinates.
-- Route edits/detachment remain draft-only until Publish; private route state never enters
-  text revisions. Public leak verification decodes artifacts separately from private-backup
-  preservation/access tests. Reverting code does not erase already-built public HTML:
-  containment requires an owner-authorized safe rebuild/release switch and cache assessment.
+- Route edits/detachment are durable private draft operations. Separate route and pair tokens
+  are checked under a per-pair transaction lock; a lost acknowledgement blocks blind retry.
+  Private state never enters text revisions. #314 must independently verify public snapshots,
+  including detachment, rather than treating private-backup preservation as leak evidence.
+- Original directories/files use `0700`/`0600`, hashed pair paths and opaque source IDs.
+  Read/write boundaries reject symlinks and validate retained bytes. Pending previews are
+  author-bound, excluded from backups, cancelled explicitly and reconciled every minute;
+  abandoned imports expire after one hour. Cleanup failures are reported, not called erasure.
+- The app holds a database ownership lease. Lease loss latches mutation/job admission off,
+  aborts/drains work and closes app pools while static serving continues. Restore requires
+  the lease and absence of app-tagged sessions, validates the complete recovery set, creates
+  a verified undo set and stages fresh source IDs before replacing database state.
+  Unknown commit outcomes retain both source sets until reference-checked reconciliation.
+  Restore is offline; do not force-terminate another process to bypass its admission check.
 
-The specification defines transaction/file ordering, original cleanup, paired restore,
-misuse cases and required failure-path evidence. No safety gate is waived by this plan.
+The specification defines transaction/file ordering, paired restore, misuse cases and
+rollback. Reverting code is not erasure, and removing future published geometry requires
+an owner-authorized safe rebuild/release switch and cache assessment. No safety gate is waived.
 
 ## Authentication & sessions
 

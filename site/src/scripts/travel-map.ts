@@ -1,15 +1,20 @@
 import 'maplibre-gl/dist/maplibre-gl.css';
+import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import {
   Map as MapLibreMap,
   Popup,
   NavigationControl,
   LngLatBounds,
   addProtocol,
+  setWorkerUrl,
   type StyleSpecification,
 } from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
 import { layers, namedTheme } from 'protomaps-themes-base';
 import type { PinCollection, TripGeometry } from '../lib/map-data';
+
+// Vite must bundle the v6 worker's shared-module import, not copy it verbatim.
+setWorkerUrl(workerUrl);
 
 // @ai-note: pmtiles protocol is registered once globally; Astro islands may
 // call initFullMap / initMiniMap on multiple pages, so guard against double-registration.

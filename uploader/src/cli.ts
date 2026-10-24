@@ -4,10 +4,13 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { SESSION_COOKIE } from './authn.js';
 import { normalizeProcessOptions, processImage, type ProcessOptions } from './pipeline.js';
 import { contentHashKey, storeVariants, type StorageOptions, type StoredImage } from './storage.js';
-import type { Dump } from './backup.js';
+import { BACKUP_FILE_RE, BackupError, dumpDatabase, readDump, resolveBackupDir, restoreDatabase, type Dump } from './backup.js';
 import { passwordPolicyViolation, type UserStore } from './users.js';
 import type { SessionStore } from './sessions.js';
 import { createSettingsStore, defaultSettings } from './settings.js';
+import { acquireStorageOwner } from './storage-owner.js';
+import { createGpxFiles } from './gpx-files.js';
+import { verifyRouteArchive, routeRecoverySummary } from './gpx-backup.js';
 
 /** Reusable: process an in-memory image and store its variants.
  * Keys are content-hash versioned like POST /upload, so a re-upload mints a
@@ -48,7 +51,7 @@ function describeDatabase(databaseUrl: string): string {
   }
 }
 
-const RESTORE_TABLES = ['users', 'posts', 'pages', 'media', 'media_folders', 'comments'] as const;
+const RESTORE_TABLES = ['users', 'posts', 'pages', 'media', 'media_folders', 'comments', 'post_routes'] as const;
 type RowCounts = Record<(typeof RESTORE_TABLES)[number], number>;
 
 /** `users 3, posts 12, …` — the same shape for the dump and for the live rows,
@@ -65,27 +68,20 @@ export function parseRestoreArgs(args: string[]): { yes: boolean; file: string |
 }
 
 /**
- * Destructive: replaces users/posts/pages/media in the live database. Order is
- * load-bearing (issue #114, spec 2026-09-05-restore-cli-confirmation-design.md):
- * refuse a bad filename or unrestorable version BEFORE connecting, show what is
- * about to be replaced, require confirmation, write a pre-restore dump, and
- * only then run the transaction. Every early exit leaves the database untouched.
+ * Offline recovery: validate the set, acquire exclusive storage ownership,
+ * refuse draining app sessions, confirm scope, verify an undo set, then replace
+ * rows transactionally. The owner stops the app first and restarts it afterward.
  */
 async function restoreMain(args: string[]): Promise<void> {
   const { yes, file } = parseRestoreArgs(args);
   if (!file) {
-    // @ai-warning: the DHI runtime image has no shell, so `docker compose exec`
-    // must invoke node directly — `tsx src/cli.ts ...` cannot run there.
     console.error(
-      'usage: docker compose exec app node --import tsx src/cli.ts restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
-      '       (bare dev: npx tsx src/cli.ts restore [--yes] <file>)\n' +
-      '       --yes skips the interactive confirmation; a pre-restore dump is written either way.',
+      'usage: stop app, then docker compose run --rm --no-deps app node --import tsx src/cli.ts restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
+      '       (bare dev: stop the app, then node --import tsx src/cli.ts restore [--yes] <file>)\n' +
+      '       --yes skips confirmation, never exclusive ownership or the verified pre-restore backup.',
     );
     process.exit(1);
   }
-  // Lazy like every subcommand here: `uploadFile` is imported by tests and by
-  // the upload path, neither of which should load pg.
-  const { BACKUP_FILE_RE, BackupError, dumpDatabase, readDump, resolveBackupDir, restoreDatabase } = await import('./backup.js');
   if (!BACKUP_FILE_RE.test(basename(file))) {
     console.error(`refusing to restore ${file}: the file name must match db-YYYYMMDD-HHmmss.json.gz. nothing was changed.`);
     process.exit(1);
@@ -98,6 +94,7 @@ async function restoreMain(args: string[]): Promise<void> {
   let dump: Dump;
   try {
     dump = readDump(file);
+    await verifyRouteArchive(file, dump.routeArchive, dump.tables.post_routes ?? []);
   } catch (e) {
     const reason = e instanceof BackupError ? e.message : `cannot read dump (${e instanceof Error ? e.message : String(e)})`;
     console.error(`refusing to restore ${file}: ${reason}. nothing was changed.`);
@@ -108,10 +105,19 @@ async function restoreMain(args: string[]): Promise<void> {
     pages: dump.tables.pages?.length ?? 0, media: dump.tables.media?.length ?? 0,
     media_folders: dump.tables.media_folders?.length ?? 0,
     comments: dump.tables.comments?.length ?? 0,
+    post_routes: dump.tables.post_routes?.length ?? 0,
   };
   const { createPool } = await import('./db.js');
-  const pool = createPool(databaseUrl);
+  const owner = await acquireStorageOwner(databaseUrl, { role: 'restore' });
+  const pool = createPool(databaseUrl, owner.applicationName);
+  const routeFiles = createGpxFiles({ storageDir: process.env.STORAGE_DIR ?? '/data/images', isWritable: owner.isWritable });
+  const assertOwner = async () => {
+    owner.assertWritable();
+    await owner.assertNoAppSessions();
+    owner.assertWritable();
+  };
   try {
+    await assertOwner();
     const live = {} as RowCounts;
     for (const t of RESTORE_TABLES) {
       live[t] = Number((await pool.query(`SELECT count(*) AS n FROM ${t}`)).rows[0].n);
@@ -123,6 +129,10 @@ async function restoreMain(args: string[]): Promise<void> {
       ? 'app_secrets preserved: absent from dump.'
       : `app_secrets: replace ${Number((await pool.query('SELECT count(*) AS n FROM app_secrets')).rows[0].n)} live rows with ${dump.tables.app_secrets.length} encrypted rows from dump.`);
     console.log('Encrypted credentials require their original master key; reconcile settings.json before using remote AI.');
+    const recovery = routeRecoverySummary(dump.routeArchive);
+    console.log(`Private routes: ${dumpCounts.post_routes}; originals: ${recovery.status} ` +
+      `(present ${recovery.present}, missing ${recovery.missing}, corrupt ${recovery.corrupt}, unreadable ${recovery.unreadable}, oversized ${recovery.oversized}).`);
+    console.log('Private recovery sets retain original locations and timestamps. Keep the app stopped until this command finishes.');
     if (!yes) {
       const answer = await promptLine("type 'yes' to continue (or pass --yes): ");
       if (answer.trim() !== 'yes') {
@@ -139,20 +149,22 @@ async function restoreMain(args: string[]): Promise<void> {
     const backupDir = join(resolveBackupDir(), 'db');
     let preDump: string;
     try {
-      preDump = resolve(backupDir, await dumpDatabase(pool, backupDir));
+      preDump = resolve(backupDir, await dumpDatabase(pool, backupDir, new Date(), { routeFiles, isWritable: owner.isWritable }));
+      const undo = readDump(preDump);
+      await verifyRouteArchive(preDump, undo.routeArchive, undo.tables.post_routes ?? []);
     } catch (e) {
       console.error(`pre-restore dump into ${backupDir} failed (${e instanceof Error ? e.message : String(e)}); restore aborted, nothing was changed.`);
       process.exitCode = 1;
       return;
     }
-    console.log(`pre-restore dump written: ${preDump}`);
-    const counts = await restoreDatabase(pool, file);
-    console.log(`restored ${counts.users} users, ${counts.posts} posts, ${counts.pages} pages, ${counts.media} media rows, and ${counts.comments} comments (all sessions invalidated).`);
+    console.log(`pre-restore recovery set verified: ${preDump}`);
+    const counts = await restoreDatabase(pool, file, { routeFiles, assertOwner });
+    console.log(`restored ${counts.users} users, ${counts.posts} posts, ${counts.pages} pages, ${counts.media} media rows, ${counts.comments} comments, and ${counts.routes} private routes (all sessions invalidated).`);
     console.log(counts.appSecrets === null ? 'app_secrets preserved.' : `restored ${counts.appSecrets} encrypted app_secrets rows.`);
     console.log(`to undo: restore --yes ${preDump}`);
-    console.log('now rebuild the site: /admin/settings.html → "Rebuild site now" (or POST /rebuild).');
+    console.log('Restart the app with the same data/settings configuration, then rebuild through /admin/settings.html → \"Rebuild site now\".');
   } finally {
-    await pool.end();
+    try { await pool.end(); } finally { await owner.close(); }
   }
 }
 

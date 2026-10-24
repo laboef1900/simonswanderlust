@@ -324,6 +324,12 @@
         <ul id="backupFiles"></ul>
         <p class="section-label">Image archives</p>
         <ul id="imageArchives"></ul>
+        <h3 id="routeBackupHeading" class="section-label"></h3>
+        <p id="routeBackupPrivacy" class="muted"></p>
+        <p id="routeBackupStatus" class="page-status" role="status"></p>
+        <p id="routeCleanupStatus" class="page-status" role="status"></p>
+        <p id="routeArchivesHeading" class="section-label"></p>
+        <ul id="routeArchives"></ul>
         <p class="muted">
           Note: DB dumps and image archives are written to <code>/data/backup/db</code> —
           the same server disk as the live data. They are not offsite copies; keep a
@@ -338,6 +344,7 @@
     </main>
 
     <script src="/admin/editor-image-copy.js"></script>
+    <script src="/admin/gpx-copy.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/llm.js"></script>
@@ -345,6 +352,10 @@
     <script>
       const $ = (id) => document.getElementById(id);
       const copy = EditorCopy.en;
+      const gpxCopy = GpxCopy.en;
+      $('routeBackupHeading').textContent = gpxCopy.backupHeading;
+      $('routeBackupPrivacy').textContent = gpxCopy.backupPrivacy;
+      $('routeArchivesHeading').textContent = gpxCopy.archiveHeading;
       for (const [id, key] of Object.entries({
         settingsIntro: 'settingsIntro', imageHeading: 'settingsImages', commentsHeading: 'settingsComments',
         siteSettingsHeading: 'settingsSite', reviewUseCaseLabel: 'settingsWriting', captionUseCaseLabel: 'settingsCaptions',
@@ -1360,6 +1371,13 @@
             : st.lastSuccessAt ? 'OK at ' + st.lastSuccessAt : 'No backup yet.';
         renderFileList($('backupFiles'), data.files || []);
         renderFileList($('imageArchives'), data.imageArchives || []);
+        renderFileList($('routeArchives'), data.routeArchives || []);
+        const recovery = st.routeRecovery;
+        $('routeBackupStatus').textContent = recovery
+          ? (recovery.status === 'degraded' ? gpxCopy.backupDegraded : gpxCopy.backupComplete) + ' ' +
+            gpxCopy.backupCounts.replace(/\{(present|missing|corrupt|unreadable|oversized)\}/g, (_, key) => String(recovery[key]))
+          : '';
+        $('routeCleanupStatus').textContent = data.routeCleanup && data.routeCleanup.status === 'blocked' ? gpxCopy.cleanupBlocked : '';
       }
 
       function renderFileList(ul, files) {

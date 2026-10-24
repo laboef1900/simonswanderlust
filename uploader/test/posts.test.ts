@@ -459,9 +459,12 @@ describe('memoryPostStore optimistic concurrency', () => {
     }
   });
 
-  it('skips the check for a brand-new post (nothing to conflict with)', async () => {
+  it('refuses a stale save after the pair has been deleted', async () => {
     const s = memoryPostStore();
-    await expect(s.upsertDraft(pair(), new Date(0))).resolves.toBeTruthy();
+    const saved = await s.upsertDraft(pair());
+    await s.remove(saved.translationKey);
+    await expect(s.upsertDraft(saved, saved.updatedAt)).rejects.toMatchObject({ code: 'not_found' });
+    expect(await s.get(saved.translationKey)).toBeNull();
   });
 });
 

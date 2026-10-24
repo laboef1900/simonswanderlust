@@ -48,6 +48,7 @@ function stubBuilder(outcome: BuildOutcome = { ok: true, release: 'r1' }) {
     builder: {
       build: async () => { calls.push(1); return outcome; },
       hasRelease: () => true,
+      quiesce: async () => {},
     } satisfies SiteBuilder,
   };
 }
@@ -61,6 +62,7 @@ function stubBackup(dir = '/tmp/none', running = false) {
     sweepTempFiles: () => [],
     list: () => [{ name: 'db-20260703-120000.json.gz', size: 3 }],
     listImageArchives: () => [{ name: 'images-20260703-120000.tar', size: 7 }],
+    listRouteArchives: () => [], quiesce: async () => {},
     state: () => ({ ...state }),
   };
   return { backup };
@@ -81,6 +83,7 @@ function stubQueue(opts: { full?: boolean } = {}) {
     isActive: (key) => enqueued.includes(key),
     recover: async () => 0,
     drain: async () => {},
+    quiesce: async () => {},
     idle: async () => {},
     stats: () => ({ pending: enqueued.length, running: 0 }),
   };
@@ -3012,7 +3015,7 @@ describe('POST /rebuild and GET /health', () => {
   it('reports whether a release exists, as information — a missing one is not a verdict', async () => {
     // #110: a fresh volume has no release for the first minutes and a persistent
     // build failure is healed by a publish, not by a container restart.
-    const none = build({ builder: { build: async () => ({ ok: true, release: 'r' }), hasRelease: () => false } });
+    const none = build({ builder: { build: async () => ({ ok: true, release: 'r' }), hasRelease: () => false, quiesce: async () => {} } });
     const res = await none.app.inject({ method: 'GET', url: '/health' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, release: false });
