@@ -609,6 +609,19 @@ surface; the renderer's superlinear worst case on adversarial backtick bodies is
 bounded by the 1 MiB request limit. See
 `docs/superpowers/specs/2026-09-06-publish-gate-foreign-images-design.md`.
 
+**Readiness follows actual rendered references** (#334, 2026-10-25). Single and bulk publishing
+render each locale once, preserve the pre-transform foreign-origin check above, and derive media
+readiness keys from the actual sanitized/transformed body image sources, plus heroes and title
+images. Direct AVIF/WebP/JPEG variants count without metadata; obsolete unused `images` entries
+do not. Known `processing`, `failed`, and `missing` rows refuse publication before snapshots or
+builds change. No-row legacy body/hero references remain allowed; title images still require a
+known ready library row. URL resolution uses origin equality and hosted path boundaries, with
+body-relative URLs resolved against their public locale story URL. There is no remote fetch or
+filesystem probe. Existing admin authorization, publish concurrency checks, sanitization,
+gallery URL/dimension guards, preview CSP, and EXIF/privacy controls are reconfirmed unchanged.
+See [the approved readiness specification](docs/superpowers/specs/2026-10-25-publish-readiness-references-design.md)
+for failure recovery, rollback, and verification.
+
 ## Output sanitization (stored XSS)
 
 Post bodies are DB-stored Markdown rendered to HTML at build time. Before that HTML reaches the
