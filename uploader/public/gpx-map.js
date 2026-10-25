@@ -231,7 +231,7 @@
       var points = (Array.isArray(data.waypoints) ? data.waypoints : []).map(function (point, index) {
         return { lng: point.lng, lat: point.lat, selected: selected.has(index) };
       }).filter(function (point) { return Number.isFinite(point.lng) && Number.isFinite(point.lat) && Math.abs(point.lng) <= 180 && Math.abs(point.lat) <= 90; });
-      if (!retained.length && !removed.length && !points.length) {
+      if (!retained.length && !removed.length && !points.length && !original.length) {
         if (!map) container.replaceChildren();
         if (map && styleReady) ['gpx-kept', 'gpx-removed', 'gpx-waypoints'].forEach(function (id) {
           if (map.getLayer(id)) map.removeLayer(id);

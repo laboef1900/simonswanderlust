@@ -995,9 +995,11 @@ and the `<dialog>`s appended to `<body>` share one set:
   after an action, but live trim feedback never steals focus while typing. Delayed cleanup
   warnings stay separate from the current input error. Candidate generation disables
   Attach while pending or invalid; collapse/limit feedback never silently changes precision
-  or drops a route. The retained original remains private, and attachment is draft-only
-  until Publish. Published story maps add a localized per-run textual alternative with
-  public-precision endpoints and approximate lengths; routeless stories gain no empty panel.
+  or drops a route. Pending refreshes preserve map-availability notices. Publish failures
+  use localized recovery messages in both the editor and the posts list.
+  The retained original remains private, and attachment is draft-only until Publish.
+  Published story maps add a localized per-run textual alternative with public-precision
+  endpoints and approximate lengths; routeless stories gain no empty panel.
 - Country assistance and excerpt generation sit next to the relevant fields in Story
   details. Coordinate approximation is explicit. Excerpt suggestions have a plain-text
   preview, character count, and separate accept/dismiss actions; generation never looks

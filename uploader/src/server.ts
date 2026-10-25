@@ -245,7 +245,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
     const route = req.routeOptions.url;
-    if (route === '/settings' || route === '/ai-config' || route?.startsWith('/ai-providers')) reply.header('Cache-Control', 'no-store');
+    if (route === '/settings' || route === '/ai-config' || route?.startsWith('/ai-providers')
+      || route === '/posts/:tk/publish' || route === '/posts/bulk') reply.header('Cache-Control', 'no-store');
     if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
       reply.header('Referrer-Policy', 'no-referrer');
@@ -1613,7 +1614,6 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // @ai-warning: publishing pushes content to the PUBLIC static site, so it is
   // admin-only. Authors may create/edit drafts (requireAuth) but not publish.
   app.post<{ Params: { tk: string } }>('/posts/:tk/publish', { preHandler: requireAdmin, bodyLimit: 4096 }, async (req, reply) => {
-    reply.header('cache-control', 'no-store');
     const body = req.body;
     if (!body || typeof body !== 'object' || Array.isArray(body)
       || Object.keys(body).length !== 2
@@ -1712,7 +1712,6 @@ export function buildServer(cfg: ServerConfig): AppServer {
   type BulkAction = (typeof BULK_ACTIONS)[number];
 
   app.post('/posts/bulk', { preHandler: requireAdmin }, async (req, reply) => {
-    reply.header('cache-control', 'no-store');
     const b = (req.body ?? {}) as { action?: unknown; keys?: unknown };
     const action = String(b.action ?? '') as BulkAction;
     if (!BULK_ACTIONS.includes(action)) {

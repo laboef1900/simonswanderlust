@@ -62,7 +62,8 @@ Implementation approval and merge authorization remain separate from design appr
   line until another Publish. Backup capture and restore reject malformed or mismatched
   public projections without treating intentionally private backup contents as a leak.
   A failed build leaves the previous release served, not a partially updated public route.
-  Single/bulk Publish responses, including failures, are `no-store`.
+  Single/bulk Publish responses are `no-store` at the response hook, including authorization
+  and body-parser refusals that never reach the handler.
 - Public projection uses 25 m per-run spherical simplification, four decimal places and
   strict 2D coordinates, capped at 100 runs, 2,000 vertices and 64 KiB. Discontinuities
   remain separate; ambiguous antipodal or antimeridian-crossing shortcuts are subdivided

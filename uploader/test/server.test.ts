@@ -1860,9 +1860,13 @@ describe('POST /posts/bulk', () => {
 
   it('is admin-only: 401 anonymous, 403 for a non-admin author', async () => {
     const b = build();
-    expect((await bulk(b, undefined, { action: 'publish', keys: ['x'] })).statusCode).toBe(401);
+    const anonymous = await bulk(b, undefined, { action: 'publish', keys: ['x'] });
+    expect(anonymous.statusCode).toBe(401);
+    expect(anonymous.headers['cache-control']).toBe('no-store');
     const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
-    expect((await bulk(b, cookie, { action: 'publish', keys: ['x'] })).statusCode).toBe(403);
+    const forbidden = await bulk(b, cookie, { action: 'publish', keys: ['x'] });
+    expect(forbidden.statusCode).toBe(403);
+    expect(forbidden.headers['cache-control']).toBe('no-store');
   });
 
   it('rejects an unknown action, a non-array keys, an empty selection and an oversize batch', async () => {
@@ -2271,9 +2275,11 @@ describe('posts editor', () => {
     for (const payload of bodies) {
       const response = await b.app.inject({ method: 'POST', url, cookies: cookie, ...(payload === undefined ? {} : { payload }) });
       expect(response.statusCode).toBe(400);
+      expect(response.headers['cache-control']).toBe('no-store');
     }
     const oversized = await b.app.inject({ method: 'POST', url, cookies: cookie, payload: { ...tokens, padding: 'x'.repeat(4096) } });
     expect(oversized.statusCode).toBe(413);
+    expect(oversized.headers['cache-control']).toBe('no-store');
     expect((await b.posts.get(saved.translationKey))!.status).toBe('draft');
   });
 
@@ -2339,12 +2345,16 @@ describe('posts editor', () => {
 
   it('publish is admin-only: a non-admin author gets 403', async () => {
     const b = build();
+    const anonymous = await b.app.inject({ method: 'POST', url: '/posts/x/publish', payload: {} });
+    expect(anonymous.statusCode).toBe(401);
+    expect(anonymous.headers['cache-control']).toBe('no-store');
     const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     expect(created.statusCode).toBe(200); // authors may still create/edit drafts
     const tk = created.json().translationKey;
     const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(pub.statusCode).toBe(403);
+    expect(pub.headers['cache-control']).toBe('no-store');
   });
 
   it('publish rejects an incomplete post (400)', async () => {

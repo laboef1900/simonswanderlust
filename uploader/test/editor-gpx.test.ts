@@ -894,11 +894,17 @@ describe('public candidate lifecycle', () => {
       track: { version: 1, type: 'MultiLineString', coordinates: [[[1, 2], [1.2, 2.2]]] }, collapsedRuns: 1,
     } });
     expect(h.element('gpxCandidateStatus').textContent).toBe(ui[locale]['gpx.candidateCollapsed'].replace('{count}', '1'));
-    expect(h.element('gpxPrivacy').textContent).toBe(ui[locale]['gpx.privacy']);
-    expect(h.element('gpxCandidateHelp').textContent).toBe(ui[locale]['gpx.candidateHelp']);
     h.element('gpxClose').click();
     expect(h.api.publishError('track_public_limit')).toBe(ui[locale]['gpx.publishRouteRecovery']);
     expect(h.focused).toBe(h.element('gpxRouteFeedback'));
+  });
+
+  it.each(['de', 'en'] as const)('classifies Publish worker failures without leaking raw codes in %s', (locale) => {
+    const h = setup({ locale });
+    expect(h.api.publishError('gpx_timeout')).toBe(ui[locale]['gpx.timeout']);
+    expect(h.api.publishError('gpx_worker_failed')).toBe(ui[locale]['gpx.workerFailed']);
+    expect(h.api.publishError('gpx_unavailable')).toBe(ui[locale]['gpx.unavailable']);
+    expect(h.api.publishError('unrelated_validation')).toBeNull();
   });
 
   it('fails closed until route loading succeeds and never refreshes a reviewed publish token', async () => {

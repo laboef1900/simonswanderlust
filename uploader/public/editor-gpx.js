@@ -514,6 +514,7 @@
         }
         if (code === 'conflict') return msg('conflict');
         if (code === 'publish_busy') return msg('busy');
+        if (typeof code === 'string' && code.startsWith('gpx_')) return msg(errorKey({ code }));
         return null;
       },
       hasPreview: () => !!preview,

@@ -109,10 +109,10 @@ function simplify(points) {
     const nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
     const normalLength = Math.hypot(nx, ny, nz);
     const dot = ax * bx + ay * by + az * bz;
-    // An antipodal pair has no unique minor arc. Subdivide using source points,
-    // never choose a hemisphere. Also subdivide a longitude-wrapping chord so
-    // MapLibre cannot invent a connection that normalization explicitly removed.
-    if ((normalLength < 1e-12 && dot < 0) || Math.abs(points[start].lng - points[end].lng) > 180) {
+    // Near-antipodal cross products amplify trig rounding into metre-scale arc errors.
+    // Subdivide using source points rather than choosing that unstable hemisphere.
+    // Also subdivide wrapping chords: MapLibre must not invent a removed connection.
+    if ((normalLength < 1e-8 && dot < 0) || Math.abs(points[start].lng - points[end].lng) > 180) {
       const middle = Math.floor((start + end) / 2);
       keep[middle] = 1;
       stack.push(start, middle, middle, end);

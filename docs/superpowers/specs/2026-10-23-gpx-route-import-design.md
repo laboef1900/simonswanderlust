@@ -151,6 +151,10 @@ minor great-circle arc numerically ambiguous (antipodal), subdivide at an existi
 source midpoint and continue. Do not invent an arc, reconnect a removed run or interpolate
 new points. The strict public validators also reject adjacent raw longitude jumps above
 180°. This conservative guard does not change the 25 m tolerance or four-decimal precision.
+The antipodal guard uses a negative endpoint dot product and cross-product norm below
+`1e-8`: a tighter near-zero cutoff lets trigonometric rounding tilt the inferred arc
+enough to discard points more than 25 m from the true meridian. Subdivision retains
+existing source points rather than relaxing the tolerance.
 
 Public rejection codes are `track_empty_after_rounding` and `track_public_limit`, with bounded retained-run/vertex/byte counts, not coordinates. A complex route can exceed the fixed output cap even after a valid private attach. In #314, refuse such new attachments before replacing the old route. A private route attached under #313 is validated on the first #314 Publish; on refusal, leave both snapshots unchanged and offer **trim/remove more segments**, **replace with a shorter track**, or explicit **Detach route, then Publish without it**. Never silently omit its line or raise tolerance. Explain this migration state in the editor. Tests include a long straight route that simplifies within bounds and a complex over-cap route; do not infer support solely from input duration or file size.
 

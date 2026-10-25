@@ -45,6 +45,13 @@ describe('canonical public track transformation', () => {
     expect(createPublicTrack(geometry(polar)).track).toEqual(track(polar));
   });
 
+  it('does not lose a 189 metre deviation to numerical noise near antipodal endpoints', () => {
+    // The true minor arc lies on the 0/180 meridian. sin(PI) noise tilts a tiny cross product.
+    const run: Position[] = [[0, 30], [179.9983, 0], [180, -29.9999999999]];
+    expect(createPublicTrack(geometry(run)).track)
+      .toEqual(track([[0, 30], [179.9983, 0], [180, -30]]));
+  });
+
   it('preserves antimeridian splits and refuses a shortcut that would invent a wrapping edge', () => {
     const normalized = geometry([[179, 0], [179.9, 0]], [[-179.9, 0], [-179, 0]]);
     expect(createPublicTrack(normalized).track).toEqual(track([[179, 0], [179.9, 0]], [[-179.9, 0], [-179, 0]]));

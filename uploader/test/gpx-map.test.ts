@@ -88,6 +88,24 @@ describe('GPX preview map', () => {
     api.destroy();
   });
 
+  it.each([false, true])('preserves map availability while an untrimmed candidate refreshes (missing basemap: %s)', async (missingBasemap) => {
+    const h = harness();
+    const api = await (h.window.GpxMap as { create(options: unknown): Promise<{ render(data: unknown): void; destroy(): void }> }).create({ container: h.container, statusElement: h.status, copy });
+    const fire = (name: string) => (h.map.on.mock.calls.find((call) => call[0] === name)![1] as () => void)();
+    fire('load');
+    if (missingBasemap) { fire('error'); fire('style.load'); }
+    const availability = h.status.textContent;
+    const geometry = { version: 1, segments: [segment({ lng: 1, lat: 2 }, { lng: 3, lat: 4 })] };
+    const pending = { geometry, rawKept: geometry, selection: { startPoints: 0, endPoints: 0, removedSegments: [] }, track: null, waypoints: [] };
+    api.render(pending);
+    expect(h.status.textContent).toBe(availability);
+    expect(h.sources['gpx-kept']).toBeUndefined();
+    api.render({ ...pending, track: { version: 1, type: 'MultiLineString', coordinates: [[[1, 2], [3, 4]]] } });
+    expect(featureSource(h.sources['gpx-kept']).data.geometry.coordinates).toEqual([[[1, 2], [3, 4]]]);
+    expect(h.status.textContent).toBe(availability);
+    api.destroy();
+  });
+
   it('renders independent route runs and exact selected waypoint coordinates', async () => {
     const h = harness();
     const api = await (h.window.GpxMap as { create: (options: unknown) => Promise<{ render(data: unknown): void; resize(): void; destroy(): void }> }).create({ container: h.container, statusElement: h.status, copy });
