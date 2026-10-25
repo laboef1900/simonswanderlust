@@ -18,6 +18,76 @@ change about the security posture.
 - **Out of scope:** DDoS, host/OS hardening, and a fully DNS-rebind-proof SSRF filter (see
   *Known limitations*).
 
+## GPX routes — private source and public snapshot
+
+The [2026-10-23 GPX specification](docs/superpowers/specs/2026-10-23-gpx-route-import-design.md)
+is owner-approved as a design (PR #326). #313 implements bounded XML import, private route
+storage and recovery; #314 adds the strictly projected public artifact. The private route
+table is never serialized into ordinary posts, builds or MDX exports.
+Implementation approval and merge authorization remain separate from design approval.
+
+- GPX originals and attached draft coordinates, elevation and timestamps are sensitive.
+  Any authenticated author may read them, unlike media GPS redaction. Only an admin may
+  Publish. Originals live outside every public/static root, with guarded attachment-only
+  downloads; private responses and failures are `no-store`.
+  GPX mutations compare a supplied Origin to the admin request's scheme and verbatim
+  forwarded `Host`, not `PUBLIC_BASE_URL` (the separate image origin).
+  `X-Forwarded-Host` is not used; the existing proxy must preserve `Host` and set
+  `X-Forwarded-Proto`. Missing/malformed authority fails closed.
+- Trimming protects **publication**, not private retention. The owner chose to keep the
+  latest attached original through detachment, delete it on replacement/post deletion,
+  and retain full private route state in DB dumps with a manifest-matched private route
+  archive. Those backups deliberately contain removed points/times until normal expiry.
+  Public HTML/JSON/assets and MDX expose only the approved 2D snapshot artifact.
+  Damaged sources may be protected from automatic cleanup by a retained degraded
+  manifest, but explicit replacement/post deletion override that protection. Durable
+  deletion intents retry failed unlink operations; a pending retry is not physical erasure.
+- Strict UTF-8 / BOM-marked UTF-16 decoding precedes DOCTYPE/entity refusal. The 5 MiB
+  file and 5 MiB + 16 KiB multipart caps are enforced while streaming; uploads have a
+  15-second admission deadline. Decoding, validation and normalization run in a terminable
+  2-second worker with bounded heap/output, not on the request event loop. One import/attach
+  worker is admitted without queuing. Limits also cover nesting, points, segments and
+  waypoints. Malformed coordinates cannot be skipped into a new connecting line.
+- No private GPX preview/point arrays go to third-party tiles, geocoders, AI or browser draft
+  storage. **Owner decision after review:** explicitly selected waypoints keep exact GPX
+  coordinates as ordinary shared stops, with an unchecked selection and a warning that
+  stops publish independently of track trimming. They follow existing stop metadata/stash
+  rules. Track rounding (four decimals) and simplification (25 m) are not anonymization;
+  neither they nor a z8 basemap protect those separately approved stop coordinates.
+- Route edits/detachment are durable private draft operations. Separate route and pair tokens
+  are checked under a per-pair transaction lock; a lost acknowledgement blocks blind retry.
+  Private state never enters text revisions. Publish derives the artifact outside transaction
+  locks, then rechecks both tokens under the pair lock before updating both locale snapshots.
+  Builds and MDX read those snapshots only; edits and detachment cannot change the public
+  line until another Publish. Backup capture and restore reject malformed or mismatched
+  public projections without treating intentionally private backup contents as a leak.
+  A failed build leaves the previous release served, not a partially updated public route.
+  Single/bulk Publish responses are `no-store` at the response hook, including authorization
+  and body-parser refusals that never reach the handler.
+- Public projection uses 25 m per-run spherical simplification, four decimal places and
+  strict 2D coordinates, capped at 100 runs, 2,000 vertices and 64 KiB. Discontinuities
+  remain separate; ambiguous antipodal or antimeridian-crossing shortcuts are subdivided
+  using existing retained points, never invented connections. Empty/over-cap results fail
+  closed. Attach checks the same candidate before replacing an attachment.
+  The admin transform has its own process-wide, nonqueued 2-second worker slot, separate
+  from author import/attach. Browser previews use a terminable worker too; none falls back
+  to synchronous simplification. Public text derives only from the public artifact and
+  remains available without JavaScript/WebGL; overview maps remain pin-only.
+- Original directories/files use `0700`/`0600`, hashed pair paths and opaque source IDs.
+  Read/write boundaries reject symlinks and validate retained bytes. Pending previews are
+  author-bound, excluded from backups, cancelled explicitly and reconciled every minute;
+  abandoned imports expire after one hour. Cleanup failures are reported, not called erasure.
+- The app holds a database ownership lease. Lease loss latches mutation/job admission off,
+  aborts/drains work and closes app pools while static serving continues. Restore requires
+  the lease and absence of app-tagged sessions, validates the complete recovery set, creates
+  a verified undo set and stages fresh source IDs before replacing database state.
+  Unknown commit outcomes retain both source sets until reference-checked reconciliation.
+  Restore is offline; do not force-terminate another process to bypass its admission check.
+
+The specification defines transaction/file ordering, paired restore, misuse cases and
+rollback. Reverting code is not erasure, and removing future published geometry requires
+an owner-authorized safe rebuild/release switch and cache assessment. No safety gate is waived.
+
 ## Authentication & sessions
 
 - **Passwords** are hashed with **scrypt** (`N=16384, r=8, p=1`, 64-byte key, per-user random salt)

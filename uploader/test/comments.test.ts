@@ -150,7 +150,7 @@ describe('dump version allow-list', () => {
     const dir = await mkdtemp(join(tmpdir(), 'dumpv-'));
     const file = async (version: number) => {
       const f = join(dir, `db-2026010${version}-000000.json.gz`);
-      await writeFile(f, gzipSync(JSON.stringify({ version, createdAt: new Date().toISOString(), tables: { users: [], posts: [] } })));
+      await writeFile(f, gzipSync(JSON.stringify({ version, createdAt: new Date().toISOString(), tables: { users: [], posts: [], ...(version >= 10 ? { post_routes: [] } : {}) } })));
       return f;
     };
     for (const v of SUPPORTED_DUMP_VERSIONS) expect(readDump(await file(v)).version).toBe(v);

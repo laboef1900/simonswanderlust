@@ -28,6 +28,18 @@ async function seed(
 }
 
 describe('rehostImage', () => {
+  it('does not fetch or create files after lease loss', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let fetched = false;
+    await expect(rehostImage('https://wp/x.jpg', 'trips/t/body', 'Alt', {
+      storageDir: dir, baseUrl: 'https://img.example', signal: controller.signal,
+      fetchImpl: async () => { fetched = true; return new Response('unused'); },
+      lookup: publicLookup,
+    })).rejects.toMatchObject({ code: 'storage_read_only' });
+    expect(fetched).toBe(false);
+    expect(await readdir(dir)).toEqual([]);
+  });
   it('downloads, processes via the pipeline, and returns src + dimensions', async () => {
     const jpeg = await sharp({ create: { width: 800, height: 600, channels: 3, background: '#345' } }).jpeg().toBuffer();
     const fetchImpl = (async () => new Response(new Uint8Array(jpeg))) as unknown as typeof fetch;
@@ -103,6 +115,25 @@ describe('rehostImage under the work-lock', () => {
     };
     return { lock: { ...inner, runShared }, asked: asked.opened, order };
   };
+
+  it('rechecks storage ownership after waiting for the encode lock', async () => {
+    const { lock, asked } = observedLock();
+    const controller = new AbortController();
+    const finish = Promise.withResolvers<void>();
+    const build = lock.runExclusive(() => finish.promise);
+    const jpeg = await jpegOf();
+    const rehost = rehostImage('https://wp/x.jpg', 'trips/t/locked', 'a', {
+      storageDir: dir, baseUrl: 'https://img.example', lookup: publicLookup, lock,
+      signal: controller.signal, fetchImpl: async () => new Response(new Uint8Array(jpeg)),
+    });
+    const rejected = expect(rehost).rejects.toMatchObject({ code: 'storage_read_only' });
+    await asked;
+    controller.abort();
+    finish.resolve();
+    await Promise.all([build, rejected]);
+    expect(await readdir(dir)).toEqual([]);
+    expect(lock.stats()).toEqual({ exclusiveRunning: false, exclusiveWaiting: 0, sharedRunning: 0 });
+  });
 
   it('does not encode while a build holds the lock, and finishes once it releases', async () => {
     const { lock, asked } = observedLock();

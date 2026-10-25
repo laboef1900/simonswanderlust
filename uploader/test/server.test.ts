@@ -1,3 +1,4 @@
+import { publishBody, publishTokens } from './publish-tokens.js';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { mkdtemp, mkdir, readdir, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
@@ -48,6 +49,7 @@ function stubBuilder(outcome: BuildOutcome = { ok: true, release: 'r1' }) {
     builder: {
       build: async () => { calls.push(1); return outcome; },
       hasRelease: () => true,
+      quiesce: async () => {},
     } satisfies SiteBuilder,
   };
 }
@@ -61,6 +63,7 @@ function stubBackup(dir = '/tmp/none', running = false) {
     sweepTempFiles: () => [],
     list: () => [{ name: 'db-20260703-120000.json.gz', size: 3 }],
     listImageArchives: () => [{ name: 'images-20260703-120000.tar', size: 7 }],
+    listRouteArchives: () => [], quiesce: async () => {},
     state: () => ({ ...state }),
   };
   return { backup };
@@ -81,6 +84,7 @@ function stubQueue(opts: { full?: boolean } = {}) {
     isActive: (key) => enqueued.includes(key),
     recover: async () => 0,
     drain: async () => {},
+    quiesce: async () => {},
     idle: async () => {},
     stats: () => ({ pending: enqueued.length, running: 0 }),
   };
@@ -628,7 +632,7 @@ describe('media library', () => {
     const { src, storedKey } = await put(b, cookie, 'trips/live/hero');
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
     const tk = created.json().translationKey;
-    await b.posts.publish(tk);
+    await b.posts.publish(tk, await publishTokens(b.posts, tk));
     // The working copy now points at a different photo; the snapshot still has `src`.
     const swapped = await b.app.inject({
       method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
@@ -644,7 +648,7 @@ describe('media library', () => {
     expect(existsSync(join(dir, `${storedKey}-640.webp`))).toBe(true);
 
     // Republishing promotes the swap into the snapshot — now nothing serves it.
-    await b.posts.publish(tk);
+    await b.posts.publish(tk, await publishTokens(b.posts, tk));
     expect((await b.app.inject({ method: 'DELETE', url: `/media/items/${storedKey}`, cookies: cookie })).statusCode).toBe(200);
   });
 
@@ -1856,9 +1860,13 @@ describe('POST /posts/bulk', () => {
 
   it('is admin-only: 401 anonymous, 403 for a non-admin author', async () => {
     const b = build();
-    expect((await bulk(b, undefined, { action: 'publish', keys: ['x'] })).statusCode).toBe(401);
+    const anonymous = await bulk(b, undefined, { action: 'publish', keys: ['x'] });
+    expect(anonymous.statusCode).toBe(401);
+    expect(anonymous.headers['cache-control']).toBe('no-store');
     const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
-    expect((await bulk(b, cookie, { action: 'publish', keys: ['x'] })).statusCode).toBe(403);
+    const forbidden = await bulk(b, cookie, { action: 'publish', keys: ['x'] });
+    expect(forbidden.statusCode).toBe(403);
+    expect(forbidden.headers['cache-control']).toBe('no-store');
   });
 
   it('rejects an unknown action, a non-array keys, an empty selection and an oversize batch', async () => {
@@ -1933,7 +1941,7 @@ describe('POST /posts/bulk', () => {
     expect(s.calls.length).toBe(0);
 
     const live = await create(b, cookie, 'b');
-    await b.app.inject({ method: 'POST', url: `/posts/${live}/publish`, cookies: cookie });
+    await b.app.inject({ method: 'POST', url: `/posts/${live}/publish`, cookies: cookie, payload: await publishBody(b.posts, live) });
     expect(s.calls.length).toBe(1); // the publish
     const dropLive = await bulk(b, cookie, { action: 'delete', keys: [live] });
     expect(dropLive.json()).toMatchObject({ succeeded: 1, build: { ok: true, release: 'r1' } });
@@ -1985,7 +1993,7 @@ describe('publish gate (encode status)', () => {
       const p = pairUsing(`${IMG}/trips/g/hero`);
       const tk = await create(b, cookie, { ...p, de: { ...p.de,
         titleImage: { src: `${IMG}/${key}`, width: 2400, height: 800, alt: 'View' } } });
-      const single = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+      const single = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
       expect(single.statusCode).toBe(409);
       expect(single.json().notReady).toContain(key);
       const bulk = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
@@ -2001,7 +2009,7 @@ describe('publish gate (encode status)', () => {
       const p = pairUsing(`${IMG}/trips/g/hero`);
       const titleImage = { src: 'https://img.simonswanderlust.com.attacker.test/title', width: 2400, height: 800, alt: 'View' };
       const tk = await create(b, cookie, { ...p, de: { ...p.de, titleImage } });
-      const response = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+      const response = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
       expect(response.statusCode).toBe(409);
       expect(response.json().foreignImages).toEqual([titleImage.src]);
     } finally { await b.app.close(); }
@@ -2019,12 +2027,12 @@ describe('publish gate (encode status)', () => {
         titleImage: { src: `${IMG}/${key}`, width: 2400, height: 800, alt: 'View' } } });
       const remove = () => b.app.inject({ method: 'DELETE', url: `/media/items/${key}`, cookies: cookie });
       expect((await remove()).statusCode).toBe(409);
-      expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie })).statusCode).toBe(200);
+      expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) })).statusCode).toBe(200);
       const saved = (await b.posts.get(tk))!;
       delete saved.de.titleImage;
       await b.posts.upsertDraft(saved);
       expect((await remove()).statusCode).toBe(409);
-      expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie })).statusCode).toBe(200);
+      expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) })).statusCode).toBe(200);
       expect((await remove()).statusCode).toBe(200);
     } finally { await b.app.close(); }
   });
@@ -2034,7 +2042,7 @@ describe('publish gate (encode status)', () => {
     const { cookie } = await authed(b);
     await b.media.upsert({ key: 'trips/g/hero', status: 'processing', width: 9, height: 9, origBytes: 1, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
     const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`));
-    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(res.statusCode).toBe(409);
     expect(res.json().notReady).toEqual(['trips/g/hero']);
     // Nothing went live.
@@ -2046,7 +2054,7 @@ describe('publish gate (encode status)', () => {
     const { cookie } = await authed(b);
     await b.media.upsert({ key: 'trips/g/hero', status: 'failed', width: 9, height: 9, origBytes: 1, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
     const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`));
-    expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie })).statusCode).toBe(409);
+    expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) })).statusCode).toBe(409);
   });
 
   it('allows publishing once every referenced photo is ready', async () => {
@@ -2054,14 +2062,14 @@ describe('publish gate (encode status)', () => {
     const { cookie } = await authed(b);
     await b.media.upsert({ key: 'trips/g/hero', status: 'ready', width: 9, height: 9, origBytes: 1, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
     const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`));
-    expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie })).statusCode).toBe(200);
+    expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) })).statusCode).toBe(200);
   });
 
   it('does NOT block a URL with no media row — WP-imported and legacy files predate the library', async () => {
     const b = build();
     const { cookie } = await authed(b);
     const tk = await create(b, cookie, pairUsing(`${IMG}/wp/legacy/photo`));
-    expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie })).statusCode).toBe(200);
+    expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) })).statusCode).toBe(200);
   });
 
   it('checks gallery/body images from the images map, not just the hero', async () => {
@@ -2073,7 +2081,7 @@ describe('publish gate (encode status)', () => {
     const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`, {
       [`${IMG}/trips/g/gallery-a`]: { width: 3000, height: 2000 },
     }));
-    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(res.statusCode).toBe(409);
     expect(res.json().notReady).toEqual(['trips/g/gallery-a']);
   });
@@ -2087,7 +2095,7 @@ describe('publish gate (encode status)', () => {
       // A different origin is not ours to gate on.
       'https://elsewhere.example/photo': { width: 10, height: 10 },
     }));
-    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(res.statusCode).toBe(409);
     expect(res.json().notReady).toEqual(['trips/g/hero']);
   });
@@ -2133,7 +2141,7 @@ describe('alt-text audit (advisory, never a gate)', () => {
     const b = build();
     const { cookie } = await authed(b);
     const tk = await create(b, cookie);
-    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ published: true, build: { ok: true, release: 'r1' } });
     expect(res.json().altAudit).toEqual({
@@ -2184,7 +2192,7 @@ describe('alt-text audit (advisory, never a gate)', () => {
     const cleared = await b.app.inject({ method: 'GET', url: `/posts/${tk}/alt-audit`, cookies: cookie });
     expect(cleared.json().images).toContainEqual({ locale: 'de', kind: 'gallery', src: `${IMG}/trips/rhodos/g1`, reason: 'empty' });
     await b.media.patch('trips/rhodos/g1', { alt: { de: 'Fischerboote im Hafen' } });
-    const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(published.statusCode).toBe(200);
     expect(published.json().altAudit).toEqual(expected);
   });
@@ -2198,7 +2206,7 @@ describe('alt-text audit (advisory, never a gate)', () => {
       en: { ...undescribedPair.en, heroImage: { ...undescribedPair.en.heroImage, alt: 'Fishing boats in Lindos harbour' } },
     };
     const tk = (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: described })).json().translationKey;
-    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(res.json().altAudit).toEqual({ count: 0, images: [] });
   });
 });
@@ -2221,7 +2229,7 @@ describe('publish gate (foreign images, #91)', () => {
     const urls = Array.from({ length: 7 }, (_, i) => `https://old.example/wp-content/uploads/${i}.jpg`);
     const de = urls.map((u) => `![p](${u} "${u.split('/').pop()}")`).join('\n\n');
     const tk = await create(b, cookie, pairWithBody(de, '```gallery\nhttps://old.example/wp-content/uploads/g.jpg\n```'));
-    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(res.statusCode).toBe(409);
     expect(res.json().foreignImageCount).toBe(8);
     expect(res.json().foreignImages).toEqual(urls.slice(0, 5));
@@ -2233,7 +2241,7 @@ describe('publish gate (foreign images, #91)', () => {
     const b = build();
     const { cookie } = await authed(b);
     const tk = await create(b, cookie, pairWithBody(`![p](${IMG}/trips/g/a)\n\n\`\`\`gallery\n${IMG}/trips/g/b | 30x20\n\`\`\``));
-    expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie })).statusCode).toBe(200);
+    expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) })).statusCode).toBe(200);
   });
 
   it('applies to the bulk path as a per-post failure', async () => {
@@ -2256,6 +2264,69 @@ describe('posts editor', () => {
     en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
 
+  it('requires the strict 4KiB explicit publish body without a bodyless compatibility path', async () => {
+    const b = build(); const { cookie } = await authed(b);
+    const saved = await b.posts.upsertDraft({ ...sample(), status: 'draft', de: { ...sample().de, locale: 'de' }, en: { ...sample().en, locale: 'en' } });
+    const url = `/posts/${saved.translationKey}/publish`;
+    const tokens = await publishBody(b.posts, saved.translationKey);
+    const bodies = [undefined, {}, { baseUpdatedAt: tokens.baseUpdatedAt }, { ...tokens, extra: true },
+      { ...tokens, baseUpdatedAt: 'not-a-date' }, { ...tokens, baseRouteVersion: '' },
+      { ...tokens, baseRouteVersion: 1 }];
+    for (const payload of bodies) {
+      const response = await b.app.inject({ method: 'POST', url, cookies: cookie, ...(payload === undefined ? {} : { payload }) });
+      expect(response.statusCode).toBe(400);
+      expect(response.headers['cache-control']).toBe('no-store');
+    }
+    const oversized = await b.app.inject({ method: 'POST', url, cookies: cookie, payload: { ...tokens, padding: 'x'.repeat(4096) } });
+    expect(oversized.statusCode).toBe(413);
+    expect(oversized.headers['cache-control']).toBe('no-store');
+    expect((await b.posts.get(saved.translationKey))!.status).toBe('draft');
+  });
+
+  it.each(['single', 'bulk'] as const)('%s refuses a text change while publish gates are checking the reviewed pair', async (mode) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder }); const { cookie } = await authed(b);
+    const saved = await b.posts.upsertDraft({ ...sample(), status: 'draft',
+      de: { ...sample().de, locale: 'de', heroImage: { ...sample().de.heroImage, src: 'https://img.simonswanderlust.com/photo' } },
+      en: { ...sample().en, locale: 'en' } });
+    const tokens = await publishBody(b.posts, saved.translationKey);
+    vi.spyOn(b.media, 'notReadyKeys').mockImplementationOnce(async () => {
+      await b.posts.upsertDraft({ ...saved, de: { ...saved.de, bodyMarkdown: '![foreign](https://old.example/private.jpg)' } });
+      return new Set<string>();
+    });
+    const response = await b.app.inject(mode === 'single'
+      ? { method: 'POST', url: `/posts/${saved.translationKey}/publish`, cookies: cookie, payload: tokens }
+      : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [saved.translationKey] } });
+    if (mode === 'single') { expect(response.statusCode).toBe(409); expect(response.json().code).toBe('conflict'); }
+    else expect(response.json()).toMatchObject({ succeeded: 0, failed: 1 });
+    expect((await b.posts.get(saved.translationKey))!.status).toBe('draft');
+    expect(s.calls).toHaveLength(0);
+  });
+
+  it('returns the committed publish timestamp even when a draft save happens during its build', async () => {
+    const posts = memoryPostStore();
+    let committed: Date | undefined;
+    let tk = '';
+    const b = build({ posts, builder: {
+      hasRelease: () => true, quiesce: async () => {},
+      build: async () => {
+        const published = (await posts.get(tk))!;
+        committed = published.updatedAt;
+        await posts.upsertDraft({ ...published, de: { ...published.de, title: 'Later draft' } });
+        return { ok: false, error: 'synthetic build failure' };
+      },
+    } });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    tk = created.json().translationKey;
+    const response = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(posts, tk) });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().updatedAt).toBe(committed!.toISOString());
+    expect(response.json().build.ok).toBe(false);
+    expect((await posts.get(tk))!.updatedAt.getTime()).toBeGreaterThan(committed!.getTime());
+    expect((await posts.get(tk))!.hasUnpublishedChanges).toBe(true);
+  });
+
   it('GET /posts 401 without auth', async () => {
     expect((await build().app.inject({ method: 'GET', url: '/posts' })).statusCode).toBe(401);
   });
@@ -2267,19 +2338,23 @@ describe('posts editor', () => {
     const tk = created.json().translationKey;
     const list = await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie });
     expect(list.json()).toHaveLength(1);
-    const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(pub.statusCode).toBe(200);
     expect(pub.json()).toMatchObject({ published: true, build: { ok: true, release: 'r1' } });
   });
 
   it('publish is admin-only: a non-admin author gets 403', async () => {
     const b = build();
+    const anonymous = await b.app.inject({ method: 'POST', url: '/posts/x/publish', payload: {} });
+    expect(anonymous.statusCode).toBe(401);
+    expect(anonymous.headers['cache-control']).toBe('no-store');
     const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     expect(created.statusCode).toBe(200); // authors may still create/edit drafts
     const tk = created.json().translationKey;
-    const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(pub.statusCode).toBe(403);
+    expect(pub.headers['cache-control']).toBe('no-store');
   });
 
   it('publish rejects an incomplete post (400)', async () => {
@@ -2287,7 +2362,7 @@ describe('posts editor', () => {
     const bad = sample(); bad.de.excerpt = '';
     const c = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: bad });
     const tk = c.json().translationKey;
-    const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(pub.statusCode).toBe(400);
   });
 
@@ -2295,7 +2370,7 @@ describe('posts editor', () => {
     const b = build(); const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     let got = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
     expect(got).toMatchObject({ status: 'published', hasUnpublishedChanges: false });
 
@@ -2312,7 +2387,7 @@ describe('posts editor', () => {
     const list = (await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json();
     expect(list[0]).toMatchObject({ status: 'published', hasUnpublishedChanges: true });
 
-    const repub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const repub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(repub.statusCode).toBe(200);
     got = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
     expect(got).toMatchObject({ status: 'published', hasUnpublishedChanges: false });
@@ -2359,7 +2434,7 @@ describe('posts editor', () => {
     const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(s.calls.length).toBe(1); // publish built once
     const del = await b.app.inject({ method: 'DELETE', url: `/posts/${tk}`, cookies: cookie });
     expect(del.statusCode).toBe(200);
@@ -2386,7 +2461,7 @@ describe('posts editor', () => {
     const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(s.calls.length).toBe(1);
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
@@ -2402,13 +2477,13 @@ describe('posts editor', () => {
     const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
     expect(un.json()).toEqual({ unpublished: true, build: { ok: false, error: 'a build is already running' } });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('draft');
     // re-publish, then delete while the builder keeps failing: DB delete lands, outcome surfaced
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     const del = await b.app.inject({ method: 'DELETE', url: `/posts/${tk}`, cookies: cookie });
     expect(del.statusCode).toBe(200);
     expect(del.json()).toEqual({ deleted: true, build: { ok: false, error: 'a build is already running' } });
@@ -2562,7 +2637,7 @@ describe('posts editor', () => {
     const b = build(); const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(pub.statusCode).toBe(200);
     expect(pub.json().updatedAt).toBeTruthy();
     // Echoing the post-publish value must not false-conflict.
@@ -2584,7 +2659,7 @@ describe('posts editor', () => {
     const tk = created.json().translationKey;
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+      const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
       expect(pub.statusCode).toBe(200);
       expect(pub.json().published).toBe(true);
       expect(spy).toHaveBeenCalledWith(expect.stringContaining(tk), expect.objectContaining({ code: 'ENOTDIR' }));
@@ -2768,7 +2843,7 @@ describe('WordPress import', () => {
     };
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: seed });
     const tk = created.json().translationKey;
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     const summary = await importAndWait(b, cookie, wxrWith());
     expect(summary).toMatchObject({ imported: 0, updated: 0, skippedPublished: 1, rejected: 0, failed: 0 });
   });
@@ -3012,7 +3087,7 @@ describe('POST /rebuild and GET /health', () => {
   it('reports whether a release exists, as information — a missing one is not a verdict', async () => {
     // #110: a fresh volume has no release for the first minutes and a persistent
     // build failure is healed by a publish, not by a container restart.
-    const none = build({ builder: { build: async () => ({ ok: true, release: 'r' }), hasRelease: () => false } });
+    const none = build({ builder: { build: async () => ({ ok: true, release: 'r' }), hasRelease: () => false, quiesce: async () => {} } });
     const res = await none.app.inject({ method: 'GET', url: '/health' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, release: false });
@@ -3061,7 +3136,7 @@ describe('POST /rebuild and GET /health', () => {
     const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie });
+    const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(res.statusCode).toBe(200);
     expect(res.json().build).toEqual({ ok: false, error: 'astro build exited 1' });
   });

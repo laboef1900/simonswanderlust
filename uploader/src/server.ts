@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import { createReadStream, existsSync, statSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { constants, statSync } from 'node:fs';
+import { open, readFile, type FileHandle } from 'node:fs/promises';
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
@@ -31,7 +31,8 @@ import {
   isProviderId, isProviderKind, isRemoteKind, newProviderId, providerNameError, providerUrlError, resolveProvider, slotFor,
   type AiProvider, type AiProviderKind,
 } from './ai-providers.js';
-import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale } from './posts.js';
+import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale, assertPublishTokens, type PublishTokens } from './posts.js';
+import { GpxError } from './gpx-errors.js';
 import { foreignImageUrls } from './publish-gate.js';
 import { auditAltText } from './alt-audit.js';
 import { renderPreviewHtml, previewCsp } from './preview.js';
@@ -52,6 +53,11 @@ import { compressionHook } from './compress.js';
 import { CommentError, isCommentStatus, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { createGeocoder, GeocodingError } from './geocoding.js';
+import { registerGpxRoutes } from './gpx-routes.js';
+import type { GpxService } from './gpx-service.js';
+import { renderGpxCopy } from './gpx-copy.js';
+import { ROUTE_ARCHIVE_RE } from './gpx-backup.js';
+import { StorageReadOnlyError } from './storage-owner.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -69,6 +75,9 @@ export interface ServerConfig {
   backupDir: string;
   dbBackup: DbBackup;
   dbCheck: () => Promise<void>; // resolves iff the DB answers — probed by GET /health
+  gpx?: GpxService;
+  isWritable?: () => boolean;
+  storageSignal?: AbortSignal;
   loginLimiter?: RateLimiter;
   accountLimiter?: AccountLimiter;
   /** Per-account failure limiter for POST /users/me/password, keyed on the session's user id. */
@@ -152,7 +161,12 @@ function isLoopbackAuthority(authority: string): boolean {
   return hostname === 'localhost' || hostname === '[::1]' || LOOPBACK_IPV4_RE.test(hostname);
 }
 
-export function buildServer(cfg: ServerConfig): FastifyInstance {
+export interface AppServer extends FastifyInstance {
+  /** Refuse new mutating handlers and wait for those already admitted. */
+  quiesceMutations(): Promise<void>;
+}
+
+export function buildServer(cfg: ServerConfig): AppServer {
   // @fastify/static requires an absolute root; tolerate a relative STORAGE_DIR
   // (e.g. ./data/images from env) by resolving against the process cwd.
   const storageDir = resolve(cfg.storageDir);
@@ -174,6 +188,45 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // over a slow connection while still bounding one that stalls outright.
   const app = Fastify({ logger: false, trustProxy: 1, requestTimeout: 120_000 });
   const { users, sessions } = cfg;
+  let mutationsClosed = false;
+  const activeMutations = new Set<Promise<void>>();
+  const isWritable = () => !mutationsClosed && cfg.isWritable?.() !== false;
+  const runtime = { signal: cfg.storageSignal, isWritable };
+  const isMutation = (method: string) => method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
+  const readOnly = (reply: FastifyReply) => reply.code(503).header('cache-control', 'no-store')
+    .send({ error: 'storage_read_only', message: ui.en['gpx.storageReadOnly'] });
+  const quiesceMutations = async () => {
+    mutationsClosed = true;
+    await Promise.allSettled(activeMutations);
+  };
+  // Track handler completion, not socket completion: an aborted client must
+  // not make a still-running mutation invisible to offline restore admission.
+  app.addHook('onRoute', (route) => {
+    const methods = Array.isArray(route.method) ? route.method : [route.method];
+    if (!methods.some(isMutation)) return;
+    const handler = route.handler;
+    route.handler = async function (request, reply) {
+      if (!isMutation(request.method)) return handler.call(this, request, reply);
+      if (!isWritable()) return readOnly(reply);
+      const completion = Promise.withResolvers<void>();
+      activeMutations.add(completion.promise);
+      try { return await handler.call(this, request, reply); }
+      finally { activeMutations.delete(completion.promise); completion.resolve(); }
+    };
+  });
+  app.addHook('onRequest', async (request, reply) => {
+    if (isWritable()) return;
+    if (request.routeOptions.url === '/health') {
+      return reply.code(503).header('cache-control', 'no-store')
+        .send({ ok: false, db: false, release: cfg.builder.hasRelease(), storageWritable: false });
+    }
+    if (isMutation(request.method)) return readOnly(reply);
+  });
+  const cleanupDeletedRoutes = async (): Promise<boolean> => {
+    if (!cfg.gpx) return false;
+    try { const result = await cfg.gpx.reconcile(); return result.skipped || result.cleanupPending; }
+    catch { return true; }
+  };
 
   // nosniff everywhere; clickjacking/referrer policies on every route that is
   // not the public blog / image / basemap surface (blog pages keep parity with
@@ -192,7 +245,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
     const route = req.routeOptions.url;
-    if (route === '/settings' || route === '/ai-config' || route?.startsWith('/ai-providers')) reply.header('Cache-Control', 'no-store');
+    if (route === '/settings' || route === '/ai-config' || route?.startsWith('/ai-providers')
+      || route === '/posts/:tk/publish' || route === '/posts/bulk') reply.header('Cache-Control', 'no-store');
     if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
       reply.header('Referrer-Policy', 'no-referrer');
@@ -240,7 +294,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   const passwordLimiter = cfg.passwordLimiter ?? accountLockoutLimiter();
   // issue #92: memory-backed by default so route tests need no database;
   // main.ts passes the Postgres-backed runner whose rows survive a restart.
-  const importJobs = cfg.importJobs ?? createImportRunner({ store: memoryImportJobStore() });
+  const importJobs = cfg.importJobs ?? createImportRunner({ store: memoryImportJobStore(), ...runtime });
   const limitAuth = rateLimitPreHandler(loginLimiter);
 
   // Unexpected errors (DB failures, bugs) must not leak internals to clients:
@@ -248,6 +302,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // errors (body-limit 413, malformed JSON 400, …) keep their message — those
   // are Fastify's own sanitized responses, not internal state.
   app.setErrorHandler((err: FastifyError, req, reply) => {
+    if (err instanceof StorageReadOnlyError || !isWritable()) return readOnly(reply);
     const status = err.statusCode ?? 500;
     if (status >= 500) {
       console.error(`unhandled error on ${req.method} ${req.url}:`, err);
@@ -272,6 +327,9 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   // routes that declare one of these preHandlers resolve `req.authUser`.
   app.decorateRequest('authUser', null);
   const { optionalAuth, requireAuth, requireAdmin } = createAuthn(users, sessions);
+  if (cfg.gpx) registerGpxRoutes(app, { gpx: cfg.gpx, requireAuth });
+  app.get('/admin/gpx-copy.js', async (_req, reply) =>
+    reply.type('application/javascript; charset=utf-8').header('cache-control', 'no-store').send(renderGpxCopy()));
 
   const here = dirname(fileURLToPath(import.meta.url));
   // Prefix WITHOUT the trailing slash plus `redirect: true`: @fastify/static
@@ -488,7 +546,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       encoding,
     });
     try {
-      await storeOriginal(versionedKey, buf, probe.ext, { storageDir });
+      await storeOriginal(versionedKey, buf, probe.ext, { storageDir, ...runtime });
     } catch (e) {
       if (existing) await cfg.media.setStatus(versionedKey, 'failed', 'write_failed').catch(() => {});
       else await cfg.media.remove(versionedKey).catch(() => {});
@@ -749,7 +807,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     if (item?.status === 'processing' || cfg.encodeQueue.isActive(key)) {
       return reply.code(409).send({ error: 'photo is still being encoded — wait for it to finish (or fail), then delete it' });
     }
-    const deleted = await deleteMedia(storageDir, key);
+    const deleted = await deleteMedia(storageDir, key, runtime);
     await cfg.media.remove(key);
     if (deleted === 0 && item === null) return reply.code(404).send({ error: 'image not found' });
     return reply.send({ ok: true, deleted });
@@ -1500,12 +1558,14 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
           }
         }
       }
-      return reply.send(await posts.upsertDraft(pair, baseUpdatedAt));
+      return reply.send(await posts.upsertDraft(pair, baseUpdatedAt ?? existing?.updatedAt));
     } catch (e) {
       if (e instanceof PostError) {
+        if (e.code === 'storage_read_only') return readOnly(reply);
         // `code` lets the editor tell a stale-tab 409 ('conflict' → offer a
         // reload) apart from duplicate_slug/slug_locked 409s.
-        const status = e.code === 'duplicate_slug' || e.code === 'slug_locked' || e.code === 'conflict' ? 409 : 400;
+        const status = e.code === 'not_found' ? 404
+          : e.code === 'duplicate_slug' || e.code === 'slug_locked' || e.code === 'conflict' ? 409 : 400;
         return reply.code(status).send({ error: e.message, ...(e.code ? { code: e.code } : {}) });
       }
       throw e;
@@ -1553,12 +1613,26 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
 
   // @ai-warning: publishing pushes content to the PUBLIC static site, so it is
   // admin-only. Authors may create/edit drafts (requireAuth) but not publish.
-  app.post('/posts/:tk/publish', { preHandler: requireAdmin }, async (req, reply) => {
-    const tk = (req.params as { tk: string }).tk;
-    const pair = await posts.get(tk);
-    if (!pair) return reply.code(404).send({ error: 'post not found' });
-    try { validateForPublish(pair); } catch (e) {
-      if (e instanceof PostError) return reply.code(400).send({ error: e.message });
+  app.post<{ Params: { tk: string } }>('/posts/:tk/publish', { preHandler: requireAdmin, bodyLimit: 4096 }, async (req, reply) => {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)
+      || Object.keys(body).length !== 2
+      || !('baseUpdatedAt' in body) || !('baseRouteVersion' in body)
+      || typeof body.baseUpdatedAt !== 'string'
+      || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(body.baseUpdatedAt)
+      || !Number.isFinite(Date.parse(body.baseUpdatedAt))
+      || new Date(body.baseUpdatedAt).toISOString() !== body.baseUpdatedAt
+      || !(body.baseRouteVersion === null || typeof body.baseRouteVersion === 'string'
+        && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.baseRouteVersion))) {
+      return reply.code(400).send({ error: 'invalid publish tokens', code: 'invalid_publish_tokens' });
+    }
+    const tokens: PublishTokens = { baseUpdatedAt: new Date(body.baseUpdatedAt), baseRouteVersion: body.baseRouteVersion };
+    const tk = req.params.tk;
+    const state = await posts.getPublishState(tk);
+    if (!state) return reply.code(404).send({ error: 'post not found' });
+    const { pair } = state;
+    try { assertPublishTokens(state, tokens); validateForPublish(pair); } catch (e) {
+      if (e instanceof PostError) return reply.code(e.code === 'conflict' ? 409 : 400).send({ error: e.message, code: e.code });
       throw e;
     }
     const foreign = await foreignBodyImages(pair);
@@ -1580,23 +1654,30 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     // live page will show, and a failed read must refuse here rather than turn
     // an already-published post into a 500 (publishing changes no media row).
     const galleryMetadata = await loadGalleryMetadata(pair, cfg.media, imageBase);
-    await posts.publish(tk);
-    const published = await posts.get(tk);
+    let committed: { updatedAt: Date };
+    try { committed = await posts.publish(tk, tokens); }
+    catch (e) {
+      if (e instanceof GpxError) return reply.code(e.statusCode).send({ error: e.code, code: e.code, ...(e.counts ? { counts: e.counts } : {}) });
+      if (e instanceof PostError) return reply.code(e.code === 'storage_read_only' ? 503 : e.code === 'not_found' ? 404 : 409).send({ error: e.message, code: e.code });
+      throw e;
+    }
     const build = await cfg.builder.build();
     // Best-effort: a failed MDX backup must not undo a publish that is already
     // live, but it must not be silent either (#145) — a bare-dev BACKUP_DIR
     // pointing at /data used to fail every publish's export without a trace.
-    if (published) await exportPost(published, cfg.backupDir).catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
+    await posts.getPublishedTrack(tk)
+      .then((track) => exportPost(pair, cfg.backupDir, track))
+      .catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
     // updatedAt: publish bumps the stored timestamp, so the editor must re-sync
     // its concurrency echo or its very next Save would falsely 409.
     // altAudit rides along so the editor can name the photos that went live
     // undescribed (src/alt-audit.ts) without a second round trip. It is
     // reported AFTER the publish succeeded, on purpose: it never gates one.
-    const audit = auditAltText(published ?? pair, galleryMetadata);
+    const audit = auditAltText(pair, galleryMetadata);
     return reply.send({
       published: true,
       build,
-      updatedAt: published?.updatedAt,
+      updatedAt: committed.updatedAt,
       altAudit: { count: audit.count, images: audit.images },
     });
   });
@@ -1644,13 +1725,15 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     const keys = [...new Set(b.keys.map((k) => String(k)))].filter((k) => k !== '');
     if (keys.length === 0) return reply.code(400).send({ error: 'keys must not be empty' });
 
-    const results: { key: string; ok: boolean; error?: string }[] = [];
+    const results: { key: string; ok: boolean; error?: string; code?: string; counts?: GpxError['counts'] }[] = [];
     // Whether anything that was actually LIVE changed — a bulk delete of drafts
     // only needs no rebuild, mirroring DELETE /posts/:tk's `wasPublished` rule.
     let liveChanged = false;
+    let cleanupPending = false;
     for (const tk of keys) {
       try {
-        const pair = await posts.get(tk);
+        const state = action === 'publish' ? await posts.getPublishState(tk) : null;
+        const pair = action === 'publish' ? state?.pair : await posts.get(tk);
         if (!pair) throw new PostError('post not found');
         if (action === 'publish') {
           validateForPublish(pair);
@@ -1660,10 +1743,11 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
           if (notReady.length > 0) {
             throw new PostError(`${notReady.length} photo(s) are still processing or failed to encode`);
           }
-          await posts.publish(tk);
-          const published = await posts.get(tk);
-          if (published) await exportPost(published, cfg.backupDir).catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
+          await posts.publish(tk, { baseUpdatedAt: pair.updatedAt, baseRouteVersion: state!.routeVersion });
           liveChanged = true;
+          await posts.getPublishedTrack(tk)
+            .then((track) => exportPost(pair, cfg.backupDir, track))
+            .catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
         } else if (action === 'unpublish') {
           if (pair.status !== 'published') throw new PostError('post is not published');
           await posts.unpublish(tk);
@@ -1671,13 +1755,16 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         } else {
           if (pair.status === 'published') liveChanged = true;
           await posts.remove(tk);
+          cleanupPending = await cleanupDeletedRoutes() || cleanupPending;
         }
         results.push({ key: tk, ok: true });
       } catch (e) {
         // Never leak an internal error to the client (global-handler contract):
         // PostError messages are ours and safe; anything else is logged and
         // reported generically.
-        if (e instanceof PostError) {
+        if (e instanceof GpxError) {
+          results.push({ key: tk, ok: false, error: e.code, code: e.code, ...(e.counts ? { counts: e.counts } : {}) });
+        } else if (e instanceof PostError) {
           results.push({ key: tk, ok: false, error: e.message });
         } else {
           console.error(`bulk ${action} failed for ${tk}:`, e);
@@ -1687,7 +1774,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     }
     const succeeded = results.filter((r) => r.ok).length;
     const build = liveChanged ? await cfg.builder.build() : undefined;
-    return reply.send({ action, succeeded, failed: results.length - succeeded, results, ...(build ? { build } : {}) });
+    return reply.send({ action, succeeded, failed: results.length - succeeded, results, ...(build ? { build } : {}), ...(cleanupPending ? { cleanupPending: true } : {}) });
   });
 
   // @ai-warning: the emergency brake — flips a published pair back to draft and
@@ -1700,7 +1787,10 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     try {
       await posts.unpublish(tk);
     } catch (e) {
-      if (e instanceof PostError) return reply.code(404).send({ error: e.message });
+      if (e instanceof PostError) {
+        if (e.code === 'storage_read_only') return readOnly(reply);
+        return reply.code(404).send({ error: e.message });
+      }
       throw e;
     }
     const build = await cfg.builder.build();
@@ -1723,14 +1813,15 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     try {
       await posts.remove(tk);
     } catch (e) {
-      if (e instanceof PostError) return reply.code(404).send({ error: e.message });
+      if (e instanceof PostError) return reply.code(e.code === 'storage_read_only' ? 503 : 404).send({ error: e.message });
       throw e;
     }
+    const cleanupPending = await cleanupDeletedRoutes();
     if (wasPublished) {
       const build = await cfg.builder.build();
-      return reply.send({ deleted: true, build });
+      return reply.send({ deleted: true, build, ...(cleanupPending ? { cleanupPending: true } : {}) });
     }
-    return reply.send({ deleted: true });
+    return reply.send({ deleted: true, ...(cleanupPending ? { cleanupPending: true } : {}) });
   });
 
   // Liveness + DB probe: the compose healthcheck polls this every 10s, so no
@@ -1915,6 +2006,8 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     running: cfg.dbBackup.running(),
     files: cfg.dbBackup.list(),
     imageArchives: cfg.dbBackup.listImageArchives(),
+    routeArchives: cfg.dbBackup.listRouteArchives(),
+    routeCleanup: cfg.gpx?.orphanCleanup(),
   }));
 
   // One run at a time (#113): while a backup is in flight, `runNow()` would
@@ -1924,26 +2017,39 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
     return cfg.dbBackup.runNow();
   });
 
-  // Filename is validated against the strict backup patterns (db dump OR images
-  // archive) — nothing else in the directory (state.json!) and no traversal can
-  // be fetched.
-  app.get('/backups/:name', { preHandler: requireAdmin }, async (req, reply) => {
-    const name = (req.params as { name: string }).name;
+  // Only named recovery artifacts may be downloaded, always admin-only.
+  // Private route archives deliberately retain original coordinates/timestamps.
+  app.get<{ Params: { name: string } }>('/backups/:name', { preHandler: requireAdmin }, async (req, reply) => {
+    reply.header('cache-control', 'no-store');
+    const name = req.params.name;
     const isDump = BACKUP_FILE_RE.test(name);
-    if (!isDump && !IMAGES_ARCHIVE_RE.test(name)) {
+    if (!isDump && !IMAGES_ARCHIVE_RE.test(name) && !ROUTE_ARCHIVE_RE.test(name)) {
       return reply.code(400).send({ error: 'invalid backup filename' });
     }
-    const file = join(cfg.dbBackup.dir, name);
-    if (!existsSync(file)) return reply.code(404).send({ error: 'backup not found' });
+    let handle: FileHandle | undefined;
+    try {
+      handle = await open(join(cfg.dbBackup.dir, name), constants.O_RDONLY | constants.O_NOFOLLOW);
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.nlink !== 1) {
+        await handle.close();
+        return reply.code(404).send({ error: 'backup not found' });
+      }
+    } catch (error) {
+      await handle?.close().catch(() => {});
+      if (error instanceof Error && 'code' in error && (error.code === 'ENOENT' || error.code === 'ELOOP')) {
+        return reply.code(404).send({ error: 'backup not found' });
+      }
+      throw error;
+    }
     reply.header('content-type', isDump ? 'application/gzip' : 'application/x-tar');
     reply.header('content-disposition', `attachment; filename="${name}"`);
-    return reply.send(createReadStream(file));
+    return reply.send(handle.createReadStream());
   });
 
   app.post('/export', { preHandler: requireAuth }, async (_req, reply) => {
     const list = await posts.list();
     const pairs = (await Promise.all(list.map((s) => posts.get(s.translationKey)))).filter((p): p is StoredPostPair => p !== null);
-    const files = await exportAll(pairs, cfg.backupDir);
+    const files = await exportAll(pairs, cfg.backupDir, (tk) => posts.getPublishedTrack(tk));
     return reply.send({ ok: true, count: files.length });
   });
 
@@ -2003,6 +2109,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         lock: cfg.workLock,
         log: (msg) => console.log(msg),
         overwriteDrafts,
+        ...runtime,
       });
     } catch (e) {
       // issue #143: a truncated download or otherwise malformed file passes
@@ -2059,7 +2166,7 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
   const imgHostServesBlog = isLoopbackAuthority(cfg.imgHost);
 
   // 404/503 for the blog; plain 404 for the img host and non-GET methods.
-  app.setNotFoundHandler(async (req, reply) => {
+  app.setNotFoundHandler((req, reply) => {
     const host = req.headers.host ?? '';
     if (req.method !== 'GET' && req.method !== 'HEAD') return reply.code(404).send({ error: 'not found' });
     if (host === cfg.imgHost) {
@@ -2077,7 +2184,12 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
       const urlPath = qIndex === -1 ? rawUrl : rawUrl.slice(0, qIndex);
       const relPath = (urlPath.endsWith('/') ? join(urlPath, 'index.html') : urlPath).replace(/^\//, '');
       const stat = relPath ? statSync(join(currentDir, relPath), { throwIfNoEntry: false }) : undefined;
-      if (stat?.isFile()) return reply.sendFile(relPath, currentDir);
+      if (stat?.isFile()) {
+        // sendFile owns completion. Avoid another thenable waiter around the
+        // already-awaited static → not-found → static streaming chain.
+        reply.sendFile(relPath, currentDir);
+        return;
+      }
       // A directory without its trailing slash: mirror the blog mount's
       // `redirect: true` (301) rather than reading the directory and blowing up.
       if (stat?.isDirectory()) {
@@ -2099,13 +2211,11 @@ export function buildServer(cfg: ServerConfig): FastifyInstance {
         .type('text/html')
         .send('<!doctype html><meta charset="utf-8"><title>Building…</title><h1>Site is building</h1><p>The first build is in progress — try again in a moment.</p>');
     }
-    try {
-      const html = await readFile(join(currentDir, '404.html'), 'utf8');
-      return reply.code(404).type('text/html').send(html);
-    } catch {
-      return reply.code(404).send('Not found');
-    }
+    return readFile(join(currentDir, '404.html'), 'utf8').then(
+      (html) => reply.code(404).type('text/html').send(html),
+      () => reply.code(404).send('Not found'),
+    );
   });
 
-  return app;
+  return Object.assign(app, { quiesceMutations });
 }

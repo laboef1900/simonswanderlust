@@ -42,6 +42,7 @@ interface EditorOptions {
   mobile?: boolean;
   search?: string;
   confirm?: boolean;
+  publishVersion?: () => string | null;
   stash?: { key: string; payload: unknown };
   pickImage?: { src: string; width: number; height: number; alt: { de: string; en: string }; format?: 'jpeg' };
   caption?: (options: { url: string; lang: string; signal: AbortSignal }) => Promise<string>;
@@ -169,6 +170,8 @@ function loadEditor(options: EditorOptions = {}) {
     },
     setTimeout: () => 0,
     clearTimeout() {},
+    setInterval: () => 0,
+    clearInterval() {},
     addEventListener: dom.document.addEventListener,
     URLSearchParams,
     URL,
@@ -215,6 +218,9 @@ function loadEditor(options: EditorOptions = {}) {
         .filter(([key]) => key.startsWith('editor.chrome.'))
         .map(([key, value]) => [key.slice('editor.chrome.'.length), value])),
     ])),
+    GpxCopy: { en: new Proxy({}, { get: (_target, key) => String(key) }) },
+    GpxMap: { create: async () => ({ render() {}, destroy() {}, resize() {} }) },
+    GpxEditor: { wire: () => ({ refresh: async () => {}, publishVersion: options.publishVersion ?? (() => null), publishError: () => null, noteCreated() {}, hasPreview: () => false, discard() {}, revisionNotice() {}, guardAction: () => true }) },
     EditorGalleryImageOrigin: 'https://img',
     AltSuggest: { wire() {}, suggestHosted: options.caption ?? (() => Promise.reject(new Error('no model in test'))) },
   };
@@ -280,6 +286,45 @@ function minimalPair(): StashPayload {
   return { translationKey: 'tk1', status: 'draft', shared: {}, de: loc('de'), en: loc('en') };
 }
 
+describe('explicit editor publish tokens', () => {
+  it.each([null, '11111111-1111-4111-8111-111111111111'])('sends the saved pair token and reviewed route token %s without refreshing', async (routeVersion) => {
+    let reviewed = 0;
+    const initial = '2026-10-24T09:00:00.000Z';
+    const saved = '2026-10-24T09:01:00.000Z';
+    const h = loadEditor({
+      isAdmin: true, search: '?tk=tk1', confirm: true,
+      publishVersion: () => { reviewed++; return routeVersion; },
+      fetch: async (url, options) => {
+        if (url === '/posts/tk1' && options?.method === 'PUT') return response({ ...fullPair(), updatedAt: saved });
+        if (url === '/posts/tk1') return response({ ...fullPair(), updatedAt: initial });
+        if (url === '/posts/tk1/publish') return response({ updatedAt: '2026-10-24T09:02:00.000Z', build: { ok: true }, altAudit: { images: [] } });
+        if (url.endsWith('/revisions')) return response([]);
+        if (url.endsWith('/alt-audit')) return response({ images: [] });
+        throw new Error('Unexpected publish request: ' + url);
+      },
+    });
+    for (let i = 0; i < 8; i++) await settle();
+    h.el('publishBtn').click();
+    for (let i = 0; i < 8; i++) await settle();
+    const publish = h.requests.find(({ url }) => url.endsWith('/publish'));
+    expect(publish).toBeDefined();
+    expect(JSON.parse(String(publish!.options.body))).toEqual({ baseUpdatedAt: saved, baseRouteVersion: routeVersion });
+    const save = h.requests.find(({ url, options }) => url === '/posts/tk1' && options.method === 'PUT');
+    expect(h.requests.indexOf(save!)).toBeLessThan(h.requests.indexOf(publish!));
+    expect(reviewed).toBe(1);
+    expect(h.requests.filter(({ url }) => url.endsWith('/route'))).toEqual([]);
+  });
+
+  it('does not save or publish when the route state has not loaded', async () => {
+    const h = loadEditor({ publishVersion: () => { throw new Error('route not loaded'); } });
+    h.api.populateForm(fullPair());
+    h.el('publishBtn').click();
+    await settle();
+    expect(h.requests).toEqual([]);
+    expect(h.el('actionError').textContent).toBe('route not loaded');
+  });
+});
+
 describe('editor.html inline script against its own markup', () => {
   it('returns to the filtered Posts view without relying on the browser referrer', () => {
     const returnTo = '/admin/posts.html?status=draft&country=Ecuador&q=river';
@@ -297,6 +342,12 @@ describe('editor.html inline script against its own markup', () => {
   ])('keeps the Posts fallback for an unsafe or absent return destination: %s', (returnTo) => {
     const h = loadEditor({ search: '?returnTo=' + encodeURIComponent(returnTo) });
     expect(h.el('backToPosts').getAttribute('href')).toBe('/admin/posts.html');
+  });
+  it('keeps private GPX geometry and import tokens out of ordinary post serialization', () => {
+    const { api } = loadEditor();
+    api.populateForm(fullPair());
+    const payload = api.buildPayload();
+    expect(JSON.stringify(payload)).not.toMatch(/\"(?:geometry|importId|baseVersion|selection|waypoints|sourceBytes)\"/);
   });
 
   it('selects an independent title image, round-trips framing, and clears it on removal or old revision restore', () => {

@@ -976,6 +976,30 @@ and the `<dialog>`s appended to `<body>` share one set:
   reduced motion. At 74rem and below it is a modal drawer opened by an icon button
   after More actions; the same header toggle closes it, and it traps Tab, closes on
   Escape or the scrim, and restores focus to its opener.
+- GPX editing is a flat section in Story details, not another dashboard. Its scoped native
+  dialog closes the phone inspector first, then restores that drawer and the exact opener
+  on dismissal. A fixed header/footer frame one scrollable body; touch actions are at least
+  44px. The self-hosted map distinguishes the actual public candidate (solid red),
+  removed source sections (dashed gray), and selected/unselected waypoints with
+  filled/hollow markers plus a text legend. Initial framing includes source context
+  even while the bounded candidate worker is pending; waypoints cannot steal that fit.
+  A missing basemap keeps interactive overlays on a grid; a WebGL failure uses local SVG.
+  WebGL2 is checked before MapLibre construction; preview cleanup cannot turn an
+  acknowledged attachment into a failed-save message.
+  An explicit point/distance selector exposes only the active trim controls; switching
+  methods uses that method's entered values, never a hidden combination of both.
+  Segment removal recalculates distance trims without counting discontinuity gaps.
+  Counts and Reset remain usable; Reset clears trimming without changing the chosen method.
+  Replacement and exact-coordinate waypoint adoption require separate unchecked consent.
+  Attach names its save scope; cancellation never silently saves. Errors receive focus
+  after an action, but live trim feedback never steals focus while typing. Delayed cleanup
+  warnings stay separate from the current input error. Candidate generation disables
+  Attach while pending or invalid; collapse/limit feedback never silently changes precision
+  or drops a route. Pending refreshes preserve map-availability notices. Publish failures
+  use localized recovery messages in both the editor and the posts list.
+  The retained original remains private, and attachment is draft-only until Publish.
+  Published story maps add a localized per-run textual alternative with public-precision
+  endpoints and approximate lengths; routeless stories gain no empty panel.
 - Country assistance and excerpt generation sit next to the relevant fields in Story
   details. Coordinate approximation is explicit. Excerpt suggestions have a plain-text
   preview, character count, and separate accept/dismiss actions; generation never looks

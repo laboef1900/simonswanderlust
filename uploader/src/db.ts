@@ -16,7 +16,15 @@ const ABOUT_SEED = {
   },
 };
 
-export function createPool(connectionString: string): DbPool {
+export function createPool(connectionString: string, applicationName?: string): DbPool {
+  if (applicationName !== undefined) {
+    let url: URL;
+    try { url = new URL(connectionString); }
+    catch { throw new Error('DATABASE_URL must be a PostgreSQL URL.'); }
+    // pg gives URL parameters precedence over Pool options.
+    url.searchParams.set('application_name', applicationName);
+    connectionString = url.toString();
+  }
   return new Pool({ connectionString });
 }
 
@@ -159,6 +167,26 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   // full-body snapshots readable forever. Sweep orphans once per boot; a no-op
   // on a consistent database, indexed on translation_key.
   await pool.query(`DELETE FROM post_revisions r WHERE NOT EXISTS (SELECT 1 FROM posts p WHERE p.translation_key = r.translation_key)`);
+  // One private route per pair; posts has no single-column parent key.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS post_routes (
+      translation_key text PRIMARY KEY,
+      version uuid NOT NULL,
+      geometry jsonb,
+      source_id uuid NOT NULL,
+      source_sha256 text NOT NULL CHECK (source_sha256 ~ '^[0-9a-f]{64}$'),
+      source_bytes integer NOT NULL CHECK (source_bytes BETWEEN 1 AND 5242880),
+      updated_at timestamptz NOT NULL
+    )
+  `);
+  // Operational intents survive failed unlink and restore, but are not dumped.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS route_cleanup (
+      source_id uuid PRIMARY KEY,
+      pair_hash text NOT NULL CHECK (pair_hash ~ '^[0-9a-f]{64}$'),
+      requested_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pages (
       key           text NOT NULL,

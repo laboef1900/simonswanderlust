@@ -1,3 +1,4 @@
+import { publishTokens } from './publish-tokens.js';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -29,11 +30,13 @@ function fakeSettings(): SettingsStore {
 }
 const queue: EncodeQueue = {
   enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {}, idle: async () => {},
+  quiesce: async () => {},
   stats: () => ({ pending: 0, running: 0 }),
 };
 const backup: DbBackup = {
   dir: '/tmp/none', runNow: async () => ({}), running: () => false, sweepTempFiles: () => [],
   list: () => [], listImageArchives: () => [], state: () => ({}),
+  listRouteArchives: () => [], quiesce: async () => {},
 };
 
 function pair(tk: string, over: Partial<PostPair['shared']> = {}): PostPair {
@@ -62,7 +65,7 @@ function build(extra: Partial<ServerConfig> = {}) {
     posts, pages: memoryPageStore(),
     media: memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' }), encodeQueue: queue,
     imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'),
-    builder: { build: async () => ({ ok: true, release: 'r1' }), hasRelease: () => true },
+    builder: { build: async () => ({ ok: true, release: 'r1' }), hasRelease: () => true, quiesce: async () => {} },
     backupDir: join(dir, 'backup'), dbBackup: backup, dbCheck: async () => {},
     comments,
     // Generous limiter so multi-POST tests never 429 spuriously.
@@ -76,7 +79,7 @@ type B = ReturnType<typeof build>;
 
 async function published(b: B, tk = 'tk-pub', over: Partial<PostPair['shared']> = {}) {
   await b.posts.upsertDraft(pair(tk, over));
-  await b.posts.publish(tk);
+  await b.posts.publish(tk, await publishTokens(b.posts, tk));
   return tk;
 }
 async function draft(b: B, tk = 'tk-draft') { await b.posts.upsertDraft(pair(tk)); return tk; }

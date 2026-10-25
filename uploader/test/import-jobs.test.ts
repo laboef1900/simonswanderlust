@@ -36,6 +36,59 @@ const recording = () => {
  * @ai-context docs/superpowers/specs/2026-09-05-async-import-job-design.md
  */
 describe('createImportRunner', () => {
+  it('waits for running work and skips queued progress/final writes after lease loss', async () => {
+    const { store, writes } = recording();
+    const controller = new AbortController();
+    const finish = Promise.withResolvers<void>();
+    let report: (p: ImportProgress) => void = () => {};
+    let runSignal: AbortSignal | undefined;
+    const runner = createImportRunner({ store, signal: controller.signal, persistEveryMs: 0, log: () => {} });
+    await runner.start({
+      startedBy: 'a', planned: planned(),
+      run: async (onProgress, signal) => { report = onProgress; runSignal = signal; await finish.promise; return OK; },
+    });
+    // Queue the mirror write, then latch before its promise callback can issue SQL.
+    report({ groups: { total: 1, done: 0 }, images: { planned: 2, hosted: 1, failed: 0 } });
+    controller.abort();
+    expect(runSignal?.aborted).toBe(true);
+    let settled = false;
+    const stop = runner.quiesce().then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish.resolve();
+    await stop;
+    expect(writes).toEqual([]);
+    expect((await store.latest())?.status).toBe('running');
+    expect((await runner.latest())?.status).toBe('interrupted');
+    await expect(runner.recover()).rejects.toMatchObject({ code: 'storage_read_only' });
+    await expect(runner.start({ startedBy: 'a', planned: planned(), run: async () => OK })).rejects.toMatchObject({ code: 'storage_read_only' });
+    const fresh = createImportRunner({ store, log: () => {} });
+    expect(await fresh.recover()).toBe(1);
+    expect((await store.latest())?.status).toBe('interrupted');
+  });
+
+  it('quiesce waits for admission already inserting a job and prevents its execution', async () => {
+    const store = memoryImportJobStore();
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    let executed = false;
+    const runner = createImportRunner({
+      store: { ...store, insert: async (job) => { entered.resolve(); await finish.promise; await store.insert(job); } },
+      log: () => {},
+    });
+    const start = runner.start({ startedBy: 'a', planned: planned(), run: async () => { executed = true; return OK; } });
+    const rejected = expect(start).rejects.toMatchObject({ code: 'storage_read_only' });
+    await entered.promise;
+    let settled = false;
+    const stop = runner.quiesce().then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish.resolve();
+    await Promise.all([stop, rejected]);
+    expect(executed).toBe(false);
+    expect(runner.current()).toBeNull();
+    expect((await store.latest())?.status).toBe('running');
+  });
   it('starts a job as running, then records done with the summary', async () => {
     const store = memoryImportJobStore();
     const runner = createImportRunner({ store, log: () => {} });

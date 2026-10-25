@@ -6,10 +6,11 @@ import { assertSafeKey, storeVariants } from './storage.js';
 import { safeFetch, type LookupFn } from './safe-fetch.js';
 import { JPEG_FORMAT, formatsFor, variantWidths, type ImageOutputFormat } from './variants.js';
 import type { WorkLock } from './work-lock.js';
+import { assertWorkWritable, type WorkCancellationOptions } from './work-cancellation.js';
 
 export interface RehostResult { src: string; width: number; height: number; format?: ImageOutputFormat }
 
-export interface RehostOptions {
+export interface RehostOptions extends WorkCancellationOptions {
   storageDir: string;
   baseUrl: string;
   fetchImpl?: typeof fetch;
@@ -28,15 +29,18 @@ export interface RehostOptions {
 }
 
 export async function rehostImage(url: string, key: string, alt: string, opts: RehostOptions): Promise<RehostResult> {
+  assertWorkWritable(opts);
   // @ai-warning: `url` is taken from an uploaded WordPress export, so it is
   // attacker-influenced. safeFetch applies the SSRF guard + timeout + byte cap.
-  const { buffer } = await safeFetch(url, { fetchImpl: opts.fetchImpl, lookup: opts.lookup, timeoutMs: opts.timeoutMs, maxBytes: opts.maxBytes });
+  const { buffer } = await safeFetch(url, { fetchImpl: opts.fetchImpl, lookup: opts.lookup, timeoutMs: opts.timeoutMs, maxBytes: opts.maxBytes, signal: opts.signal });
   // The fetch stays OUTSIDE the lock: network I/O guards no memory, and holding
   // the mutex across a stalling source host would delay a Publish for nothing.
   // Only the sharp pipeline + variant writes are what a build must never overlap.
   const encode = async () => {
+    assertWorkWritable(opts);
     const result = await processImage(buffer, opts.encoding);
-    return storeVariants(key, alt, result, { storageDir: opts.storageDir, baseUrl: opts.baseUrl });
+    assertWorkWritable(opts);
+    return storeVariants(key, alt, result, opts);
   };
   const stored = opts.lock ? await opts.lock.runShared(encode) : await encode();
   return {

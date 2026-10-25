@@ -1,3 +1,4 @@
+import { publishTokens } from './publish-tokens.js';
 import { randomUUID } from 'node:crypto';
 import { scheduler } from 'node:timers/promises';
 import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
@@ -5,6 +6,7 @@ import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgUserStore, verifyPassword, UserExistsError, UsernamePolicyError } from '../src/users.js';
 import { pgSessionStore } from '../src/sessions.js';
 import { pgPostStore, PostError, REVISION_CAP } from '../src/posts.js';
+import { lockPostPair } from '../src/post-pair-lock.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -151,7 +153,7 @@ maybe('pgPostStore (integration)', () => {
       });
       expect((await store.get(saved.translationKey))?.de.titleImage).toEqual(titleImage);
       expect((await store.get(saved.translationKey))?.en.titleImage).toBeUndefined();
-      await store.publish(saved.translationKey);
+      await store.publish(saved.translationKey, await publishTokens(store, saved.translationKey));
       delete saved.de.titleImage;
       await store.upsertDraft(saved);
       await ensureSchema(pool);
@@ -162,7 +164,7 @@ maybe('pgPostStore (integration)', () => {
       const rev = (await store.listRevisions(saved.translationKey))[0];
       if (!rev) throw new Error('missing title-image revision');
       expect((await store.getRevision(saved.translationKey, rev.id))?.snapshot.de.titleImage).toEqual(titleImage);
-      await store.publish(saved.translationKey);
+      await store.publish(saved.translationKey, await publishTokens(store, saved.translationKey));
       expect((await store.usageRows()).filter((r) => r.translationKey === saved.translationKey).every((r) => !r.titleImage)).toBe(true);
     } finally {
       await pool.end();
@@ -189,7 +191,7 @@ maybe('pgPostStore (integration)', () => {
     expect(fetched?.de.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
     // stops survive the jsonb round-trip (writeLocale → rowShared)
     expect(fetched?.shared.stops).toEqual(stops);
-    await store.publish(created.translationKey);
+    await store.publish(created.translationKey, await publishTokens(store, created.translationKey));
     expect((await store.get(created.translationKey))?.status).toBe('published');
     expect((await store.get(created.translationKey))?.shared.stops).toEqual(stops);
     await expect(store.upsertDraft({ ...created, status: 'published', de: { ...base.de, slug: 'renamed' } })).rejects.toThrow();
@@ -214,7 +216,7 @@ maybe('pgPostStore (integration)', () => {
     const tk = created.translationKey;
     expect(created.hasUnpublishedChanges).toBe(false); // drafts have nothing published to diverge from
 
-    await store.publish(tk);
+    await store.publish(tk, await publishTokens(store, tk));
     const snapshotDe = async () => (await pool.query(
       `SELECT published_snapshot AS s, published_at AS p FROM posts WHERE translation_key=$1 AND locale='de'`, [tk],
     )).rows[0];
@@ -237,7 +239,7 @@ maybe('pgPostStore (integration)', () => {
     expect(row.s.body_markdown).toBe('## live');
 
     // Re-publish promotes the newest working copy and clears the flag.
-    await store.publish(tk);
+    await store.publish(tk, await publishTokens(store, tk));
     row = await snapshotDe();
     expect(row.s.body_markdown).toBe('## edited');
     expect((await store.get(tk))?.hasUnpublishedChanges).toBe(false);
@@ -262,7 +264,7 @@ maybe('pgPostStore (integration)', () => {
     expect(await flags()).toEqual([{ locale: 'de', featured: true }, { locale: 'en', featured: true }]);
     expect((await store.get(tk))?.shared.featured).toBe(true);
 
-    await store.publish(tk);
+    await store.publish(tk, await publishTokens(store, tk));
     const snapshots = (await pool.query<{ s: { featured?: boolean } }>(
       `SELECT published_snapshot AS s FROM posts WHERE translation_key=$1 ORDER BY locale`, [tk],
     )).rows;
@@ -362,7 +364,7 @@ maybe('pgPostStore (integration)', () => {
     };
     const created = await store.upsertDraft(base);
     expect((await store.list()).find((p) => p.translationKey === created.translationKey)?.hasEnBody).toBe(true);
-    await store.publish(created.translationKey);
+    await store.publish(created.translationKey, await publishTokens(store, created.translationKey));
     await store.unpublish(created.translationKey);
     expect((await store.get(created.translationKey))?.status).toBe('draft');
     await store.remove(created.translationKey);
@@ -427,7 +429,7 @@ maybe('pgPostStore (integration)', () => {
     const created = await store.upsertDraft(base);
     expect((await store.usageRows()).map((r) => r.source)).toEqual(['working', 'working']);
 
-    await store.publish(created.translationKey);
+    await store.publish(created.translationKey, await publishTokens(store, created.translationKey));
     await store.upsertDraft({
       ...base, translationKey: created.translationKey, status: 'published',
       de: loc('de', 'https://i/new'), en: loc('en', 'https://i/new'),
@@ -720,7 +722,7 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
       en: { locale: 'en', slug: `st-${n}-en`, title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     });
     const a = await mk('a');
-    await store.publish(a.translationKey);
+    await store.publish(a.translationKey, await publishTokens(store, a.translationKey));
     await mk('b', { categories: ['City'], tags: ['x', 'y'] });
     expect(await store.getCmsStats!()).toEqual({ totalPosts: 2, draftPosts: 1, publishedPosts: 1, totalCategories: 1, totalTags: 2 });
     await pool.end();
@@ -771,39 +773,38 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
   });
 
   it('remove() also deletes a revision committed by a save it had to wait for', async () => {
-    // A save holds the posts row locks with its revision inserted but not yet
-    // committed; remove() blocks on those locks. One data-modifying CTE would
-    // delete the posts after the commit yet miss the revision (a CTE's
-    // sub-statements share one snapshot, taken before the wait). Two
-    // statements in READ COMMITTED see it.
+    // A cooperating save holds the pair lock with an uncommitted revision.
+    // Deletion must wait, then see and remove that revision after commit.
     const store = pgPostStore(pool);
     const post = await store.upsertDraft(base('racy'));
     const tk = post.translationKey;
     const saver = await pool.connect();
     try {
       await saver.query('BEGIN');
+      await lockPostPair(saver, tk);
+      const pid = (await saver.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
       await saver.query(
         `INSERT INTO post_revisions (id, translation_key, snapshot) VALUES ($1, $2, '{"status":"draft","de":{"title":"late"}}')`,
         [randomUUID(), tk],
       );
       await saver.query(`UPDATE posts SET updated_at = now() WHERE translation_key = $1`, [tk]);
       const removal = store.remove(tk);
-      // Wait for remove() to actually block on the row locks (observable only
-      // server-side — another connection's lock wait has no in-process
-      // signal), so the save's COMMIT is guaranteed to land after remove()'s
-      // first statement started. Polled through the pool, NOT the saver: inside
-      // a transaction pg_stat_activity is a snapshot frozen at first access and
-      // would never show a backend that connected afterwards.
-      for (;;) {
+      // Observe blocking by this exact transaction, not an incidental SQL
+      // statement spelling. Bound the wait and always roll back on failure.
+      let blocked = false;
+      for (let attempt = 0; attempt < 200; attempt++) {
         const { rowCount } = await pool.query(
-          `SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'DELETE FROM posts%'`,
+          'SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))',
+          [pid],
         );
-        if (rowCount) break;
+        if (rowCount) { blocked = true; break; }
         await scheduler.wait(10);
       }
+      expect(blocked).toBe(true);
       await saver.query('COMMIT');
       await removal;
     } finally {
+      await saver.query('ROLLBACK');
       saver.release();
     }
     expect(await store.get(tk)).toBeNull();

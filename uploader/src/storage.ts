@@ -3,8 +3,9 @@ import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { normalizeProcessOptions, type ProcessOptions, type ProcessResult, type Variant } from './pipeline.js';
 import type { ImageOutputFormat } from './variants.js';
+import { assertWorkWritable, isWorkWritable, type WorkCancellationOptions } from './work-cancellation.js';
 
-export interface StorageOptions {
+export interface StorageOptions extends WorkCancellationOptions {
   storageDir: string;
   baseUrl: string;
 }
@@ -92,14 +93,18 @@ export function contentHashKey(key: string, data: Buffer, options: ProcessOption
  * `.avif`/`.webp`/`.jpeg` nor `-orig.<ext>`, so a leftover from a crash is invisible to
  * `VARIANT_FILE_RE` / `ORIGINAL_FILE_RE` and every walk built on them.
  */
-async function writeAtomic(abs: string, data: Buffer): Promise<void> {
+async function writeAtomic(abs: string, data: Buffer, opts: WorkCancellationOptions): Promise<void> {
+  assertWorkWritable(opts);
   await mkdir(dirname(abs), { recursive: true });
   const tmp = `${abs}.part-${randomBytes(4).toString('hex')}`;
   try {
-    await writeFile(tmp, data);
+    assertWorkWritable(opts);
+    await writeFile(tmp, data, { signal: opts.signal });
+    assertWorkWritable(opts);
     await rename(tmp, abs);
   } catch (err) {
-    await unlink(tmp).catch(() => { /* best-effort; nothing else to do with it */ });
+    // Lease loss forbids even cleanup mutations; the next owner ignores .part files.
+    if (isWorkWritable(opts)) await unlink(tmp).catch(() => { /* best-effort */ });
     throw err;
   }
 }
@@ -123,12 +128,12 @@ export async function storeOriginal(
   key: string,
   data: Buffer,
   ext: string,
-  { storageDir }: Pick<StorageOptions, 'storageDir'>,
+  opts: Pick<StorageOptions, 'storageDir' | 'signal' | 'isWritable'>,
 ): Promise<string> {
   assertSafeKey(key);
   if (!SAFE_EXT_RE.test(ext)) throw new Error(`unsafe original extension "${ext}"`);
   const rel = `${key}-orig.${ext}`;
-  await writeAtomic(join(storageDir, rel), data);
+  await writeAtomic(join(opts.storageDir, rel), data, opts);
   return rel;
 }
 
@@ -144,14 +149,14 @@ export async function storeOriginal(
 export async function storeVariantFiles(
   key: string,
   variants: Variant[],
-  { storageDir }: Pick<StorageOptions, 'storageDir'>,
+  opts: Pick<StorageOptions, 'storageDir' | 'signal' | 'isWritable'>,
 ): Promise<{ files: string[]; bytes: number }> {
   assertSafeKey(key);
   const files: string[] = [];
   let bytes = 0;
   for (const v of variants) {
     const rel = `${key}-${v.width}.${v.format}`;
-    await writeAtomic(join(storageDir, rel), v.data);
+    await writeAtomic(join(opts.storageDir, rel), v.data, opts);
     files.push(rel);
     bytes += v.data.length;
   }
@@ -190,15 +195,15 @@ export async function storeVariants(
   key: string,
   alt: string,
   result: ProcessResult,
-  { storageDir, baseUrl }: StorageOptions,
+  opts: StorageOptions,
 ): Promise<StoredImage> {
   // Original first: it carries the extension check, and a failure there must
   // not leave a half-written variant set behind.
-  const origRel = await storeOriginal(key, result.original.data, result.original.ext, { storageDir });
-  const { files } = await storeVariantFiles(key, result.variants, { storageDir });
+  const origRel = await storeOriginal(key, result.original.data, result.original.ext, opts);
+  const { files } = await storeVariantFiles(key, result.variants, opts);
   files.push(origRel);
 
-  const src = `${baseUrl.replace(/\/+$/, '')}/${key}`;
+  const src = `${opts.baseUrl.replace(/\/+$/, '')}/${key}`;
   return {
     src, width: result.width, height: result.height, files,
     ...(result.format ? { format: result.format } : {}),

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgSecretsStore } from '../src/secrets.js';
-import { dumpDatabase, readDump, restoreDatabase, type Connectable } from '../src/backup.js';
+import { dumpDatabase, listBackups, readDump, restoreDatabase, type Connectable } from '../src/backup.js';
 import { runCli } from './run-cli.js';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -193,9 +193,9 @@ maybe('encrypted secrets and current backups (Postgres)', () => {
     expect(result.stdout).toContain('app_secrets: replace 1 live rows with 1 encrypted rows');
     expect(result.stdout).not.toContain('incoming-fixture');
     expect(result.stdout).not.toContain('undo-fixture');
-    const undo = result.stdout.match(/pre-restore dump written: (.+)/)?.[1];
-    expect(undo).toBeDefined();
-    await restoreDatabase(pool, undo!);
+    const undo = listBackups(join(backupDir, 'db'));
+    expect(undo).toHaveLength(1);
+    await restoreDatabase(pool, join(backupDir, 'db', undo[0]!.name));
     expect(await store.get('ai_api_key')).toBe('undo-fixture');
   }, 30_000);
 

@@ -24,9 +24,10 @@ already-built blog on `/data` — see [docs/authoring-workflow.md](docs/authorin
 Shared state, all under the **`/data`** volume (bind-mounted from `./uploader/data`):
 - `images/` — optimized image variants plus the untouched upload originals
   (`{key}-orig.<ext>`) (`STORAGE_DIR`).
+- `routes/` — private GPX originals and expiring import staging; never a static root.
 - `site/releases/<stamp>` + `site/current` (symlink) — built static output (`SITE_DIR`).
-- `backup/` — MDX export backups; `backup/db/` — gzipped Postgres dumps and incremental
-  image archives.
+- `backup/` — MDX export backups; `backup/db/` — gzipped Postgres dumps, incremental
+  image archives and manifest-matched private GPX original archives.
 - `settings.json` — admin-configurable settings, including backup scheduling, image conversion/quality, and the AI provider registry (no secrets).
 
 Plus the **`pgdata`** volume — Postgres data.
@@ -52,6 +53,58 @@ Plus the **`pgdata`** volume — Postgres data.
                                │  sessions    │
                                └──────────────┘
 ```
+
+## GPX route boundary (#311)
+
+The [owner-approved GPX specification](docs/superpowers/specs/2026-10-23-gpx-route-import-design.md)
+governs the private workflow (#313) and public snapshot pipeline (#314).
+Story URLs, shared stops and the free-text `route` label are unchanged.
+
+- One private `post_routes` row per translation pair, authenticated import/attach/read APIs,
+  and `/data/routes` beside—not inside—images/site/static roots. Attach compares both route
+  version and pair `updatedAt`; pair mutations advance both locale timestamps monotonically.
+  Detach retains the latest original for explicit recovery. GPX arrays stay outside ordinary
+  post JSON, text revisions and browser draft backups. An unsaved post is explicitly saved
+  before attaching; attachment to an existing post does not save unsaved text/metadata.
+- Pair-wide transaction locks serialize save/attach/publish/delete against the two-locale
+  schema; `translation_key` is not itself a unique parent key on `posts`. A separate
+  file-lifecycle gate protects originals during mutation/backup. A process-lifetime
+  PostgreSQL advisory lock and app-session drain check exclude concurrent restore.
+  Lease loss latches writes/jobs off and closes the pool without stopping static serving;
+  health reports `storageWritable: false`; an explicit app restart resumes writes.
+  Cleanup never queues behind backup. Transactional operational `route_cleanup` intents
+  retry failed explicit removals across restart without targeting current/restored sources.
+- `gpx-public-track.js` is the canonical pure projection shared by browser, author Attach
+  and admin Publish workers: separate runs, 25 m simplification, four-decimal 2D coordinates,
+  fixed output caps. An independent admin worker prevents author imports occupying the
+  Publish slot. Computation runs outside DB transaction locks.
+- `getPublishState()` captures both locales and the route coherently. Explicit Publish
+  compares the reviewed pair/route tokens again under the pair lock, then copies one
+  validated `track` artifact into both locale snapshots; detachment omits the field.
+  Legacy snapshot backfill never joins private routes. Content Layer and MDX consume only
+  snapshot artifacts, so edits/detachment remain draft-only through Save and Rebuild.
+  MDX retains working-copy prose but the last published track. Both snapshot projections
+  must validate and agree; corrupt/mismatched artifacts refuse export and recovery capture.
+- Story mini-maps render the public runs below pin/stop markers and fit all their bounds.
+  Localized per-run lengths/endpoints remain usable without JavaScript, tiles or WebGL.
+  Overview maps remain pin-only; routeless stories keep their existing fallback unchanged.
+- Private dump v10 includes route rows; a full, manifest-matched private route archive
+  includes retained originals. The archive is completed before the matching dump becomes
+  visible; manifest references pair retention independently of filename timestamps.
+  Explicitly degraded sets preserve the database/available originals when a source is
+  missing, corrupt, unreadable or oversized; they never promise to recover unavailable
+  bytes. Retained degraded manifests pin unreadable/oversized local sources against
+  automatic reclamation, but explicit replacement/post deletion override those pins.
+  Offline restore validates the set and both public snapshot projections, stages new
+  identities, then commits database state transactionally. Legacy dumps restore without routes.
+- The admin's self-hosted MapLibre 6.4.1 / PMTiles 4.4.1 preview is context only. Distance,
+  point and whole-segment controls work without basemap data; WebGL failure uses a local SVG.
+  Waypoints are unchecked and adopted independently as exact, shared stops only after explicit
+  confirmation. No journey reuse, geocoder/AI call or third-party location transfer occurs.
+
+Rollback leaves additive storage inert; removing a public line requires an authorized
+rebuild, not merely an image redeploy. Full failure/recovery contracts and approval gates
+are in the specification.
 
 ## Content pipeline (keyboard → published page)
 
@@ -176,8 +229,10 @@ take the same lock as shared holders (#95; its fetches do not). A waiting build 
 backlog at the next job boundary rather than queueing behind it, because Publish awaits the
 rebuild synchronously in the editor. That mutual exclusion is why `docker-compose.yml`'s
 `mem_limit` is sized as `max(build, encode) + baseline` rather than their sum.
-`createShutdown` drains the queue between closing the HTTP server and ending the pg pool, so
-in-flight jobs can still write their final status.
+On shutdown, `main.ts` closes HTTP admission and quiesces background work together,
+then ends the pool and releases storage ownership. Quiescence cancels further file/status
+publication and waits for admitted work; abandoned encode rows remain `processing` for
+`recover()` on the next boot. Lease loss uses the same quiescence without closing static HTTP.
 
 **Disk headroom (#73):** roughly **17.5 MB per photo** (6.9 MB of variants + the 10.7 MB retained
 original) ≈ **1.75 GB per 100 photos**, plus roughly the same again under `/data/backup` because
@@ -336,6 +391,11 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
   Working copies and published snapshots keep separate selections. The additive column
   migration runs before snapshot SQL references it and never backfills an existing snapshot
   from an unpublished working copy.
+- **`post_routes`** — one private row per `translation_key`: route version, nullable trimmed
+  geometry and latest-original identity/digest/size. No FK to the non-unique locale pair key.
+  Post deletion removes this row and records source cleanup in the same transaction.
+- **`route_cleanup`** — durable explicit source-deletion intents, excluded from dumps and
+  revisions. Cleanup rechecks current references and is retryable across process restarts.
 - **`comments`** — reader comments (#204, [spec](docs/superpowers/specs/2026-09-14-comments-design.md)): `id`, `translation_key` (one flat thread per post pair, no FK — `posts` has no single-column pair key), `locale` (the locale the reader posted from), `name`, `body` (plain text, 1–2000 chars, control characters stripped), `status` (`pending`/`approved`/`rejected`/`spam`; every reader row is born `pending`), `is_author` (an admin reply — born `approved`), `sender_hash` (keyed HMAC of the IP for rate limiting, never the raw IP), `created_at`. The legacy `email` column is always `NULL` — no email is collected. `pgPostStore.remove` deletes the thread in the same transaction as the post, and `ensureSchema` sweeps orphans on boot. **Runtime data, not build input:** the Astro build never reads this table — the blog fetches approved comments from `GET /comments?tk=…` at page load, so approving a comment needs no rebuild.
 - **`media`** — one row per storage key: `folder` (virtual, decoupled from the key), `title`,
   bilingual `alt_*`/`caption_*`, `tags` (`text[]`), dimensions, byte sizes, `status`
@@ -381,16 +441,16 @@ carry a `DEFAULT`, or the `ALTER` fails on populated tables.
 ## Backups & disaster recovery
 
 Full recovery needs **two things**: the Postgres content (`users`/`posts`/`pages`) and the
-**`/data` volume** (image originals + variants, site releases, MDX exports — and the in-app
-backup files themselves). Everything the app writes, including its own DB dumps and image
-archives under `/data/backup/db/`, lives on the **same server disk** as the live data (`/data`
+**`/data` volume** (image originals + variants, private GPX originals, site releases, MDX exports
+and the in-app backup files themselves). Everything the app writes, including database dumps,
+image archives and private route archives under `/data/backup/db/`, lives on the **same server disk** (`/data`
 is bind-mounted from `./uploader/data`; `pgdata`, the live database, is a named volume on the
 same host). The in-app backups therefore protect against application-level mistakes (bad edit,
 botched restore, accidental delete), **not** against disk failure or host loss.
 
 > **Offsite backup is required for real DR:** run a host-level backup (e.g. a restic / borg /
 > rsync cron job) of `./uploader/data`. That one directory contains the DB dumps, the image
-> archives, image originals, and settings.json. Encrypted AI credentials additionally require
+> archives, private GPX originals/archives, image originals, and settings.json. Encrypted AI credentials additionally require
 > **separate offsite master-key escrow**; `/data` and a DB dump cannot recover a lost master key.
 > The manual download buttons on the settings page are an escape hatch, not a strategy.
 
@@ -399,10 +459,10 @@ botched restore, accidental delete), **not** against disk failure or host loss.
 `uploader/src/backup.ts` provides app-native logical dumps (no `pg_dump`, no sidecar container):
 
 - **Dump format** — one file per run, `/data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`, containing
-  `{ "version": 9, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […], "comments": […] } }`
+  `{ "version": 10, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […], "comments": […], "post_routes": […] } }`
   with full column fidelity — an integration test diffs the dumped `posts` keys against
   `information_schema.columns`, so a column added in `db.ts` without touching `backup.ts` fails
-  the suite instead of silently vanishing from every backup. The six table reads run on one
+  the suite instead of silently vanishing from every backup. The table reads run on one
   client inside a single `REPEATABLE READ` snapshot, so a bulk delete during a backup can never
   produce a dump whose `posts` reference `media` rows that aren't in it. `sessions` are
   **never** dumped — they're disposable, and token hashes don't belong in a backup file. A dump
@@ -411,7 +471,7 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   the directory, so the finished temp file is published with `link(2)` (fails with `EEXIST`
   where `rename` would clobber) and a taken name advances to the next free second while
   `createdAt` keeps the real time (#114).
-  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 9), so
+  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 10), so
   every bump must widen it or newly written dumps become unrestorable. v1 predates `pages`, v2
   predates the media tables, v3 predates `posts.categories`/`tags`/`scheduled_at`, v4 predates
   `posts.featured` (the homepage-cover flag); all still restore and leave what they never
@@ -431,6 +491,12 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   v9 adds `posts.title_image`; both the working and published selections survive restore.
   Older dumps restore an absent title image as NULL, preserving the hero fallback.
   Older application versions reject v9 rather than silently dropping the new selection.
+  v10 adds full private `post_routes`, including detached rows, and a `routeArchive` manifest
+  when any route row exists. Its `routes-<stamp>-<random32>.tar` contains retained originals,
+  including removed locations and source metadata. It is not a public export or image archive.
+  The manifest binds names, byte counts and SHA-256 digests; degraded source states are explicit.
+  The archive is published before its dump. Retention follows manifest references, not matching
+  timestamps; unreadable manifests stop orphan reclamation. v1–v9 restore with no private routes.
   The CLI names replacement versus preservation and its pre-restore undo dump includes
   current encrypted secrets. Pause AI/settings edits during restore and reconcile the
   providers in settings.json before resuming: that file is not part of a logical DB dump.
@@ -457,32 +523,40 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   a fresh full chain — rather than re-tarring the ~11 GB corpus. Not detected: deleting only
   *some* archives of a chain, and files whose mtime moved backwards (a host-level restore that
   preserves old mtimes) — an mtime incremental never picks those up.
-- **Admin UI** (settings page) — schedule select, retention input, **Back up now** button, last-run
-  status (shows *Running…* while a run is in flight), and lists of existing dumps and image
-  archives with download links.
-- **Routes** (all admin-only): `GET /backups` (state + `running` + dump list + image-archive
-  list), `POST /backups` (run now; **409** while a run is already in flight),
-  `GET /backups/:name` (download; filename validated against `^db-\d{8}-\d{6}\.json\.gz$` or
-  `^images-\d{8}-\d{6}\.tar$` — no traversal).
+- **Admin UI** (settings page) — schedule, retention, **Back up now**, last-run state and
+  separate dump/image/private-route archive lists. Keep each private archive with its matching
+  dump; download both for offline recovery. Degraded-source and cleanup status are visible.
+- **Routes** (all admin-only): `GET /backups` returns state, running status, dump/image/route
+  archive lists and route cleanup state; `POST /backups` returns **409** while already running.
+  `GET /backups/:name` is `no-store`, accepts only strict dump/archive basenames and opens
+  regular, single-link files without following symlinks.
 - **Restore is CLI-only** (destructive, so no web button):
-  `docker compose exec app node --import tsx src/cli.ts restore [--yes] /data/backup/db/<file>`.
-  The DHI runtime image has no shell, so `exec` must invoke `node` directly (a bare
-  `tsx src/cli.ts ...` cannot run there); outside Docker use `npx tsx src/cli.ts restore <file>`.
-  Before anything touches the database, restore (#114, spec
-  `docs/superpowers/specs/2026-09-05-restore-cli-confirmation-design.md`): refuses a file name
+  Stop the app and wait for its work and database sessions to drain; keep Postgres running.
+  Then run the same configured image/volumes without starting the app service:
+  `docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore [--yes] /data/backup/db/<file>`.
+  A running app holds the ownership lease, so `docker compose exec app … restore` is refused.
+  Outside Docker, stop the configured app process and run `node --import tsx src/cli.ts restore <file>`
+  with the same database/storage settings. Do not run other maintenance writers concurrently.
+  Before anything destructive, restore (#114 and #313) refuses a file name
   outside `db-YYYYMMDD-HHmmss.json.gz` (the same pattern the download route enforces); rejects
   an unsupported dump `version`; prints the target database (`host:port/dbname`, never the
   credentials), the dump's `createdAt` and per-table counts, and the **live** per-table counts
   about to be replaced; then asks for the literal line `yes` — `--yes` skips the prompt for
   scripted use, and EOF/anything else aborts with nothing changed. It then writes a
-  **pre-restore dump** of the current state into `BACKUP_DIR/db/` — the scheduler's own
-  directory, resolved the same way (`/data/backup` by default) — (an ordinary
-  `db-<stamp>.json.gz`: listed and downloadable in the admin UI, subject to retention pruning,
-  and restorable with this same command — the CLI prints it as the undo path) and **aborts if
-  that dump cannot be written**. Only then does it, in **one transaction**, delete and re-insert
-  `users`, `posts`, media, and — for v2+ dumps — `pages` (v1 dumps leave existing pages
-  untouched). Deleting users **cascades to `sessions`**, so every login is invalidated — the CLI
-  prints a reminder to trigger a rebuild afterwards (`POST /rebuild`).
+  **pre-restore recovery set** of the current state into `BACKUP_DIR/db/`, verifies that
+  set, and aborts if it cannot be safely restored. A v10 input is fully validated against its
+  paired archive before database replacement. Originals stage under fresh identities, then
+  database replacement commits in one transaction. Missing/corrupt/degraded originals are
+  reported rather than silently reconstructed. Lost COMMIT acknowledgement retains both
+  source sets; do not manually delete them while the outcome is unresolved.
+  Deleting users invalidates every login. Start the app again only after the CLI exits;
+  then sign in and explicitly rebuild the site. The prior static release remains unchanged
+  until that rebuild. The CLI prints the verified undo dump path.
+- **Storage lease loss:** `/health` returns 503 with `storageWritable: false`; mutations
+  return `storage_read_only`. Static pages/images remain available. Confirm Postgres is
+  healthy and no restore is running, then restart the same app configuration
+  (`docker compose restart app`, or restart the bare Node process). Writes never resume
+  automatically in a process that lost its lease.
 - **Admin password recovery** — a forgotten password is reset from the host via the CLI (the
   runtime image has no shell, so use the exec form):
   `docker compose exec app node --import tsx src/cli.ts set-password <username>` — prompts for

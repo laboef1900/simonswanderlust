@@ -2,12 +2,13 @@ import { createHash } from 'node:crypto';
 import { parseWxr, type ParsedPost } from './wxr-parse.js';
 import { htmlToMarkdown, markdownImages } from './wp-content.js';
 import { rehostImage, type RehostResult, type RehostResume } from './wp-images.js';
-import { isSafeSlug, PostError, type ImageDims, type PostLocale, type PostPair, type PostStatus, type PostStore, type PostSummary, type StoredPostPair } from './posts.js';
+import { isSafeSlug, PostError, type ImageDims, type PostLocale, type PostPair, type PostStore, type PostSummary, type StoredPostPair } from './posts.js';
 import { rewriteFences, rewriteOutsideGalleries } from './body-content.js';
 import { FetchError } from './safe-fetch.js';
 import { insufficientSpaceForImport, type DiskSpace } from './disk.js';
 import type { WorkLock } from './work-lock.js';
 import { normalizeProcessOptions, type ProcessOptions } from './pipeline.js';
+import { assertWorkWritable, cancellableSleep, type WorkCancellationOptions } from './work-cancellation.js';
 
 /** Per-image accounting, so a partial import cannot masquerade as a clean one. */
 export interface ImportImageCounts {
@@ -36,11 +37,11 @@ export interface ImportSummary {
   warnings: string[];
 }
 
-export interface ImportDeps {
+export interface ImportDeps extends WorkCancellationOptions {
   postStore: PostStore; storageDir: string; baseUrl: string;
   /** Immutable image profile snapshot for this prepared import. */
   encoding?: ProcessOptions;
-  rehost?: (url: string, key: string, alt: string) => Promise<RehostResult>;
+  rehost?: (url: string, key: string, alt: string, signal?: AbortSignal) => Promise<RehostResult>;
   /** Minimum spacing between remote fetches, in ms. 0 restores pre-#85 behaviour. */
   delayMs?: number;
   /** Retries per image, on top of the first attempt. */
@@ -310,6 +311,7 @@ function warningSink(cap = WARNING_CAP) {
 function resilientRehost(rehost: RehostFn, cfg: {
   delayMs: number; retries: number; retryBudget: number; hostFailureLimit: number;
   sleep: (ms: number) => Promise<void>; now: () => number; log: (msg: string) => void;
+  assertWritable: () => void;
 }): RehostFn & { notices: string[] } {
   let nextAt = -Infinity;
   let retriesLeft = cfg.retryBudget;
@@ -319,8 +321,10 @@ function resilientRehost(rehost: RehostFn, cfg: {
   const notices: string[] = [];
 
   const paced: RehostFn = async (url, key, alt) => {
+    cfg.assertWritable();
     const wait = nextAt - cfg.now();
     if (wait > 0) await cfg.sleep(wait);
+    cfg.assertWritable();
     nextAt = cfg.now() + cfg.delayMs;
     return rehost(url, key, alt);
   };
@@ -336,6 +340,7 @@ function resilientRehost(rehost: RehostFn, cfg: {
         if (host !== null) consecutiveFailures.set(host, 0);
         return r;
       } catch (e) {
+        cfg.assertWritable();
         // @ai-warning ONLY a host-shaped failure counts toward the breaker, which
         // is why this reuses the retry classifier. A 404, an oversized response,
         // an unusable URL, a sharp decode failure or an ENOSPC on our own /data
@@ -626,7 +631,7 @@ export interface PreparedImport {
    * Perform the import. `onProgress` fires after every image outcome and every
    * group outcome with the same object, mutated in place — copy it if you keep it.
    */
-  run(onProgress?: (p: ImportProgress) => void): Promise<ImportSummary>;
+  run(onProgress?: (p: ImportProgress) => void, signal?: AbortSignal): Promise<ImportSummary>;
 }
 
 /** The whole import in one call — the pre-#92 shape, kept for the CLI and tests. */
@@ -642,12 +647,22 @@ export async function importWxr(xml: string, deps: ImportDeps): Promise<ImportSu
  * (issue #92).
  */
 export async function prepareImport(xml: string, deps: ImportDeps): Promise<PreparedImport> {
+  let boundary: WorkCancellationOptions = { signal: deps.signal, isWritable: deps.isWritable };
+  const assertWritable = () => assertWorkWritable(boundary);
+  assertWritable();
   const { attachments, posts } = parseWxr(xml);
   const log = deps.log ?? console.log;
   const encoding = normalizeProcessOptions(deps.encoding);
-  const baseRehost = deps.rehost ?? ((url, key, alt) => rehostImage(url, key, alt, {
-    storageDir: deps.storageDir, baseUrl: deps.baseUrl, lock: deps.lock, encoding,
-  }));
+  const baseRehost: RehostFn = async (url, key, alt) => {
+    assertWritable();
+    const result = deps.rehost
+      ? await deps.rehost(url, key, alt, boundary.signal)
+      : await rehostImage(url, key, alt, {
+        storageDir: deps.storageDir, baseUrl: deps.baseUrl, lock: deps.lock, encoding, ...boundary,
+      });
+    assertWritable();
+    return result;
+  };
   const images: ImportImageCounts = { total: 0, hosted: 0, failed: 0 };
   const warnings = warningSink();
 
@@ -660,9 +675,10 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
     retries: deps.retries ?? 0,
     retryBudget: deps.retryBudget ?? DEFAULT_RETRY_BUDGET,
     hostFailureLimit: deps.hostFailureLimit ?? DEFAULT_HOST_FAILURE_LIMIT,
-    sleep: deps.sleep ?? ((ms) => new Promise((r) => { setTimeout(r, ms); })),
+    sleep: (ms) => cancellableSleep(ms, boundary, deps.sleep),
     now: deps.now ?? (() => Date.now()),
     log,
+    assertWritable,
   });
 
   /**
@@ -679,6 +695,7 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   /** New key → the pre-#98 key to fall back to; filled from the plans below. */
   const legacyByKey = new Map<string, string>();
   const lookupResume = (key: string): Promise<RehostResult | null> => {
+    assertWritable();
     const index = deps.resume;
     if (!index) return Promise.resolve(null);
     let hit = resumed.get(key);
@@ -691,6 +708,7 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
       hit = index.lookup(key)
         .then((r) => r ?? (legacy === undefined ? null : index.lookup(legacy)))
         .then((r) => r ?? null, (e: unknown) => {
+          assertWritable();
           log(`import: resume lookup failed for ${key}, re-fetching: ${(e as Error).message}`);
           return null;
         });
@@ -711,8 +729,10 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
    * 665-photo import would sleep ~13 minutes fetching nothing.
    */
   const runRehost: RehostFn = async (url, key, alt) => {
+    assertWritable();
     images.total++;
     const already = await lookupResume(key);
+    assertWritable();
     if (already) { images.hosted++; tick(); return already; }
     try {
       const r = await resilient(url, key, alt);
@@ -720,6 +740,7 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
       tick();
       return r;
     } catch (e) {
+      assertWritable();
       images.failed++;
       tick();
       warnings.push(`image ${url} (${key}): ${failureReason(e)}`);
@@ -743,6 +764,7 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   // Golden Rule 2). Pair identity is therefore the (DE slug, EN slug) tuple as a
   // unit, and ANY other overlap is a conflict — never a binding.
   const existing = await deps.postStore.list();
+  assertWritable();
   const owners = new Map<string, PostSummary[]>();
   for (const s of existing) {
     for (const slug of new Set([s.slugDe, s.slugEn])) {
@@ -759,8 +781,9 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   // counts EXACTLY the groups that will be imported — no more, no less.
   // `stored` is the pair a MERGE run will write into (issue #126): resolved here,
   // before the count, because whether the hero is fetched depends on it.
-  const pending: { de: ParsedPost; en: ParsedPost; prior: { translationKey: string; status: PostStatus } | undefined; stored: StoredPostPair | null }[] = [];
+  const pending: { de: ParsedPost; en: ParsedPost; prior: Pick<PostSummary, 'translationKey' | 'status' | 'updatedAt'> | undefined; stored: StoredPostPair | null }[] = [];
   for (const [group, members] of groups) {
+    assertWritable();
     const de = members.find((m) => m.locale === 'de');
     const en = members.find((m) => m.locale === 'en');
     if (!de || !en) { summary.rejected++; warnings.push(`group ${group}: missing ${de ? 'en' : 'de'} translation (${members.map((m) => m.slug).join(', ')})`); continue; }
@@ -827,6 +850,7 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
     try {
       space = await deps.diskSpace();
     } catch (e) {
+      assertWritable();
       log(`import: free-space check skipped (statfs failed): ${(e as Error).message}`);
     }
     const problem = space && insufficientSpaceForImport(space, toFetch);
@@ -842,20 +866,26 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   };
 
   let started = false;
-  const run = async (onProgress?: (p: ImportProgress) => void): Promise<ImportSummary> => {
+  const run = async (onProgress?: (p: ImportProgress) => void, signal?: AbortSignal): Promise<ImportSummary> => {
+    if (signal) boundary = { ...boundary, signal: deps.signal ? AbortSignal.any([deps.signal, signal]) : signal };
+    assertWritable();
     if (started) throw new Error('a prepared import can only run once');
     started = true;
     tick = () => {
+      assertWritable();
       progress.images.hosted = images.hosted;
       progress.images.failed = images.failed;
       onProgress?.(progress);
     };
     for (const { de, en, prior, stored } of pending) {
       try {
+        assertWritable();
         // One cache per pair: de and en describe the same trip and share photos.
         const pairRehost = sharedRehost(runRehost);
         const freshDe = await buildLocale(de, attachments, pairRehost, includeHero(stored));
+        assertWritable();
         const freshEn = await buildLocale(en, attachments, pairRehost, includeHero(stored));
+        assertWritable();
         const pair: PostPair = stored
           ? { translationKey: stored.translationKey, status: 'draft', shared: stored.shared, de: mergeLocale(stored.de, freshDe), en: mergeLocale(stored.en, freshEn) }
           : {
@@ -865,9 +895,11 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
             de: freshDe.locale,
             en: freshEn.locale,
           };
-        await deps.postStore.upsertDraft(pair);
+        assertWritable();
+        await deps.postStore.upsertDraft(pair, prior?.updatedAt);
         if (prior) summary.updated++; else summary.imported++;
       } catch (e) {
+        assertWritable();
         summary.failed++;
         // The client sees a PostError as-is (a validation verdict, worded for
         // the author) but never a pg/infrastructure message — `invalid byte

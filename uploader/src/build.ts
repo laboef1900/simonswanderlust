@@ -2,14 +2,15 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { cp, mkdir, rm, rename, symlink, readdir, readlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { setTimeout as setTimeoutP } from 'node:timers/promises';
 import { createWorkLock, type WorkLock } from './work-lock.js';
+import { assertWorkWritable, cancellableSleep, createWorkCancellation, isWorkWritable, type WorkCancellationOptions } from './work-cancellation.js';
 
 export interface BuildOutcome { ok: boolean; release?: string; error?: string }
 
 export interface SiteBuilder {
   build(): Promise<BuildOutcome>;
   hasRelease(): boolean;
+  quiesce(): Promise<void>;
 }
 
 /** Bounds a spawned `astro build`. Measured builds finish well under a minute
@@ -30,7 +31,8 @@ export class BuildTimeoutError extends Error {
   }
 }
 
-export interface SiteBuilderOptions {
+export interface SiteBuilderOptions extends WorkCancellationOptions {
+  applicationName?: string;
   siteAppDir: string;
   releasesRoot: string;
   keep?: number;
@@ -88,11 +90,22 @@ export function runChildBuild(
   cwd: string,
   timeoutMs: number,
   onSpawn?: (child: ChildProcess) => void,
+  opts: WorkCancellationOptions & { applicationName?: string } = {},
 ): Promise<void> {
+  assertWorkWritable(opts);
+  const env: NodeJS.ProcessEnv = { ...process.env, ASTRO_TELEMETRY_DISABLED: '1' };
+  if (opts.applicationName) {
+    env.PGAPPNAME = opts.applicationName;
+    if (env.DATABASE_URL) {
+      const url = new URL(env.DATABASE_URL);
+      url.searchParams.set('application_name', opts.applicationName);
+      env.DATABASE_URL = url.href;
+    }
+  }
   const { promise, resolve, reject } = Promise.withResolvers<void>();
   const child = spawn(command, args, {
     cwd,
-    env: { ...process.env, ASTRO_TELEMETRY_DISABLED: '1' },
+    env,
     stdio: ['ignore', 'inherit', 'pipe'],
   });
   onSpawn?.(child);
@@ -108,9 +121,17 @@ export function runChildBuild(
     child.kill('SIGKILL');
     child.stderr?.destroy();
   }, timeoutMs);
-  child.on('error', (err) => { clearTimeout(timer); reject(err); });
+  const abort = () => { child.kill('SIGKILL'); child.stderr?.destroy(); };
+  opts.signal?.addEventListener('abort', abort, { once: true });
+  if (!isWorkWritable(opts)) abort();
+  child.on('error', (err) => { clearTimeout(timer); opts.signal?.removeEventListener('abort', abort); reject(err); });
   child.on('close', (code, signal) => {
     clearTimeout(timer);
+    opts.signal?.removeEventListener('abort', abort);
+    if (!isWorkWritable(opts)) {
+      try { assertWorkWritable(opts); } catch (err) { reject(err); }
+      return;
+    }
     if (timedOut) return reject(new BuildTimeoutError(timeoutMs));
     if (code === 0) return resolve();
     const why = code === null ? `astro build killed by ${signal}` : `astro build exited ${code}`;
@@ -122,17 +143,19 @@ export function runChildBuild(
 
 /** Spawn `astro build` via plain node — no npx/npm/shell, so the runtime image
  * can stay minimal and non-root. Telemetry is disabled for headless runs. */
-function runAstroBuild(siteAppDir: string, outDir: string, timeoutMs: number): Promise<void> {
+function runAstroBuild(siteAppDir: string, outDir: string, timeoutMs: number, opts: WorkCancellationOptions & { applicationName?: string }): Promise<void> {
   const astroBin = join(siteAppDir, 'node_modules', 'astro', 'bin', 'astro.mjs');
-  return runChildBuild(process.execPath, [astroBin, 'build', '--outDir', outDir], siteAppDir, timeoutMs);
+  return runChildBuild(process.execPath, [astroBin, 'build', '--outDir', outDir], siteAppDir, timeoutMs, undefined, opts);
 }
 
 /** Remove what a crashed (SIGKILLed) earlier run left behind: the CWD-local
  * build tmp and any dot-prefixed staging dir under `releases/`. Runs inside
  * the exclusive lock, so nothing else is mid-build. */
-async function sweepLeftovers(siteAppDir: string, releases: string): Promise<void> {
+async function sweepLeftovers(siteAppDir: string, releases: string, opts: WorkCancellationOptions): Promise<void> {
+  assertWorkWritable(opts);
   await rm(join(siteAppDir, '.build-tmp'), { recursive: true, force: true });
   for (const name of await readdir(releases)) {
+    assertWorkWritable(opts);
     if (name.startsWith('.')) await rm(join(releases, name), { recursive: true, force: true });
   }
 }
@@ -156,41 +179,49 @@ let stampSeq = 0;
  * `keep` and displaces a real rollback candidate (#110). Staging dirs are
  * removed on failure, swept at the next run, and ignored by pruning.
  */
-async function buildAndDeploy(opts: Required<Omit<SiteBuilderOptions, 'runBuild' | 'lock' | 'timeoutMs'>> & { runBuild: (outDir: string) => Promise<void> }): Promise<string> {
+async function buildAndDeploy(opts: Pick<SiteBuilderOptions, 'siteAppDir' | 'releasesRoot' | 'signal' | 'isWritable'> & { keep: number; runBuild: (outDir: string) => Promise<void> }): Promise<string> {
   const releases = join(opts.releasesRoot, 'releases');
+  assertWorkWritable(opts);
   await mkdir(releases, { recursive: true });
-  await sweepLeftovers(opts.siteAppDir, releases);
+  await sweepLeftovers(opts.siteAppDir, releases, opts);
   const stamp = `${Date.now()}-${process.pid}-${String(stampSeq++).padStart(4, '0')}`;
   const buildTmp = join(opts.siteAppDir, '.build-tmp', stamp);
   const staging = join(releases, `.${stamp}.partial`);
   const dest = join(releases, stamp);
   try {
+    assertWorkWritable(opts);
     await opts.runBuild(buildTmp);
-    await cp(buildTmp, staging, { recursive: true });
+    assertWorkWritable(opts);
+    await cp(buildTmp, staging, { recursive: true, filter: () => { assertWorkWritable(opts); return true; } });
+    assertWorkWritable(opts);
     await rename(staging, dest);
   } catch (e) {
-    await rm(staging, { recursive: true, force: true }).catch(() => { /* best-effort; swept next run */ });
+    if (isWorkWritable(opts)) await rm(staging, { recursive: true, force: true }).catch(() => { /* best-effort; swept next run */ });
     throw e;
   } finally {
-    await rm(buildTmp, { recursive: true, force: true });
+    if (isWorkWritable(opts)) await rm(buildTmp, { recursive: true, force: true });
   }
   const tmpLink = join(opts.releasesRoot, `.current.${stamp}`);
+  assertWorkWritable(opts);
   await symlink(dest, tmpLink);
+  assertWorkWritable(opts);
   await rename(tmpLink, join(opts.releasesRoot, 'current'));
   const all = (await readdir(releases)).filter((name) => !name.startsWith('.')).sort();
   let live = '';
   try { live = (await readlink(join(opts.releasesRoot, 'current'))).split('/').pop() ?? ''; } catch { /* no current yet */ }
   for (const old of all.slice(0, -opts.keep)) {
     if (old === live) continue;
+    assertWorkWritable(opts);
     await rm(join(releases, old), { recursive: true, force: true });
   }
   return stamp;
 }
 
 export function createSiteBuilder(opts: SiteBuilderOptions): SiteBuilder {
+  const work = createWorkCancellation(opts);
   const keep = opts.keep ?? 3;
   const timeoutMs = opts.timeoutMs ?? BUILD_TIMEOUT_MS;
-  const runBuild = opts.runBuild ?? ((outDir: string) => runAstroBuild(opts.siteAppDir, outDir, timeoutMs));
+  const runBuild = opts.runBuild ?? ((outDir: string) => runAstroBuild(opts.siteAppDir, outDir, timeoutMs, { ...work, applicationName: opts.applicationName }));
   const lock = opts.lock ?? createWorkLock();
   // @ai-note One-deep coalescing instead of rejecting concurrent builds. The
   // publish route flips the Postgres row BEFORE calling build(), so rejecting
@@ -206,11 +237,12 @@ export function createSiteBuilder(opts: SiteBuilderOptions): SiteBuilder {
   // in-flight build is safe.
   const runOnce = async (): Promise<BuildOutcome> => {
     try {
+      work.assertWritable();
       // Exclusive: pauses the encode queue for the duration (see work-lock.ts).
       // Taken INSIDE runOnce so the coalescing above is unaffected — a queued
       // build still waits for the in-flight one, then competes for the lock.
       const release = await lock.runExclusive(() =>
-        buildAndDeploy({ siteAppDir: opts.siteAppDir, releasesRoot: opts.releasesRoot, keep, runBuild }));
+        buildAndDeploy({ siteAppDir: opts.siteAppDir, releasesRoot: opts.releasesRoot, keep, runBuild, ...work }));
       return { ok: true, release };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
@@ -224,7 +256,12 @@ export function createSiteBuilder(opts: SiteBuilderOptions): SiteBuilder {
   };
   return {
     hasRelease: () => existsSync(join(opts.releasesRoot, 'current')),
+    async quiesce() {
+      work.stop();
+      await Promise.all([inFlight, queued]);
+    },
     async build() {
+      if (!work.isWritable()) return runOnce();
       if (queued) return queued; // coalesce: share the one already-queued run
       if (inFlight) {
         const next = inFlight.then(() => {
@@ -242,7 +279,7 @@ export function createSiteBuilder(opts: SiteBuilderOptions): SiteBuilder {
   };
 }
 
-export interface BootstrapOptions {
+export interface BootstrapOptions extends WorkCancellationOptions {
   log: (message: string) => void;
   /** Total build attempts, including the first; default 6. */
   attempts?: number;
@@ -253,8 +290,6 @@ export interface BootstrapOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
-// `ref: false`: a pending retry never keeps a shutting-down process alive.
-const defaultSleep = (ms: number) => setTimeoutP(ms, undefined, { ref: false });
 
 /**
  * First boot on a fresh volume: produce the initial release, retrying a failed
@@ -269,24 +304,27 @@ const defaultSleep = (ms: number) => setTimeoutP(ms, undefined, { ref: false });
  * Never rejects; every outcome is logged. Each attempt goes through the
  * builder's coalescing and lock, so a retry never runs beside another build.
  */
-export async function bootstrapRelease(builder: SiteBuilder, opts: BootstrapOptions): Promise<void> {
+export async function bootstrapRelease(builder: Pick<SiteBuilder, 'build' | 'hasRelease'>, opts: BootstrapOptions): Promise<void> {
   const attempts = opts.attempts ?? 6;
   const maxDelayMs = opts.maxDelayMs ?? 8 * 60_000;
-  const sleep = opts.sleep ?? defaultSleep;
+  const sleep = opts.sleep;
   let delayMs = opts.baseDelayMs ?? 30_000;
   for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (!isWorkWritable(opts)) return;
     if (builder.hasRelease()) {
       if (attempt > 1) opts.log('initial build no longer needed: a release exists');
       return;
     }
     const r = await builder.build();
+    if (!isWorkWritable(opts)) return;
     if (r.ok) { opts.log(`initial build released ${r.release}`); return; }
     if (attempt === attempts) {
       opts.log(`initial build failed (attempt ${attempt}/${attempts}), giving up; publish or rebuild from the admin to retry: ${r.error}`);
       return;
     }
     opts.log(`initial build failed (attempt ${attempt}/${attempts}), retrying in ${Math.round(delayMs / 1000)}s: ${r.error}`);
-    await sleep(delayMs);
+    try { await cancellableSleep(delayMs, opts, sleep); }
+    catch (err) { if (!isWorkWritable(opts)) return; throw err; }
     delayMs = Math.min(delayMs * 2, maxDelayMs);
   }
 }

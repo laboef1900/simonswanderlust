@@ -79,6 +79,43 @@ describe('assertFetchableUrl', () => {
 });
 
 describe('safeFetch', () => {
+  it('aborts a stalled lookup without fetching or converting cancellation into a retryable timeout', async () => {
+    const controller = new AbortController();
+    const entered = Promise.withResolvers<void>();
+    const lookup = Promise.withResolvers<ReadonlyArray<{ address: string; family: number }>>();
+    let fetched = false;
+    const run = safeFetch('https://example.com/a.jpg', {
+      signal: controller.signal,
+      lookup: () => { entered.resolve(); return lookup.promise; },
+      fetchImpl: async () => { fetched = true; return new Response('unused'); },
+    });
+    const reason = new Error('ownership lost');
+    const rejection = expect(run).rejects.toBe(reason);
+    await entered.promise;
+    controller.abort(reason);
+    await rejection;
+    expect(fetched).toBe(false);
+    lookup.resolve([{ address: '93.184.216.34', family: 4 }]);
+  });
+
+  it('cancels an active response body on storage lease loss', async () => {
+    const controller = new AbortController();
+    const reading = Promise.withResolvers<void>();
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull() { reading.resolve(); },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 });
+    const run = safeFetch('https://example.com/a.jpg', {
+      signal: controller.signal, lookup: publicLookup,
+      fetchImpl: async () => new Response(stream),
+    });
+    const rejection = expect(run).rejects.toMatchObject({ name: 'AbortError' });
+    await reading.promise;
+    controller.abort();
+    await rejection;
+    expect(cancelled).toBe(true);
+  });
   it('returns the body buffer on success', async () => {
     const payload = new Uint8Array([1, 2, 3, 4]);
     const fetchImpl = (async () => new Response(payload)) as unknown as typeof fetch;

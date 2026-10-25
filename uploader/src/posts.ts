@@ -1,5 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { heroImageError, imageMarkdown, imagesMapError, normalizeGalleryFences, rewriteOutsideGalleries, type ImageMeta } from './body-content.js';
+import { lockPostPair, touchPostPair } from './post-pair-lock.js';
+import { safePairHash, type GpxFiles } from './gpx-files.js';
+import { enqueueRouteCleanup } from './gpx-store.js';
+import { validatePublicTrack, type PublicTrack } from '../public/gpx-public-track.js';
+import type { PrivateGeometry } from '../public/gpx-geometry.js';
+import type { PublicTrackWorker } from './gpx-public-worker.js';
+import { GpxError } from './gpx-errors.js';
+import { publishedTrackOf, type PublishedTrackRow } from './published-track.js';
 
 export type Locale = 'de' | 'en';
 /**
@@ -137,9 +145,23 @@ export class PostError extends Error {
   constructor(message: string, code?: string) { super(message); this.code = code; }
 }
 
+export interface PublishTokens { baseUpdatedAt: Date; baseRouteVersion: string | null }
+export interface PublishState { pair: StoredPostPair; routeVersion: string | null }
+
+/** Publish uses exact reviewed tokens, not save's older-than comparison. */
+export function assertPublishTokens(state: PublishState, tokens: PublishTokens): void {
+  if (!(tokens?.baseUpdatedAt instanceof Date)
+    || tokens.baseUpdatedAt.getTime() !== state.pair.updatedAt.getTime()
+    || tokens.baseRouteVersion !== state.routeVersion) {
+    throw new PostError('post or route changed since review; reload before publishing', 'conflict');
+  }
+}
+
 export interface PostStore {
   list(): Promise<PostSummary[]>;
   get(translationKey: string): Promise<StoredPostPair | null>;
+  getPublishState(translationKey: string): Promise<PublishState | null>;
+  getPublishedTrack(translationKey: string): Promise<PublicTrack | undefined>;
   /**
    * Create or overwrite the working copy. When `baseUpdatedAt` is given (the
    * `updatedAt` the editor loaded), the save is rejected with PostError code
@@ -148,7 +170,7 @@ export interface PostStore {
    * an existing pair first snapshots the pre-save state into the revisions.
    */
   upsertDraft(pair: PostPair, baseUpdatedAt?: Date): Promise<StoredPostPair>;
-  publish(translationKey: string): Promise<void>;
+  publish(translationKey: string, tokens: PublishTokens): Promise<{ updatedAt: Date }>;
   /** Flip a pair back to draft (the "emergency brake" — the live site drops it on the next build). */
   unpublish(translationKey: string): Promise<void>;
   /** Hard-delete both locale rows, freeing their slugs for reuse. */
@@ -534,6 +556,15 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
   const revisionsByKey = new Map<string, PostRevision[]>();
   const slugTaken = (locale: Locale, slug: string, exceptKey: string) =>
     slug !== '' && [...byKey.values()].some((p) => p.translationKey !== exceptKey && p[locale].slug === slug);
+  const mutations = new Map<string, Promise<unknown>>();
+  async function withPair<T>(key: string, mutate: () => T | Promise<T>): Promise<T> {
+    const previous = mutations.get(key) ?? Promise.resolve();
+    const current = previous.catch(() => {}).then(mutate);
+    mutations.set(key, current);
+    try { return await current; }
+    finally { if (mutations.get(key) === current) mutations.delete(key); }
+  }
+  const nextTime = (previous?: Date) => new Date(Math.max(Date.now(), (previous?.getTime() ?? 0) + 1));
 
   return {
     async list() {
@@ -562,6 +593,11 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
       const p = byKey.get(tk);
       return p ? structuredClone({ translationKey: p.translationKey, status: p.status, shared: p.shared, de: p.de, en: p.en, hasUnpublishedChanges: p.hasUnpublishedChanges, updatedAt: p.updatedAt }) : null;
     },
+    async getPublishState(tk) {
+      const pair = await this.get(tk);
+      return pair ? { pair, routeVersion: null } : null;
+    },
+    async getPublishedTrack() { return undefined; },
     async usageRows() {
       return [...byKey.values()].flatMap((p) => {
         const sources: { source: PostUsageRow['source']; from: Pick<PostPair, 'de' | 'en'> }[] = [{ source: 'working', from: p }];
@@ -576,53 +612,67 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
     async upsertDraft(pair, baseUpdatedAt) {
       pair = draftWithDefaults(pair);
       const key = pair.translationKey || randomUUID();
-      const existing = byKey.get(key);
-      if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
-      for (const locale of ['de', 'en'] as Locale[]) {
-        if (slugTaken(locale, pair[locale].slug, key)) throw new PostError(`slug "${pair[locale].slug}" already in use for ${locale}`, 'duplicate_slug');
-        if (existing && existing.status === 'published' && existing[locale].slug !== pair[locale].slug) {
-          throw new PostError('cannot change the slug of a published post', 'slug_locked');
+      return withPair(key, () => {
+        const existing = byKey.get(key);
+        if (!existing && baseUpdatedAt) throw new PostError('post not found', 'not_found');
+        if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
+        for (const locale of ['de', 'en'] as Locale[]) {
+          if (slugTaken(locale, pair[locale].slug, key)) throw new PostError(`slug "${pair[locale].slug}" already in use for ${locale}`, 'duplicate_slug');
+          if (existing && existing.status === 'published' && existing[locale].slug !== pair[locale].slug) {
+            throw new PostError('cannot change the slug of a published post', 'slug_locked');
+          }
         }
-      }
-      if (existing) {
-        // Snapshot the pre-save working copy so the overwrite is recoverable.
-        const revs = revisionsByKey.get(key) ?? [];
-        revs.push({
-          id: randomUUID(), savedAt: new Date(), titleDe: existing.de.title, status: existing.status,
-          snapshot: structuredClone({ status: existing.status, shared: existing.shared, de: existing.de, en: existing.en }),
-        });
-        if (revs.length > REVISION_CAP) revs.splice(0, revs.length - REVISION_CAP);
-        revisionsByKey.set(key, revs);
-      }
-      const status = existing?.status ?? 'draft';
-      const stored: Stored = {
-        ...structuredClone(pair), translationKey: key, status, updatedAt: new Date(),
-        // Preserve the published snapshot — a draft save must never touch what is live.
-        publishedAt: existing?.publishedAt, publishedSnapshot: existing?.publishedSnapshot,
-        hasUnpublishedChanges: status === 'published',
-      };
-      byKey.set(key, stored);
-      return structuredClone(stored);
+        if (existing) {
+          const revs = revisionsByKey.get(key) ?? [];
+          revs.push({
+            id: randomUUID(), savedAt: new Date(), titleDe: existing.de.title, status: existing.status,
+            snapshot: structuredClone({ status: existing.status, shared: existing.shared, de: existing.de, en: existing.en }),
+          });
+          if (revs.length > REVISION_CAP) revs.splice(0, revs.length - REVISION_CAP);
+          revisionsByKey.set(key, revs);
+        }
+        const status = existing?.status ?? 'draft';
+        const stored: Stored = {
+          ...structuredClone(pair), translationKey: key, status, updatedAt: nextTime(existing?.updatedAt),
+          // A route lives outside this object; a text revision cannot restore it.
+          publishedAt: existing?.publishedAt, publishedSnapshot: existing?.publishedSnapshot,
+          hasUnpublishedChanges: status === 'published',
+        };
+        byKey.set(key, stored);
+        return structuredClone(stored);
+      });
     },
-    async publish(tk) {
-      const p = byKey.get(tk);
-      if (!p) throw new PostError('post not found');
-      p.status = 'published';
-      p.publishedSnapshot = structuredClone({ shared: p.shared, de: p.de, en: p.en });
-      p.publishedAt = new Date();
-      p.updatedAt = p.publishedAt;
-      p.hasUnpublishedChanges = false;
+    async publish(tk, tokens) {
+      const state = await this.getPublishState(tk);
+      if (!state) throw new PostError('post not found', 'not_found');
+      assertPublishTokens(state, tokens);
+      return withPair(tk, () => {
+        const p = byKey.get(tk);
+        if (!p) throw new PostError('post not found', 'not_found');
+        assertPublishTokens({ pair: p, routeVersion: null }, tokens);
+        p.status = 'published';
+        p.publishedSnapshot = structuredClone({ shared: p.shared, de: p.de, en: p.en });
+        p.publishedAt = nextTime(p.updatedAt);
+        p.updatedAt = p.publishedAt;
+        p.hasUnpublishedChanges = false;
+        return { updatedAt: new Date(p.updatedAt) };
+      });
     },
     async unpublish(tk) {
-      const p = byKey.get(tk);
-      if (!p) throw new PostError('post not found');
-      p.status = 'draft';
-      p.updatedAt = new Date();
+      return withPair(tk, () => {
+        const p = byKey.get(tk);
+        if (!p) throw new PostError('post not found');
+        p.status = 'draft';
+        p.updatedAt = nextTime(p.updatedAt);
+      });
     },
     async remove(tk) {
-      if (!byKey.delete(tk)) throw new PostError('post not found');
-      revisionsByKey.delete(tk); // #137: snapshots must not outlive their post
-      await opts.comments?.removeByTranslationKey(tk); // comments spec M13: the thread goes with the post
+      return withPair(tk, async () => {
+        if (!byKey.has(tk)) throw new PostError('post not found');
+        await opts.comments?.removeByTranslationKey(tk);
+        byKey.delete(tk);
+        revisionsByKey.delete(tk);
+      });
     },
     async listRevisions(tk) {
       return (revisionsByKey.get(tk) ?? [])
@@ -755,7 +805,46 @@ function localeParams(tk: string, status: string, shared: PostShared, p: PostLoc
     shared.featured ?? false, shared.commentsEnabled ?? true, p.titleImage ? JSON.stringify(p.titleImage) : null];
 }
 
-export function pgPostStore(pool: DbPool): PostStore {
+async function readPostPair(client: DbPool | DbClient, tk: string, lock = false): Promise<StoredPostPair | null> {
+  const { rows } = await client.query<PostRow>(
+    `SELECT * FROM posts WHERE translation_key=$1 ORDER BY locale${lock ? ' FOR UPDATE' : ''}`, [tk],
+  );
+  return postPairFromRows(tk, rows);
+}
+
+function postPairFromRows(tk: string, rows: PostRow[]): StoredPostPair | null {
+  const de = rows.find((row) => row.locale === 'de');
+  const en = rows.find((row) => row.locale === 'en');
+  if (!de || !en) return null;
+  return {
+    translationKey: tk, status: de.status, shared: rowShared(de), de: rowLocale(de), en: rowLocale(en),
+    hasUnpublishedChanges: rowHasUnpublishedChanges(de) || rowHasUnpublishedChanges(en),
+    updatedAt: new Date(Math.max(de.updated_at.getTime(), en.updated_at.getTime())),
+  };
+}
+
+/** One statement sees both locales and the route version at the same MVCC snapshot. */
+async function readPublishState(client: DbPool | DbClient, tk: string, geometry = false) {
+  const { rows } = await client.query<PostRow & { route_version: string | null; route_geometry?: PrivateGeometry | null }>(
+    `SELECT p.*, r.version AS route_version${geometry ? ', r.geometry AS route_geometry' : ''}
+       FROM posts p LEFT JOIN post_routes r USING (translation_key)
+      WHERE p.translation_key=$1 ORDER BY p.locale`, [tk],
+  );
+  const pair = postPairFromRows(tk, rows);
+  const row = rows[0];
+  return pair && row ? { pair, routeVersion: row.route_version, geometry: row.route_geometry ?? null } : null;
+}
+
+interface PgPostStoreOptions {
+  routeFiles?: GpxFiles;
+  isWritable?: () => boolean;
+  publicTrackWorker?: PublicTrackWorker;
+}
+
+export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): PostStore {
+  const writable = () => {
+    if (options.isWritable && !options.isWritable()) throw new PostError('Storage is read-only; restart the app after database recovery.', 'storage_read_only');
+  };
   // Plain INSERT: a (locale, slug) collision surfaces as 23505 from
   // posts_locale_slug_idx and is mapped to duplicate_slug by the caller — never
   // ON CONFLICT DO UPDATE, which re-assigned another pair's row (issue #106).
@@ -775,7 +864,7 @@ export function pgPostStore(pool: DbPool): PostStore {
     const res = await client.query(
       `UPDATE posts SET slug=$3, title=$4, date=$5, country=$6, country_code=$7, region=$8, excerpt=$9,
          hero_image=$10, coordinates=$11, stops=$12, route=$13, key_facts=$14, body_markdown=$15, images=$16,
-         status=$17, categories=$18, tags=$19, scheduled_at=$20, featured=$21, comments_enabled=$22, title_image=$23, updated_at=now()
+         status=$17, categories=$18, tags=$19, scheduled_at=$20, featured=$21, comments_enabled=$22, title_image=$23
        WHERE translation_key=$1 AND locale=$2`,
       localeParams(tk, status, shared, p),
     );
@@ -810,18 +899,17 @@ export function pgPostStore(pool: DbPool): PostStore {
         };
       });
     },
-    async get(tk) {
-      const { rows } = await pool.query<PostRow>(`SELECT * FROM posts WHERE translation_key = $1`, [tk]);
-      const de = rows.find((r) => r.locale === 'de'); const en = rows.find((r) => r.locale === 'en');
-      if (!de || !en) return null;
-      return {
-        translationKey: tk, status: de.status, shared: rowShared(de), de: rowLocale(de), en: rowLocale(en),
-        hasUnpublishedChanges: rowHasUnpublishedChanges(de) || rowHasUnpublishedChanges(en),
-        // Max of both rows: since #106 both locale writes share one
-        // transaction (one now()), but rows written before it can differ by a
-        // tick, and publish()/unpublish() still stamp per statement.
-        updatedAt: new Date(Math.max(de.updated_at.getTime(), en.updated_at.getTime())),
-      };
+    get: (tk) => readPostPair(pool, tk),
+    async getPublishState(tk) {
+      const state = await readPublishState(pool, tk);
+      return state ? { pair: state.pair, routeVersion: state.routeVersion } : null;
+    },
+    async getPublishedTrack(tk) {
+      const { rows } = await pool.query<PublishedTrackRow>(
+        'SELECT locale, published_snapshot FROM posts WHERE translation_key=$1 ORDER BY locale', [tk],
+      );
+      try { return publishedTrackOf(rows); }
+      catch { throw new PostError('invalid published route snapshots', 'invalid_published_track'); }
     },
     async usageRows() {
       // The second SELECT mirrors the site loader's filter (postgres-loader.ts:
@@ -845,22 +933,15 @@ export function pgPostStore(pool: DbPool): PostStore {
     async upsertDraft(pair, baseUpdatedAt) {
       pair = draftWithDefaults(pair);
       const tk = pair.translationKey || randomUUID();
-      const existing = await this.get(tk);
-      // @ai-note The revision snapshot and BOTH locale writes run in one
-      // transaction, so a save is all-or-nothing and posts_locale_slug_idx is
-      // the race-safe backstop for the slug pre-check below (a losing racer
-      // gets duplicate_slug, never a re-assigned row — issue #106). What is
-      // still NOT serialized is the read → stale-check above: two saves racing
-      // within the same ms window can both pass assertNotStale (single-process
-      // deployment; the losing state is still recoverable via its revision).
-      // A hard guarantee would need SELECT ... FOR UPDATE inside this
-      // transaction — keep the timestamp compare in JS if that ever happens
-      // (see assertNotStale's @ai-warning).
-      if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
-      const status = existing?.status ?? 'draft';
+      writable();
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        await lockPostPair(client, tk);
+        const existing = await readPostPair(client, tk, true);
+        if (!existing && baseUpdatedAt) throw new PostError('post not found', 'not_found');
+        if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
+        const status = existing?.status ?? 'draft';
         for (const locale of ['de', 'en'] as Locale[]) {
           const slug = pair[locale].slug;
           if (slug !== '') {
@@ -870,8 +951,6 @@ export function pgPostStore(pool: DbPool): PostStore {
           if (existing && existing.status === 'published' && existing[locale].slug !== slug) throw new PostError('cannot change the slug of a published post', 'slug_locked');
         }
         if (existing) {
-          // Snapshot the pre-save working copy so the overwrite is recoverable,
-          // then prune to the newest REVISION_CAP per post.
           await client.query(
             `INSERT INTO post_revisions (id, translation_key, snapshot) VALUES ($1, $2, $3)`,
             [randomUUID(), tk, JSON.stringify({ status: existing.status, shared: existing.shared, de: existing.de, en: existing.en })],
@@ -889,63 +968,101 @@ export function pgPostStore(pool: DbPool): PostStore {
           await insertLocale(client, tk, status, pair.shared, { ...pair.de, locale: 'de' });
           await insertLocale(client, tk, status, pair.shared, { ...pair.en, locale: 'en' });
         }
+        await touchPostPair(client, tk);
+        // Return this save's token, not a later writer's post-COMMIT read.
+        const saved = await readPostPair(client, tk);
+        if (!saved) throw new PostError('failed to save post');
+        writable();
         await client.query('COMMIT');
+        return saved;
       } catch (e) {
-        await client.query('ROLLBACK');
+        await client.query('ROLLBACK').catch(() => {});
         if (isSlugCollision(e)) throw new PostError('slug already in use', 'duplicate_slug');
         throw e;
-      } finally {
-        client.release();
+      } finally { client.release(); }
+    },
+    async publish(tk, tokens) {
+      writable();
+      const state = await readPublishState(pool, tk, true);
+      if (!state) throw new PostError('post not found', 'not_found');
+      assertPublishTokens(state, tokens);
+      let track: PublicTrack | undefined;
+      if (state.geometry !== null) {
+        if (!options.publicTrackWorker) throw new GpxError('gpx_unavailable', 503);
+        track = validatePublicTrack((await options.publicTrackWorker.transform(state.geometry)).track);
       }
-      const saved = await this.get(tk);
-      if (!saved) throw new PostError('failed to save post');
-      return saved;
-    },
-    async publish(tk) {
-      // Copy the working columns into published_snapshot in the same UPDATE —
-      // the snapshot (not the working row) is what the site loader builds from,
-      // so later draft saves cannot leak live (issue #20). published_at and
-      // updated_at are stamped with the same now(), making
-      // `updated_at > published_at` (= hasUnpublishedChanges) false until the
-      // next draft save bumps updated_at.
-      const res = await pool.query(
-        `UPDATE posts SET status='published', published_snapshot=${POST_SNAPSHOT_SQL}, published_at=now(), updated_at=now() WHERE translation_key=$1`,
-        [tk],
-      );
-      if (res.rowCount === 0) throw new PostError('post not found');
-    },
-    async unpublish(tk) {
-      const res = await pool.query(`UPDATE posts SET status='draft', updated_at=now() WHERE translation_key=$1`, [tk]);
-      if (res.rowCount === 0) throw new PostError('post not found');
-    },
-    async remove(tk) {
-      // Both locale rows AND the post's revisions go in one transaction (#137):
-      // post_revisions has no FK — posts is keyed (translation_key, locale) —
-      // so nothing cascades on its own, and a crash between the two would
-      // leave the post gone but its full-body snapshots readable. Two
-      // statements rather than one data-modifying CTE on purpose: every
-      // sub-statement of a CTE shares the statement's snapshot, so a revision
-      // committed by a concurrent save while the posts DELETE waited on that
-      // save's row locks would be invisible to the revisions DELETE and
-      // survive. In READ COMMITTED the second statement takes a fresh snapshot
-      // and sees it. The revisions DELETE runs only when the post existed:
-      // an unknown key deletes nothing (orphans are the boot sweep's job).
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
-        const gone = await client.query(`DELETE FROM posts WHERE translation_key = $1`, [tk]);
-        if (gone.rowCount === 0) throw new PostError('post not found');
-        await client.query(`DELETE FROM post_revisions WHERE translation_key = $1`, [tk]);
-        // Reader comments go with the post (comments spec M13) — a separate
-        // statement for the same snapshot reason as the revisions DELETE.
-        await client.query(`DELETE FROM comments WHERE translation_key = $1`, [tk]);
+        await lockPostPair(client, tk);
+        const pair = await readPostPair(client, tk, true);
+        if (!pair) throw new PostError('post not found', 'not_found');
+        const route = await client.query<{ version: string }>(
+          'SELECT version FROM post_routes WHERE translation_key=$1 FOR UPDATE', [tk],
+        );
+        assertPublishTokens({ pair, routeVersion: route.rows[0]?.version ?? null }, tokens);
+        const updatedAt = await touchPostPair(client, tk);
+        // This merge exists ONLY at explicit Publish; legacy backfills stay route-free.
+        await client.query(
+          `UPDATE posts SET status='published',
+             published_snapshot=${POST_SNAPSHOT_SQL} || $3::jsonb, published_at=$2
+           WHERE translation_key=$1`,
+          [tk, updatedAt, JSON.stringify(track ? { track } : {})],
+        );
+        writable();
         await client.query('COMMIT');
-      } catch (e) {
-        await client.query('ROLLBACK');
-        throw e;
-      } finally {
-        client.release();
-      }
+        return { updatedAt };
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally { client.release(); }
+    },
+    async unpublish(tk) {
+      writable();
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await lockPostPair(client, tk);
+        if (!(await readPostPair(client, tk, true))) throw new PostError('post not found');
+        await touchPostPair(client, tk);
+        await client.query(`UPDATE posts SET status='draft' WHERE translation_key=$1`, [tk]);
+        writable();
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally { client.release(); }
+    },
+    async remove(tk) {
+      const remove = async () => {
+        writable();
+        const pairHash = safePairHash(tk);
+        const leftovers = options.routeFiles
+          ? await options.routeFiles.listOriginals(pairHash)
+          : [];
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await lockPostPair(client, tk);
+          const rows = await client.query('SELECT locale FROM posts WHERE translation_key=$1 ORDER BY locale FOR UPDATE', [tk]);
+          if (rows.rowCount === 0) throw new PostError('post not found', 'not_found');
+          const sources = await client.query<{ source_id: string }>('DELETE FROM post_routes WHERE translation_key=$1 RETURNING source_id', [tk]);
+          await enqueueRouteCleanup(client, [
+            ...leftovers,
+            ...sources.rows.map((row) => ({ sourceId: row.source_id, pairHash })),
+          ]);
+          await client.query('DELETE FROM posts WHERE translation_key=$1', [tk]);
+          await client.query('DELETE FROM post_revisions WHERE translation_key=$1', [tk]);
+          await client.query('DELETE FROM comments WHERE translation_key=$1', [tk]);
+          writable();
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw error;
+        } finally { client.release(); }
+      };
+      if (options.routeFiles) await options.routeFiles.gate.runExclusive(remove);
+      else await remove();
     },
     async listRevisions(tk) {
       // Pull only the summary fields out of the jsonb — bodies can be large.

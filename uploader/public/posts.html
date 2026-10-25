@@ -109,6 +109,7 @@
     </main>
 
     <script src="/admin/editor-image-copy.js"></script>
+    <script src="/admin/gpx-copy.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/posts-filter.js"></script>
@@ -270,7 +271,7 @@
           : '';
         const ok = await AdminConfirm.ask({
           title: 'Delete this trip?',
-          body: '"' + title + '"' + slugSuffix(p) + '?' + warning + '\n\nThis cannot be undone.',
+          body: '"' + title + '"' + slugSuffix(p) + '?' + warning + '\n\n' + GpxCopy.en.deleteScope + '\n\nThis cannot be undone.',
           confirmLabel: 'Delete',
           danger: true,
         });
@@ -282,7 +283,7 @@
           if (res.status === 401) { location.href = '/login'; return; }
           const body = await res.json().catch(() => ({}));
           if (!res.ok) { $('out').textContent = 'Delete failed: ' + (body.error || res.status); return; }
-          const msg = 'Deleted "' + title + '".' + describeBuild(body.build);
+          const msg = 'Deleted "' + title + '".' + describeBuild(body.build) + (body.cleanupPending ? ' ' + GpxCopy.en.cleanupPending : '');
           $('out').textContent = msg;
           // Pass the outcome so load() does not clobber it with "N post(s) loaded."
           // — a failed rebuild (body.build.ok === false) must stay visible to the admin.
@@ -338,7 +339,7 @@
             : '';
           return AdminConfirm.ask({
             title: 'Delete ' + keys.length + ' selected ' + (keys.length === 1 ? 'story?' : 'stories?'),
-            body: 'This CANNOT be undone.' + warning + storyList + '\n\nType DELETE to confirm:',
+            body: 'This CANNOT be undone.' + warning + storyList + '\n\n' + GpxCopy.en.deleteScope + '\n\nType DELETE to confirm:',
             confirmLabel: 'Delete',
             danger: true,
             typed: 'DELETE',
@@ -356,12 +357,18 @@
         });
       }
 
+      const gpxPublishErrors = {
+        track_public_limit: 'publishRouteRecovery', track_empty_after_rounding: 'publishRouteRecovery',
+        publish_busy: 'busy', gpx_timeout: 'timeout', gpx_worker_failed: 'workerFailed', gpx_unavailable: 'unavailable',
+      };
       function summarizeBulk(action, body) {
         const failures = (body.results || []).filter((r) => !r.ok);
         let msg = action + ': ' + body.succeeded + ' succeeded, ' + body.failed + ' failed.' + describeBuild(body.build);
         for (const f of failures) {
           const p = allPosts.find((x) => x.translationKey === f.key);
-          msg += '\n  · ' + ((p && p.titleDe) || f.key) + ' — ' + f.error;
+          const errorKey = Object.hasOwn(gpxPublishErrors, f.code) ? gpxPublishErrors[f.code]
+            : (typeof f.code === 'string' && f.code.startsWith('gpx_') ? 'failed' : null);
+          msg += '\n  · ' + ((p && p.titleDe) || f.key) + ' — ' + (errorKey ? GpxCopy.en[errorKey] : f.error);
         }
         return msg;
       }
@@ -384,7 +391,7 @@
           if (res.status === 401) { location.href = '/login'; return; }
           const body = await res.json().catch(() => ({}));
           if (!res.ok) { $('out').textContent = 'Bulk ' + action + ' failed: ' + (body.error || res.status); return; }
-          const msg = summarizeBulk(action, body);
+          const msg = summarizeBulk(action, body) + (body.cleanupPending ? ' ' + GpxCopy.en.cleanupPending : '');
           // Keep failed stories selected so the visible failure report is also
           // immediately actionable: the author can fix them and retry without
           // reconstructing a cross-filter selection. A complete success may

@@ -1,15 +1,20 @@
 import 'maplibre-gl/dist/maplibre-gl.css';
+import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import {
   Map as MapLibreMap,
   Popup,
   NavigationControl,
   LngLatBounds,
   addProtocol,
+  setWorkerUrl,
   type StyleSpecification,
 } from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
 import { layers, namedTheme } from 'protomaps-themes-base';
 import type { PinCollection, TripGeometry } from '../lib/map-data';
+
+// Vite must bundle the v6 worker's shared-module import, not copy it verbatim.
+setWorkerUrl(workerUrl);
 
 // @ai-note: pmtiles protocol is registered once globally; Astro islands may
 // call initFullMap / initMiniMap on multiple pages, so guard against double-registration.
@@ -102,6 +107,22 @@ export function initMiniMap(container: HTMLElement, geometry: TripGeometry): voi
   });
 
   map.on('load', () => {
+    if (geometry.track) {
+      map.addSource('track', {
+        type: 'geojson',
+        data: { type: 'Feature', properties: {}, geometry: {
+          type: geometry.track.type, coordinates: geometry.track.coordinates,
+        } },
+      });
+      // A separate MultiLineString preserves gaps; added before all story circles.
+      map.addLayer({
+        id: 'track',
+        type: 'line',
+        source: 'track',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#142a42', 'line-width': 3 },
+      });
+    }
     const feats = [geometry.pin, ...geometry.stops];
     map.addSource('trip', {
       type: 'geojson',
@@ -119,12 +140,15 @@ export function initMiniMap(container: HTMLElement, geometry: TripGeometry): voi
       },
     });
 
-    if (feats.length === 1) {
+    if (feats.length === 1 && !geometry.track) {
       map.setCenter(geometry.pin.geometry.coordinates);
       map.setZoom(5);
     } else {
       const b = new LngLatBounds();
       for (const f of feats) b.extend(f.geometry.coordinates);
+      for (const run of geometry.track?.coordinates ?? []) {
+        for (const position of run) b.extend(position);
+      }
       map.fitBounds(b, { padding: 40, maxZoom: 8 });
     }
 

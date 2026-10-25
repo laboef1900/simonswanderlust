@@ -25,11 +25,13 @@ function fakeSettings(): SettingsStore {
 
 const queue: EncodeQueue = {
   enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {}, idle: async () => {},
+  quiesce: async () => {},
   stats: () => ({ pending: 0, running: 0 }),
 };
 const backup: DbBackup = {
   dir: '/tmp/none', runNow: async () => ({}), running: () => false, sweepTempFiles: () => [],
   list: () => [], listImageArchives: () => [], state: () => ({}),
+  listRouteArchives: () => [], quiesce: async () => {},
 };
 
 function pending(over: Partial<AdminComment> = {}): AdminComment {
@@ -49,7 +51,7 @@ function build(extra: Partial<ServerConfig> = {}) {
     posts: memoryPostStore(), pages: memoryPageStore(),
     media: memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' }), encodeQueue: queue,
     imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'),
-    builder: { build: async () => ({ ok: true, release: 'r1' }), hasRelease: () => true },
+    builder: { build: async () => ({ ok: true, release: 'r1' }), hasRelease: () => true, quiesce: async () => {} },
     backupDir: join(dir, 'backup'), dbBackup: backup, dbCheck: async () => {},
     commentsAdmin: store,
     ...extra,

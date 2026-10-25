@@ -15,6 +15,7 @@ import { memoryMediaStore } from '../src/media-store.js';
 import { createEncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock } from '../src/work-lock.js';
 import { ui } from '../../site/src/i18n/ui.js';
+import { renderGpxCopy } from '../src/gpx-copy.js';
 
 // posts.html, settings.html and comments.html run their actions as plain
 // top-level browser code. Load each inline script in a vm context backed by a
@@ -173,6 +174,7 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
   };
   ctx.window = ctx;
   vm.createContext(ctx);
+  vm.runInContext(renderGpxCopy(), ctx);
   for (const dependency of scripts) vm.runInContext(readFileSync(dependency, 'utf8'), ctx, { filename: dependency });
   vm.runInContext(script, ctx);
   return { ctx, el, windowListeners };
@@ -352,6 +354,29 @@ describe('posts.html selection, recovery and disclosures', () => {
     expect(el('out').textContent).not.toMatch(/^Bulk .* failed:/);
     expect(el('bulkBar').hidden).toBe(false);
     expect(el('selectionList').children.map((item) => item.textContent)).toEqual(['Beta']);
+  });
+
+  it('reports actionable route failures without hiding unrelated bulk Publish errors', async () => {
+    const rows = ['limit', 'timeout', 'media'].map((key) => ({ ...post, translationKey: key, titleDe: key }));
+    const { ctx, el } = loadPosts({
+      fetch: async (url: string) => ({
+        status: 200, ok: true, json: async () => url === '/posts/bulk' ? {
+          succeeded: 0, failed: 3, results: [
+            { key: 'limit', ok: false, code: 'track_public_limit', error: 'track_public_limit' },
+            { key: 'timeout', ok: false, code: 'gpx_timeout', error: 'gpx_timeout' },
+            { key: 'media', ok: false, code: 'photos_not_ready', error: 'Photos still processing' },
+          ],
+        } : rows,
+      }),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    vm.runInContext(`me = { isAdmin: true }; allPosts = ${JSON.stringify(rows)};
+      selected.add('limit'); selected.add('timeout'); selected.add('media');`, ctx);
+    await (vm.runInContext('runBulk', ctx) as (action: string) => Promise<void>)('publish');
+    expect(el('out').textContent).toContain('limit — ' + ui.en['gpx.publishRouteRecovery']);
+    expect(el('out').textContent).toContain('timeout — ' + ui.en['gpx.timeout']);
+    expect(el('out').textContent).toContain('media — Photos still processing');
+    expect(el('out').textContent).not.toMatch(/track_public_limit|gpx_timeout/);
   });
 
   it('carries canonical filter params through Edit and New post', () => {
@@ -1599,8 +1624,8 @@ describe('settings.html against the real settings and provider routes', () => {
       storageDir: dir, baseUrl: 'https://images.example', imgHost: 'images.example', siteDir: join(dir, 'site'),
       users, sessions, secrets, settings, media, encodeQueue: queue,
       posts: memoryPostStore(), pages: memoryPageStore(),
-      builder: { build: unavailable, hasRelease: () => false }, backupDir: join(dir, 'backup'),
-      dbBackup: { dir, runNow: unavailable, running: () => false, sweepTempFiles: () => [], list: () => [], listImageArchives: () => [], state: () => ({}) },
+      builder: { build: unavailable, hasRelease: () => false, quiesce: async () => {} }, backupDir: join(dir, 'backup'),
+      dbBackup: { dir, runNow: unavailable, running: () => false, sweepTempFiles: () => [], list: () => [], listImageArchives: () => [], listRouteArchives: () => [], state: () => ({}), quiesce: async () => {} },
       dbCheck: unavailable,
     });
     closeServer = async () => {

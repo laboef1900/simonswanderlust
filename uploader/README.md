@@ -123,6 +123,12 @@ DATABASE_URL=postgres://images:YOUR_PASSWORD@127.0.0.1:5432/images \
 # -> "image uploader listening on :3000", open /login to create the first admin
 ```
 
+For an isolated feature worktree, set absolute writable paths for `STORAGE_DIR`,
+`SETTINGS_PATH`, `SITE_DIR` and `SITE_APP_DIR`, plus `HOST=127.0.0.1` and a separate
+`PORT`. Set `MAP_DIR` to the self-hosted basemap assets. Use a dedicated database;
+integration tests require a different `TEST_DATABASE_URL`, never the content database.
+An empty `SITE_DIR` starts a build from `SITE_APP_DIR`, so check both paths before launch.
+
 ---
 
 ## Deploy to your server
@@ -178,6 +184,44 @@ Full details in [`../SECURITY.md`](../SECURITY.md); the essentials:
   (it creates drafts, writes under `/data`, and fetches from the host named in the export);
   remote image fetches reject internal/loopback addresses, time out, and cap the download size;
   imported slugs are validated before anything is written.
+
+## GPX routes
+
+**Story details → GPX route** accepts a `.gpx` file up to 5 MiB. Authors can inspect,
+trim by point count/distance, remove whole segments, and explicitly attach the result.
+The self-hosted map has a no-basemap grid and a local SVG fallback; no GPX operation
+calls a remote tile, geocoder or AI provider. Publishing remains admin-only.
+
+- On a new post, **Save draft and attach route** saves the form first. If attachment
+  then fails, the saved draft remains and the preview can be retried. On an existing
+  post, **Attach route** saves only the private route, not unsaved text or metadata.
+- A confirmed replacement deletes the superseded original. **Detach route** keeps the
+  latest original for **Load original again**. Post deletion removes it; old backups
+  remain subject to retention. Failed file cleanup is reported and retried.
+- Closing/discarding a preview cancels its staged original. Abandoned staging expires
+  after one hour. Preview geometry, source metadata, selections and tokens never enter
+  browser draft storage or text revisions.
+- Waypoints start unchecked. Explicitly adopted stops keep exact coordinates and one
+  shared name for DE/EN, independently of route trimming. Save them through the normal
+  draft action; closing the route dialog does not undo adoption.
+- The solid preview is the actual public candidate: separate runs, 25 m simplification,
+  four-decimal 2D coordinates, at most 100 runs / 2,000 vertices / 64 KiB. Wait for validation;
+  collapsed/over-limit candidates require more trimming or replacement, not weaker precision.
+  These limits are not anonymization. The server derives and checks the same candidate.
+- Only admin Publish copies the artifact into both locale snapshots. Route edits and
+  detachment remain draft-only through Save and Rebuild. A failed build keeps the old
+  static release served; a later rebuild uses the committed snapshot.
+- Story maps and their localized per-run textual alternatives use only the public artifact.
+  MDX exports working-copy prose but only the last published track; overview maps stay pin-only.
+- Private originals and dump/archive recovery sets retain removed locations, elevation,
+  timestamps and source metadata. Download paired private recovery files from Settings;
+  keep them confidential. MDX is not a private-route backup.
+
+See the [approved contract](../docs/superpowers/specs/2026-10-23-gpx-route-import-design.md)
+for the private (#313) and public snapshot (#314) boundaries.
+For offline restore, verified undo sets and `storage_read_only` recovery, follow
+[Database dumps](../ARCHITECTURE.md#database-dumps). A running app prevents restore;
+do not bypass the ownership/session drain checks.
 
 ## Media library
 

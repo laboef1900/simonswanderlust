@@ -1,27 +1,15 @@
-// Clean shutdown sequencing for the app process. `docker stop` sends SIGTERM
-// (forwarded to node by tini via `init: true` in docker-compose.yml); we close
-// the HTTP server (waits for in-flight requests), end the pg pool, then exit 0
-// so stops are sub-second instead of hitting the 10s grace-period SIGKILL.
-// @ai-context: docs/superpowers — issue #31 (container operability).
+// Shutdown sequencing for the app process. The caller's close hook stops HTTP
+// admission and quiesces background work before backing resources are released.
+// Completion is best-effort within the container's stop grace period; interrupted
+// encodes remain recoverable on the next boot.
+// @ai-context: docs/superpowers/specs/2026-10-23-gpx-route-import-design.md, storage ownership.
 
 export interface ShutdownHooks {
   close: () => Promise<unknown>; // stop accepting connections, drain in-flight requests
   /**
-   * Let background work finish before the backing resources go away.
-   *
-   * @ai-warning This must run BETWEEN close and end. The encode queue keeps
-   * working after the HTTP server stops accepting connections, and its final
-   * `setStatus` write needs the pg pool. Without the drain step, `pool.end()`
-   * fires while jobs are in flight, every `docker stop` logs a rejection, and
-   * rows are left stuck in `processing` — which the next boot then has to
-   * recover. Optional so callers with no background work can omit it.
-   *
-   * @ai-note Best-effort, NOT a guarantee. An encode waiting on the shared
-   * work-lock cannot finish until an in-flight `astro build` releases it, so a
-   * drain can outlast `docker stop`'s 10 s grace and get SIGKILLed. That is
-   * acceptable — it degrades to exactly the pre-drain behaviour, which
-   * `encodeQueue.recover()` already heals on the next boot — but do not add a
-   * step here whose correctness depends on the drain completing.
+   * Optional cleanup for callers that do not incorporate their work into close().
+   * The app already quiesces its guarded workers in close(), so it does not use
+   * this hook. If supplied, it completes before backing resources are released.
    */
   drain?: () => Promise<unknown>;
   end: () => Promise<unknown>;   // release backing resources (pg pool)
