@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { galleryFencesToMdx, rewriteOutsideGalleries, unescapeAltText } from './body-content.js';
 import { markdownImages } from './wp-content.js';
 import type { HeroImage, Locale, PostLocale, PostPair } from './posts.js';
+import { validatePublicTrack, type PublicTrack } from '../public/gpx-public-track.js';
 
 // YAML single-quoted scalar: a literal quote is escaped by doubling it ('' ),
 // never with a backslash. Mirrors storage.ts so exported MDX re-parses cleanly.
@@ -52,7 +53,7 @@ function bodyToMdx(p: PostLocale): string {
   });
 }
 
-export function renderPostToMdx(pair: PostPair, locale: Locale): string {
+export function renderPostToMdx(pair: PostPair, locale: Locale, track?: PublicTrack): string {
   const p = locale === 'de' ? pair.de : pair.en;
   const s = pair.shared;
   const lines = [
@@ -70,6 +71,7 @@ export function renderPostToMdx(pair: PostPair, locale: Locale): string {
   ];
   if (s.route) lines.push(`route: ${q(s.route)}`);
   if (s.stops?.length) lines.push(`stops: ${JSON.stringify(s.stops)}`);
+  if (track !== undefined) lines.push(`track: ${JSON.stringify(validatePublicTrack(track))}`);
   // Zod has it as `featured: z.boolean().optional()` (site/src/content.config.ts):
   // absent = not the cover. Writing `featured: false` would be valid but would
   // change every existing backup file, so the key is omitted when unset.
@@ -82,7 +84,7 @@ export function renderPostToMdx(pair: PostPair, locale: Locale): string {
   return lines.join('\n');
 }
 
-export async function exportPost(pair: PostPair, baseDir: string): Promise<string[]> {
+export async function exportPost(pair: PostPair, baseDir: string, track?: PublicTrack): Promise<string[]> {
   const out: string[] = [];
   for (const locale of ['de', 'en'] as Locale[]) {
     const slug = pair[locale].slug;
@@ -92,14 +94,23 @@ export async function exportPost(pair: PostPair, baseDir: string): Promise<strin
     const dir = join(baseDir, 'trips', locale);
     await mkdir(dir, { recursive: true });
     const path = join(dir, `${slug}.mdx`);
-    await writeFile(path, renderPostToMdx(pair, locale), 'utf8');
+    await writeFile(path, renderPostToMdx(pair, locale, track), 'utf8');
     out.push(path);
   }
   return out;
 }
 
-export async function exportAll(pairs: PostPair[], baseDir: string): Promise<string[]> {
+export async function exportAll(
+  pairs: PostPair[],
+  baseDir: string,
+  readTrack: (translationKey: string) => Promise<PublicTrack | undefined>,
+): Promise<string[]> {
   const out: string[] = [];
-  for (const p of pairs) out.push(...(await exportPost(p, baseDir)));
+  for (const pair of pairs) {
+    // Snapshot retrieval validates BOTH locale artifacts before this pair writes
+    // anything. Working-copy route edits/detachment must never reach this path.
+    const track = await readTrack(pair.translationKey);
+    out.push(...(await exportPost(pair, baseDir, track)));
+  }
   return out;
 }

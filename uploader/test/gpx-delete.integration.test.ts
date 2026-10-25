@@ -1,3 +1,5 @@
+import { publishTokens } from './publish-tokens.js';
+import { createPublicTrackWorker, type PublicTrackWorker } from '../src/gpx-public-worker.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, realpath, rm, truncate } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -38,6 +40,7 @@ maybe('private GPX post deletion and durable cleanup', () => {
   let service: GpxService;
   let files: GpxFiles;
   let posts: PostStore;
+  let publicTrackWorker: PublicTrackWorker;
   let queue: EncodeQueue;
   let authorId: string;
   let cookies: { sid: string };
@@ -46,7 +49,8 @@ maybe('private GPX post deletion and durable cleanup', () => {
 
   function start() {
     files = createGpxFiles({ storageDir: join(root, 'images'), isWritable: () => writable });
-    posts = pgPostStore(pool, { routeFiles: files, isWritable: () => writable });
+    publicTrackWorker = createPublicTrackWorker();
+    posts = pgPostStore(pool, { routeFiles: files, isWritable: () => writable, publicTrackWorker });
     service = createGpxService({ pool, files, worker: createGpxWorker(), backupDir,
       isWritable: () => writable, readManifestPins: createRouteManifestPinReader(backupDir) });
     const media = memoryMediaStore({ baseUrl: 'https://images.test' });
@@ -83,6 +87,7 @@ maybe('private GPX post deletion and durable cleanup', () => {
     vi.restoreAllMocks();
     await app?.close();
     await service?.close();
+    await publicTrackWorker?.close();
     await queue?.quiesce();
     await pool?.end();
     if (observer) { await observer.query(`DROP SCHEMA ${schema} CASCADE`); await observer.end(); }
@@ -206,7 +211,7 @@ maybe('private GPX post deletion and durable cleanup', () => {
 
   it('returns storage_read_only 503 when unpublish loses ownership after HTTP admission, without changing the published pair', async () => {
     const { tk, record } = await seed();
-    await posts.publish(tk);
+    await posts.publish(tk, await publishTokens(posts, tk));
     const before = await posts.get(tk);
     const get = posts.get.bind(posts);
     vi.spyOn(posts, 'get').mockImplementationOnce(async key => {

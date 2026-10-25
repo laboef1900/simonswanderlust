@@ -979,8 +979,10 @@ and the `<dialog>`s appended to `<body>` share one set:
 - GPX editing is a flat section in Story details, not another dashboard. Its scoped native
   dialog closes the phone inspector first, then restores that drawer and the exact opener
   on dismissal. A fixed header/footer frame one scrollable body; touch actions are at least
-  44px. The self-hosted map distinguishes kept runs (solid red), removed runs (dashed gray)
-  and selected/unselected waypoints with filled/hollow markers plus a text legend.
+  44px. The self-hosted map distinguishes the actual public candidate (solid red),
+  removed source sections (dashed gray), and selected/unselected waypoints with
+  filled/hollow markers plus a text legend. Initial framing includes source context
+  even while the bounded candidate worker is pending; waypoints cannot steal that fit.
   A missing basemap keeps interactive overlays on a grid; a WebGL failure uses local SVG.
   WebGL2 is checked before MapLibre construction; preview cleanup cannot turn an
   acknowledged attachment into a failed-save message.
@@ -991,8 +993,13 @@ and the `<dialog>`s appended to `<body>` share one set:
   Replacement and exact-coordinate waypoint adoption require separate unchecked consent.
   Attach names its save scope; cancellation never silently saves. Errors receive focus
   after an action, but live trim feedback never steals focus while typing. Delayed cleanup
-  warnings stay separate from the current input error. #313 clearly labels routes private;
-  public rendering is #314's dependent work.
+  warnings stay separate from the current input error. Candidate generation disables
+  Attach while pending or invalid; collapse/limit feedback never silently changes precision
+  or drops a route. Pending refreshes preserve map-availability notices. Publish failures
+  use localized recovery messages in both the editor and the posts list.
+  The retained original remains private, and attachment is draft-only until Publish.
+  Published story maps add a localized per-run textual alternative with public-precision
+  endpoints and approximate lengths; routeless stories gain no empty panel.
 - Country assistance and excerpt generation sit next to the relevant fields in Story
   details. Coordinate approximation is explicit. Excerpt suggestions have a plain-text
   preview, character count, and separate accept/dismiss actions; generation never looks

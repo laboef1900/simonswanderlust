@@ -11,6 +11,8 @@ interface PostRow {
   coordinates: { lat: number; lng: number };
   stops: { name: string; lat: number; lng: number }[] | null; route: string | null;
   key_facts: Record<string, string> | null; body_markdown: string; images: Record<string, ImageDims>;
+  // Only published_snapshot.track, never the attached working route.
+  track?: unknown;
   /**
    * "Use as homepage cover" (uploader `PostShared.featured`, column
    * `featured boolean NOT NULL DEFAULT false`). Optional here because a
@@ -70,6 +72,7 @@ export function rowToEntryInput(row: PostRow, imageHost: string) {
       coordinates: row.coordinates,
       ...(row.stops ? { stops: row.stops } : {}),
       ...(row.route ? { route: row.route } : {}),
+      ...(row.track !== undefined ? { track: row.track } : {}),
       ...(row.key_facts ? { keyFacts: row.key_facts } : {}),
       // Emitted only when true: the Zod field is `.optional()` and NOT
       // defaulted, so a false/absent flag must produce no key at all — that is

@@ -18,6 +18,7 @@ import { createGpxWorker } from '../src/gpx-worker.js';
 import { createGpxService, type GpxService, type ImportPreview, type RouteMutation } from '../src/gpx-service.js';
 import { registerGpxRoutes } from '../src/gpx-routes.js';
 import { pgGpxStore } from '../src/gpx-store.js';
+import type { PublicTrackCounts } from '../public/gpx-public-track.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -67,11 +68,11 @@ maybe('private GPX API and real PostgreSQL transactions', () => {
       author: { sid: await sessions.create(authorId, 60_000) }, other: { sid: await sessions.create(otherId, 60_000) } };
     fixtures.push(result); return result;
   }
-  async function upload(f: Fixture): Promise<ImportPreview> {
+  async function upload(f: Fixture, bytes = xml): Promise<ImportPreview> {
     const boundary = 'synthetic-boundary';
     const response = await f.app.inject({ method: 'POST', url: '/gpx/imports', cookies: f.author,
       headers: { 'content-type': `multipart/form-data; boundary=${boundary}`, origin: 'http://localhost' },
-      payload: Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="private.gpx"\r\nContent-Type: application/octet-stream\r\n\r\n`), xml, Buffer.from(`\r\n--${boundary}--\r\n`)]) });
+      payload: Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="private.gpx"\r\nContent-Type: application/octet-stream\r\n\r\n`), bytes, Buffer.from(`\r\n--${boundary}--\r\n`)]) });
     expect(response.statusCode, response.body).toBe(201);
     expect(response.headers['cache-control']).toBe('no-store');
     return response.json<ImportPreview>();
@@ -80,6 +81,35 @@ maybe('private GPX API and real PostgreSQL transactions', () => {
     return f.app.inject({ method: 'PUT', url: `/posts/${f.tk}/route`, cookies: f.author,
       payload: { importId: preview.importId, baseVersion: version, baseUpdatedAt: token, selection, confirmReplace } });
   }
+
+  it('reports bounded public refusal counts without replacing the old route and permits trimming the same preview for retry', async () => {
+    const f = await fixture();
+    const saved = (await attach(f, await upload(f))).json<RouteMutation>();
+    const bytes = Buffer.from('<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1"><trk>'
+      + Array.from({ length: 21 }, (_, run) => '<trkseg>' + Array.from({ length: 100 }, (_, point) =>
+        `<trkpt lat="${20 + run * 0.1 + (point % 2) * 0.01}" lon="${10 + point * 0.001}"/>`).join('') + '</trkseg>').join('')
+      + '</trk></gpx>');
+    const preview = await upload(f, bytes);
+    const refused = await attach(f, preview, saved.version, saved.updatedAt, true);
+    expect(refused.statusCode).toBe(422);
+    expect(refused.headers['cache-control']).toBe('no-store');
+    expect(refused.json()).toEqual({
+      error: 'track_public_limit',
+      counts: { retainedRuns: expect.any(Number), vertices: 2001, bytes: expect.any(Number) },
+    });
+    const counts = refused.json<{ counts: PublicTrackCounts }>().counts;
+    expect(counts.retainedRuns).toBeGreaterThan(0);
+    expect(counts.retainedRuns).toBeLessThanOrEqual(101);
+    expect(counts.bytes).toBeGreaterThan(0);
+    expect(counts.bytes).toBeLessThanOrEqual(65_537);
+    expect(await f.service.get(f.tk)).toMatchObject({ version: saved.version, geometry: saved.geometry });
+    expect(await f.service.original(f.tk)).toEqual(xml);
+    const retried = await f.app.inject({ method: 'PUT', url: `/posts/${f.tk}/route`, cookies: f.author,
+      payload: { importId: preview.importId, baseVersion: saved.version, baseUpdatedAt: saved.updatedAt,
+        selection: { startPoints: 0, endPoints: 0, removedSegments: Array.from({ length: 20 }, (_, i) => i + 1) }, confirmReplace: true } });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json<RouteMutation>().geometry?.segments).toEqual([preview.geometry.segments[0]]);
+  });
 
   it('authenticates all eight endpoints before parsing, and confines malformed framework errors', async () => {
     const f = await fixture();

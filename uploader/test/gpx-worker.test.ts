@@ -37,6 +37,34 @@ describe('real admitted GPX workers', () => {
     expect(pooled).toEqual(before);
   });
 
+  it('keeps over-public-cap imports editable but refuses Attach until the same staged source is trimmed', async () => {
+    const points = Array.from({ length: 2001 }, (_, i) =>
+      `<trkpt lat="${i % 2 ? '0.01' : '0'}" lon="${(i * 0.01).toFixed(2)}"/>`).join('');
+    const bytes = Buffer.from('<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1"><trk><trkseg>'
+      + points + '</trkseg></trk></gpx>');
+    const worker = create();
+    const preview = await worker.parse(bytes);
+    expect(preview.counts.points).toBe(2001);
+    await expect(worker.parse(bytes, { selection: { startPoints: 0, endPoints: 0, removedSegments: [] } }))
+      .rejects.toMatchObject({ code: 'track_public_limit', statusCode: 422,
+        counts: { retainedRuns: 1, vertices: 2001, bytes: expect.any(Number) } });
+    // Refusal does not consume or mutate the original; it remains usable for a new selection.
+    const trimmed = await worker.parse(bytes, { selection: { startPoints: 1998, endPoints: 0, removedSegments: [] } });
+    expect(trimmed.geometry.segments[0]!.points).toEqual(preview.geometry.segments[0]!.points.slice(1998));
+    expect(trimmed.counts.points).toBe(3);
+  });
+
+  it('refuses a rounding-collapsed Attach without rejecting its import-only preview', async () => {
+    const bytes = Buffer.from('<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1"><trk><trkseg>'
+      + '<trkpt lat="0" lon="0"/><trkpt lat="0" lon="0.000001"/></trkseg></trk></gpx>');
+    const worker = create();
+    expect((await worker.parse(bytes)).counts.points).toBe(2);
+    await expect(worker.parse(bytes, { selection: { startPoints: 0, endPoints: 0, removedSegments: [] } }))
+      .rejects.toMatchObject({ code: 'track_empty_after_rounding', statusCode: 422,
+        counts: { retainedRuns: 0, vertices: 0, bytes: 0 } });
+    expect((await worker.parse(bytes)).counts.points).toBe(2);
+  });
+
   it('admits one worker process-wide with immediate refusal and no queued retry', async () => {
     const first = create();
     const second = create();

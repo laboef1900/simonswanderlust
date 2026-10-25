@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Loader } from 'astro/loaders';
 import { postgresTripsLoader, rowToEntryInput } from './postgres-loader';
 import { renderMarkdown } from './render-markdown.js';
+import { publicTrackSchema, type PublicTrack } from './public-track';
+
+const publicTrack: PublicTrack = {
+  version: 1, type: 'MultiLineString', coordinates: [[[1, 2], [3, 4]], [[10, 20], [11, 21]]],
+};
 
 // Shared fake-DB state for the mocked `pg` module (hoisted with the mock).
 const db = vi.hoisted(() => ({
@@ -105,6 +110,12 @@ describe('rowToEntryInput', () => {
     expect('featured' in rowToEntryInput({ ...row, featured: false } as never, 'https://img').data).toBe(false);
     expect(rowToEntryInput({ ...row, featured: true } as never, 'https://img').data.featured).toBe(true);
   });
+  it('passes only the snapshot track to schema validation, without a route default', () => {
+    expect(rowToEntryInput({ ...row, track: publicTrack }, 'https://img').data.track).toEqual(publicTrack);
+    expect(rowToEntryInput(row, 'https://img').data).not.toHaveProperty('track');
+    // Invalid present data must reach the strict schema, not disappear as if absent.
+    expect(rowToEntryInput({ ...row, track: null }, 'https://img').data).toHaveProperty('track', null);
+  });
 });
 
 type LoaderContext = Parameters<Loader['load']>[0];
@@ -122,7 +133,10 @@ function fakeLoadContext(): { entries: Map<string, StoredEntry>; ctx: LoaderCont
       clear: () => entries.clear(),
       set: (entry: StoredEntry) => { entries.set(entry.id, entry); return true; },
     },
-    parseData: async ({ data }: { id: string; data: Record<string, unknown> }) => data,
+    parseData: async ({ data }: { id: string; data: Record<string, unknown> }) => {
+      if ('track' in data) publicTrackSchema.parse(data.track);
+      return data;
+    },
     renderMarkdown: async (md: string) => ({ html: await renderMarkdown(md) }),
     logger: { info: () => { /* quiet */ } },
   };
@@ -166,6 +180,34 @@ describe('postgresTripsLoader load()', () => {
     expect(entry?.body).toBe('LIVE body');
     expect(entry?.rendered?.html).toContain('LIVE body');
     expect(entry?.rendered?.html).not.toContain('WORKING-EDIT');
+  });
+  it('keeps the published track through draft replacement and detachment, and never fills a legacy snapshot', async () => {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    const snapshot = { ...row, track: publicTrack };
+    const draftTrack = { ...publicTrack, coordinates: [[[50, 60], [51, 61]]] };
+    db.rows = [
+      { ...row, track: draftTrack, status: 'published', published_snapshot: snapshot },
+      { ...row, track: draftTrack, status: 'published', published_snapshot: { ...row, locale: 'en' } },
+    ];
+    const { entries, ctx } = fakeLoadContext();
+    await postgresTripsLoader().load(ctx);
+    expect(entries.get(`de/${row.slug}`)?.data?.track).toEqual(publicTrack);
+    expect(entries.get(`en/${row.slug}`)?.data).not.toHaveProperty('track');
+    db.rows[0]!.track = null;
+    await postgresTripsLoader().load(ctx);
+    expect(entries.get(`de/${row.slug}`)?.data?.track).toEqual(publicTrack);
+    expect(db.sql.every((sql) => !/post_routes/i.test(sql))).toBe(true);
+  });
+
+  it('fails the build path for corrupt or private snapshot geometry instead of silently discarding it', async () => {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    db.rows = [{
+      ...row, status: 'published',
+      published_snapshot: { ...row, track: { ...publicTrack, time: 'private' } },
+    }];
+    const { entries, ctx } = fakeLoadContext();
+    await expect(postgresTripsLoader().load(ctx)).rejects.toThrow();
+    expect(entries.size).toBe(0);
   });
 
   it('refreshes localized library descriptions on rebuild without publishing working edits', async () => {

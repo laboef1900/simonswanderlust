@@ -8,10 +8,13 @@ import { Header } from 'tar';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ensureSchema, type DbPool } from '../src/db.js';
 import { pgPostStore, type PostLocale } from '../src/posts.js';
-import { createRouteManifestPinReader, dumpDatabase, readDump, restoreDatabase } from '../src/backup.js';
+import { BackupError, createRouteManifestPinReader, dumpDatabase, listBackups, readDump, restoreDatabase } from '../src/backup.js';
 import { verifyRouteArchive, type RouteDumpRow } from '../src/gpx-backup.js';
 import { createGpxFiles, safePairHash, sourceDigest, type GpxFiles } from '../src/gpx-files.js';
 import { GPX_LIMITS, type PrivateGeometry } from '../public/gpx-geometry.js';
+import { pgGpxStore } from '../src/gpx-store.js';
+import { createPublicTrackWorker } from '../src/gpx-public-worker.js';
+import { exportPost } from '../src/export.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -63,7 +66,7 @@ maybe('private v10 recovery with isolated PostgreSQL state', () => {
   async function seed(detached = false): Promise<RouteDumpRow> {
     const slug = randomUUID();
     const locale = (locale: 'de' | 'en'): PostLocale => ({ locale, slug: `${locale}-${slug}`, title: 'Synthetic recovery story',
-      excerpt: '', country: 'Test', heroImage: { src: '', width: 1, height: 1, alt: '' }, bodyMarkdown: 'Synthetic body', images: {} });
+      excerpt: 'Synthetic recovery route.', country: 'Test', heroImage: { src: 'https://img.example/recovery', width: 1280, height: 800, alt: 'Synthetic landscape' }, bodyMarkdown: 'Synthetic body', images: {} });
     const pair = await pgPostStore(pool).upsertDraft({ translationKey: '', status: 'draft',
       shared: { date: '2026-01-01', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 2 } }, de: locale('de'), en: locale('en') });
     const row: RouteDumpRow = { translation_key: pair.translationKey, version: randomUUID(), geometry: detached ? null : geometry,
@@ -82,6 +85,97 @@ maybe('private v10 recovery with isolated PostgreSQL state', () => {
     return { path, dump: readDump(path) };
   }
   const pathOf = (row: RouteDumpRow) => join(files.root, 'originals', safePairHash(row.translation_key), `${row.source_id}.gpx`);
+
+  const publicTrack = { version: 1, type: 'MultiLineString', coordinates: [[[2.9877, 1.1235], [2.9871, 1.124]]] };
+  function mdxTrack(text: string): unknown {
+    const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1];
+    if (frontmatter === undefined) throw new Error('Missing MDX frontmatter');
+    const entry = frontmatter.split('\n').find(line => line.startsWith('track: '));
+    return entry === undefined ? undefined : JSON.parse(entry.slice('track: '.length));
+  }
+
+  it('keeps published MDX and snapshot artifacts through detachment and private recovery until explicit Publish', async () => {
+    const row = await seed();
+    const worker = createPublicTrackWorker();
+    const posts = pgPostStore(pool, { publicTrackWorker: worker });
+    try {
+      const state = (await posts.getPublishState(row.translation_key))!;
+      const published = await posts.publish(row.translation_key, {
+        baseUpdatedAt: state.pair.updatedAt, baseRouteVersion: state.routeVersion,
+      });
+      const { path, dump } = await capture();
+      for (const post of dump.tables.posts) {
+        expect((post.published_snapshot as Record<string, unknown>).track).toEqual(publicTrack);
+      }
+      // A private recovery set deliberately preserves the high-precision tier.
+      expect(dump.tables.post_routes?.[0]?.geometry).toEqual(geometry);
+      await pgGpxStore(pool).detach(row.translation_key, {
+        baseVersion: row.version, baseUpdatedAt: published.updatedAt.toISOString(),
+      });
+      expect((await pgGpxStore(pool).get(row.translation_key))?.geometry).toBeNull();
+      const exportDir = join(root, 'mdx');
+      const detached = (await posts.get(row.translation_key))!;
+      const paths = await exportPost(detached, exportDir, await posts.getPublishedTrack(row.translation_key));
+      for (const file of paths) expect(mdxTrack(await readFile(file, 'utf8'))).toEqual(publicTrack);
+
+      await restoreDatabase(pool, path, { routeFiles: files });
+      const restored = (await current())[0]!;
+      expect(restored.geometry).toEqual(geometry);
+      expect(restored.source_id).not.toBe(row.source_id);
+      expect((await files.inspectOriginal(source(restored))).bytes).toEqual(original);
+      expect(await posts.getPublishedTrack(row.translation_key)).toEqual(publicTrack);
+      const restoredPair = (await posts.get(row.translation_key))!;
+      await pgGpxStore(pool).detach(row.translation_key, {
+        baseVersion: restored.version, baseUpdatedAt: restoredPair.updatedAt.toISOString(),
+      });
+      const ready = (await posts.getPublishState(row.translation_key))!;
+      await posts.publish(row.translation_key, {
+        baseUpdatedAt: ready.pair.updatedAt, baseRouteVersion: ready.routeVersion,
+      });
+      expect(await posts.getPublishedTrack(row.translation_key)).toBeUndefined();
+      const routeless = (await posts.get(row.translation_key))!;
+      await exportPost(routeless, exportDir, await posts.getPublishedTrack(row.translation_key));
+      for (const file of paths) expect(mdxTrack(await readFile(file, 'utf8'))).toBeUndefined();
+      expect((await files.inspectOriginal(source(restored))).bytes).toEqual(original);
+    } finally { await worker.close(); }
+  });
+
+  it.each(['private-field', 'different-route', 'missing-counterpart'] as const)(
+    'refuses a %s published projection before destructive restore SQL', async kind => {
+      const row = await seed();
+      const { path, dump } = await capture();
+      dump.tables.posts[0]!.published_snapshot = { track: publicTrack };
+      dump.tables.posts[1]!.published_snapshot = { track: publicTrack };
+      if (kind === 'private-field') {
+        dump.tables.posts[1]!.published_snapshot = { track: { ...publicTrack, time: '2042-01-02T03:04:05Z' } };
+      } else if (kind === 'different-route') {
+        dump.tables.posts[1]!.published_snapshot = { track: { ...publicTrack, coordinates: [[[5, 6], [7, 8]]] } };
+      } else {
+        dump.tables.posts[1]!.published_snapshot = {};
+      }
+      await writeFile(path, gzipSync(JSON.stringify(dump)));
+      await pool.query('CREATE SEQUENCE restore_delete_seen');
+      await pool.query(`CREATE OR REPLACE FUNCTION observe_restore_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN PERFORM nextval('restore_delete_seen'); RETURN OLD; END $$`);
+      await pool.query('CREATE TRIGGER observe_restore_delete BEFORE DELETE ON posts FOR EACH ROW EXECUTE FUNCTION observe_restore_delete()');
+      await expect(restoreDatabase(pool, path, { routeFiles: files })).rejects.toBeInstanceOf(BackupError);
+      expect((await pool.query('SELECT is_called FROM restore_delete_seen')).rows[0]!.is_called).toBe(false);
+      expect(await current()).toEqual([row]);
+      expect(await files.listOriginals()).toHaveLength(1);
+      expect(await readFile(pathOf(row))).toEqual(original);
+    },
+  );
+
+  it('refuses to claim a new recovery set for an invalid public projection without damaging the prior set', async () => {
+    const row = await seed();
+    const { path, dump } = await capture();
+    await pool.query('UPDATE posts SET published_snapshot=$2::jsonb WHERE translation_key=$1 AND locale=$3',
+      [row.translation_key, JSON.stringify({ track: { ...publicTrack, coordinates: [[[1, 2, 3], [4, 5, 6]]] } }), 'de']);
+    await expect(capture()).rejects.toBeInstanceOf(BackupError);
+    expect(listBackups(dir).map(entry => join(dir, entry.name))).toEqual([path]);
+    expect(readDump(path)).toEqual(dump);
+    expect(await current()).toEqual([row]);
+  });
 
   it('round-trips precise private geometry and detached originals with fresh identities while preserving cleanup intents', async () => {
     const attached = await seed(); const detached = await seed(true);

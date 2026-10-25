@@ -356,6 +356,29 @@ describe('posts.html selection, recovery and disclosures', () => {
     expect(el('selectionList').children.map((item) => item.textContent)).toEqual(['Beta']);
   });
 
+  it('reports actionable route failures without hiding unrelated bulk Publish errors', async () => {
+    const rows = ['limit', 'timeout', 'media'].map((key) => ({ ...post, translationKey: key, titleDe: key }));
+    const { ctx, el } = loadPosts({
+      fetch: async (url: string) => ({
+        status: 200, ok: true, json: async () => url === '/posts/bulk' ? {
+          succeeded: 0, failed: 3, results: [
+            { key: 'limit', ok: false, code: 'track_public_limit', error: 'track_public_limit' },
+            { key: 'timeout', ok: false, code: 'gpx_timeout', error: 'gpx_timeout' },
+            { key: 'media', ok: false, code: 'photos_not_ready', error: 'Photos still processing' },
+          ],
+        } : rows,
+      }),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    vm.runInContext(`me = { isAdmin: true }; allPosts = ${JSON.stringify(rows)};
+      selected.add('limit'); selected.add('timeout'); selected.add('media');`, ctx);
+    await (vm.runInContext('runBulk', ctx) as (action: string) => Promise<void>)('publish');
+    expect(el('out').textContent).toContain('limit — ' + ui.en['gpx.publishRouteRecovery']);
+    expect(el('out').textContent).toContain('timeout — ' + ui.en['gpx.timeout']);
+    expect(el('out').textContent).toContain('media — Photos still processing');
+    expect(el('out').textContent).not.toMatch(/track_public_limit|gpx_timeout/);
+  });
+
   it('carries canonical filter params through Edit and New post', () => {
     const { ctx, el } = loadPosts({
       PostsFilter: {

@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { Trip } from './trips';
-import { tripPins, tripGeometry } from './map-data';
+import { tripPins, tripGeometry, type TripGeometry } from './map-data';
+import type { PublicTrack } from './public-track';
+
+type Exact<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2)
+  ? (<T>() => T extends B ? 1 : 2) extends (<T>() => T extends A ? 1 : 2) ? true : false
+  : false;
+const contentShape: Exact<Pick<Trip['data'], 'track'>, { track?: PublicTrack }> = true;
+const mapShape: Exact<Pick<TripGeometry, 'track'>, { track?: PublicTrack }> = true;
+const track: PublicTrack = {
+  version: 1, type: 'MultiLineString',
+  coordinates: [[[1.1234, 2.3456], [2, 3]], [[20, 30], [21, 31]]],
+};
 
 // Minimal Trip stub — only the fields the helpers read.
 function trip(id: string, data: Partial<Trip['data']>): Trip {
@@ -27,6 +38,12 @@ describe('tripPins', () => {
   it('is empty for an empty collection', () => {
     expect(tripPins([], 'de').features).toEqual([]);
   });
+  it('keeps overview maps pin-only even for stories with tracks and stops', () => {
+    const plain = trip('de/x', {});
+    const routed = trip('de/x', { track, stops: [{ name: 'Stop', lat: 3, lng: 4 }] });
+    expect(tripPins([routed], 'de')).toEqual(tripPins([plain], 'de'));
+    expect(Object.keys(tripPins([routed], 'de').features[0]!.geometry)).toEqual(['type', 'coordinates']);
+  });
 });
 
 describe('tripGeometry', () => {
@@ -39,5 +56,18 @@ describe('tripGeometry', () => {
   });
   it('has no stops when none are defined', () => {
     expect(tripGeometry(trip('de/x', {})).stops).toEqual([]);
+  });
+  it('preserves discontinuous public runs without mixing them into the stop points', () => {
+    const geometry = tripGeometry(trip('de/x', { track }));
+    expect(geometry.track).toEqual(track);
+    expect(geometry.stops).toEqual([]);
+    expect(Object.keys(geometry)).toEqual(['pin', 'stops', 'track']);
+    expect(JSON.parse(JSON.stringify(geometry)).track).toEqual(track);
+  });
+  it('omits track entirely for route-free stories', () => {
+    expect(tripGeometry(trip('de/x', {}))).not.toHaveProperty('track');
+  });
+  it('pins content-inferred and map track types exactly, including optional additions', () => {
+    expect([contentShape, mapShape]).toEqual([true, true]);
   });
 });

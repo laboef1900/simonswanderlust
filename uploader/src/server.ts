@@ -31,7 +31,8 @@ import {
   isProviderId, isProviderKind, isRemoteKind, newProviderId, providerNameError, providerUrlError, resolveProvider, slotFor,
   type AiProvider, type AiProviderKind,
 } from './ai-providers.js';
-import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale } from './posts.js';
+import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale, assertPublishTokens, type PublishTokens } from './posts.js';
+import { GpxError } from './gpx-errors.js';
 import { foreignImageUrls } from './publish-gate.js';
 import { auditAltText } from './alt-audit.js';
 import { renderPreviewHtml, previewCsp } from './preview.js';
@@ -244,7 +245,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
     const route = req.routeOptions.url;
-    if (route === '/settings' || route === '/ai-config' || route?.startsWith('/ai-providers')) reply.header('Cache-Control', 'no-store');
+    if (route === '/settings' || route === '/ai-config' || route?.startsWith('/ai-providers')
+      || route === '/posts/:tk/publish' || route === '/posts/bulk') reply.header('Cache-Control', 'no-store');
     if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
       reply.header('Referrer-Policy', 'no-referrer');
@@ -1611,12 +1613,26 @@ export function buildServer(cfg: ServerConfig): AppServer {
 
   // @ai-warning: publishing pushes content to the PUBLIC static site, so it is
   // admin-only. Authors may create/edit drafts (requireAuth) but not publish.
-  app.post('/posts/:tk/publish', { preHandler: requireAdmin }, async (req, reply) => {
-    const tk = (req.params as { tk: string }).tk;
-    const pair = await posts.get(tk);
-    if (!pair) return reply.code(404).send({ error: 'post not found' });
-    try { validateForPublish(pair); } catch (e) {
-      if (e instanceof PostError) return reply.code(400).send({ error: e.message });
+  app.post<{ Params: { tk: string } }>('/posts/:tk/publish', { preHandler: requireAdmin, bodyLimit: 4096 }, async (req, reply) => {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)
+      || Object.keys(body).length !== 2
+      || !('baseUpdatedAt' in body) || !('baseRouteVersion' in body)
+      || typeof body.baseUpdatedAt !== 'string'
+      || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(body.baseUpdatedAt)
+      || !Number.isFinite(Date.parse(body.baseUpdatedAt))
+      || new Date(body.baseUpdatedAt).toISOString() !== body.baseUpdatedAt
+      || !(body.baseRouteVersion === null || typeof body.baseRouteVersion === 'string'
+        && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.baseRouteVersion))) {
+      return reply.code(400).send({ error: 'invalid publish tokens', code: 'invalid_publish_tokens' });
+    }
+    const tokens: PublishTokens = { baseUpdatedAt: new Date(body.baseUpdatedAt), baseRouteVersion: body.baseRouteVersion };
+    const tk = req.params.tk;
+    const state = await posts.getPublishState(tk);
+    if (!state) return reply.code(404).send({ error: 'post not found' });
+    const { pair } = state;
+    try { assertPublishTokens(state, tokens); validateForPublish(pair); } catch (e) {
+      if (e instanceof PostError) return reply.code(e.code === 'conflict' ? 409 : 400).send({ error: e.message, code: e.code });
       throw e;
     }
     const foreign = await foreignBodyImages(pair);
@@ -1638,23 +1654,30 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // live page will show, and a failed read must refuse here rather than turn
     // an already-published post into a 500 (publishing changes no media row).
     const galleryMetadata = await loadGalleryMetadata(pair, cfg.media, imageBase);
-    await posts.publish(tk);
-    const published = await posts.get(tk);
+    let committed: { updatedAt: Date };
+    try { committed = await posts.publish(tk, tokens); }
+    catch (e) {
+      if (e instanceof GpxError) return reply.code(e.statusCode).send({ error: e.code, code: e.code, ...(e.counts ? { counts: e.counts } : {}) });
+      if (e instanceof PostError) return reply.code(e.code === 'storage_read_only' ? 503 : e.code === 'not_found' ? 404 : 409).send({ error: e.message, code: e.code });
+      throw e;
+    }
     const build = await cfg.builder.build();
     // Best-effort: a failed MDX backup must not undo a publish that is already
     // live, but it must not be silent either (#145) — a bare-dev BACKUP_DIR
     // pointing at /data used to fail every publish's export without a trace.
-    if (published) await exportPost(published, cfg.backupDir).catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
+    await posts.getPublishedTrack(tk)
+      .then((track) => exportPost(pair, cfg.backupDir, track))
+      .catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
     // updatedAt: publish bumps the stored timestamp, so the editor must re-sync
     // its concurrency echo or its very next Save would falsely 409.
     // altAudit rides along so the editor can name the photos that went live
     // undescribed (src/alt-audit.ts) without a second round trip. It is
     // reported AFTER the publish succeeded, on purpose: it never gates one.
-    const audit = auditAltText(published ?? pair, galleryMetadata);
+    const audit = auditAltText(pair, galleryMetadata);
     return reply.send({
       published: true,
       build,
-      updatedAt: published?.updatedAt,
+      updatedAt: committed.updatedAt,
       altAudit: { count: audit.count, images: audit.images },
     });
   });
@@ -1702,14 +1725,15 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const keys = [...new Set(b.keys.map((k) => String(k)))].filter((k) => k !== '');
     if (keys.length === 0) return reply.code(400).send({ error: 'keys must not be empty' });
 
-    const results: { key: string; ok: boolean; error?: string }[] = [];
+    const results: { key: string; ok: boolean; error?: string; code?: string; counts?: GpxError['counts'] }[] = [];
     // Whether anything that was actually LIVE changed — a bulk delete of drafts
     // only needs no rebuild, mirroring DELETE /posts/:tk's `wasPublished` rule.
     let liveChanged = false;
     let cleanupPending = false;
     for (const tk of keys) {
       try {
-        const pair = await posts.get(tk);
+        const state = action === 'publish' ? await posts.getPublishState(tk) : null;
+        const pair = action === 'publish' ? state?.pair : await posts.get(tk);
         if (!pair) throw new PostError('post not found');
         if (action === 'publish') {
           validateForPublish(pair);
@@ -1719,10 +1743,11 @@ export function buildServer(cfg: ServerConfig): AppServer {
           if (notReady.length > 0) {
             throw new PostError(`${notReady.length} photo(s) are still processing or failed to encode`);
           }
-          await posts.publish(tk);
-          const published = await posts.get(tk);
-          if (published) await exportPost(published, cfg.backupDir).catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
+          await posts.publish(tk, { baseUpdatedAt: pair.updatedAt, baseRouteVersion: state!.routeVersion });
           liveChanged = true;
+          await posts.getPublishedTrack(tk)
+            .then((track) => exportPost(pair, cfg.backupDir, track))
+            .catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
         } else if (action === 'unpublish') {
           if (pair.status !== 'published') throw new PostError('post is not published');
           await posts.unpublish(tk);
@@ -1737,7 +1762,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
         // Never leak an internal error to the client (global-handler contract):
         // PostError messages are ours and safe; anything else is logged and
         // reported generically.
-        if (e instanceof PostError) {
+        if (e instanceof GpxError) {
+          results.push({ key: tk, ok: false, error: e.code, code: e.code, ...(e.counts ? { counts: e.counts } : {}) });
+        } else if (e instanceof PostError) {
           results.push({ key: tk, ok: false, error: e.message });
         } else {
           console.error(`bulk ${action} failed for ${tk}:`, e);
@@ -2022,7 +2049,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   app.post('/export', { preHandler: requireAuth }, async (_req, reply) => {
     const list = await posts.list();
     const pairs = (await Promise.all(list.map((s) => posts.get(s.translationKey)))).filter((p): p is StoredPostPair => p !== null);
-    const files = await exportAll(pairs, cfg.backupDir);
+    const files = await exportAll(pairs, cfg.backupDir, (tk) => posts.getPublishedTrack(tk));
     return reply.send({ ok: true, count: files.length });
   });
 

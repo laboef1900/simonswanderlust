@@ -357,12 +357,18 @@
         });
       }
 
+      const gpxPublishErrors = {
+        track_public_limit: 'publishRouteRecovery', track_empty_after_rounding: 'publishRouteRecovery',
+        publish_busy: 'busy', gpx_timeout: 'timeout', gpx_worker_failed: 'workerFailed', gpx_unavailable: 'unavailable',
+      };
       function summarizeBulk(action, body) {
         const failures = (body.results || []).filter((r) => !r.ok);
         let msg = action + ': ' + body.succeeded + ' succeeded, ' + body.failed + ' failed.' + describeBuild(body.build);
         for (const f of failures) {
           const p = allPosts.find((x) => x.translationKey === f.key);
-          msg += '\n  · ' + ((p && p.titleDe) || f.key) + ' — ' + f.error;
+          const errorKey = Object.hasOwn(gpxPublishErrors, f.code) ? gpxPublishErrors[f.code]
+            : (typeof f.code === 'string' && f.code.startsWith('gpx_') ? 'failed' : null);
+          msg += '\n  · ' + ((p && p.titleDe) || f.key) + ' — ' + (errorKey ? GpxCopy.en[errorKey] : f.error);
         }
         return msg;
       }

@@ -1,6 +1,7 @@
 import type { Locale } from '../i18n/ui';
 import type { Region } from './paths';
 import { byLocale, pathOf, type Trip } from './trips';
+import type { PublicTrack } from './public-track';
 
 export interface PinFeature {
   type: 'Feature';
@@ -13,7 +14,7 @@ export interface StopFeature {
   geometry: { type: 'Point'; coordinates: [number, number] };
   properties: { name: string };
 }
-export interface TripGeometry { pin: PinFeature; stops: StopFeature[] }
+export interface TripGeometry { pin: PinFeature; stops: StopFeature[]; track?: PublicTrack }
 
 function pinOf(trip: Trip): PinFeature {
   const { lat, lng } = trip.data.coordinates;
@@ -34,5 +35,5 @@ export function tripGeometry(trip: Trip): TripGeometry {
     geometry: { type: 'Point', coordinates: [s.lng, s.lat] },
     properties: { name: s.name },
   }));
-  return { pin: pinOf(trip), stops };
+  return { pin: pinOf(trip), stops, ...(trip.data.track ? { track: trip.data.track } : {}) };
 }

@@ -1,3 +1,4 @@
+import { publishTokens } from './publish-tokens.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
@@ -67,7 +68,7 @@ maybe('production boot (src/main.ts, Postgres)', () => {
       de: loc('de'), en: loc('en'),
     });
     tk = created.translationKey;
-    await posts.publish(tk);
+    await posts.publish(tk, await publishTokens(posts, tk));
 
     dir = await mkdtemp(join(await realpath(tmpdir()), 'main-boot-'));
     settingsPath = join(dir, 'settings.json');

@@ -40,8 +40,9 @@ export function registerGpxRoutes(app: FastifyInstance, { gpx, requireAuth }: { 
   app.register(async (routes) => {
     routes.setErrorHandler((error: unknown, _request, reply) => {
       if (error instanceof GpxError) {
-        const payload: { error: string; invalidPoints?: number } = { error: error.code };
+        const payload: { error: string; invalidPoints?: number; counts?: GpxError['counts'] } = { error: error.code };
         if (error.invalidPoints !== undefined) payload.invalidPoints = error.invalidPoints;
+        if (error.counts !== undefined) payload.counts = error.counts;
         return reply.code(error.statusCode).header('cache-control', 'no-store').send(payload);
       }
       const status = error && typeof error === 'object' && 'statusCode' in error && typeof error.statusCode === 'number' ? error.statusCode : 500;

@@ -1,7 +1,7 @@
 import { Worker } from 'node:worker_threads';
 import { GPX_LIMITS, type TrimSelection } from '../public/gpx-geometry.js';
 import { assertGpxDecoders, type GpxPreview } from './gpx-parser.js';
-import { GpxError } from './gpx-errors.js';
+import { GpxError, readPublicTrackCounts } from './gpx-errors.js';
 
 export interface GpxWorker {
   parse(bytes: Uint8Array, options?: { signal?: AbortSignal; selection?: TrimSelection }): Promise<GpxPreview>;
@@ -83,12 +83,16 @@ export function createGpxWorker(): GpxWorker {
             void finish(undefined, result);
           } catch { void finish(new GpxError('gpx_worker_failed')); }
         } else if (response.ok === false && typeof response.code === 'string'
-          && /^gpx_[a-z_]{1,40}$/.test(response.code)
+          && (/^gpx_[a-z_]{1,40}$/.test(response.code)
+            || response.code === 'track_empty_after_rounding' || response.code === 'track_public_limit')
           && (response.statusCode === 400 || response.statusCode === 413 || response.statusCode === 422 || response.statusCode === 503)
           && (response.invalidPoints === undefined || (typeof response.invalidPoints === 'number'
             && Number.isSafeInteger(response.invalidPoints) && response.invalidPoints > 0
             && response.invalidPoints <= GPX_LIMITS.points + GPX_LIMITS.waypoints))) {
-          void finish(new GpxError(response.code, response.statusCode, response.invalidPoints as number | undefined));
+          try {
+            void finish(new GpxError(response.code, response.statusCode, response.invalidPoints as number | undefined,
+              readPublicTrackCounts(response.counts)));
+          } catch { void finish(new GpxError('gpx_worker_failed')); }
         } else void finish(new GpxError('gpx_worker_failed'));
       });
       // Covers an abort that arrived while creating the worker, before listener registration.

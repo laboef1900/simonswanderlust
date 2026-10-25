@@ -1,3 +1,4 @@
+import { publishTokens } from './publish-tokens.js';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -145,7 +146,7 @@ maybe('GPX and text saves share PostgreSQL pair isolation', () => {
     let current = await assertNext();
     current = await f.posts.upsertDraft({ ...current, en: { ...current.en, title: 'English edit' } }, current.updatedAt);
     await assertNext();
-    await f.posts.publish(tk); await assertNext();
+    await f.posts.publish(tk, await publishTokens(f.posts, tk)); await assertNext();
     await f.posts.unpublish(tk); await assertNext();
   });
 

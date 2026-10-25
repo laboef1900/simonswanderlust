@@ -185,7 +185,7 @@ Full details in [`../SECURITY.md`](../SECURITY.md); the essentials:
   remote image fetches reject internal/loopback addresses, time out, and cap the download size;
   imported slugs are validated before anything is written.
 
-## Private GPX routes
+## GPX routes
 
 **Story details → GPX route** accepts a `.gpx` file up to 5 MiB. Authors can inspect,
 trim by point count/distance, remove whole segments, and explicitly attach the result.
@@ -204,12 +204,21 @@ calls a remote tile, geocoder or AI provider. Publishing remains admin-only.
 - Waypoints start unchecked. Explicitly adopted stops keep exact coordinates and one
   shared name for DE/EN, independently of route trimming. Save them through the normal
   draft action; closing the route dialog does not undo adoption.
+- The solid preview is the actual public candidate: separate runs, 25 m simplification,
+  four-decimal 2D coordinates, at most 100 runs / 2,000 vertices / 64 KiB. Wait for validation;
+  collapsed/over-limit candidates require more trimming or replacement, not weaker precision.
+  These limits are not anonymization. The server derives and checks the same candidate.
+- Only admin Publish copies the artifact into both locale snapshots. Route edits and
+  detachment remain draft-only through Save and Rebuild. A failed build keeps the old
+  static release served; a later rebuild uses the committed snapshot.
+- Story maps and their localized per-run textual alternatives use only the public artifact.
+  MDX exports working-copy prose but only the last published track; overview maps stay pin-only.
 - Private originals and dump/archive recovery sets retain removed locations, elevation,
   timestamps and source metadata. Download paired private recovery files from Settings;
   keep them confidential. MDX is not a private-route backup.
 
-The private workflow is #313; public snapshot/render/export support is #314 and is not
-implemented by #313. See the [approved contract](../docs/superpowers/specs/2026-10-23-gpx-route-import-design.md).
+See the [approved contract](../docs/superpowers/specs/2026-10-23-gpx-route-import-design.md)
+for the private (#313) and public snapshot (#314) boundaries.
 For offline restore, verified undo sets and `storage_read_only` recovery, follow
 [Database dumps](../ARCHITECTURE.md#database-dumps). A running app prevents restore;
 do not bypass the ownership/session drain checks.

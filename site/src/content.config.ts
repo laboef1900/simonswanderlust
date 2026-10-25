@@ -3,6 +3,7 @@ import { z } from 'astro/zod';
 import { postgresTripsLoader } from './lib/postgres-loader';
 import { postgresPagesLoader } from './lib/pages-loader';
 import { regions } from './lib/paths';
+import { publicTrackSchema } from './lib/public-track';
 
 const storyImage = z.object({
   src: z.url(),
@@ -29,6 +30,7 @@ const trips = defineCollection({
       coordinates: z.object({ lat: z.number(), lng: z.number() }),
       stops: z.array(z.object({ name: z.string(), lat: z.number(), lng: z.number() })).optional(),
       route: z.string().optional(),
+      track: publicTrackSchema.optional(),
       keyFacts: z.record(z.string(), z.string()).optional(),
       // Optional, never defaulted: absent/undefined = not featured, so every
       // entry written before this field stays valid without a migration of

@@ -1,3 +1,4 @@
+import { publishTokens } from './publish-tokens.js';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -78,7 +79,7 @@ type B = ReturnType<typeof build>;
 
 async function published(b: B, tk = 'tk-pub', over: Partial<PostPair['shared']> = {}) {
   await b.posts.upsertDraft(pair(tk, over));
-  await b.posts.publish(tk);
+  await b.posts.publish(tk, await publishTokens(b.posts, tk));
   return tk;
 }
 async function draft(b: B, tk = 'tk-draft') { await b.posts.upsertDraft(pair(tk)); return tk; }

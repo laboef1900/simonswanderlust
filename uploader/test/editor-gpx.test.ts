@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as geometry from '../public/gpx-geometry.js';
+import * as publicTrack from '../public/gpx-public-track.js';
 import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import type { PostPair } from '../src/posts.js';
@@ -23,6 +24,40 @@ const browserGeometry = {
   trimGeometry: (value: Parameters<typeof geometry.trimGeometry>[0], selection: Parameters<typeof geometry.trimGeometry>[1]) =>
     geometry.trimGeometry(value, structuredClone(selection)),
 };
+const browserPublicTrack = {
+  validatePublicTrack: (value: unknown) => publicTrack.validatePublicTrack(structuredClone(value)),
+};
+class CandidateWorker {
+  onmessage: ((event: { data: unknown }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  onmessageerror: (() => void) | null = null;
+  terminated = false;
+  input: Parameters<typeof publicTrack.createPublicTrack>[0] | null = null;
+  constructor(readonly url: string, readonly options: { type: string }) {}
+  postMessage(input: { geometry: Parameters<typeof publicTrack.createPublicTrack>[0] }) {
+    this.input = structuredClone(input.geometry);
+    queueMicrotask(() => { if (!this.terminated) this.complete(); });
+  }
+  complete() {
+    try { this.reply({ ok: true, result: publicTrack.createPublicTrack(this.input!) }); }
+    catch (error) {
+      const code = error instanceof Error ? ('code' in error ? error.code : error.message) : 'gpx_worker_failed';
+      this.reply({ ok: false, code });
+    }
+  }
+  reply(data: unknown) { this.onmessage?.({ data }); }
+  terminate() { this.terminated = true; }
+}
+function manualCandidates() {
+  const jobs: CandidateWorker[] = [];
+  class ManualWorker extends CandidateWorker {
+    override postMessage(input: { geometry: Parameters<typeof publicTrack.createPublicTrack>[0] }) {
+      this.input = structuredClone(input.geometry);
+      jobs.push(this);
+    }
+  }
+  return { jobs, Worker: ManualWorker };
+}
 const settle = async () => { for (let i = 0; i < 8; i++) await new Promise<void>((resolve) => setImmediate(resolve)); };
 const emptyRoute = { version: null, geometry: null, originalAvailable: false, sourceBytes: null };
 const attachedRoute = { version: 'c'.repeat(36), geometry: preview.geometry, originalAvailable: true, sourceBytes: 2048 };
@@ -35,6 +70,8 @@ interface SetupOptions {
   failAttach?: boolean;
   failSave?: boolean;
   preview?: typeof preview;
+  Worker?: typeof CandidateWorker;
+  locale?: 'de' | 'en';
   fetch?: (url: string, request: RequestInit) => Promise<Reply | undefined>;
 }
 
@@ -57,7 +94,7 @@ function gpxDocument() {
 
 type HostState = { tk: string | null; baseUpdatedAt: string };
 interface GpxTestHarness {
-  api: { refresh(): Promise<void>; hasPreview(): boolean };
+  api: { refresh(): Promise<void>; hasPreview(): boolean; publishVersion(): string | null; publishError(code: string): string | null };
   element(id: string): EditorElement;
   requests: { url: string; options: RequestInit }[];
   state: HostState;
@@ -92,6 +129,7 @@ function setup(options: SetupOptions = {}) {
     fetch: fetcher,
     FormData: FormDataMock,
     AbortController,
+    Worker: options.Worker ?? CandidateWorker,
     URL,
     console,
     setTimeout,
@@ -107,15 +145,18 @@ function setup(options: SetupOptions = {}) {
     setBaseUpdatedAt: (value: string) => { state.baseUpdatedAt = value; },
     saveDraft: async () => { saveCalls++; if (options.failSave) return false; state.tk = 'new-pair'; state.baseUpdatedAt = '2026-10-24T10:00:30.000Z'; return true; },
     adoptStops(stops: { name: string; lat: number; lng: number }[]) { adopted.push(stops); },
-    inspector: { isOpen: () => false, close() {}, open() {} },
+    inspector: { isOpen: () => false, close() {}, open() {}, reveal(target: EditorElement) { target.focus(); } },
     on401() {},
     confirm: async () => options.confirm ?? true,
-    copy: context.GpxCopy && (context.GpxCopy as { en: Record<string, string> }).en,
+    copy: options.locale
+      ? Object.fromEntries(Object.entries(ui[options.locale]).filter(([key]) => key.startsWith('gpx.')).map(([key, value]) => [key.slice(4), value]))
+      : context.GpxCopy && (context.GpxCopy as { en: Record<string, string> }).en,
     mapCopy: {},
     map: { create: async () => ({ render(value: unknown) { renders.push(value); }, destroy() {}, resize() {} }) },
     loadGeometry: async () => browserGeometry,
+    loadPublicTrack: async () => browserPublicTrack,
   };
-  const api = (context.GpxEditor as { wire(host: unknown): { refresh(): Promise<void>; hasPreview(): boolean } }).wire(host);
+  const api = (context.GpxEditor as { wire(host: unknown): GpxTestHarness['api'] }).wire(host);
   const element = (id: string) => {
     const el = dom.document.getElementById(id);
     if (!el) throw new Error('missing #' + id);
@@ -202,6 +243,7 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
       throw new Error('unexpected editor request: ' + url);
     },
     FormData: class { append() {} },
+    Worker: CandidateWorker,
     setTimeout: () => 0,
     clearTimeout() {},
     addEventListener: dom.document.addEventListener,
@@ -235,7 +277,7 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
   // seam: Node's VM cannot resolve the browser-only /admin module URL.
   const controller = context.GpxEditor as { wire(host: Record<string, unknown>): unknown };
   const wire = controller.wire;
-  controller.wire = (host) => wire({ ...host, loadGeometry: async () => browserGeometry });
+  controller.wire = (host) => wire({ ...host, loadGeometry: async () => browserGeometry, loadPublicTrack: async () => browserPublicTrack });
   const inline = html.slice(html.indexOf("'use strict'", html.lastIndexOf('<script>')), html.lastIndexOf('</script>'));
   vm.runInContext(inline, context, { filename: 'editor.html' });
   const editor = vm.runInContext('({ buildPayload, doSaveDraft, guard, gpxEditor, deMDE, addStopRow })', context) as {
@@ -265,6 +307,7 @@ describe('private GPX editor lifecycle', () => {
     await importPreview(h);
     h.element('gpxStart').value = '1';
     h.element('gpxStart').fire('input');
+    await settle();
     h.element('gpxAttach').click();
     await settle();
 
@@ -351,7 +394,7 @@ describe('private GPX editor lifecycle', () => {
     expect(h.element('gpxStartDistance').disabled).toBe(true);
     expect(h.element('gpxDistanceTrim').hidden).toBe(true);
     expect(h.renders.at(-1)).toMatchObject({
-      kept: { segments: [{ points: [{ lng: 1.1, lat: 2.1 }, { lng: 1.2, lat: 2.2 }] }] },
+      rawKept: { segments: [{ points: [{ lng: 1.1, lat: 2.1 }, { lng: 1.2, lat: 2.2 }] }] },
     });
 
     h.element('gpxTrimMethod').value = 'distance';
@@ -362,11 +405,11 @@ describe('private GPX editor lifecycle', () => {
     expect(h.element('gpxPointTrim').hidden).toBe(true);
     expect(h.element('gpxEndDistance').disabled).toBe(false);
     expect(h.renders.at(-1)).toMatchObject({
-      kept: { segments: [{ points: [{ lng: 1, lat: 2 }, { lng: 1.1, lat: 2.1 }] }] },
+      rawKept: { segments: [{ points: [{ lng: 1, lat: 2 }, { lng: 1.1, lat: 2.1 }] }] },
     });
     h.element('gpxReset').click();
     expect(h.element('gpxEndDistance').disabled).toBe(false);
-    expect(h.renders.at(-1)).toMatchObject({ kept: preview.geometry });
+    expect(h.renders.at(-1)).toMatchObject({ rawKept: preview.geometry });
   });
 
   it('recalculates distance trimming after removing a segment without consuming the disconnected gap', async () => {
@@ -390,9 +433,11 @@ describe('private GPX editor lifecycle', () => {
     const segment = h.element('gpxSegments').querySelector('input')!;
     segment.checked = true;
     segment.fire('change');
+    await h.api.refresh();
+    await settle();
     expect(h.element('gpxAttach').disabled).toBe(false);
     expect(h.renders.at(-1)).toMatchObject({
-      kept: { segments: [{ points: [{ lng: 2.01, lat: 2 }, { lng: 2.02, lat: 2 }] }] },
+      rawKept: { segments: [{ points: [{ lng: 2.01, lat: 2 }, { lng: 2.02, lat: 2 }] }] },
     });
   });
 
@@ -420,6 +465,7 @@ describe('private GPX editor lifecycle', () => {
     expect(h.element('gpxRouteStatus').textContent).toBe('statusAttached');
     expect(h.api.hasPreview()).toBe(true);
     h.element('gpxReset').click();
+    await settle();
     expect(h.element('gpxAttach').disabled).toBe(false);
   });
 
@@ -505,6 +551,7 @@ describe('private GPX editor lifecycle', () => {
   it.each([{ status: 404, newPost: false }, { status: 409, newPost: true }])('invalidates an unavailable preview ($status) instead of retrying its stale token', async ({ status, newPost }) => {
     const h = setup({ newPost, fetch: async (url, request) =>
       url.endsWith('/route') && request.method === 'PUT' ? response({ error: 'gpx_import_unavailable' }, status) : undefined });
+    await h.api.refresh();
     await importPreview(h);
     h.element('gpxAttach').click();
     await settle();
@@ -749,5 +796,187 @@ describe('GPX privacy through the real editor save and stash boundary', () => {
     expect(JSON.parse(String(retry.options.body))).toEqual(later);
     expect(h.saveCalls).toBe(1);
     expect(routeWrites(h)).toHaveLength(1);
+  });
+});
+
+describe('public candidate lifecycle', () => {
+  it('keeps Attach unavailable until the current candidate succeeds and ignores stale results', async () => {
+    const workers = manualCandidates();
+    const h = setup({ Worker: workers.Worker });
+    await h.api.refresh();
+    await importPreview(h);
+    expect(h.element('gpxAttach').disabled).toBe(true);
+    expect(h.element('gpxStart').disabled).toBe(false);
+    expect(h.element('gpxReset').disabled).toBe(false);
+    const first = workers.jobs[0]!;
+    expect(first.url).toBe('/admin/gpx-candidate-worker.js');
+    expect(first.options).toEqual({ type: 'module' });
+    h.element('gpxStart').focus();
+    h.element('gpxStart').value = '1';
+    h.element('gpxStart').fire('input');
+    expect(first.terminated).toBe(true);
+    first.complete();
+    expect(h.element('gpxAttach').disabled).toBe(true);
+    workers.jobs[1]!.complete();
+    expect(h.element('gpxAttach').disabled).toBe(false);
+    expect(h.focused).toBe(h.element('gpxStart'));
+    expect(h.renders.at(-1)).toMatchObject({
+      rawKept: { segments: [{ points: preview.geometry.segments[0]!.points.slice(1) }] },
+      track: { version: 1, type: 'MultiLineString', coordinates: [[[1.1, 2.1], [1.2, 2.2]]] },
+    });
+    h.element('gpxClose').click();
+    workers.jobs[1]!.complete();
+    expect(h.element('gpxAttach').disabled).toBe(true);
+    expect(h.focused).toBe(h.element('gpxImportOpen'));
+    expect(routeWrites(h)).toEqual([]);
+  });
+
+  it.each(['track_public_limit', 'track_empty_after_rounding'])('keeps %s retryable without replacing the existing attachment', async (code) => {
+    const workers = manualCandidates();
+    const h = setup({ Worker: workers.Worker, route: attachedRoute });
+    await h.api.refresh();
+    await importPreview(h);
+    check(h, 'gpxReplaceConfirm');
+    workers.jobs[0]!.reply({ ok: false, code });
+    expect(h.element('gpxAttach').disabled).toBe(true);
+    expect(h.api.hasPreview()).toBe(true);
+    expect(h.element('gpxReset').disabled).toBe(false);
+    expect(h.element('gpxError').textContent).toBe(code === 'track_public_limit' ? 'publicLimit' : 'publicEmpty');
+    h.element('gpxReset').click();
+    workers.jobs[1]!.complete();
+    expect(h.element('gpxAttach').disabled).toBe(false);
+    expect(routeWrites(h)).toEqual([]);
+    h.element('gpxClose').click();
+  });
+
+  it.each(['error', 'messageerror', 'invalid-result'] as const)('fails closed on worker %s and permits explicit retry', async (failure) => {
+    const workers = manualCandidates();
+    const h = setup({ Worker: workers.Worker });
+    await h.api.refresh();
+    await importPreview(h);
+    const job = workers.jobs[0]!;
+    if (failure === 'error') job.onerror?.();
+    else if (failure === 'messageerror') job.onmessageerror?.();
+    else job.reply({ ok: true, result: { track: { version: 1, type: 'MultiLineString', coordinates: [[[1, 2, 3], [3, 4, 5]]] }, collapsedRuns: 0 } });
+    expect(job.terminated).toBe(true);
+    expect(h.element('gpxAttach').disabled).toBe(true);
+    expect(h.element('gpxError').textContent).toBe('candidateFailed');
+    job.complete();
+    expect(h.element('gpxAttach').disabled).toBe(true);
+    h.element('gpxReset').click();
+    workers.jobs[1]!.complete();
+    expect(h.element('gpxAttach').disabled).toBe(false);
+    h.element('gpxClose').click();
+  });
+
+  it('terminates a timed-out job and ignores its late success', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const workers = manualCandidates();
+      const h = setup({ Worker: workers.Worker });
+      await h.api.refresh();
+      await importPreview(h);
+      vi.advanceTimersByTime(2000);
+      expect(workers.jobs[0]!.terminated).toBe(true);
+      expect(h.element('gpxError').textContent).toBe('candidateTimeout');
+      workers.jobs[0]!.complete();
+      expect(h.element('gpxAttach').disabled).toBe(true);
+      h.element('gpxClose').click();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['de', 'en'] as const)('announces rounding collapse and recovery in %s', async (locale) => {
+    const workers = manualCandidates();
+    const h = setup({ Worker: workers.Worker, locale });
+    await h.api.refresh();
+    await importPreview(h);
+    workers.jobs[0]!.reply({ ok: true, result: {
+      track: { version: 1, type: 'MultiLineString', coordinates: [[[1, 2], [1.2, 2.2]]] }, collapsedRuns: 1,
+    } });
+    expect(h.element('gpxCandidateStatus').textContent).toBe(ui[locale]['gpx.candidateCollapsed'].replace('{count}', '1'));
+    h.element('gpxClose').click();
+    expect(h.api.publishError('track_public_limit')).toBe(ui[locale]['gpx.publishRouteRecovery']);
+    expect(h.focused).toBe(h.element('gpxRouteFeedback'));
+  });
+
+  it.each(['de', 'en'] as const)('classifies Publish worker failures without leaking raw codes in %s', (locale) => {
+    const h = setup({ locale });
+    expect(h.api.publishError('gpx_timeout')).toBe(ui[locale]['gpx.timeout']);
+    expect(h.api.publishError('gpx_worker_failed')).toBe(ui[locale]['gpx.workerFailed']);
+    expect(h.api.publishError('gpx_unavailable')).toBe(ui[locale]['gpx.unavailable']);
+    expect(h.api.publishError('unrelated_validation')).toBeNull();
+  });
+
+  it('fails closed until route loading succeeds and never refreshes a reviewed publish token', async () => {
+    const pending = Promise.withResolvers<Reply>();
+    const h = setup({ fetch: async (url, request) => url.endsWith('/route') && request.method === 'GET' ? pending.promise : undefined });
+    expect(() => h.api.publishVersion()).toThrow();
+    const loading = h.api.refresh();
+    expect(() => h.api.publishVersion()).toThrow();
+    pending.resolve(response(attachedRoute));
+    await loading;
+    expect(h.api.publishVersion()).toBe(attachedRoute.version);
+    expect(h.api.publishVersion()).toBe(attachedRoute.version);
+    expect(h.requests.filter(({ options }) => options.method === 'GET')).toHaveLength(1);
+    h.state.tk = 'another-pair';
+    expect(() => h.api.publishVersion()).toThrow();
+  });
+});
+
+describe('candidate failure recovery boundaries', () => {
+  it('allows explicit waypoint adoption while the public route candidate is still pending', async () => {
+    const workers = manualCandidates();
+    const h = setup({
+      Worker: workers.Worker,
+      preview: { ...preview, waypoints: [{ name: 'Exact stop', lat: 2.1234567, lng: 1.1234567 }], counts: { ...preview.counts, waypoints: 1 } },
+    });
+    await h.api.refresh();
+    await importPreview(h);
+    const checkbox = h.element('gpxWaypoints').querySelector('input[type=checkbox]')!;
+    checkbox.checked = true; checkbox.fire('change');
+    check(h, 'gpxAdoptConfirm');
+    expect(h.element('gpxAttach').disabled).toBe(true);
+    expect(h.element('gpxAdopt').disabled).toBe(false);
+    h.element('gpxAdopt').click();
+    await settle();
+    expect(h.adopted).toEqual([[{ name: 'Exact stop', lat: 2.1234567, lng: 1.1234567 }]]);
+    expect(workers.jobs).toHaveLength(1);
+    h.element('gpxClose').click();
+    expect(workers.jobs[0]!.terminated).toBe(true);
+    expect(routeWrites(h)).toEqual([]);
+  });
+
+  it('keeps Attach unavailable when the browser cannot create a worker', async () => {
+    class UnavailableWorker extends CandidateWorker {
+      constructor(url: string, options: { type: string }) {
+        super(url, options);
+        throw new Error('worker unavailable');
+      }
+    }
+    const h = setup({ Worker: UnavailableWorker });
+    await h.api.refresh();
+    await importPreview(h);
+    expect(h.element('gpxAttach').disabled).toBe(true);
+    expect(h.element('gpxError').textContent).toBe('candidateFailed');
+    expect(h.element('gpxReset').disabled).toBe(false);
+    expect(h.api.hasPreview()).toBe(true);
+    h.element('gpxClose').click();
+  });
+
+  it('refuses publish after a failed route read and ignores an obsolete post response', async () => {
+    const pending = Promise.withResolvers<Reply>();
+    let calls = 0;
+    const h = setup({ fetch: async (url, request) => {
+      if (!url.endsWith('/route') || request.method !== 'GET') return undefined;
+      return ++calls === 1 ? pending.promise : response({ error: 'gpx_unavailable' }, 503);
+    } });
+    const first = h.api.refresh();
+    h.state.tk = 'other-pair';
+    await h.api.refresh();
+    pending.resolve(response(attachedRoute));
+    await first;
+    expect(() => h.api.publishVersion()).toThrow();
+    expect(h.element('gpxAttach').disabled).toBe(true);
+    expect(h.requests).toHaveLength(2);
   });
 });

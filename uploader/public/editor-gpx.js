@@ -11,6 +11,7 @@
     const attach = $('gpxAttach');
     const copy = host.copy;
     let geometryApi;
+    let publicApi;
     function applyCopy() {
       const labels = {
         gpxDialogHeading: 'editorTitle', gpxClose: 'close', gpxImportOpen: 'import',
@@ -24,6 +25,7 @@
         gpxWaypointWarning: 'waypointWarning', gpxAdopt: 'adoptSelected',
         gpxAdoptionNote: 'adoptionIndependent',
         gpxPublicationNotice: 'publicationNotice',
+        gpxCandidateHelp: 'candidateHelp',
         gpxDiscard: 'discardPreview', gpxAttach: 'attach', gpxReplaceScope: 'replaceBody',
       };
       Object.entries(labels).forEach(([id, key]) => {
@@ -51,6 +53,13 @@
     let metresMode = false;
     let outcomeUnknown = false;
     let cleanupUnconfirmed = false;
+    let routeLoaded = !host.getPost().tk;
+    let routeTk = null;
+    let routeEpoch = 0;
+    let candidate = null;
+    let candidateWorker = null;
+    let candidateTimer = null;
+    let candidateEpoch = 0;
     applyCopy();
     const msg = (key) => copy[key] || key;
     function say(key) {
@@ -81,6 +90,10 @@
       if (!geometryApi) geometryApi = host.loadGeometry ? await host.loadGeometry() : await import('/admin/gpx-geometry.js');
       return geometryApi;
     }
+    async function publicTrack() {
+      if (!publicApi) publicApi = host.loadPublicTrack ? await host.loadPublicTrack() : await import('/admin/gpx-public-track.js');
+      return publicApi;
+    }
     const postUrl = (suffix) => '/posts/' + encodeURIComponent(host.getPost().tk) + '/route' + suffix;
     async function request(url, options, mutation = false) {
       let response;
@@ -98,20 +111,69 @@
       return body;
     }
     function errorKey(e) {
-      const table = { gpx_conflict: 'conflict', gpx_outcome_unknown: 'unknown', gpx_import_unavailable: 'previewExpired', gpx_busy: 'busy', gpx_quota: 'quota', gpx_timeout: 'timeout', gpx_too_large: 'fileTooLarge', gpx_invalid_xml: 'invalidFile', gpx_invalid_points: 'invalidFile', gpx_invalid_encoding: 'invalidFile', gpx_invalid_request: 'invalidFile', gpx_limit: 'limitExceeded', gpx_invalid_geometry: 'invalidFile', gpx_invalid_selection: 'invalidFile', gpx_empty_selection: 'allTrimmed', gpx_empty: 'invalidEmpty', gpx_unavailable: 'unavailable', gpx_worker_failed: 'workerFailed', gpx_forbidden_origin: 'failed', gpx_aborted: 'failed', gpx_original_unavailable: 'unavailable', gpx_route_not_found: 'missingRoute', gpx_post_not_found: 'missingPost', gpx_invalid_source: 'invalidFile', gpx_replace_unconfirmed: 'replaceUnconfirmed', gpx_detach_unconfirmed: 'failed', gpx_cleanup_pending: 'cleanupPending', storage_read_only: 'storageReadOnly', track_empty_after_rounding: 'allTrimmed' };
+      if (e?.code === 'track_public_limit') return 'publicLimit';
+      if (e?.code === 'track_empty_after_rounding') return 'publicEmpty';
+      const table = { gpx_conflict: 'conflict', gpx_outcome_unknown: 'unknown', gpx_import_unavailable: 'previewExpired', gpx_busy: 'busy', gpx_quota: 'quota', gpx_timeout: 'timeout', gpx_too_large: 'fileTooLarge', gpx_invalid_xml: 'invalidFile', gpx_invalid_points: 'invalidFile', gpx_invalid_encoding: 'invalidFile', gpx_invalid_request: 'invalidFile', gpx_limit: 'limitExceeded', gpx_invalid_geometry: 'invalidFile', gpx_invalid_selection: 'invalidFile', gpx_empty_selection: 'allTrimmed', gpx_empty: 'invalidEmpty', gpx_unavailable: 'unavailable', gpx_worker_failed: 'workerFailed', gpx_forbidden_origin: 'failed', gpx_aborted: 'failed', gpx_original_unavailable: 'unavailable', gpx_route_not_found: 'missingRoute', gpx_post_not_found: 'missingPost', gpx_invalid_source: 'invalidFile', gpx_replace_unconfirmed: 'replaceUnconfirmed', gpx_detach_unconfirmed: 'failed', gpx_cleanup_pending: 'cleanupPending', storage_read_only: 'storageReadOnly' };
       return table[e && e.code] || 'failed';
     }
     function setBusy(value) {
       busy = value;
       dialog.querySelectorAll('button,input,select').forEach((el) => { el.disabled = el === $('gpxClose') ? mutationPending : value; });
       ['gpxImportOpen', 'gpxReimport', 'gpxDetach'].forEach((id) => { $(id).disabled = value || outcomeUnknown; });
+      $('gpxDetach').disabled = value || outcomeUnknown || !routeLoaded;
       $('gpxDownload').disabled = value;
       attach.textContent = msg(host.getPost().tk ? 'attach' : 'newPostSaveFirst');
-      attach.disabled = value || outcomeUnknown || !preview || !preview.geometry.segments.length || !renderStats().valid || (route.version !== null && !$('gpxReplaceConfirm').checked);
+      attach.disabled = value || outcomeUnknown || !routeLoaded || !candidate || !preview || !preview.geometry.segments.length || !renderStats().valid || (route.version !== null && !$('gpxReplaceConfirm').checked);
       syncTrimControls();
       updateAdopt();
     }
     function cleanupMap() { if (map) map.destroy(); map = null; }
+    function cancelCandidate() {
+      candidateEpoch++;
+      clearTimeout(candidateTimer);
+      candidateTimer = null;
+      if (candidateWorker) candidateWorker.terminate();
+      candidateWorker = null;
+      candidate = null;
+    }
+    function generateCandidate(kept) {
+      cancelCandidate();
+      const myEpoch = candidateEpoch;
+      $('gpxCandidateStatus').textContent = msg('candidatePending');
+      const finish = (result, failure) => {
+        if (myEpoch !== candidateEpoch || !preview) return;
+        candidateEpoch++;
+        clearTimeout(candidateTimer);
+        candidateTimer = null;
+        if (candidateWorker) candidateWorker.terminate();
+        candidateWorker = null;
+        if (failure) {
+          $('gpxCandidateStatus').textContent = '';
+          fail(failure, false);
+        } else {
+          candidate = result;
+          $('gpxCandidateStatus').textContent = result.collapsedRuns
+            ? msg('candidateCollapsed').replace('{count}', String(result.collapsedRuns))
+            : msg('candidateReady');
+        }
+        updatePreview(false);
+      };
+      try {
+        candidateWorker = new Worker('/admin/gpx-candidate-worker.js', { type: 'module' });
+        candidateWorker.onmessage = ({ data }) => {
+          if (myEpoch !== candidateEpoch) return;
+          if (!data?.ok) { finish(null, errorKey(data)); return; }
+          try {
+            publicApi.validatePublicTrack(data.result.track);
+            if (!Number.isSafeInteger(data.result.collapsedRuns) || data.result.collapsedRuns < 0 || data.result.collapsedRuns > 100) throw new Error('invalid result');
+            finish(data.result);
+          } catch (_) { finish(null, 'candidateFailed'); }
+        };
+        candidateWorker.onerror = candidateWorker.onmessageerror = () => finish(null, 'candidateFailed');
+        candidateTimer = setTimeout(() => finish(null, 'candidateTimeout'), 2000);
+        candidateWorker.postMessage({ geometry: kept });
+      } catch (_) { finish(null, 'candidateFailed'); }
+    }
     function cancelImport(importId) {
       void request('/gpx/imports/' + encodeURIComponent(importId), { method: 'DELETE' }).catch((e) => {
         if (e.handled || e.status === 404) return;
@@ -125,6 +187,7 @@
       epoch++;
       if (controller) controller.abort();
       controller = null;
+      cancelCandidate();
       if (preview && preview.importId) cancelImport(preview.importId);
       preview = null;
       selection = { startPoints: 0, endPoints: 0, removedSegments: [] };
@@ -137,6 +200,7 @@
       $('gpxCounts').textContent = '';
       $('gpxKept').textContent = '';
       $('gpxRemoved').textContent = '';
+      $('gpxCandidateStatus').textContent = '';
       $('gpxAdopt').hidden = true;
       metresMode = false;
       setBusy(false);
@@ -162,14 +226,21 @@
       $('gpxStart').disabled = $('gpxEnd').disabled = busy || metresMode;
       $('gpxStartDistance').disabled = $('gpxEndDistance').disabled = busy || !metresMode;
     }
-    function updatePreview() {
+    function updatePreview(recompute = true) {
       syncTrimControls();
       if (!preview) return;
       const stats = renderStats();
-      attach.disabled = busy || outcomeUnknown || !stats.valid || (route.version !== null && !$('gpxReplaceConfirm').checked);
-      if (stats.valid && errorCode === 'allTrimmed') clearError();
-      else if (!stats.valid && preview.geometry.segments.length && !busy && !outcomeUnknown && (!errorCode || errorCode === 'allTrimmed')) fail('allTrimmed', false);
-      if (map) map.render({ geometry: preview.geometry, kept: stats.valid ? stats.result.geometry : { version: 1, segments: [] }, waypoints: preview.waypoints, selectedWaypointIndices: selectedWaypoints() });
+      if (recompute) {
+        if (['allTrimmed', 'publicLimit', 'publicEmpty', 'candidateFailed', 'candidateTimeout'].includes(errorCode)) clearError();
+        if (stats.valid) generateCandidate(stats.result.geometry);
+        else {
+          cancelCandidate();
+          $('gpxCandidateStatus').textContent = '';
+          if (preview.geometry.segments.length && !busy && !outcomeUnknown && !errorCode) fail('allTrimmed', false);
+        }
+      }
+      attach.disabled = busy || outcomeUnknown || !routeLoaded || !candidate || !stats.valid || (route.version !== null && !$('gpxReplaceConfirm').checked);
+      if (map) map.render({ geometry: preview.geometry, rawKept: stats.valid ? stats.result.geometry : { version: 1, segments: [] }, selection, track: candidate?.track || null, waypoints: preview.waypoints, selectedWaypointIndices: selectedWaypoints() });
       updateAdopt();
     }
     function selectedWaypoints() { return [...$('gpxWaypoints').querySelectorAll('input[type=checkbox]:checked')].map((el) => Number(el.value)); }
@@ -197,7 +268,7 @@
       $('gpxEmpty').hidden = true;
       $('gpxPreview').hidden = false;
       $('gpxMap').setAttribute('aria-label', host.mapCopy.routeLabel);
-      await geometry();
+      await Promise.all([geometry(), publicTrack()]);
       if (expectedEpoch !== epoch) return;
       $('gpxCounts').textContent = msg('counts').replace('{points}', String(data.counts.points)).replace('{segments}', String(data.counts.segments)).replace('{waypoints}', String(data.counts.waypoints));
       $('gpxReplaceScope').hidden = route.version === null;
@@ -223,7 +294,7 @@
         const row = document.createElement('div'); row.className = 'gpx-waypoint';
         const check = document.createElement('input'); check.type = 'checkbox'; check.value = String(index); check.setAttribute('aria-label', msg('adoptWaypoints') + ' ' + (index + 1));
         const name = document.createElement('input'); name.type = 'text'; name.value = point.name || ''; name.setAttribute('aria-label', msg('waypointName') + ' ' + (index + 1));
-        check.addEventListener('change', updatePreview);
+        check.addEventListener('change', () => updatePreview(false));
         row.append(check, name); waypointList.append(row);
       });
       $('gpxAdopt').hidden = !data.waypoints.length;
@@ -260,9 +331,27 @@
       finally { if (myEpoch === epoch) { controller = null; setBusy(false); } }
     }
     async function refreshRoute() {
-      if (!host.getPost().tk) { route = { version: null, geometry: null, originalAvailable: false }; renderRoute(); return; }
-      try { route = await request(postUrl(''), { method: 'GET' }); renderRoute(); }
-      catch (e) { if (!e.handled) fail(errorKey(e)); }
+      const tk = host.getPost().tk;
+      const current = ++routeEpoch;
+      routeLoaded = false;
+      setBusy(busy);
+      if (!tk) {
+        route = { version: null, geometry: null, originalAvailable: false };
+        routeTk = null; routeLoaded = true; renderRoute(); setBusy(busy); return;
+      }
+      try {
+        const loaded = await request('/posts/' + encodeURIComponent(tk) + '/route', { method: 'GET' });
+        if (current !== routeEpoch || tk !== host.getPost().tk) return;
+        if (!loaded || !(loaded.version === null || (typeof loaded.version === 'string' && loaded.version))) throw new Error('invalid route state');
+        route = loaded; routeTk = tk; routeLoaded = true; renderRoute(); setBusy(busy);
+      } catch (e) { if (current === routeEpoch && !e.handled) fail(errorKey(e)); }
+    }
+    function publishVersion() {
+      if (!routeLoaded || routeTk !== host.getPost().tk || outcomeUnknown || mutationPending || preview) {
+        fail(outcomeUnknown ? 'unknown' : 'routeNotReviewed');
+        throw new Error(msg('routeNotReviewed'));
+      }
+      return route.version;
     }
     function renderRoute() {
       $('gpxRouteStatus').textContent = route.geometry ? msg('statusAttached') : msg(route.version === null ? 'statusNone' : 'statusDetached');
@@ -306,6 +395,7 @@
     async function attachRoute() {
       if (busy || outcomeUnknown || !preview) return;
       const computed = renderStats(); if (!computed.valid) { fail('allTrimmed'); return; }
+      if (!candidate || !routeLoaded) { fail('candidateUnavailable'); return; }
       if (route.version !== null && !$('gpxReplaceConfirm').checked) { fail('replaceUnconfirmed'); $('gpxReplaceConfirm').focus(); return; }
       const existing = !!host.getPost().tk;
       mutationPending = true;
@@ -323,7 +413,7 @@
         const body = { importId: preview.importId, baseVersion: route.version, baseUpdatedAt: tokens.baseUpdatedAt, selection, confirmReplace: true };
         const result = await request(postUrl(''), { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, true);
         host.setBaseUpdatedAt(result.updatedAt);
-        route = result; renderRoute();
+        route = result; routeTk = host.getPost().tk; routeLoaded = true; renderRoute();
         preview = null; mutationPending = false;
         closeDialog();
         if (result.cleanupPending) fail('cleanupPending'); else say('attachSuccess');
@@ -398,7 +488,7 @@
     $('gpxAttach').addEventListener('click', attachRoute);
     $('gpxAdopt').addEventListener('click', adopt);
     $('gpxAdoptConfirm').addEventListener('change', updateAdopt);
-    $('gpxReplaceConfirm').addEventListener('change', updatePreview);
+    $('gpxReplaceConfirm').addEventListener('change', () => updatePreview(false));
     $('gpxDetach').addEventListener('click', detachRoute);
     $('gpxDownload').addEventListener('click', downloadOriginal);
     $('gpxDiscard').addEventListener('click', () => { teardownPreview(); say(''); });
@@ -412,6 +502,21 @@
     });
     return {
       refresh: refreshRoute,
+      publishVersion,
+      noteCreated: (tk) => {
+        if (routeLoaded && routeTk === null && route.version === null) routeTk = tk;
+      },
+      publishError: (code) => {
+        if (code === 'track_public_limit' || code === 'track_empty_after_rounding') {
+          fail('publishRouteRecovery', false);
+          host.inspector.reveal(feedback);
+          return msg('publishRouteRecovery');
+        }
+        if (code === 'conflict') return msg('conflict');
+        if (code === 'publish_busy') return msg('busy');
+        if (typeof code === 'string' && code.startsWith('gpx_')) return msg(errorKey({ code }));
+        return null;
+      },
       hasPreview: () => !!preview,
       discard: teardownPreview,
       revisionNotice: () => say('revisionRouteNotice'),
