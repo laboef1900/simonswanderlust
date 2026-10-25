@@ -475,9 +475,20 @@ describe('replaceFenceAt', () => {
       expect(apply(prose, G.replaceFenceAt(prose, 2, FENCE))).toBe('a\n\n```gallery\nhttps://i/b\n```\n\nb');
     });
 
-    it('adds no padding at the very start or very end of the body', () => {
-      expect(apply('', G.replaceFenceAt('', 0, FENCE))).toBe(FENCE);
-      expect(apply('a\n\n', G.replaceFenceAt('a\n\n', 3, FENCE))).toBe('a\n\n' + FENCE);
+    it('leaves a blank-line insertion point after an EOF gallery, including in an empty body', () => {
+      const empty = apply('', G.replaceFenceAt('', 0, FENCE));
+      expect(empty).toBe(FENCE + '\n\n');
+      expect(G.scanFences(empty)).toMatchObject([{ isGallery: true, unterminated: false }]);
+
+      const prose = 'a\n\n';
+      const out = apply(prose, G.replaceFenceAt(prose, prose.length, FENCE));
+      expect(out).toBe(prose + FENCE + '\n\n');
+      // This is the editor's next replaceSelection(ImageMarkdown.image(...)):
+      // the caret lands after the suffix, so the image starts on its own line.
+      const continued = out + '![Second](https://i/second)\n\nFOLLOWING STORY TEXT';
+      expect(G.scanFences(continued)).toMatchObject([{ isGallery: true, unterminated: false }]);
+      expect(continued).toContain('![Second](https://i/second)');
+      expect(continued).toContain('FOLLOWING STORY TEXT');
     });
   });
 

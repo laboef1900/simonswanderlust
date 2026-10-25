@@ -448,7 +448,11 @@ window.GalleryFence = (function () {
     var prefix = at === 0 ? '' : new Array(2 - runBefore(text, at) + 1).join('\n');
     var trailing = 0;
     while (trailing < 2 && text.charAt(at + trailing) === '\n') trailing++;
-    var suffix = at === text.length ? '' : new Array(2 - trailing + 1).join('\n');
+    // Keep the caret after a complete blank-line separator even at EOF. The
+    // editor leaves it at the end of this range edit; without a suffix, the
+    // next uploaded image is concatenated to the closing ``` and opens the
+    // gallery fence over all following story content.
+    var suffix = new Array(2 - trailing + 1).join('\n');
     return { text: prefix + block + suffix, start: at, end: at, replaced: false };
   }
 

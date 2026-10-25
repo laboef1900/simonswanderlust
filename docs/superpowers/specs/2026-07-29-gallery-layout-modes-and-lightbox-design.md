@@ -232,6 +232,12 @@ test in `test/gallery-fence.test.ts` imports `readLayoutMode` cross-tree and run
 corpus, and `test/admin-pages.test.ts` pins the editor's offered values to `GALLERY_MODES`. Without
 those, the picker can show one mode while the site renders another — silently, and only after
 publishing.
+The picker keeps EOF insertion safe for the next author action: it leaves a blank-line separator
+after the closing fence, so an image upload starts outside the gallery and subsequent prose stays
+renderable. The insertion remains an undoable CodeMirror range edit; `test/gallery-fence.test.ts`
+pins the EOF boundary.
+
+
 
 ## Testing
 
