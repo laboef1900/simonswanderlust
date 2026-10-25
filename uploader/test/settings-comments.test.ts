@@ -33,6 +33,7 @@ function stubBuilder() {
   const builder: SiteBuilder = {
     build: async () => { calls.push(1); return { ok: true, release: 'r1' }; },
     hasRelease: () => true,
+    quiesce: async () => {},
   };
   return { calls, builder };
 }
@@ -46,6 +47,7 @@ function stubBackup(): DbBackup {
     sweepTempFiles: () => [],
     list: () => [],
     listImageArchives: () => [],
+    listRouteArchives: () => [], quiesce: async () => {},
     state: () => ({ ...state }),
   };
 }
@@ -55,6 +57,7 @@ const queue: EncodeQueue = {
   isActive: () => false,
   recover: async () => 0,
   drain: async () => {},
+  quiesce: async () => {},
   idle: async () => {},
   stats: () => ({ pending: 0, running: 0 }),
 };

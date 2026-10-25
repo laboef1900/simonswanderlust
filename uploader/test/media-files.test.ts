@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, mkdir, writeFile, readdir } from 'node:fs/promises';
+import { readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deleteMedia, imageUsage, VARIANT_FILE_RE } from '../src/media-files.js';
@@ -125,6 +126,15 @@ describe('imageUsage', () => {
 });
 
 describe('deleteMedia', () => {
+  it('stops deleting files as soon as the storage guard latches read-only', async () => {
+    await put('photo-640.avif');
+    await put('photo-640.webp');
+    await expect(deleteMedia(dir, 'photo', {
+      isWritable: () => readdirSync(dir).length === 2,
+    })).rejects.toMatchObject({ code: 'storage_read_only' });
+    expect(await readdir(dir)).toHaveLength(1);
+  });
+
   it('removes exactly the key\'s variant files, leaving prefix siblings alone', async () => {
     await put('trips/x/hero-640.webp');
     await put('trips/x/hero-640.avif');

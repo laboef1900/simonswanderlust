@@ -5,6 +5,7 @@ import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgUserStore, verifyPassword, UserExistsError, UsernamePolicyError } from '../src/users.js';
 import { pgSessionStore } from '../src/sessions.js';
 import { pgPostStore, PostError, REVISION_CAP } from '../src/posts.js';
+import { lockPostPair } from '../src/post-pair-lock.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -771,39 +772,38 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
   });
 
   it('remove() also deletes a revision committed by a save it had to wait for', async () => {
-    // A save holds the posts row locks with its revision inserted but not yet
-    // committed; remove() blocks on those locks. One data-modifying CTE would
-    // delete the posts after the commit yet miss the revision (a CTE's
-    // sub-statements share one snapshot, taken before the wait). Two
-    // statements in READ COMMITTED see it.
+    // A cooperating save holds the pair lock with an uncommitted revision.
+    // Deletion must wait, then see and remove that revision after commit.
     const store = pgPostStore(pool);
     const post = await store.upsertDraft(base('racy'));
     const tk = post.translationKey;
     const saver = await pool.connect();
     try {
       await saver.query('BEGIN');
+      await lockPostPair(saver, tk);
+      const pid = (await saver.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
       await saver.query(
         `INSERT INTO post_revisions (id, translation_key, snapshot) VALUES ($1, $2, '{"status":"draft","de":{"title":"late"}}')`,
         [randomUUID(), tk],
       );
       await saver.query(`UPDATE posts SET updated_at = now() WHERE translation_key = $1`, [tk]);
       const removal = store.remove(tk);
-      // Wait for remove() to actually block on the row locks (observable only
-      // server-side — another connection's lock wait has no in-process
-      // signal), so the save's COMMIT is guaranteed to land after remove()'s
-      // first statement started. Polled through the pool, NOT the saver: inside
-      // a transaction pg_stat_activity is a snapshot frozen at first access and
-      // would never show a backend that connected afterwards.
-      for (;;) {
+      // Observe blocking by this exact transaction, not an incidental SQL
+      // statement spelling. Bound the wait and always roll back on failure.
+      let blocked = false;
+      for (let attempt = 0; attempt < 200; attempt++) {
         const { rowCount } = await pool.query(
-          `SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'DELETE FROM posts%'`,
+          'SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))',
+          [pid],
         );
-        if (rowCount) break;
+        if (rowCount) { blocked = true; break; }
         await scheduler.wait(10);
       }
+      expect(blocked).toBe(true);
       await saver.query('COMMIT');
       await removal;
     } finally {
+      await saver.query('ROLLBACK');
       saver.release();
     }
     expect(await store.get(tk)).toBeNull();

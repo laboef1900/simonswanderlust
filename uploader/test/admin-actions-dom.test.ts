@@ -15,6 +15,7 @@ import { memoryMediaStore } from '../src/media-store.js';
 import { createEncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock } from '../src/work-lock.js';
 import { ui } from '../../site/src/i18n/ui.js';
+import { renderGpxCopy } from '../src/gpx-copy.js';
 
 // posts.html, settings.html and comments.html run their actions as plain
 // top-level browser code. Load each inline script in a vm context backed by a
@@ -173,6 +174,7 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
   };
   ctx.window = ctx;
   vm.createContext(ctx);
+  vm.runInContext(renderGpxCopy(), ctx);
   for (const dependency of scripts) vm.runInContext(readFileSync(dependency, 'utf8'), ctx, { filename: dependency });
   vm.runInContext(script, ctx);
   return { ctx, el, windowListeners };
@@ -1599,8 +1601,8 @@ describe('settings.html against the real settings and provider routes', () => {
       storageDir: dir, baseUrl: 'https://images.example', imgHost: 'images.example', siteDir: join(dir, 'site'),
       users, sessions, secrets, settings, media, encodeQueue: queue,
       posts: memoryPostStore(), pages: memoryPageStore(),
-      builder: { build: unavailable, hasRelease: () => false }, backupDir: join(dir, 'backup'),
-      dbBackup: { dir, runNow: unavailable, running: () => false, sweepTempFiles: () => [], list: () => [], listImageArchives: () => [], state: () => ({}) },
+      builder: { build: unavailable, hasRelease: () => false, quiesce: async () => {} }, backupDir: join(dir, 'backup'),
+      dbBackup: { dir, runNow: unavailable, running: () => false, sweepTempFiles: () => [], list: () => [], listImageArchives: () => [], listRouteArchives: () => [], state: () => ({}), quiesce: async () => {} },
       dbCheck: unavailable,
     });
     closeServer = async () => {

@@ -1,14 +1,21 @@
+import { randomBytes } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import {
-  existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
+  closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { create as createTar } from 'tar';
 import type { BackupSchedule } from './settings.js';
-import { POST_SNAPSHOT_SQL, type DbPool } from './db.js';
+import { POST_SNAPSHOT_SQL, type DbClient, type DbPool } from './db.js';
 import { diskSpace, formatBytes, UPLOAD_HEADROOM_BYTES, type DiskSpace } from './disk.js';
 import { isEncryptedSecret, type EncryptedSecret } from './secrets.js';
 import { storedProcessOptions } from './pipeline.js';
+import type { GpxFiles } from './gpx-files.js';
+import {
+  createRouteArchive, ROUTE_ARCHIVE_RE, routeRecoverySummary, stageRouteRestore,
+  validateRouteDumpRows, validateRouteManifest, type RouteArchiveManifest,
+  type RouteDumpRow, type RouteRecoverySummary, type StagedRouteRestore,
+} from './gpx-backup.js';
 
 /**
  * v8 (issue #204) added reader `comments` (no email — the spec stores none;
@@ -17,6 +24,8 @@ import { storedProcessOptions } from './pipeline.js';
  * cannot outlive posts the dump may not contain) and comments_enabled = true
  * (the column default; the site-wide setting is the real off switch).
  * v9 adds the optional story-only `posts.title_image`; older dumps restore it as NULL.
+ * v10 adds private `post_routes` and a full manifest-matched original archive.
+ * These recovery sets deliberately contain private coordinates and timestamps.
  * v7 added media `format` + `encoding`, preserving JPEG-only sets and their
  * snapped retry/recovery profile across restore.
  * v6 added encrypted `app_secrets` (never the encryption master key);
@@ -24,9 +33,9 @@ import { storedProcessOptions } from './pipeline.js';
  * v3 added `media` + `media_folders`; v2 added `pages`.
  * @ai-warning Bumping this ALSO requires widening the allow-list guard below.
  */
-export const DUMP_VERSION = 9;
+export const DUMP_VERSION = 10;
 /** Every version `readDump` accepts — an allow-list, not a minimum. */
-export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
 export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 /**
@@ -34,7 +43,7 @@ export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
  * see `atomicWrite`). Matches neither regex above, so a leftover is never
  * listed, served or pruned — which is exactly why `sweepTempFiles` exists.
  */
-const TEMP_FILE_RE = /^(?:db-\d{8}-\d{6}\.json\.gz|images-\d{8}-\d{6}\.tar|state\.json)\.\d+\.tmp$/;
+const TEMP_FILE_RE = /^(?:db-\d{8}-\d{6}\.json\.gz|images-\d{8}-\d{6}\.tar|routes-\d{8}-\d{6}-[0-9a-f]{32}\.tar|state\.json)\.\d+\.tmp$|^\.db-\d+-\d+-[0-9a-f]+\.tmp$/;
 
 export class BackupError extends Error {}
 
@@ -65,6 +74,7 @@ export interface BackupState {
   lastError?: string;
   /** mtime cutoff for the next incremental images archive (walk-start time of the last one). */
   lastImagesArchiveAt?: string;
+  routeRecovery?: RouteRecoverySummary;
 }
 export interface BackupFileInfo { name: string; size: number }
 
@@ -80,13 +90,25 @@ function fileStamp(now: Date): string {
   return `${iso.slice(0, 10).replace(/-/g, '')}-${iso.slice(11, 19).replace(/:/g, '')}`;
 }
 
+export interface DumpOptions {
+  routeFiles?: GpxFiles;
+  isWritable?: () => boolean;
+}
+
 /** Dump durable content, accounts, media metadata, and encrypted credentials
  * (never sessions or the master key) as one gzipped JSON file. Returns the filename.
  * @ai-note The SELECTs run on ONE client inside a REPEATABLE READ READ ONLY
  * transaction, so they see the same snapshot. Autocommit on the pool would let a
  * bulk delete of a post + its media land between two SELECTs and produce a dump
  * whose posts reference media rows that are not in it. */
-export async function dumpDatabase(db: Connectable, dir: string, now: Date = new Date()): Promise<string> {
+export async function dumpDatabase(db: Connectable, dir: string, now: Date = new Date(), options: DumpOptions = {}): Promise<string> {
+  const capture = () => captureDatabase(db, dir, now, options);
+  return options.routeFiles ? options.routeFiles.gate.runExclusive(capture) : capture();
+}
+
+async function captureDatabase(db: Connectable, dir: string, now: Date, options: DumpOptions): Promise<string> {
+  const writable = () => { if (options.isWritable?.() === false) throw new BackupError('storage_read_only'); };
+  writable();
   const client = await db.connect();
   let users: Record<string, unknown>[];
   let posts: Record<string, unknown>[];
@@ -95,6 +117,8 @@ export async function dumpDatabase(db: Connectable, dir: string, now: Date = new
   let mediaFolders: Record<string, unknown>[];
   let appSecrets: Record<string, unknown>[];
   let comments: Record<string, unknown>[];
+  let routeRows: RouteDumpRow[] = [];
+  let routeArchive: RouteArchiveManifest | undefined;
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
     users = (await client.query('SELECT * FROM users ORDER BY created_at')).rows;
@@ -126,42 +150,62 @@ export async function dumpDatabase(db: Connectable, dir: string, now: Date = new
     } catch {
       throw new BackupError('Encrypted credentials could not be backed up.');
     }
+    const rawRoutes = (await client.query(
+      'SELECT translation_key, version, geometry, source_id, source_sha256, source_bytes, updated_at FROM post_routes ORDER BY translation_key',
+    )).rows.map((row) => ({
+      ...row, updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+    }));
+    validateRouteDumpRows(rawRoutes, posts);
+    routeRows = rawRoutes;
+    if (routeRows.length && !options.routeFiles) throw new BackupError('Private route storage is required for a complete backup.');
+    if (options.routeFiles) routeArchive = await createRouteArchive(options.routeFiles, dir, routeRows, now, options.isWritable);
+    writable();
     await client.query('COMMIT');
   } catch (e) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
+    if (routeArchive && options.isWritable?.() !== false) rmSync(join(dir, routeArchive.name), { force: true });
     throw e;
   } finally {
     client.release();
   }
-  mkdirSync(dir, { recursive: true });
-  const payload = gzipSync(JSON.stringify({
-    version: DUMP_VERSION, createdAt: now.toISOString(),
-    tables: { users, posts, pages, media, media_folders: mediaFolders, app_secrets: appSecrets, comments },
-  }));
-  // @ai-warning Names have one-second resolution and every writer — the
-  // scheduler in the app, "Back up now", and the restore CLI running in a
-  // SEPARATE process via `docker compose exec` — shares this directory. A dump
-  // that reused a name would silently destroy the state the earlier file held
-  // (issue #114: the pre-restore dump is the operator's only undo copy), and
-  // an exists-check before `rename` is a cross-process race. So the name is
-  // claimed atomically: the payload is written to a private temp file and
-  // published with link(2), which fails with EEXIST if the name is taken
-  // (rename(2) would overwrite). On EEXIST the stamp advances one second and
-  // the link is retried; `createdAt` stays the real time either way.
-  const tmp = join(dir, `.db-${process.pid}-${now.getTime()}.tmp`);
-  writeFileSync(tmp, payload);
+  let temporary: string | undefined;
+  let published = false;
   try {
+    writable();
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const payload = gzipSync(JSON.stringify({
+      version: DUMP_VERSION, createdAt: now.toISOString(),
+      tables: { users, posts, pages, media, media_folders: mediaFolders, app_secrets: appSecrets, comments, post_routes: routeRows },
+      routeArchive,
+    }));
+    // Claim the final name atomically: a same-second backup or pre-restore
+    // undo must never overwrite an earlier recovery set.
+    const candidate = join(dir, `.db-${process.pid}-${now.getTime()}-${randomBytes(8).toString('hex')}.tmp`);
+    const fd = openSync(candidate, 'wx', 0o600);
+    temporary = candidate; // only remove a temp this invocation actually owns
+    try { writeFileSync(fd, payload); fsyncSync(fd); } finally { closeSync(fd); }
     for (let stamp = now; ; stamp = new Date(stamp.getTime() + 1000)) {
       const name = `db-${fileStamp(stamp)}.json.gz`;
       try {
-        linkSync(tmp, join(dir, name));
+        writable();
+        linkSync(temporary, join(dir, name));
+        published = true;
+        const directory = openSync(dir, 'r');
+        try { fsyncSync(directory); } finally { closeSync(directory); }
         return name;
       } catch (e) {
         if (!(e instanceof Error && 'code' in e && e.code === 'EEXIST')) throw e;
       }
     }
   } finally {
-    rmSync(tmp, { force: true });
+    if (options.isWritable?.() !== false) {
+      try { if (temporary) rmSync(temporary, { force: true }); }
+      finally {
+        // A final dump already visible after an fsync error must keep its
+        // paired archive. A crash without that marker is swept after grace.
+        if (!published && routeArchive) rmSync(join(dir, routeArchive.name), { force: true });
+      }
+    }
   }
 }
 
@@ -195,7 +239,9 @@ export async function archiveImages(
   sinceMs: number,
   now: Date = new Date(),
   space: (path: string) => Promise<DiskSpace> = diskSpace,
+  signal?: AbortSignal,
 ): Promise<string | null> {
+  signal?.throwIfAborted();
   let names: string[];
   try {
     names = readdirSync(storageDir, { recursive: true, encoding: 'utf8' });
@@ -253,7 +299,11 @@ export async function archiveImages(
   const discard = () => rmSync(tmp, { force: true });
   process.on('exit', discard);
   try {
+    signal?.throwIfAborted();
     await createTar({ file: tmp, cwd: storageDir, portable: true }, fresh);
+    // Let an already-running copy settle, but never activate its result after
+    // lease loss. quiesce() waits this promise before the app pool closes.
+    signal?.throwIfAborted();
     renameSync(tmp, join(dir, name));
   } catch (e) {
     discard();
@@ -321,7 +371,7 @@ function listByPattern(dir: string, re: RegExp): BackupFileInfo[] {
     .filter((n) => re.test(n))
     .sort()
     .reverse()
-    .map((name) => ({ name, size: statSync(join(dir, name)).size }));
+    .map((name) => ({ name, size: lstatSync(join(dir, name)).size }));
 }
 
 export function listBackups(dir: string): BackupFileInfo[] {
@@ -332,9 +382,90 @@ export function listImageArchives(dir: string): BackupFileInfo[] {
   return listByPattern(dir, IMAGES_ARCHIVE_RE);
 }
 
+export function listRouteArchives(dir: string): BackupFileInfo[] {
+  const referenced = new Set<string>();
+  for (const file of listBackups(dir)) {
+    try {
+      const manifest = readDump(join(dir, file.name)).routeArchive;
+      if (manifest) referenced.add(manifest.name);
+    } catch {
+      // Do not advertise an incomplete set. The manifest pin reader reports
+      // the blocked cleanup state independently; valid sets stay downloadable.
+    }
+  }
+  return listByPattern(dir, ROUTE_ARCHIVE_RE).filter((file) => referenced.has(file.name));
+}
+
+/** Only the dump is a completion marker. Preserve all archives if even one
+ * retained manifest cannot be trusted; never sweep during a live backup. */
+export function sweepOrphanRouteArchives(dir: string, nowMs = Date.now()): string[] {
+  let names: string[];
+  try { names = readdirSync(dir); } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
+    throw new BackupError('Private route backup manifests are unreadable.');
+  }
+  const referenced = new Set<string>();
+  for (const name of names) {
+    if (!BACKUP_FILE_RE.test(name)) continue;
+    const manifest = readDump(join(dir, name)).routeArchive;
+    if (manifest) referenced.add(manifest.name);
+  }
+  const swept: string[] = [];
+  for (const name of names) {
+    if (!ROUTE_ARCHIVE_RE.test(name) || referenced.has(name)) continue;
+    const path = join(dir, name);
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.nlink !== 1 || nowMs - stat.mtimeMs < 60 * 60_000) continue;
+    rmSync(path);
+    swept.push(name);
+  }
+  return swept;
+}
+
+/** Retained dump manifests pin only originals that could not be archived.
+ * Immutable dump identities are cached; a changed/unreadable file fails closed. */
+export function createRouteManifestPinReader(dir: string): () => Promise<ReadonlySet<string>> {
+  const cache = new Map<string, { fingerprint: string; pins: string[] }>();
+  return async () => {
+    let names: string[];
+    try { names = readdirSync(dir).filter((name) => BACKUP_FILE_RE.test(name)); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Set<string>();
+      throw new BackupError('Private route backup manifests are unreadable.');
+    }
+    const pins = new Set<string>();
+    for (const name of names) {
+      const path = join(dir, name);
+      const stat = lstatSync(path, { bigint: true });
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n) throw new BackupError('Invalid private route backup manifest.');
+      const fingerprint = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+      let entry = cache.get(name);
+      if (entry?.fingerprint !== fingerprint) {
+        const dump = readDump(path);
+        entry = { fingerprint, pins: (dump.routeArchive?.originals ?? [])
+          .filter((source) => source.state === 'unreadable' || source.state === 'oversized').map((source) => source.sourceId) };
+        cache.set(name, entry);
+      }
+      for (const sourceId of entry.pins) pins.add(sourceId);
+    }
+    const retained = new Set(names);
+    for (const name of cache.keys()) if (!retained.has(name)) cache.delete(name);
+    return pins;
+  };
+}
+
 export function pruneBackups(dir: string, keep: number): string[] {
-  const doomed = listBackups(dir).slice(keep).map((f) => f.name);
-  for (const name of doomed) rmSync(join(dir, name), { force: true });
+  const backups = listBackups(dir);
+  const doomed = backups.slice(keep).map((f) => f.name);
+  // Resolve every manifest before deleting anything: a malformed retained dump
+  // must not make a shared archive look unreferenced.
+  const manifests = new Map(backups.map((file) => [file.name, readDump(join(dir, file.name)).routeArchive?.name]));
+  const retainedArchives = new Set(backups.slice(0, keep).map((file) => manifests.get(file.name)).filter(Boolean));
+  for (const name of doomed) {
+    rmSync(join(dir, name), { force: true });
+    const archive = manifests.get(name);
+    if (archive && !retainedArchives.has(archive)) rmSync(join(dir, archive), { force: true });
+  }
   return doomed;
 }
 
@@ -367,6 +498,14 @@ export function readState(dir: string): BackupState {
   if (isTimestamp(r.lastSuccessAt)) state.lastSuccessAt = r.lastSuccessAt;
   if (isTimestamp(r.lastImagesArchiveAt)) state.lastImagesArchiveAt = r.lastImagesArchiveAt;
   if (typeof r.lastError === 'string') state.lastError = r.lastError;
+  if (r.routeRecovery && typeof r.routeRecovery === 'object' && !Array.isArray(r.routeRecovery)) {
+    const recovery = r.routeRecovery as Record<string, unknown>;
+    const states = ['present', 'missing', 'corrupt', 'unreadable', 'oversized'] as const;
+    if (states.every((key) => Number.isSafeInteger(recovery[key]) && (recovery[key] as number) >= 0)) {
+      const counts = Object.fromEntries(states.map((key) => [key, recovery[key]])) as Omit<RouteRecoverySummary, 'status'>;
+      state.routeRecovery = { ...counts, status: states.slice(1).some((key) => counts[key] > 0) ? 'degraded' : 'complete' };
+    }
+  }
   return state;
 }
 
@@ -404,21 +543,28 @@ export interface DbBackup {
   runNow(): Promise<BackupState>;
   /** True while a run is in flight — `POST /backups` answers 409 instead of a stale state. */
   running(): boolean;
-  /** Reclaim temp files a killed process left behind; a no-op while running. */
+  /** Reclaim crashed-run temps and expired incomplete route archives; no-op while running/read-only. */
   sweepTempFiles(): string[];
   list(): BackupFileInfo[];
   listImageArchives(): BackupFileInfo[];
+  listRouteArchives(): BackupFileInfo[];
+  quiesce(): Promise<void>;
   state(): BackupState;
 }
 
 export function createDbBackup(
-  opts: { db: Connectable; dir: string; retention: () => number; storageDir?: string },
+  opts: { db: Connectable; dir: string; retention: () => number; storageDir?: string; routeFiles?: GpxFiles; isWritable?: () => boolean; signal?: AbortSignal },
 ): DbBackup {
   let running = false;
+  let stopped = false;
+  let settled = Promise.resolve();
+  const writable = () => !stopped && !opts.signal?.aborted && opts.isWritable?.() !== false;
   const sweep = (): string[] => {
-    if (running) return [];
+    if (running || !writable()) return [];
     const swept = sweepTempFiles(opts.dir);
-    if (swept.length) console.error(`removed ${swept.length} stale backup temp file(s): ${swept.join(', ')}`);
+    try { swept.push(...sweepOrphanRouteArchives(opts.dir)); }
+    catch { console.error('Private route archive cleanup deferred; backup manifests require attention.'); }
+    if (swept.length) console.error(`removed ${swept.length} stale backup file(s): ${swept.join(', ')}`);
     return swept;
   };
   return {
@@ -427,23 +573,35 @@ export function createDbBackup(
     sweepTempFiles: sweep,
     list: () => listBackups(opts.dir),
     listImageArchives: () => listImageArchives(opts.dir),
+    listRouteArchives: () => listRouteArchives(opts.dir),
+    async quiesce() { stopped = true; await settled; },
     state: () => readState(opts.dir),
     async runNow() {
+      if (!writable()) throw new BackupError('storage_read_only');
       if (running) return readState(opts.dir);
       // Reclaim a crashed run's leftover BEFORE writing, so a repeat attempt
       // never stacks a second multi-GB temp on top of the first.
       sweep();
       running = true;
+      const completion = Promise.withResolvers<void>();
+      settled = completion.promise;
       const state = readState(opts.dir);
       state.lastAttemptAt = new Date().toISOString();
+      // Recovery completeness belongs to this attempt, not the previous dump.
+      // Repopulate only once this run has published its DB + originals set.
+      delete state.routeRecovery;
       // Persist the attempt up front so `state()` reports THIS run's start
       // while it is in flight (the UI shows it next to "Running…"), and a
       // SIGKILLed run leaves an attempt newer than its last success behind.
       try { writeState(opts.dir, state); } catch { /* recorded again at the end */ }
       try {
-        await dumpDatabase(opts.db, opts.dir);
+        const dumpName = await dumpDatabase(opts.db, opts.dir, new Date(), { routeFiles: opts.routeFiles, isWritable: writable });
+        state.routeRecovery = routeRecoverySummary(readDump(join(opts.dir, dumpName)).routeArchive);
         state.lastSuccessAt = new Date().toISOString();
         delete state.lastError;
+        // The recovery set is already complete even if ownership is lost before
+        // images or retention work. Preserve that evidence alongside the failure.
+        if (!writable()) throw new BackupError('storage_read_only');
         // Best-effort incremental images archive after a successful dump. The
         // cutoff for the NEXT run is this run's walk-start time (>= compare),
         // so files written mid-archive land again in the next tar — duplicates
@@ -458,7 +616,8 @@ export function createDbBackup(
             const chain = archiveChainCutoff(opts.dir);
             const stored = state.lastImagesArchiveAt ? Date.parse(state.lastImagesArchiveAt) : undefined;
             const since = stored === undefined || chain === 0 ? chain : stored;
-            await archiveImages(opts.storageDir, opts.dir, since, walkStart);
+            await archiveImages(opts.storageDir, opts.dir, since, walkStart, diskSpace, opts.signal);
+            if (!writable()) throw new BackupError('storage_read_only');
             state.lastImagesArchiveAt = walkStart.toISOString();
           } catch (e) {
             // Also log it: state.lastError is a single slot, and a later prune
@@ -468,6 +627,7 @@ export function createDbBackup(
           }
         }
         try {
+          if (!writable()) throw new BackupError('storage_read_only');
           pruneBackups(opts.dir, opts.retention());
         } catch (e) {
           const msg = `prune failed: ${(e as Error).message}`;
@@ -478,8 +638,9 @@ export function createDbBackup(
       } finally {
         // Best-effort: a failed state write must neither wedge the in-flight
         // flag nor reject (callers fire-and-forget runNow).
-        try { writeState(opts.dir, state); } catch { /* state write failed */ }
+        if (writable()) { try { writeState(opts.dir, state); } catch { /* state write failed */ } }
         running = false;
+        completion.resolve();
       }
       return { ...state };
     },
@@ -494,6 +655,7 @@ export interface SecretDumpRow extends EncryptedSecret {
 export interface Dump {
   version: number;
   createdAt: string;
+  routeArchive?: RouteArchiveManifest;
   tables: {
     users: Record<string, unknown>[];
     posts: Record<string, unknown>[];
@@ -502,6 +664,7 @@ export interface Dump {
     media_folders?: Record<string, unknown>[];
     app_secrets?: SecretDumpRow[];
     comments?: Record<string, unknown>[];
+    post_routes?: RouteDumpRow[];
   };
 }
 
@@ -513,7 +676,12 @@ export interface Dump {
 export function readDump(filePath: string): Dump {
   let dump: Dump;
   try {
-    dump = JSON.parse(gunzipSync(readFileSync(filePath)).toString('utf8')) as Dump;
+    const fd = openSync(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.nlink !== 1) throw new BackupError('Invalid backup dump file.');
+      dump = JSON.parse(gunzipSync(readFileSync(fd)).toString('utf8')) as Dump;
+    } finally { closeSync(fd); }
   } catch {
     // JSON errors may quote secret-bearing file contents.
     throw new BackupError('Cannot read backup dump.');
@@ -560,6 +728,13 @@ export function readDump(filePath: string): Dump {
       names.add(row.key);
     }
   }
+  if (dump.version >= 10) {
+    validateRouteDumpRows(dump.tables.post_routes, dump.tables.posts);
+    if (dump.tables.post_routes.length) validateRouteManifest(dump.routeArchive, dump.tables.post_routes);
+    else if (dump.routeArchive !== undefined) throw new BackupError('Unexpected private route archive.');
+  } else if (dump.tables.post_routes !== undefined || dump.routeArchive !== undefined) {
+    throw new BackupError('Private routes require a version 10 recovery set.');
+  }
   return dump;
 }
 
@@ -578,20 +753,45 @@ const asTextArray = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) 
  * this module never imports the store). */
 const COMMENT_STATUS_ALLOW: readonly string[] = ['pending', 'approved', 'rejected', 'spam'];
 
+export interface RestoreOptions {
+  routeFiles?: GpxFiles;
+  assertOwner?: () => Promise<void>;
+}
+export interface RestoreCounts {
+  users: number; posts: number; pages: number; media: number; comments: number; appSecrets: number | null; routes: number;
+}
+
 /** Restore a dump inside one transaction. Deleting users cascades to sessions
  * (FK ON DELETE CASCADE), so every login is invalidated. */
-export async function restoreDatabase(
-  pool: DbPool,
-  filePath: string,
-): Promise<{ users: number; posts: number; pages: number; media: number; comments: number; appSecrets: number | null }> {
+export async function restoreDatabase(pool: DbPool, filePath: string, options: RestoreOptions = {}): Promise<RestoreCounts> {
+  const restore = () => restoreDatabaseContents(pool, filePath, options);
+  return options.routeFiles ? options.routeFiles.gate.runExclusive(restore) : restore();
+}
+
+async function restoreDatabaseContents(pool: DbPool, filePath: string, options: RestoreOptions): Promise<RestoreCounts> {
   const dump = readDump(filePath);
-  const client = await pool.connect();
+  const routes = dump.tables.post_routes ?? [];
+  if (routes.length && !options.routeFiles) throw new BackupError('Private route storage is required for this restore.');
+  let staged: StagedRouteRestore | undefined;
+  let client: DbClient | undefined;
+  let committing = false;
+  const counts: RestoreCounts = {
+    users: dump.tables.users.length, posts: dump.tables.posts.length,
+    pages: dump.tables.pages?.length ?? 0, media: dump.tables.media?.length ?? 0,
+    comments: dump.tables.comments?.length ?? 0, appSecrets: dump.tables.app_secrets?.length ?? null, routes: routes.length,
+  };
   try {
+    if (options.routeFiles) staged = await stageRouteRestore(options.routeFiles, filePath, dump.routeArchive, routes);
+    client = await pool.connect();
+    await options.assertOwner?.();
     await client.query('BEGIN');
     // Comments are always replaced: an older dump (no `comments` key) restores
     // an EMPTY table rather than leaving live comments attached to posts the
     // dump may not contain (comments spec M14).
     await client.query('DELETE FROM comments');
+    // Operational cleanup intents survive restoration. Fresh restored source
+    // identities cannot be erased by a pre-restore deletion intent.
+    await client.query('DELETE FROM post_routes');
     await client.query('DELETE FROM posts');
     // @ai-warning media MUST be deleted before users. `media.uploaded_by`
     // references `users(id) ON DELETE SET NULL`, so deleting users first would
@@ -629,6 +829,13 @@ export async function restoreDatabase(
          p.comments_enabled !== false, asJsonb(p.title_image)],
       );
     }
+    for (const route of staged?.rows ?? []) {
+      await client.query(
+        `INSERT INTO post_routes (translation_key, version, geometry, source_id, source_sha256, source_bytes, updated_at)
+         VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7)`,
+        [route.translation_key, route.version, asJsonb(route.geometry), route.source_id, route.source_sha256, route.source_bytes, route.updated_at],
+      );
+    }
     // @ai-warning A dump is a file the operator hands us, not a trusted row
     // set: `status` is mapped onto the moderation allow-list (anything else
     // becomes `pending`, never `approved`) and `is_author` must be the literal
@@ -647,10 +854,9 @@ export async function restoreDatabase(
     // @ai-warning: pre-snapshot dumps (v1, and v2 files written before issue
     // #20) carry no published_snapshot, so their published rows would land
     // NULL — invisible to the site loader (`published_snapshot IS NOT NULL`)
-    // until ensureSchema runs at the NEXT app start, which the documented
-    // restore flow (CLI restore → POST /rebuild, no restart) never triggers.
-    // Backfill in the same transaction, exactly like the ensureSchema
-    // migration: promote the restored working copy of already-published rows
+    // until ensureSchema runs at the next app start. Backfill here as well so
+    // the restored database is complete before the offline restore returns.
+    // Promote the restored working copy of already-published rows
     // into the snapshot. The NULL guard keeps new-format dumps intact — their
     // restored snapshots (and any unpublished draft edits) survive unchanged.
     await client.query(
@@ -709,17 +915,31 @@ export async function restoreDatabase(
         throw new BackupError('Encrypted credentials could not be restored.');
       }
     }
+    await options.assertOwner?.();
+    committing = true;
     await client.query('COMMIT');
-    return {
-      users: dump.tables.users.length, posts: dump.tables.posts.length,
-      pages: dump.tables.pages?.length ?? 0, media: dump.tables.media?.length ?? 0,
-      comments: dump.tables.comments?.length ?? 0,
-      appSecrets: dump.tables.app_secrets?.length ?? null,
-    };
+    committing = false;
+    return counts;
   } catch (e) {
-    await client.query('ROLLBACK');
+    if (committing) {
+      client?.release(true);
+      client = undefined;
+      // A fresh random source identity is positive evidence of this atomic
+      // restore. Without it (including legacy empty-route restores), be honest
+      // about uncertainty and retain both original sets.
+      if (staged?.rows.length) {
+        try {
+          const current = (await pool.query('SELECT translation_key, source_id FROM post_routes')).rows;
+          const expected = new Map(staged.rows.map((row) => [row.translation_key, row.source_id]));
+          if (current.length === expected.size && current.every((row) => expected.get(row.translation_key) === row.source_id)) return counts;
+        } catch { /* unavailable evidence is not a rollback */ }
+      }
+      throw new BackupError('Restore outcome is unknown; originals were retained. Inspect the database before retrying.');
+    }
+    await client?.query('ROLLBACK').catch(() => {});
+    await staged?.discard();
     throw e;
   } finally {
-    client.release();
+    client?.release();
   }
 }

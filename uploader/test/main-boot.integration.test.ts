@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import { randomBytes } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -68,7 +69,7 @@ maybe('production boot (src/main.ts, Postgres)', () => {
     tk = created.translationKey;
     await posts.publish(tk);
 
-    dir = await mkdtemp(join(tmpdir(), 'main-boot-'));
+    dir = await mkdtemp(join(await realpath(tmpdir()), 'main-boot-'));
     settingsPath = join(dir, 'settings.json');
     // A pre-registry install: review on OpenRouter, captions local, and the one
     // shared key in the legacy slot. Boot must migrate both before listen().
@@ -88,6 +89,7 @@ maybe('production boot (src/main.ts, Postgres)', () => {
         ENCRYPTION_KEY: encryptionKey.toString('hex'),
         DATABASE_URL: url!,
         PORT: String(port),
+        HOST: '127.0.0.1',
         PUBLIC_BASE_URL: base,
         IMG_HOST: `localhost:${port}`,
         STORAGE_DIR: join(dir, 'images'),
@@ -111,7 +113,11 @@ maybe('production boot (src/main.ts, Postgres)', () => {
   }, 30_000);
 
   afterAll(async () => {
-    child?.kill('SIGKILL');
+    if (child && child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, 'exit');
+      child.kill('SIGKILL');
+      await exited;
+    }
     if (tk) await pgPostStore(pool).remove(tk);
     if (username) await pool.query('DELETE FROM users WHERE username = $1', [username]);
     await pool?.query("DELETE FROM app_secrets WHERE key IN ('ai_api_key', 'ai_provider_key:openrouter')");

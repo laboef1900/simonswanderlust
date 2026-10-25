@@ -1,3 +1,4 @@
+import { mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { buildServer } from './server.js';
 import { createSettingsStore, defaultSettings } from './settings.js';
@@ -7,7 +8,7 @@ import { pgSessionStore } from './sessions.js';
 import { pgPostStore } from './posts.js';
 import { pgPageStore } from './pages.js';
 import { bootstrapRelease, createSiteBuilder } from './build.js';
-import { createDbBackup, isBackupDue, resolveBackupDir } from './backup.js';
+import { createDbBackup, createRouteManifestPinReader, isBackupDue, resolveBackupDir } from './backup.js';
 import { createImportRunner, pgImportJobStore } from './import-jobs.js';
 import { createShutdown } from './shutdown.js';
 import { makeDbCheck } from './health.js';
@@ -19,6 +20,10 @@ import { parseEncryptionKey, pgSecretsStore } from './secrets.js';
 import { LEGACY_AI_KEY_SLOT, slotFor } from './ai-providers.js';
 import { pgCommentStore } from './comments.js';
 import { pgCommentAdminStore } from './comments-admin.js';
+import { acquireStorageOwner } from './storage-owner.js';
+import { createGpxFiles } from './gpx-files.js';
+import { createGpxWorker } from './gpx-worker.js';
+import { createGpxService } from './gpx-service.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -30,12 +35,17 @@ if (!databaseUrl) {
 const encryptionKey = parseEncryptionKey(process.env.ENCRYPTION_KEY);
 if (encryptionKey === undefined) console.info('ENCRYPTION_KEY not configured in .env; encrypted remote AI credentials are unavailable.');
 
+// A second app or offline restore must not share ownership of route files.
+const owner = await acquireStorageOwner(databaseUrl, { role: 'app' });
+const runtime = { signal: owner.signal, isWritable: owner.isWritable };
 const storageDir = process.env.STORAGE_DIR ?? '/data/images';
 const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(storageDir), 'settings.json');
 const settings = createSettingsStore({ path: settingsPath, defaults: defaultSettings() });
 
-const pool = createPool(databaseUrl);
+const pool = createPool(databaseUrl, owner.applicationName);
+pool.on('error', () => console.error('Application database connection unavailable.'));
 await ensureSchema(pool);
+owner.assertWritable();
 const secrets = pgSecretsStore(pool, encryptionKey);
 // AI provider registry migration (spec §5), before listen(): copy the legacy
 // shared key to every provider that already received it, THEN persist the
@@ -49,12 +59,17 @@ if (aiMigration) {
 }
 const users = pgUserStore(pool);
 const sessions = pgSessionStore(pool);
-const posts = pgPostStore(pool);
+await mkdir(dirname(resolve(storageDir)), { recursive: true, mode: 0o700 });
+owner.assertWritable();
+const routeFiles = createGpxFiles({ storageDir, isWritable: owner.isWritable });
+await routeFiles.assertRoot();
+const posts = pgPostStore(pool, { routeFiles, isWritable: owner.isWritable });
 const pages = pgPageStore(pool);
 // issue #92: a job the previous process left `running` is marked interrupted
 // BEFORE listen(), so no request can observe a stale row as "busy".
-const importJobs = createImportRunner({ store: pgImportJobStore(pool) });
+const importJobs = createImportRunner({ store: pgImportJobStore(pool, runtime), ...runtime });
 await importJobs.recover();
+owner.assertWritable();
 
 const baseUrl = process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com';
 let imgHost: string;
@@ -77,9 +92,11 @@ const builder = createSiteBuilder({
   siteAppDir: process.env.SITE_APP_DIR ?? '/app/site',
   releasesRoot: siteDir,
   lock: workLock,
+  ...runtime,
+  applicationName: owner.applicationName + ':build',
 });
 const media = pgMediaStore(pool, { baseUrl });
-const encodeQueue = createEncodeQueue({ store: media, storageDir, lock: workLock });
+const encodeQueue = createEncodeQueue({ store: media, storageDir, lock: workLock, ...runtime });
 const reconciler = createReconciler({
   sync: createMediaSync({
     store: media,
@@ -93,11 +110,17 @@ const reconciler = createReconciler({
   queue: encodeQueue,
 });
 const backupDir = resolveBackupDir();
+const gpx = createGpxService({
+  pool, files: routeFiles, worker: createGpxWorker(), backupDir: join(backupDir, 'db'),
+  isWritable: owner.isWritable, readManifestPins: createRouteManifestPinReader(join(backupDir, 'db')),
+});
 const dbBackup = createDbBackup({
   db: pool,
   dir: join(backupDir, 'db'),
   retention: () => settings.get().backupRetention,
   storageDir, // scheduled/on-demand runs also write the incremental images tar
+  routeFiles,
+  ...runtime,
 });
 // A SIGKILLed archive leaves its multi-GB .tmp behind; reclaim it before the
 // first run can stack another on top (#113).
@@ -105,12 +128,15 @@ dbBackup.sweepTempFiles();
 
 // Hourly housekeeping: sweep expired sessions and run a due scheduled backup.
 const housekeeping = () => {
+  if (!owner.isWritable()) return;
   void sessions.sweepExpired().catch(() => {});
   if (isBackupDue(dbBackup.state(), settings.get().backupSchedule, Date.now())) {
-    void dbBackup.runNow().then((s) => { if (s.lastError) console.error('scheduled backup failed:', s.lastError); });
+    void dbBackup.runNow().then((s) => { if (s.lastError) console.error('scheduled backup failed:', s.lastError); })
+      .catch(() => console.error('Scheduled backup stopped before completion.'));
   }
 };
-setInterval(housekeeping, 3_600_000).unref();
+const housekeepingTimer = setInterval(housekeeping, 3_600_000);
+housekeepingTimer.unref();
 
 const app = buildServer({
   storageDir,
@@ -137,17 +163,36 @@ const app = buildServer({
   dbBackup,
   backupDir,
   dbCheck: makeDbCheck(() => pool.query('SELECT 1')),
+  gpx,
+  isWritable: owner.isWritable,
+  storageSignal: owner.signal,
 });
+
+let quiescing: Promise<void> | undefined;
+let poolEnding: Promise<void> | undefined;
+const endPool = () => poolEnding ??= pool.end();
+function quiesceWork(): Promise<void> {
+  clearInterval(housekeepingTimer);
+  return quiescing ??= Promise.allSettled([
+    app.quiesceMutations(), gpx.close(), builder.quiesce(), encodeQueue.quiesce(), importJobs.quiesce(), dbBackup.quiesce(),
+  ]).then((results) => {
+    if (results.some((result) => result.status === 'rejected')) console.error('Background storage work stopped with errors; restart recovery is required.');
+  });
+}
+function storageLost(): void {
+  console.error('Storage ownership lost. Mutations are disabled until an owner-operated restart.');
+  // Keep the HTTP/static server alive. Pool closure waits for guarded workers;
+  // restore also refuses any app-tagged session that is still draining.
+  void quiesceWork().then(endPool).catch(() => console.error('Database pool draining failed after storage ownership loss.'));
+}
+owner.signal.addEventListener('abort', storageLost, { once: true });
+if (owner.signal.aborted) storageLost();
 
 // Clean shutdown on docker stop / compose recreate: close the HTTP server,
 // end the pg pool, exit 0 (any failure exits 1 — docker kills us anyway).
 const onSignal = createShutdown({
-  close: () => app.close(),
-  // Between close and end: in-flight encodes still need the pg pool for their
-  // final setStatus write, or every `docker stop` logs a rejection and leaves
-  // rows stuck in `processing`.
-  drain: () => encodeQueue.drain(),
-  end: () => pool.end(),
+  close: async () => { await Promise.all([app.close(), quiesceWork()]); },
+  end: async () => { try { await endPool(); } finally { await owner.close(); } },
   exit: (code) => process.exit(code),
   log: (msg) => console.log(msg),
   error: (msg, err) => console.error(msg, err),
@@ -157,19 +202,22 @@ process.on('SIGINT', () => onSignal('SIGINT'));
 
 const port = Number(process.env.PORT ?? 3000);
 app
-  .listen({ port, host: '0.0.0.0' })
+  .listen({ port, host: process.env.HOST ?? '0.0.0.0' })
   .then(() => {
     console.log(`app listening on :${port}`);
     // First boot on a fresh volume: populate the site in the background
     // (blog routes 503 until the release lands), retrying a failed build with
     // backoff (#110). Restarts against an existing release skip this.
-    if (!builder.hasRelease()) void bootstrapRelease(builder, { log: (msg) => console.log(msg) });
+    if (!builder.hasRelease()) void bootstrapRelease(builder, { log: (msg) => console.log(msg), ...runtime });
     housekeeping();
     // Reconcile disk ↔ database, THEN resume anything left half-encoded. Runs
     // AFTER listen() and never blocks boot; a failure is logged, not fatal.
     // The sync/recover ordering lives in createReconciler — the same pass
     // POST /media/rescan runs (#117).
-    void reconciler.run().catch((e) => console.error('media reconciliation failed:', e));
+    if (owner.isWritable()) {
+      void reconciler.run().catch(() => console.error('Media reconciliation failed.'));
+      void gpx.reconcile().catch(() => console.error('Private route reconciliation requires attention.'));
+    }
   })
   .catch((err) => {
     console.error(err);

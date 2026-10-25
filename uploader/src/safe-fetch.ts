@@ -63,6 +63,7 @@ function messageOf(e: unknown): string {
 export type LookupFn = (hostname: string) => Promise<ReadonlyArray<{ address: string; family: number }>>;
 
 export interface SafeFetchOptions {
+  signal?: AbortSignal;
   timeoutMs?: number;
   maxBytes?: number;
   /** Redirect hops followed before giving up. Every hop is re-validated. */
@@ -162,13 +163,14 @@ export function assertFetchableUrl(raw: string): URL {
 }
 
 /** Settle with `p`, or reject with the signal's reason the moment it aborts. */
-function abortable<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(signal.reason);
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(signal.reason);
-    signal.addEventListener('abort', onAbort, { once: true });
-    p.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
-  });
+async function abortable<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  const { promise, resolve, reject } = Promise.withResolvers<T>();
+  const onAbort = () => reject(signal.reason);
+  signal.addEventListener('abort', onAbort, { once: true });
+  void p.then(resolve, reject);
+  try { return await promise; }
+  finally { signal.removeEventListener('abort', onAbort); }
 }
 
 /**
@@ -241,6 +243,7 @@ function discard(res: Response): void {
  * resized-variant handlers), which is why the hops are followed at all.
  */
 export async function safeFetch(raw: string, opts: SafeFetchOptions = {}): Promise<SafeFetchResult> {
+  opts.signal?.throwIfAborted();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
   const maxRedirects = opts.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
@@ -249,12 +252,16 @@ export async function safeFetch(raw: string, opts: SafeFetchOptions = {}): Promi
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, controller.signal]) : controller.signal;
   try {
     let url = assertFetchableUrl(raw);
     let res: Response;
     for (let hop = 0; ; hop++) {
-      await assertResolvesPublic(url, lookup, controller.signal);
-      res = await doFetch(url, { signal: controller.signal, redirect: 'manual' });
+      signal.throwIfAborted();
+      await assertResolvesPublic(url, lookup, signal);
+      signal.throwIfAborted();
+      res = await doFetch(url, { signal, redirect: 'manual' });
+      if (signal.aborted) { discard(res); signal.throwIfAborted(); }
       const location = REDIRECT_STATUSES.has(res.status) ? res.headers.get('location') : null;
       if (location === null) break;
       discard(res);
@@ -274,20 +281,29 @@ export async function safeFetch(raw: string, opts: SafeFetchOptions = {}): Promi
 
     const chunks: Uint8Array[] = [];
     let total = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        total += value.byteLength;
-        if (total > maxBytes) {
-          await reader.cancel();
-          throw new FetchError(`response exceeds the ${maxBytes}-byte limit for ${raw}`, 'too-large');
+    const cancel = () => { void reader.cancel().catch(() => {}); };
+    signal.addEventListener('abort', cancel, { once: true });
+    try {
+      signal.throwIfAborted();
+      for (;;) {
+        const { done, value } = await abortable(reader.read(), signal);
+        signal.throwIfAborted();
+        if (done) break;
+        if (value) {
+          total += value.byteLength;
+          if (total > maxBytes) {
+            await reader.cancel();
+            throw new FetchError(`response exceeds the ${maxBytes}-byte limit for ${raw}`, 'too-large');
+          }
+          chunks.push(value);
         }
-        chunks.push(value);
       }
+      return { buffer: Buffer.concat(chunks), contentType };
+    } finally {
+      signal.removeEventListener('abort', cancel);
     }
-    return { buffer: Buffer.concat(chunks), contentType };
   } catch (e) {
+    opts.signal?.throwIfAborted();
     if (e instanceof FetchError) throw e;
     if ((e instanceof Error && e.name === 'AbortError') || controller.signal.aborted) {
       throw new FetchError(`request timed out after ${timeoutMs}ms for ${raw}`, 'timeout');

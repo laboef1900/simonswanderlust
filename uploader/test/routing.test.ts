@@ -19,6 +19,7 @@ import { memorySecretsStore } from '../src/secrets.js';
 /** This suite only exercises host routing, so the queue never needs to run. */
 const noopQueue = (): EncodeQueue => ({
   enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {}, idle: async () => {},
+  quiesce: async () => {},
   stats: () => ({ pending: 0, running: 0 }),
 });
 
@@ -66,13 +67,14 @@ function stubBackup(backupDir: string): DbBackup {
     sweepTempFiles: () => [],
     list: () => [{ name: 'db-20260703-120000.json.gz', size: 3 }],
     listImageArchives: () => [],
+    listRouteArchives: () => [], quiesce: async () => {},
     state: () => ({ ...state }),
   };
 }
 
 function build(extra: Partial<ServerConfig> = {}) {
   const hasRelease = () => existsSync(join(siteDir, 'current'));
-  const builder: SiteBuilder = { build: async () => ({ ok: true, release: 'r' }), hasRelease };
+  const builder: SiteBuilder = { build: async () => ({ ok: true, release: 'r' }), hasRelease, quiesce: async () => {} };
   const backupDir = join(dir, 'backup');
   return buildServer({
     storageDir: join(dir, 'images'), baseUrl: `https://${IMG}`, imgHost: IMG,

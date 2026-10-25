@@ -32,6 +32,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DbPool } from './db.js';
 import type { ImportProgress, ImportSummary } from './wp-import.js';
+import { assertWorkWritable, createWorkCancellation, type WorkCancellationOptions } from './work-cancellation.js';
 
 export type ImportJobStatus = 'running' | 'done' | 'failed' | 'interrupted';
 
@@ -139,9 +140,10 @@ const fromRow = (r: Row): ImportJob => ({
   error: r.error,
 });
 
-export function pgImportJobStore(pool: DbPool): ImportJobStore {
+export function pgImportJobStore(pool: DbPool, opts: WorkCancellationOptions = {}): ImportJobStore {
   return {
     async insert(job) {
+      assertWorkWritable(opts);
       await pool.query(
         `INSERT INTO import_jobs (id, status, started_by, started_at, updated_at, finished_at, progress, summary, error)
          VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8)`,
@@ -149,6 +151,7 @@ export function pgImportJobStore(pool: DbPool): ImportJobStore {
           job.summary ? JSON.stringify(job.summary) : null, job.error],
       );
       // Bounded history: operational state must not grow with every run.
+      assertWorkWritable(opts);
       await pool.query(
         `DELETE FROM import_jobs WHERE id IN (
            SELECT id FROM import_jobs ORDER BY started_at DESC OFFSET $1
@@ -157,6 +160,7 @@ export function pgImportJobStore(pool: DbPool): ImportJobStore {
       );
     },
     async update(id, patch) {
+      assertWorkWritable(opts);
       const sets: string[] = ['updated_at = now()'];
       const params: unknown[] = [id];
       const add = (col: string, value: unknown): void => { params.push(value); sets.push(`${col} = $${params.length}`); };
@@ -175,6 +179,7 @@ export function pgImportJobStore(pool: DbPool): ImportJobStore {
       return rows[0] ? fromRow(rows[0]) : null;
     },
     async interruptRunning() {
+      assertWorkWritable(opts);
       const { rowCount } = await pool.query(
         `UPDATE import_jobs SET status = 'interrupted', finished_at = now(), updated_at = now() WHERE status = 'running'`,
       );
@@ -183,7 +188,7 @@ export function pgImportJobStore(pool: DbPool): ImportJobStore {
   };
 }
 
-export interface ImportRunnerOptions {
+export interface ImportRunnerOptions extends WorkCancellationOptions {
   store: ImportJobStore;
   log?: (msg: string) => void;
   now?: () => number;
@@ -193,7 +198,7 @@ export interface ImportRunnerOptions {
 export interface StartImport {
   startedBy: string;
   planned: ImportProgress;
-  run(onProgress: (p: ImportProgress) => void): Promise<ImportSummary>;
+  run(onProgress: (p: ImportProgress) => void, signal: AbortSignal): Promise<ImportSummary>;
 }
 
 export interface ImportRunner {
@@ -207,114 +212,116 @@ export interface ImportRunner {
   recover(): Promise<number>;
   /** Resolves when the running job (if any) has finished. Tests and shutdown. */
   settle(): Promise<void>;
+  quiesce(): Promise<void>;
 }
 
 export function createImportRunner(opts: ImportRunnerOptions): ImportRunner {
+  const work = createWorkCancellation(opts);
   const log = opts.log ?? ((m: string) => console.log(m));
   const now = opts.now ?? (() => Date.now());
   const persistEveryMs = opts.persistEveryMs ?? DEFAULT_PERSIST_EVERY_MS;
   let current: ImportJob | null = null;
-  /** The most recently finished job, kept so a failed terminal write cannot strand the page. */
   let last: ImportJob | null = null;
   let running: Promise<void> = Promise.resolve();
-
+  const recoveries = new Set<Promise<number>>();
   const snapshot = (j: ImportJob): ImportJob => ({ ...j, progress: cloneProgress(j.progress) });
 
   return {
     async start(spec) {
+      work.assertWritable();
       if (current) throw new ImportBusyError();
       const startedAt = new Date(now()).toISOString();
       const job: ImportJob = {
-        id: randomUUID(),
-        status: 'running',
-        startedBy: spec.startedBy,
-        startedAt,
-        updatedAt: startedAt,
-        finishedAt: null,
-        progress: cloneProgress(spec.planned),
-        summary: null,
-        error: null,
+        id: randomUUID(), status: 'running', startedBy: spec.startedBy,
+        startedAt, updatedAt: startedAt, finishedAt: null,
+        progress: cloneProgress(spec.planned), summary: null, error: null,
       };
-      // Take the slot BEFORE the first await, or two concurrent starts would
-      // both pass the check; and insert the row before the run starts, so a
-      // status poll can never see a running import with no row behind it.
+      // Reserve and track admission before insert: quiesce must also wait for
+      // a start blocked acquiring a database connection.
       current = job;
-      try {
-        await opts.store.insert(job);
-      } catch (e) {
-        current = null;
-        throw e;
-      }
-
-      let lastPersist = now();
-      let lastGroups = job.progress.groups.done;
-      // Persist failures must not fail the import: the row is a mirror of the
-      // live counters, not the source of truth for the run. Writes are
-      // SERIALISED through one chain — unawaited pooled UPDATEs can commit out
-      // of order when connection acquisition is delayed, and an older snapshot
-      // landing after a newer one (or after the terminal write) would make the
-      // durable counters go backwards.
-      let chain: Promise<void> = Promise.resolve();
-      const persist = (patch: ImportJobPatch): Promise<boolean> => {
-        const next = chain.then(() => opts.store.update(job.id, patch)).then(() => true, (e: unknown) => {
-          log(`import job ${job.id}: progress write failed: ${(e as Error).message}`);
-          return false;
-        });
-        chain = next.then(() => {});
-        return next;
-      };
-
+      const admitted = Promise.withResolvers<void>();
       running = (async () => {
-        try {
-          const summary = await spec.run((p) => {
-            job.progress = cloneProgress(p);
-            job.updatedAt = new Date(now()).toISOString();
-            // Every group boundary, else at most every persistEveryMs.
-            const groupDone = p.groups.done !== lastGroups;
-            if (groupDone || now() - lastPersist >= persistEveryMs) {
-              lastGroups = p.groups.done;
-              lastPersist = now();
-              void persist({ progress: job.progress });
-            }
+        let chain: Promise<void> = Promise.resolve();
+        const persist = (patch: ImportJobPatch): Promise<boolean> => {
+          const next = chain.then(async () => {
+            if (!work.isWritable()) return false;
+            await opts.store.update(job.id, patch);
+            return true;
+          }).catch((e: unknown) => {
+            if (work.isWritable()) log(`import job ${job.id}: progress write failed: ${(e as Error).message}`);
+            return false;
           });
-          job.status = 'done';
-          job.summary = summary;
+          chain = next.then(() => {});
+          return next;
+        };
+        try {
+          await opts.store.insert(job);
+          work.assertWritable();
+          admitted.resolve();
+          let lastPersist = now();
+          let lastGroups = job.progress.groups.done;
+          try {
+            const summary = await spec.run((p) => {
+              work.assertWritable();
+              job.progress = cloneProgress(p);
+              job.updatedAt = new Date(now()).toISOString();
+              if (p.groups.done !== lastGroups || now() - lastPersist >= persistEveryMs) {
+                lastGroups = p.groups.done;
+                lastPersist = now();
+                void persist({ progress: job.progress });
+              }
+            }, work.signal);
+            work.assertWritable();
+            job.status = 'done';
+            job.summary = summary;
+          } catch (e) {
+            if (work.isWritable()) {
+              log(`import job ${job.id} failed: ${(e as Error).stack ?? String(e)}`);
+              job.status = 'failed';
+              job.error = IMPORT_FAILED_MESSAGE;
+            } else {
+              job.status = 'interrupted';
+            }
+          }
+          job.finishedAt = new Date(now()).toISOString();
+          job.updatedAt = job.finishedAt;
+          const stored = await persist({ status: job.status, progress: job.progress, summary: job.summary, error: job.error, finishedAt: job.finishedAt });
+          if (!stored && work.isWritable()) {
+            log(`import job ${job.id}: outcome ${job.status} could not be persisted; serving it from memory until restart`);
+          }
+          last = job;
         } catch (e) {
-          // Per-group and per-image failures are already caught INTO the
-          // summary by the importer, so reaching here is unexpected (database
-          // down, a bug). Fixed message out, detail to stdout only.
-          log(`import job ${job.id} failed: ${(e as Error).stack ?? String(e)}`);
-          job.status = 'failed';
-          job.error = IMPORT_FAILED_MESSAGE;
+          admitted.reject(e);
+        } finally {
+          await chain;
+          current = null;
         }
-        job.finishedAt = new Date(now()).toISOString();
-        job.updatedAt = job.finishedAt;
-        const stored = await persist({ status: job.status, progress: job.progress, summary: job.summary, error: job.error, finishedAt: job.finishedAt });
-        if (!stored) {
-          // The outcome is kept in memory (see latest()) so the page does not
-          // poll a stale `running` row forever; a restart turns it into
-          // `interrupted` via recover(), which is honest about what was lost.
-          log(`import job ${job.id}: outcome ${job.status} could not be persisted; serving it from memory until restart`);
-        }
-        last = job;
-        current = null;
       })();
+      await admitted.promise;
       return snapshot(job);
     },
     current: () => (current ? snapshot(current) : null),
     async latest() {
       if (current) return snapshot(current);
       const stored = await opts.store.latest();
-      // Memory wins for the SAME job: its terminal write may have failed. A
-      // newer row (a later import) wins over a stale memory copy.
       if (last && (!stored || stored.id === last.id)) return snapshot(last);
       return stored;
     },
-    async recover() {
-      const n = await opts.store.interruptRunning();
-      if (n > 0) log(`import jobs: marked ${n} job(s) left running by the previous process as interrupted`);
-      return n;
+    recover() {
+      const recovery = (async () => {
+        work.assertWritable();
+        const n = await opts.store.interruptRunning();
+        if (n > 0) log(`import jobs: marked ${n} job(s) left running by the previous process as interrupted`);
+        return n;
+      })();
+      recoveries.add(recovery);
+      void recovery.then(() => recoveries.delete(recovery), () => recoveries.delete(recovery));
+      return recovery;
     },
     settle: () => running,
+    async quiesce() {
+      work.stop();
+      await Promise.allSettled([running, ...recoveries]);
+    },
   };
 }

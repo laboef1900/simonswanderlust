@@ -51,6 +51,80 @@ function setup(opts: { concurrency?: number; maxBacklog?: number } = {}) {
 }
 
 describe('createEncodeQueue', () => {
+  it('drops backlog and blocks status publication on lease loss, then recovers on a fresh queue', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await seed(store, ['a', 'b']);
+    const controller = new AbortController();
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const keys: string[] = [];
+    const queue = createEncodeQueue({
+      store, storageDir: '/nonexistent', lock: createWorkLock(), concurrency: 1, signal: controller.signal,
+      encodeOne: async (key) => { keys.push(key); started.resolve(); await finish.promise; return { bytes: 123 }; },
+    });
+    queue.enqueue('a');
+    queue.enqueue('b');
+    await started.promise;
+    controller.abort();
+    let settled = false;
+    const stop = queue.quiesce().then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(queue.stats().pending).toBe(0);
+    expect(() => queue.enqueue('c')).toThrow();
+    await expect(queue.recover()).rejects.toMatchObject({ code: 'storage_read_only' });
+    finish.resolve();
+    await stop;
+    expect(keys).toEqual(['a']);
+    expect((await store.get('a'))?.status).toBe('processing');
+    expect((await store.get('b'))?.status).toBe('processing');
+    const fresh = createEncodeQueue({
+      store, storageDir: '/nonexistent', lock: createWorkLock(), log: () => {},
+      encodeOne: async () => ({ bytes: 456 }),
+    });
+    expect(await fresh.recover()).toBe(2);
+    await fresh.idle();
+    expect(await store.get('a')).toMatchObject({ status: 'ready', variantBytes: 456 });
+    expect(await store.get('b')).toMatchObject({ status: 'ready', variantBytes: 456 });
+  });
+
+  it('does not record an encoding failure after quiesce', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await seed(store, ['a']);
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const queue = createEncodeQueue({
+      store, storageDir: '/nonexistent', lock: createWorkLock(),
+      encodeOne: async () => { entered.resolve(); await finish.promise; throw new Error('decode failed'); },
+    });
+    queue.enqueue('a');
+    await entered.promise;
+    const stop = queue.quiesce();
+    finish.resolve();
+    await stop;
+    expect((await store.get('a'))?.status).toBe('processing');
+  });
+
+  it('awaits an admitted recovery read and never starts its rows after quiesce', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await seed(store, ['a']);
+    const listed = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const queue = createEncodeQueue({
+      store: { ...store, list: async (query) => { listed.resolve(); await finish.promise; return store.list(query); } },
+      storageDir: '/nonexistent', lock: createWorkLock(), encodeOne: async () => { throw new Error('must not encode'); },
+    });
+    const recovery = queue.recover();
+    const rejected = expect(recovery).rejects.toMatchObject({ code: 'storage_read_only' });
+    await listed.promise;
+    let settled = false;
+    const stop = queue.quiesce().then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish.resolve();
+    await Promise.all([stop, rejected]);
+    expect(queue.stats()).toEqual({ pending: 0, running: 0 });
+  });
   it('marks a job ready and records its variant bytes', async () => {
     const { store, queue } = setup();
     await seed(store, ['a']);
@@ -263,7 +337,7 @@ describe('createEncodeQueue', () => {
     expect(await store.get('a')).toMatchObject({ status: 'ready' });
     expect(await store.get('b')).toMatchObject({ status: 'processing' });
     // One-way: a late enqueue after the drain never runs either.
-    queue.enqueue('d');
+    expect(() => queue.enqueue('d')).toThrow();
     await tick();
     expect(started).toEqual(['a']);
   });

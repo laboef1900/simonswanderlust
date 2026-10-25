@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { chmod, mkdir, mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises';
-import { gunzipSync } from 'node:zlib';
+import { gzipSync, gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { list as listTar } from 'tar';
@@ -29,6 +29,7 @@ const fakeDb = (
       : sql.includes('FROM media') ? media
       : sql.includes('FROM app_secrets') ? []
       : sql.includes('FROM comments') ? comments
+      : sql.includes('FROM post_routes') ? []
       : posts,
   });
   return { query, connect: async () => ({ query, release() {} }) };
@@ -144,7 +145,7 @@ describe('dumpDatabase', () => {
 describe('list + prune + state', () => {
   it('lists newest first, ignoring foreign files, and prunes beyond keep', async () => {
     for (const stamp of ['20260101-000000', '20260102-000000', '20260103-000000']) {
-      await writeFile(join(dir, `db-${stamp}.json.gz`), 'x');
+      await writeFile(join(dir, `db-${stamp}.json.gz`), gzipSync(JSON.stringify({ version: 9, tables: { users: [], posts: [] } })));
     }
     await writeFile(join(dir, 'state.json'), '{}');
     await writeFile(join(dir, 'evil.sh'), 'x');

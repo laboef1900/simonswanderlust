@@ -5,7 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Post Editor · Simon's Wanderlust</title>
     <link rel="stylesheet" href="/admin/admin.css" />
+    <link rel="stylesheet" href="/admin/editor-gpx.css" />
+    <link rel="stylesheet" href="/admin/gpx-map.css" />
     <link rel="stylesheet" href="/admin/vendor/easymde.min.css" />
+    <link rel="stylesheet" href="/admin/vendor/font-awesome/css/font-awesome.min.css" />
   </head>
   <body class="editor-page">
     <header class="cms-page-meta">
@@ -379,6 +382,18 @@
               <p class="muted"><a id="waypointAttribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer"></a></p>
             </div>
           </details>
+          <section class="editor-inspector-group gpx-route" aria-labelledby="gpxRouteHeading">
+            <h3 class="editor-card-title" id="gpxRouteHeading"></h3>
+            <p id="gpxRouteStatus" class="muted" role="status"></p>
+            <p id="gpxPublicationNotice" class="muted"></p>
+            <p id="gpxRouteFeedback" class="muted" role="status" tabindex="-1" hidden></p>
+            <div class="gpx-route__actions">
+              <button id="gpxImportOpen" type="button" class="btn-secondary"></button>
+              <button id="gpxReimport" type="button" class="btn-secondary" hidden></button>
+              <button id="gpxDownload" type="button" class="btn-secondary" hidden></button>
+              <button id="gpxDetach" type="button" class="btn-secondary" hidden></button>
+            </div>
+          </section>
 
           <details class="editor-inspector-group" id="taxonomyDetails">
             <summary class="editor-card-title">Taxonomy</summary>
@@ -424,7 +439,59 @@
         <button id="runReview" type="button" class="btn-secondary">Review again</button>
       </footer>
     </dialog>
+    <dialog id="gpxDialog" class="gpx-dialog" aria-labelledby="gpxDialogHeading">
+      <header class="gpx-dialog__header">
+        <h2 id="gpxDialogHeading"></h2>
+        <button id="gpxClose" type="button" class="btn-secondary"></button>
+      </header>
+      <div class="gpx-dialog__body">
+        <label id="gpxFileLabel" for="gpxFile"></label>
+        <input id="gpxFile" type="file" accept=".gpx,application/gpx+xml,application/xml,text/xml" />
+        <p id="gpxError" class="err" role="alert" tabindex="-1" hidden></p>
+        <p id="gpxStatus" class="muted" role="status" aria-live="polite"></p>
+        <p id="gpxCleanupNotice" class="notice-warn" role="status" hidden></p>
+        <p id="gpxEmpty" class="muted"></p>
+        <section id="gpxPreview" class="gpx-preview" hidden>
+          <div id="gpxMap" class="gpx-map gpx-map__canvas" role="region"></div>
+          <p id="gpxMapStatus" class="muted" role="status"></p>
+          <p id="gpxCounts" class="muted"></p>
+          <p id="gpxReplaceScope" class="notice-warn" hidden></p>
+          <label id="gpxReplaceConfirmLabel" class="check-field" hidden><input id="gpxReplaceConfirm" type="checkbox" /> <span></span></label>
+          <p id="gpxPrivacy" class="muted"></p>
+          <label id="gpxTrimMethodLabel" for="gpxTrimMethod"></label>
+          <select id="gpxTrimMethod" aria-describedby="gpxTrimMethodHelp">
+            <option id="gpxTrimPointsOption" value="points"></option>
+            <option id="gpxTrimDistanceOption" value="distance"></option>
+          </select>
+          <p id="gpxTrimMethodHelp" class="muted"></p>
+          <div id="gpxPointTrim" class="gpx-trim">
+            <label id="gpxStartLabel" for="gpxStart"></label><input id="gpxStart" type="number" min="0" value="0" inputmode="numeric" />
+            <label id="gpxEndLabel" for="gpxEnd"></label><input id="gpxEnd" type="number" min="0" value="0" inputmode="numeric" />
+          </div>
+          <div id="gpxDistanceTrim" class="gpx-trim" hidden>
+            <label id="gpxStartDistanceLabel" for="gpxStartDistance"></label><input id="gpxStartDistance" type="number" min="0" value="0" inputmode="decimal" />
+            <label id="gpxEndDistanceLabel" for="gpxEndDistance"></label><input id="gpxEndDistance" type="number" min="0" value="0" inputmode="decimal" />
+          </div>
+          <p id="gpxKept" class="muted"></p><p id="gpxRemoved" class="muted"></p>
+          <button id="gpxReset" class="btn-secondary" type="button"></button>
+          <fieldset><legend id="gpxSegmentsLegend"></legend><div id="gpxSegments" class="gpx-segments"></div></fieldset>
+          <h3 id="gpxWaypointsHeading" hidden></h3>
+          <p id="gpxWaypointWarning" class="notice-warn" hidden></p>
+          <label id="gpxAdoptConfirmLabel" class="check-field" hidden><input id="gpxAdoptConfirm" type="checkbox" /> <span></span></label>
+          <div id="gpxWaypoints" class="gpx-waypoints"></div>
+          <button id="gpxAdopt" type="button" class="btn-secondary" hidden></button>
+          <p id="gpxAdoptionNote" class="muted" hidden></p>
+        </section>
+      </div>
+      <footer class="gpx-dialog__footer">
+        <button id="gpxDiscard" type="button" class="btn-secondary"></button>
+        <button id="gpxAttach" type="button" class="btn-primary-publish" disabled></button>
+      </footer>
+    </dialog>
 
+    <script src="/admin/gpx-copy.js"></script>
+    <script src="/admin/gpx-map.js"></script>
+    <script src="/admin/editor-gpx.js"></script>
     <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/admin-confirm.js"></script>
@@ -492,12 +559,14 @@
       const deMDE = new EasyMDE({
         element: $('deBody'),
         spellChecker: false,
+        autoDownloadFontAwesome: false,
         autosave: { enabled: false },
         toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'],
       });
       const enMDE = new EasyMDE({
         element: $('enBody'),
         spellChecker: false,
+        autoDownloadFontAwesome: false,
         autosave: { enabled: false },
         toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'],
       });
@@ -1616,7 +1685,8 @@
       // ---- save draft ----
       // Persists the current on-screen form. Returns true on success so Publish
       // can save first and validate exactly what's on screen.
-      async function doSaveDraft() {
+      async function doSaveDraft({ gpxAttach = false } = {}) {
+        if (!gpxAttach && !gpxEditor.guardAction()) return false;
         showErr('');
         setStatus('');
         const snap = guard.snapshot(); // edits typed after this point must survive markClean
@@ -1994,6 +2064,7 @@
       // normal Save (slug-lock + validation apply, and the overwritten state
       // gets its own revision) — there is no direct server-side restore.
       async function restoreRevision(id) {
+        if (!gpxEditor.guardAction()) return;
         showErr('');
         const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/revisions/' + encodeURIComponent(id));
         if (res.status === 401) { guard.redirectToLogin(); return; }
@@ -2016,8 +2087,40 @@
           + ' into the editor'
           + (isPublished ? ' (current slugs kept — the slug is locked after publish)' : '')
           + ' — review it, then Save draft to keep it.');
+        gpxEditor.revisionNotice();
       }
 
+      const gpxEditor = GpxEditor.wire({
+        getPost: () => ({ tk: currentTk, baseUpdatedAt: loadedUpdatedAt }),
+        saveDraft: () => doSaveDraft({ gpxAttach: true }),
+        saveError: () => $('actionError').textContent,
+        setBaseUpdatedAt: (value) => { loadedUpdatedAt = value; },
+        adoptStops: (stops) => {
+          if (!Array.isArray(stops) || stops.some((stop) => !stop.name || !Number.isFinite(stop.lat) || !Number.isFinite(stop.lng))) throw new Error('invalid stops');
+          stops.forEach((stop) => addStopRow(stop.name, stop.lat, stop.lng));
+          guard.markDirty();
+        },
+        inspector: {
+          isOpen: () => document.body.classList.contains('editor-inspector-open'),
+          close: () => inspectorApi.close(),
+          open: () => { if (window.matchMedia('(max-width: 74rem)').matches) $('inspectorToggle').click(); },
+        },
+        on401: () => guard.redirectToLogin(),
+        confirm: (options) => AdminConfirm.ask(options),
+        copy: GpxCopy.en,
+        map: GpxMap,
+        mapCopy: {
+          loading: GpxCopy.en.mapLoading,
+          basemapMissing: GpxCopy.en.mapBasemapMissing,
+          webglFallback: GpxCopy.en.mapWebglFallback,
+          kept: GpxCopy.en.mapLegendKept,
+          removed: GpxCopy.en.mapLegendRemoved,
+          waypoints: GpxCopy.en.mapLegendWaypoints,
+          routeLabel: GpxCopy.en.mapRouteLabel,
+          waypointLabel: GpxCopy.en.mapWaypointLabel,
+          noGeometry: GpxCopy.en.mapNoGeometry,
+        },
+      });
       // ---- init ----
       (async () => {
         const s = await Auth.ensureAuthed();
@@ -2059,6 +2162,7 @@
         } else {
           guard.markClean();
         }
+        await gpxEditor.refresh();
         document.querySelector('main').addEventListener('input', updateLocaleChip);
         updateLocaleChip();
       })();

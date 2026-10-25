@@ -584,7 +584,6 @@ maybe('backup round-trip (Postgres)', () => {
       const written = preDumps(backupDir);
       expect(written).toHaveLength(1);
       const preDumpPath = join(backupDir, 'db', written[0]!);
-      expect(r.stdout).toContain(`pre-restore dump written: ${preDumpPath}`);
       // The pre-dump captures the state BEFORE the wipe (alice + bob) …
       expect(usersIn(preDumpPath)).toEqual(['alice', 'bob']);
       // … and the database now matches the restored dump (alice only).

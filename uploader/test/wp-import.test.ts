@@ -106,6 +106,78 @@ const run = (
 });
 
 describe('importWxr', () => {
+  it.each([false, true])('does not resurrect a matched draft deleted after preparation (overwrite=%s)', async (overwriteDrafts) => {
+    const store = memoryPostStore();
+    const body = pairOf('g', 'de-a', 'en-a', '<p>original</p>');
+    const deps = { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost, log: () => {} };
+    await importWxr(body, deps);
+    const prior = (await store.list())[0]!;
+    const prepared = await prepareImport(body, { ...deps, overwriteDrafts });
+    await store.remove(prior.translationKey);
+    expect(await prepared.run()).toMatchObject({ imported: 0, updated: 0, failed: 1 });
+    expect(await store.list()).toEqual([]);
+  });
+
+  it('does not overwrite an author save made after WXR preparation', async () => {
+    const store = memoryPostStore();
+    const body = pairOf('g', 'de-a', 'en-a', '<p>original</p>');
+    const deps = { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost, log: () => {} };
+    await importWxr(body, deps);
+    const prior = (await store.list())[0]!;
+    const prepared = await prepareImport(body, deps);
+    const pair = (await store.get(prior.translationKey))!;
+    await store.upsertDraft({ ...pair, de: { ...pair.de, title: 'Author edit' } }, pair.updatedAt);
+    expect(await prepared.run()).toMatchObject({ updated: 0, failed: 1 });
+    expect((await store.get(pair.translationKey))?.de.title).toBe('Author edit');
+  });
+
+  it('passes runner cancellation through rehosting and never saves or reports progress afterwards', async () => {
+    const store = memoryPostStore();
+    const controller = new AbortController();
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    let seenSignal: AbortSignal | undefined;
+    let calls = 0;
+    let reports = 0;
+    const prepared = await prepareImport(pairOf('g', 'de-a', 'en-a', imgs('https://old.example/a.jpg', 'https://old.example/b.jpg')), {
+      postStore: store, storageDir: '/tmp', baseUrl: 'https://img', log: () => {},
+      rehost: async (_url, _key, _alt, signal) => {
+        calls++; seenSignal = signal; entered.resolve(); await finish.promise;
+        return { src: 'https://img/a', width: 10, height: 10 };
+      },
+    });
+    const run = prepared.run(() => { reports++; }, controller.signal);
+    const rejected = expect(run).rejects.toMatchObject({ code: 'storage_read_only' });
+    await entered.promise;
+    controller.abort();
+    expect(seenSignal?.aborted).toBe(true);
+    finish.resolve();
+    await rejected;
+    expect(calls).toBe(1);
+    expect(reports).toBe(0);
+    expect(await store.list()).toEqual([]);
+  });
+
+  it('cancels retry backoff rather than issuing another fetch or saving a partial draft', async () => {
+    const store = memoryPostStore();
+    const controller = new AbortController();
+    const sleeping = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    let calls = 0;
+    const run = importWxr(pairOf('g', 'de-a', 'en-a', imgs('https://old.example/a.jpg')), {
+      postStore: store, storageDir: '/tmp', baseUrl: 'https://img', log: () => {},
+      signal: controller.signal, retries: 2,
+      sleep: () => { sleeping.resolve(); return finish.promise; },
+      rehost: async () => { calls++; throw new FetchError('timeout', 'timeout'); },
+    });
+    const rejected = expect(run).rejects.toMatchObject({ code: 'storage_read_only' });
+    await sleeping.promise;
+    controller.abort();
+    await rejected;
+    finish.resolve();
+    expect(calls).toBe(1);
+    expect(await store.list()).toEqual([]);
+  });
   it('creates a draft pair with preserved slugs, placeholders, and re-hosted images', async () => {
     const store = memoryPostStore();
     const s = await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });

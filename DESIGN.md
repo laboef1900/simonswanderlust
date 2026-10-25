@@ -976,6 +976,23 @@ and the `<dialog>`s appended to `<body>` share one set:
   reduced motion. At 74rem and below it is a modal drawer opened by an icon button
   after More actions; the same header toggle closes it, and it traps Tab, closes on
   Escape or the scrim, and restores focus to its opener.
+- GPX editing is a flat section in Story details, not another dashboard. Its scoped native
+  dialog closes the phone inspector first, then restores that drawer and the exact opener
+  on dismissal. A fixed header/footer frame one scrollable body; touch actions are at least
+  44px. The self-hosted map distinguishes kept runs (solid red), removed runs (dashed gray)
+  and selected/unselected waypoints with filled/hollow markers plus a text legend.
+  A missing basemap keeps interactive overlays on a grid; a WebGL failure uses local SVG.
+  WebGL2 is checked before MapLibre construction; preview cleanup cannot turn an
+  acknowledged attachment into a failed-save message.
+  An explicit point/distance selector exposes only the active trim controls; switching
+  methods uses that method's entered values, never a hidden combination of both.
+  Segment removal recalculates distance trims without counting discontinuity gaps.
+  Counts and Reset remain usable; Reset clears trimming without changing the chosen method.
+  Replacement and exact-coordinate waypoint adoption require separate unchecked consent.
+  Attach names its save scope; cancellation never silently saves. Errors receive focus
+  after an action, but live trim feedback never steals focus while typing. Delayed cleanup
+  warnings stay separate from the current input error. #313 clearly labels routes private;
+  public rendering is #314's dependent work.
 - Country assistance and excerpt generation sit next to the relevant fields in Story
   details. Coordinate approximation is explicit. Excerpt suggestions have a plain-text
   preview, character count, and separate accept/dismiss actions; generation never looks
