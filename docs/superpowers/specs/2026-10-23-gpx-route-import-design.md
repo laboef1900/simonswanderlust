@@ -251,6 +251,23 @@ Registry metadata and package file listings were inspected on 2026-10-23: both B
 
 Do not add deprecated `protomaps-themes-base` to uploader. Use a small fixed local context style over the existing Protomaps `earth`, `water`, `boundaries`, `roads`, `places` layers, self-hosted glyphs and attribution; no sprites or external style document. This scoped editing style does not replace the public site's theme. PMTiles protocol registers once, all tile/font requests resolve to the app origin, and the map URL is fixed `/map/basemap.pmtiles`. Tile failure switches to a no-source grid style without discarding overlays. Camera fit z8 is a convenience; authors may inspect geometry at higher zoom without claiming more basemap detail. Never enable geolocation or map-position URL hashing.
 
+Display framing clarification (#336, 2026-10-25): the editor map, its local SVG fallback,
+and the public story mini-map share a display-only longitude frame. Choose the largest
+unoccupied circular gap **between whole run intervals**, including waypoints/pins/stops
+as singleton intervals, and put the viewport seam there. Never cut a connected run at
+a gap between its vertices: a genuinely wide route must remain wide. Ties keep ordinary
+longitude bounds. Shift only rendering copies by 360° where needed; preserve run
+boundaries and never change private geometry, the rounded public artifact, embedded
+`data-geometry`, adopted stops, or stored/published coordinates. SVG and MapLibre use
+the same frame, including the original context while an editor candidate is pending.
+Public mini-map overlays initialize on `style.load`, independently of tile availability.
+A failed local basemap switches that mini-map to a source-free canvas and restores the
+same overlays without resetting the camera. The public route text remains available;
+the overview map and its fallback are unchanged.
+This is a normal-risk display fix; the publication/privacy and self-hosting boundaries
+above are unchanged. Rollback is reverting the display helper and its two consumers,
+with no content migration or rebuild of stored route artifacts.
+
 Upstream references: [MapLibre Map API](https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/), [MapLibre v6 migration](https://github.com/maplibre/maplibre-gl-js/blob/v6.0.0/docs/guides/v5-to-v6-migration-guide.md), [PMTiles MapLibre integration](https://docs.protomaps.com/pmtiles/maplibre), [Protomaps layer contract](https://docs.protomaps.com/basemaps/layers), [MapLibre repository](https://github.com/maplibre/maplibre-gl-js), [PMTiles repository](https://github.com/protomaps/PMTiles). Original package entrypoints were verified with `npm pack --dry-run --ignore-scripts`; the amended 6.4.1 ESM layout was inspected in the installed package and checked against the versioned migration guide.
 
 ## 7. Explicit Publish and public read paths
