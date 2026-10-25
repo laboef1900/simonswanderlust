@@ -224,6 +224,13 @@ Removed sections stay visually distinct; separate runs are never connected. If t
 or WebGL are unavailable, the grid/SVG and numeric controls still work. Removing every
 usable run disables attachment; use **Detach route** to remove an existing attachment.
 
+The solid line is the **public candidate**, simplified within each run at 25 m and rounded
+to four decimal places. Neither that precision nor the z8 basemap anonymizes a location.
+Wait for the candidate to finish before attaching. Collapsed runs are reported; an empty
+candidate or one exceeding 100 runs, 2,000 vertices or 64 KiB cannot be attached/published.
+Trim more, remove segments or replace the source; precision is never silently reduced.
+A route attached before public-route support may need this correction on its first Publish.
+
 **Attach route** is explicit. For an existing post it does not save unsaved story text
 or other fields. For a new post, **Save draft and attach route** first saves the form;
 if attachment fails afterwards, keep the saved draft and retry the preview. A conflict
@@ -250,9 +257,12 @@ remove sensitive stops separately and save the ordinary draft.
 
 Private originals and paired database/route-archive backups deliberately retain removed
 locations, elevation, timestamps and source metadata. Treat them as confidential.
-The private workflow is delivered in #313; public route rendering and published-only
-route export remain #314's dependent work. Until that lands, GPX geometry is not emitted
-into the blog or MDX.
+Only explicit admin **Publish** updates the public route. Save, route edits, Detach and
+**Rebuild site now** leave the last published line unchanged. To remove it publicly,
+detach and then Publish. If the build fails after publication, the old release remains
+served; fix the build failure and rebuild the committed snapshot.
+Both language pages show the same public geometry, with localized per-run lengths and
+start/end coordinates available without JavaScript or a map. Overview maps remain pin-only.
 
 
 ### Finding posts, and acting on several at once
@@ -290,7 +300,10 @@ name the affected stories. Important details:
 
 The **Export MDX to server backup** button (Posts list) writes MDX backup files for all posts to
 `/data/backup` on the server. Exports contain the **working copies** (what you see in the
-editor) — including draft edits not yet published. These are reference copies — Postgres is the
+editor) — including draft prose/metadata edits not yet published. The optional `track`
+field is deliberately different: it is only the **last published public artifact**, never
+the current private attachment. Never-published routes are omitted; edited/detached routes
+keep the last published line until Publish. These are reference copies — Postgres is the
 source of truth.
 
 GPX originals/private geometry are excluded from MDX. Recovery requires the private v10

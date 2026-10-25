@@ -23,6 +23,7 @@ import { pgCommentAdminStore } from './comments-admin.js';
 import { acquireStorageOwner } from './storage-owner.js';
 import { createGpxFiles } from './gpx-files.js';
 import { createGpxWorker } from './gpx-worker.js';
+import { createPublicTrackWorker } from './gpx-public-worker.js';
 import { createGpxService } from './gpx-service.js';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -63,7 +64,8 @@ await mkdir(dirname(resolve(storageDir)), { recursive: true, mode: 0o700 });
 owner.assertWritable();
 const routeFiles = createGpxFiles({ storageDir, isWritable: owner.isWritable });
 await routeFiles.assertRoot();
-const posts = pgPostStore(pool, { routeFiles, isWritable: owner.isWritable });
+const publicTrackWorker = createPublicTrackWorker();
+const posts = pgPostStore(pool, { routeFiles, isWritable: owner.isWritable, publicTrackWorker });
 const pages = pgPageStore(pool);
 // issue #92: a job the previous process left `running` is marked interrupted
 // BEFORE listen(), so no request can observe a stale row as "busy".
@@ -174,7 +176,7 @@ const endPool = () => poolEnding ??= pool.end();
 function quiesceWork(): Promise<void> {
   clearInterval(housekeepingTimer);
   return quiescing ??= Promise.allSettled([
-    app.quiesceMutations(), gpx.close(), builder.quiesce(), encodeQueue.quiesce(), importJobs.quiesce(), dbBackup.quiesce(),
+    app.quiesceMutations(), gpx.close(), publicTrackWorker.close(), builder.quiesce(), encodeQueue.quiesce(), importJobs.quiesce(), dbBackup.quiesce(),
   ]).then((results) => {
     if (results.some((result) => result.status === 'rejected')) console.error('Background storage work stopped with errors; restart recovery is required.');
   });

@@ -66,7 +66,7 @@ describe('GPX preview map', () => {
     const nextPending = maps.create({ container: h.container, statusElement: h.status, copy });
     h.finishLoads();
     const [old, next] = await Promise.all([oldPending, nextPending]);
-    next.render({ geometry: { version: 1, segments: [segment({ lng: 1, lat: 2 }, { lng: 3, lat: 4 })] }, kept: { version: 1, segments: [segment({ lng: 1, lat: 2 }, { lng: 3, lat: 4 })] } });
+    next.render({ geometry: { version: 1, segments: [segment({ lng: 1, lat: 2 }, { lng: 3, lat: 4 })] }, rawKept: { version: 1, segments: [segment({ lng: 1, lat: 2 }, { lng: 3, lat: 4 })] }, selection: { startPoints: 0, endPoints: 0, removedSegments: [] }, track: { version: 1, type: 'MultiLineString', coordinates: [[[1, 2], [3, 4]]] } });
     old.destroy();
     expect(h.container.innerHTML).toContain('<polyline');
     expect(h.container.parentNode?.children).toHaveLength(2);
@@ -74,12 +74,26 @@ describe('GPX preview map', () => {
     expect(h.container.innerHTML).toBe('');
   });
 
+  it('keeps the route in the initial viewport while its public candidate is pending', async () => {
+    const h = harness();
+    const api = await (h.window.GpxMap as { create(options: unknown): Promise<{ render(data: unknown): void; destroy(): void }> }).create({ container: h.container, statusElement: h.status, copy });
+    const geometry = { version: 1, segments: [segment({ lng: 1, lat: 2 }, { lng: 3, lat: 4 })] };
+    const pending = { geometry, rawKept: geometry, selection: { startPoints: 0, endPoints: 0, removedSegments: [] }, track: null, waypoints: [{ lng: 40, lat: 50 }] };
+    api.render(pending);
+    expect(h.map.fitBounds).toHaveBeenCalledWith([[1, 2], [40, 50]], expect.objectContaining({ duration: 0 }));
+    expect(h.sources['gpx-kept']).toBeUndefined();
+    api.render({ ...pending, track: { version: 1, type: 'MultiLineString', coordinates: [[[1, 2], [3, 4]]] } });
+    expect(h.map.fitBounds).toHaveBeenCalledOnce();
+    expect(featureSource(h.sources['gpx-kept']).data.geometry.coordinates).toEqual([[[1, 2], [3, 4]]]);
+    api.destroy();
+  });
+
   it('renders independent route runs and exact selected waypoint coordinates', async () => {
     const h = harness();
     const api = await (h.window.GpxMap as { create: (options: unknown) => Promise<{ render(data: unknown): void; resize(): void; destroy(): void }> }).create({ container: h.container, statusElement: h.status, copy });
     const original = { version: 1 as const, segments: [segment({ lng: 1, lat: 2 }, { lng: 3, lat: 4 }, { lng: 5, lat: 6 }), segment({ lng: 40, lat: 50 }, { lng: 42, lat: 52 })] };
     const kept = { version: 1 as const, segments: [segment({ lng: 3, lat: 4 }, { lng: 5, lat: 6 })] };
-    api.render({ geometry: original, kept, waypoints: [{ lng: 41, lat: 51 }], selectedWaypointIndices: [0] });
+    api.render({ geometry: original, rawKept: kept, selection: { startPoints: 1, endPoints: 0, removedSegments: [1] }, track: { version: 1, type: 'MultiLineString', coordinates: [[[3, 4], [5, 6]]] }, waypoints: [{ lng: 41, lat: 51 }], selectedWaypointIndices: [0] });
     const removedData = featureSource(h.sources['gpx-removed']).data;
     expect(removedData.geometry.type).toBe('MultiLineString');
     expect(removedData.geometry.coordinates).toEqual([[[1, 2], [3, 4]], [[40, 50], [42, 52]]]);
@@ -93,7 +107,7 @@ describe('GPX preview map', () => {
   it.each(['unavailable', 'partial', 'throws'] as const)('draws and cleans up a local SVG for %s WebGL initialization, including polar coordinates', async (mode) => {
     const h = harness(mode);
     const api = await (h.window.GpxMap as { create: (options: unknown) => Promise<{ render(data: unknown): void; destroy(): void }> }).create({ container: h.container, statusElement: h.status, copy });
-    api.render({ geometry: { version: 1, segments: [segment({ lng: -180, lat: -90 }, { lng: 180, lat: 90 })] }, kept: { version: 1, segments: [] }, waypoints: [{ lng: 0, lat: 90 }], selectedWaypointIndices: [0] });
+    api.render({ geometry: { version: 1, segments: [segment({ lng: -180, lat: -90 }, { lng: 180, lat: 90 })] }, rawKept: { version: 1, segments: [] }, selection: { startPoints: 0, endPoints: 0, removedSegments: [0] }, track: null, waypoints: [{ lng: 0, lat: 90 }], selectedWaypointIndices: [0] });
     expect((h.container as unknown as { innerHTML: string }).innerHTML).toContain('<svg');
     expect((h.container as unknown as { innerHTML: string }).innerHTML).not.toMatch(/\b(?:NaN|Infinity)\b/);
     expect(h.status.textContent).toBe('Fallback');
@@ -104,11 +118,48 @@ describe('GPX preview map', () => {
   it('shows unselected waypoints without requiring an attachable route', async () => {
     const h = harness('unavailable');
     const api = await (h.window.GpxMap as { create: (options: unknown) => Promise<{ render(data: unknown): void; destroy(): void }> }).create({ container: h.container, statusElement: h.status, copy });
-    api.render({ geometry: { version: 1, segments: [] }, kept: { version: 1, segments: [] }, waypoints: [{ lng: 0, lat: 0 }, { lng: 1, lat: 1 }], selectedWaypointIndices: [1] });
+    api.render({ geometry: { version: 1, segments: [] }, rawKept: { version: 1, segments: [] }, selection: { startPoints: 0, endPoints: 0, removedSegments: [] }, track: null, waypoints: [{ lng: 0, lat: 0 }, { lng: 1, lat: 1 }], selectedWaypointIndices: [1] });
     const svg = (h.container as unknown as { innerHTML: string }).innerHTML;
     expect(svg.match(/<circle /g)).toHaveLength(2);
     expect(svg.match(/class="gpx-map__waypoint is-selected"/g)).toHaveLength(1);
     expect(svg).not.toContain('<polyline');
+    api.destroy();
+  });
+  it('draws only rounded public vertices as solid and only explicitly removed original edges as dashed', async () => {
+    const h = harness();
+    const maps = h.window.GpxMap as { create(options: unknown): Promise<{ render(data: unknown): void; destroy(): void }> };
+    const api = await maps.create({ container: h.container, statusElement: h.status, copy });
+    const run = segment({ lng: 1.0000123, lat: 2.0000123 }, { lng: 1.1000123, lat: 2.1000123 }, { lng: 1.2000123, lat: 2.2000123 });
+    const rawKept = { version: 1, segments: [run] };
+    const data = {
+      geometry: { version: 1, segments: [run, structuredClone(run)] }, rawKept,
+      selection: { startPoints: 0, endPoints: 0, removedSegments: [1] },
+      track: { version: 1, type: 'MultiLineString', coordinates: [[[1, 2], [1.2, 2.2]]] },
+    };
+    api.render(data);
+    expect(featureSource(h.sources['gpx-kept']).data.geometry.coordinates).toEqual(data.track.coordinates);
+    expect(featureSource(h.sources['gpx-removed']).data.geometry.coordinates).toEqual([
+      run.points.map(({ lng, lat }) => [lng, lat]),
+    ]);
+    expect(h.map.fitBounds).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ duration: 0 }));
+    api.render({ ...data, track: null, geometry: rawKept, selection: { startPoints: 0, endPoints: 0, removedSegments: [] } });
+    expect(h.sources['gpx-kept']).toBeUndefined();
+    expect(h.sources['gpx-removed']).toBeUndefined();
+    api.destroy();
+  });
+
+  it('keeps the rounded solid and removed dashed paths distinct in the no-WebGL fallback', async () => {
+    const h = harness('unavailable');
+    const maps = h.window.GpxMap as { create(options: unknown): Promise<{ render(data: unknown): void; destroy(): void }> };
+    const api = await maps.create({ container: h.container, statusElement: h.status, copy });
+    const original = { version: 1, segments: [segment({ lng: 1, lat: 2 }, { lng: 3.000012, lat: 4.000012 }, { lng: 5.000012, lat: 6.000012 })] };
+    api.render({
+      geometry: original, rawKept: { version: 1, segments: [segment(...original.segments[0]!.points.slice(1))] },
+      selection: { startPoints: 1, endPoints: 0, removedSegments: [] },
+      track: { version: 1, type: 'MultiLineString', coordinates: [[[3, 4], [5, 6]]] },
+    });
+    expect(h.container.innerHTML.match(/class="gpx-map__line is-kept"/g)).toHaveLength(1);
+    expect(h.container.innerHTML.match(/class="gpx-map__line is-removed"/g)).toHaveLength(1);
     api.destroy();
   });
 });

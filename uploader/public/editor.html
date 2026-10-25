@@ -458,6 +458,8 @@
           <p id="gpxReplaceScope" class="notice-warn" hidden></p>
           <label id="gpxReplaceConfirmLabel" class="check-field" hidden><input id="gpxReplaceConfirm" type="checkbox" /> <span></span></label>
           <p id="gpxPrivacy" class="muted"></p>
+          <p id="gpxCandidateHelp" class="muted"></p>
+          <p id="gpxCandidateStatus" class="muted" role="status" aria-live="polite"></p>
           <label id="gpxTrimMethodLabel" for="gpxTrimMethod"></label>
           <select id="gpxTrimMethod" aria-describedby="gpxTrimMethodHelp">
             <option id="gpxTrimPointsOption" value="points"></option>
@@ -1751,6 +1753,7 @@
         if (!currentTk && body.translationKey) {
           storyReview?.invalidate();
           currentTk = body.translationKey;
+          gpxEditor.noteCreated(currentTk);
           guard.setKey('swl:draft:' + currentTk);
           const url2 = new URL(location.href);
           url2.searchParams.set('tk', currentTk);
@@ -1781,6 +1784,10 @@
       });
 
       $('publishBtn').addEventListener('click', async () => {
+        if (!gpxEditor.guardAction()) return;
+        let reviewedRouteVersion;
+        try { reviewedRouteVersion = gpxEditor.publishVersion(); }
+        catch (e) { showErr(e.message); return; }
         const g = allPublishGaps();
         if (gapCount(g) > 0) {
           showErr('Not ready to publish. Use the bar above to jump to the missing fields.');
@@ -1809,13 +1816,17 @@
           setStatus('Building… ' + Math.round((Date.now() - started) / 1000) + 's');
         }, 1000);
         try {
-          const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/publish', { method: 'POST' });
+          const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/publish', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ baseUpdatedAt: loadedUpdatedAt, baseRouteVersion: reviewedRouteVersion }),
+          });
           if (res.status === 401) { guard.redirectToLogin(); return; }
           const body = await res.json().catch(() => ({}));
           if (!res.ok) {
             const examples = Array.isArray(body.foreignImages) && body.foreignImages.length
               ? ' Examples: ' + body.foreignImages.join(', ') : '';
-            showErr((body.error || ('Publish failed: ' + res.status)) + examples);
+            showErr(gpxEditor.publishError(body.code || body.error) || (body.error || ('Publish failed: ' + res.status)) + examples);
             setStatus('');
             return;
           }
@@ -2104,6 +2115,7 @@
           isOpen: () => document.body.classList.contains('editor-inspector-open'),
           close: () => inspectorApi.close(),
           open: () => { if (window.matchMedia('(max-width: 74rem)').matches) $('inspectorToggle').click(); },
+          reveal: (target) => inspectorApi.reveal(target),
         },
         on401: () => guard.redirectToLogin(),
         confirm: (options) => AdminConfirm.ask(options),

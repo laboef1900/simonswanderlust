@@ -57,9 +57,8 @@ Plus the **`pgdata`** volume — Postgres data.
 ## GPX route boundary (#311)
 
 The [owner-approved GPX specification](docs/superpowers/specs/2026-10-23-gpx-route-import-design.md)
-governs this high-risk change. **#313 implements the private workflow; #314's public artifact,
-snapshot and rendering work remains pending.** Story URLs, shared stops and the free-text
-`route` label are unchanged.
+governs the private workflow (#313) and public snapshot pipeline (#314).
+Story URLs, shared stops and the free-text `route` label are unchanged.
 
 - One private `post_routes` row per translation pair, authenticated import/attach/read APIs,
   and `/data/routes` beside—not inside—images/site/static roots. Attach compares both route
@@ -75,10 +74,20 @@ snapshot and rendering work remains pending.** Story URLs, shared stops and the 
   health reports `storageWritable: false`; an explicit app restart resumes writes.
   Cleanup never queues behind backup. Transactional operational `route_cleanup` intents
   retry failed explicit removals across restart without targeting current/restored sources.
-- **Pending #314:** create a bounded public `track` artifact from the trimmed private route
-  and copy it into both locale snapshots only on explicit Publish. Content Layer/MDX must
-  read those snapshots, never the current private row, preserving route edits and detachment
-  as draft-only changes. Overview maps remain pin-only. #313 emits no public route geometry.
+- `gpx-public-track.js` is the canonical pure projection shared by browser, author Attach
+  and admin Publish workers: separate runs, 25 m simplification, four-decimal 2D coordinates,
+  fixed output caps. An independent admin worker prevents author imports occupying the
+  Publish slot. Computation runs outside DB transaction locks.
+- `getPublishState()` captures both locales and the route coherently. Explicit Publish
+  compares the reviewed pair/route tokens again under the pair lock, then copies one
+  validated `track` artifact into both locale snapshots; detachment omits the field.
+  Legacy snapshot backfill never joins private routes. Content Layer and MDX consume only
+  snapshot artifacts, so edits/detachment remain draft-only through Save and Rebuild.
+  MDX retains working-copy prose but the last published track. Both snapshot projections
+  must validate and agree; corrupt/mismatched artifacts refuse export and recovery capture.
+- Story mini-maps render the public runs below pin/stop markers and fit all their bounds.
+  Localized per-run lengths/endpoints remain usable without JavaScript, tiles or WebGL.
+  Overview maps remain pin-only; routeless stories keep their existing fallback unchanged.
 - Private dump v10 includes route rows; a full, manifest-matched private route archive
   includes retained originals. The archive is completed before the matching dump becomes
   visible; manifest references pair retention independently of filename timestamps.
@@ -86,8 +95,8 @@ snapshot and rendering work remains pending.** Story URLs, shared stops and the 
   missing, corrupt, unreadable or oversized; they never promise to recover unavailable
   bytes. Retained degraded manifests pin unreadable/oversized local sources against
   automatic reclamation, but explicit replacement/post deletion override those pins.
-  Offline restore validates the set, stages new identities, then commits database state
-  transactionally. Legacy dumps restore without routes.
+  Offline restore validates the set and both public snapshot projections, stages new
+  identities, then commits database state transactionally. Legacy dumps restore without routes.
 - The admin's self-hosted MapLibre 6.4.1 / PMTiles 4.4.1 preview is context only. Distance,
   point and whole-segment controls work without basemap data; WebGL failure uses a local SVG.
   Waypoints are unchecked and adopted independently as exact, shared stops only after explicit

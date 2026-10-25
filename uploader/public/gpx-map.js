@@ -69,23 +69,26 @@
     if (!nondegenerate.length) return null;
     return { type: 'Feature', properties: properties, geometry: { type: 'MultiLineString', coordinates: nondegenerate } };
   }
-  function removedRuns(original, kept) {
-    var retainedEdges = new Set();
-    function key(a, b) { return a.lng + ',' + a.lat + '>' + b.lng + ',' + b.lat; }
-    kept.forEach(function (run) {
-      for (var i = 1; i < run.length; i += 1) retainedEdges.add(key(run[i - 1], run[i]));
-    });
+  function removedRuns(original, selection, rawKept) {
+    // Index provenance, not coordinate equality: a removed run can retrace a kept one.
+    var excluded = new Set(selection.removedSegments);
+    var total = original.reduce(function (n, run, index) { return n + (excluded.has(index) ? 0 : run.length); }, 0);
+    var end = total - selection.endPoints, offset = 0;
     var result = [];
-    original.forEach(function (run) {
+    original.forEach(function (run, index) {
+      var startIndex = Math.max(0, selection.startPoints - offset);
+      var endIndex = Math.min(run.length, end - offset);
+      var removed = excluded.has(index);
+      if (!removed) offset += run.length;
+      var retained = !removed && rawKept.length > 0 && endIndex - startIndex >= 2;
       var current = [];
       for (var i = 1; i < run.length; i += 1) {
-        var a = run[i - 1], b = run[i];
-        if (retainedEdges.has(key(a, b))) {
+        if (retained && i - 1 >= startIndex && i < endIndex) {
           if (current.length > 1) result.push(current);
           current = [];
         } else {
-          if (!current.length) current.push(a);
-          current.push(b);
+          if (!current.length) current.push(run[i - 1]);
+          current.push(run[i]);
         }
       }
       if (current.length > 1) result.push(current);
@@ -219,12 +222,23 @@
     function render(data) {
       if (dead) return;
       latestData = data;
-      var retained = runsOf(data.kept), removed = removedRuns(runsOf(data.geometry), retained);
+      var retained = data.track ? data.track.coordinates.map(function (run) {
+        return run.map(function (point) { return { lng: point[0], lat: point[1] }; });
+      }) : [];
+      var original = runsOf(data.geometry);
+      var removed = removedRuns(original, data.selection, runsOf(data.rawKept));
       var selected = new Set(Array.isArray(data.selectedWaypointIndices) ? data.selectedWaypointIndices : []);
       var points = (Array.isArray(data.waypoints) ? data.waypoints : []).map(function (point, index) {
         return { lng: point.lng, lat: point.lat, selected: selected.has(index) };
       }).filter(function (point) { return Number.isFinite(point.lng) && Number.isFinite(point.lat) && Math.abs(point.lng) <= 180 && Math.abs(point.lat) <= 90; });
-      if (!retained.length && !removed.length && !points.length) { status.textContent = copyText(copy, 'noGeometry'); return; }
+      if (!retained.length && !removed.length && !points.length) {
+        if (!map) container.replaceChildren();
+        if (map && styleReady) ['gpx-kept', 'gpx-removed', 'gpx-waypoints'].forEach(function (id) {
+          if (map.getLayer(id)) map.removeLayer(id);
+          if (map.getSource(id)) map.removeSource(id);
+        });
+        status.textContent = copyText(copy, 'noGeometry'); return;
+      }
       if (failed || !map) { svgFallback(container, status, copy, retained, removed, points, fallbackKey); return; }
       if (!styleReady || dead) return;
       try {
@@ -235,7 +249,8 @@
           if (keepFeature) { map.addSource('gpx-kept', { type: 'geojson', data: keepFeature }); map.addLayer({ id: 'gpx-kept', type: 'line', source: 'gpx-kept', paint: { 'line-color': '#d23b30', 'line-width': 4 } }); }
           if (removeFeature) { map.addSource('gpx-removed', { type: 'geojson', data: removeFeature }); map.addLayer({ id: 'gpx-removed', type: 'line', source: 'gpx-removed', paint: { 'line-color': '#59636d', 'line-width': 3, 'line-dasharray': [2, 2], 'line-opacity': .8 } }); }
           if (points.length) { map.addSource('gpx-waypoints', { type: 'geojson', data: { type: 'FeatureCollection', features: points.map(function (point) { return { type: 'Feature', properties: { selected: point.selected }, geometry: { type: 'Point', coordinates: [point.lng, point.lat] } }; }) } }); map.addLayer({ id: 'gpx-waypoints', type: 'circle', source: 'gpx-waypoints', paint: { 'circle-radius': ['case', ['get', 'selected'], 7, 4], 'circle-color': ['case', ['get', 'selected'], '#142a42', '#fff'], 'circle-stroke-color': '#142a42', 'circle-stroke-width': 2 } }); }
-          var bounds = boundsFor(retained.concat(removed, points.map(function (point) { return [point]; })));
+          // The public candidate arrives asynchronously; fit source context, not a pending empty line.
+          var bounds = boundsFor(original.concat(points.map(function (point) { return [point]; })));
           if (needsFit && bounds) { map.fitBounds(bounds, { padding: 40, maxZoom: 8, duration: 0 }); needsFit = false; }
         };
         update();

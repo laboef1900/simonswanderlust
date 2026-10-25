@@ -64,6 +64,7 @@ export class EditorElement {
   get children() { return this.childNodes.filter((child) => child.tagName !== '#TEXT'); }
   get firstChild(): EditorElement | null { return this.childNodes[0] ?? null; }
   get parentNode() { return this.parentElement; }
+  get isConnected(): boolean { return this.tagName === '#DOCUMENT' || (this.parentElement?.isConnected ?? false); }
   get id() { return this.getAttribute('id') ?? ''; }
   set id(value: string) { this.setAttribute('id', value); }
   get className() { return this.getAttribute('class') ?? ''; }

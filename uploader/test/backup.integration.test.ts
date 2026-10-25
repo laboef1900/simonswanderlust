@@ -58,7 +58,7 @@ maybe('backup round-trip (Postgres)', () => {
     // pair: with TZ=Europe/Berlin, rowShared's Date→string conversion shifts
     // the calendar date west, and re-saving it would poison the date column —
     // a pre-existing quirk this test deliberately keeps out of its scope.)
-    await posts.publish(createdPair.translationKey);
+    await posts.publish(createdPair.translationKey, { baseUpdatedAt: createdPair.updatedAt, baseRouteVersion: null });
     await posts.upsertDraft({ ...base, translationKey: createdPair.translationKey, de: { ...base.de, bodyMarkdown: 'Hallo v2',
       titleImage: { ...base.de.titleImage, src: 'https://img.example/title-draft' } } });
     await pool.query(`INSERT INTO pages (key,locale,title,body_markdown) VALUES ('about','de','T','Body')
@@ -181,7 +181,7 @@ maybe('backup round-trip (Postgres)', () => {
       en: { locale: 'en' as const, slug: 'cover-trip', title: 'Cover', excerpt: 'x', country: 'Iceland', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hello', images: {} },
     };
     const created = await posts.upsertDraft(base);
-    await posts.publish(created.translationKey);
+    await posts.publish(created.translationKey, { baseUpdatedAt: created.updatedAt, baseRouteVersion: null });
 
     const file = join(dir, await dumpDatabase(pool, dir));
     expect(readDump(file).version).toBe(DUMP_VERSION);

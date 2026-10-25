@@ -3,6 +3,11 @@ import { heroImageError, imageMarkdown, imagesMapError, normalizeGalleryFences, 
 import { lockPostPair, touchPostPair } from './post-pair-lock.js';
 import { safePairHash, type GpxFiles } from './gpx-files.js';
 import { enqueueRouteCleanup } from './gpx-store.js';
+import { validatePublicTrack, type PublicTrack } from '../public/gpx-public-track.js';
+import type { PrivateGeometry } from '../public/gpx-geometry.js';
+import type { PublicTrackWorker } from './gpx-public-worker.js';
+import { GpxError } from './gpx-errors.js';
+import { publishedTrackOf, type PublishedTrackRow } from './published-track.js';
 
 export type Locale = 'de' | 'en';
 /**
@@ -140,9 +145,23 @@ export class PostError extends Error {
   constructor(message: string, code?: string) { super(message); this.code = code; }
 }
 
+export interface PublishTokens { baseUpdatedAt: Date; baseRouteVersion: string | null }
+export interface PublishState { pair: StoredPostPair; routeVersion: string | null }
+
+/** Publish uses exact reviewed tokens, not save's older-than comparison. */
+export function assertPublishTokens(state: PublishState, tokens: PublishTokens): void {
+  if (!(tokens?.baseUpdatedAt instanceof Date)
+    || tokens.baseUpdatedAt.getTime() !== state.pair.updatedAt.getTime()
+    || tokens.baseRouteVersion !== state.routeVersion) {
+    throw new PostError('post or route changed since review; reload before publishing', 'conflict');
+  }
+}
+
 export interface PostStore {
   list(): Promise<PostSummary[]>;
   get(translationKey: string): Promise<StoredPostPair | null>;
+  getPublishState(translationKey: string): Promise<PublishState | null>;
+  getPublishedTrack(translationKey: string): Promise<PublicTrack | undefined>;
   /**
    * Create or overwrite the working copy. When `baseUpdatedAt` is given (the
    * `updatedAt` the editor loaded), the save is rejected with PostError code
@@ -151,7 +170,7 @@ export interface PostStore {
    * an existing pair first snapshots the pre-save state into the revisions.
    */
   upsertDraft(pair: PostPair, baseUpdatedAt?: Date): Promise<StoredPostPair>;
-  publish(translationKey: string): Promise<void>;
+  publish(translationKey: string, tokens: PublishTokens): Promise<{ updatedAt: Date }>;
   /** Flip a pair back to draft (the "emergency brake" — the live site drops it on the next build). */
   unpublish(translationKey: string): Promise<void>;
   /** Hard-delete both locale rows, freeing their slugs for reuse. */
@@ -574,6 +593,11 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
       const p = byKey.get(tk);
       return p ? structuredClone({ translationKey: p.translationKey, status: p.status, shared: p.shared, de: p.de, en: p.en, hasUnpublishedChanges: p.hasUnpublishedChanges, updatedAt: p.updatedAt }) : null;
     },
+    async getPublishState(tk) {
+      const pair = await this.get(tk);
+      return pair ? { pair, routeVersion: null } : null;
+    },
+    async getPublishedTrack() { return undefined; },
     async usageRows() {
       return [...byKey.values()].flatMap((p) => {
         const sources: { source: PostUsageRow['source']; from: Pick<PostPair, 'de' | 'en'> }[] = [{ source: 'working', from: p }];
@@ -618,15 +642,20 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         return structuredClone(stored);
       });
     },
-    async publish(tk) {
+    async publish(tk, tokens) {
+      const state = await this.getPublishState(tk);
+      if (!state) throw new PostError('post not found', 'not_found');
+      assertPublishTokens(state, tokens);
       return withPair(tk, () => {
         const p = byKey.get(tk);
-        if (!p) throw new PostError('post not found');
+        if (!p) throw new PostError('post not found', 'not_found');
+        assertPublishTokens({ pair: p, routeVersion: null }, tokens);
         p.status = 'published';
         p.publishedSnapshot = structuredClone({ shared: p.shared, de: p.de, en: p.en });
         p.publishedAt = nextTime(p.updatedAt);
         p.updatedAt = p.publishedAt;
         p.hasUnpublishedChanges = false;
+        return { updatedAt: new Date(p.updatedAt) };
       });
     },
     async unpublish(tk) {
@@ -780,6 +809,10 @@ async function readPostPair(client: DbPool | DbClient, tk: string, lock = false)
   const { rows } = await client.query<PostRow>(
     `SELECT * FROM posts WHERE translation_key=$1 ORDER BY locale${lock ? ' FOR UPDATE' : ''}`, [tk],
   );
+  return postPairFromRows(tk, rows);
+}
+
+function postPairFromRows(tk: string, rows: PostRow[]): StoredPostPair | null {
   const de = rows.find((row) => row.locale === 'de');
   const en = rows.find((row) => row.locale === 'en');
   if (!de || !en) return null;
@@ -790,9 +823,22 @@ async function readPostPair(client: DbPool | DbClient, tk: string, lock = false)
   };
 }
 
+/** One statement sees both locales and the route version at the same MVCC snapshot. */
+async function readPublishState(client: DbPool | DbClient, tk: string, geometry = false) {
+  const { rows } = await client.query<PostRow & { route_version: string | null; route_geometry?: PrivateGeometry | null }>(
+    `SELECT p.*, r.version AS route_version${geometry ? ', r.geometry AS route_geometry' : ''}
+       FROM posts p LEFT JOIN post_routes r USING (translation_key)
+      WHERE p.translation_key=$1 ORDER BY p.locale`, [tk],
+  );
+  const pair = postPairFromRows(tk, rows);
+  const row = rows[0];
+  return pair && row ? { pair, routeVersion: row.route_version, geometry: row.route_geometry ?? null } : null;
+}
+
 interface PgPostStoreOptions {
   routeFiles?: GpxFiles;
   isWritable?: () => boolean;
+  publicTrackWorker?: PublicTrackWorker;
 }
 
 export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): PostStore {
@@ -854,6 +900,17 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
       });
     },
     get: (tk) => readPostPair(pool, tk),
+    async getPublishState(tk) {
+      const state = await readPublishState(pool, tk);
+      return state ? { pair: state.pair, routeVersion: state.routeVersion } : null;
+    },
+    async getPublishedTrack(tk) {
+      const { rows } = await pool.query<PublishedTrackRow>(
+        'SELECT locale, published_snapshot FROM posts WHERE translation_key=$1 ORDER BY locale', [tk],
+      );
+      try { return publishedTrackOf(rows); }
+      catch { throw new PostError('invalid published route snapshots', 'invalid_published_track'); }
+    },
     async usageRows() {
       // The second SELECT mirrors the site loader's filter (postgres-loader.ts:
       // `status = 'published' AND published_snapshot IS NOT NULL`) so the
@@ -924,21 +981,37 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         throw e;
       } finally { client.release(); }
     },
-    async publish(tk) {
+    async publish(tk, tokens) {
       writable();
+      const state = await readPublishState(pool, tk, true);
+      if (!state) throw new PostError('post not found', 'not_found');
+      assertPublishTokens(state, tokens);
+      let track: PublicTrack | undefined;
+      if (state.geometry !== null) {
+        if (!options.publicTrackWorker) throw new GpxError('gpx_unavailable', 503);
+        track = validatePublicTrack((await options.publicTrackWorker.transform(state.geometry)).track);
+      }
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
         await lockPostPair(client, tk);
-        if (!(await readPostPair(client, tk, true))) throw new PostError('post not found');
+        const pair = await readPostPair(client, tk, true);
+        if (!pair) throw new PostError('post not found', 'not_found');
+        const route = await client.query<{ version: string }>(
+          'SELECT version FROM post_routes WHERE translation_key=$1 FOR UPDATE', [tk],
+        );
+        assertPublishTokens({ pair, routeVersion: route.rows[0]?.version ?? null }, tokens);
         const updatedAt = await touchPostPair(client, tk);
-        // Public track generation is #314; private route state never enters this fragment.
+        // This merge exists ONLY at explicit Publish; legacy backfills stay route-free.
         await client.query(
-          `UPDATE posts SET status='published', published_snapshot=${POST_SNAPSHOT_SQL}, published_at=$2 WHERE translation_key=$1`,
-          [tk, updatedAt],
+          `UPDATE posts SET status='published',
+             published_snapshot=${POST_SNAPSHOT_SQL} || $3::jsonb, published_at=$2
+           WHERE translation_key=$1`,
+          [tk, updatedAt, JSON.stringify(track ? { track } : {})],
         );
         writable();
         await client.query('COMMIT');
+        return { updatedAt };
       } catch (error) {
         await client.query('ROLLBACK').catch(() => {});
         throw error;

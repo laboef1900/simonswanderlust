@@ -16,6 +16,7 @@ import {
   validateRouteDumpRows, validateRouteManifest, type RouteArchiveManifest,
   type RouteDumpRow, type RouteRecoverySummary, type StagedRouteRestore,
 } from './gpx-backup.js';
+import { publishedTrackOf, type PublishedTrackRow } from './published-track.js';
 
 /**
  * v8 (issue #204) added reader `comments` (no email — the spec stores none;
@@ -46,6 +47,34 @@ export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 const TEMP_FILE_RE = /^(?:db-\d{8}-\d{6}\.json\.gz|images-\d{8}-\d{6}\.tar|routes-\d{8}-\d{6}-[0-9a-f]{32}\.tar|state\.json)\.\d+\.tmp$|^\.db-\d+-\d+-[0-9a-f]+\.tmp$/;
 
 export class BackupError extends Error {}
+
+/** Private dumps retain private routes, but their published projections stay public-only. */
+function validatePublishedTracks(posts: readonly Record<string, unknown>[]): void {
+  const trackedKeys = new Set<string>();
+  for (const post of posts) {
+    const snapshot = post?.published_snapshot;
+    if (snapshot !== null && typeof snapshot === 'object' && Object.hasOwn(snapshot, 'track')) {
+      if (typeof post.translation_key !== 'string' || !post.translation_key) {
+        throw new BackupError('Invalid public route snapshots in backup.');
+      }
+      trackedKeys.add(post.translation_key);
+    }
+  }
+  if (!trackedKeys.size) return;
+  const pairs = new Map<string, PublishedTrackRow[]>();
+  for (const post of posts) {
+    const key = post?.translation_key;
+    if (typeof key !== 'string' || !trackedKeys.has(key)) continue;
+    let rows = pairs.get(key);
+    if (!rows) { rows = []; pairs.set(key, rows); }
+    rows.push({ locale: post.locale, published_snapshot: post.published_snapshot });
+  }
+  try {
+    for (const rows of pairs.values()) publishedTrackOf(rows);
+  } catch {
+    throw new BackupError('Invalid public route snapshots in backup.');
+  }
+}
 
 /**
  * Where MDX exports and (under `db/`) dumps land. Without `BACKUP_DIR` it is a
@@ -134,6 +163,7 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
          categories, tags, scheduled_at, featured, comments_enabled, title_image
        FROM posts ORDER BY created_at`,
     )).rows;
+    validatePublishedTracks(posts);
     comments = (await client.query(
       `SELECT id, translation_key, locale, name, body, status, is_author, sender_hash, created_at
          FROM comments ORDER BY created_at, id`,
@@ -692,6 +722,7 @@ export function readDump(filePath: string): Dump {
   if (!dump.tables || !Array.isArray(dump.tables.users) || !Array.isArray(dump.tables.posts)) {
     throw new BackupError('Invalid backup tables.');
   }
+  validatePublishedTracks(dump.tables.posts);
   if (dump.tables.media !== undefined) {
     if (!Array.isArray(dump.tables.media)) throw new BackupError('Invalid media in backup.');
     for (const row of dump.tables.media) {

@@ -3,7 +3,7 @@
 **Date:** 2026-10-23  
 **Issues:** [#312](https://github.com/laboef1900/simonswanderlust/issues/312), part of [#311](https://github.com/laboef1900/simonswanderlust/issues/311); implementation [#313](https://github.com/laboef1900/simonswanderlust/issues/313), then [#314](https://github.com/laboef1900/simonswanderlust/issues/314).  
 **Risk:** HIGH — untrusted XML, location privacy, schema, backup/restore and publication.  
-**Status:** Owner-approved specification, 2026-10-23, at reviewed PR #326 head `99263ca0ce88c4ab619c5d32507a441a06dfae1a`; implementation has not yet landed. The owner separately authorized merging #326 after green CI, including this approval-record-only update. Each implementation PR still requires owner approval and separate merge authorization; no deployment or real-content publication is authorized.
+**Status:** Owner-approved specification, 2026-10-23, at reviewed PR #326 head `99263ca0ce88c4ab619c5d32507a441a06dfae1a`. The owner separately authorized merging #326 after green CI, including its approval-record-only update. Private workflow #313 merged as PR #327 on 2026-10-25 after owner approval of reviewed head `d7cb5027c9aa78d33231e88519d0944ed0a07868`. Public pipeline #314 requires its own implementation review, owner approval and merge authorization; no deployment or real-content publication is authorized.
 
 ## 1. Scope, decisions and baseline
 
@@ -145,7 +145,19 @@ interface PublicTrack {
 
 For each retained run independently: iterative Ramer–Douglas–Peucker at 25 m using spherical shortest-point-to-minor-great-circle-segment distance (endpoints included); round to four decimal places; normalize negative zero; remove consecutive equal rounded positions. Never simplify across a run boundary. Emit no run with fewer than two distinct rounded positions, and report collapsed runs. Reject an all-collapsed result or the output caps; do not silently raise tolerance, join runs, publish empty geometry or retain precise coordinates as a fallback. Attach/public-candidate validation and Publish use the same deterministic function. The author sees the public candidate and collapse warnings before confirmation once #314 lands.
 
+Implementation clarification for numerical/longitude discontinuities: when an RDP shortcut
+would have an absolute raw longitude difference above 180°, or its endpoints make the
+minor great-circle arc numerically ambiguous (antipodal), subdivide at an existing retained
+source midpoint and continue. Do not invent an arc, reconnect a removed run or interpolate
+new points. The strict public validators also reject adjacent raw longitude jumps above
+180°. This conservative guard does not change the 25 m tolerance or four-decimal precision.
+
 Public rejection codes are `track_empty_after_rounding` and `track_public_limit`, with bounded retained-run/vertex/byte counts, not coordinates. A complex route can exceed the fixed output cap even after a valid private attach. In #314, refuse such new attachments before replacing the old route. A private route attached under #313 is validated on the first #314 Publish; on refusal, leave both snapshots unchanged and offer **trim/remove more segments**, **replace with a shorter track**, or explicit **Detach route, then Publish without it**. Never silently omit its line or raise tolerance. Explain this migration state in the editor. Tests include a long straight route that simplifies within bounds and a complex over-cap route; do not infer support solely from input duration or file size.
+
+Error counts are bounded **lower bounds**, not an unbounded recount after refusal:
+`retainedRuns`, `vertices`, and compact-JSON `bytes` saturate at 101, 2,001 and 65,537
+respectively. An empty candidate reports zeroes. The browser shows counts only from a
+validated worker/error envelope; private coordinates never accompany a public-limit error.
 
 The result contains only positions derived from **retained** points. A repeated source position or a rounding collision can have the same tuple as a removed point; no implementation can promise global tuple inequality in that case. Privacy tests use distinct removed/retained rounded positions and also verify source-run provenance. Rounding and simplification can move endpoints/shortcut bends and are not an anonymity radius. A line may still reveal a home, hotel or trail. The UI explains this and offers inspection before attachment.
 

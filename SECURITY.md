@@ -18,12 +18,12 @@ change about the security posture.
 - **Out of scope:** DDoS, host/OS hardening, and a fully DNS-rebind-proof SSRF filter (see
   *Known limitations*).
 
-## GPX routes — private workflow (#313)
+## GPX routes — private source and public snapshot
 
 The [2026-10-23 GPX specification](docs/superpowers/specs/2026-10-23-gpx-route-import-design.md)
 is owner-approved as a design (PR #326). #313 implements bounded XML import, private route
-storage and recovery. **Public route artifacts and snapshot rendering remain #314's scope**;
-the private route table is not serialized into ordinary posts, builds or MDX exports.
+storage and recovery; #314 adds the strictly projected public artifact. The private route
+table is never serialized into ordinary posts, builds or MDX exports.
 Implementation approval and merge authorization remain separate from design approval.
 
 - GPX originals and attached draft coordinates, elevation and timestamps are sensitive.
@@ -38,7 +38,7 @@ Implementation approval and merge authorization remain separate from design appr
   latest attached original through detachment, delete it on replacement/post deletion,
   and retain full private route state in DB dumps with a manifest-matched private route
   archive. Those backups deliberately contain removed points/times until normal expiry.
-  #314 must expose only the approved 2D artifact in public HTML/JSON/assets and MDX.
+  Public HTML/JSON/assets and MDX expose only the approved 2D snapshot artifact.
   Damaged sources may be protected from automatic cleanup by a retained degraded
   manifest, but explicit replacement/post deletion override that protection. Durable
   deletion intents retry failed unlink operations; a pending retry is not physical erasure.
@@ -56,8 +56,22 @@ Implementation approval and merge authorization remain separate from design appr
   neither they nor a z8 basemap protect those separately approved stop coordinates.
 - Route edits/detachment are durable private draft operations. Separate route and pair tokens
   are checked under a per-pair transaction lock; a lost acknowledgement blocks blind retry.
-  Private state never enters text revisions. #314 must independently verify public snapshots,
-  including detachment, rather than treating private-backup preservation as leak evidence.
+  Private state never enters text revisions. Publish derives the artifact outside transaction
+  locks, then rechecks both tokens under the pair lock before updating both locale snapshots.
+  Builds and MDX read those snapshots only; edits and detachment cannot change the public
+  line until another Publish. Backup capture and restore reject malformed or mismatched
+  public projections without treating intentionally private backup contents as a leak.
+  A failed build leaves the previous release served, not a partially updated public route.
+  Single/bulk Publish responses, including failures, are `no-store`.
+- Public projection uses 25 m per-run spherical simplification, four decimal places and
+  strict 2D coordinates, capped at 100 runs, 2,000 vertices and 64 KiB. Discontinuities
+  remain separate; ambiguous antipodal or antimeridian-crossing shortcuts are subdivided
+  using existing retained points, never invented connections. Empty/over-cap results fail
+  closed. Attach checks the same candidate before replacing an attachment.
+  The admin transform has its own process-wide, nonqueued 2-second worker slot, separate
+  from author import/attach. Browser previews use a terminable worker too; none falls back
+  to synchronous simplification. Public text derives only from the public artifact and
+  remains available without JavaScript/WebGL; overview maps remain pin-only.
 - Original directories/files use `0700`/`0600`, hashed pair paths and opaque source IDs.
   Read/write boundaries reject symlinks and validate retained bytes. Pending previews are
   author-bound, excluded from backups, cancelled explicitly and reconciled every minute;

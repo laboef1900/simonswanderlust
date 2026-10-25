@@ -1,3 +1,4 @@
+import { publishTokens } from './publish-tokens.js';
 import { randomUUID } from 'node:crypto';
 import { scheduler } from 'node:timers/promises';
 import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
@@ -152,7 +153,7 @@ maybe('pgPostStore (integration)', () => {
       });
       expect((await store.get(saved.translationKey))?.de.titleImage).toEqual(titleImage);
       expect((await store.get(saved.translationKey))?.en.titleImage).toBeUndefined();
-      await store.publish(saved.translationKey);
+      await store.publish(saved.translationKey, await publishTokens(store, saved.translationKey));
       delete saved.de.titleImage;
       await store.upsertDraft(saved);
       await ensureSchema(pool);
@@ -163,7 +164,7 @@ maybe('pgPostStore (integration)', () => {
       const rev = (await store.listRevisions(saved.translationKey))[0];
       if (!rev) throw new Error('missing title-image revision');
       expect((await store.getRevision(saved.translationKey, rev.id))?.snapshot.de.titleImage).toEqual(titleImage);
-      await store.publish(saved.translationKey);
+      await store.publish(saved.translationKey, await publishTokens(store, saved.translationKey));
       expect((await store.usageRows()).filter((r) => r.translationKey === saved.translationKey).every((r) => !r.titleImage)).toBe(true);
     } finally {
       await pool.end();
@@ -190,7 +191,7 @@ maybe('pgPostStore (integration)', () => {
     expect(fetched?.de.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
     // stops survive the jsonb round-trip (writeLocale → rowShared)
     expect(fetched?.shared.stops).toEqual(stops);
-    await store.publish(created.translationKey);
+    await store.publish(created.translationKey, await publishTokens(store, created.translationKey));
     expect((await store.get(created.translationKey))?.status).toBe('published');
     expect((await store.get(created.translationKey))?.shared.stops).toEqual(stops);
     await expect(store.upsertDraft({ ...created, status: 'published', de: { ...base.de, slug: 'renamed' } })).rejects.toThrow();
@@ -215,7 +216,7 @@ maybe('pgPostStore (integration)', () => {
     const tk = created.translationKey;
     expect(created.hasUnpublishedChanges).toBe(false); // drafts have nothing published to diverge from
 
-    await store.publish(tk);
+    await store.publish(tk, await publishTokens(store, tk));
     const snapshotDe = async () => (await pool.query(
       `SELECT published_snapshot AS s, published_at AS p FROM posts WHERE translation_key=$1 AND locale='de'`, [tk],
     )).rows[0];
@@ -238,7 +239,7 @@ maybe('pgPostStore (integration)', () => {
     expect(row.s.body_markdown).toBe('## live');
 
     // Re-publish promotes the newest working copy and clears the flag.
-    await store.publish(tk);
+    await store.publish(tk, await publishTokens(store, tk));
     row = await snapshotDe();
     expect(row.s.body_markdown).toBe('## edited');
     expect((await store.get(tk))?.hasUnpublishedChanges).toBe(false);
@@ -263,7 +264,7 @@ maybe('pgPostStore (integration)', () => {
     expect(await flags()).toEqual([{ locale: 'de', featured: true }, { locale: 'en', featured: true }]);
     expect((await store.get(tk))?.shared.featured).toBe(true);
 
-    await store.publish(tk);
+    await store.publish(tk, await publishTokens(store, tk));
     const snapshots = (await pool.query<{ s: { featured?: boolean } }>(
       `SELECT published_snapshot AS s FROM posts WHERE translation_key=$1 ORDER BY locale`, [tk],
     )).rows;
@@ -363,7 +364,7 @@ maybe('pgPostStore (integration)', () => {
     };
     const created = await store.upsertDraft(base);
     expect((await store.list()).find((p) => p.translationKey === created.translationKey)?.hasEnBody).toBe(true);
-    await store.publish(created.translationKey);
+    await store.publish(created.translationKey, await publishTokens(store, created.translationKey));
     await store.unpublish(created.translationKey);
     expect((await store.get(created.translationKey))?.status).toBe('draft');
     await store.remove(created.translationKey);
@@ -428,7 +429,7 @@ maybe('pgPostStore (integration)', () => {
     const created = await store.upsertDraft(base);
     expect((await store.usageRows()).map((r) => r.source)).toEqual(['working', 'working']);
 
-    await store.publish(created.translationKey);
+    await store.publish(created.translationKey, await publishTokens(store, created.translationKey));
     await store.upsertDraft({
       ...base, translationKey: created.translationKey, status: 'published',
       de: loc('de', 'https://i/new'), en: loc('en', 'https://i/new'),
@@ -721,7 +722,7 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
       en: { locale: 'en', slug: `st-${n}-en`, title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     });
     const a = await mk('a');
-    await store.publish(a.translationKey);
+    await store.publish(a.translationKey, await publishTokens(store, a.translationKey));
     await mk('b', { categories: ['City'], tags: ['x', 'y'] });
     expect(await store.getCmsStats!()).toEqual({ totalPosts: 2, draftPosts: 1, publishedPosts: 1, totalCategories: 1, totalTags: 2 });
     await pool.end();

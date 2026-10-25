@@ -1,3 +1,4 @@
+import { publishTokens } from './publish-tokens.js';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
@@ -386,7 +387,7 @@ ${['de', 'en']
     expect(await store.list()).toHaveLength(1);
     // publish it, then re-import → skippedPublished, content untouched
     const tk = (await store.list())[0]!.translationKey;
-    await store.publish(tk);
+    await store.publish(tk, await publishTokens(store, tk));
     const third = await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
     expect(third).toMatchObject({ imported: 0, updated: 0, skippedPublished: 1, rejected: 0, failed: 0 });
     expect(third.warnings.join(' ')).toMatch(/published/);
@@ -424,7 +425,7 @@ describe('importWxr pair identity', () => {
   it('never binds a published post\'s protection to a cross-locale namesake (rejected, not skippedPublished)', async () => {
     const store = memoryPostStore();
     await seed(store, 'rhodos', 'rhodes-adventure');
-    await store.publish((await store.list())[0]!.translationKey);
+    await store.publish((await store.list())[0]!.translationKey, await publishTokens(store, (await store.list())[0]!.translationKey));
     const s = await importWxr(pairOf('g2', 'rhodos-2', 'rhodos', '<p>new de</p>'),
       { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: rehostSpy });
     expect(s).toMatchObject({ imported: 0, rejected: 1, skippedPublished: 0 });
