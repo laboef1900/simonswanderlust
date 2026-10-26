@@ -1611,6 +1611,12 @@ describe('inline gallery editing', () => {
     first.onPick([row, placeholder], { layout: 'slider', captions: { visible: false, overrides: { [other]: local } } });
 
     const edited = h.api.buildPayload().de;
+    // The caret is parked past the blank line after the updated gallery — on
+    // "Middle" — not on its closing ```, where the next upload would reopen
+    // the fence over the rest of the story (#333).
+    const caret = h.editors[0]!.codemirror.indexFromPos(h.editors[0]!.cursor!);
+    expect(edited.bodyMarkdown.slice(caret, caret + 'Middle'.length)).toBe('Middle');
+    expect(edited.bodyMarkdown.slice(0, caret).endsWith('```\n\n')).toBe(true);
     const saved = normalizeGalleryFences(edited.bodyMarkdown, edited.images);
     // The shared images map keeps Media's / the stored caption: the edit is not in it.
     expect(saved.images[other]).toEqual({ width: 300, height: 200, alt: 'Andere', caption: 'Gespeichert' });

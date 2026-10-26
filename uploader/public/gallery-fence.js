@@ -385,11 +385,63 @@ window.GalleryFence = (function () {
   }
 
   /**
-   * replaceFenceAt(body, cursor, fence) → { text, start, end, replaced, blocked? }
+   * The blank lines a block inserted at `at` needs to stand alone: `prefix`
+   * completes the separator before it (none at the very start), `suffix` the
+   * one after it — also at EOF, so the caret the editor leaves at the end of
+   * the range edit is never on the block's last line. Without that suffix the
+   * next uploaded image was concatenated to a gallery's closing ``` and opened
+   * the fence over all following story content (#333).
+   */
+  function padding(text, at) {
+    var prefix = at === 0 ? '' : new Array(2 - runBefore(text, at) + 1).join('\n');
+    var trailing = 0;
+    while (trailing < 2 && text.charAt(at + trailing) === '\n') trailing++;
+    return { prefix: prefix, suffix: new Array(2 - trailing + 1).join('\n') };
+  }
+
+  /**
+   * insertBlockAt(body, cursor, block) → { text, start, cursor, relocated, blocked? }
+   *
+   * Where a block the editor is about to write at `cursor` — an uploaded
+   * image's `![alt](src)` line — may safely go, as a range edit inserting
+   * `text` at `start` with the caret at `cursor` afterwards. Outside every
+   * fence that is the cursor itself, unpadded (`relocated: false`): the caller
+   * may insert as it always has, replacing a selection if there is one. Inside
+   * a fence it is the position after the block, padded to stand alone
+   * (`relocated: true`): on the closer's own line the image turns the closing
+   * ``` into text and a gallery swallows the rest of the story; between the
+   * fences of a gallery it is a photo line the renderer ignores; in any other
+   * block it is literal text. `blocked: 'unterminated'` when the enclosing
+   * fence has no closer, as replaceFenceAt reports it — there is no "after"
+   * to relocate to, and the caller must make no edit.
+   */
+  function insertBlockAt(body, cursor, block) {
+    var text = String(body == null ? '' : body);
+    var line = String(block == null ? '' : block);
+    var at = Math.max(0, Math.min(text.length, Number(cursor) || 0));
+    var enclosing = blockAt(text, at);
+    if (!enclosing) return { text: line, start: at, cursor: at + line.length, relocated: false };
+    if (enclosing.unterminated) {
+      return { text: '', start: at, cursor: at, relocated: false, blocked: 'unterminated' };
+    }
+    var pad = padding(text, enclosing.end);
+    return {
+      text: pad.prefix + line + pad.suffix,
+      start: enclosing.end,
+      cursor: enclosing.end + pad.prefix.length + line.length + 2,
+      relocated: true,
+    };
+  }
+
+  /**
+   * replaceFenceAt(body, cursor, fence) → { text, start, end, cursor, replaced, blocked? }
    *
    * A RANGE EDIT, not a new document: `text` replaces `[start, end)`. The caller
    * applies it with `cm.replaceRange`, which keeps CodeMirror's undo history —
    * `mde.value()` would discard it, so a mis-inserted gallery could not be undone.
+   * `cursor` is where the caret belongs in the NEW document: after the block
+   * and the blank line that follows it, so what the author writes next can
+   * never land on the closing ``` (#333).
    *
    * Replaces the gallery fence under the cursor ("Edit gallery"), or inserts at
    * the cursor when there is none ("Insert gallery"). An empty `fence` removes
@@ -414,7 +466,7 @@ window.GalleryFence = (function () {
     var found = fenceAt(text, cursor);
 
     if (found && found.unterminated) {
-      return { text: '', start: found.start, end: found.start, replaced: false, blocked: 'unterminated' };
+      return { text: '', start: found.start, end: found.start, cursor: found.start, replaced: false, blocked: 'unterminated' };
     }
 
     if (found && block === '') {
@@ -424,12 +476,18 @@ window.GalleryFence = (function () {
       var after = 0;
       while (text.charAt(end + after) === '\n') after++;
       var keep = Math.max(0, Math.min(after, 2 - runBefore(text, found.start)));
-      return { text: '', start: found.start, end: end + after - keep, replaced: true };
+      return { text: '', start: found.start, end: end + after - keep, cursor: found.start, replaced: true };
     }
-    if (found) return { text: block, start: found.start, end: found.end, replaced: true };
+    if (found) {
+      // The text around the fence is left byte for byte; the caret skips the
+      // separator that is already there (up to the blank line).
+      var following = 0;
+      while (following < 2 && text.charAt(found.end + following) === '\n') following++;
+      return { text: block, start: found.start, end: found.end, cursor: found.start + block.length + following, replaced: true };
+    }
     if (block === '') {
       var noop = Math.max(0, Math.min(text.length, Number(cursor) || 0));
-      return { text: '', start: noop, end: noop, replaced: false };
+      return { text: '', start: noop, end: noop, cursor: noop, replaced: false };
     }
 
     var at = Math.max(0, Math.min(text.length, Number(cursor) || 0));
@@ -440,20 +498,21 @@ window.GalleryFence = (function () {
     var enclosing = blockAt(text, at);
     if (enclosing) {
       if (enclosing.unterminated) {
-        return { text: '', start: at, end: at, replaced: false, blocked: 'unterminated' };
+        return { text: '', start: at, end: at, cursor: at, replaced: false, blocked: 'unterminated' };
       }
       at = enclosing.end;
     }
 
-    var prefix = at === 0 ? '' : new Array(2 - runBefore(text, at) + 1).join('\n');
-    var trailing = 0;
-    while (trailing < 2 && text.charAt(at + trailing) === '\n') trailing++;
-    // Keep the caret after a complete blank-line separator even at EOF. The
-    // editor leaves it at the end of this range edit; without a suffix, the
-    // next uploaded image is concatenated to the closing ``` and opens the
-    // gallery fence over all following story content.
-    var suffix = new Array(2 - trailing + 1).join('\n');
-    return { text: prefix + block + suffix, start: at, end: at, replaced: false };
+    // Existing newlines at `at` plus the suffix always make exactly one blank
+    // line, so the caret lands on the first line after it.
+    var pad = padding(text, at);
+    return {
+      text: pad.prefix + block + pad.suffix,
+      start: at,
+      end: at,
+      cursor: at + pad.prefix.length + block.length + 2,
+      replaced: false,
+    };
   }
 
   return {
@@ -476,5 +535,6 @@ window.GalleryFence = (function () {
     scanFences: scanFences,
     fenceAt: fenceAt,
     replaceFenceAt: replaceFenceAt,
+    insertBlockAt: insertBlockAt,
   };
 })();

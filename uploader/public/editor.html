@@ -1238,6 +1238,9 @@
             // A range edit, not mde.value(): replaceRange keeps CodeMirror's undo
             // history (and fires a change event, which marks the guard dirty).
             cm.replaceRange(out.text, cm.posFromIndex(out.start), cm.posFromIndex(out.end));
+            // Past the blank line after the block — never on the closing ```,
+            // where the next upload or keystroke would reopen the fence (#333).
+            cm.setCursor(cm.posFromIndex(out.cursor));
             guard.markDirty();
             // Count the lines actually written, not the photos picked: serialize
             // drops a newly picked photo whose dimensions are unusable.
@@ -1334,14 +1337,28 @@
             ...(body.format === 'jpeg' ? { format: body.format } : {}),
           };
 
-          // Insert markdown at cursor in the matching EasyMDE instance
-          // (replaceSelection fires a CodeMirror change → marks the guard dirty)
-          const mde = locale === 'de' ? deMDE : enMDE;
+          // Insert markdown at the cursor in the matching EasyMDE instance —
+          // but never into a fence (#333): on a gallery's closing line the
+          // image turns the ``` into text and the gallery swallows the rest of
+          // the story; between its fences it is a photo line the renderer
+          // ignores. Then it goes after the block instead, on its own line.
+          // (Both edits fire a CodeMirror change → marks the guard dirty.)
+          const cm = (locale === 'de' ? deMDE : enMDE).codemirror;
           const md = ImageMarkdown.image(altInput.value, body.src);
-          mde.codemirror.replaceSelection(md);
-
-          statusEl.textContent = 'Inserted: ' + body.src
-            + (body.status === 'processing' ? ' — still processing (Publish waits for it)' : '');
+          const spot = GalleryFence.insertBlockAt(cm.getValue(), cm.indexFromPos(cm.getCursor()), md);
+          if (spot.blocked === 'unterminated') {
+            statusEl.textContent = 'Uploaded ' + body.src + ' but not inserted: the block around the cursor has no closing ``` — close it, then paste: ' + md;
+          } else {
+            if (spot.relocated) {
+              const from = cm.posFromIndex(spot.start);
+              cm.replaceRange(spot.text, from, from);
+              cm.setCursor(cm.posFromIndex(spot.cursor));
+            } else {
+              cm.replaceSelection(md);
+            }
+            statusEl.textContent = (spot.relocated ? 'Inserted after the ``` block: ' : 'Inserted: ') + body.src
+              + (body.status === 'processing' ? ' — still processing (Publish waits for it)' : '');
+          }
           fileInput.value = '';
           altInput.value = '';
         } catch (e) {
