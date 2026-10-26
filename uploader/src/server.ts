@@ -33,7 +33,7 @@ import {
 } from './ai-providers.js';
 import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale, assertPublishTokens, type PublishTokens } from './posts.js';
 import { GpxError } from './gpx-errors.js';
-import { foreignImageUrls } from './publish-gate.js';
+import { analyzeBodyImages, bodyImageKey } from './publish-gate.js';
 import { auditAltText } from './alt-audit.js';
 import { renderPreviewHtml, previewCsp } from './preview.js';
 import { loadGalleryMetadata } from './gallery-metadata.js';
@@ -1400,20 +1400,27 @@ export function buildServer(cfg: ServerConfig): AppServer {
     return src.slice(prefix.length).replace(/-\d+\.(?:avif|webp|jpeg)$/, '');
   }
 
-  /**
-   * Every image URL a post references: both heroes and every `images` key
-   * (gallery URLs are already `images` keys — body-images.ts skips any that
-   * are not).
-   */
-  function referencedSrcs(pair: StoredPostPair): string[] {
-    const out = new Set<string>();
+  /** Render once per locale; metadata alone is never a publication reference. */
+  async function publicationImages(pair: StoredPostPair): Promise<{ foreign: string[]; keys: string[] }> {
+    const foreign = new Set<string>();
+    const keys = new Set<string>();
     for (const locale of ['de', 'en'] as const) {
       const l = pair[locale];
-      if (l?.heroImage?.src) out.add(l.heroImage.src);
-      if (l?.titleImage?.src) out.add(l.titleImage.src);
-      for (const key of Object.keys(l?.images ?? {})) out.add(key);
+      const body = await analyzeBodyImages(l.bodyMarkdown, l.images, imageBase);
+      for (const src of body.foreign) foreign.add(src);
+      const storyUrl = new URL(`${locale === 'en' ? '/en' : ''}/${l.slug}/`, imageBase).href;
+      for (const src of body.sources) {
+        const key = bodyImageKey(src, imageBase, storyUrl);
+        if (key !== null) keys.add(key);
+      }
+      for (const image of [l.heroImage, l.titleImage]) {
+        if (!image) continue;
+        const key = srcToKey(image.src, imageBase);
+        if (key !== null) keys.add(key);
+      }
+      if (l.titleImage && srcToKey(l.titleImage.src, imageBase) === null) foreign.add(l.titleImage.src);
     }
-    return [...out];
+    return { foreign: [...foreign], keys: [...keys] };
   }
 
   /**
@@ -1430,10 +1437,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
    * URLs with NO media row do not block: WordPress-imported and legacy files
    * predate the library and exist on disk perfectly well.
    */
-  async function notReadyPhotos(pair: StoredPostPair): Promise<string[]> {
-    const keys = referencedSrcs(pair)
-      .map((src) => srcToKey(src, imageBase))
-      .filter((k): k is string => k !== null);
+  async function notReadyPhotos(pair: StoredPostPair, keys: string[]): Promise<string[]> {
     if (keys.length === 0) return [];
     const notReady = await cfg.media.notReadyKeys(keys);
     // Title images are new library selections, not pre-library legacy heroes.
@@ -1447,21 +1451,6 @@ export function buildServer(cfg: ServerConfig): AppServer {
     return [...notReady];
   }
 
-  /**
-   * The publish gate's second check (#91): every image URL the rendered body
-   * of either locale would put on the page whose origin is not the image
-   * host. Store-free, so it runs BEFORE `notReadyPhotos` — a foreign URL has
-   * no media row to look up, and it is the more fundamental problem to report.
-   */
-  async function foreignBodyImages(pair: StoredPostPair): Promise<string[]> {
-    const out = new Set<string>();
-    for (const locale of ['de', 'en'] as const) {
-      for (const url of await foreignImageUrls(pair[locale].bodyMarkdown, imageBase)) out.add(url);
-      const title = pair[locale].titleImage;
-      if (title && srcToKey(title.src, imageBase) === null) out.add(title.src);
-    }
-    return [...out];
-  }
 
   const FOREIGN_EXAMPLES = 5;
   function foreignImagesMessage(n: number): string {
@@ -1635,7 +1624,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       if (e instanceof PostError) return reply.code(e.code === 'conflict' ? 409 : 400).send({ error: e.message, code: e.code });
       throw e;
     }
-    const foreign = await foreignBodyImages(pair);
+    const { foreign, keys: imageKeys } = await publicationImages(pair);
     if (foreign.length > 0) {
       return reply.code(409).send({
         error: foreignImagesMessage(foreign.length),
@@ -1643,7 +1632,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
         foreignImageCount: foreign.length,
       });
     }
-    const notReady = await notReadyPhotos(pair);
+    const notReady = await notReadyPhotos(pair, imageKeys);
     if (notReady.length > 0) {
       return reply.code(409).send({
         error: `${notReady.length} photo(s) are still processing or failed to encode — wait for them to finish, then publish again`,
@@ -1737,9 +1726,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
         if (!pair) throw new PostError('post not found');
         if (action === 'publish') {
           validateForPublish(pair);
-          const foreign = await foreignBodyImages(pair);
+          const { foreign, keys: imageKeys } = await publicationImages(pair);
           if (foreign.length > 0) throw new PostError(foreignImagesMessage(foreign.length));
-          const notReady = await notReadyPhotos(pair);
+          const notReady = await notReadyPhotos(pair, imageKeys);
           if (notReady.length > 0) {
             throw new PostError(`${notReady.length} photo(s) are still processing or failed to encode`);
           }

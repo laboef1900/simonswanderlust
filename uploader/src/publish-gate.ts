@@ -1,6 +1,6 @@
 /**
- * The publish gate's foreign-image check (#91): every `http(s)` image URL a
- * post body would put on the live page whose origin is not the image host.
+ * Publication image analysis: foreign-origin refusal (#91) and readiness
+ * references from the actual transformed body (#334).
  *
  * @ai-warning Judged on the RENDERED body, read from the renderer's own
  * sanitized hast tree (`bodyImageSources` in site/src/lib/body-images.ts,
@@ -13,7 +13,7 @@
  * named-sensitive surface. Reading the renderer's tree makes the two agree
  * by construction: what the gate sees IS what the reader would get.
  *
- * The sources are collected BEFORE any `images` resolution on purpose. With
+ * Foreign sources are collected BEFORE any `images` resolution on purpose. With
  * the map applied, `transformBodyImages` would turn a foreign inline image
  * into a `<picture>` that hot-links `…-640.webp` on the old host and — worse
  * — silently DROP a foreign gallery line, which is exactly the "photo
@@ -23,15 +23,22 @@
  * allow-list's rule, for the same look-alike-host reason.
  *
  * @ai-context docs/superpowers/specs/2026-09-06-publish-gate-foreign-images-design.md
+ * @ai-context docs/superpowers/specs/2026-10-25-publish-readiness-references-design.md
  */
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
-import { bodyImageSources } from '../../site/src/lib/body-images.js';
+import { bodyImageSources, transformBodyImages, type ImageDims } from '../../site/src/lib/body-images.js';
 
-export async function foreignImageUrls(body: string, imageOrigin: string): Promise<string[]> {
+/** Foreign references before resolution; actual image loads after resolution (#334). */
+export async function analyzeBodyImages(
+  body: string,
+  images: Record<string, ImageDims>,
+  imageOrigin: string,
+): Promise<{ foreign: string[]; sources: string[] }> {
   // server.ts validates cfg.baseUrl at boot (previewCsp), so this cannot throw there.
   const allowed = new URL(imageOrigin).origin;
   const found = new Set<string>();
-  const { sources, galleryLines } = bodyImageSources(await renderMarkdown(body));
+  const html = await renderMarkdown(body);
+  const { sources, galleryLines } = bodyImageSources(html);
   for (const raw of [...sources, ...galleryLines]) {
     let u: URL;
     // Resolved against the image host — which in this deployment is the origin
@@ -46,5 +53,21 @@ export async function foreignImageUrls(body: string, imageOrigin: string): Promi
     if (u.protocol !== 'https:' && u.protocol !== 'http:') continue;
     if (u.origin !== allowed) found.add(raw);
   }
-  return [...found];
+  return {
+    foreign: [...found],
+    sources: bodyImageSources(transformBodyImages(html, images, allowed)).sources,
+  };
+}
+
+/** Browser-resolved body reference → hosted key; no filesystem access. */
+export function bodyImageKey(src: string, imageBase: string, storyUrl: string): string | null {
+  try {
+    const url = new URL(src, storyUrl);
+    const base = new URL(imageBase);
+    const prefix = `${base.pathname.replace(/\/+$/, '')}/`;
+    if (url.origin !== base.origin || !url.pathname.startsWith(prefix)) return null;
+    return decodeURIComponent(url.pathname.slice(prefix.length)).replace(/-\d+\.(?:avif|webp|jpeg)$/, '');
+  } catch {
+    return null;
+  }
 }

@@ -9,8 +9,8 @@ path) while the **rendered** body of either locale would put an `http(s)` image 
 origin is not the configured image host (`PUBLIC_BASE_URL`, `cfg.baseUrl`), or contains a gallery
 line the renderer would silently drop for the same reason.
 
-**The gate judges the rendered body, not the Markdown text.** `foreignImageUrls(body, imageOrigin)`
-(`uploader/src/publish-gate.ts`) runs the body through `renderMarkdown` and then
+**The gate judges the rendered body, not the Markdown text.** Since #334,
+`analyzeBodyImages(body, images, imageOrigin)` (`uploader/src/publish-gate.ts`) runs the body through `renderMarkdown` and then
 `bodyImageSources` (`site/src/lib/body-images.ts`), which parses and sanitizes exactly as
 `transformBodyImages` does and reads, from that hast tree, **before any `images` resolution**:
 
@@ -45,9 +45,11 @@ The response carries the count and up to five example URLs so the author can fin
 { "error": "2 image(s) in the body still point at another host — re-run the WordPress import to re-host them, or replace them with library photos, then publish again", "foreignImages": ["https://old.example/wp-content/uploads/a.jpg", "…"], "foreignImageCount": 2 }
 ```
 
-`server.ts` wraps the function per pair (`foreignBodyImages`) next to `notReadyPhotos`. Order in
-the handler: `validateForPublish` (400) → foreign images (409, no store access) → `notReadyPhotos`
-(409, hits the media store). A foreign URL has no `media` row to look up, so checking it first
+`server.ts` collects this function's foreign results per pair (`publicationImages`) next to
+`notReadyPhotos`. Order in the handler: `validateForPublish` (400) → foreign images (409, no
+store access) → `notReadyPhotos` (409, hits the media store). The combined analysis also reads
+actual transformed body references for readiness (#334), without changing this pre-resolution
+foreign-origin interpretation. A foreign URL has no `media` row to look up, so checking it first
 avoids a pointless query and reports the more fundamental problem.
 
 **Residual, accepted:** the Markdown renderer (micromark) is superlinear on adversarial input —
@@ -90,7 +92,7 @@ such hot-link 404s on the live site.
   not the silent one this issue is about.
 - **`images` map keys.** The map is never pruned and has no UI to edit it, so blocking on a stale
   key would leave the author no way to publish. Only what the render path reads from the body
-  counts; the function therefore takes the body and the origin, not the map.
+  counts; the foreign check therefore ignores the map even though readiness resolves it.
 - **Non-`http(s)` destinations** (`data:`, relative paths): they do not hot-link anything.
 - **Pages** (`/pages`): the about page has its own publish path and no importer feeding it.
 

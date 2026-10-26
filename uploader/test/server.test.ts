@@ -2072,15 +2072,17 @@ describe('publish gate (encode status)', () => {
     expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) })).statusCode).toBe(200);
   });
 
-  it('checks gallery/body images from the images map, not just the hero', async () => {
+  it('checks a gallery actually referenced in the body, not just the hero', async () => {
     const b = build();
     const { cookie } = await authed(b);
     const exif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
     await b.media.upsert({ key: 'trips/g/hero', status: 'ready', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null });
     await b.media.upsert({ key: 'trips/g/gallery-a', status: 'processing', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null });
-    const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`, {
+    const p = pairUsing(`${IMG}/trips/g/hero`, {
       [`${IMG}/trips/g/gallery-a`]: { width: 3000, height: 2000 },
-    }));
+    });
+    const tk = await create(b, cookie, { ...p, de: { ...p.de,
+      bodyMarkdown: `\`\`\`gallery\n${IMG}/trips/g/gallery-a\n\`\`\`` } });
     const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(res.statusCode).toBe(409);
     expect(res.json().notReady).toEqual(['trips/g/gallery-a']);
@@ -2111,6 +2113,56 @@ describe('publish gate (encode status)', () => {
     });
     expect(res.json()).toMatchObject({ succeeded: 0, failed: 1 });
     expect(res.json().results[0].error).toMatch(/still processing/);
+  });
+
+  it.each(['processing', 'failed', 'missing'] as const)('blocks actual %s Markdown/raw references in both publish paths without metadata', async (status) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    try {
+      const { cookie } = await authed(b);
+      const key = 'trips/g/body';
+      await b.media.upsert({ key, status, width: 1280, height: 960, origBytes: 1,
+        exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+      for (const format of ['avif', 'webp', 'jpeg']) {
+        for (const locale of ['de', 'en'] as const) {
+          const src = `${IMG}/${key}-640.${format}`;
+          for (const bodyMarkdown of [`![View](${src})`, `<img src="${src}">`,
+            `<picture><source srcset="${src} 1x"><img src="${IMG}/legacy-640.webp"></picture>`]) {
+            const p = pairUsing(`${IMG}/wp/legacy/hero`);
+            const tk = await create(b, cookie, { ...p, [locale]: { ...p[locale], bodyMarkdown } });
+            const single = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+            expect(single.statusCode).toBe(409);
+            expect(single.json().notReady).toEqual([key]);
+            const bulk = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+            expect(bulk.json()).toMatchObject({ succeeded: 0, failed: 1 });
+            expect((await b.posts.get(tk))?.status).toBe('draft');
+            expect((await b.posts.usageRows()).filter(row => row.translationKey === tk && row.source === 'published')).toEqual([]);
+            await b.posts.remove(tk);
+          }
+        }
+      }
+      expect(s.calls).toHaveLength(0);
+    } finally { await b.app.close(); }
+  });
+
+  it.each(['single', 'bulk'] as const)('%s allows stale unused metadata and ready/legacy body references', async (mode) => {
+    const b = build();
+    try {
+      const { cookie } = await authed(b);
+      const exif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+      await b.media.upsert({ key: 'trips/g/stale', status: 'failed', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null });
+      await b.media.upsert({ key: 'trips/g/ready', status: 'ready', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null });
+      const p = pairUsing(`${IMG}/wp/legacy/hero`, { [`${IMG}/trips/g/stale`]: { width: 9, height: 9 } });
+      const bodyMarkdown = `![Ready](${IMG}/trips/g/ready-9.webp)\n\n<img src="${IMG}/wp/legacy/body-640.jpeg">`;
+      const tk = await create(b, cookie, { ...p, de: { ...p.de, bodyMarkdown } });
+      const response = mode === 'single'
+        ? await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) })
+        : await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+      expect(response.statusCode).toBe(200);
+      if (mode === 'bulk') expect(response.json()).toMatchObject({ succeeded: 1, failed: 0 });
+      expect((await b.posts.get(tk))?.status).toBe('published');
+      expect((await b.posts.usageRows()).find(row => row.translationKey === tk && row.source === 'published' && row.locale === 'de')?.bodyMarkdown).toBe(bodyMarkdown);
+    } finally { await b.app.close(); }
   });
 });
 
