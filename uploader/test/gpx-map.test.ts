@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { mapFrame } from '../public/map-frame.js';
 
 const script = await readFile(join(import.meta.dirname, '../public/gpx-map.js'), 'utf8');
 
@@ -48,7 +49,7 @@ function harness(webgl: 'ready' | 'unavailable' | 'partial' | 'throws' = 'ready'
     querySelector: () => null,
   };
   const ResizeObserver = class { observe() {} disconnect() {} };
-  new Function('window', 'document', 'location', 'ResizeObserver', script)(windowState, document, { href: 'http://localhost/admin/', origin: 'http://localhost' }, ResizeObserver);
+  new Function('window', 'document', 'location', 'ResizeObserver', 'loadFrame', script.replace("import('./map-frame.js')", 'loadFrame()'))(windowState, document, { href: 'http://localhost/admin/', origin: 'http://localhost' }, ResizeObserver, async () => ({ mapFrame }));
   return { window: windowState, map, sources, container, status, finishLoads: () => loads.splice(0).forEach((loaded) => loaded()) };
 }
 
@@ -57,6 +58,36 @@ const segment = (...points: { lng: number; lat: number }[]) => ({ points });
 const featureSource = (value: unknown) => value as { data: { geometry: { type: string; coordinates: number[][][] } } };
 
 describe('GPX preview map', () => {
+  it.each(['ready', 'unavailable'] as const)('frames crossing runs and waypoints together without mutating inputs (%s)', async (mode) => {
+    const h = harness(mode);
+    const api = await (h.window.GpxMap as { create(options: unknown): Promise<{ render(data: unknown): void; destroy(): void }> }).create({ container: h.container, statusElement: h.status, copy });
+    const coordinates = [[[179.95, -16.8], [179.999, -16.82]], [[-179.98, -16.83], [-179.95, -16.84]]];
+    const geometry = { version: 1, segments: coordinates.map((run) => segment(...run.map(([lng, lat]) => ({ lng: lng!, lat: lat! })))) };
+    const data = {
+      geometry, rawKept: geometry, selection: { startPoints: 0, endPoints: 0, removedSegments: [] },
+      track: { version: 1, type: 'MultiLineString', coordinates }, waypoints: [{ lng: -179.9, lat: -16.85 }], selectedWaypointIndices: [0],
+    };
+    const before = structuredClone(data);
+    api.render(data);
+    if (mode === 'ready') {
+      expect(h.map.fitBounds).toHaveBeenCalledWith([[179.95, -16.85], [180.1, -16.8]], expect.anything());
+      expect(featureSource(h.sources['gpx-kept']).data.geometry.coordinates).toEqual([
+        coordinates[0], [[180.02, -16.83], [180.05, -16.84]],
+      ]);
+      expect((h.sources['gpx-waypoints'] as { data: { features: { geometry: { coordinates: number[] } }[] } }).data.features[0]!.geometry.coordinates).toEqual([180.1, -16.85]);
+    } else {
+      const lines = [...h.container.innerHTML.matchAll(/<polyline[^>]*points="([^"]+)"/g)];
+      expect(lines).toHaveLength(2);
+      const xs = lines.map((line) => line[1]!.split(' ').map((point) => Number(point.split(',')[0])));
+      expect(xs[0]![0]).toBe(24);
+      expect(xs[0]![1]).toBeLessThan(xs[1]![0]!);
+      expect(xs[1]![1]! - xs[1]![0]!).toBeGreaterThan(100);
+      expect(h.container.innerHTML).toContain('cx="576.00"');
+    }
+    expect(data).toEqual(before);
+    api.destroy();
+  });
+
   it('cancels an initializing preview without letting its stale teardown erase the replacement route', async () => {
     const h = harness('unavailable', true);
     const maps = h.window.GpxMap as { create: (options: unknown) => Promise<{ render(data: unknown): void; destroy(): void }> };
