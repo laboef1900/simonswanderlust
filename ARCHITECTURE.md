@@ -512,7 +512,7 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   pattern as the session sweep) runs a backup in the first tick of each new calendar window —
   UTC day, or Monday-anchored UTC week — after the last success (an elapsed-time rule drifted an
   hour per day, #113), tracked in `/data/backup/db/state.json`
-  (`lastAttemptAt`/`lastSuccessAt`/`lastError`/`lastImagesArchiveAt`); missed windows catch up on
+  (`lastAttemptAt`/`lastSuccessAt`/`lastError`/`lastImagesArchiveAt`/`imagesCutoffSource`); missed windows catch up on
   next boot. After a successful run, dump files beyond the retention count are pruned. Failures
   are recorded and logged, never crash the app.
 - **Images archive safety (#113,
@@ -520,12 +520,18 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   `images-*.tar` is streamed to a `.<pid>.tmp` that is unlinked on any failure, including the
   process exiting mid-stream; stale temps from a SIGKILL are swept at boot and before each run.
   The archive refuses (recorded as `lastError`, cutoff unchanged) when its estimated size plus the
-  same 2 GiB reserve `/upload` keeps would not fit. `state.json` is validated field by field, and
-  the mtime cutoff is derived from the archives on disk when the state is unusable — a corrupt
-  file resumes incrementally from the newest tar's stamp, and a hand-emptied archive dir starts
-  a fresh full chain — rather than re-tarring the ~11 GB corpus. Not detected: deleting only
-  *some* archives of a chain, and files whose mtime moved backwards (a host-level restore that
-  preserves old mtimes) — an mtime incremental never picks those up.
+  same 2 GiB reserve `/upload` keeps would not fit. Since [#335](docs/superpowers/specs/2026-10-25-image-archive-publication-boundary-design.md),
+  selection includes content mtime **or publication ctime**, excluding atomic-write `.part-*`
+  files. A private empty marker on the images filesystem supplies the next inclusive cutoff,
+  avoiding userspace/kernel clock precision gaps; it is removed before the walk. A read-only
+  source or marker failure refuses the archive without advancing the cutoff. State must carry
+  validated `imagesCutoffSource: "filesystem-v1"`; legacy, missing or corrupt state, or an empty
+  archive directory, forces a **full image archive**, keeping all old archives. Plan capacity for
+  this on upgrade; low space reports failure, never deletes history. Filename timestamps, including
+  collision-bumped names, are not trusted as recovery cutoffs. Supported local Linux/macOS
+  filesystems must update ctime on rename and share one nondecreasing filesystem clock with the
+  marker. Not covered: clock rollback, nested foreign mounts, unsupported remote filesystems,
+  privileged timestamp manipulation, or deletion of only *some* archives.
 - **Admin UI** (settings page) — schedule, retention, **Back up now**, last-run state and
   separate dump/image/private-route archive lists. Keep each private archive with its matching
   dump; download both for offline recovery. Degraded-source and cleanup status are visible.
@@ -595,11 +601,11 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   — because `/data/images` is the importer's resume record (#85): a re-run resolves the same key
   and skips what is complete on disk. Photos imported before #98 sit under the plain
   `trips/<slug>/<name>` and stay resumable while that name is unique within the pair.
-- **Image archives** — after each successful scheduled/on-demand dump, files under `/data/images`
-  modified since the previous archive are tarred into
-  `/data/backup/db/images-<YYYYMMDD-HHmmss>.tar` (mtime-incremental; when nothing changed, no
-  file is written). Archives are **never pruned** — each holds a unique slice of the library —
-  so the chain eventually stores one extra copy of every image; the offsite host-level backup
+- **Image archives** — after each successful scheduled/on-demand dump, completed files under
+  `/data/images` written or published since the previous filesystem boundary are tarred into
+  `/data/backup/db/images-<YYYYMMDD-HHmmss>.tar` (mtime/ctime-incremental; when nothing qualifies,
+  no file is written). Archives are **never pruned** — each can hold a unique slice of the library.
+  Metadata changes and conservative full recovery can repeat files and increase backup space; the offsite host-level backup
   above remains the real DR protection. To rebuild the images dir from archives, untar them
   **oldest-first** into an empty `images/` (later duplicates simply overwrite earlier ones).
 

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import {
-  closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
+  closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { create as createTar } from 'tar';
@@ -101,8 +101,9 @@ export interface BackupState {
   lastAttemptAt?: string;
   lastSuccessAt?: string;
   lastError?: string;
-  /** mtime cutoff for the next incremental images archive (walk-start time of the last one). */
+  /** Images-filesystem publication boundary, trusted only with its provenance tag. */
   lastImagesArchiveAt?: string;
+  imagesCutoffSource?: 'filesystem-v1';
   routeRecovery?: RouteRecoverySummary;
 }
 export interface BackupFileInfo { name: string; size: number }
@@ -248,10 +249,38 @@ export class ArchiveSpaceError extends BackupError {}
  */
 const TAR_PER_ENTRY_OVERHEAD = 2048;
 
+const IMAGE_BOUNDARY_FILE_RE = /^\.archive-boundary-\d+-[0-9a-f]{16}\.tmp$/;
+
+/** Same-filesystem time avoids the kernel inode clock lag behind Date.now() (#335). */
+function imageArchiveBoundary(storageDir: string): string | null {
+  const marker = join(storageDir, `.archive-boundary-${process.pid}-${randomBytes(8).toString('hex')}.tmp`);
+  let fd: number;
+  try {
+    fd = openSync(marker, 'wx', 0o600);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+    throw error;
+  }
+  try {
+    // Floor, never round up: a publication in this same filesystem clock tick
+    // must qualify on the next inclusive comparison.
+    return new Date(Math.floor(fstatSync(fd).ctimeMs)).toISOString();
+  } finally {
+    try { closeSync(fd); } finally { unlinkSync(marker); }
+  }
+}
+
+export interface ImageArchiveResult {
+  name: string | null;
+  /** Null only when the source directory is absent; never advance a cutoff then. */
+  boundary: string | null;
+}
+
 /**
- * Incremental images archive: tars every file under `storageDir` whose mtime is
- * >= `sinceMs` into `images-<stamp>.tar` in `dir` (next to the db dumps).
- * Returns the filename, or null — writing nothing — when no file qualifies.
+ * Incremental images archive: tars final files whose mtime OR ctime is >=
+ * `sinceMs`. The returned boundary comes from the source filesystem before
+ * enumeration; `now` labels the archive only, never the next cutoff.
  * Consecutive archives form a chain; restore by untarring them oldest-first
  * into an empty images dir (duplicate entries across tars are benign in that
  * order). Archives are deliberately never pruned: each holds a unique slice.
@@ -270,30 +299,25 @@ export async function archiveImages(
   now: Date = new Date(),
   space: (path: string) => Promise<DiskSpace> = diskSpace,
   signal?: AbortSignal,
-): Promise<string | null> {
+): Promise<ImageArchiveResult> {
   signal?.throwIfAborted();
-  let names: string[];
-  try {
-    names = readdirSync(storageDir, { recursive: true, encoding: 'utf8' });
-  } catch (e) {
-    // Only a genuinely absent images dir means "nothing to archive". Every
-    // other failure (EACCES/EIO/...) MUST propagate so the caller records it
-    // and does NOT advance the mtime cutoff — a swallowed transient error
-    // would otherwise permanently exclude all pre-existing files from the chain.
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
-    throw e;
-  }
+  const boundary = imageArchiveBoundary(storageDir);
+  if (boundary === null) return { name: null, boundary: null };
+  // A source disappearing after the boundary is an error, not an empty walk.
+  const names = readdirSync(storageDir, { recursive: true, encoding: 'utf8' });
   const fresh: string[] = [];
   let payloadBytes = 0;
   for (const rel of names) {
+    // Rename preserves content mtime but advances publication ctime on our
+    // supported local filesystems. Excluding temps alone would lose that final.
+    if (/\.part-[0-9a-f]{8}$/.test(rel) || IMAGE_BOUNDARY_FILE_RE.test(rel)) continue;
     const st = statSync(join(storageDir, rel), { throwIfNoEntry: false });
-    if (st !== undefined && st.isFile() && st.mtimeMs >= sinceMs) {
+    if (st !== undefined && st.isFile() && (st.mtimeMs >= sinceMs || st.ctimeMs >= sinceMs)) {
       fresh.push(rel);
       payloadBytes += st.size;
     }
   }
-  if (fresh.length === 0) return null;
+  if (fresh.length === 0) return { name: null, boundary };
   mkdirSync(dir, { recursive: true });
   const needed = payloadBytes + fresh.length * TAR_PER_ENTRY_OVERHEAD + UPLOAD_HEADROOM_BYTES;
   let free: number | undefined;
@@ -330,7 +354,7 @@ export async function archiveImages(
   process.on('exit', discard);
   try {
     signal?.throwIfAborted();
-    await createTar({ file: tmp, cwd: storageDir, portable: true }, fresh);
+    await createTar({ file: tmp, cwd: storageDir, portable: true, strict: true }, fresh);
     // Let an already-running copy settle, but never activate its result after
     // lease loss. quiesce() waits this promise before the app pool closes.
     signal?.throwIfAborted();
@@ -341,7 +365,7 @@ export async function archiveImages(
   } finally {
     process.off('exit', discard);
   }
-  return name;
+  return { name, boundary };
 }
 
 /**
@@ -366,32 +390,6 @@ export function sweepTempFiles(dir: string): string[] {
     }
   }
   return swept;
-}
-
-/** `images-YYYYMMDD-HHmmss.tar` → epoch ms of its (UTC) stamp. */
-function archiveStampMs(name: string): number {
-  const s = name.slice('images-'.length, -'.tar'.length);
-  return Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(9, 11), +s.slice(11, 13), +s.slice(13, 15));
-}
-
-/**
- * The mtime cutoff the archives on disk can vouch for: the stamp of the
- * newest `images-*.tar`, or 0 when there is none. Lets a lost or corrupt
- * `state.json` degrade to an incremental run instead of re-tarring the whole
- * corpus, and makes a hand-emptied archive dir start a fresh full chain (#113).
- *
- * @ai-note A same-second collision bumps a name FORWARD of its walk-start, so
- * the newest stamp alone could sit after the real cutoff — a gap. Every
- * archive in a run of consecutive-second stamps started at or after the
- * earliest of them, so that one is the safe answer (a few seconds of benign
- * duplicates at worst).
- */
-export function archiveChainCutoff(dir: string): number {
-  const stamps = listImageArchives(dir).map((f) => archiveStampMs(f.name)); // newest first
-  if (stamps.length === 0) return 0;
-  let cutoff = stamps[0]!;
-  for (let i = 1; i < stamps.length && stamps[i] === cutoff - 1000; i++) cutoff = stamps[i]!;
-  return cutoff;
 }
 
 function listByPattern(dir: string, re: RegExp): BackupFileInfo[] {
@@ -527,6 +525,9 @@ export function readState(dir: string): BackupState {
   if (isTimestamp(r.lastAttemptAt)) state.lastAttemptAt = r.lastAttemptAt;
   if (isTimestamp(r.lastSuccessAt)) state.lastSuccessAt = r.lastSuccessAt;
   if (isTimestamp(r.lastImagesArchiveAt)) state.lastImagesArchiveAt = r.lastImagesArchiveAt;
+  if (state.lastImagesArchiveAt && r.imagesCutoffSource === 'filesystem-v1') {
+    state.imagesCutoffSource = 'filesystem-v1';
+  }
   if (typeof r.lastError === 'string') state.lastError = r.lastError;
   if (r.routeRecovery && typeof r.routeRecovery === 'object' && !Array.isArray(r.routeRecovery)) {
     const recovery = r.routeRecovery as Record<string, unknown>;
@@ -632,23 +633,19 @@ export function createDbBackup(
         // The recovery set is already complete even if ownership is lost before
         // images or retention work. Preserve that evidence alongside the failure.
         if (!writable()) throw new BackupError('storage_read_only');
-        // Best-effort incremental images archive after a successful dump. The
-        // cutoff for the NEXT run is this run's walk-start time (>= compare),
-        // so files written mid-archive land again in the next tar — duplicates
-        // are benign on an ordered restore, gaps would not be.
+        // Only an explicitly filesystem-derived boundary is safe: userspace
+        // timestamps (including legacy/collision-bumped archive names) can be
+        // ahead of inode publication time. Untrusted state requires a full tar.
         if (opts.storageDir) {
           try {
-            const walkStart = new Date();
-            // Lost or corrupt state → resume from the newest tar's stamp; no
-            // tar on disk at all (hand-emptied dir) → a fresh full chain. An
-            // intact state next to an existing chain is trusted as-is: the
-            // stamp is only a truncation or a collision bump away from it.
-            const chain = archiveChainCutoff(opts.dir);
-            const stored = state.lastImagesArchiveAt ? Date.parse(state.lastImagesArchiveAt) : undefined;
-            const since = stored === undefined || chain === 0 ? chain : stored;
-            await archiveImages(opts.storageDir, opts.dir, since, walkStart, diskSpace, opts.signal);
+            const trusted = state.imagesCutoffSource === 'filesystem-v1' && state.lastImagesArchiveAt;
+            const since = trusted && listImageArchives(opts.dir).length > 0 ? Date.parse(trusted) : 0;
+            const result = await archiveImages(opts.storageDir, opts.dir, since, new Date(), diskSpace, opts.signal);
             if (!writable()) throw new BackupError('storage_read_only');
-            state.lastImagesArchiveAt = walkStart.toISOString();
+            if (result.boundary !== null) {
+              state.lastImagesArchiveAt = result.boundary;
+              state.imagesCutoffSource = 'filesystem-v1';
+            }
           } catch (e) {
             // Also log it: state.lastError is a single slot, and a later prune
             // failure in the same run would otherwise displace this message.

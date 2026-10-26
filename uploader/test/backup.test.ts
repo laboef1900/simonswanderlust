@@ -1,12 +1,12 @@
 import { describe, expect, it, beforeEach } from 'vitest';
-import { chmod, mkdir, mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, stat, utimes, writeFile } from 'node:fs/promises';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { list as listTar } from 'tar';
 import {
   dumpDatabase, listBackups, listImageArchives, pruneBackups, readState, writeState, isBackupDue,
-  createDbBackup, archiveImages, archiveChainCutoff, sweepTempFiles, ArchiveSpaceError,
+  createDbBackup, archiveImages, sweepTempFiles, ArchiveSpaceError,
   BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, resolveBackupDir, type Connectable,
 } from '../src/backup.js';
 
@@ -224,17 +224,6 @@ describe('list + prune + state', () => {
     },
   );
 
-  it('derives the archive cutoff from the newest tar, stepping back over a same-second run', async () => {
-    expect(archiveChainCutoff(dir)).toBe(0);
-    for (const n of ['images-20260701-000000.tar', 'images-20260704-102030.tar']) await writeFile(join(dir, n), 'x');
-    expect(archiveChainCutoff(dir)).toBe(Date.parse('2026-07-04T10:20:30Z'));
-    // 102031/102032 were bumped off a collision with 102030 — their walks
-    // started at or after 10:20:30, so that is the cutoff the chain can vouch for
-    for (const n of ['images-20260704-102031.tar', 'images-20260704-102032.tar']) await writeFile(join(dir, n), 'x');
-    expect(archiveChainCutoff(dir)).toBe(Date.parse('2026-07-04T10:20:30Z'));
-    await writeFile(join(dir, 'images-20260704-102040.tar'), 'x');
-    expect(archiveChainCutoff(dir)).toBe(Date.parse('2026-07-04T10:20:40Z'));
-  });
 });
 
 describe('archiveImages', () => {
@@ -253,7 +242,8 @@ describe('archiveImages', () => {
   }
 
   it('tars everything on first run (since 0) with a stamped name', async () => {
-    const name = await archiveImages(storage, dir, 0, new Date('2026-07-04T10:20:30Z'));
+    const { name, boundary } = await archiveImages(storage, dir, 0, new Date('2026-07-04T10:20:30Z'));
+    expect(boundary).toBeTruthy();
     expect(name).toBe('images-20260704-102030.tar');
     expect(IMAGES_ARCHIVE_RE.test(name!)).toBe(true);
     expect(await tarEntries(join(dir, name!))).toEqual([
@@ -261,22 +251,25 @@ describe('archiveImages', () => {
     ]);
   });
 
-  it('includes only files modified at/after the cutoff', async () => {
+  it('includes only files written or published at/after the cutoff', async () => {
+    const oldFile = join(storage, 'trips', 'x', 'hero-640.avif');
     const old = new Date('2026-01-01T00:00:00Z');
-    await utimes(join(storage, 'trips', 'x', 'hero-640.avif'), old, old);
-    const cutoff = Date.parse('2026-06-01T00:00:00Z');
-    const name = await archiveImages(storage, dir, cutoff, new Date('2026-07-04T10:20:30Z'));
+    await utimes(oldFile, old, old);
+    const cutoff = Math.ceil((await stat(oldFile)).ctimeMs) + 1;
+    const fresh = new Date(cutoff + 1000);
+    await utimes(join(storage, 'trips', 'x', 'hero-orig.jpg'), fresh, fresh);
+    const { name } = await archiveImages(storage, dir, cutoff);
     expect(await tarEntries(join(dir, name!))).toEqual(['trips/x/hero-orig.jpg']);
   });
 
   it('writes nothing and returns null when no file is new', async () => {
     const far = Date.parse('2099-01-01T00:00:00Z');
-    expect(await archiveImages(storage, dir, far)).toBeNull();
+    expect(await archiveImages(storage, dir, far)).toEqual({ name: null, boundary: expect.any(String) });
     expect(await readdir(dir)).toEqual([]);
   });
 
-  it('returns null for a missing storage dir', async () => {
-    expect(await archiveImages(join(storage, 'nope'), dir, 0)).toBeNull();
+  it('returns no boundary for a missing storage dir', async () => {
+    expect(await archiveImages(join(storage, 'nope'), dir, 0)).toEqual({ name: null, boundary: null });
     expect(await readdir(dir)).toEqual([]);
   });
 
@@ -296,10 +289,10 @@ describe('archiveImages', () => {
 
   it('never overwrites an existing archive: same-second runs get bumped stamps', async () => {
     const now = new Date('2026-07-04T10:20:30Z');
-    const first = await archiveImages(storage, dir, 0, now);
+    const { name: first } = await archiveImages(storage, dir, 0, now);
     expect(first).toBe('images-20260704-102030.tar');
     await writeFile(join(storage, 'trips', 'x', 'new-orig.jpg'), 'n');
-    const second = await archiveImages(storage, dir, 0, now);
+    const { name: second } = await archiveImages(storage, dir, 0, now);
     expect(second).toBe('images-20260704-102031.tar');
     // the first tar survives untouched — neither slice of the chain is lost
     expect(await tarEntries(join(dir, first!))).toEqual([
@@ -330,12 +323,12 @@ describe('archiveImages', () => {
     await expect(archiveImages(storage, dir, 0, new Date(), tight)).rejects.toThrow(/2 files/);
     expect(await readdir(dir)).toEqual([]);
     const roomy = async () => ({ free: 2 * 1024 * 1024 * 1024 + 2 * 2048 + 2, total: 0 });
-    expect(await archiveImages(storage, dir, 0, new Date(), roomy)).toMatch(IMAGES_ARCHIVE_RE);
+    expect((await archiveImages(storage, dir, 0, new Date(), roomy)).name).toMatch(IMAGES_ARCHIVE_RE);
   });
 
   it('archives anyway when free space cannot be read', async () => {
     const broken = async (): Promise<never> => { throw new Error('statfs ENOSYS'); };
-    expect(await archiveImages(storage, dir, 0, new Date(), broken)).toMatch(IMAGES_ARCHIVE_RE);
+    expect((await archiveImages(storage, dir, 0, new Date(), broken)).name).toMatch(IMAGES_ARCHIVE_RE);
   });
 });
 
@@ -445,7 +438,7 @@ describe('createDbBackup.runNow', () => {
     expect((await readdir(dir)).some((n) => n.endsWith('.tmp'))).toBe(false);
   });
 
-  it('recovers the archive cutoff from the newest tar when state.json is corrupt', async () => {
+  it('takes a full archive when state is corrupt rather than trusting filename time', async () => {
     const storage = await mkdtemp(join(tmpdir(), 'imgarch-'));
     const old = new Date('2026-01-01T00:00:00Z');
     await writeFile(join(storage, 'old-orig.jpg'), 'o');
@@ -461,7 +454,8 @@ describe('createDbBackup.runNow', () => {
     expect(archives.length).toBe(2);
     const entries: string[] = [];
     await listTar({ file: join(dir, archives[0]!.name), onReadEntry: (e) => { entries.push(e.path); } });
-    expect(entries).toEqual(['new-orig.jpg']); // not a full re-archive
+    expect(entries.sort()).toEqual(['new-orig.jpg', 'old-orig.jpg']);
+    expect(s.imagesCutoffSource).toBe('filesystem-v1');
     expect(readState(dir).lastImagesArchiveAt).toBe(s.lastImagesArchiveAt);
   });
 
