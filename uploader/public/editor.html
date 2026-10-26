@@ -532,6 +532,8 @@
       // updatedAt of the pair as loaded/last saved in THIS tab. Echoed back on
       // every save so the server can 409 when another tab/user saved meanwhile.
       let loadedUpdatedAt = null;
+      let loadBlocked = false;
+      let recoveryDraft = null; // immutable pre-reload form while population is unsafe
       let storyReview = null;
       let excerptAssist = null;
       let reviewIsAdmin = false;
@@ -594,7 +596,7 @@
         // share one and the first save deletes the other's work (#138).
         storageKey: initialTk ? 'swl:draft:' + initialTk : DraftGuard.tabScopedKey('swl:draft:new'),
         ...(initialTk ? {} : { orphanPrefix: 'swl:draft:new' }),
-        collect: () => buildPayload(),
+        collect: () => recoveryDraft || buildPayload(),
         onChange: (dirty) => {
           if (dirty && !pendingSaves) setStatus('');
           renderDraftState();
@@ -1705,6 +1707,10 @@
       // Persists the current on-screen form. Returns true on success so Publish
       // can save first and validate exactly what's on screen.
       async function doSaveDraft({ gpxAttach = false } = {}) {
+        if (loadBlocked) {
+          showErr(editorCopy.reloadFailed);
+          return false;
+        }
         if (!gpxAttach && !gpxEditor.guardAction()) return false;
         showErr('');
         setStatus('');
@@ -1926,7 +1932,7 @@
       }
 
       function populateLocale(loc, data) {
-        if (!data) return;
+        data = data || {};
         $(loc + 'Title').value = singleLineTitle(data.title || '');
         resizeTitle($(loc + 'Title'));
         $(loc + 'Country').value = data.country || '';
@@ -2005,14 +2011,13 @@
         // a stored value): a loaded slug turns derivation off for that locale
         // until the author clears the field (#122).
         for (const locale of ['de', 'en']) {
-          const slug = post[locale] && post[locale].slug;
-          if (slug) { slugFieldFor(locale).value = slug; slugAuto[locale] = false; }
+          const slug = post[locale]?.slug || '';
+          slugFieldFor(locale).value = slug;
+          slugAuto[locale] = !slug;
         }
 
-        if (isPublished) {
-          $('slugFieldDe').disabled = true;
-          $('slugFieldEn').disabled = true;
-        }
+        $('slugFieldDe').disabled = isPublished;
+        $('slugFieldEn').disabled = isPublished;
         countryCoords.reset();
         updateLocaleChip();
       }
@@ -2020,6 +2025,7 @@
       // Returns false only when it redirected to /login (callers must stop);
       // true otherwise — even on a failed load, so a local stash can still be offered.
       async function loadPost(tk) {
+        loadBlocked = true;
         setStatus('Loading…');
         let post;
         try {
@@ -2036,15 +2042,36 @@
           setStatus('');
           return true;
         }
-        storyReview?.invalidate();
+        // Never pair a partly populated bilingual form with a fresh concurrency
+        // token. Retain the pre-reload payload independently of the live form:
+        // even a second failure while rolling back cannot corrupt its stash.
+        if (currentTk && !recoveryDraft) recoveryDraft = structuredClone(buildPayload());
+        if (recoveryDraft) guard.stashNow();
+        const wasPublished = isPublished;
+        try {
+          isPublished = post.status === 'published';
+          populateForm(post);
+        } catch (error) {
+          isPublished = wasPublished;
+          console.error('Post form population failed', error);
+          if (recoveryDraft) {
+            try { populateForm(recoveryDraft); }
+            catch (restoreError) { console.error('Local form restoration failed', restoreError); }
+            guard.markDirty();
+            guard.stashNow();
+          }
+          showErr(editorCopy.reloadFailed);
+          setStatus('');
+          return true;
+        }
         currentTk = post.translationKey || tk;
-        isPublished = post.status === 'published';
         loadedUpdatedAt = post.updatedAt || null;
-        loadedSlugs.de = (post.de && post.de.slug) || '';
-        loadedSlugs.en = (post.en && post.en.slug) || '';
-
+        loadedSlugs.de = post.de?.slug || '';
+        loadedSlugs.en = post.en?.slug || '';
+        recoveryDraft = null;
+        loadBlocked = false;
         $('pageTitle').textContent = 'Edit post';
-        populateForm(post);
+        showErr('');
 
         loadRevisions().catch(() => {});
         // Visible before publishing, not only after it: an imported draft is
