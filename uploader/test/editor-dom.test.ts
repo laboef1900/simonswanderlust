@@ -61,7 +61,7 @@ interface EditorApi {
   renderAltAudit(audit: AltAudit | null, published: boolean): void;
   // No `status`/`scheduledAt`: the store decides status and nothing consumes
   // scheduled_at, so the editor sends neither (#121).
-  buildPayload(): Omit<PostPair, 'status'>;
+  buildPayload(): Omit<PostPair, 'status'> & { updatedAt?: string };
 }
 
 
@@ -99,6 +99,7 @@ function loadEditor(options: EditorOptions = {}) {
     private text = '';
     private readonly changes: (() => void)[] = [];
     private readonly markers = new Set<{ start: number; end: number; cleared: boolean }>();
+    private documentVersion = 0;
     input = dom.document.createElement('textarea');
     cursor: { line: number; ch: number } | null = null;
     selection: { from: { line: number; ch: number }; to: { line: number; ch: number } } | null = null;
@@ -131,8 +132,15 @@ function loadEditor(options: EditorOptions = {}) {
         };
       },
       addLineWidget: (_line: number, node: Element) => {
+        const version = this.documentVersion;
         this.input.parentElement!.appendChild(node);
-        return { clear: () => node.remove(), changed() {} };
+        let cleared = false;
+        return {
+          clear: () => { cleared = true; node.remove(); },
+          changed: () => {
+            if (cleared || version !== this.documentVersion) throw new Error('remeasured a detached widget');
+          },
+        };
       },
       replaceRange: (value: string, from: { line: number; ch: number }, to: { line: number; ch: number }) => {
         const start = this.codemirror.indexFromPos(from);
@@ -149,6 +157,7 @@ function loadEditor(options: EditorOptions = {}) {
     };
     value(value?: string): string {
       if (value !== undefined) {
+        this.documentVersion += 1;
         for (const marker of this.markers) marker.cleared = true;
         this.text = value;
         for (const callback of this.changes) callback();
@@ -176,6 +185,7 @@ function loadEditor(options: EditorOptions = {}) {
     URLSearchParams,
     URL,
     AbortController,
+    structuredClone,
     Event: EditorEvent,
     KeyboardEvent: EditorEvent,
     console,
@@ -285,6 +295,72 @@ function minimalPair(): StashPayload {
   const loc = (locale: 'de' | 'en') => ({ locale, slug: 'x', title: 'X', excerpt: '', country: '', bodyMarkdown: '', images: {} });
   return { translationKey: 'tk1', status: 'draft', shared: {}, de: loc('de'), en: loc('en') };
 }
+
+describe('complete bilingual conflict reload', () => {
+  it('reloads both locales before using the new token on the next save', async () => {
+    let stored = { ...fullPair(), updatedAt: '2026-10-25T10:00:00.000Z' };
+    const h = loadEditor({ confirm: true, fetch: async (url, options) => {
+      if (url === '/posts/tk1' && options?.method === 'PUT') {
+        const payload = JSON.parse(String(options.body));
+        if (payload.updatedAt !== stored.updatedAt) return response({ code: 'conflict' }, 409);
+        stored = { ...stored, ...payload };
+        return response(stored);
+      }
+      if (url === '/posts/tk1') return response(stored);
+      return response([]);
+    } });
+    await h.api.loadPost('tk1');
+    h.el('deTitle').value = 'Local German edit';
+    h.el('deTitle').fire('input');
+    stored = { ...stored, updatedAt: '2026-10-25T11:00:00.000Z',
+      de: { ...stored.de, title: 'New DE', bodyMarkdown: 'New German body' },
+      en: { ...stored.en, title: 'New EN must survive', bodyMarkdown: 'New English body must survive' } };
+    expect(await h.api.doSaveDraft()).toBe(false); // conflict then explicit Reload
+    expect(h.api.buildPayload().updatedAt).toBe(stored.updatedAt);
+    expect(h.el('enTitle').value).toBe(stored.en.title);
+    expect(await h.api.doSaveDraft()).toBe(true);
+    expect(stored.en.bodyMarkdown).toBe('New English body must survive');
+  });
+
+  it.each([false, true])('blocks mixed-form saves and retains local edits when population fails (rollback also fails: %s)', async (failRollback) => {
+    let stored = { ...fullPair(), updatedAt: '2026-10-25T10:00:00.000Z' };
+    const h = loadEditor({ confirm: true, fetch: async (url, options) => {
+      if (options?.method === 'PUT') return response({ code: 'conflict' }, 409);
+      return response(url === '/posts/tk1' ? stored : []);
+    } });
+    await h.api.loadPost('tk1');
+    h.el('deTitle').value = 'Recover my unsaved DE title';
+    h.el('deTitle').fire('input');
+    h.editors[1]!.value('Recover my unsaved English body');
+    const local = structuredClone(h.api.buildPayload());
+    stored = { ...stored, updatedAt: '2026-10-25T11:00:00.000Z',
+      de: { ...stored.de, title: 'New server DE', bodyMarkdown: 'Replacement body' },
+      en: { ...stored.en, title: 'New server EN' } };
+    const value = h.editors[0]!.value.bind(h.editors[0]);
+    h.editors[0]!.value = (text?: string) => {
+      const result = value(text); // fail AFTER DE fields/body have changed, before EN
+      if (text !== undefined && (failRollback || text === 'Replacement body')) throw new Error('forced population failure');
+      return result;
+    };
+    expect(await h.api.doSaveDraft()).toBe(false);
+    expect(h.api.buildPayload().updatedAt).toBe(local.updatedAt);
+    expect(h.el('actionError').textContent).toBe(ui.en['editor.chrome.reloadFailed']);
+    expect(h.requests.filter((request) => request.options.method === 'PUT')).toHaveLength(1);
+    expect(await h.api.doSaveDraft()).toBe(false);
+    h.el('previewBtn').click();
+    h.el('publishBtn').click();
+    await settle();
+    expect(h.requests.filter((request) => request.options.method === 'PUT')).toHaveLength(1);
+    const stashes = Array.from({ length: h.local.length }, (_, index) => JSON.parse(h.local.getItem(h.local.key(index)!)!));
+    expect(stashes.some((stash) => JSON.stringify(stash.payload) === JSON.stringify(local))).toBe(true);
+    if (!failRollback) expect(h.api.buildPayload()).toEqual(local);
+    h.editors[0]!.value = value;
+    await h.api.loadPost('tk1');
+    expect(h.api.buildPayload().updatedAt).toBe(stored.updatedAt);
+    expect(h.el('enTitle').value).toBe('New server EN');
+    expect(h.el('actionError').hidden).toBe(true);
+  });
+});
 
 describe('explicit editor publish tokens', () => {
   it.each([null, '11111111-1111-4111-8111-111111111111'])('sends the saved pair token and reviewed route token %s without refreshing', async (routeVersion) => {
@@ -1611,6 +1687,12 @@ describe('inline gallery editing', () => {
     first.onPick([row, placeholder], { layout: 'slider', captions: { visible: false, overrides: { [other]: local } } });
 
     const edited = h.api.buildPayload().de;
+    // The caret is parked past the blank line after the updated gallery — on
+    // "Middle" — not on its closing ```, where the next upload would reopen
+    // the fence over the rest of the story (#333).
+    const caret = h.editors[0]!.codemirror.indexFromPos(h.editors[0]!.cursor!);
+    expect(edited.bodyMarkdown.slice(caret, caret + 'Middle'.length)).toBe('Middle');
+    expect(edited.bodyMarkdown.slice(0, caret).endsWith('```\n\n')).toBe(true);
     const saved = normalizeGalleryFences(edited.bodyMarkdown, edited.images);
     // The shared images map keeps Media's / the stored caption: the edit is not in it.
     expect(saved.images[other]).toEqual({ width: 300, height: 200, alt: 'Andere', caption: 'Gespeichert' });

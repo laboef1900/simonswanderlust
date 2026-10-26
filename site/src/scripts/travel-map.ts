@@ -12,6 +12,7 @@ import {
 import { Protocol } from 'pmtiles';
 import { layers, namedTheme } from 'protomaps-themes-base';
 import type { PinCollection, TripGeometry } from '../lib/map-data';
+import { mapFrame } from '../../../uploader/public/map-frame.js';
 
 // Vite must bundle the v6 worker's shared-module import, not copy it verbatim.
 setWorkerUrl(workerUrl);
@@ -99,6 +100,12 @@ export function initFullMap(
 }
 
 export function initMiniMap(container: HTMLElement, geometry: TripGeometry): void {
+  const feats = [geometry.pin, ...geometry.stops];
+  const frame = mapFrame([
+    ...(geometry.track?.coordinates ?? []),
+    ...feats.map((feature) => [feature.geometry.coordinates]),
+  ]);
+  const position = ([lng, lat]: [number, number]): [number, number] => [frame.longitude(lng), lat];
   const map = new MapLibreMap({
     container,
     style: baseStyle(),
@@ -106,12 +113,23 @@ export function initMiniMap(container: HTMLElement, geometry: TripGeometry): voi
     attributionControl: {},
   });
 
-  map.on('load', () => {
+  let framed = false;
+  let basemapFailed = false;
+  map.on('error', () => {
+    if (basemapFailed) return;
+    basemapFailed = true;
+    // The local archive is optional. Keep the public-only overlay and the
+    // existing textual route description; never fall back to external tiles.
+    map.setStyle({ version: 8, sources: {}, layers: [
+      { id: 'background', type: 'background', paint: { 'background-color': '#fbfbfd' } },
+    ] });
+  });
+  map.on('style.load', () => {
     if (geometry.track) {
       map.addSource('track', {
         type: 'geojson',
         data: { type: 'Feature', properties: {}, geometry: {
-          type: geometry.track.type, coordinates: geometry.track.coordinates,
+          type: geometry.track.type, coordinates: geometry.track.coordinates.map((run) => run.map(position)),
         } },
       });
       // A separate MultiLineString preserves gaps; added before all story circles.
@@ -123,10 +141,11 @@ export function initMiniMap(container: HTMLElement, geometry: TripGeometry): voi
         paint: { 'line-color': '#142a42', 'line-width': 3 },
       });
     }
-    const feats = [geometry.pin, ...geometry.stops];
     map.addSource('trip', {
       type: 'geojson',
-      data: { type: 'FeatureCollection', features: feats },
+      data: { type: 'FeatureCollection', features: feats.map((feature) => ({
+        ...feature, geometry: { ...feature.geometry, coordinates: position(feature.geometry.coordinates) },
+      })) },
     });
     map.addLayer({
       id: 'trip',
@@ -140,16 +159,15 @@ export function initMiniMap(container: HTMLElement, geometry: TripGeometry): voi
       },
     });
 
-    if (feats.length === 1 && !geometry.track) {
-      map.setCenter(geometry.pin.geometry.coordinates);
-      map.setZoom(5);
-    } else {
-      const b = new LngLatBounds();
-      for (const f of feats) b.extend(f.geometry.coordinates);
-      for (const run of geometry.track?.coordinates ?? []) {
-        for (const position of run) b.extend(position);
+    if (!framed) {
+      if (feats.length === 1 && !geometry.track) {
+        map.setCenter(geometry.pin.geometry.coordinates);
+        map.setZoom(5);
+      } else if (frame.bounds) {
+        // No initial fly-in: a tile-failure style swap must not interrupt the fit.
+        map.fitBounds(frame.bounds, { padding: 40, maxZoom: 8, duration: 0 });
       }
-      map.fitBounds(b, { padding: 40, maxZoom: 8 });
+      framed = true;
     }
 
     container.dataset.ready = 'true';
