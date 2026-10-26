@@ -591,7 +591,7 @@ domain (an inline image with no `images` entry passes through unchanged) or drop
 gallery line fails the origin allow-list), and after the DNS cutover both 404. `POST
 /posts/:tk/publish` and the bulk `publish` action therefore refuse while the **rendered** body of
 either locale would emit an `<img>` — or contains a gallery line — whose **origin is not the image
-host** (`foreignImageUrls`, `uploader/src/publish-gate.ts` — origin equality, never a prefix, the
+host** (`analyzeBodyImages`, `uploader/src/publish-gate.ts` — origin equality, never a prefix, the
 gallery allow-list's rule). Each candidate is resolved against the image host first, because a
 browser gives a reference with no origin of its own the page's: `//old.example/a.jpg` (and its
 `&#47;&#47;` and `\\` spellings) is a foreign hot-link the sanitizer keeps, while
