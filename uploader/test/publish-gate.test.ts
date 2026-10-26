@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { foreignImageUrls } from '../src/publish-gate.js';
+import { analyzeBodyImages, bodyImageKey } from '../src/publish-gate.js';
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
 import { transformBodyImages } from '../../site/src/lib/body-images.js';
 
@@ -15,7 +15,7 @@ import { transformBodyImages } from '../../site/src/lib/body-images.js';
 // nothing is resolved away). The oracle is deliberately more liberal than a
 // tag parser — it cannot be fooled by a `>` inside an attribute — and the gate
 // must agree with it exactly.
-describe('foreignImageUrls', () => {
+describe('analyzeBodyImages foreign-origin interpretation', () => {
   const ORIGIN = 'https://img.simonswanderlust.com';
   const OLD = 'https://old.example';
   const oracle = async (body: string): Promise<string[]> => {
@@ -86,7 +86,7 @@ describe('foreignImageUrls', () => {
 
   it('reports exactly what the renderer would hot-link', async () => {
     for (const [body, expected] of cases) {
-      const got = await foreignImageUrls(body, ORIGIN);
+      const { foreign: got } = await analyzeBodyImages(body, {}, ORIGIN);
       expect(got, body).toEqual(expected);
       expect(got, `oracle disagrees for ${body}`).toEqual(await oracle(body));
     }
@@ -101,7 +101,7 @@ describe('foreignImageUrls', () => {
       `<pre>\n<code class="language-gallery" id="c">${ORIGIN}/trips/x/one\n${OLD}/wp-content/uploads/g.jpg</code>\n</pre>`,
     ];
     for (const body of bodies) {
-      expect(await foreignImageUrls(body, ORIGIN), body).toEqual([`${OLD}/wp-content/uploads/g.jpg`]);
+      expect((await analyzeBodyImages(body, {}, ORIGIN)).foreign, body).toEqual([`${OLD}/wp-content/uploads/g.jpg`]);
       // The hole being closed: with the own photo resolvable, the renderer builds
       // the gallery and the foreign line simply disappears.
       const rendered = transformBodyImages(await renderMarkdown(body), { [`${ORIGIN}/trips/x/one`]: { width: 3000, height: 2000 } }, ORIGIN);
@@ -114,11 +114,74 @@ describe('foreignImageUrls', () => {
     const body = ['```gallery', `${ORIGIN}/trips/x/one | 3000x2000`, '//old.example/wp-content/uploads/g.jpg', '```'].join('\n');
     // galleryPhotos parses the line without a base too, so the renderer drops it
     // silently — the same disappearing photo, one spelling further out.
-    expect(await foreignImageUrls(body, ORIGIN)).toEqual(['//old.example/wp-content/uploads/g.jpg']);
+    expect((await analyzeBodyImages(body, {}, ORIGIN)).foreign).toEqual(['//old.example/wp-content/uploads/g.jpg']);
   });
 
   it('de-duplicates across shapes', async () => {
     const body = `![a](${OLD}/a.jpg)\n\n![b](${OLD}/a.jpg)\n<img src="${OLD}/a.jpg">\n\n\`\`\`gallery\n${OLD}/a.jpg\n\`\`\``;
-    expect(await foreignImageUrls(body, ORIGIN)).toEqual([`${OLD}/a.jpg`]);
+    expect((await analyzeBodyImages(body, {}, ORIGIN)).foreign).toEqual([`${OLD}/a.jpg`]);
+  });
+});
+
+describe('rendered readiness references (#334)', () => {
+  const origin = 'https://images.test';
+  const photo = `${origin}/trips/test/photo`;
+  const images = { [photo]: { width: 1280, height: 960 } };
+
+  it.each(['avif', 'webp', 'jpeg'])('reads direct %s variants without metadata from Markdown and raw HTML', async (format) => {
+    const src = `${photo}-640.${format}`;
+    for (const body of [`![View](${src})`, `<img src="${src}" alt="View > valley">`]) {
+      expect((await analyzeBodyImages(body, {}, origin)).sources).toEqual([src]);
+      expect(transformBodyImages(await renderMarkdown(body), {}, origin)).toContain(`src="${src}"`);
+    }
+  });
+
+  it('retains every raw picture candidate, not just its ready fallback', async () => {
+    const body = `<picture><source srcset="${photo}-640.avif 1x, ${origin}/other-1280.avif 2x"><img src="${origin}/ready-640.webp"></picture>`;
+    const result = await analyzeBodyImages(body, {}, origin);
+    expect(result.sources).toEqual([`${photo}-640.avif`, `${origin}/other-1280.avif`, `${origin}/ready-640.webp`]);
+    const html = transformBodyImages(await renderMarkdown(body), {}, origin);
+    for (const src of result.sources) expect(html).toContain(src);
+  });
+
+  it('reads resolved galleries and inline pictures but ignores obsolete metadata and code examples', async () => {
+    const bodies = [`![View](${photo})`, `\`\`\`gallery\n${photo}\n\`\`\``];
+    for (const body of bodies) {
+      const result = await analyzeBodyImages(body, images, origin);
+      const html = transformBodyImages(await renderMarkdown(body), images, origin);
+      expect(result.sources.length).toBeGreaterThan(0);
+      expect(new Set(result.sources.map(src => bodyImageKey(src, origin, `${origin}/story/`)))).toEqual(new Set(['trips/test/photo']));
+      for (const src of result.sources) expect(html).toContain(src);
+    }
+    for (const body of ['No photo remains', `\`![View](${photo})\``, `\`\`\`html\n<img src="${photo}">\n\`\`\``]) {
+      expect((await analyzeBodyImages(body, images, origin)).sources).toEqual([]);
+    }
+  });
+
+  it('does not treat unresolved gallery text as an image load, but still refuses foreign gallery lines', async () => {
+    const body = `\`\`\`gallery\n${photo}\nhttps://foreign.test/photo\n\`\`\``;
+    const result = await analyzeBodyImages(body, {}, origin);
+    expect(result).toEqual({ sources: [], foreign: ['https://foreign.test/photo'] });
+    expect(transformBodyImages(await renderMarkdown(body), {}, origin)).toContain('<pre>');
+  });
+
+  it.each([
+    [`${photo}-640.webp?download=1#photo`, 'trips/test/photo'],
+    ['/trips/test/photo-640.avif', 'trips/test/photo'],
+    ['//images.test/trips/test/photo-640.jpeg', 'trips/test/photo'],
+    ['../../trips/test/photo-640.webp', 'trips/test/photo'],
+    ['/trips/test/%70hoto-640.webp', 'trips/test/photo'],
+    ['photo-640.webp', 'en/story/photo'],
+    ['https://images.test.evil/trips/test/photo-640.webp', null],
+    ['https://images.test@evil.test/trips/test/photo-640.webp', null],
+    ['data:image/png;base64,AAAA', null],
+    ['/trips/test/%ZZ-640.webp', null],
+  ])('maps browser reference %s to its media key', (src, key) => {
+    expect(bodyImageKey(src, origin, `${origin}/en/story/`)).toBe(key);
+  });
+
+  it('respects a configured image path boundary', () => {
+    expect(bodyImageKey('/images/photo-640.webp', `${origin}/images`, `${origin}/story/`)).toBe('photo');
+    expect(bodyImageKey('/images-other/photo-640.webp', `${origin}/images`, `${origin}/story/`)).toBeNull();
   });
 });

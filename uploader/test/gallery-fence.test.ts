@@ -49,7 +49,16 @@ interface Edit {
   text: string;
   start: number;
   end: number;
+  cursor: number;
   replaced: boolean;
+  blocked?: 'unterminated';
+}
+interface Insertion {
+  text: string;
+  start: number;
+  cursor: number;
+  relocated: boolean;
+  blocked?: 'unterminated';
 }
 interface Api {
   escapeMeta(s: string): string;
@@ -66,6 +75,7 @@ interface Api {
   scanFences(text: string): { start: number; end: number; isGallery: boolean; unterminated: boolean }[];
   fenceAt(body: string, cursor: number): { text: string; start: number; end: number } | null;
   replaceFenceAt(body: string, cursor: number, fence: string): Edit;
+  insertBlockAt(body: string, cursor: number, block: string): Insertion;
   LAYOUTS: string[];
   DEFAULT_LAYOUT: string;
   layoutOf(directives: string[]): string;
@@ -475,9 +485,102 @@ describe('replaceFenceAt', () => {
       expect(apply(prose, G.replaceFenceAt(prose, 2, FENCE))).toBe('a\n\n```gallery\nhttps://i/b\n```\n\nb');
     });
 
-    it('adds no padding at the very start or very end of the body', () => {
-      expect(apply('', G.replaceFenceAt('', 0, FENCE))).toBe(FENCE);
-      expect(apply('a\n\n', G.replaceFenceAt('a\n\n', 3, FENCE))).toBe('a\n\n' + FENCE);
+    it('leaves a blank-line insertion point after an EOF gallery, including in an empty body', () => {
+      const emptyEdit = G.replaceFenceAt('', 0, FENCE);
+      const empty = apply('', emptyEdit);
+      expect(empty).toBe(FENCE + '\n\n');
+      expect(emptyEdit.cursor).toBe(empty.length);
+      expect(G.scanFences(empty)).toMatchObject([{ isGallery: true, unterminated: false }]);
+
+      const prose = 'a\n\n';
+      const edit = G.replaceFenceAt(prose, prose.length, FENCE);
+      const out = apply(prose, edit);
+      expect(out).toBe(prose + FENCE + '\n\n');
+      expect(edit.cursor).toBe(out.length);
+      // This is the editor's next replaceSelection(ImageMarkdown.image(...)):
+      // the caret lands after the suffix, so the image starts on its own line.
+      const continued = out + '![Second](https://i/second)\n\nFOLLOWING STORY TEXT';
+      expect(G.scanFences(continued)).toMatchObject([{ isGallery: true, unterminated: false }]);
+      expect(continued).toContain('![Second](https://i/second)');
+      expect(continued).toContain('FOLLOWING STORY TEXT');
+    });
+
+    // The suffix is empty when the body already has the blank line, so the end
+    // of the range edit — where CodeMirror leaves the caret — is the closing
+    // ```. The editor moves the caret to `cursor` instead: the first line after
+    // the separator, whatever came after the insertion point.
+    it('puts the caret past the blank line that already followed the insertion point', () => {
+      const prose = 'Intro\n\nMore';
+      const edit = G.replaceFenceAt(prose, 'Intro'.length, FENCE);
+      const out = apply(prose, edit);
+      expect(out).toBe('Intro\n\n' + FENCE + '\n\nMore');
+      expect(out.slice(edit.cursor)).toBe('More');
+      expect(out.slice(0, edit.cursor).endsWith('```\n\n')).toBe(true);
+    });
+
+    it('puts the caret after an updated gallery and its existing separator, changing nothing around it', () => {
+      const edit = G.replaceFenceAt(body, body.indexOf('https://i/a'), FENCE);
+      const out = apply(body, edit);
+      expect(out.slice(edit.cursor)).toBe('outro');
+      // An update at EOF with no newline after the closer has nowhere further
+      // to go; it stays byte-identical rather than appending one.
+      const eof = 'intro\n\n```gallery\nhttps://i/a\n```';
+      const tail = G.replaceFenceAt(eof, eof.length - 1, FENCE);
+      expect(apply(eof, tail)).toBe('intro\n\n' + FENCE);
+      expect(tail.cursor).toBe(apply(eof, tail).length);
+    });
+  });
+
+  // The upload button's `![alt](src)` must never land inside a fence: on the
+  // closer's line it turned ``` into `` ```![…](…) ``, which is no closer, so
+  // the gallery ran to EOF and the preview dropped every image and paragraph
+  // after it while the saved Markdown still held them (#333).
+  describe('insertBlockAt keeps an image out of every fence', () => {
+    const IMG = '![Second](https://i/second)';
+    const galleryBody = 'Intro\n\n```gallery\nhttps://i/a\n```\n\nFOLLOWING STORY TEXT';
+    const closer = galleryBody.indexOf('```\n\nFOLLOWING') + 3;
+    const place = (text: string, ins: Insertion) => text.slice(0, ins.start) + ins.text + text.slice(ins.start);
+
+    it('inserts at the cursor itself outside every fence', () => {
+      const ins = G.insertBlockAt(galleryBody, 'Intro'.length, IMG);
+      expect(ins).toEqual({ text: IMG, start: 'Intro'.length, cursor: 'Intro'.length + IMG.length, relocated: false });
+      // The line right after the closer is outside the block, too.
+      expect(G.insertBlockAt(galleryBody, closer + 1, IMG).relocated).toBe(false);
+    });
+
+    it('relocates a cursor on the closing ``` to after the block, without stacking blank lines', () => {
+      const ins = G.insertBlockAt(galleryBody, closer, IMG);
+      expect(ins.relocated).toBe(true);
+      const out = place(galleryBody, ins);
+      expect(out).toBe('Intro\n\n```gallery\nhttps://i/a\n```\n\n' + IMG + '\n\nFOLLOWING STORY TEXT');
+      expect(out.slice(ins.cursor)).toBe('FOLLOWING STORY TEXT');
+      expect(G.scanFences(out)).toMatchObject([{ isGallery: true, unterminated: false }]);
+    });
+
+    it('relocates from the opener line, a photo line, and a code block alike', () => {
+      const opener = galleryBody.indexOf('```gallery') + '```gallery'.length;
+      const photo = galleryBody.indexOf('https://i/a') + 4;
+      for (const cursor of [opener, photo]) {
+        const out = place(galleryBody, G.insertBlockAt(galleryBody, cursor, IMG));
+        expect(out).toBe('Intro\n\n```gallery\nhttps://i/a\n```\n\n' + IMG + '\n\nFOLLOWING STORY TEXT');
+      }
+      const code = 'a\n\n```js\nconst x = 1;\n```\nb';
+      const ins = G.insertBlockAt(code, code.indexOf('const') + 2, IMG);
+      expect(place(code, ins)).toBe('a\n\n```js\nconst x = 1;\n```\n\n' + IMG + '\n\nb');
+      expect(place(code, ins).slice(ins.cursor)).toBe('b');
+    });
+
+    it('pads an EOF block so the caret ends on a fresh line', () => {
+      const eof = '```gallery\nhttps://i/a\n```';
+      const ins = G.insertBlockAt(eof, eof.length, IMG);
+      const out = place(eof, ins);
+      expect(out).toBe(eof + '\n\n' + IMG + '\n\n');
+      expect(ins.cursor).toBe(out.length);
+    });
+
+    it('refuses inside an unterminated fence instead of guessing where it ends', () => {
+      const open = 'Intro\n\n```gallery\nhttps://i/a\n';
+      expect(G.insertBlockAt(open, open.length, IMG)).toMatchObject({ blocked: 'unterminated', text: '', relocated: false });
     });
   });
 

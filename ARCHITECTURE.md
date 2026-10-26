@@ -212,11 +212,14 @@ re-encode probe it replaced. This exists because encoding a 24 MP frame costs ~1
 peak RSS: at concurrency 2 the old synchronous path held the connection for 40–90 s, against a
 reverse proxy whose default read timeout is 60 s. The trade-off is that `{src}-640.webp` 404s
 until the encode lands, so **`POST /posts/:tk/publish` refuses (409) while any photo the post
-references is not `ready`** — that gate is the only thing standing between a lost encode job and
-a published page full of broken images. A key with no `media` row never blocks (WordPress-imported
-and legacy files predate the library). The same gate also refuses (409, with a count and up to
-five example URLs) while the **rendered** body of either locale would emit an `<img>`, or holds a
-` ```gallery ` line, whose **origin is not the image host** (#91, `foreignImageUrls` in
+actually puts on the page is not `ready`** — the heroes and title images, and every `img`/`source`
+URL the **rendered, `images`-resolved** body of either locale would emit (#334; a stale `images`
+entry for a photo the body no longer mentions does not block). That gate is the only thing
+standing between a lost encode job and a published page full of broken images. A key with no
+`media` row never blocks (WordPress-imported and legacy files predate the library). The same gate
+also refuses (409, with a count and up to five example URLs) while the rendered body of either
+locale would emit an `<img>`, or holds a ` ```gallery ` line, whose **origin is not the image
+host** (#91; both readings come from one render per locale in `analyzeBodyImages`,
 `uploader/src/publish-gate.ts`): that is what a failed WXR re-host leaves behind, and the render
 path would hot-link the old domain or drop the photo silently. The body is judged from the
 renderer's own sanitized tree (`renderMarkdown` + `bodyImageSources`), so code fences, code spans

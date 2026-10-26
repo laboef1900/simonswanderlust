@@ -601,7 +601,7 @@ domain (an inline image with no `images` entry passes through unchanged) or drop
 gallery line fails the origin allow-list), and after the DNS cutover both 404. `POST
 /posts/:tk/publish` and the bulk `publish` action therefore refuse while the **rendered** body of
 either locale would emit an `<img>` — or contains a gallery line — whose **origin is not the image
-host** (`foreignImageUrls`, `uploader/src/publish-gate.ts` — origin equality, never a prefix, the
+host** (`analyzeBodyImages`, `uploader/src/publish-gate.ts` — origin equality, never a prefix, the
 gallery allow-list's rule). Each candidate is resolved against the image host first, because a
 browser gives a reference with no origin of its own the page's: `//old.example/a.jpg` (and its
 `&#47;&#47;` and `\\` spellings) is a foreign hot-link the sanitizer keeps, while
@@ -618,6 +618,19 @@ author-level preview route already does per request, so the gate (admin-only) ad
 surface; the renderer's superlinear worst case on adversarial backtick bodies is pre-existing and
 bounded by the 1 MiB request limit. See
 `docs/superpowers/specs/2026-09-06-publish-gate-foreign-images-design.md`.
+
+**Readiness follows actual rendered references** (#334, 2026-10-25). Single and bulk publishing
+render each locale once, preserve the pre-transform foreign-origin check above, and derive media
+readiness keys from the actual sanitized/transformed body image sources, plus heroes and title
+images. Direct AVIF/WebP/JPEG variants count without metadata; obsolete unused `images` entries
+do not. Known `processing`, `failed`, and `missing` rows refuse publication before snapshots or
+builds change. No-row legacy body/hero references remain allowed; title images still require a
+known ready library row. URL resolution uses origin equality and hosted path boundaries, with
+body-relative URLs resolved against their public locale story URL. There is no remote fetch or
+filesystem probe. Existing admin authorization, publish concurrency checks, sanitization,
+gallery URL/dimension guards, preview CSP, and EXIF/privacy controls are reconfirmed unchanged.
+See [the approved readiness specification](docs/superpowers/specs/2026-10-25-publish-readiness-references-design.md)
+for failure recovery, rollback, and verification.
 
 ## Output sanitization (stored XSS)
 
