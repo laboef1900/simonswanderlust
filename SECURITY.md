@@ -239,6 +239,16 @@ let anyone on the internet watch the volume fill up and time a disk-exhaustion a
 **never as a health verdict**: a low-space 503 would trigger a restart loop, which makes a full
 disk strictly worse.
 
+Image archives exclude unfinished storage `.part-*` files and use mtime **or rename ctime**
+against an inclusive boundary obtained from an empty, exclusive-created `0600` marker on the
+images filesystem (#335). The marker is removed before enumeration; crash leftovers are
+ignored, never treated as originals. Marker/read/strict-tar failures preserve the prior cutoff.
+The source must be writable and use the supported local Linux/macOS filesystem semantics;
+clock rollback, foreign nested mounts and arbitrary network filesystems are outside this
+timestamp protocol. Legacy, missing or corrupt cutoff provenance forces a full archive with
+the existing reserve, retaining old archives rather than guessing from filenames. Admin-only
+backup access, private original/EXIF handling, storage ownership and key guards are unchanged.
+
 `POST /import` has the same precondition (issue #94), with the same 507 and the same reserve, but
 sized from a **count** rather than a byte total — a WXR declares URLs, not sizes — using the
 measured ~17.5 MB whole cost of one re-hosted photo. The count is the photos the run will actually
@@ -591,7 +601,7 @@ domain (an inline image with no `images` entry passes through unchanged) or drop
 gallery line fails the origin allow-list), and after the DNS cutover both 404. `POST
 /posts/:tk/publish` and the bulk `publish` action therefore refuse while the **rendered** body of
 either locale would emit an `<img>` — or contains a gallery line — whose **origin is not the image
-host** (`foreignImageUrls`, `uploader/src/publish-gate.ts` — origin equality, never a prefix, the
+host** (`analyzeBodyImages`, `uploader/src/publish-gate.ts` — origin equality, never a prefix, the
 gallery allow-list's rule). Each candidate is resolved against the image host first, because a
 browser gives a reference with no origin of its own the page's: `//old.example/a.jpg` (and its
 `&#47;&#47;` and `\\` spellings) is a foreign hot-link the sanitizer keeps, while
@@ -608,6 +618,19 @@ author-level preview route already does per request, so the gate (admin-only) ad
 surface; the renderer's superlinear worst case on adversarial backtick bodies is pre-existing and
 bounded by the 1 MiB request limit. See
 `docs/superpowers/specs/2026-09-06-publish-gate-foreign-images-design.md`.
+
+**Readiness follows actual rendered references** (#334, 2026-10-25). Single and bulk publishing
+render each locale once, preserve the pre-transform foreign-origin check above, and derive media
+readiness keys from the actual sanitized/transformed body image sources, plus heroes and title
+images. Direct AVIF/WebP/JPEG variants count without metadata; obsolete unused `images` entries
+do not. Known `processing`, `failed`, and `missing` rows refuse publication before snapshots or
+builds change. No-row legacy body/hero references remain allowed; title images still require a
+known ready library row. URL resolution uses origin equality and hosted path boundaries, with
+body-relative URLs resolved against their public locale story URL. There is no remote fetch or
+filesystem probe. Existing admin authorization, publish concurrency checks, sanitization,
+gallery URL/dimension guards, preview CSP, and EXIF/privacy controls are reconfirmed unchanged.
+See [the approved readiness specification](docs/superpowers/specs/2026-10-25-publish-readiness-references-design.md)
+for failure recovery, rollback, and verification.
 
 ## Output sanitization (stored XSS)
 

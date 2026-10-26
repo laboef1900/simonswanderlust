@@ -132,7 +132,7 @@ Before starting, edit your private `.env`:
 - For a local trial, set `PUBLIC_BASE_URL=http://localhost:3000` and
   `IMG_HOST=localhost:3000`. For a server, use your image domain and its matching host.
 - Set `IMAGE_TAG` to the [release](https://github.com/laboef1900/simonswanderlust/releases)
-  you want to run. The committed default is `0.17.0`.
+  you want to run. The committed default is `0.17.1`.
 
 The app runs as non-root uid 1000. On a Linux host, prepare the data directory so it is
 writable, then start the stack:
@@ -224,25 +224,32 @@ integration tests need a separate `TEST_DATABASE_URL`.
 
 ### Cutting a release
 
-**Current release: v0.17.0.** Highlights since v0.16.0:
+**Current release: v0.17.1.** Fixes since v0.17.0:
 
-- Optional GPX import in Story details: inspect a self-hosted preview, trim by distance
-  or point count, remove segments, and explicitly attach the route to a draft.
-- Originals, elevation and timestamps stay private; authenticated authors can read them.
-  Explicitly adopted waypoints become ordinary shared stops at their exact coordinates.
-- Publish creates a bounded, simplified, four-decimal 2D route for both language pages.
-  Draft edits and detachment do not alter the public route until the next Publish.
-  Discontinuities remain separate, with localized route text when maps or JavaScript fail.
-- Bounded XML workers reject hostile/oversized input. Private recovery now pairs v10
-  database dumps with manifest-matched original archives; MDX contains only the last
-  published public route, never private originals or timestamps.
+- Gallery reloads no longer risk saving mixed DE/EN content after partial form loading;
+  failed reloads preserve a local recovery copy and block Save, Preview and Publish.
+- Galleries inserted at the end of a story stay separated from subsequent photos and prose.
+- Editor and public story maps frame split antimeridian routes consistently, preserve
+  genuinely wide routes, and keep route overlays visible when the local basemap is unavailable.
+- Publish checks readiness against the images actually rendered in the story, including
+  direct Markdown and HTML references, without blocking on unused image metadata.
+- Image backups exclude unfinished temporary files and capture completed images that cross
+  an incremental archive boundary, using a cutoff from the images filesystem.
 
-Before upgrading to v0.17.0, take **Back up now** and retain the previous image and backup.
-GPX recovery requires the private dump **and its matching route archive**. Restore is
-offline: stop the app before running the restore CLI, then restart it after inspecting
-the result. See [Database dumps](ARCHITECTURE.md#database-dumps).
-API clients calling `POST /posts/:tk/publish` must now send `baseUpdatedAt` and
-`baseRouteVersion`; the bundled editor already does so.
+Before upgrading, take **Back up now** and retain the previous image and backup.
+The first image backup after this upgrade creates a **full image archive** to establish
+the new cutoff provenance; allow capacity for that archive plus the existing free-space
+reserve. Missing or invalid backup state also requires a full archive. Existing archives
+are preserved; insufficient space reports a failure rather than deleting backup history.
+See [Database dumps](ARCHITECTURE.md#database-dumps).
+
+Upgrading from before v0.17.0: GPX recovery requires the private v10 database dump **and
+its matching route archive**. Restore is offline: stop the app before running the restore
+CLI, then restart it after inspecting the result. API clients calling
+`POST /posts/:tk/publish` must send `baseUpdatedAt` and `baseRouteVersion`; the bundled
+editor already does so. GPX originals, elevation and timestamps stay private but are
+readable by authenticated authors. Publish creates a simplified, four-decimal 2D route;
+explicitly adopted waypoints remain shared stops at their exact coordinates.
 Deploying does not publish drafts or rebuild the live blog. Route precision is not
 anonymization: remove sensitive points and inspect separately adopted stops before Publish.
 
@@ -258,8 +265,8 @@ Upgrading from before v0.15.0: take **Back up now** before deploying. First boot
 
 ```bash
 git fetch origin main
-git tag -a v0.17.0 origin/main -m "Release v0.17.0"
-git push origin v0.17.0
+git tag -a v0.17.1 origin/main -m "Release v0.17.1"
+git push origin v0.17.1
 ```
 
 Never push directly to protected branches, tag an unmerged feature branch or replace a

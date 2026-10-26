@@ -47,6 +47,15 @@ Failures stay inline; manual editing, saving and publishing remain available.
 - Retain widgets while unrelated text or their own alt text changes. Dispose stale
   widgets, requests and image observers. Refresh measured heights after image loads
   or suggestions. Hidden locale editors refresh when their tab becomes visible.
+- Disposing a widget clears its measurement reference before cancellation or late
+  image/observer callbacks can run. A removed CodeMirror line must never be
+  remeasured; unexpected errors are not swallowed.
+- Conflict Reload commits the server concurrency token only after the complete
+  DE/EN form is populated. Failed population blocks Save, Preview and Publish,
+  retains the previous token and an independent pre-reload local draft, and
+  attempts to restore the visible local form. Even failed restoration cannot
+  replace that recovery stash with mixed fields. A complete reload is required
+  before saving is allowed again (#332); no server concurrency contract changes.
 - Initial alt precedence: unsaved fence metadata, then the post's images map, then
   empty. Explicit empty is distinct from absent. The picker must serialize an
   explicit empty alt rather than resurrecting stored/library text.
@@ -109,3 +118,27 @@ https://codemirror.net/5/doc/manual.html#addLineWidget
 - No production content, media metadata, published output, credentials or
   deployment were changed. Renderer/normalizer validation and the security model
   remain unchanged; editor strings still cross the existing escaping boundary.
+
+### Conflict Reload regression (#332, 2026-10-25)
+
+- Normal frontend risk: no API, authorization, persistence schema, renderer or
+  slug contract changes. Revert the frontend patch to roll back; no data migration.
+- Permanent editor regressions exercise complete bilingual Reload and force an
+  exception after the DE body changes but before EN population, including a
+  second exception during local-form restoration. They assert the old token,
+  blocked subsequent writes, preserved recovery payload and successful retry.
+  The widget harness rejects measurement after document replacement/disposal.
+- Real shipped EasyMDE / CodeMirror 5.65.15, managed Chromium and the real
+  PostgreSQL-backed app: DE gallery visible at 1440px, newer EN saved by a second
+  client, stale Save conflict, Reload, Save — newer EN title/body persisted intact,
+  with no browser error. Synthetic missing thumbnail exercised the real widget,
+  not photo delivery. Forced partial population plus rollback failure retained
+  the exact local draft and old token, refused Save, and left server EN intact.
+  Desktop and 390px mobile error text remained readable without page overflow.
+- Node 26.12.1 / isolated PostgreSQL 18.6: uploader typecheck passed; full suite
+  with `TEST_DATABASE_URL` and `--maxWorkers=2`: 98 files, 2,275 tests passed.
+  The first unbounded run hit the unchanged GPX worker's deadline under concurrent
+  work (2,274 passed); no timeout or test was weakened. Site: 364 tests passed;
+  Astro check: 99 files, no errors/warnings/hints.
+- Focused design detector reported only incumbent dynamic-image placeholders and
+  hierarchy inferred without resolving `/admin/` stylesheets. No layout redesign.

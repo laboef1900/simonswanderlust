@@ -233,6 +233,27 @@ corpus, and `test/admin-pages.test.ts` pins the editor's offered values to `GALL
 those, the picker can show one mode while the site renders another — silently, and only after
 publishing.
 
+### Editor: the caret and the closing fence (#333)
+
+A gallery's closing ``` is a hazard for whatever the editor writes next: text concatenated to it
+is no longer a closer, so the fence runs to EOF and the renderer drops every image and paragraph
+after it while the saved Markdown still holds them. Two rules keep the editor's own writes off it:
+
+- **The picker parks the caret past the gallery.** `replaceFenceAt` pads a new fence with blank
+  lines on both sides — also at EOF — and reports `cursor`, the offset of the first line after the
+  separator; the editor sets the caret there after its `replaceRange`. An update leaves the text
+  around the fence byte-identical and skips the separator that already follows it.
+- **The upload button never splices an image into a fence.** `insertBlockAt(body, cursor, md)`
+  resolves the caret the author actually left: outside every fence it is used as is (a selection
+  is still replaced); on a fence's opener or closer line, between a gallery's fences (a photo line
+  the renderer ignores) or inside a code block, the image goes after the block on its own
+  paragraph and the status line says so. An unterminated enclosing fence refuses, as the picker
+  does, and hands the author the Markdown to paste once it is closed.
+
+Both stay undoable CodeMirror range edits. `test/gallery-fence.test.ts` pins the EOF boundary, the
+caret on every `replaceFenceAt` branch and the relocation cases; `test/editor-dom.test.ts` pins
+that the editor moves the caret after a picker update.
+
 ## Testing
 
 | Area | Coverage |

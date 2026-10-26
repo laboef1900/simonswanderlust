@@ -39,15 +39,6 @@
   }
 
   function sameOrigin(url) { return new URL(url, location.href).origin === location.origin; }
-  function boundsFor(runs) {
-    var west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
-    runs.forEach(function (run) { run.forEach(function (p) {
-      if (!p || !Number.isFinite(p.lng) || !Number.isFinite(p.lat)) return;
-      west = Math.min(west, p.lng); east = Math.max(east, p.lng);
-      south = Math.min(south, p.lat); north = Math.max(north, p.lat);
-    }); });
-    return west === Infinity ? null : [[west, south], [east, north]];
-  }
   function copyText(copy, key) {
     var mapped = {
       loading: 'mapLoading', basemapMissing: 'mapBasemapMissing', webglFallback: 'mapWebglFallback',
@@ -95,9 +86,7 @@
     });
     return result;
   }
-  function svgFallback(container, status, copy, retained, removed, waypoints, statusKey) {
-    var all = retained.concat(removed, waypoints.map(function (point) { return [point]; }));
-    var bounds = boundsFor(all);
+  function svgFallback(container, status, copy, retained, removed, waypoints, statusKey, bounds) {
     var width = Math.max(320, container.clientWidth || 640), height = 300, pad = 24;
     function xy(point) {
       var x = bounds && bounds[0][0] !== bounds[1][0] ? (point.lng - bounds[0][0]) / (bounds[1][0] - bounds[0][0]) : .5;
@@ -172,6 +161,7 @@
     status.textContent = copyText(copy, 'loading');
     try { await Promise.all([loadCss(), loadScript(maplibreUrl), loadScript(pmtilesUrl)]); }
     catch (_) { failed = true; }
+    var mapFrame = (await import('./map-frame.js')).mapFrame;
     if (dead) return api;
     var gl = window.maplibregl;
     var pm = window.pmtiles;
@@ -231,6 +221,13 @@
       var points = (Array.isArray(data.waypoints) ? data.waypoints : []).map(function (point, index) {
         return { lng: point.lng, lat: point.lat, selected: selected.has(index) };
       }).filter(function (point) { return Number.isFinite(point.lng) && Number.isFinite(point.lat) && Math.abs(point.lng) <= 180 && Math.abs(point.lat) <= 90; });
+      var frame = mapFrame(original.concat(retained, removed, points.map(function (point) { return [point]; })).map(function (run) {
+        return run.map(function (point) { return [point.lng, point.lat]; });
+      }));
+      function displayRun(run) { return run.map(function (point) { return Object.assign({}, point, { lng: frame.longitude(point.lng) }); }); }
+      retained = retained.map(displayRun);
+      removed = removed.map(displayRun);
+      points = displayRun(points);
       if (!retained.length && !removed.length && !points.length && !original.length) {
         if (!map) container.replaceChildren();
         if (map && styleReady) ['gpx-kept', 'gpx-removed', 'gpx-waypoints'].forEach(function (id) {
@@ -239,7 +236,7 @@
         });
         status.textContent = copyText(copy, 'noGeometry'); return;
       }
-      if (failed || !map) { svgFallback(container, status, copy, retained, removed, points, fallbackKey); return; }
+      if (failed || !map) { svgFallback(container, status, copy, retained, removed, points, fallbackKey, frame.bounds); return; }
       if (!styleReady || dead) return;
       try {
         var keepFeature = feature(retained, { kind: 'kept' }), removeFeature = feature(removed, { kind: 'removed' });
@@ -250,14 +247,14 @@
           if (removeFeature) { map.addSource('gpx-removed', { type: 'geojson', data: removeFeature }); map.addLayer({ id: 'gpx-removed', type: 'line', source: 'gpx-removed', paint: { 'line-color': '#59636d', 'line-width': 3, 'line-dasharray': [2, 2], 'line-opacity': .8 } }); }
           if (points.length) { map.addSource('gpx-waypoints', { type: 'geojson', data: { type: 'FeatureCollection', features: points.map(function (point) { return { type: 'Feature', properties: { selected: point.selected }, geometry: { type: 'Point', coordinates: [point.lng, point.lat] } }; }) } }); map.addLayer({ id: 'gpx-waypoints', type: 'circle', source: 'gpx-waypoints', paint: { 'circle-radius': ['case', ['get', 'selected'], 7, 4], 'circle-color': ['case', ['get', 'selected'], '#142a42', '#fff'], 'circle-stroke-color': '#142a42', 'circle-stroke-width': 2 } }); }
           // The public candidate arrives asynchronously; fit source context, not a pending empty line.
-          var bounds = boundsFor(original.concat(points.map(function (point) { return [point]; })));
+          var bounds = frame.bounds;
           if (needsFit && bounds) { map.fitBounds(bounds, { padding: 40, maxZoom: 8, duration: 0 }); needsFit = false; }
         };
         update();
       } catch (_) {
         failed = true;
         removeMap();
-        svgFallback(container, status, copy, retained, removed, points, fallbackKey);
+        svgFallback(container, status, copy, retained, removed, points, fallbackKey, frame.bounds);
       }
     }
     observer = map && typeof ResizeObserver === 'function' ? new ResizeObserver(function () { if (map && !dead) map.resize(); }) : null;
