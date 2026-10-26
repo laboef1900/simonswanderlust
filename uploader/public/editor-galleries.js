@@ -34,9 +34,13 @@ window.EditorGalleries = (function () {
     function cancel() { controllers.forEach((controller) => controller.cancel()); }
     function dispose(controller) {
       controller.alive = false;
-      controller.cancel();
+      // setValue may already have removed the widget's CodeMirror line. Stop
+      // every late image/observer/cancellation callback from remeasuring it.
+      const widget = controller.widget;
+      controller.widget = null;
       controller.observer?.disconnect();
-      controller.widget.clear();
+      widget.clear();
+      controller.cancel();
       controller.marker.clear();
     }
 
@@ -296,7 +300,7 @@ window.EditorGalleries = (function () {
       });
       controller.widget = cm.addLineWidget(cm.posFromIndex(block.start).line, root);
       if (typeof ResizeObserver !== 'undefined') {
-        controller.observer = new ResizeObserver(() => controller.widget.changed());
+        controller.observer = new ResizeObserver(() => controller.widget?.changed());
         controller.observer.observe(root);
       }
       return controller;

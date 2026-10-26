@@ -532,6 +532,8 @@
       // updatedAt of the pair as loaded/last saved in THIS tab. Echoed back on
       // every save so the server can 409 when another tab/user saved meanwhile.
       let loadedUpdatedAt = null;
+      let loadBlocked = false;
+      let recoveryDraft = null; // immutable pre-reload form while population is unsafe
       let storyReview = null;
       let excerptAssist = null;
       let reviewIsAdmin = false;
@@ -594,7 +596,7 @@
         // share one and the first save deletes the other's work (#138).
         storageKey: initialTk ? 'swl:draft:' + initialTk : DraftGuard.tabScopedKey('swl:draft:new'),
         ...(initialTk ? {} : { orphanPrefix: 'swl:draft:new' }),
-        collect: () => buildPayload(),
+        collect: () => recoveryDraft || buildPayload(),
         onChange: (dirty) => {
           if (dirty && !pendingSaves) setStatus('');
           renderDraftState();
@@ -1238,6 +1240,9 @@
             // A range edit, not mde.value(): replaceRange keeps CodeMirror's undo
             // history (and fires a change event, which marks the guard dirty).
             cm.replaceRange(out.text, cm.posFromIndex(out.start), cm.posFromIndex(out.end));
+            // Past the blank line after the block — never on the closing ```,
+            // where the next upload or keystroke would reopen the fence (#333).
+            cm.setCursor(cm.posFromIndex(out.cursor));
             guard.markDirty();
             // Count the lines actually written, not the photos picked: serialize
             // drops a newly picked photo whose dimensions are unusable.
@@ -1334,14 +1339,28 @@
             ...(body.format === 'jpeg' ? { format: body.format } : {}),
           };
 
-          // Insert markdown at cursor in the matching EasyMDE instance
-          // (replaceSelection fires a CodeMirror change → marks the guard dirty)
-          const mde = locale === 'de' ? deMDE : enMDE;
+          // Insert markdown at the cursor in the matching EasyMDE instance —
+          // but never into a fence (#333): on a gallery's closing line the
+          // image turns the ``` into text and the gallery swallows the rest of
+          // the story; between its fences it is a photo line the renderer
+          // ignores. Then it goes after the block instead, on its own line.
+          // (Both edits fire a CodeMirror change → marks the guard dirty.)
+          const cm = (locale === 'de' ? deMDE : enMDE).codemirror;
           const md = ImageMarkdown.image(altInput.value, body.src);
-          mde.codemirror.replaceSelection(md);
-
-          statusEl.textContent = 'Inserted: ' + body.src
-            + (body.status === 'processing' ? ' — still processing (Publish waits for it)' : '');
+          const spot = GalleryFence.insertBlockAt(cm.getValue(), cm.indexFromPos(cm.getCursor()), md);
+          if (spot.blocked === 'unterminated') {
+            statusEl.textContent = 'Uploaded ' + body.src + ' but not inserted: the block around the cursor has no closing ``` — close it, then paste: ' + md;
+          } else {
+            if (spot.relocated) {
+              const from = cm.posFromIndex(spot.start);
+              cm.replaceRange(spot.text, from, from);
+              cm.setCursor(cm.posFromIndex(spot.cursor));
+            } else {
+              cm.replaceSelection(md);
+            }
+            statusEl.textContent = (spot.relocated ? 'Inserted after the ``` block: ' : 'Inserted: ') + body.src
+              + (body.status === 'processing' ? ' — still processing (Publish waits for it)' : '');
+          }
           fileInput.value = '';
           altInput.value = '';
         } catch (e) {
@@ -1688,6 +1707,10 @@
       // Persists the current on-screen form. Returns true on success so Publish
       // can save first and validate exactly what's on screen.
       async function doSaveDraft({ gpxAttach = false } = {}) {
+        if (loadBlocked) {
+          showErr(editorCopy.reloadFailed);
+          return false;
+        }
         if (!gpxAttach && !gpxEditor.guardAction()) return false;
         showErr('');
         setStatus('');
@@ -1909,7 +1932,7 @@
       }
 
       function populateLocale(loc, data) {
-        if (!data) return;
+        data = data || {};
         $(loc + 'Title').value = singleLineTitle(data.title || '');
         resizeTitle($(loc + 'Title'));
         $(loc + 'Country').value = data.country || '';
@@ -1988,14 +2011,13 @@
         // a stored value): a loaded slug turns derivation off for that locale
         // until the author clears the field (#122).
         for (const locale of ['de', 'en']) {
-          const slug = post[locale] && post[locale].slug;
-          if (slug) { slugFieldFor(locale).value = slug; slugAuto[locale] = false; }
+          const slug = post[locale]?.slug || '';
+          slugFieldFor(locale).value = slug;
+          slugAuto[locale] = !slug;
         }
 
-        if (isPublished) {
-          $('slugFieldDe').disabled = true;
-          $('slugFieldEn').disabled = true;
-        }
+        $('slugFieldDe').disabled = isPublished;
+        $('slugFieldEn').disabled = isPublished;
         countryCoords.reset();
         updateLocaleChip();
       }
@@ -2003,6 +2025,7 @@
       // Returns false only when it redirected to /login (callers must stop);
       // true otherwise — even on a failed load, so a local stash can still be offered.
       async function loadPost(tk) {
+        loadBlocked = true;
         setStatus('Loading…');
         let post;
         try {
@@ -2019,15 +2042,36 @@
           setStatus('');
           return true;
         }
-        storyReview?.invalidate();
+        // Never pair a partly populated bilingual form with a fresh concurrency
+        // token. Retain the pre-reload payload independently of the live form:
+        // even a second failure while rolling back cannot corrupt its stash.
+        if (currentTk && !recoveryDraft) recoveryDraft = structuredClone(buildPayload());
+        if (recoveryDraft) guard.stashNow();
+        const wasPublished = isPublished;
+        try {
+          isPublished = post.status === 'published';
+          populateForm(post);
+        } catch (error) {
+          isPublished = wasPublished;
+          console.error('Post form population failed', error);
+          if (recoveryDraft) {
+            try { populateForm(recoveryDraft); }
+            catch (restoreError) { console.error('Local form restoration failed', restoreError); }
+            guard.markDirty();
+            guard.stashNow();
+          }
+          showErr(editorCopy.reloadFailed);
+          setStatus('');
+          return true;
+        }
         currentTk = post.translationKey || tk;
-        isPublished = post.status === 'published';
         loadedUpdatedAt = post.updatedAt || null;
-        loadedSlugs.de = (post.de && post.de.slug) || '';
-        loadedSlugs.en = (post.en && post.en.slug) || '';
-
+        loadedSlugs.de = post.de?.slug || '';
+        loadedSlugs.en = post.en?.slug || '';
+        recoveryDraft = null;
+        loadBlocked = false;
         $('pageTitle').textContent = 'Edit post';
-        populateForm(post);
+        showErr('');
 
         loadRevisions().catch(() => {});
         // Visible before publishing, not only after it: an imported draft is
