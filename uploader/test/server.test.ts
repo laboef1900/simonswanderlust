@@ -2517,10 +2517,48 @@ describe('posts editor', () => {
     expect(s.calls.length).toBe(1);
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
-    expect(un.json()).toEqual({ unpublished: true, build: { ok: true, release: 'r1' } });
+    expect(un.json()).toEqual({ unpublished: true, build: { ok: true, release: 'r1' }, updatedAt: expect.any(String) });
     expect(s.calls.length).toBe(2);
     const got = await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie });
     expect(got.json().status).toBe('draft');
+    expect(un.json().updatedAt).toBe(got.json().updatedAt);
+    expect(new Date(un.json().updatedAt).getTime()).toBeGreaterThan(new Date(created.json().updatedAt).getTime());
+    const saved = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), updatedAt: un.json().updatedAt },
+    });
+    expect(saved.statusCode).toBe(200);
+  });
+
+  it('unpublish returns its own token when a later writer saves during the rebuild', async () => {
+    const posts = memoryPostStore();
+    let tokenAtBuild: string | undefined;
+    const builder: SiteBuilder = {
+      ...stubBuilder().builder,
+      build: async () => {
+        const [summary] = await posts.list();
+        const pair = (await posts.get(summary!.translationKey))!;
+        tokenAtBuild = pair.updatedAt.toISOString();
+        await posts.upsertDraft({ ...pair, de: { ...pair.de, title: 'Another tab' } }, pair.updatedAt);
+        return { ok: true, release: 'r1' };
+      },
+    };
+    const b = build({ posts, builder });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    await posts.publish(tk, await publishTokens(posts, tk));
+    const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    expect(un.statusCode).toBe(200);
+    expect(un.json().updatedAt).toBe(tokenAtBuild);
+    expect(un.json().updatedAt).not.toBe((await posts.get(tk))!.updatedAt.toISOString());
+    const stale = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), updatedAt: un.json().updatedAt },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().code).toBe('conflict');
+    expect((await posts.get(tk))!.de.title).toBe('Another tab');
   });
 
   it('a failed rebuild is surfaced but the store change still lands (unpublish + delete)', async () => {
@@ -2532,7 +2570,7 @@ describe('posts editor', () => {
     await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
-    expect(un.json()).toEqual({ unpublished: true, build: { ok: false, error: 'a build is already running' } });
+    expect(un.json()).toEqual({ unpublished: true, build: { ok: false, error: 'a build is already running' }, updatedAt: (await b.posts.get(tk))!.updatedAt.toISOString() });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('draft');
     // re-publish, then delete while the builder keeps failing: DB delete lands, outcome surfaced
     await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });

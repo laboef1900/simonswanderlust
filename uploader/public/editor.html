@@ -1895,6 +1895,7 @@
           const body = await res.json().catch(() => ({}));
           if (!res.ok) { showErr('Unpublish failed: ' + (body.error || res.status)); setStatus(''); return; }
           isPublished = false;
+          if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
           $('slugFieldDe').disabled = false;
           $('slugFieldEn').disabled = false;
           setStatus('Unpublished "' + title + '".');

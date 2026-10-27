@@ -213,6 +213,14 @@ Gallery descriptions are the exception: alt text and captions for photos in the 
 library use the current library values on the next rebuild, without republishing each
 article. This does not publish any draft text or change gallery order.
 
+**More actions → Unpublish** returns both languages to draft and rebuilds the site.
+The previous release remains visible until that rebuild succeeds; if it fails, the
+old live pages remain until a successful rebuild. After your own successful unpublish,
+you can edit and **Save draft** in the same tab without reloading. The editor adopts
+that unpublish's concurrency token, not a later writer's: a save made elsewhere,
+including while the rebuild is running, still produces the normal conflict dialog.
+Choose **Cancel** there to keep your unsaved edits on screen for copying.
+
 ### Import and trim a private GPX route
 
 Open **Story details → GPX route → Import GPX** and choose a local `.gpx` file

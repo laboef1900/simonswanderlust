@@ -172,7 +172,7 @@ export interface PostStore {
   upsertDraft(pair: PostPair, baseUpdatedAt?: Date): Promise<StoredPostPair>;
   publish(translationKey: string, tokens: PublishTokens): Promise<{ updatedAt: Date }>;
   /** Flip a pair back to draft (the "emergency brake" — the live site drops it on the next build). */
-  unpublish(translationKey: string): Promise<void>;
+  unpublish(translationKey: string): Promise<{ updatedAt: Date }>;
   /** Hard-delete both locale rows, freeing their slugs for reuse. */
   remove(translationKey: string): Promise<void>;
   /**
@@ -664,6 +664,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         if (!p) throw new PostError('post not found');
         p.status = 'draft';
         p.updatedAt = nextTime(p.updatedAt);
+        return { updatedAt: new Date(p.updatedAt) };
       });
     },
     async remove(tk) {
@@ -1024,10 +1025,11 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         await client.query('BEGIN');
         await lockPostPair(client, tk);
         if (!(await readPostPair(client, tk, true))) throw new PostError('post not found');
-        await touchPostPair(client, tk);
+        const updatedAt = await touchPostPair(client, tk);
         await client.query(`UPDATE posts SET status='draft' WHERE translation_key=$1`, [tk]);
         writable();
         await client.query('COMMIT');
+        return { updatedAt };
       } catch (error) {
         await client.query('ROLLBACK').catch(() => {});
         throw error;
