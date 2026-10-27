@@ -347,6 +347,15 @@ Extend those roles with a size or a weight when needed — never
 a tracking value, and never a coloured plate, which is what the card's date
 line used to be.
 
+**Count grammar.** Public DE/EN labels use the singular only for exactly one:
+`1 REISE` / `1 TRIP`, `1 LAND` / `1 COUNTRY`, `1 KONTINENT` / `1 CONTINENT`,
+`1 Pin-Standort` / `1 pin location`, and `1 Kommentar` / `1 comment`.
+The homepage map band, region kicker, map page, About statistics and comment
+thread share this rule through `countLabel`; translated forms stay in `ui.ts`.
+Zero and two or more use plural labels. Existing empty states take precedence:
+the homepage omits its map band without stories, empty regions have no page,
+and an empty comment thread says “Noch keine Kommentare.” / “No comments yet.”
+
 **Where the entry number belongs.** `N°09` is a signature mark and it earns
 its place where it says something: the homepage hero's entry, where it
 introduces the latest story as one of a numbered series. It was also on every
