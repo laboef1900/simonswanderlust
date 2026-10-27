@@ -3,28 +3,29 @@
 **Date:** 2026-10-27 · **Risk:** high (shared root URL namespace, Golden Rule 2, `db.ts` schema,
 dump version, a new author-controlled URL sink in `Nav.astro`/`Footer.astro`) · **Size:** large
 
-**Status: APPROVAL PENDING.** This is a proposal. No decision in it is approved. Every
-recommendation below waits for the owner, and implementation (#288, #289) must not start until
-the approval record at the end is filled in. Creating #287 did not grant approval. The only owner
-decision that already exists is the one quoted from the issue: **story-slug reservation is in
-scope and existing slugs are grandfathered (2026-10-19)**.
+**Status: OWNER APPROVED, 2026-10-27.** The owner selected **“Approve proposed page contract”**
+for PR #407 at `dcf775e25034547764e9c9e48a2c94feb6e78413`: fixed page kinds, About's existing
+URLs and undeletable status, reserved-route/cross-content guards, Postgres navigation, and
+published pages continuing to save live. Story-slug reservation and grandfathering remain in
+scope. Implementation (#288/#289) must preserve every documented invariant.
 
-**Epic:** #286 · **Blocked by:** #283 (language-mode contract, open, unapproved) · **Blocks:** #288
+**Epic:** #286 · **Prerequisite:** #283's language contract (owner-approved 2026-10-27) · **Blocks:** #288
 (store/API/editor), #289 (rendering/nav), #308 (journey routes reuse the reserved-route contract)
 · **Baseline:** `dev` at `11e16d1`. The issue was planned against `9e400f9`; all the evidence below
 was re-checked at `11e16d1`.
 
 ## How this spec handles #283
 
-#283 has not been decided. This spec is written so it can be approved without it:
+#283 was approved in the same owner decision batch. The applicability labels below distinguish
+today's mode from the additional approved modes:
 
 - Everything **not** marked *Conditional on #283* applies to the only mode that exists today:
   **DE+EN, DE-primary**. DE is at the root and EN is under `/en/`. That is unchanged and needs no
   #283 decision.
-- Sections marked **Conditional on #283** restate #283's **proposed** contract (draft:
+- Sections marked **Conditional on #283** apply when #283's approved mode support is implemented:
   `docs/superpowers/specs/2026-10-27-issue-283-language-mode-contract.md` on
-  `feature/issue-283-locale-contract-design`, also unapproved). They take effect only if #283 is approved as proposed.
-  If #283 changes, those sections are amended. The unconditional contract is not.
+  `feature/issue-283-locale-contract-design` (PR #406). Any later change to that contract requires
+  reconciling these sections before implementation.
 - The reservation model is written in terms of **namespaces** (the root, or a locale prefix), not
   locales, so a mode change only reassigns locales to namespaces. The rules stay the same.
 
@@ -688,7 +689,7 @@ No new root segment is registered, so the app reservation set is unchanged by th
 
 | Item | Status |
 |---|---|
-| Owner approval of this spec | **PENDING** (none recorded) |
-| #283 contract approval (conditional sections) | **PENDING** |
-| `SECURITY.md` reconfirmation | pending implementation (#288/#289) |
-| Approver / date | — |
+| Owner approval of this spec | Approved: **“Approve proposed page contract”**, PR #407 at `dcf775e25034547764e9c9e48a2c94feb6e78413` |
+| #283 contract approval (conditional sections) | Approved in the same interactive decision batch; implementation still required |
+| `SECURITY.md` reconfirmation | Required during implementation (#288/#289) |
+| Approver / date | Repository owner, interactive implementation session, 2026-10-27 |
