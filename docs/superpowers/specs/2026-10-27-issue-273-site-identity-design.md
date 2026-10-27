@@ -5,10 +5,11 @@
 **Risk:** HIGH. The contract covers the Postgres schema and backups, the in-process build
 pipeline, SEO output (`Astro.site`, canonical, `hreflang`, sitemap, RSS, JSON-LD), the public
 comment Origin check, and an image upload path.
-**Status:** **PROPOSED. Owner approval pending.** No decision below has been approved. This
-document changes no runtime behaviour, policy or rule. `SECURITY.md`, `ARCHITECTURE.md` and
-`CLAUDE.md` are unchanged; §21–§22 hold *drafts* of their deltas. The implementation children
-(#274, #275, #276) must not start until §23 records the owner's approval.
+**Status:** **OWNER APPROVED, 2026-10-27.** The owner selected **“Approve proposed Postgres
+contract”** for PR #405 at `4692ecf30785fa911084e6f328345f255263e7d4`. The identity/assets
+contract and its upgrade/recovery rules are approved; #274, #275 and #276 may proceed in
+dependency order. This design PR itself changes no runtime or owner content. The implementation
+must apply the applicable SECURITY.md, ARCHITECTURE.md and CLAUDE.md deltas in §21–§22.
 **Baseline:** `origin/dev` at `11e16d1` (v0.17.1, dump version 10 with private GPX archives
 after #271). All `file:line` references below were verified at that commit unless marked
 `[INFERENCE]`.
@@ -1051,7 +1052,16 @@ joins #296's operator-managed `settings.json` row, and #295's rehearsal must res
 
 ## 23. Owner approval record
 
-**Not recorded.** This proposal is waiting for the owner's decision on O1–O14 (§0). Approval
-has to name the approver, the date, and the alternative chosen for any row not accepted as
-recommended. Until then, #274, #275 and #276 must not start. #319 is not gated by this
-record.
+- **Approver/date:** repository owner, interactive implementation session, 2026-10-27.
+- **Evidence:** **“Approve proposed Postgres contract”**, linked to PR #405 at
+  `4692ecf30785fa911084e6f328345f255263e7d4`.
+- **Approved:** the proposed identity/assets storage, neutral fresh-install and exact legacy
+  upgrade seeding, blog origin, noindex-until-configured, re-encoded assets and recovery contract.
+- **Settings-store exception:** identity and its assets use Postgres rather than settings.json
+  so database recovery preserves a coherent identity. Risks are migration errors and larger
+  dumps; bounded validated assets, transactional backup/restore, exact legacy seeding and
+  the tests specified here are compensating controls. Review at the first third-party install
+  or 2027-10-27, whichever comes first.
+- **Still separate:** #291's software/content/brand-rights decisions, #319's independent origin
+  fix approval, and any newly discovered issue such as F1. No release, deployment or owner-content
+  mutation is authorized by this record.
