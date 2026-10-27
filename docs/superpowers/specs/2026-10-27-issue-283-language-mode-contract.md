@@ -732,9 +732,9 @@ CREATE TABLE IF NOT EXISTS site_language (
   cached mode. #287 page publish, published PUT and page mutations affecting activation preflight
   join the same language-first order so preflight cannot race a page save.
 - No transaction above acquires or waits for the build/encode work lock. Release DB locks before
-  calling the builder, which acquires the work lock **once**, reads committed language/identity
-  state and builds. The current work lock protects build/encode resource use; it does **not**
-  serialize `posts.publish`'s earlier DB writes (`server.ts:1647,1735`, `build.ts:244`).
+  calling the builder, which acquires the work lock **once**, opens the shared exported
+  read snapshot below, and builds. The current work lock protects build/encode resource use;
+  it does **not** serialize `posts.publish`'s earlier DB writes (`server.ts:1647,1735`, `build.ts:244`).
   Memory stores must model the same serial outcomes; Postgres barrier tests are the race proof.
 - **Why not `settings.json`:** `settings.json` is not in DB dumps (`ARCHITECTURE.md`, Backups).
   The mode decides the URL of every published row. A dump restored into a fresh install would
@@ -743,16 +743,31 @@ CREATE TABLE IF NOT EXISTS site_language (
   settings is cosmetic; losing the mode moves URLs.
 - **#273 alignment** (advisory, no native link): DesignIdentity273 has confirmed that #273's
   proposal also moves identity to a single-row Postgres table in the dump. It uses the same
-  propagation shape, with both values read in one snapshot inside the build's exclusive lock,
-  after mutation transactions release their locks. Identity renders/edits enabled locales;
-  stored maps may retain disabled-locale values as #273 specifies.
+  propagation shape, with language, identity/assets and every database content loader bound
+  to one exported PostgreSQL snapshot inside the build's exclusive lock, after mutation
+  transactions release their locks. Stored identity maps may retain disabled-locale values.
 
 ### 10.2 Build propagation
 
-- `build.ts` reads `site_language` inside `lock.runExclusive` and passes
-  `SITE_LANGUAGE_JSON={"primary":"de","locales":["de","en"]}` in the child `env`. This is
-  programmatic, **not** an operator `.env` knob (`.env` does not grow).
-- `astro.config.mjs` and `site/src/lib/` validate it with Zod.
+- `build.ts` opens a dedicated `REPEATABLE READ READ ONLY` transaction inside
+  `lock.runExclusive`, calls `pg_export_snapshot()`, and reads language/identity/assets from
+  that same connection. It supplies `SITE_LANGUAGE_JSON={"primary":"de","locales":["de","en"]}`
+  and internal `SITE_DATABASE_SNAPSHOT` to the child unconditionally. These are programmatic,
+  **not** operator `.env` knobs.
+- Every trips/pages/media-metadata/navigation loader imports that snapshot on a checked-out
+  connection before its first query and keeps all related reads on that connection. Use
+  #273 §6.1's shared `loader-pool.ts` helper. The exporter stays open until the child exits and
+  is always released in `finally`, bounded by the existing build deadline. No fresh-read
+  fallback on invalid/expired snapshot; no imported snapshot for live ownership checks/writes.
+  PostgreSQL 18 requires `SET TRANSACTION SNAPSHOT` before the first query:
+  [official contract](https://www.postgresql.org/docs/18/sql-set-transaction.html).
+- A configuration-only parent snapshot is insufficient: after a bilingual build captures its
+  mode, an unlocked install could disable EN and save private inactive EN page text before
+  the child's loader query. Importing the same database snapshot prevents that text entering
+  the old bilingual output, even if the queued replacement build fails. Barrier-test this
+  interleaving and its EN-primary mirror, plus snapshot failure/timeout cleanup. Normal
+  mutations may still commit while the older immutable build runs; no writer/build-lock cycle.
+- `astro.config.mjs` and `site/src/lib/` validate `SITE_LANGUAGE_JSON` with Zod.
   - **Absent** means DE+EN DE-primary, so `npm run dev`, `astro check` and CI stay byte-identical.
   - **Present but invalid** fails the build. Integrity failures never fall back to a weaker
     default, and the previous release stays live.
