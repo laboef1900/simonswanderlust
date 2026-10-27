@@ -6,6 +6,11 @@ Golden Rule 2 authorization. The recommended route, omitted-locale, freeze and r
 contract is approved. This design PR changes no runtime routes; #284/#285 must implement
 the contract, its collision guards and the rule/documentation amendments together.
 
+Independent review requested changes; the correctness clarifications below do not replace that
+review with a clean verdict or revoke the recorded approval. **One additional cross-contract
+owner decision remains pending:** secondary-language activation with incomplete published pages
+(§8.1, Q18). The original O1–O17 approval does not approve Q18.
+
 - **Issue:** #283 (parent epic #282). Blocks #284, #285, #287 and #308.
 - **Baseline:** `origin/dev` at `11e16d1` (after #271 and the v10 dump with private GPX archives).
   The issue was written against `9e400f9`. Two of its references are stale: `DUMP_VERSION` is now
@@ -26,8 +31,9 @@ four modes are the four combinations: DE+EN DE-primary (today, byte-identical), 
 DE-only and EN-only. Each locale keeps its own slugs (German route words in DE, English in EN) in
 every mode. Only the prefix depends on the mode. The primary locale is **locked at the first story
 publish**. After that, the only mode change allowed is *adding* the secondary locale, which adds
-URLs and moves none. Every other change is refused with a named error, so no redirect machinery is
-needed.
+URLs and moves none. Its interaction with published basic pages awaits Q18 (§8.1); no
+implementation may silently choose that transition. Every other change is refused with a named
+error, so no redirect machinery is needed.
 
 Both locale rows of a story always exist, as today. An intentionally absent locale is the existing
 row plus a new `omitted` flag, and a database CHECK makes an omitted row unpublishable. In DE+EN
@@ -44,7 +50,9 @@ Postgres, so it travels inside DB dumps. `build.ts` hands it to the `astro build
 | **Secondary locale** | The other locale, when enabled. It is served under `/<locale>/`. |
 | **Enabled locales** | `{primary}` or `{primary, secondary}`. |
 | **Mode** | `(primary_locale, enabled_locales)`: DE+EN/DE-primary = `('de', {de,en})`; DE+EN/EN-primary = `('en', {en,de})`; DE-only = `('de', {de})`; EN-only = `('en', {en})`. |
-| **Published locale set of a story** | The enabled locales whose row is not `omitted`. Only these rows can be published. |
+| **Requested locale set of a story** | Enabled locales whose working row is not `omitted`. Publish validates this set; saving it does not publish it. |
+| **Committed published locale set of a story** | Enabled locales whose stored row has `status = 'published'` **and** a non-null `published_snapshot`. This is the authoritative public projection, independent of unsaved or saved working coverage requests. |
+| **Snapshot-bearing locale set** | Locales with a retained non-null `published_snapshot`, including an unpublished story's retained snapshots. Used for backup/GPX validation, not public visibility (§8.5). |
 | **Lock** | Holds once any story has ever been published, defined in §7.1. After the lock, the primary locale never changes. |
 | **Published URL set** | The set of public HTML/XML paths in the live release (`/data/site/current`). |
 
@@ -284,9 +292,12 @@ signed):
 - **`translationKey`:** unchanged. It names one story, whatever its locale count. The
   `(translation_key, locale)` unique index and every `WHERE translation_key` reader keep working.
 - **Pair status:** becomes the **primary** row's status (today: the DE row's, `posts.ts:820`).
-  Publish writes `status = 'published'` plus the snapshot **only to rows in the published locale
-  set**. Other rows stay `draft`. Unpublish keeps writing `draft` to every row (no change).
-  `hasUnpublishedChanges` is computed over the published-set rows.
+  Publish validates the **requested** set under §10.1's transaction protocol, then writes
+  `status = 'published'`, `published_at` and snapshots only to those rows. Other rows remain
+  `draft` with no snapshot. Save never promotes a draft secondary merely because the primary is
+  published. Unpublish writes `draft` to every row but retains existing snapshots and history.
+  `hasUnpublishedChanges` includes requested-versus-committed coverage differences as well as
+  working edits to requested rows; un-omit + Save must show pending changes.
 - **Slug lock:** moves from pair-level (`existing.status === 'published'`, `posts.ts:621,951`)
   to **per row**. A row's slug is locked once that row's `published_at IS NOT NULL`. Filling the
   `''` slug of a never-published secondary row on a published story is therefore allowed. Today it
@@ -298,6 +309,8 @@ signed):
   `RevisionSummary.titleDe` becomes the primary-locale title (clean cutover of the field name in
   #284).
 - **Published snapshot (#20):** unchanged per row. Omitted rows never get one (CHECK).
+  A never-published, non-omitted secondary may also have no snapshot: it is a requested draft,
+  not committed publication. A draft save leaves existing published snapshots/status unchanged.
 - **Draft start:** "a German title is required to start a draft" (`posts.ts:320`) becomes "a
   title in the primary locale is required".
 
@@ -378,7 +391,7 @@ installation (simonswanderlust.com) is therefore locked to DE+EN DE-primary at f
 | From → To | Unlocked | Locked |
 |---|---|---|
 | Change primary (any DE-primary mode ⇄ any EN-primary mode) | allowed | **409 `language_primary_locked`** |
-| Enable secondary (DE-only → DE+EN DE-primary; EN-only → DE+EN EN-primary) | allowed | **allowed**: adds URLs under the prefix, moves none |
+| Enable secondary (DE-only → DE+EN DE-primary; EN-only → DE+EN EN-primary) | allowed in principle; published-page preflight awaits Q18 (§8.1) | **allowed in principle**: adds URLs, moves none; same pending Q18 preflight |
 | Disable secondary (DE+EN → single) | allowed (secondary rows set `omitted`, §5.1) | **409 `language_locale_published`**: the secondary home, About, map, regions index and feed are published URLs |
 | Same mode | no-op 200 | no-op 200 |
 
@@ -422,6 +435,12 @@ Tests:
    is also one snapshot per new mode.
 4. **Runtime smoke** (#284/#285): build a release, attempt a refused `PUT /language`, rebuild, and
    diff the `releases/<stamp>` file lists. They must be identical.
+5. **Publication/mode race:** barrier-controlled Postgres tests for both single and bulk publish
+   versus primary change, secondary disable and secondary enable. Assert §10.1's lock order,
+   mode/coverage revalidation, atomic snapshots plus `locked_at`, and valid serial outcomes;
+   no publish validated under one mode may commit under another. Include stale post/GPX tokens,
+   rollback on failed validation and failed build after commit. Assert exactly one ordinary
+   rebuild per bulk batch and no recursive acquisition of the non-reentrant work lock.
 
 ### 7.5 Rejected: guided migration with 301s
 
@@ -442,30 +461,78 @@ spec. A redirect migration, once shipped, cannot be undone.
 - `pages` keeps both rows (`PagePair` unchanged). Content of a disabled locale is kept, never
   wiped.
 - About is **built only in enabled locales**, at the route in §4.2. In DE+EN, both are built, as
-  today, with no per-page omission in this contract. Any per-page locale coverage for new page
-  kinds is #287's decision, and it must follow §5/§6: primary required, absent = not built, never
-  an empty page.
+  today, with no per-page omission in this contract. #287 requires complete enabled-locale
+  content for published non-About pages and does not approve per-page locale omission. The
+  interaction with enabling another locale is the pending decision below, not an implicit
+  exception to either contract.
 - Enabling the secondary builds the secondary About from stored content. If that body is empty, the
   page uses `AboutPage.astro`'s existing fallback heading. That is the installer's explicit choice
   and is named in the confirm copy (§9).
 - `about.html:179`'s "Live:" URLs come from the uploader mirror (§11).
 
+**Q18 / #287 Q12 — pending owner decision, not covered by the existing approvals.**
+DE-only can have a published contact page with empty retained EN fields. Enabling EN cannot
+simultaneously promise immediate rebuilding, complete bilingual pages and no empty pages without
+an explicit transition rule.
+
+- **Recommended, awaiting approval:** preflight every published registry page's candidate locale.
+  Non-About pages require complete secondary title/body/slug and the image gate; About requires
+  its fixed route and image safety, but may retain its empty-title/body fallback. Refuse
+  `PUT /language` with `409 language_pages_incomplete` and admin-only page/locale/field-reason
+  blockers until all pass; no mode,
+  page status, current URL or navigation change on refusal. An explicit **Language Settings →
+  Prepare EN pages** flow (DE when EN-primary) exposes only the candidate inactive locale in the
+  page editor, clearly marked not public. Ordinary single-language editing remains primary-only.
+  Preparation reuses PUT plus `updatedAt`, preserves the active locale when omitted from the
+  payload, permits incomplete inactive fields even on a published pair, and rebuilds only the
+  current mode. Per-locale page `published_at` remains NULL while inactive, allowing an empty
+  secondary slug to be filled despite pair-level published status. Activation rechecks the whole
+  candidate set inside §10.1's transaction, stamps newly exposed page locales' publication
+  history/slug locks and changes the mode without changing pair statuses (§D5.1 of #287).
+  It commits before requesting a rebuild. Navigation resolves the new locale only after successful
+  release activation; existing primary links remain unchanged.
+- **Alternative:** omit incomplete secondary pages until valid. This requires a new per-locale
+  public-eligibility rule and an explicit exception to #287's bilingual completeness rule, with
+  eligibility sticky once public. It is not already approved story omission semantics.
+- **Alternative (not recommended):** require explicitly confirmed whole-page unpublication
+  **before** activation. Never unpublish automatically. This separate action removes primary URLs;
+  it cannot itself be claimed as §7.4's additive language transition.
+- Until the owner chooses, implementation of this cross-contract transition is blocked. The
+  recommendation is not authorization to ship preparation UI, a new refusal or silent omission.
+  Test the selected DE-only published-page → bilingual transition (and EN mirror), incomplete
+  retained fields, image refusal, active-content preservation, navigation, concurrent page saves
+  and build failure. After a committed activation whose build fails, the prior release stays
+  live; retry rebuild under the committed mode, never silently roll metadata back.
+
 ### 8.2 Comments (public route: high risk)
 
-- **One thread per story, merged across the story's published locale set.** This preserves the
+- **One thread per story, merged across the committed published locale set.** This preserves the
   2026-09-14 comments spec decision 4 for DE+EN stories published in both languages, byte-for-byte.
-- **`POST /comments`:** `postedLocale` must be in the story's published locale set. Otherwise the
+- Replace `comments-public.ts`'s working-copy `posts.get()`/pair-status inference with an explicit
+  `PostStore.getPublishedLocales(translationKey)` read in both pg and memory stores. It returns
+  the committed locale set from enabled mode plus each row's status/snapshot in one consistent
+  read; it exposes neither bodies nor private route data. No committed primary means no public
+  story (404). The existing comment-enabled flags remain a separate check; do not change their
+  semantics merely to obtain locale membership.
+- **`POST /comments`:** `postedLocale` must be in the committed published locale set. Otherwise the
   route answers `400 invalid_comment`, the same generic code, so the route is no oracle for
   draft/omitted rows. This check sits after the existing published-pair check (404) in the
   documented order, which becomes "… → published pair (404) → posted locale in published set
   (400) → flags (409) → …".
-- **`GET /comments`:** returns approved comments whose `locale` is in the published locale set.
-  Approved comments in other locales can exist only through a cross-mode restore or legacy data.
+- **`GET /comments`:** queries/returns approved comments only in the committed published locale set,
+  then preserves the existing merge order, result cap and serialization.
+  Comments outside that set may remain after unpublish or from legacy/cross-mode restored data.
   They are **not deleted**. They stay visible in the admin moderation queue with a "not shown
   publicly — <locale> not published for this story" label. Nothing is silently hidden from the
   admin, and nothing is exposed publicly.
 - Author replies (`comments.ts:277`, default `'de'`) default to the **primary** locale.
 - `comments.locale` CHECK unchanged. Public JSON shape unchanged.
+- Un-omitting a secondary and saving **without Publish** must leave secondary POSTs refused and
+  approved legacy/restored secondary comments hidden. Only successful publication admits that
+  locale; failed validation, stale publish tokens or transaction rollback do not. Unpublish
+  removes public eligibility even though snapshots remain. Pin these transitions in both store
+  contracts, `comments-public.test.ts` and Postgres integration; preserve rate-limit, honeypot,
+  Origin/Referer ordering, generic errors and the exact public JSON key set.
 
 ### 8.3 Region slugs
 
@@ -493,8 +560,46 @@ Fixed per locale (`regionSlugs`), identical in every mode. Only the prefix varie
 ### 8.5 MDX export (`export.ts`)
 
 A row is written iff its locale is enabled, it is not omitted, and its slug is non-empty.
-MDX backups therefore mirror what the site can build. The DB dump stays the complete backup,
-including omitted rows and disabled-locale content.
+This is a **working-content backup filter**, not proof that the row has been published; a
+non-omitted translation saved without Publish may be exported but not built or commented on.
+The DB dump stays the complete backup, including omitted rows and disabled-locale content.
+
+**GPX projection contract (all consumers must migrate together).** `published-track.ts` currently
+requires matching DE and EN snapshots. Replace that unconditional two-snapshot assumption with
+validation of the **actual permitted snapshot-bearing locale set**, not the requested working
+set or the currently public set. Both physical locale rows still exist. An omitted row must
+satisfy the CHECK; a never-published secondary may have no snapshot even after it is un-omitted.
+A retained snapshot on an unpublished row remains a last-published artifact, not a live route.
+For the new format, reject a snapshot in a disabled/omitted locale, a missing primary snapshot
+when any secondary snapshot exists, or a missing snapshot for a row claiming publication history.
+Validate the enclosing row/mode state before treating a missing counterpart as legitimate.
+
+If no permitted snapshot contains `track`, the public track is absent. If any contains it,
+**every snapshot-bearing locale** must contain a valid closed-schema `PublicTrack` and all
+projections must agree (coordinate order and run boundaries included). A counterpart snapshot
+containing `{}` instead of the shared track remains corrupt, as do private fields, malformed
+tracks and disagreeing projections. Do not fill any missing snapshot or track from working
+`post_routes`, private geometry, an original GPX archive, another locale or current draft fields.
+Pre-snapshot legacy content backfill remains route-free; it is not permission to synthesize GPX.
+
+Required clean cutover: `PublishedTrackRow`/`publishedTrackOf`; pg and memory
+`PostStore.getPublishedTrack`; `backup.ts` capture query and `validatePublishedTracks`, `readDump`
+and restore validation; `export.ts` `exportAll`/`exportPost`; and `server.ts`'s single publish,
+bulk publish and Export all callers. Carry the mode plus per-row status/history/omission and
+snapshot membership needed for validation; a bare shared track must not accidentally stamp a
+never-published secondary MDX export. Attach `track` only to exported locales having that validated
+snapshot. Resolve/validate the complete artifact set before writing a pair's MDX files.
+`readDump` callers for CLI previews, recovery-set retention/pruning, archive pins and recovery
+summaries must receive the same version-aware validation, not a second looser reader.
+
+Required GPX cases: DE-only, EN-only, bilingual-with-omitted-secondary, un-omit + Save without
+Publish, successful secondary publication, unpublish with retained snapshots, and draft
+route edit/detachment. Exercise dump capture → read → restore, single/bulk automatic MDX backup
+and Export all. Extend `gpx-backup.integration.test.ts` without removing its private-field,
+different-route or missing-track-in-an-existing-counterpart refusal assertions. A genuinely
+absent permitted secondary snapshot succeeds; a corrupt claimed published snapshot still fails
+before destructive restore SQL or pair export writes. Private recovery archives retain their
+existing safety/ownership guarantees and never become public projection inputs.
 
 ### 8.6 Dump / restore across modes (`backup.ts`)
 
@@ -503,15 +608,26 @@ including omitted rows and disabled-locale content.
   - `tables.site_language`, one row: `primary_locale`, `enabled_locales`, `locked_at`.
   - `posts[].omitted`.
   
-  `SUPPORTED_DUMP_VERSIONS` keeps 1-10. Older apps refuse the new dump through their allow-list.
+  `SUPPORTED_DUMP_VERSIONS` keeps all existing supported versions, including any intermediate
+  #273 identity-only version. Older apps refuse the new dump through their allow-list. Identify
+  formats by their declared version, not by permissively accepting missing language metadata.
 - **Validation before any `DELETE`** (in `readDump`):
   - the `site_language` shape and values;
   - every posts row satisfies the omitted CHECK;
-  - the primary row of each `translation_key` is not omitted.
+  - the primary row of each `translation_key` is not omitted;
+  - both physical locale rows and their status/snapshot/history obey §5 and §8.5, using the
+    dump's mode rather than the live destination's; GPX public projection agreement and
+    private-field rejection hold across the permitted snapshot-bearing set.
   
   A violation raises `BackupError`, and nothing is deleted.
-- **Older dumps (≤ v10):** `omitted = false` on every row. `site_language` is written as DE+EN
-  DE-primary, since that was the only mode before this change. Lock derivation per §7.1.
+- **Legacy formats predating language metadata (v1–v10, plus an identity-only intermediate
+  version if #273 lands first):** normalize `omitted = false` on every row and explicitly
+  replace `site_language` with DE+EN DE-primary. Derive `locked_at` from the restored publication
+  history after the existing route-free legacy snapshot/history backfill, not from the former
+  live database. Restore these normalized rows and matching mode in the **same transaction**.
+  A failed restore leaves both live content and live language metadata unchanged. Legacy formats
+  retain their old two-locale GPX requirement; an absent new field must not legalize corrupt
+  historical snapshots. A new-format dump missing required language metadata is rejected.
 - **Restoring into a different mode:** content and its language config travel together. The
   dump's `site_language` **replaces** the live row, because restoring content under another
   layout would itself move every URL.
@@ -525,15 +641,18 @@ including omitted rows and disabled-locale content.
 
 ### 8.7 Legacy WordPress redirects (`redirects.ts`)
 
-The map encodes the DE-primary Polylang layout of simonswanderlust.com. An entry is active only if
-its target exists in the current route table:
+The map encodes the DE-primary Polylang layout of simonswanderlust.com. Eligibility is controlled
+only by the language layout, not by whether a target file currently exists:
 - **DE+EN DE-primary:** all entries (unchanged).
 - **DE-only:** the 9 DE entries only. The `/en/…` entries would 301 into a 404.
 - **EN-primary and EN-only:** none. No WP layout is known for them, and a 301 to the wrong
   language's feed is worse than a 404.
 
-Whether the map stays unconditional for other installs at all is #273 decision 5. This rule is the
-locale constraint that decision must respect.
+Identity/canonical-domain changes (#273) never gate, add, remove or retarget these eligible
+entries; there is no WordPress-install flag. Eligible category redirects remain active even for
+empty regions whose target is not built (`redirects.ts:52–54`); the existing 301→404 is preserved.
+There is no per-content existence probe. Test all 18 entries in every mode, including an empty
+region, `/feed`, `/en/feed`, and an identity/domain change with unchanged language eligibility.
 
 ---
 
@@ -553,13 +672,16 @@ locale constraint that decision must respect.
   `secondaryStatus: 'none' | 'omitted' | 'empty' | 'started'` (clean cutover in #284, with every
   caller migrated).
 - **Publish gate messages** (`validateForPublish`, `publish-gate.ts`): checks and messages run over
-  the published locale set only. The format is `"German: title required"` (locale named). A
+  the **requested** locale set only, rechecked under §10.1's transaction. The format is
+  `"German: title required"` (locale named). A
   disabled or omitted locale never produces a message. Foreign-image and not-ready-photo gates run
   over the same rows.
 - **Settings → language section** (admin-only): shows the mode, the lock state and its reason
   ("Locked since <date>: stories have been published"). Allowed changes are offered with a
   confirmation that names their scope:
-  - "Adds /en/ (home, About, map, destinations, feed). No existing URL changes."
+  - "Adds /en/ (home, About, map, destinations, feed). No existing URL changes." Name the
+    About empty-body fallback when relevant. Published basic-page activation follows pending Q18;
+    do not promise immediate success or offer its preparation flow before that decision.
   - Refused transitions are shown disabled with the error's text.
 
 ---
@@ -586,12 +708,35 @@ CREATE TABLE IF NOT EXISTS site_language (
   was ever published.
 - **API (#284).**
   - `GET /language`: `requireAuth`, because the editor needs the enabled locales.
-  - `PUT /language`: `requireAdmin`. It runs under the **exclusive** work lock, so it is
-    serialized against builds and publishes. It applies §7.2 and is refused with
-    `400 invalid_language`, `409 language_primary_locked` or `409 language_locale_published`.
-  - On success it awaits a rebuild, like Publish (owner choice O16; the alternative is
-    persist-only with "goes live at the next rebuild").
+  - `PUT /language`: `requireAdmin`. It uses the shared **database transaction protocol** below,
+    not the build work lock, to serialize mode changes with publication. It applies §7.2 and is
+    refused with `400 invalid_language`, `409 language_primary_locked` or
+    `409 language_locale_published`; the page-preflight refusal awaits Q18.
+  - On success it commits first, releases database locks, then awaits the ordinary builder
+    (owner choice O16). It must not wrap `builder.build()` in `workLock.runExclusive`: that
+    method already acquires the non-reentrant lock. Build failure preserves the prior release
+    and reports persisted-mode/build-failed distinctly; retry rebuild, not an implicit DB undo.
   - Responses are `no-store`.
+- **One database lock/order for mode mutation and publication.** Begin transaction; acquire
+  `SELECT … FROM site_language WHERE id = true FOR UPDATE` **first**; then acquire existing post
+  pair/content locks (sorted keys for multi-key work), then route-version locks. Re-read the
+  mode, publication-history lock, requested locales, current post and exact publish tokens under
+  those locks. Validate completeness and publication gates against that mode/current content,
+  then atomically commit snapshots/status/history and `COALESCE(locked_at, now())`.
+  Expensive GPX projection may still be prepared outside the transaction, but its exact
+  post/route tokens must be rechecked inside; never commit a projection for different inputs.
+  Single Publish and every bulk-publish item use this same store operation. Bulk retains its
+  existing per-item success/failure transactions and one rebuild after the batch, not an
+  all-or-nothing redesign. Mode-changing omission updates also happen within this protocol.
+  Draft saves/revision restoration/import writes that validate or change locale coverage acquire
+  the language row before pair locks too; no path may invert that order or validate against a
+  cached mode. #287 page publish, published PUT and page mutations affecting activation preflight
+  join the same language-first order so preflight cannot race a page save.
+- No transaction above acquires or waits for the build/encode work lock. Release DB locks before
+  calling the builder, which acquires the work lock **once**, reads committed language/identity
+  state and builds. The current work lock protects build/encode resource use; it does **not**
+  serialize `posts.publish`'s earlier DB writes (`server.ts:1647,1735`, `build.ts:244`).
+  Memory stores must model the same serial outcomes; Postgres barrier tests are the race proof.
 - **Why not `settings.json`:** `settings.json` is not in DB dumps (`ARCHITECTURE.md`, Backups).
   The mode decides the URL of every published row. A dump restored into a fresh install would
   build its content under the default layout, which moves every URL of an EN-primary install. It
@@ -599,8 +744,9 @@ CREATE TABLE IF NOT EXISTS site_language (
   settings is cosmetic; losing the mode moves URLs.
 - **#273 alignment** (advisory, no native link): DesignIdentity273 has confirmed that #273's
   proposal also moves identity to a single-row Postgres table in the dump. It uses the same
-  propagation shape, with both values read in one snapshot inside the exclusive lock.
-  Per-locale identity fields are keyed by this config's enabled locales.
+  propagation shape, with both values read in one snapshot inside the build's exclusive lock,
+  after mutation transactions release their locks. Identity renders/edits enabled locales;
+  stored maps may retain disabled-locale values as #273 specifies.
 
 ### 10.2 Build propagation
 
@@ -624,9 +770,9 @@ CREATE TABLE IF NOT EXISTS site_language (
 
 | Consumer | Contract |
 |---|---|
-| **#284** | `site_language` table, boot row, `GET`/`PUT /language`, the §7.2 state machine and its error codes. `posts.omitted` with the CHECK. Primary-row pair status. Per-row slug lock. Primary-title draft rule. Comment locale rule. WXR buckets. MDX filter. Dump version + validation + CLI flag. Uploader URL mirror `publicPath(lang, locale, kind, slug?)` and `publicUrlSet(lang, rows)`, replacing the literals in `editor.html`, `admin-confirm.js` and `about.html`. Tests §7.4 (1)(2). |
+| **#284** | `site_language`, boot/API and §10.1's shared transaction protocol for single/bulk publication and coverage writes. Requested versus committed locale sets, explicit public-comment projection, `posts.omitted` CHECK, primary-row pair status, per-row slug lock and primary-title draft rule. WXR buckets. Every §8.5 GPX dump/export/restore consumer. Version-aware atomic language/content restore and CLI flag. Uploader URL mirror `publicPath(lang, locale, kind, slug?)` / `publicUrlSet(lang, rows)` replacing editor/confirm/About literals. Tests §7.4 (1)(2)(5); Q18 transition awaits owner decision. |
 | **#285** | `SITE_LANGUAGE_JSON` parsing. `localePrefix`, the route table §4.2, hreflang/`x-default`/`og:locale:alternate`, switcher, feeds, 404, legacy redirects §8.7. Tests §7.4 (3)(4). Owns the Golden Rule 2 amendment and doc comments, conditional on §20. |
-| **#287** | Reserves `de` and `en` as first segments in every mode. Reserves the primary-locale fixed words at root and the secondary words under the prefix. Reserves every top-level Fastify route plus `/map/` in the root namespace (EN-at-root is not selectable before this exists). Page kinds follow §8.1 (primary required, absent = not built). About keeps `/uber-mich/` and `/en/about-me/` in DE-primary. |
+| **#287** | Reserves `de`/`en`, locale fixed words in their namespaces and every top-level Fastify route (including new `/language`) plus `/map/` at root before EN-at-root is selectable. About retains its DE-primary routes. Published non-About pages require complete enabled locales; secondary activation awaits Q18 / #287 Q12 (§8.1). Page writes join the language-first transaction protocol. |
 | **#308** | Journey routes use `localePrefix(locale) + <locale's journey word>/<slug>/`. A journey page in a locale lists only member stories published in that locale. Journey routes are built only in enabled locales. |
 | **#281** | Offers the language choice only while unlocked. Once locked, the choice is read-only, showing the lock reason. |
 | **#273** | Same storage family (Postgres, in dumps) and the same env handoff. Identity per-locale validation reads `enabled_locales`. The dump version bump is coordinated. |
@@ -637,7 +783,7 @@ CREATE TABLE IF NOT EXISTS site_language (
 
 | Boundary / actor | Misuse | Control |
 |---|---|---|
-| Anonymous reader → `POST /comments` | Posts into an omitted/disabled locale, or probes for draft rows | `postedLocale` must be in the published set. Same `400 invalid_comment` code. Published-pair 404 unchanged. |
+| Anonymous reader → `POST /comments` | Posts into an omitted/disabled or un-omitted-but-unpublished locale, or probes for draft rows | Explicit committed published-locale read; never infer from working pair status/coverage. Same `400 invalid_comment`; published-story 404 unchanged. |
 | Anonymous reader → static blog | Guesses `/en/<slug>/` of an omitted or draft translation | Never built: CHECK plus loader filter plus enabled-locale filter. |
 | Author (non-admin) | Changes mode, or publishes a primary-only story | `PUT /language` is admin-only. Publish is already admin-only. Authors may toggle `omitted` on drafts only (it changes no public state until an admin publishes). |
 | Admin | Swaps primary after launch (moves every URL) | `409 language_primary_locked`. The lock has two sources (§7.1). |
@@ -663,8 +809,14 @@ CREATE TABLE IF NOT EXISTS site_language (
    `og:locale:alternate`, feed, sitemap entry, language switcher or public comment.
 6. No migration, mode change or restore preview modifies an existing slug (#284 slug-set test).
 7. Content of a disabled or omitted locale is never deleted by a mode change.
-8. Comments are never deleted by a mode or coverage change. Public visibility follows the published
-   set, and admin visibility is total.
+8. Comments are never deleted by a mode or coverage change. Public visibility follows the committed
+   published set, never the requested working set; admin visibility is total.
+9. Publication and language mutations use one language-first DB lock order; committed snapshots
+   and `locked_at` agree with the mode validated in that transaction.
+10. GPX validation uses permitted snapshot-bearing locales, preserves projection agreement and
+    private-field rejection, and never synthesizes public tracks from working/private data.
+11. Restore replaces content and matching language metadata atomically; logical dumps do not
+    remove additive schema objects.
 
 ---
 
@@ -708,33 +860,39 @@ CREATE TABLE IF NOT EXISTS site_language (
     it.
   - No locale CHECK, index or existing column changes.
 - **Pre-migration dump:** #284 writes a `dumpDatabase` pre-dump before the first boot that adds the
-  column or constraint. It is restorable with the existing restore CLI.
+  column or constraint. The updated reader restores it through §8.6's explicit legacy mapping;
+  an older reader alone cannot reset newly introduced language metadata.
 - **API:** `PostSummary`/`RevisionSummary` field cutover (§9, §5.2) with every caller migrated. The
   public comment JSON is unchanged.
 - **Existing installs:** recorded as DE+EN DE-primary and locked. No observable change.
 
 ## 17. Rollback and containment
 
-- **Code rollback** (redeploying the previous image): the previous image ignores `site_language`
-  and `omitted`. It still cannot publish an omitted row, because omitted rows are `draft` with a
-  NULL snapshot, which the old loader already excludes, and its pair readers still see both rows.
-  But on a non-DE-primary install it would rebuild under the DE-primary layout, and it derives
-  pair status from the DE row (`posts.ts:820`), so an EN-only story with an omitted DE row would
-  read as a draft (comments 404). **An image rollback is therefore unsafe once any
-  non-DE-primary install has published.** Containment:
-  - the old image's publish writes `published` to every row of a key (`posts.ts:1007`). On a
-    story with an omitted row the CHECK makes that publish fail (`23514`, sanitized 500) instead
-    of leaking the omitted locale;
-  - the release notes state it;
-  - the previous release under `/data/site/releases` keeps serving until a rebuild;
-  - the pre-migration dump restores the pre-change schema.
-
-  For simonswanderlust.com (DE-primary), an image rollback is a no-op on URLs.
-- **Mode rollback:** before the lock, `PUT /language` back. After the lock, no forward change
-  except "enable secondary" exists. Undoing that means restoring the pre-change dump, with
-  `--accept-language-change` as it then differs.
-- **Dump rollback:** older apps refuse the new dump version (allow-list). Restore the pre-migration
-  dump with the older image.
+- **Containment, not blind image downgrade:** stop authoring/publish/rebuild operations and retain
+  the last known-good static release and a complete current recovery set. An older image ignores
+  `site_language`/`omitted`, derives pair status from DE, and can rebuild EN-primary or EN-only
+  content under the wrong layout. Even DE-primary single-language/omitted stories are not
+  behaviorally compatible: old pair publication fails the omitted CHECK and old GPX readers
+  require two snapshots. Do not describe DE-primary rollback as universally safe.
+- **Supported data recovery:** use the updated, security-fixed restore reader/CLI, its offline
+  restore ownership safeguards, required pre-restore dump and existing archive validation.
+  Inspect the live/dump mode and confirm the exact recovery set; require
+  `--accept-language-change` when locked and different. Restore the pre-change dump using
+  §8.6's version-aware normalization. In one transaction restore content, explicit omission
+  defaults and matching DE+EN DE-primary language metadata, deriving history from restored data.
+  New-format recovery instead restores its own recorded mode. Failure rolls back both.
+- **Schema remains upgraded.** Logical dump restore replaces known row data; it does not drop
+  `site_language`, the `omitted` column or CHECKs. Boot's `ON CONFLICT DO NOTHING` must see the
+  intentionally restored mode, not a stale EN-primary row left by an older restore. Test restart
+  after legacy restore into an upgraded EN-primary database, including a failure before commit.
+- Validate/rebuild the restored state with the updated compatible image before serving a new
+  release. Keep the old static release if that build fails. A code rollback needs a separately
+  assessed compatible, security-fixed image; **never roll back #347's security fixes** to obtain
+  an older dump reader. New dump versions remain refused by old readers.
+- **Mode rollback:** before the lock, use `PUT /language` back. After the lock, undoing secondary
+  activation means confirmed restoration of the pre-change content/config recovery set; it is
+  not an in-place locale disable or a schema rollback. Q18's post-commit build failure normally
+  recovers by rebuilding the committed mode, without data rollback.
 
 ## 18. Acceptance verification (what the implementing children must show)
 
@@ -747,8 +905,12 @@ CREATE TABLE IF NOT EXISTS site_language (
 | `language-mode.integration.test.ts` (§7.4 (1)), including CHECK `23514` | #284 |
 | Cross-tree path parity test (§7.4 (2)) | #284 |
 | Slug set before/after migration identical | #284 |
-| Dump: new version round-trip, v1-v10 still restore, crafted-dump refusals, older app refuses the new version | #284 |
-| Comments: POST into a non-published locale → 400. GET filter. Merged thread unchanged for DE+EN. Moderation label | #284 |
+| Dump: coordinated/intermediate versions; atomic content+mode round-trip; legacy restore into upgraded EN-primary then restart; failure rollback; crafted-dump rejection before DELETE; older app refuses new version | #284 |
+| GPX: §8.5 single-language/omitted/un-omitted/unpublished lifecycle through dump capture/read/restore, automatic single/bulk MDX and Export all; agreement/private-field/missing-counterpart failures retained | #284 |
+| Comments: un-omit + Save without Publish stays private, successful Publish admits, failed Publish changes nothing, unpublish with retained snapshots hides; GET filter/POST 400, merged DE+EN thread and moderation label | #284 |
+| Barrier races: single/bulk publication and mode changes, mode/coverage/token recheck under DB lock, atomic `locked_at`, no recursive work lock; build-failed-after-commit recovery | #284 |
+| Legacy redirects: language-layout matrix, empty-region 301 retained, identity/domain changes leave eligible map unchanged | #285 with #273 |
+| Secondary activation with published pages, preparation/validation/nav/races/build failure: implement and test only the explicitly selected Q18 / #287 Q12 outcome | #284/#287 |
 | WXR: `skippedLocale` bucket. Primary-only group → draft. Untagged-item rules. #99 identity with `''` | #284 |
 | Runtime smoke per mode: switcher, feeds, comment island, map, region pages, refused-change release diff | #284/#285 |
 | `SECURITY.md` (Public comments, Backups, Known limitations: image rollback), `ARCHITECTURE.md` (Data model, Content pipeline, Database dumps), `DESIGN.md` (language switcher per mode) | #284/#285 |
@@ -757,9 +919,9 @@ CREATE TABLE IF NOT EXISTS site_language (
 ## 19. Documentation impact (drafted here, applied by the children)
 
 - **`SECURITY.md`:**
-  - *Public comments:* the posted-locale rule and new order step.
-  - *Backups:* the cross-mode restore flag.
-  - *Known limitations:* image rollback on EN-primary installs.
+  - *Public comments:* committed-locale projection, posted-locale rule and new order step.
+  - *Backups:* cross-mode flag, atomic legacy language reset and snapshot-bearing GPX validation.
+  - *Known limitations:* image rollback compatibility; retain #347 security fixes and upgraded schema.
   - *Authorization:* `PUT /language` is admin-only.
 - **`ARCHITECTURE.md`:** `site_language` in *Data model*, the `SITE_LANGUAGE_JSON` handoff in
   *Content pipeline*, the dump version in *Database dumps*.
@@ -786,11 +948,17 @@ CREATE TABLE IF NOT EXISTS site_language (
 | O10 | Mode storage | Postgres `site_language`, in dumps | `settings.json` |
 | O11 | Cross-mode restore | dump config replaces live; extra `--accept-language-change` when locked and different | `yes` only; refuse cross-mode |
 | O12 | Comments | thread merged over published set; non-published-locale comments kept, admin-visible only | show all (contradicts the epic leakage AC) |
-| O13 | Legacy WP redirects | active only where the target exists (§8.7) | unconditional (#273 d5) |
+| O13 | Legacy WP redirects | language-layout eligibility only (§8.7), not per-content target existence | unconditional in every language mode |
 | O14 | WXR: group missing the secondary in DE+EN | import as draft | reject (today) |
 | O15 | N° numbering | per locale | primary chronology with gaps |
 | O16 | `PUT /language` publishes immediately | awaits a rebuild | persist only |
 | O17 | Pre-launch fixed pages may move before the lock | accept | lock earlier (O9 alternative) |
+
+**Additional decision Q18 (same as #287 Q12), pending:** choose the published-page transition
+when enabling a secondary locale. §8.1 recommends activation preflight plus explicit inactive-locale
+preparation, versus per-locale omission or confirmed whole-page unpublication. This newly identified
+cross-contract choice is outside the approval below. F2–F6 are correctness clarifications of the
+approved route, publication, snapshot and recovery invariants, not new owner approvals.
 
 **Approval record: approved.**
 - **Approver/date:** repository owner, interactive implementation session, 2026-10-27.
