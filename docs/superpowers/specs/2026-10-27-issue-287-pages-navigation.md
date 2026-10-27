@@ -742,13 +742,21 @@ No new root segment is registered, so the app reservation set is unchanged by th
   `status`/`published_at`. **Built output on the existing install is unchanged:** the seeded nav
   reproduces today's header and footer links, and #274 has already replaced Instagram. #289's
   test compares built header and footer link sets before and after.
-- **Before deploying #288:** take an on-demand v10 dump (an older app cannot read v11), and run the
-  D2.6 collision query read-only against production. Record the result in the PR.
-- **Rollback:** redeploy the previous image tag. The old code ignores the new columns and table.
-  It renders only `about`, and old `pages-loader` loads all rows, but no route of the old code
-  renders a non-About key, so drafts stay invisible. The old Nav and Footer are hardcoded. The
-  previous release directory keeps serving until the next build. To restore from backup, use the
-  pre-change v10 dump. The new columns and table can stay; they are inert to the old code.
+- **Before deploying #288:** capture a complete recovery set immediately before the migration,
+  using the then-current `dumpDatabase()` format, plus its settings, media/assets, required
+  escrowed key material and serving-release identity under #283's recovery rules. Record that
+  dump version and a compatible, security-fixed restore image; do not demand v10 or substitute
+  an older dump that omits identity/language state. Run the D2.6 collision query read-only
+  against production and record its result before deployment.
+- **Rollback:** prefer a fixed-forward image. A previous image is eligible only if it retains
+  the required security fixes and understands the identity/language state in that recovery set.
+  A compatible pre-pages image ignores the additive page columns/table, renders only `about`,
+  and uses its existing navigation; non-About rows do not acquire routes merely because its
+  loader reads them. The serving release remains unchanged until an explicit successful build.
+  Restore, when necessary, uses the captured pre-migration recovery set and its actual format,
+  never an arbitrary v10 dump or an unconditional image downgrade. A logical restore does not
+  reverse schema migrations; the additive columns/table may remain only where compatible with
+  that explicitly selected recovery image.
   **Containment:** a page or nav problem is fixed by unpublishing or deleting the page, or by
   resetting the nav document to the default, then rebuilding. None of these touches stories.
   About cannot be unpublished: repair its content or restore a valid revision through PUT.
