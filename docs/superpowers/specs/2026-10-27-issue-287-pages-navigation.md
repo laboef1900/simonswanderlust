@@ -8,9 +8,9 @@ for PR #407 at `dcf775e25034547764e9c9e48a2c94feb6e78413`: fixed page kinds, Abo
 URLs and undeletable status, reserved-route/cross-content guards, Postgres navigation, and
 published pages continuing to save live. Story-slug reservation and grandfathering remain in
 scope. The independent review subsequently requested corrections (F7–F9), not a replacement
-approval. F7/F9 below clarify that approved scope; **Q12 / D5.1 is a newly identified, pending
-owner decision** about secondary-language activation. Implementation of that transition is
-blocked until the owner selects it; the original approval remains valid for the recorded choices.
+approval. F7/F9 below clarify that approved scope. The owner additionally selected
+**“Prepare translations before activation”** on 2026-10-27 for Q12 / #283 Q18, approving
+D5.1 option A's explicit inactive-locale preparation and activation preflight.
 
 **Epic:** #286 · **Prerequisite:** #283's language contract (owner-approved 2026-10-27) · **Blocks:** #288
 (store/API/editor), #289 (rendering/nav), #308 (journey routes reuse the reserved-route contract)
@@ -128,10 +128,10 @@ admin can remove them with `DELETE /pages/:key`.
 - Other kinds store one slug per locale in a new `pages.slug` column (D3 schema), using the same
   `SLUG_RE` as stories. `''` means "unset": permitted in drafts and retained inactive locale
   rows, never in an enabled published non-About row. Pair-level `published` does not make an
-  inactive translation public (D5; pending activation transition D5.1).
+  inactive translation public (D5 and the approved activation transition D5.1).
 - **Slug lock:** each locale's slug locks at its first publication (`published_at`, 409
   `page_slug_locked`); a never-public inactive translation is not locked just because its pair
-  is published (pending D5.1 transition). Unpublishing does not clear the timestamp or unlock
+  is published (D5.1). Unpublishing does not clear the timestamp or unlock
   an existing URL. Moving that URL requires explicit owner authorization, not a mode change;
   delete/recreate is a separately confirmed destructive action. There are no automatic redirects.
   **Rejected:** a confirmed change like #122's draft rename. A published page URL is a live URL
@@ -317,7 +317,7 @@ The guard does not rely on that.
 
 These apply to #283's four approved modes once implemented: primary locale at root, secondary
 under its own prefix, `de` and `en` reserved at root in every mode. After publication the primary
-is locked; enabling a secondary is additive, subject to the pending page preflight in D5.1.
+is locked; enabling a secondary is additive, subject to the approved page preflight in D5.1.
 
 | Mode | Locale in `root` | Prefixed namespace and its `site` segments | `site` segments in `root` (besides `404`) |
 |---|---|---|---|
@@ -344,7 +344,7 @@ published pages keep About's "Save = live" behaviour:
   - `pages.slug text NOT NULL DEFAULT ''`
   - `pages.status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published'))`
   - `pages.published_at timestamptz`: per-locale first-publication marker, retained on unpublish.
-    The treatment of never-public inactive rows during activation is part of pending D5.1.
+    D5.1 specifies the approved activation treatment of never-public inactive rows.
   - Partial unique index `(locale, slug) WHERE slug <> ''`.
   - Boot backfill, idempotent: `UPDATE pages SET status='published', published_at=COALESCE(published_at, updated_at) WHERE key='about' AND status='draft'`.
     Other existing keys stay `draft`. None of them is rendered today, so nothing public changes.
@@ -360,7 +360,7 @@ published pages keep About's "Save = live" behaviour:
 - **Publication validation is a write invariant, not just a Publish-button check.** Apply it
   before every mutation whose resulting stored pair status is `published`: first Publish,
   subsequent PUT (including restoring a revision through PUT), and locale activation against
-  the candidate enabled set (D5.1, pending). Read status and language state server-side;
+  the candidate enabled set (D5.1). Read status and language state server-side;
   a caller-supplied status must not bypass it. Every enabled non-About locale needs a trimmed
   non-empty title and body and a non-empty slug. Recheck C1–C3 and slug locks in the transaction.
 - **Image safety on every such write:** use the actual
@@ -535,17 +535,17 @@ deletes.
   exception remains. A nav target must be built (D4.2). A page without an alternate uses
   #283's other-locale-home fallback, not a fabricated page URL.
 
-#### D5.1 Pending Q12 — enabling a secondary with incomplete published pages (review F8)
+#### D5.1 Approved Q12 — prepare translations before secondary activation (review F8)
 
-**This is a new owner decision, not covered by the prior approval.** Example: DE-only has a
+**The owner approved option A on 2026-10-27, supplementing the prior approval.** Example: DE-only has a
 published `contact` pair with complete DE content at `/kontakt/`, but empty EN title/body/slug.
 Both physical rows have pair status `published`; EN has never been public. Simply flipping the
 mode must neither build an empty EN page, silently remove `/kontakt/`, nor invent a translation.
 The mirror case is EN-only → DE+EN EN-primary. #283 must apply the same chosen policy.
 
-**Recommend A: refuse activation until translations are prepared.** This preserves the approved
+**Approved A: refuse activation until translations are prepared.** This preserves the approved
 pair-status/live-save model and bilingual completeness without adding per-page omission state.
-The following is a proposed transition, pending Q12:
+The transition is:
 
 1. Under #283's shared language-row-first transaction protocol, preflight **every published
    registry page** against the candidate enabled set. Non-About secondary rows need title,
@@ -558,7 +558,7 @@ The following is a proposed transition, pending Q12:
    labelled "Not public until English is enabled", with normal preview and save. It is not a
    hidden requirement to use SQL or to enable a locale before editing it. Ordinary single-mode
    editing still shows only the active locale, as #283 requires; the preparation view is the
-   narrow, owner-visible exception requiring Q12 approval. Existing PUT and `updatedAt` are
+   narrow, owner-visible exception approved under Q12. Existing PUT and `updatedAt` are
    reused, preserving active content and accepting incomplete inactive fields in stages.
    Validate inactive field shapes/non-empty slug reservations at save; enabled live content
    still passes D3. Saving this published pair rebuilds the **current single-language mode**
@@ -583,7 +583,7 @@ The following is a proposed transition, pending Q12:
    the existing Rebuild action; it must not strand recovery behind a no-op mode response.
    Restored candidate content is subjected to the same validation before activation/build.
 
-**Alternative B: enable now, omit incomplete secondary pages until valid.** This is not just
+**Rejected alternative B: enable now, omit incomplete secondary pages until valid.** This is not just
 skipping loader rows. It requires an explicit per-locale publication/eligibility contract:
 keep the primary public and pair published, mark the secondary not public, omit its nav,
 alternate and sitemap path, then first publish that locale only on a validated admin live-save
@@ -594,17 +594,15 @@ indefinitely), unlike A. About still always renders its fixed fallback and never
 Choose B only with explicit approval of this wider per-locale lifecycle, not as silent build
 filtering under the existing pair-level contract.
 
-**Alternative C: explicitly unpublish each incomplete non-About pair before enabling.** Existing
+**Rejected alternative C: explicitly unpublish each incomplete non-About pair before enabling.** Existing
 unpublish confirmation must name the DE URLs removed and affected navigation. This needs no
 preparation UI, but `/kontakt/` disappears until both translations are complete and republished;
 it is **not** the additive activation guarantee. Never do it automatically or present it as
 URL-preserving; it is not recommended. About cannot be unpublished.
 
-**Concrete owner question:** for a live DE `/kontakt/` with no EN translation, choose **A**
-(keep DE live, prepare EN through the explicit setup flow, enable only once valid), **B**
-(enable EN now but leave that EN page absent, approving the per-locale lifecycle/completeness
-exception), or **C** (explicitly take the whole page offline before enabling). Recommendation:
-**A**, the smallest option retaining the approved page lifecycle and no route removal.
+**Owner selection:** **“Prepare translations before activation”**, option A. Existing primary
+URLs remain live while the secondary translation is prepared and validated. The owner did not
+select B's per-locale publication exception or C's whole-page unpublication.
 
 ### D6 — Contact information
 
@@ -704,7 +702,7 @@ No new root segment is registered, so the app reservation set is unchanged by th
 | A draft page reaching the public site through an unrelated rebuild | impossible: the loader selects `status = 'published'` only |
 | A live page PUT or revision restore empties an enabled non-About body or adds a foreign image | Refused before commit/rebuild by D3; no new revision or public change. About may be empty but cannot bypass image safety |
 | The seeded About route meets its own reservation | One legitimate catalogue owner, not a collision; another resource at that path fails |
-| DE-only published contact has empty EN and activation is requested | Pending Q12; recommended A refuses without changing mode/routes and provides the explicit inactive-translation preparation flow |
+| DE-only published contact has empty EN and activation is requested | Approved A refuses without changing mode/routes and provides the explicit inactive-translation preparation flow |
 
 ## Invariants
 
@@ -726,7 +724,7 @@ No new root segment is registered, so the app reservation set is unchanged by th
    is not exempt. About's completeness fallback does not weaken image safety.
 9. About owns its fixed reservation once per enabled locale. A namespace prefix is not an
    ordinary page slug. Secondary activation must not silently remove an existing page route;
-   Q12 must be decided before implementing that transition.
+   approved Q12 option A prepares incomplete translations before activation.
 
 ## Compatibility, migration and rollback
 
@@ -770,7 +768,7 @@ No new root segment is registered, so the app reservation set is unchanged by th
   rows/revisions and performs no build. About empty title/body survives, but foreign images fail.
 - Build error after a valid live save reports saved-but-not-rebuilt and retains the old release;
   a valid revision PUT and subsequent rebuild recover without bypassing the gate.
-- **Pending Q12, recommended A:** DE-only published contact with empty EN → activation 409 with
+- **Approved Q12 A:** DE-only published contact with empty EN → activation 409 with
   unchanged mode/status/nav/routes; prepare EN in explicit inactive-only view, save partially,
   preview, finish, then activate. Inactive saves preserve DE and never emit EN. Repeat with
   EN-primary. Include draft pages (not blockers), empty About (fallback), and invalid About
@@ -795,7 +793,7 @@ No new root segment is registered, so the app reservation set is unchanged by th
   root-slug `en`/`de` and namespace-relative reserved slugs fail. Cover all four approved modes.
 - Invalid enabled published page data introduced by restore fails closed without silently
   removing a route. About's existing empty fallback still builds, with image safety retained.
-- Pending Q12 A: before activation no secondary page/nav/alternate/sitemap entry; after a
+- Q12 A: before activation no secondary page/nav/alternate/sitemap entry; after a
   successful activation build complete secondary entries appear and primary paths are unchanged.
 - `javascript:`/`data:` never reach built HTML (Zod and render).
 - Unresolved nav items skipped per locale.
@@ -850,10 +848,9 @@ No new root segment is registered, so the app reservation set is unchanged by th
 9. **Q9 (D5):** Both locales required for every page in DE+EN. Other modes follow #283?
 10. **Q10 (D6/D8):** Contact as Markdown only; legal pages with no seeded content?
 11. **Q11 (D7):** Delete semantics as specified, About undeletable and un-unpublishable?
-12. **Q12 (D5.1, NEW / PENDING):** Select A (preflight refusal plus explicit inactive-translation
-    preparation; recommended), B (per-locale omission and bilingual-completeness exception), or
-    C (confirmed whole-page unpublish, losing those URLs). This choice was not in Q1–Q11's
-    approval and is required in both #287 and #283 before secondary activation is implemented.
+12. **Q12 (D5.1, APPROVED 2026-10-27):** Option A: preflight refusal plus explicit
+    inactive-translation preparation. Exact answer: **“Prepare translations before activation”**.
+    The supplementary approval applies to both #287 and #283; B/C were not selected.
 
 ## Approval record
 
@@ -864,4 +861,4 @@ No new root segment is registered, so the app reservation set is unchanged by th
 | `SECURITY.md` reconfirmation | Required during implementation (#288/#289) |
 | Approver / date | Repository owner, interactive implementation session, 2026-10-27 |
 | Independent review F7/F9 | Correctness clarifications incorporated; not a claim that the earlier review was clean |
-| Q12 / review F8 | **Pending owner selection**; prior approval does not settle the missing page-activation transition |
+| Q12 / review F8 | Approved **“Prepare translations before activation”** after PR #407 head `93619a0ccb665c27152dff67fce496b779a3b38d` and PR #406 head `8542d78fa1f9168c0313d2cffdef3d17830eba6d`; option A only |
