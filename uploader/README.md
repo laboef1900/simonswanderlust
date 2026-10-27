@@ -255,6 +255,11 @@ upload receives **429** because that backlog is full, a new photo keeps its orig
 restored unless another request already admitted or completed its job. Once capacity returns,
 **Retry** or re-uploading the same bytes encodes the retained photo. Re-upload also repairs an
 older orphan `processing` row by enqueueing it when no active job owns the key (#348).
+Upload, Retry, and boot/rescan recovery serialize admission and refusal rollback for the
+same key, including the awaited status write. Recovery re-reads the row after waiting rather
+than admitting a stale `processing` snapshot. Re-uploading a `queue_full` photo changes only
+its status and restores its original; curated folder, localized descriptions, title, tags,
+and the saved encoding profile are retained even across repeated refusals.
 
 Three consequences worth knowing:
 

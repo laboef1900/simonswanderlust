@@ -78,6 +78,7 @@ function stubBackup(dir = '/tmp/none', running = false) {
 function stubQueue() {
   const enqueued: string[] = [];
   const queue: EncodeQueue = {
+    withAdmission: (_key, operation) => operation(),
     enqueue: (key) => { enqueued.push(key); },
     isActive: (key) => enqueued.includes(key),
     recover: async () => 0,
@@ -421,7 +422,7 @@ describe('POST /upload', () => {
     const again = await upload(b, b.cookie, form, b.img);
     expect(again.statusCode).toBe(200);
     expect(again.json()).toMatchObject({ key: b.key, status: 'processing' });
-    expect(again.json().duplicate).toBeUndefined();
+    expect(again.json().duplicate).toBe(true);
     expect(b.queue.isActive(b.key)).toBe(true);
     await b.queue.idle();
     expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null, folder: 'Iceland', title: 'Glacier' });
@@ -492,10 +493,7 @@ describe('POST /upload', () => {
     expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null });
   });
 
-  it('a refused upload whose rollback lands after a concurrent same-key encode reached ready leaves it ready', async () => {
-    // Request A is refused and parks inside its rollback write; request B (same
-    // bytes) then finds A's `processing` row, enqueues it after the drain, and
-    // its encode records `ready` — all before A's rollback lands.
+  it.each(['upload', 'retry'] as const)('a pending refusal rollback excludes same-key %s admission until the row is settled', async (entry) => {
     const reached = Promise.withResolvers<void>();
     const landing = Promise.withResolvers<void>();
     const b = await buildFullQueue((m) => ({
@@ -506,19 +504,75 @@ describe('POST /upload', () => {
         return m.setStatusIfProcessing(...args);
       },
     }));
-    const a = upload(b, b.cookie, { key: 'trips/full/hero', folder: 'A', title: 'From A' }, b.img);
+    const a = upload(b, b.cookie, { key: 'trips/full/hero', folder: 'Iceland/South', alt: 'Curated' }, b.img);
     await reached.promise;
-    expect(await b.media.get(b.key)).toMatchObject({ status: 'processing' });
-
     await b.release();
-    const second = await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img);
-    expect(second.json()).toMatchObject({ status: 'processing', duplicate: true });
-    await b.queue.idle();
-    expect(await b.media.get(b.key)).toMatchObject({ status: 'ready' });
-
+    // Hold the second encode: checking only after ready missed the original race.
+    const encodeGate = Promise.withResolvers<void>();
+    // Occupy the queue's next job via its store read without replacing the encoder.
+    const get = b.media.get;
+    const encoding = Promise.withResolvers<void>();
+    b.media.get = async (key) => {
+      const row = await get(key);
+      if (key === b.key && b.queue.isActive(key)) {
+        encoding.resolve();
+        await encodeGate.promise;
+      }
+      return row;
+    };
+    const admission = Promise.withResolvers<void>();
+    const withAdmission = b.queue.withAdmission;
+    b.queue.withAdmission = (key, operation) => {
+      admission.resolve();
+      return withAdmission(key, operation);
+    };
+    const second = entry === 'upload'
+      ? upload(b, b.cookie, { key: 'trips/full/hero', folder: 'Norway', alt: 'Replacement' }, b.img)
+      : b.retry();
+    await admission.promise;
+    expect(b.queue.isActive(b.key)).toBe(false);
+    expect(await get(b.key)).toMatchObject({ status: 'processing' });
     landing.resolve();
     expect((await a).statusCode).toBe(429);
-    expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null, folder: 'A', title: 'From A' });
+    expect((await second).statusCode).toBe(200);
+    await encoding.promise;
+    expect(b.queue.isActive(b.key)).toBe(true);
+    expect(await get(b.key)).toMatchObject({
+      status: 'processing', error: null, folder: 'Iceland/South',
+      alt: { de: 'Curated', en: 'Curated' },
+    });
+    // This is the exact persisted state a crash must recover.
+    expect((await b.media.list({ status: 'processing' })).items.map((item) => item.key)).toContain(b.key);
+    encodeGate.resolve();
+    await b.queue.idle();
+    expect(await get(b.key)).toMatchObject({ status: 'ready', error: null });
+  });
+
+  it('repeated queue-refused orphan uploads preserve curated metadata before and after admission', async () => {
+    const b = await buildFullQueue();
+    await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img);
+    await b.media.setStatus(b.key, 'processing');
+    const curated = {
+      folder: 'Iceland/South', title: 'Glacier',
+      alt: { de: 'Gletscher', en: 'Glacier' },
+      caption: { de: 'Am Morgen', en: 'At dawn' }, tags: ['ice'],
+    };
+    await b.media.patch(b.key, curated);
+    const before = await b.media.get(b.key);
+    const form = { key: 'trips/full/hero', folder: 'Norway', title: 'Replacement', alt: 'Replacement' };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect((await upload(b, b.cookie, form, b.img)).statusCode).toBe(429);
+      expect(await b.media.get(b.key)).toMatchObject({ ...curated, status: 'failed', error: 'queue_full' });
+    }
+    await b.release();
+    const accepted = await upload(b, b.cookie, form, b.img);
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toMatchObject({ duplicate: true, folder: curated.folder, status: 'processing' });
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({
+      ...curated, status: 'ready', error: null,
+      encoding: before?.encoding, uploadedAt: before?.uploadedAt, uploadedBy: before?.uploadedBy,
+    });
   });
 
   it('records EXIF-free uploads without lat/lng and stores the supplied folder/title', async () => {

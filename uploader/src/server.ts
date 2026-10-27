@@ -404,12 +404,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
    * or its original could not be written — to `s`, resolving whether this
    * caller's write landed (#348).
    *
-   * @ai-warning Both guards are load-bearing. A key the queue holds was queued
-   * by a concurrent request in the meantime — its job owns the row, so leave
-   * it `processing`. And the write is compare-and-set on `processing`: it is
-   * async, so an unconditional write could land after a concurrent same-key
-   * encode already recorded `ready` and turn an encoded photo back into
-   * `failed`. Losing the CAS means another writer settled the row.
+   * @ai-warning Call only inside the queue's same-key admission boundary.
+   * The active check and awaited CAS must exclude Upload, Retry and recovery
+   * admission until the rollback lands; CAS alone cannot protect an accepted
+   * job that is still processing. The CAS also preserves a settled encode.
    */
   const releaseUnqueued = async (key: string, s: MediaStatus, e?: MediaError): Promise<boolean> => {
     if (cfg.encodeQueue.isActive(key)) return false;
@@ -516,120 +514,107 @@ export function buildServer(cfg: ServerConfig): AppServer {
     }
     const format = outputFormatForExtension(probe.ext, encoding);
 
-    // Re-uploading identical bytes is the NORMAL case when a folder is dropped
-    // twice, so all three states of an existing row are handled explicitly.
-    const existing = await cfg.media.get(versionedKey);
-    if (existing && existing.status === 'ready') {
-      // Metadata the caller supplied still applies — it is not silently
-      // discarded — but the STORED values win: alt fills only a blank slot,
-      // and the folder only if the photo is still in the root (#135). The
-      // browser always sends the folder that is currently open, so a second
-      // drop of the same camera export must not relocate a curated photo.
-      const fillFolder = folder !== '' && existing.folder === '';
-      let stored = existing;
-      if (alt || title || fillFolder) {
-        // Best-effort on a duplicate — but the response reports what was
-        // PERSISTED, so a failed patch cannot claim a folder the photo is not in.
-        stored = await cfg.media.patch(versionedKey, {
-          ...(title ? { title } : {}), ...(fillFolder ? { folder } : {}),
-          ...(alt ? { alt: { de: existing.alt.de || alt, en: existing.alt.en || alt } } : {}),
-        }).catch(() => existing);
-      }
-      return reply.send({
-        src, key: versionedKey, width: existing.width, height: existing.height,
-        status: existing.status, duplicate: true, folder: stored.folder,
-        ...(existing.format ? { format: existing.format } : {}),
-        snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt, existing.format),
-      });
-    }
-    if (existing && existing.status === 'processing') {
-      // #348: `processing` does NOT prove a job is queued. A row stranded by a
-      // crash, or by a 429 from before the rollback below existed, has nothing
-      // behind it — and answering "duplicate, processing" then left the author
-      // believing it was encoding while Retry and Delete both skip the row.
-      // enqueue() is idempotent, so only a key the queue does not hold is
-      // offered again. This request rewrites the original first: the row may
-      // belong to a concurrent upload still inside its storeOriginal, and a job
-      // started before those bytes landed would fail as `decode_failed`. Same
-      // bytes under the same content-hash key, written atomically, so racing
-      // writers converge on one file.
-      if (!cfg.encodeQueue.isActive(versionedKey)) {
-        try {
-          await storeOriginal(versionedKey, buf, probe.ext, { storageDir, ...runtime });
-        } catch (e) {
-          // Settle a row nothing will encode — unless a concurrent request
-          // has queued it meanwhile (releaseUnqueued's guards).
-          await releaseUnqueued(versionedKey, 'failed', 'write_failed');
-          console.error(`could not store the original for ${versionedKey}:`, e);
-          return reply.code(500).send({ error: 'internal server error' });
+    return cfg.encodeQueue.withAdmission(versionedKey, async () => {
+      // Read inside the same-key boundary: a preceding refusal may have changed
+      // processing to failed while this request was waiting.
+      const existing = await cfg.media.get(versionedKey);
+      if (existing && existing.status === 'ready') {
+        // Metadata the caller supplied still applies — it is not silently
+        // discarded — but the STORED values win: alt fills only a blank slot,
+        // and the folder only if the photo is still in the root (#135). The
+        // browser always sends the folder that is currently open, so a second
+        // drop of the same camera export must not relocate a curated photo.
+        const fillFolder = folder !== '' && existing.folder === '';
+        let stored = existing;
+        if (alt || title || fillFolder) {
+          // Best-effort on a duplicate — but the response reports what was
+          // PERSISTED, so a failed patch cannot claim a folder the photo is not in.
+          stored = await cfg.media.patch(versionedKey, {
+            ...(title ? { title } : {}), ...(fillFolder ? { folder } : {}),
+            ...(alt ? { alt: { de: existing.alt.de || alt, en: existing.alt.en || alt } } : {}),
+          }).catch(() => existing);
         }
-        try {
-          cfg.encodeQueue.enqueue(versionedKey);
-        } catch (e) {
-          if (!(e instanceof BacklogFullError)) throw e;
-          // Never a false success, and never `processing` with nothing queued:
-          // the row becomes a retryable `queue_full` failure. If it belongs to
-          // a concurrent upload that then enqueues after all, that job's own
-          // `ready` supersedes this.
-          await releaseUnqueued(versionedKey, 'failed', 'queue_full');
-          return reply.code(429).send({ error: e.message });
-        }
+        return reply.send({
+          src, key: versionedKey, width: existing.width, height: existing.height,
+          status: existing.status, duplicate: true, folder: stored.folder,
+          ...(existing.format ? { format: existing.format } : {}),
+          snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt, existing.format),
+        });
       }
-      return reply.send({
-        src, key: versionedKey, width: existing.width, height: existing.height,
-        status: 'processing', duplicate: true, folder: existing.folder,
-        ...(existing.format ? { format: existing.format } : {}),
-        snippet: heroSnippet(src, existing.width, existing.height, alt, existing.format),
-      });
-    }
+      if (existing && (existing.status === 'processing' ||
+        (existing.status === 'failed' && existing.error === 'queue_full'))) {
+        // #348: processing alone does not prove a job exists. Restore the
+        // original before admitting an orphan left by a crash or old refusal.
+        if (!cfg.encodeQueue.isActive(versionedKey)) {
+          // A backlog refusal never invalidates this photo's curated metadata or
+          // immutable encoding profile. Recover it without a destructive upsert.
+          await cfg.media.setStatus(versionedKey, 'processing');
+          try {
+            await storeOriginal(versionedKey, buf, probe.ext, { storageDir, ...runtime });
+          } catch (e) {
+            await releaseUnqueued(versionedKey, 'failed', 'write_failed');
+            console.error(`could not store the original for ${versionedKey}:`, e);
+            return reply.code(500).send({ error: 'internal server error' });
+          }
+          try {
+            cfg.encodeQueue.enqueue(versionedKey);
+          } catch (e) {
+            if (!(e instanceof BacklogFullError)) throw e;
+            // Hold the boundary until the write lands; subsequent admissions
+            // must re-read this settled status, not a stale processing snapshot.
+            await releaseUnqueued(versionedKey, 'failed', 'queue_full');
+            return reply.code(429).send({ error: e.message });
+          }
+        }
+        return reply.send({
+          src, key: versionedKey, width: existing.width, height: existing.height,
+          status: 'processing', duplicate: true, folder: existing.folder,
+          ...(existing.format ? { format: existing.format } : {}),
+          snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt, existing.format),
+        });
+      }
 
-    const exif = parseExif(probe.exif);
-    // Persist the immutable profile before the original becomes recoverable
-    // from disk. A crash after this point leaves a deterministic processing
-    // row for boot recovery instead of an origin-only orphan that has lost the
-    // setting snapshot.
-    await cfg.media.upsert({
-      key: versionedKey, folder, title,
-      alt: { de: alt, en: alt },
-      width: probe.width, height: probe.height, origBytes: buf.length,
-      status: 'processing', exif, uploadedBy: req.authUser?.id ?? null,
-      ...(format ? { format } : {}),
-      encoding,
-    });
-    try {
-      await storeOriginal(versionedKey, buf, probe.ext, { storageDir, ...runtime });
-    } catch (e) {
-      if (existing) await cfg.media.setStatus(versionedKey, 'failed', 'write_failed').catch(() => {});
-      else await cfg.media.remove(versionedKey).catch(() => {});
-      console.error(`could not store the original for ${versionedKey}:`, e);
-      return reply.code(500).send({ error: 'internal server error' });
-    }
-    // @ai-warning A refused enqueue MUST NOT leave the row `processing` (#348):
-    // nothing is queued for it, /media/retry skips it, DELETE refuses it and the
-    // publish gate blocks every post using it until a reconcile pass. Like
-    // /media/retry, a pre-existing row gets its own status and error back. A
-    // NEW key is marked `failed` (`queue_full`) rather than removed with its
-    // original: a concurrent upload of the same bytes can be past its own
-    // `existing` check and about to write the original and enqueue, and
-    // deleting the row or the shared original under it would turn its 200 into
-    // a vanished photo. The failed row keeps the original, so Retry, Delete,
-    // and a re-send of the same bytes all work once the backlog drains.
-    try {
-      cfg.encodeQueue.enqueue(versionedKey);
-    } catch (e) {
-      if (!(e instanceof BacklogFullError)) throw e;
-      await releaseUnqueued(
-        versionedKey,
-        existing ? existing.status : 'failed',
-        existing ? existing.error ?? undefined : 'queue_full',
-      );
-      return reply.code(429).send({ error: e.message });
-    }
-    return reply.send({
-      src, key: versionedKey, width: probe.width, height: probe.height,
-      status: 'processing',
-      ...(format ? { format } : {}),
-      snippet: heroSnippet(src, probe.width, probe.height, alt, format),
+      const exif = parseExif(probe.exif);
+      // Persist the immutable profile before the original becomes recoverable
+      // from disk. A crash after this point leaves a deterministic processing
+      // row for boot recovery instead of an origin-only orphan that has lost the
+      // setting snapshot.
+      await cfg.media.upsert({
+        key: versionedKey, folder, title,
+        alt: { de: alt, en: alt },
+        width: probe.width, height: probe.height, origBytes: buf.length,
+        status: 'processing', exif, uploadedBy: req.authUser?.id ?? null,
+        ...(format ? { format } : {}),
+        encoding,
+      });
+      try {
+        await storeOriginal(versionedKey, buf, probe.ext, { storageDir, ...runtime });
+      } catch (e) {
+        if (existing) await cfg.media.setStatus(versionedKey, 'failed', 'write_failed').catch(() => {});
+        else await cfg.media.remove(versionedKey).catch(() => {});
+        console.error(`could not store the original for ${versionedKey}:`, e);
+        return reply.code(500).send({ error: 'internal server error' });
+      }
+      // @ai-warning A refused enqueue MUST NOT leave an unqueued processing row
+      // (#348). Restore an existing failure; keep a new photo as failed/queue_full
+      // with its original so Retry, Delete and re-upload remain available.
+      try {
+        cfg.encodeQueue.enqueue(versionedKey);
+      } catch (e) {
+        if (!(e instanceof BacklogFullError)) throw e;
+        await releaseUnqueued(
+          versionedKey,
+          existing ? existing.status : 'failed',
+          existing ? existing.error ?? undefined : 'queue_full',
+        );
+        return reply.code(429).send({ error: e.message });
+      }
+      return reply.send({
+        src, key: versionedKey, width: probe.width, height: probe.height,
+        status: 'processing',
+        ...(format ? { format } : {}),
+        snippet: heroSnippet(src, probe.width, probe.height, alt, format),
+      });
     });
   });
 
@@ -774,19 +759,25 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const keys = Array.isArray(b.keys) ? b.keys.map(String).slice(0, MAX_BULK_KEYS) : [];
     let queued = 0;
     for (const key of keys) {
-      const item = await cfg.media.get(key);
-      // `missing` is retryable too: media-sync marks a row missing when its
-      // files vanish, and the retained original may well still be there.
-      if (!item || item.status === 'ready' || item.status === 'processing') continue;
-      await cfg.media.setStatus(key, 'processing');
       try {
-        cfg.encodeQueue.enqueue(key);
+        const admitted = await cfg.encodeQueue.withAdmission(key, async () => {
+          const item = await cfg.media.get(key);
+          // `missing` is retryable too: its retained original may still exist.
+          if (!item || item.status === 'ready' || item.status === 'processing') return false;
+          await cfg.media.setStatus(key, 'processing');
+          try {
+            cfg.encodeQueue.enqueue(key);
+          } catch (e) {
+            await releaseUnqueued(key, item.status, item.error ?? undefined);
+            throw e;
+          }
+          return true;
+        });
+        if (admitted) queued++;
       } catch (e) {
-        await releaseUnqueued(key, item.status, item.error ?? undefined);
         if (e instanceof BacklogFullError) return reply.code(429).send({ error: e.message, queued });
         throw e;
       }
-      queued++;
     }
     return reply.send({ ok: true, queued });
   });
