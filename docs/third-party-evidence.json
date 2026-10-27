@@ -1,0 +1,520 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-10-27",
+  "scope": "Issue #291 owner-approved AGPL-3.0-only software license, 2026-10-27; no legal assurance. Exact lockfile metadata is separate from reviewed upstream evidence. AND means all component terms; OR is a choice. Summaries never replace full notices or release-specific source obligations.",
+  "packageResolutions": [
+    {
+      "name": "@bruits/satteri-darwin-arm64",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-darwin-arm64/-/satteri-darwin-arm64-0.9.4.tgz",
+      "integrity": "sha512-W3MSUkr2mZRR8Stoe+lqNAyzQzRuFMU8WffV9IvFSxTok0LGWR0ZZQPLELU4QTRiUbhL2Y4VUP9vV7pj8rHjgg==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-darwin-arm64",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-darwin-arm64/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-darwin-x64",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-darwin-x64/-/satteri-darwin-x64-0.9.4.tgz",
+      "integrity": "sha512-DXOuuaE1lsv7mpk2mOvGrzqoEWEvOIZEO/fXVa7zfM23Iob+CBjBkRAMwpHA4pmZ3j6Gj7WJzPKw0kQ7w741AQ==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-darwin-x64",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-darwin-x64/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-linux-arm64-gnu",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-linux-arm64-gnu/-/satteri-linux-arm64-gnu-0.9.4.tgz",
+      "integrity": "sha512-gJxU9rGGoqIznSEgEzpjxkry24jeHuMpoo1tCIAhHYh7WaD3j5F8zt3jmHxEaN1Uwa+K5+wFgIR2uIGOnMzEmw==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-linux-arm64-gnu",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-linux-arm64-gnu/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-linux-arm64-musl",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-linux-arm64-musl/-/satteri-linux-arm64-musl-0.9.4.tgz",
+      "integrity": "sha512-Wjzu9hmmAbfmDkBfPI1VdZygJtYz9uYZQnkEyrXi6S2JFi+2pXQ1A5irj38bqm0IZmWcTbk0cVG4NZnPdtVNJA==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-linux-arm64-musl",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-linux-arm64-musl/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-linux-x64-gnu",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-linux-x64-gnu/-/satteri-linux-x64-gnu-0.9.4.tgz",
+      "integrity": "sha512-MR1Q+wMx65FQlbSV7cRqWW87Knp0zkoaIV55Dt+xZl028wJABXEPEEmG3670SLq7lVZvcGIDwCgSg2kCYxvRwA==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-linux-x64-gnu",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-linux-x64-gnu/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-linux-x64-musl",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-linux-x64-musl/-/satteri-linux-x64-musl-0.9.4.tgz",
+      "integrity": "sha512-T4gxhXve3zyNAZesrXAd/rDZOGRkbfFIUFld4TGsw6BsjoIteCcDji6IMqeXyaWEVSykY2X8Eid2hr6aXGYAaw==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-linux-x64-musl",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-linux-x64-musl/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-wasm32-wasi",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-wasm32-wasi/-/satteri-wasm32-wasi-0.9.4.tgz",
+      "integrity": "sha512-/CEG8LUlpaBEnhFnYVn0UnlHFLs51UhrkJBUPDUXLzkadzAcnR88iRA/nOl7Zwhjb4WhfBV4p3P5qeOJMtH0iA==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 7,
+      "registryEvidence": {
+        "name": "@bruits/satteri-wasm32-wasi",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-wasm32-wasi/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-win32-arm64-msvc",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-win32-arm64-msvc/-/satteri-win32-arm64-msvc-0.9.4.tgz",
+      "integrity": "sha512-E1ZPQbgCtFKiU7pFYVndynvY7ne4coeVDUgnVThErSFlJ2ceQCBZrfRTD1lzrIDy63Bbqo+g/cZY9duw+JYjIw==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-win32-arm64-msvc",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-win32-arm64-msvc/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-win32-x64-msvc",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-win32-x64-msvc/-/satteri-win32-x64-msvc-0.9.4.tgz",
+      "integrity": "sha512-5I7SiarsNdAUuhJb50CXJPTwr/ECVrBoU+fymoLjChK5fW//+srhY4lstcNTzgFRtQSYfVtm4OQZz16CVMeTeA==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-win32-x64-msvc",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-win32-x64-msvc/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "satteri",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/satteri/-/satteri-0.9.4.tgz",
+      "integrity": "sha512-BKob126Tay84diOZsnVNH/Q/c+3njPJTCad3w5zLKa6j8bVjxskPNHDtxrMwYK4bN/RlqUSdMnPwKY4k65EMOQ==",
+      "gitHead": null,
+      "licenseFiles": [
+        {
+          "path": "package/LICENSE",
+          "text": "MIT License\n\nCopyright (c) 2026 Bruits\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        }
+      ],
+      "packageFileCount": 79,
+      "registryEvidence": {
+        "name": "satteri",
+        "url": "https://registry.npmjs.org/satteri/0.9.4",
+        "version": "0.9.4",
+        "gitHead": null,
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    }
+  ],
+  "licenseObligations": {
+    "AGPL-3.0-only": {
+      "summary": "Original first-party software only, owner-approved 2026-10-27. Preserve license/copyright/no-warranty and modification notices; convey Corresponding Source under section 6 and prominently offer modified network-version Corresponding Source to remote users at no charge under section 13. Content and brand exclusions are in NOTICE; third-party terms remain separate.",
+      "url": "https://www.gnu.org/licenses/agpl-3.0.txt",
+      "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+      "reviewedAt": "2026-10-27"
+    },
+    "0BSD": {
+      "summary": "No notice-retention condition in the license text; retain provenance and warranty disclaimer in the distribution inventory.",
+      "url": "https://spdx.org/licenses/0BSD.json",
+      "sha256": "e3f18c71e10d673590eb9856c1d79dd3b4b0d65404efb5e8584dbede7edd608b",
+      "upstream": [
+        "http://landley.net/toybox/license.html",
+        "https://opensource.org/license/0BSD"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "Apache-2.0": {
+      "summary": "Supply the license; preserve applicable notices and upstream NOTICE content; mark modified files. Patent and trademark terms remain applicable (sections 3–6).",
+      "url": "https://spdx.org/licenses/Apache-2.0.json",
+      "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+      "upstream": [
+        "https://www.apache.org/licenses/LICENSE-2.0",
+        "https://opensource.org/license/apache-2.0"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "BSD-2-Clause": {
+      "summary": "Retain copyright, conditions and disclaimer in source; reproduce them in documentation/materials accompanying binary redistribution.",
+      "url": "https://spdx.org/licenses/BSD-2-Clause.json",
+      "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df",
+      "upstream": [
+        "https://opensource.org/license/BSD-2-Clause"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "BSD-3-Clause": {
+      "summary": "BSD-2-Clause notice duties plus no use of contributor/copyright-holder names to endorse derived products without permission.",
+      "url": "https://spdx.org/licenses/BSD-3-Clause.json",
+      "sha256": "5a93d5831e1297ab10fe643e1a631e83be392896da14ee2951285a79012df69d",
+      "upstream": [
+        "https://opensource.org/license/BSD-3-Clause",
+        "https://www.eclipse.org/org/documents/edl-v10.php"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "BlueOak-1.0.0": {
+      "summary": "Ensure recipients also receive the license or its link; patent grant and no-warranty terms remain applicable.",
+      "url": "https://spdx.org/licenses/BlueOak-1.0.0.json",
+      "sha256": "8a1af140fdfbf5afd3df27f7e662f989c5b963a300020dfafce42033cae9e004",
+      "upstream": [
+        "https://blueoakcouncil.org/license/1.0.0"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "CC0-1.0": {
+      "summary": "Public-domain dedication with fallback license; no attribution condition, but patent/trademark rights and third-party rights are not granted.",
+      "url": "https://spdx.org/licenses/CC0-1.0.json",
+      "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+      "upstream": [
+        "https://creativecommons.org/publicdomain/zero/1.0/legalcode"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "ISC": {
+      "summary": "Include copyright and permission notice in all copies; preserve disclaimer.",
+      "url": "https://spdx.org/licenses/ISC.json",
+      "sha256": "521c6f0ed8e64736684f89843d16a4df6b4b7449acbcfc6ca6630a3037ca8c53",
+      "upstream": [
+        "https://www.isc.org/licenses/",
+        "https://www.isc.org/downloads/software-support-policy/isc-license/",
+        "https://opensource.org/license/ISC"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "LGPL-3.0-or-later": {
+      "summary": "Preserve notices and supply LGPL plus GPL texts; meet corresponding-source duties for distributed covered libraries. Combined works must allow library modification/reverse engineering for debugging and satisfy relinking/shared-library requirements (LGPL section 4). Choose and document a permitted license version; do not treat a package metadata label or upstream URL alone as compliance.",
+      "url": "https://spdx.org/licenses/LGPL-3.0-or-later.json",
+      "sha256": "996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1",
+      "upstream": [
+        "https://www.gnu.org/licenses/lgpl-3.0-standalone.html",
+        "https://www.gnu.org/licenses/lgpl+gpl-3.0.txt",
+        "https://opensource.org/license/LGPL-3.0"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "MIT": {
+      "summary": "Include copyright and permission notice in all copies or substantial portions; preserve disclaimer.",
+      "url": "https://spdx.org/licenses/MIT.json",
+      "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+      "upstream": [
+        "https://opensource.org/license/MIT",
+        "https://gitlab.freedesktop.org/xorg/xserver/-/blob/dd5c2595a42d3ff0c4f18d9b53d1f6c3fd934fd4/COPYING#L365-389"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "MPL-2.0": {
+      "summary": "Covered files, including modifications, remain MPL; make covered Source Code Form available to executable recipients and inform them how to obtain it (3.1–3.2); preserve notices (3.4). Larger works can have separate terms (3.3).",
+      "url": "https://spdx.org/licenses/MPL-2.0.json",
+      "sha256": "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172",
+      "upstream": [
+        "https://www.mozilla.org/MPL/2.0/",
+        "https://opensource.org/license/MPL-2.0"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "OFL-1.1": {
+      "summary": "Include copyright and full OFL with font copies; fonts cannot be sold alone; modified fonts must respect Reserved Font Names; font derivatives remain OFL; no endorsement. Documents made using fonts are not thereby OFL.",
+      "url": "https://spdx.org/licenses/OFL-1.1.json",
+      "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd",
+      "upstream": [
+        "http://scripts.sil.org/cms/scripts/page.php?item_id=OFL_web",
+        "https://opensource.org/license/OFL-1.1"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "Python-2.0": {
+      "summary": "Retain the full applicable Python license chain (PSF, BeOpen, CNRI and CWI notices), including copyright/permission notices in copies and supporting documentation as specified; summarize modifications for derivative works; respect no-endorsement/trademark restrictions.",
+      "url": "https://spdx.org/licenses/Python-2.0.json",
+      "sha256": "893c2bafbb8133f7aa97e1f79a3ee3241ebca7025f56278e9e1f72bb98592f9d",
+      "upstream": [
+        "https://opensource.org/license/Python-2.0"
+      ],
+      "reviewedAt": "2026-10-27"
+    }
+  },
+  "manualAssets": [
+    {
+      "name": "DHI Node build base",
+      "source": "Dockerfile:17,42,50",
+      "url": "dhi.io/node:26-dev",
+      "version": "Public 0.17.1 provenance: dhi.io/node:26-dev@sha256:0c199c224fbc0dd15ca49b716ab92f9ffaee604f29e9a778d84e9b4ab7e9e771",
+      "license": "Docker DHI catalog: Apache-2.0; included components retain their own licenses",
+      "licenseEvidence": [
+        "https://docs.docker.com/dhi/",
+        "https://docs.docker.com/dhi/explore/security-concepts/sbom/"
+      ],
+      "reviewedAt": "2026-10-27",
+      "obligation": "Apache notices for Docker material plus component-specific terms. Build stage not copied wholesale; /app uploader and site including installed npm assets are copied. Capture exact base digest/platform and signed SBOM for release-specific component accounting. Current documentation does not prove terms of every previously published image."
+    },
+    {
+      "name": "DHI Node runtime base",
+      "source": "Dockerfile:18,105",
+      "url": "dhi.io/node:26",
+      "version": "Public 0.17.1 provenance: dhi.io/node:26@sha256:dc87c509f7279f734d04036f696bf9aad1b8d66f34750f32c30c5b85e033187f (26.12.1-1-debian13)",
+      "license": "Docker DHI catalog: Apache-2.0; included components retain their own licenses",
+      "licenseEvidence": [
+        "https://docs.docker.com/dhi/",
+        "https://docs.docker.com/dhi/explore/security-concepts/sbom/"
+      ],
+      "reviewedAt": "2026-10-27",
+      "obligation": "Final image redistributes this base; retain applicable Docker/component notices and satisfy component source duties. Verified per-platform SBOM/source attestations and reachable source-image digests are recorded in third-party-image-evidence.json. The image-level MIT annotation is not blanket relicensing of OS/Node dependencies; missing component license assertions remain unresolved rather than inferred."
+    },
+    {
+      "name": "Alpine map-fetch build base",
+      "source": "Dockerfile:59,67,117",
+      "url": "https://hub.docker.com/_/alpine",
+      "version": "alpine:3.22, mutable tag; apk repositories resolve curl/tar and dependencies at build time",
+      "license": "per component, not one image-wide software license; examples GPL-2.0-only (busybox) and MIT (musl)",
+      "licenseEvidence": [
+        "https://raw.githubusercontent.com/docker-library/docs/master/alpine/license.md",
+        "https://pkgs.alpinelinux.org/package/v3.22/main/x86_64/busybox",
+        "https://pkgs.alpinelinux.org/package/v3.22/main/x86_64/musl"
+      ],
+      "reviewedAt": "2026-10-27",
+      "obligation": "Only /map output is copied to final image, not Alpine tools. If build-stage images/caches are distributed, preserve per-package notices and satisfy applicable source duties. Observed repository examples busybox 1.37.0-r20 / musl 1.2.5-r13 are not asserted to be the historical build versions."
+    },
+    {
+      "name": "go-pmtiles CLI",
+      "source": "Dockerfile:36,69-72",
+      "url": "https://github.com/protomaps/go-pmtiles/releases/tag/v1.30.3",
+      "version": "1.30.3 default (build argument can override)",
+      "license": "BSD-3-Clause",
+      "licenseEvidence": [
+        "https://raw.githubusercontent.com/protomaps/go-pmtiles/v1.30.3/LICENSE"
+      ],
+      "reviewedAt": "2026-10-27",
+      "obligation": "Retain Copyright 2021 Protomaps LLC, conditions and disclaimer for source/binary redistribution; no endorsement. CLI only in build stage, not /map output. A distributed CLI/build-stage image also needs its Go dependency notices; this is not a Go binary SBOM."
+    },
+    {
+      "name": "Protomaps basemap slice",
+      "source": "Dockerfile:37-39,80-95,117",
+      "url": "https://build.protomaps.com/${BUILD}.pmtiles",
+      "version": "PROTOMAPS_BUILD=auto; newest within 14 days, maxzoom=8; exact resolved date in image /map-assets/BASEMAP_BUILD",
+      "license": "ODbL-1.0 Produced Work per Protomaps downloads; OSM/coastlines ODbL; Natural Earth public domain; landcover CC-BY-4.0 where included",
+      "licenseEvidence": [
+        "https://docs.protomaps.com/basemaps/downloads",
+        "https://protomaps.com/legal",
+        "https://raw.githubusercontent.com/protomaps/basemaps/main/LICENSE_DATA.md",
+        "https://www.openstreetmap.org/copyright",
+        "https://opendatacommons.org/licenses/odbl/1-0/",
+        "https://esa-worldcover.org/en/data-access"
+      ],
+      "reviewedAt": "2026-10-27",
+      "obligation": "Public interactive map: visible corner OSM attribution linked to OSM copyright. Preserve provenance/notices with distributed PMTiles; database duties remain governed separately by ODbL 4.2/4.4/4.6. Public 0.17.1 amd64/arm64 and #347 candidate artifacts identify builds 20261026/20261024 and basemap 4.15.2 with landcover, linking to the profile's documented Daylight/ESA WorldCover 2020 source. Public maps now carry the required 2020 credit and CC-BY-4.0 link; NOTICE describes transformations. Natural Earth attribution is not required; Protomaps branding is encouraged, not made mandatory by the cited terms. Recheck changed inputs."
+    },
+    {
+      "name": "Protomaps Noto Sans glyph ranges",
+      "source": "Dockerfile:96-102,117",
+      "url": "https://github.com/protomaps/basemaps-assets/archive/028c18f713baecad011301ff7a69acc39bcc2ae7.tar.gz",
+      "version": "028c18f713baecad011301ff7a69acc39bcc2ae7 pinned for future builds; not proven historical image revision",
+      "paths": [
+        "fonts/Noto Sans Regular",
+        "fonts/Noto Sans Medium",
+        "fonts/Noto Sans Italic"
+      ],
+      "license": "OFL-1.1",
+      "licenseEvidence": [
+        "https://raw.githubusercontent.com/protomaps/basemaps-assets/028c18f713baecad011301ff7a69acc39bcc2ae7/fonts/OFL.txt"
+      ],
+      "reviewedAt": "2026-10-27",
+      "obligation": "Include Copyright 2022 The Noto Project Authors and full OFL with glyph font copies; respect reserved names/no standalone sale/no endorsement. Docker now ships fonts/OFL.txt and records GLYPHS_REVISION. Both inspected public 0.17.1 platforms and #347 candidates lack a readable OFL or revision; this correction does not change their existing bytes."
+    }
+  ],
+  "vendorAssets": {
+    "sources": [
+      "uploader/scripts/copy-vendor.mjs",
+      "uploader/scripts/copy-fonts.mjs",
+      "uploader/scripts/copy-easymde.mjs"
+    ],
+    "packages": [
+      "easymde",
+      "htm",
+      "preact",
+      "maplibre-gl",
+      "pmtiles",
+      "fflate",
+      "font-awesome",
+      "@fontsource-variable/inter",
+      "@fontsource/ibm-plex-mono"
+    ],
+    "scope": "All npm versions/licenses are generated from locks, including browser copies and fonts. copy-legal.mjs collects installed-package LICENSE/COPYING/NOTICE/COPYRIGHT/AUTHORS files and license directories, plus supplemental texts, into public/legal for both trees. It delivers the license, NOTICE, inventory and evidence through existing static serving. Actual emitted bundle/font/native coverage and corresponding source require artifact inspection.",
+    "evidence": [
+      "https://github.com/protomaps/PMTiles/blob/0cebcaeade40034b86facb6e7da4ec726b9053fb/LICENSE",
+      "https://fontawesome.com/v4/license"
+    ],
+    "noticeGap": "Generated notice-gaps.json lists installed packages lacking recognized notices; review upstream, supplemental coverage and emitted/native assets. No recognized-file scan alone proves a complete notice bundle or source compliance."
+  },
+  "limitations": [
+    "First-party roots now declare owner-approved AGPL-3.0-only. The approved image rename is a separate implementation; historical public artifacts remain untouched.",
+    "Lockfile inventory includes optional platforms and dev entries, not only installed/distributed packages. Site devDependencies ship in final image because builds run at runtime.",
+    "Native source evidence now includes checksum-matched Satteri Cargo.lock archives (154), libvips 1.3.4 source/patch downloads (33) and librsvg crates (357), historical libvips 1.3.2 downloads (32) and crates (348), plus release-generated Rust standard-library notices matched to the compiler source identities read from both image platforms. Full texts and exact source directions supplement the package license labels. These are dependency supersets, not exact ELF linkage or reproduction claims.",
+    "Read-only inspection of exact public 0.17.1 amd64/arm64 and local #347 candidates is recorded in third-party-image-evidence.json. Published provenance resolves the base; signed runtime-base SBOM/source attestations verified with Docker Scout identify 20 components per platform and corresponding source-image digests. Source manifests are reachable. No inspected image was started or altered; uninspected historical releases remain unassessed.",
+    "Downloaded public Satteri tarballs were inspected in memory and SHA-512 matched to locks. No package installation or dependency code execution. Evidence date is review date, not release certification.",
+    "Artifact BASEMAP_BUILD/tileset metadata now connects 0.17.1 and #347 to Protomaps 4.15.2 and its documented Daylight input. Daylight's primary 2023-10-11 announcement identifies ESA WorldCover 2020 and remapping/denoising/smoothing/vectorization: https://daylightmap.org/2023/10/11/landcover.html. Credit year 2020 follows that source lineage, not the app release date; mutable future inputs must be reassessed.",
+    "No application builds, tests, type checks, lint, formatter or runtime/browser smoke were performed.",
+    "Supplemental native summaries: sharp-libvips 1.3.2 SHA256 25ffcfa69e28b1913ced27ec778b90f24911a1bb3021253577e8b0af55db0d49 at git 4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6; 1.3.4 SHA256 6f0d5086e3bcbee12bcdacf5878b31d1104002aeecaeb241d3fff466108082fe at git ebb95f8add54eee8bed840e3fb587e4cbec857d7; Node 26.12.1 LICENSE SHA256 8e603aa87c70d36e497004f0dec63111511cb61b7d65ace12e10ea791599286c. Full component bundles and their source/hash inventories are now in third-party-image-evidence.json. Genuine missing notices and historical mutable-patch-byte uncertainty are explicitly retained; no copyright owners/years were fabricated."
+  ]
+}

@@ -1,0 +1,65 @@
+Native libraries and runtime-base source directions
+Reviewed 2026-10-27. These directions cover the exact versions named below, not
+uninspected historical images or a future build that resolves different inputs.
+The application imposes no restriction on modifying/replacing LGPL-covered
+libraries or reverse engineering for debugging those modifications.
+
+sharp-libvips 1.3.4 (inspected #347 candidates, libvips 8.18.7):
+https://github.com/lovell/sharp-libvips/archive/ebb95f8add54eee8bed840e3fb587e4cbec857d7.tar.gz
+https://github.com/lovell/sharp-libvips/tree/ebb95f8add54eee8bed840e3fb587e4cbec857d7
+
+sharp-libvips 1.3.2 (public 0.17.1, libvips 8.18.3):
+https://github.com/lovell/sharp-libvips/archive/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6.tar.gz
+https://github.com/lovell/sharp-libvips/tree/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6
+
+Each pinned build repository contains build.sh, platform toolchains,
+versions.properties and build/posix.sh. The latter identifies source archives,
+external patches and inline modifications. third-party-image-evidence.json lists
+those URLs, review-time hashes, library notices and original librsvg Cargo.lock
+crate archives/checksums. The original lock is a conservative dependency superset:
+Cargo --workspace preserves existing non-workspace versions when the script
+removes image/Cairo features. It is not a per-binary linkage inventory.
+https://doc.rust-lang.org/cargo/commands/cargo-update.html
+
+To replace the library, use the matching pinned build inputs for the image's
+architecture/libc, rebuild a compatible libvips-cpp shared library, and put it in
+the matching @img/sharp-libvips-linux-{arm64,x64}/lib package directory in BOTH
+/app/uploader/node_modules and /app/site/node_modules of a derived image.
+Preserve the expected SONAME/ABI and accompanying notices. The upstream scripts
+contain the actual link options, including statically incorporated dependencies;
+a generic unmodified libvips source download is not a substitute for those inputs.
+No rebuild/relink run is claimed here. Review-time hashes do not establish which
+bytes a mutable upstream PR patch URL returned when an older binary was built.
+
+Satteri 0.9.4:
+https://github.com/bruits/satteri/archive/815424811e52f097b4052d2ddd0051b32fbbbc55.tar.gz
+https://github.com/bruits/satteri/tree/815424811e52f097b4052d2ddd0051b32fbbbc55
+Its pinned Cargo.lock identifies 154 registry archives. All were checksum-matched
+without executing code; original notices and pinned repository supplements are
+included. This includes build/dev/optional targets, not just linked code.
+json-escape-simd 3.0.2 declares MIT but its archive, pinned repository root and
+leading source comments provide no original notice; no owner/year was invented.
+Other source-only/platform crates with absent notices are explicitly recorded.
+
+DHI Node runtime used by public 0.17.1:
+dhi.io/node@sha256:dc87c509f7279f734d04036f696bf9aad1b8d66f34750f32c30c5b85e033187f
+Verified signed source attestations identify these corresponding source indexes:
+linux/arm64:
+dhi.io/node@sha256:5a8a4e5e26b0f4bb33c0d8c7950d74d710300acde5d471d1a69b694dbc12b2f1
+linux/amd64:
+dhi.io/node@sha256:b08f5839e924ea21813ff35ce0d7c0e20a1dc924a38110b1343265a8234fa299
+The source manifests were reachable. Docker's documented source-artifact and
+verification process is https://docs.docker.com/dhi/explore/security-concepts/attestations/
+For example, use Docker Scout attest get on the exact runtime digest with
+--predicate-type https://docker.com/dhi/source/v0.1 --verify --platform linux/arm64
+(or linux/amd64), then retrieve the attested source-image digest with the Docker
+registry tooling described there. The verified SBOM components, source digests
+and verification method are retained in third-party-image-evidence.json.
+Base component copyright files/common license texts remain in the image's
+/usr/share/doc and /usr/share/common-licenses. Node's complete 26.12.1 LICENSE is
+also included in these supplemental notices; source is available at
+https://github.com/nodejs/node/tree/v26.12.1
+
+None of this changes old image bytes or certifies legal compliance. Before an
+additional distribution, confirm actual resolved versions/source accessibility,
+notice delivery and applicable source/relink obligations for that artifact.

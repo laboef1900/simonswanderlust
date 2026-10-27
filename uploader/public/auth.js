@@ -190,6 +190,11 @@ window.Auth = (function () {
     shell.querySelector('.cms-brand-mark').textContent = copy.studioName.charAt(0);
     shell.querySelector('.cms-brand-title').textContent = copy.studioName;
     shell.querySelector('.cms-masthead-right > .cms-brand-sub').textContent = copy.studioDescriptor;
+    const legal = document.createElement('a');
+    legal.href = '/admin/legal/en.html';
+    legal.className = 'cms-btn-ghost';
+    legal.textContent = copy.softwareNotices;
+    shell.querySelector('.cms-sidebar-footer').prepend(legal);
 
     // Username is the one user-controlled string in this shell; set as text
     // and as an attribute value AFTER the parse so it can never be markup (#131).
