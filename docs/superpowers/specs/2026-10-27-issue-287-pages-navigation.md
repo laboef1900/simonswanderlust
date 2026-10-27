@@ -380,7 +380,7 @@ published pages keep About's "Save = live" behaviour:
   foreign-image analysis, sanitization, concurrency or owner/path checks. This avoids making
   a previously valid empty About seed unbuildable while protecting all subsequent live writes.
 - **Transaction boundary:** with #283 installed, every page save/publish/unpublish/delete takes
-  `SELECT ... FROM site_language WHERE id = 1 FOR UPDATE` before page/namespace locks, matching
+  `SELECT ... FROM site_language WHERE id = true FOR UPDATE` before page/namespace locks, matching
   #283's language/publication protocol. Validate the exact candidate saved under those locks,
   including its enabled set and current status; retain optimistic concurrency and revision
   capture. Invoke ordinary `builder.build()` only after commit and lock release. Never hold
@@ -494,17 +494,25 @@ page carries the address in its body, D6). **Owner question Q7** if a `mailto:` 
   entry), parsed by the Zod schema of D4.3. If the row is missing (dev or CI without the table),
   the site falls back to the **same default document**, exported from a pure site module, so
   output is unchanged. This mirrors how pages reach the build. **Rejected:** an env var like
-  #273's `SITE_IDENTITY_JSON`. Nav and pages must come from the same database read of one build.
+  #273's `SITE_IDENTITY_JSON`. Nav, pages and gallery metadata import the same exported
+  PostgreSQL build snapshot as language/identity and trips (#273 §6.1 / #283 §10.2), using the
+  shared loader connection helper. A separate fresh `pool.query` would violate this boundary.
 - **Dump:** `site_nav` joins the dump (`tables.site_nav`). `pages` gains `slug`, `status` and
   `published_at` in the dump. This takes **the next free `DUMP_VERSION`** at landing. #273 and #283
   also propose a bump; whichever lands first takes 11. `SUPPORTED_DUMP_VERSIONS` is widened in the
   same change.
+  Record that introduction as `PAGES_NAV_DUMP_VERSION`; older identity-only/language-only
+  intermediate formats must remain restorable, not be mistaken for malformed new-format dumps.
 - **Restore** (one transaction, as today) replaces `pages` and `site_nav` together. For older
   dumps:
   - **no `pages` key (v1):** pages and nav are left untouched, as today.
-  - **no `site_nav` (≤ v10):** nav is left untouched.
-  - **pages without `slug`/`status`:** the D3 backfill rule applies: `about` becomes published,
-    every other key becomes draft with an empty slug.
+  - **supported pre-navigation version (`version < PAGES_NAV_DUMP_VERSION`):** nav is left
+    untouched. This includes v≤10 and supported identity/language-only intermediate versions.
+    Do not infer this branch merely from a missing `site_nav` key.
+  - **pre-navigation pages:** the D3 backfill rule applies: `about` becomes published, every
+    other key becomes draft with an empty slug.
+  - **navigation-capable versions:** require `site_nav` and the version's complete page fields;
+    missing tables/fields refuse the whole restore rather than silently preserving old state.
   - Restore also deletes `page_revisions` whose key is no longer in `pages`, the same intent as
     #137's sweep.
   - The restore CLI's pre-restore summary (#114) adds two lines: the number of nav items that
@@ -780,8 +788,9 @@ No new root segment is registered, so the app reservation set is unchanged by th
   saved-but-not-live; rebuild retry recovers. Do not assert database/release atomicity.
 - Author 403 on every admin route.
 - URL policy table (each misuse row).
-- Dump/restore round-trip of the new shape, and restore of v10 and v1 dumps (backfill, nav
-  untouched, orphan revisions removed).
+- Dump/restore round-trip of the new shape; v10/v1 and each supported intermediate identity/
+  language-only format follow their introduction-version rules (backfill, nav untouched,
+  orphan revisions removed). Missing metadata in a navigation-capable format fails atomically.
 - Boot collision report.
 
 **#289 (site):**
@@ -795,6 +804,10 @@ No new root segment is registered, so the app reservation set is unchanged by th
   removing a route. About's existing empty fallback still builds, with image safety retained.
 - Q12 A: before activation no secondary page/nav/alternate/sitemap entry; after a
   successful activation build complete secondary entries appear and primary paths are unchanged.
+- Pause an old bilingual build after snapshot capture, disable the secondary while unlocked,
+  then prepare new inactive page text before its loader reads. The old release candidate must
+  contain only pre-capture text/nav, never the private preparation; also fail the queued rebuild
+  and verify no leak. Snapshot import failure prevents release promotion and releases all connections.
 - `javascript:`/`data:` never reach built HTML (Zod and render).
 - Unresolved nav items skipped per locale.
 - Existing URL set and header/footer links identical on the existing install (built-HTML
