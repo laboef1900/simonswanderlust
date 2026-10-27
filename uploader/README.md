@@ -260,6 +260,9 @@ same key, including the awaited status write. Recovery re-reads the row after wa
 than admitting a stale `processing` snapshot. Re-uploading a `queue_full` photo changes only
 its status and restores its original; curated folder, localized descriptions, title, tags,
 and the saved encoding profile are retained even across repeated refusals.
+Recovery starts each admitted job immediately, so a later candidate's database read failure
+does not strand earlier admissions. The rescan still reports the error; already admitted
+photos finish independently, while remaining `processing` photos can recover on a later rescan.
 
 Three consequences worth knowing:
 

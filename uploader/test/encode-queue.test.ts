@@ -284,6 +284,21 @@ describe('createEncodeQueue', () => {
     expect(await store.get('done')).toMatchObject({ status: 'ready' });
   });
 
+  it('finishes admitted recovery work when reading a later row fails', async () => {
+    const { store, queue } = setup();
+    await seed(store, ['x', 'y']);
+    const get = store.get.bind(store);
+    store.get = async (key) => {
+      if (key === 'y') throw new Error('lookup unavailable');
+      return get(key);
+    };
+    await expect(queue.recover()).rejects.toThrow('lookup unavailable');
+    await tick();
+    expect(await get('x')).toMatchObject({ status: 'ready', variantBytes: 123 });
+    expect(await get('y')).toMatchObject({ status: 'processing' });
+    await queue.idle();
+  });
+
   it('recovery waits for same-key rollback and discards its stale processing snapshot', async () => {
     const store = memoryMediaStore({ baseUrl: BASE });
     await seed(store, ['orphan']);

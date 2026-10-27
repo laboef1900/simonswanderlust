@@ -270,6 +270,9 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
             if (inFlight.has(item.key) || pending.includes(item.key) || pending.length >= maxBacklog) return;
             pending.push(item.key);
             n++;
+            // A later row read can fail; admitted work must not depend on
+            // the rest of this recovery scan succeeding.
+            pump();
           });
         }
         if (n > 0) log(`encode queue: recovered ${n} unfinished upload(s)`);
@@ -277,7 +280,6 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
         // is picked up by the next reconcile pass (POST /media/rescan or a
         // restart) — NOT by POST /media/retry, which skips `processing` rows.
         if (total > n) log(`encode queue: ${total - n} more still pending — re-run recovery after this batch`);
-        pump();
         return n;
       })();
       recoveries.add(recovery);
