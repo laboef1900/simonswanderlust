@@ -339,6 +339,13 @@ and may increase provider charges and latency; the chosen model must support it.
 This does not toggle thinking or change the separate caption timeout. Existing settings
 files without the field use 8,000; saved values survive restart.
 
+Alt-text suggestions discard case-insensitive `<think>…</think>` blocks, including
+an unfinished block through the end of the reply. A `finish_reason: "length"` reply
+is refused even if it contains valid-looking caption JSON. Hero/body fields and
+hosted-gallery alt text retain their existing value on refusal; the token-limit
+hint names **Maximum output tokens** rather than suggesting a connection problem.
+Gallery suggestions still require explicit acceptance before changing Markdown.
+
 Non-secret settings (`aiProviders`, `aiDefaultProviderId`, `captionProviderId`, `lmModel`,
 `captionTimeoutMs`, `captionMaxTokens`, `captionMaxEdge`, `captionPrompt`) live in settings.json.
 Authenticated `GET /ai-config?purpose=caption` resolves `captionBaseUrl` and provides

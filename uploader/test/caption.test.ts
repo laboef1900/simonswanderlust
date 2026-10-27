@@ -73,6 +73,21 @@ describe('parseCaption', () => {
     const alt = 'x'.repeat(MAX_ALT - 1) + '😀';
     expect(parseCaption(JSON.stringify({ altEn: alt, altDe: 'B' })).altEn).toBe('x'.repeat(MAX_ALT - 1));
   });
+
+  // #351: a reasoning model may draft the JSON while thinking; only the final
+  // answer counts, and a thought cut off mid-way is not an answer.
+  it('takes the final answer over a draft inside a closed think block', () => {
+    const reply = '<think>Draft: {"altEn":"draft guess","altDe":"Entwurf"} but wait, the sign says</think>\n' +
+      '{"altEn":"final answer","altDe":"endgültige Antwort"}';
+    expect(parseCaption(reply)).toEqual({ altEn: 'final answer', altDe: 'endgültige Antwort' });
+    expect(parseCaption(reply.replace(/think>/g, 'THINK>'))).toEqual({ altEn: 'final answer', altDe: 'endgültige Antwort' });
+  });
+
+  it('refuses a reply whose only caption sits in an unclosed think block', () => {
+    expect(() => parseCaption('<think>Draft: {"altEn":"draft guess","altDe":"Entwurf"} but wait, the sign actually'))
+      .toThrow(CaptionError);
+    expect(() => parseCaption('<think>first</think> prose <think>{"altEn":"A","altDe":"B"}')).toThrow(CaptionError);
+  });
 });
 
 describe('DEFAULT_PROMPT', () => {
