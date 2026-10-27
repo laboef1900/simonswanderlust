@@ -312,9 +312,15 @@ describe('POST /upload', () => {
     expect((await b.app.inject({ method: 'GET', url: `/${key}-orig.jpg.part-0a1b2c3d`, headers: img })).statusCode).toBe(404);
     expect((await b.app.inject({ method: 'GET', url: `/${key}-1280.webp.part-0a1b2c3d`, headers: img })).statusCode).toBe(404);
     for (const suffix of ['-orig.jpg', '-orig.jpg.part-0a1b2c3d', '-1280.webp.part-0a1b2c3d']) {
+      const privateBytes = readFileSync(join(dir, `${key}${suffix}`));
       for (const prefix of ['//', '/./', '/x/../', '/x/%2e%2e/']) {
         const url = `${prefix}${key}${suffix}`;
-        expect((await b.app.inject({ method: 'GET', url, headers: img })).statusCode, url).toBe(404);
+        const denied = await b.app.inject({ method: 'GET', url, headers: img });
+        // Static 10 rejects ambiguous path syntax with 403 before allowedPath;
+        // canonical private files still 404 above. Either refusal protects the
+        // boundary, but a redirect, success or server error must never pass.
+        expect([403, 404], url).toContain(denied.statusCode);
+        expect(denied.rawPayload.includes(privateBytes), url).toBe(false);
       }
     }
   });
