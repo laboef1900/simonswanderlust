@@ -1,12 +1,12 @@
 # Issue #369: patch the production dependency locks without breaking proxy trust
 
-**Status: PROPOSED. Waiting for owner approval.** Nothing in this document is approved. Under
-`CLAUDE.md` this is **high risk** in two places. The uploader half changes proxy trust, which feeds
-the auth rate limiter, the session cookie's `Secure` flag, the public comment limiter and the GPX
-Origin check. The site half changes the Markdown renderer behind the body-HTML render path,
-the draft preview and the publish gate. Before implementation, this issue or this file needs four
-things on record: explicit owner approval, answers to the §11 decisions, the SECURITY.md
-reconfirmation in §9, and acceptance of the rollback plan in §10.
+**Status: OWNER APPROVED, 2026-10-27.** The owner selected **“Approve documented host-proxy
+topology”** for PR #404 at `fad862fff4e8fcba5fe4c8c6ccf558b3e65ac185`. This authorizes the
+dependency and explicit immediate-peer trust contract for a single host TLS proxy, without a
+CDN or extra proxy hop, including fail-closed gateway discovery. Under `CLAUDE.md` this remains
+high risk: proxy trust feeds rate limits, Secure cookies and GPX Origin checks; the site
+toolchain feeds the sanitized body renderer. SECURITY.md reconfirmation and all §7 checks
+remain implementation requirements. No release, deployment or production topology change is authorized.
 
 Baseline: `origin/dev` @ `11e16d1b8e43141d296b801ee663a351ae3fe415`, app version `0.17.1`.
 Related: #347 (sharp). It lands first; see §8.
@@ -413,6 +413,10 @@ affected (Golden Rule 2).
 - The locks are the source of truth. A revert commit restores the exact previous resolution, and
   `npm ci` reproduces it.
 
+Any recovery image must retain #347's patched codec floors: the owner approved that upgrade
+**roll-forward only**. The previous `0.17.1` image is therefore not an authorized rollback target.
+If no suitable patched image exists, fix forward without weakening proxy or output-safety controls.
+
 ## 11. Owner decisions to batch
 
 - **D1. A gateway that cannot be discovered under `docker-gateway`.** **Recommended:** refuse boot (§5).
@@ -435,6 +439,17 @@ affected (Golden Rule 2).
 - **D6. @fastify/static lock version.** **Recommended:** range `^10.1.7`, lock 10.1.8. 10.1.8 is a
   docs-only delta with SLSA provenance, published 2026-10-27. Alternative: hold the lock at 10.1.7
   (2026-10-21) under a minimum-release-age policy.
+
+### Approval record and workflow interpretation
+
+- **Approver/date:** repository owner, interactive implementation session, 2026-10-27.
+- **Evidence:** **“Approve documented host-proxy topology”**, linked to PR #404 at
+  `fad862fff4e8fcba5fe4c8c6ccf558b3e65ac185`.
+- The recommended security/dependency contract is approved, including D1/D2/D3/D5/D6.
+- D4 is executed as one focused issue PR with separately reviewable uploader/site commits,
+  following the owner's one-issue branch/worktree workflow; neither half is omitted.
+- #347 must be the prerequisite; its roll-forward-only codec constraint applies here too.
+
 
 ## 12. Evidence sources
 
