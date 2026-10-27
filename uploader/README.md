@@ -249,6 +249,13 @@ longer complete for its original's width — and then `encodeQueue.recover()` re
 from `status = 'processing'`). Variant and original files are written atomically (temp +
 rename), so a crash never leaves a truncated file under a final name.
 
+The backlog admits at most 200 waiting jobs, in addition to the two running jobs. When an
+upload receives **429** because that backlog is full, a new photo keeps its original as
+`failed` / `queue_full`, not stranded `processing`; an existing photo's prior status/error is
+restored unless another request already admitted or completed its job. Once capacity returns,
+**Retry** or re-uploading the same bytes encodes the retained photo. Re-upload also repairs an
+older orphan `processing` row by enqueueing it when no active job owns the key (#348).
+
 Three consequences worth knowing:
 
 - **Publishing is gated on encode state.** A post referencing a photo that is not yet `ready` is

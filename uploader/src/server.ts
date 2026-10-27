@@ -12,7 +12,7 @@ import { contentHashKey, storeOriginal, heroSnippet, assertSafeKey } from './sto
 import { deleteMedia, imageUsage, VARIANT_FILE_RE } from './media-files.js';
 import {
   libraryKey, redactForNonAdmin, MediaStoreError, assertSafeFolder,
-  type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
+  type MediaError, type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
 } from './media-store.js';
 import { BacklogFullError, type EncodeQueue } from './encode-queue.js';
 import type { WorkLock } from './work-lock.js';
@@ -400,6 +400,26 @@ export function buildServer(cfg: ServerConfig): AppServer {
   const MAX_BULK_KEYS = 100;
 
   /**
+   * Move a `processing` row that nothing will encode — its enqueue was refused
+   * or its original could not be written — to `s`, resolving whether this
+   * caller's write landed (#348).
+   *
+   * @ai-warning Both guards are load-bearing. A key the queue holds was queued
+   * by a concurrent request in the meantime — its job owns the row, so leave
+   * it `processing`. And the write is compare-and-set on `processing`: it is
+   * async, so an unconditional write could land after a concurrent same-key
+   * encode already recorded `ready` and turn an encoded photo back into
+   * `failed`. Losing the CAS means another writer settled the row.
+   */
+  const releaseUnqueued = async (key: string, s: MediaStatus, e?: MediaError): Promise<boolean> => {
+    if (cfg.encodeQueue.isActive(key)) return false;
+    return cfg.media.setStatusIfProcessing(key, s, e).catch((err: unknown) => {
+      console.error(`could not roll back status for ${key}:`, err);
+      return false;
+    });
+  };
+
+  /**
    * Single-file upload. The request returns as soon as the untouched ORIGINAL
    * is on disk; the AVIF/WebP variants encode in the background queue.
    *
@@ -523,7 +543,38 @@ export function buildServer(cfg: ServerConfig): AppServer {
       });
     }
     if (existing && existing.status === 'processing') {
-      // Do NOT re-enqueue: the job is already in the queue.
+      // #348: `processing` does NOT prove a job is queued. A row stranded by a
+      // crash, or by a 429 from before the rollback below existed, has nothing
+      // behind it — and answering "duplicate, processing" then left the author
+      // believing it was encoding while Retry and Delete both skip the row.
+      // enqueue() is idempotent, so only a key the queue does not hold is
+      // offered again. This request rewrites the original first: the row may
+      // belong to a concurrent upload still inside its storeOriginal, and a job
+      // started before those bytes landed would fail as `decode_failed`. Same
+      // bytes under the same content-hash key, written atomically, so racing
+      // writers converge on one file.
+      if (!cfg.encodeQueue.isActive(versionedKey)) {
+        try {
+          await storeOriginal(versionedKey, buf, probe.ext, { storageDir, ...runtime });
+        } catch (e) {
+          // Settle a row nothing will encode — unless a concurrent request
+          // has queued it meanwhile (releaseUnqueued's guards).
+          await releaseUnqueued(versionedKey, 'failed', 'write_failed');
+          console.error(`could not store the original for ${versionedKey}:`, e);
+          return reply.code(500).send({ error: 'internal server error' });
+        }
+        try {
+          cfg.encodeQueue.enqueue(versionedKey);
+        } catch (e) {
+          if (!(e instanceof BacklogFullError)) throw e;
+          // Never a false success, and never `processing` with nothing queued:
+          // the row becomes a retryable `queue_full` failure. If it belongs to
+          // a concurrent upload that then enqueues after all, that job's own
+          // `ready` supersedes this.
+          await releaseUnqueued(versionedKey, 'failed', 'queue_full');
+          return reply.code(429).send({ error: e.message });
+        }
+      }
       return reply.send({
         src, key: versionedKey, width: existing.width, height: existing.height,
         status: 'processing', duplicate: true, folder: existing.folder,
@@ -553,11 +604,26 @@ export function buildServer(cfg: ServerConfig): AppServer {
       console.error(`could not store the original for ${versionedKey}:`, e);
       return reply.code(500).send({ error: 'internal server error' });
     }
+    // @ai-warning A refused enqueue MUST NOT leave the row `processing` (#348):
+    // nothing is queued for it, /media/retry skips it, DELETE refuses it and the
+    // publish gate blocks every post using it until a reconcile pass. Like
+    // /media/retry, a pre-existing row gets its own status and error back. A
+    // NEW key is marked `failed` (`queue_full`) rather than removed with its
+    // original: a concurrent upload of the same bytes can be past its own
+    // `existing` check and about to write the original and enqueue, and
+    // deleting the row or the shared original under it would turn its 200 into
+    // a vanished photo. The failed row keeps the original, so Retry, Delete,
+    // and a re-send of the same bytes all work once the backlog drains.
     try {
       cfg.encodeQueue.enqueue(versionedKey);
     } catch (e) {
-      if (e instanceof BacklogFullError) return reply.code(429).send({ error: e.message });
-      throw e;
+      if (!(e instanceof BacklogFullError)) throw e;
+      await releaseUnqueued(
+        versionedKey,
+        existing ? existing.status : 'failed',
+        existing ? existing.error ?? undefined : 'queue_full',
+      );
+      return reply.code(429).send({ error: e.message });
     }
     return reply.send({
       src, key: versionedKey, width: probe.width, height: probe.height,
@@ -701,7 +767,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // The flip has to come FIRST despite that, not after a successful enqueue:
   // the queue can start the job immediately, and a fast encode would then
   // write `ready` before our write landed, leaving the row stuck at
-  // `processing` after a perfectly successful encode.
+  // `processing` after a perfectly successful encode. The rollback itself goes
+  // through releaseUnqueued, so it can never undo a concurrent `ready`.
   app.post('/media/retry', { preHandler: requireAuth }, async (req, reply) => {
     const b = (req.body ?? {}) as { keys?: unknown };
     const keys = Array.isArray(b.keys) ? b.keys.map(String).slice(0, MAX_BULK_KEYS) : [];
@@ -715,8 +782,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       try {
         cfg.encodeQueue.enqueue(key);
       } catch (e) {
-        await cfg.media.setStatus(key, item.status, item.error ?? undefined)
-          .catch((err) => console.error(`could not restore status for ${key}:`, err));
+        await releaseUnqueued(key, item.status, item.error ?? undefined);
         if (e instanceof BacklogFullError) return reply.code(429).send({ error: e.message, queued });
         throw e;
       }
