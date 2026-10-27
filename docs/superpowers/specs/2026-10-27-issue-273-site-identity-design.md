@@ -34,7 +34,7 @@ that cites that row ID changes with it.
 | **O8** | Where logo/favicon bytes live (decision 6) | **`site_identity_assets` (bytea, ≤ 256 KiB per row, in dumps).** The build copies them into each release under `/_identity/` (§9.4) | Media library key on the image host; a `/data/identity/` directory (outside dumps and the images archive) |
 | **O9** | Social links (decision 7) | **≤ 6 links**, `https:` only, admin-chosen plain-text label (1–40 characters, shared across locales), rendered `target="_blank" rel="noopener noreferrer"` exactly as today (§10) | Add `rel="me"` (useful for Mastodon verification, but it changes the existing install's markup, so the owner must accept that); allow `mailto:`; a platform allow-list |
 | **O10** | Does saving identity rebuild the site? (decision 8) | **Persist only**, following the comments-switch precedent. The response and UI say "public site updates at the next Publish or Rebuild"; Settings offers an admin **Rebuild site now** button. The comment Origin check and author-reply name take effect immediately (§11) | Auto-rebuild on save (each save holds the exclusive lock for up to 15 minutes and preempts encodes) |
-| **O11** | Legacy WordPress redirects (decision 5) | **Stay unconditional.** They are root-relative and domain-independent (§8.3) | Gate them behind an "imported from WordPress" flag |
+| **O11** | Legacy WordPress redirects (decision 5) | **Unconditional with respect to identity/domain and WordPress-install provenance.** Language-layout eligibility follows #283; eligible category redirects remain even when their region is empty (§8.3) | Gate them behind an "imported from WordPress" flag |
 | **O12** | Simon-specific code defaults (decision 5) | The compose `PUBLIC_BASE_URL`/`IMG_HOST` defaults become `:?` in **#293** (owner decision of 2026-10-19, already recorded there). **#276** changes the code fallbacks in `main.ts:76`, `cli.ts:404` and `site/src/lib/images.ts:60` to the neutral `http://localhost:3000`. `.env.example` keeps the owner's hosts as *examples* until #293 rewrites it. No new `.env` knob (§8.4) | Make `PUBLIC_BASE_URL` mandatory in code too (bare `npm run dev` stops working without an env file); keep the Simon fallbacks |
 | **O13** | Product token in outbound identification (Nominatim `User-Agent`, OpenRouter `X-Title`) | `User-Agent: <token>/<app version> (+<canonical origin>; editor location lookup)`. The software token is #291's decision; until #291 decides, the token stays `SimonsWanderlust`, allow-listed under #291. `X-Title` = the site name when it is printable Latin-1, otherwise omitted (§8.5) | Use the site name as the UA product token (not a product identifier, and it changes whenever the owner renames the blog) |
 | **O14** | Live finding F1: the live author-reply path publishes the admin's **login username** | #274 switches the live path to the identity author name. The owner decides whether F1 also gets its **own bug issue** now, so it does not wait on the #273 approval (§2.2) | Leave it inside #274 |
@@ -228,9 +228,9 @@ changes. The DB `CHECK`s are a backstop; the authoritative rules are the shared 
    that #296's inventory could only warn about, not prevent.
 2. **Consistency with #283.** The #283 proposal (worktree `simonswanderlust-issue-283`, peer
    coordination 2026-10-27) puts the language mode in a Postgres singleton `site_language`
-   inside the dump, because it decides published URLs. Per-locale identity values are keyed by
-   that mode's enabled locales (§5.2). Keeping both in the same restore unit means a restore can
-   never pair one dump's language mode with another install's identity.
+   inside the dump, because it decides published URLs. Per-locale identity maps retain
+   supported DE/EN values; enabled locales select their active projection (§5.2). Keeping
+   both in the same restore unit prevents pairing another install's mode with this identity.
 3. **Seeding is atomic with its evidence.** The fresh-vs-existing check (§12) reads `users` and
    `posts` in the same database, inside one statement.
 4. **Assets get dump coverage for free** (O8). `settings.json` cannot hold binary assets, and a
@@ -301,17 +301,28 @@ never from a seed (§12.1).
 
 ### 5.2 Per-locale shape and single-language installs
 
-A per-locale value is `{ de?: string; en?: string }`. Its **only** valid keys are the install's
-**enabled locales**. Until #283 lands, that set is the fixed `['de','en']`. After #283, it is
-read from #283's language config, in the same build snapshot (§6.1).
+A **stored locale map** is `{ de?: string; en?: string }`. Only `de` and `en` are valid
+keys, regardless of which locales are enabled. Every present value, including an inactive
+one, must pass the same type, normalization and length rules (§5.3). Disabled does not mean
+unvalidated. Neither key is required, and validation never manufactures a missing key.
 
-- A one-locale install stores and renders **exactly one** value per per-locale field. The form
-  shows one input. Nothing requires, stores or renders an empty second locale.
-- A value for a locale that is not enabled is **kept but never rendered or validated as
-  required**. If #283 ever allows a mode change, switching back restores it. This decision does
-  not depend on how #283 resolves mode changes.
-- A missing value for an enabled locale renders that field's "empty means" behaviour (§5.1).
-  It is never a build error.
+The **active projection** contains only enabled-locale keys. Until #283 lands, enabled
+locales are fixed at `['de','en']`; afterwards they come from its language config, read
+with identity in the same build snapshot (§6.1).
+
+- A fresh one-locale install needs only that locale's value per field; it never needs an
+  empty second-locale placeholder. The form shows exactly one input per field.
+- Disabling a locale does not delete its stored values. They are absent from rendered
+  output, the build snapshot and the active editor projection. Re-enabling that locale
+  reveals its retained values, subject to #283's permitted transitions.
+- An active-form save replaces only enabled-locale values. Omitted enabled keys become
+  absent (and use the field's fallback); inactive stored keys are copied unchanged from
+  the current row, never from the client's projection. Shared fields keep their normal
+  replacement semantics. A request containing inactive-locale keys is refused with
+  `invalid_identity`, not allowed to overwrite hidden values. Reopening the form after
+  a language change supplies the new active projection.
+- A missing or empty enabled value renders that field's "empty means" behaviour (§5.1).
+  It is never a build error. No enabled locale falls back to another locale's retained text.
 
 ### 5.3 Validation: one validator for both trees
 
@@ -319,9 +330,10 @@ The shape and rules live in **one pure, `astro:`-free module, `site/src/lib/site
 The uploader imports it (precedent: `gallery-layout.ts`, §2.1), so the two trees cannot drift.
 That is the trap the `ImageMeta`/`ImageDims` `@ai-warning` in CLAUDE.md describes. It exports:
 
-- `normalizeIdentity(input: unknown): Identity`, which throws `IdentityError { field, code }`;
+- `normalizeIdentity(input: unknown): Identity`, which validates the full stored shape,
+  including all retained DE/EN values, and throws `IdentityError { field, code }`;
 - `parseIdentitySnapshot(json: string | undefined): IdentitySnapshot`, used by the build
-  (§6.2).
+  (§6.2). It uses the same field rules and requires projected keys to belong to `locales`.
 
 Rules, applied in this order to every text field:
 
@@ -336,6 +348,12 @@ Rules, applied in this order to every text field:
 
 The result is stored and rendered as **plain text only**.
 
+Stored rows and restore input use `normalizeIdentity` without an enabled-key restriction.
+Build and public/admin projections are derived only after full stored-value validation.
+The save route separately enforces the active request keys, merges the current inactive
+values (§11.1), then validates the complete result with this same validator. Unknown locale
+keys, non-object maps and non-string values are rejected in every path.
+
 ---
 
 ## 6. Decision 2: build propagation
@@ -346,7 +364,7 @@ Inside `runOnce` → `lock.runExclusive`, before `buildAndDeploy` starts the chi
 
 1. reads `site_identity` and `site_identity_assets` in one `REPEATABLE READ` transaction
    (together with #283's `site_language` once it exists);
-2. serializes the **build snapshot**:
+2. validates the complete stored identity, then serializes its enabled-locale **projection**:
    ```ts
    interface IdentitySnapshot {
      v: 1;
@@ -514,14 +532,22 @@ to today's file with the origin substituted.
 
 ### 8.3 Legacy WordPress redirects (O11)
 
-`uploader/src/redirects.ts` stays **unconditional**:
+Identity settings and canonical-origin changes **never gate, add, remove or retarget** entries
+in `uploader/src/redirects.ts`. There is no "imported from WordPress" flag. The root-relative
+targets are domain-independent. **#283 alone governs language-layout eligibility**:
 
-- its targets are root-relative paths (`/rss.xml`, region pages), so they are
-  domain-independent;
-- they map URL shapes that a non-WordPress install never receives;
-- a 301 to an existing route is harmless.
+- **DE+EN, DE-primary:** all 18 existing entries retain their exact targets.
+- **DE-only:** the 9 DE entries retain their exact targets; EN entries are inactive.
+- **EN-primary bilingual or EN-only:** no legacy entries are active. The known WordPress
+  map is DE-primary, not a generic map to whichever language occupies root.
 
-Gating them would add state that nothing reads.
+Eligibility concerns the target's **locale namespace and reserved route family**, not whether
+a target file was emitted by the current build. In particular, the existing category
+redirects stay active in an eligible namespace even when the region has no published stories:
+the 301 may lead to a 404, exactly as documented in `redirects.ts:52–54`. No content-count,
+filesystem or target-existence check is introduced. Reserving the route family does not
+require generating an empty region page. Before #283 lands, the current fixed DE-primary
+bilingual layout keeps all entries. Domain changes do not alter this result in any mode.
 
 ### 8.4 Defaults (O12)
 
@@ -659,9 +685,13 @@ No new `.env` variable is introduced anywhere in this contract.
 ### 11.1 Routes (all JSON responses `Cache-Control: no-store`)
 
 - `GET /settings/identity`, `requireAdmin` →
-  `{ revision, savedAt, seedSource, identity, locales }`.
+  `{ revision, savedAt, seedSource, identity, locales }`, where `identity` exposes shared
+  fields and only the active localized projection (§5.2).
 - `PUT /settings/identity`, `requireAdmin`, body `{ revision, identity }`:
-  - validated by `normalizeIdentity` (§5.3) plus the origin rules (§7.2);
+  - the request's localized keys must be enabled; merge its active projection with the
+    current row's inactive values in the identity-write transaction, under the existing
+    revision check. Never replace a full stored locale map with the form's partial map;
+  - validate the merged full identity with `normalizeIdentity` (§5.3) plus §7.2;
   - 400 `{ code: 'invalid_identity', field }` with a fixed message per code. A supplied value
     is never echoed;
   - 409 `{ code: 'identity_conflict' }` when `revision` is stale. This is optimistic
@@ -674,10 +704,10 @@ No new `.env` variable is introduced anywhere in this contract.
 ### 11.2 Public subset
 
 `GET /admin/editor-image-copy.js` (unauthenticated, because the login page needs it) adds
-`window.SiteIdentity = { siteName, studioDescriptor, canonicalOrigin }`. These values are
-already public on the blog. The author name, social links and assets are not included. The
-payload is built with `JSON.stringify` into a JavaScript response, and every consumer paints it
-with `textContent`.
+`window.SiteIdentity = { siteName, studioDescriptor, canonicalOrigin }`. The localized
+descriptor is the enabled-locale projection, never a copy of inactive stored values. The
+author name, social links and assets are not included. The payload is built with
+`JSON.stringify` into a JavaScript response, and every consumer paints it with `textContent`.
 
 ### 11.3 Effect timing (stated in the UI)
 
@@ -791,12 +821,16 @@ Identity rows are part of the `REPEATABLE READ` dump snapshot.
 
 ### 13.2 Restore
 
-- **New dump:** validate every identity field with `normalizeIdentity` and §7.2. Validate
-  every asset by its `CHECK`s, re-hash it, and confirm it decodes as a PNG within its role's
-  dimensions. **Any violation refuses the whole restore** with a `BackupError` naming the
-  field. A crafted dump is the realistic attacker here; refusing is safer than repairing
-  (unlike comments, where row-level demotion keeps reader data). Then replace both tables in
-  the content-restore transaction.
+- **New dump:** `readDump` validates every identity field with the same full-storage
+  `normalizeIdentity` used by saves/builds, plus §7.2, before any destructive restore work.
+  Valid retained DE/EN values are accepted regardless of the dump's enabled locales or the
+  destination's current mode; unknown keys and malformed inactive values are refused.
+  Restore replaces the complete maps, not just an active projection. Validate every asset
+  by its `CHECK`s, re-hash it, and confirm it decodes as a PNG within its role's dimensions.
+  **Any violation refuses the whole restore** with a `BackupError` naming the field.
+  A crafted dump is the realistic attacker here; refusing is safer than repairing (unlike
+  comments, where row-level demotion keeps reader data). Then replace both tables in the
+  content-restore transaction, together with language metadata when #283 is installed.
 - **Dump v≤10 (O3):** replace the identity with the §12.2 legacy values, `seed_source =
   'restored-legacy'`, `saved_at = NULL`, no assets, and keep the live `canonical_origin` if one
   is set. The CLI's summary prints "identity: restored legacy brand (dump predates identity).
@@ -954,8 +988,19 @@ joins #296's operator-managed `settings.json` row, and #295's rehearsal must res
 - a fresh-install `dist/` + served-admin-HTML scan with the committed #291 allow-list;
 - a `GET /comments` route test showing an author reply carries `authorName`, never the admin
   username, with existing rows unchanged (`comments.test.ts:93` updated, not deleted);
-- dump/restore round trip, including v10 → `restored-legacy`;
-- a single-locale-config unit test of §5.2;
+- dump/restore round trip, including v10 → `restored-legacy`, and a single-language dump
+  retaining valid values for the disabled locale; restore preserves those values even into
+  a destination with a different mode, with language metadata following #283;
+- shared save/build/restore validation cases: valid inactive DE/EN values accepted; unknown
+  locale keys, malformed maps, non-string or oversized inactive values refused (failed
+  restore leaves all live rows unchanged);
+- both DE-only and EN-only fresh identity forms/snapshots have no second-locale placeholder;
+  test missing enabled values use §5.1 fallbacks rather than another locale's text;
+- transition regression (where #283 permits it): configure bilingual values → disable a
+  secondary → save active identity → dump/restore → re-enable. Assert inactive stored text
+  survives unchanged, stays absent from editor/public/build projections while disabled,
+  and returns on re-enable. Cover active key omission/clearing, inactive request-key refusal,
+  stale identity revision refusal and active-only payloads not wiping retained keys;
 - a browser smoke of the Settings tab and a built story page.
 
 **#275:**
@@ -977,6 +1022,11 @@ joins #296's operator-managed `settings.json` row, and #295's rehearsal must res
 - §7.2 validation cases (prefix, userinfo, IDN, path, IP, image-origin equality);
 - unconfigured `noindex`/`robots.txt`;
 - `robots.txt` bytes for the legacy seed;
+- redirect matrix under all four #283 modes: change identity and configured/unconfigured
+  canonical origin without changing eligible entries, exact targets or 301 behavior;
+  eligible empty-region category redirects remain 301s even though their targets 404;
+  disabled namespaces never redirect to another locale's feed. Dump/restore of language
+  metadata restores that mode's eligibility, while identity restoration alone never gates it;
 - the UA and `X-Title` rules;
 - a real browser comment POST through a reverse proxy on two hostnames.
 
@@ -1065,3 +1115,7 @@ joins #296's operator-managed `settings.json` row, and #295's rehearsal must res
 - **Still separate:** #291's software/content/brand-rights decisions, #319's independent origin
   fix approval, and any newly discovered issue such as F1. No release, deployment or owner-content
   mutation is authorized by this record.
+- **Independent-review corrections (2026-10-27, PR #405 F1/F2):** stored-vs-active locale
+  semantics and #283 precedence for redirects clarify the approved contract; they are not
+  new owner decisions or a claim of a clean independent review. The original approval
+  above remains the evidence; no additional approval or owner URL migration is inferred.
