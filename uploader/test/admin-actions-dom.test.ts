@@ -472,6 +472,227 @@ describe('posts.html selection, recovery and disclosures', () => {
 });
 
 describe('comments.html moderation view', () => {
+  const comment = (id: string) => ({
+    id, name: id, isAuthor: false, translationKey: 'tk1', locale: 'de',
+    createdAt: '2026-09-29T04:56:50Z', status: 'pending', body: 'Hallo',
+  });
+  interface CommentResponse {
+    status: number;
+    ok: boolean;
+    json(): Promise<unknown>;
+  }
+  const response = (data: unknown = {}): CommentResponse => ({
+    status: 200, ok: true, json: async () => data,
+  });
+  function commentsPage(fetch: (url: string, options: { method: string; body?: string }) => Promise<unknown>) {
+    const page = loadPage('public/comments.html', { fetch });
+    const doc = page.ctx.document as Element & {
+      body: Element; activeElement: Element; createElement: () => Element;
+    };
+    doc.body = element();
+    doc.activeElement = doc.body;
+    doc.createElement = () => {
+      const node = Object.assign(element(), {
+        selectionStart: 0, selectionEnd: 0, selectionDirection: 'none',
+        setSelectionRange(start: number, end: number, direction: string) {
+          this.selectionStart = start;
+          this.selectionEnd = end;
+          this.selectionDirection = direction;
+        },
+      });
+      node.focus = () => { doc.activeElement = node; };
+      return node;
+    };
+    page.el('statusFilter').focus = () => { doc.activeElement = page.el('statusFilter'); };
+    page.el('statusFilter').value = 'pending';
+    const load = vm.runInContext('load', page.ctx) as () => Promise<void>;
+    const row = (id: string) => {
+      const node = page.el('list').children.find((child) => child.children[0]?.children[0]?.textContent === id);
+      if (!node) throw new Error('Missing comment ' + id);
+      const form = node.children.find((child) => child.className === 'comment-reply');
+      if (!form) throw new Error('Missing reply form ' + id);
+      const ta = form.children[0] as Element & {
+        selectionStart: number; selectionEnd: number; selectionDirection: string;
+        setSelectionRange(start: number, end: number, direction: string): void;
+      };
+      const send = form.children[1];
+      const actions = node.children.find((child) => child.className === 'comment-actions');
+      if (!ta || !send || !actions) throw new Error('Missing comment controls ' + id);
+      return { form, ta, send, action: (label: string) => actions.children.find((child) => child.textContent === label)! };
+    };
+    const type = async (id: string, text: string) => {
+      const { ta } = row(id);
+      ta.value = text;
+      await ta.fire('input');
+      return ta;
+    };
+    return { ...page, doc, load, row, type };
+  }
+
+  it('keeps A’s latest draft and selection while approving B and awaiting the list', async () => {
+    const refresh = Promise.withResolvers<CommentResponse>();
+    const loading = Promise.withResolvers<void>();
+    let reads = 0;
+    const fetch = vi.fn(async (_url: string, options: { method: string }) => {
+      if (options.method === 'GET') {
+        if (++reads === 2) { loading.resolve(); return refresh.promise; }
+        return response({ comments: [comment('A'), comment('B')] });
+      }
+      return response();
+    });
+    const page = commentsPage(fetch);
+    await page.load();
+    await page.type('A', 'Thanks Anna,');
+    const approve = page.row('B').action('Approve');
+    approve.focus();
+    const pending = approve.click();
+    await loading.promise;
+    const ta = await page.type('A', 'Thanks Anna, the hike was');
+    ta.focus();
+    ta.setSelectionRange(7, 11, 'backward');
+    refresh.resolve(response({ comments: [comment('A')] }));
+    await pending;
+    expect(fetch).toHaveBeenCalledWith('/moderation/comments/B/status', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ status: 'approved' }),
+    }));
+    expect(page.row('A').ta.value).toBe('Thanks Anna, the hike was');
+    expect(page.doc.activeElement).toBe(page.row('A').ta);
+    expect(page.row('A').ta.selectionStart).toBe(7);
+    expect(page.row('A').ta.selectionEnd).toBe(11);
+    expect(page.row('A').ta.selectionDirection).toBe('backward');
+  });
+
+  it('keeps hidden drafts across views and does not steal focus from the filter', async () => {
+    const page = commentsPage(async (url) => response({
+      comments: url.endsWith('approved') ? [] : [comment('A')],
+    }));
+    await page.load();
+    await page.type('A', 'Unsent reply');
+    page.el('statusFilter').value = 'approved';
+    page.el('statusFilter').focus();
+    await page.load();
+    expect(page.el('list').children).toHaveLength(0);
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Unsent reply');
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+  });
+
+  it('sends B unchanged, clears only its successful reply, and never restores it on reload', async () => {
+    const fetch = vi.fn(async (_url: string, options: { method: string }) =>
+      response(options.method === 'GET' ? { comments: [comment('A'), comment('B')] } : {}));
+    const page = commentsPage(fetch);
+    await page.load();
+    await page.type('A', 'Still writing');
+    await page.type('B', ' Ready to publish ');
+    page.row('B').send.focus();
+    await page.row('B').form.fire('submit');
+    expect(fetch).toHaveBeenCalledWith('/moderation/comments/B/reply', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ body: ' Ready to publish ' }),
+    }));
+    expect(page.row('B').ta.value).toBe('');
+    expect(page.doc.activeElement).toBe(page.row('B').send);
+    await page.load();
+    expect(page.row('B').ta.value).toBe('');
+    expect(page.row('A').ta.value).toBe('Still writing');
+  });
+
+  it('retains failed replies and re-enables submit', async () => {
+    const page = commentsPage(async (_url, options) => {
+      if (options.method === 'POST') throw NETWORK_DOWN;
+      return response({ comments: [comment('A')] });
+    });
+    await page.load();
+    await page.type('A', 'Please keep this');
+    await page.row('A').form.fire('submit');
+    expect(page.row('A').send.disabled).toBe(false);
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Please keep this');
+  });
+
+  it('retains edits made during a successful reply request, even across an intervening reload', async () => {
+    const sent = Promise.withResolvers<CommentResponse>();
+    const page = commentsPage(async (_url, options) => options.method === 'POST'
+      ? sent.promise : response({ comments: [comment('A')] }));
+    await page.load();
+    await page.type('A', 'First reply');
+    const pending = page.row('A').form.fire('submit');
+    await page.load();
+    const ta = await page.type('A', 'Second reply in progress');
+    ta.focus();
+    ta.setSelectionRange(5, 5, 'none');
+    sent.resolve(response());
+    await pending;
+    expect(page.row('A').ta.value).toBe('Second reply in progress');
+    expect(page.doc.activeElement).toBe(page.row('A').ta);
+    expect(page.row('A').ta.selectionStart).toBe(5);
+  });
+
+  it('does not resurrect a sent draft when the follow-up list request fails', async () => {
+    let reads = 0;
+    const page = commentsPage(async (_url, options) => {
+      if (options.method === 'GET' && ++reads === 2) throw NETWORK_DOWN;
+      return response({ comments: [comment('A')] });
+    });
+    await page.load();
+    await page.type('A', 'Published once');
+    await page.row('A').form.fire('submit');
+    expect(page.el('out').textContent).toContain('Could not load comments: Failed to fetch');
+    expect(page.row('A').ta.value).toBe('');
+    await page.load();
+    expect(page.row('A').ta.value).toBe('');
+  });
+
+  it('does not clear a reply when the request redirects an expired session to login', async () => {
+    const page = commentsPage(async (_url, options) => options.method === 'POST'
+      ? { ...response(), status: 401, ok: false }
+      : response({ comments: [comment('A')] }));
+    await page.load();
+    await page.type('A', 'Not published');
+    await page.row('A').form.fire('submit');
+    expect(page.ctx.location).toEqual(expect.objectContaining({ href: '/login' }));
+    expect(page.row('A').ta.value).toBe('Not published');
+    expect(page.el('out').textContent).not.toBe('Reply published.');
+  });
+
+  it.each(['Delete', 'Spam'])('clears only the successfully %s-deleted draft', async (action) => {
+    const page = commentsPage(async () => response({ comments: [comment('A'), comment('B')] }));
+    await page.load();
+    await page.type('A', 'Keep A');
+    await page.type('B', 'Remove B');
+    await page.row('B').action(action).click();
+    // Return B again to prove its draft was removed, not merely hidden.
+    expect(page.row('A').ta.value).toBe('Keep A');
+    expect(page.row('B').ta.value).toBe('');
+  });
+
+  it.each(['cancelled', 'failed'])('keeps the draft after a %s deletion', async (outcome) => {
+    const page = commentsPage(async (_url, options) => {
+      if (options.method === 'DELETE') throw NETWORK_DOWN;
+      return response({ comments: [comment('A')] });
+    });
+    if (outcome === 'cancelled') page.ctx.AdminConfirm = { ask: async () => false };
+    await page.load();
+    await page.type('A', 'Keep A');
+    await page.row('A').action('Delete').click();
+    if (outcome === 'failed') expect(page.el('out').textContent).toContain('Failed: Failed to fetch');
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Keep A');
+  });
+
+  it('moves focus to the view filter when the focused action’s row disappears', async () => {
+    let removed = false;
+    const page = commentsPage(async (_url, options) => {
+      if (options.method === 'POST') removed = true;
+      return response({ comments: removed ? [] : [comment('A')] });
+    });
+    await page.load();
+    const approve = page.row('A').action('Approve');
+    approve.focus();
+    await approve.click();
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+  });
+
   it('switching the view clears the previous view\'s empty-state message', async () => {
     const approved = {
       id: 'c1', name: 'Reader', isAuthor: false, translationKey: 'tk1', locale: 'de',
