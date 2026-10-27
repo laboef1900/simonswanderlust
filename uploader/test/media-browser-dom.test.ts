@@ -105,6 +105,7 @@ interface Page {
   timers: { fn: () => void; cleared: boolean }[];
   listRequests: Deferred[];
   patches: { url: string; body: Record<string, unknown> }[];
+  deletions: string[];
   rows: Map<string, Item>;
   described: string[];
   confirms: string[];
@@ -132,6 +133,7 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
   const timers: { fn: () => void; cleared: boolean }[] = [];
   const listRequests: Deferred[] = [];
   const patches: { url: string; body: Record<string, unknown> }[] = [];
+  const deletions: string[] = [];
   const rows = new Map<string, Item>();
   const described: string[] = [];
   const confirms: string[] = [];
@@ -139,6 +141,12 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
   const ok = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
   const fetch = (url: string, init?: { method?: string; body?: string }): Promise<unknown> => {
     if (url.startsWith('/media/folders')) return ok([]);
+    if (init?.method === 'DELETE' && url.startsWith('/media/items/')) {
+      const key = url.slice('/media/items/'.length);
+      deletions.push(key);
+      rows.delete(key);
+      return ok({});
+    }
     if (init?.method === 'PATCH') {
       patches.push({ url, body: JSON.parse(init.body ?? '{}') as Record<string, unknown> });
       return ok({});
@@ -165,6 +173,9 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
     setTimeout: (fn: () => void) => { timers.push({ fn, cleared: false }); return timers.length; },
     clearTimeout: (id: number) => { const t = timers[id - 1]; if (t) t.cleared = true; },
     confirm: (msg: string) => { confirms.push(msg); return confirmAnswer.value; },
+    AdminConfirm: {
+      ask: async (opts: { body: string }) => { confirms.push(opts.body); return confirmAnswer.value; },
+    },
     prompt: () => null,
     console,
     FormData: class { append() {} },
@@ -195,7 +206,7 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
   vm.runInContext(dialogSrc, ctx);
   vm.runInContext(browserSrc, ctx);
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await setImmediate(); };
-  return { el, win: ctx, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush };
+  return { el, win: ctx, timers, listRequests, patches, deletions, rows, described, confirms, confirmAnswer, flush };
 }
 
 function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
@@ -590,6 +601,138 @@ describe('media-browser bulk AI dialog', () => {
     expect(page.listRequests.at(-1)!.url).toMatch(/^\/media\?/);
     page.el('aiCancel').dispatch('click');
     expect(page.el('aiDialog').open).toBe(false);
+  });
+});
+
+describe('media-browser pagination', () => {
+  function keys(page: Page): string[] {
+    return page.el('grid').querySelectorAll('.media-cell').map((cell) => cell.dataset.key!);
+  }
+
+  async function answer(page: Page, number: number, items: Item[], total: number): Promise<void> {
+    const request = page.listRequests.shift()!;
+    expect(new URL(request.url, 'https://app.example').searchParams.get('page')).toBe(String(number));
+    request.resolve({ items, total });
+    await page.flush();
+  }
+
+  async function lastPage(total: number): Promise<Page> {
+    const page = loadPage();
+    const items = Array.from({ length: total }, (_, index) => item('photo-' + index));
+    for (const row of items) page.rows.set(row.key, row);
+    await page.flush();
+    const pages = Math.ceil(total / 60);
+    for (let number = 1; number <= pages; number++) {
+      await answer(page, number, items.slice((number - 1) * 60, number * 60), total);
+      if (number < pages) {
+        page.el('nextPage').dispatch('click');
+        await page.flush();
+      }
+    }
+    return page;
+  }
+
+  async function deleteFirst(page: Page): Promise<void> {
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    page.confirmAnswer.value = true;
+    page.el('detail').querySelectorAll('.btn-remove')[0]!.dispatch('click');
+    await page.flush();
+  }
+
+  it('deletes the only photo on the last page and loads the remaining photos before rendering', async () => {
+    const page = await lastPage(61);
+    expect(keys(page)).toEqual(['photo-60']);
+    await deleteFirst(page);
+    expect(page.confirms).toHaveLength(1);
+    expect(page.deletions).toEqual(['photo-60']);
+    expect(page.rows.has('photo-60')).toBe(false);
+
+    await answer(page, 2, [], 60);
+    // The intermediate empty response must not paint a phantom page.
+    expect(keys(page)).toEqual(['photo-60']);
+    const remaining = [...page.rows.values()];
+    await answer(page, 1, remaining, remaining.length);
+    expect(keys(page)).toEqual(remaining.map((row) => row.key));
+    expect(page.el('pageInfo').textContent).toBe('Page 1 of 1');
+    expect(page.el('prevPage').disabled).toBe(true);
+    expect(page.el('nextPage').disabled).toBe(true);
+    expect(page.el('bulkTools').hidden).toBe(true);
+    expect(page.el('detail').dataset.key).toBeUndefined();
+    expect(page.el('out').textContent).toBe('Deleted.');
+    expect(page.listRequests).toHaveLength(0);
+  });
+
+  it.each([1, 61])('returns an empty result to page one from a library of %i photos', async (total) => {
+    const page = await lastPage(total);
+    await deleteFirst(page);
+    // Other photos may have disappeared concurrently.
+    await answer(page, Math.ceil(total / 60), [], 0);
+    expect(keys(page)).toEqual([]);
+    expect(page.el('pageInfo').textContent).toBe('');
+    expect(page.el('prevPage').disabled).toBe(true);
+    expect(page.el('nextPage').disabled).toBe(true);
+    expect(page.el('bulkTools').hidden).toBe(true);
+    expect(page.listRequests).toHaveLength(0);
+
+    // A subsequent reload must start at page one, not the removed page.
+    page.el('fOrder').dispatch('change');
+    await page.flush();
+    await answer(page, 1, [item('new-photo')], 1);
+    expect(keys(page)).toEqual(['new-photo']);
+    expect(page.el('pageInfo').textContent).toBe('Page 1 of 1');
+  });
+
+  it('keeps moving backwards when the count shrinks again during correction', async () => {
+    const page = await lastPage(121);
+    await deleteFirst(page);
+    await answer(page, 3, [], 120);
+    await answer(page, 2, [], 60);
+    const remaining = [...page.rows.values()].slice(0, 60);
+    await answer(page, 1, remaining, 60);
+    expect(keys(page)).toEqual(remaining.map((row) => row.key));
+    expect(page.el('pageInfo').textContent).toBe('Page 1 of 1');
+    expect(page.el('prevPage').disabled).toBe(true);
+    expect(page.el('nextPage').disabled).toBe(true);
+    expect(page.listRequests).toHaveLength(0);
+  });
+
+  it('keeps a valid corrected page when concurrent uploads grow the count', async () => {
+    const page = await lastPage(61);
+    await deleteFirst(page);
+    await answer(page, 2, [], 60);
+    const remaining = [...page.rows.values()];
+    await answer(page, 1, remaining, 62);
+    expect(keys(page)).toEqual(remaining.map((row) => row.key));
+    expect(page.el('pageInfo').textContent).toBe('Page 1 of 2');
+    expect(page.el('prevPage').disabled).toBe(true);
+    expect(page.el('nextPage').disabled).toBe(false);
+    expect(page.listRequests).toHaveLength(0);
+  });
+
+  it.each([false, true])('does not let a superseded load correct a newer view (correction started: %s)', async (correcting) => {
+    const page = await lastPage(121);
+    page.el('fOrder').dispatch('change');
+    await page.flush();
+    if (correcting) await answer(page, 3, [], 120);
+    const stale = page.listRequests.shift()!;
+
+    page.el('fStatus').value = 'ready';
+    page.el('fStatus').dispatch('change');
+    await page.flush();
+    await answer(page, 1, [item('current')], 1);
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    page.el('dAltDe').value = 'Unsaved description';
+    page.el('detail').dispatch('input');
+
+    stale.resolve({ items: [], total: 60 });
+    await page.flush();
+    expect(keys(page)).toEqual(['current']);
+    expect(page.el('grid').querySelectorAll('.media-cell')[0]!.getAttribute('aria-selected')).toBe('true');
+    expect(page.el('dAltDe').value).toBe('Unsaved description');
+    expect(page.el('pageInfo').textContent).toBe('Page 1 of 1');
+    expect(page.el('prevPage').disabled).toBe(true);
+    expect(page.el('nextPage').disabled).toBe(true);
+    expect(page.listRequests).toHaveLength(0);
   });
 });
 
