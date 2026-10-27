@@ -86,6 +86,9 @@ window.AdminConfirm = (function () {
         resolve(true);
       }
       dlg.addEventListener('close', onClose);
+      // Escape and close() without a result preserve returnValue in Firefox
+      // and Safari. Each ask must start cancelled, never reuse a prior consent.
+      dlg.returnValue = '';
       dlg.showModal();
       if (typedInput) typedInput.focus();
       else dlg.querySelector('#adminConfirmOk').focus();
