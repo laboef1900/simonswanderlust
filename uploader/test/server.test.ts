@@ -262,6 +262,23 @@ describe('POST /upload', () => {
     expect(busy.json()).toMatchObject({ duplicate: true, status: 'processing', folder: 'Iceland/South' });
   });
 
+  it.each([
+    { status: 'failed' as const, storedFolder: 'Iceland/South', dropFolder: '', expected: 'Iceland/South' },
+    { status: 'missing' as const, storedFolder: 'Iceland/South', dropFolder: 'Norway', expected: 'Iceland/South' },
+    { status: 'failed' as const, storedFolder: '', dropFolder: 'Norway', expected: 'Norway' },
+  ])('re-uploading a $status photo keeps its curated folder or fills the root', async ({ status, storedFolder, dropFolder, expected }) => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const img = await jpeg();
+    const first = await upload(b, cookie, { key: 'trips/recover/hero', folder: storedFolder }, img);
+    const key = first.json().key as string;
+    await b.media.setStatus(key, status);
+    const recovered = await upload(b, cookie, { key: 'trips/recover/hero', folder: dropFolder }, img);
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({ key, status: 'processing', folder: expected });
+    expect((await b.media.get(key))?.folder).toBe(expected);
+  });
+
   it('a duplicate reports the folder that was PERSISTED, not the one a failed best-effort patch asked for', async () => {
     const media = memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
     const failing: MediaStore = { ...media, patch: async () => { throw new Error('db down'); } };

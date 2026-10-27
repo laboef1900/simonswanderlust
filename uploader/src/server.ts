@@ -537,8 +537,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // from disk. A crash after this point leaves a deterministic processing
     // row for boot recovery instead of an origin-only orphan that has lost the
     // setting snapshot.
-    await cfg.media.upsert({
-      key: versionedKey, folder, title,
+    // Recovering identical bytes keeps a curated folder, just like ready duplicates.
+    const stored = await cfg.media.upsert({
+      key: versionedKey, folder: existing?.folder || folder, title,
       alt: { de: alt, en: alt },
       width: probe.width, height: probe.height, origBytes: buf.length,
       status: 'processing', exif, uploadedBy: req.authUser?.id ?? null,
@@ -561,7 +562,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     }
     return reply.send({
       src, key: versionedKey, width: probe.width, height: probe.height,
-      status: 'processing',
+      status: 'processing', folder: stored.folder,
       ...(format ? { format } : {}),
       snippet: heroSnippet(src, probe.width, probe.height, alt, format),
     });
