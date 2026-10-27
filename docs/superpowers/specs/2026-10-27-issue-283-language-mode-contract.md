@@ -1,10 +1,10 @@
 # Language modes and the primary-language contract (issue #283)
 
-**Status: PROPOSED — owner approval pending.** Nothing in this document is approved. It changes no
-runtime behaviour, route, rule or policy. `CLAUDE.md`, `site/src/lib/paths.ts` and
-`site/src/lib/trips.ts` are deliberately **not** amended here. Every "recommended" item is a
-proposal until the owner signs the approval record in §20. The Golden Rule 2 authorization in §4.4
-is a draft for the owner to sign or decline. It is not consent.
+**Status: OWNER APPROVED, 2026-10-27.** The owner selected **“Approve four-mode contract”**
+for PR #406 at `85ee0ddfc4eea053a0f51c1a8ad370f2e6f5aea6`, expressly including §4.4's
+Golden Rule 2 authorization. The recommended route, omitted-locale, freeze and recovery
+contract is approved. This design PR changes no runtime routes; #284/#285 must implement
+the contract, its collision guards and the rule/documentation amendments together.
 
 - **Issue:** #283 (parent epic #282). Blocks #284, #285, #287 and #308.
 - **Baseline:** `origin/dev` at `11e16d1` (after #271 and the v10 dump with private GPX archives).
@@ -187,7 +187,7 @@ owner picks it.
   never be `de` or `en`, even while the install is single-language, because adding the secondary
   locale later would then collide. Grandfathering of existing slugs follows #287.
 
-### 4.4 Golden Rule 2 — statement, draft amendment and draft authorization
+### 4.4 Golden Rule 2 — statement, authorized exception and implementation amendment
 
 **Statement.** The DE+EN DE-primary route set, and therefore every URL of simonswanderlust.com, is
 unchanged by this contract. No mode change can move it (§7). Golden Rule 2 as written
@@ -198,7 +198,7 @@ comments at `paths.ts:22-27`, `paths.ts:38-56` and `trips.ts:18`. The recommende
 EN-only modes therefore **require owner authorization and an amendment of the rule in the same
 change that ships them** (#285). This spec does not amend anything.
 
-**Draft authorization (for the owner to sign or decline in §20).**
+**Owner-authorized exception (approved through §20 on 2026-10-27).**
 > I authorize that an install whose primary language is English — DE+EN EN-primary, or EN-only —
 > serves English at the site root and, when enabled, German under `/de/`, per the route table in
 > `docs/superpowers/specs/2026-10-27-issue-283-language-mode-contract.md` §4.2. The primary language
@@ -215,8 +215,8 @@ change that ships them** (#285). This spec does not amend anything.
 - **Compensating controls:** the primary lock (§7.1) and the 409 refusals (§7.2); the reserved
   root namespace (§4.3, #287); the byte-identical DE+EN route snapshot (#285); and the URL-set
   invariant test (§7.4).
-- **Approver / date / review:** pending. Proposed review: at the first EN-primary production
-  install, or 2027-10-27, whichever comes first.
+- **Approver/date:** repository owner, interactive implementation session, 2026-10-27.
+- **Review:** at the first EN-primary production install or 2027-10-27, whichever comes first.
 
 **Draft amendment of `CLAUDE.md:105-108`** (to be applied by #285 only after the authorization is
 signed):
@@ -792,9 +792,12 @@ CREATE TABLE IF NOT EXISTS site_language (
 | O16 | `PUT /language` publishes immediately | awaits a rebuild | persist only |
 | O17 | Pre-launch fixed pages may move before the lock | accept | lock earlier (O9 alternative) |
 
-**Approval record:** not approved.
-- Approver: —
-- Date: —
-- Decisions accepted / amended: —
-- Golden Rule 2 authorization: **not signed**.
-- Review date: —
+**Approval record: approved.**
+- **Approver/date:** repository owner, interactive implementation session, 2026-10-27.
+- **Evidence:** **“Approve four-mode contract”**, linked to PR #406 at
+  `85ee0ddfc4eea053a0f51c1a8ad370f2e6f5aea6`.
+- **Decisions:** the recommended four-mode contract, including O1–O17, with no requested deviation.
+- **Golden Rule 2 authorization:** expressly approved as stated in §4.4; no existing
+  simonswanderlust.com URL or slug may be renamed.
+- **Review:** first EN-primary production install or 2027-10-27, whichever comes first.
+- Release, deployment and production/owner-content changes remain outside this authorization.
