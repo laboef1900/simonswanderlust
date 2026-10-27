@@ -1,18 +1,15 @@
 # Issue #347: upgrade sharp so untrusted AVIF and SVG input stops reaching vulnerable codecs
 
-**Status: PROPOSED. Owner approval pending.** Nothing in this document is approved. Under
-`CLAUDE.md` this is a **high-risk** change: it touches EXIF/GPS handling, the image-decode trust
-boundary and the build/publish pipeline (the release image). Before implementation, #347 or this
-file must record:
-
-- explicit owner approval of the upgrade;
-- owner acceptance of the rollback risk in §7;
-- the SECURITY.md reconfirmation in §8.
+**Status: OWNER APPROVED, 2026-10-27.** The owner selected **“Approve upgrade; roll forward
+only”** for PR #403 at `57f986a109d0ed7d8c6339723b8247cddbbe9bcb` in the implementation
+session. This authorizes the specified sharp 0.35.5/libvips 1.3.4 upgrade, not deployment or a
+rollback to vulnerable codecs. Under `CLAUDE.md` this remains high risk. Local suites and both
+candidate-image runtime checks passed (§12); final-head independent review and CI remain required.
 
 Baseline: `origin/dev` @ `11e16d1b8e43141d296b801ee663a351ae3fe415`, app version `0.17.1`.
 Related: #369, the wider production-dependency and `trustProxy` work. §9 fixes the order of the two.
 
-## 1. Problem (verified against the tree and upstream)
+## 1. Baseline problem (verified against the original tree and upstream)
 
 | Fact | Evidence |
 | --- | --- |
@@ -119,9 +116,11 @@ Edit only these files:
      `/Users/simon/localGIT/simonswanderlust-issue-347/site/package.json`. The PR states that this
      was needed; #369's Astro bump removes it.
 3. Lock review rule:
-   - The diff may touch only the `sharp`, `@img/sharp-*` and `@img/sharp-libvips-*` entries.
+   - The diff is limited to `sharp`, `@img/sharp-*`, `@img/sharp-libvips-*` and their required
+     dependency changes. `@img/sharp-wasm32@0.35.5` requires `@emnapi/runtime ^1.11.3`, so both
+     locks must advance runtime 1.11.2 → 1.11.3; retaining 1.11.2 makes `npm ci` fail.
    - `semver` and `detect-libc` may move only if npm re-dedupes them inside their existing ranges.
-   - Any other package movement is #369's scope and is backed out.
+   - Unrelated package movement remains #369's scope; no broad audit fix is part of #347.
 4. Permanent tests (behaviour, not version text):
    - `/Users/simon/localGIT/simonswanderlust-issue-347/uploader/test/pipeline.test.ts` gains AVIF
      **input** cases:
@@ -142,7 +141,8 @@ Edit only these files:
    - `/Users/simon/localGIT/simonswanderlust-issue-347/ARCHITECTURE.md`, release flow section: a
      native codec fix ships only through a new image, and the previous image's digest is recorded
      before deploying.
-   - `/Users/simon/localGIT/simonswanderlust-issue-347/CLAUDE.md`, *Project Status*: a Done entry.
+   - `/Users/simon/localGIT/simonswanderlust-issue-347/CLAUDE.md`, *Project Status*: implementation
+     evidence with an explicit release-pending qualification.
    - Historical plans are not edited.
 
 ### Rejected alternatives
@@ -243,9 +243,9 @@ docker build --platform linux/<arch> -t sw347:<arch> /Users/simon/localGIT/simon
 Use the default DHI `NODE_BUILD`/`NODE_RUNTIME`. The `node:26-slim` fallback does not count: it is
 not the shipped base. arm64 runs natively on Apple silicon; amd64 runs under emulation.
 
-The smoke script is **not committed**. It lives in a scratch directory outside the repo, is
-mounted read-only, and uses only what the image already contains (sharp,
-`/app/uploader/src/pipeline.ts`, `/app/uploader/src/exif.ts`, tsx):
+The smoke script is **not committed**. It lives in the worktree's ignored scratch directory,
+outside tracked source and owner data, is mounted read-only, and uses only image-provided
+dependencies (`sharp`, `/app/uploader/src/{pipeline,exif,variants}.ts`, tsx and Node built-ins).
 
 ```
 docker run --rm --platform linux/<arch> --network none --read-only --tmpfs /tmp --user 1000 \
@@ -306,48 +306,21 @@ loopback or private addresses, and weakening that guard is forbidden. Its decode
    directory `/app/uploader`) reports the §2 versions.
 3. Upload one real photo: the variants render, and `audit-exif` still reports zero GPS variants.
 
-## 7. Rollback and containment
+## 7. Recovery and containment: roll forward only
 
-The owner must explicitly accept the risk described here.
+The owner expressly declined authorization to restore vulnerable codecs. Recover from a
+0.35.5-specific regression with a corrected, tested image that retains the patched codec
+floors; do not downgrade to 0.35.3 or 0.35.4.
 
-**Retain the rollback image.** Before deploying, record
+There is no schema, `/data` layout or settings migration. Existing originals, variants and
+static releases remain compatible files. Preserve them and the database while diagnosing a
+failure; never re-import, wipe storage or restore content merely to undo this dependency change.
 
-```
-docker image inspect --format '{{index .RepoDigests 0}}' ghcr.io/laboef1900/simonswanderlust-app:<current IMAGE_TAG>
-```
+A previous image may be retained as diagnostic evidence, but its existence is not permission
+to deploy it. Returning to heif 1.23.1 or rsvg 2.62.90 would reintroduce the vulnerabilities,
+including in boot reconciliation and rescan of retained originals. Avoiding new uploads
+alone does not make that downgrade safe. Release and deployment remain separate owner actions.
 
-(today `0.17.1`) in the release PR. Then:
-
-- keep that GHCR version, and do not `docker image prune -a` on the server until the new image is
-  verified;
-- roll back by exact tag or digest, never by `latest` or `{major}.{minor}`, because `release.yml`
-  moves both.
-
-**It is safe for data.** There is no schema, `/data` or settings change. Restoring the old
-`IMAGE_TAG` and running `docker compose up -d` is the whole procedure. The old image serves
-variants made by 0.35.5 as ordinary files.
-
-**It knowingly reinstates the vulnerabilities.** The old image brings back heif 1.23.1 and
-rsvg 2.62.90 in both trees. While it runs:
-
-- every upload, preview, retry and WXR re-host decodes with the vulnerable libraries;
-- boot reconciliation and rescan re-parse stored originals with them. [INFERENCE: libheif header
-  parsing is inside the affected code; the advisories do not say which entry points are
-  affected.]
-
-The §6.C PIE measurement indicates how strongly the upstream RCE precondition applies to that
-image.
-
-Containment while the rollback image runs:
-
-- no WXR import;
-- no uploads or previews of images from untrusted sources;
-- non-admin author sessions revoked, if any exist;
-- no `POST /media/rescan` or `/media/retry` unless necessary;
-- a roll-forward tracked on #347.
-
-**Roll forward in preference to rollback.** Fix a 0.35.5-specific regression forward. Never return
-to 0.35.4, which still ships the vulnerable librsvg.
 
 ## 8. SECURITY.md reconfirmation (implementation PR)
 
@@ -357,7 +330,7 @@ to 0.35.4, which still ships the vulnerable librsvg.
     redeploy;
   - the codec versions the shipped image was verified with;
   - the measured PIE status of the shipped `node`;
-  - the rollback risk from §7.
+  - the roll-forward-only recovery constraint from §7.
 - The upload, import and preview authorization text stays unchanged.
 
 ## 9. Dependency contracts and ordering
@@ -375,11 +348,15 @@ DesignProxy369, the author of #369's design, has confirmed the following.
 - The site `overrides` fallback (§2), if it was used, is removed by #369's Astro bump.
 - No other open spec owns `pipeline.ts`, the locks or the Dockerfile bases.
 
-## 10. Owner decisions
+## 10. Owner approval record
 
-1. **Approve the upgrade** as specified in §2, with #347 landing before #369.
-2. **Accept the documented rollback risk** in §7: rolling back to the retained image reinstates
-   the vulnerable libheif and librsvg, with the containment listed there.
+- **Approver:** repository owner, interactive implementation session.
+- **Date:** 2026-10-27.
+- **Evidence:** the answer **“Approve upgrade; roll forward only”** to the approval question
+  linked to PR #403 at `57f986a109d0ed7d8c6339723b8247cddbbe9bcb`.
+- **Approved:** §2's upgrade in both trees, preserving formats and EXIF controls, before #369.
+- **Not authorized:** a vulnerable-codec rollback, release, deployment or decoder-policy change.
+
 
 ## 11. Evidence sources
 
@@ -404,4 +381,47 @@ DesignProxy369, the author of #369's design, has confirmed the following.
   - `uploader/test/{pipeline,server}.test.ts`;
   - `SECURITY.md` (*Published image metadata*), `ARCHITECTURE.md` (release flow) and `README.md`.
 
-No tests, builds, installs or audits were run for this proposal. The code is unchanged.
+## 12. Implementation verification, 2026-10-27
+
+- `npm ci` succeeded in both trees. `npm ls sharp` reports one 0.35.5 per tree, without a site
+  override or a direct site sharp dependency.
+- Uploader typecheck passed. Focused pipeline/server/EXIF/audit suites passed (4 files,
+  274 tests), then the complete uploader suite passed (101 files, 2,333 tests) with isolated
+  Postgres integration enabled. Site: 367 tests passed; Astro check reported zero errors,
+  warnings and hints; production build passed. Existing build notices about the map chunk and
+  empty fixture collection were not suppressed.
+- Production-only audits contain neither sharp advisory. Other vulnerabilities remain for #369:
+  uploader 3 high; site 10 high and 1 critical. In particular the Astro advisory remains at
+  Astro 7.0.6; this narrow fix does not claim to clear the whole dependency audit.
+- Both images built from the unchanged release Dockerfile and default DHI bases. Scratch files
+  and private env files were excluded from the build context. Base manifest digests:
+  `dhi.io/node:26-dev@sha256:0c199c224fbc0dd15ca49b716ab92f9ffaee604f29e9a778d84e9b4ab7e9e771`;
+  `dhi.io/node:26@sha256:dc87c509f7279f734d04036f696bf9aad1b8d66f34750f32c30c5b85e033187f`.
+
+| Candidate | Execution | Local manifest-list digest |
+|---|---|---|
+| `swl-issue347:arm64` | Native Linux ARM64 in Docker | `sha256:0182855712073db3a7cde67dccbc930523682f3ef36ca55b78f588c213c468a8` |
+| `swl-issue347:amd64` | Linux AMD64 under emulation | `sha256:0ffcb467ef23c2e4d85762ea9c50139024f639a4391e22d25fbdbdb7ba66e016` |
+
+For **each** candidate:
+
+- The network-disabled, read-only codec probe loaded the exact §2 versions from both trees,
+  measured glibc 2.41 and PIE Node (`e_type=3`), and decoded/encoded ten variants across JPEG's
+  modern/JPEG-only profiles, AVIF input and SVG input. Dimensions, representative decoded
+  pixel colours, untouched originals, SVG `png` naming and metadata privacy were asserted.
+- A dedicated Postgres 18.6 database and empty app volume booted the real `src/main.ts`.
+  Synthetic `/setup` succeeded; subsequent runs used that account's login. JPEG, AVIF and SVG
+  uploads reached `ready`; eight variants from the completed scenario returned 200 with the
+  correct MIME type and decoded pixels. Each original URL returned 404 anonymously.
+- Six quality previews (three inputs × AVIF/WebP) returned 200, correct dimensions and no EXIF.
+  Media count and stored file sizes/mtimes stayed unchanged. Rescan inserted, demoted, marked
+  missing and recovered zero rows.
+- The actual `audit-exif` CLI found 16 variants across five synthetic keys, 12 carrying allowed
+  EXIF and **zero carrying GPS**. Two JPEG keys came from earlier smoke attempts: Node fetch
+  did not apply the intended virtual-host header. The harness was corrected to use
+  `node:http` for image-host requests; a host-side fetch of the actual public-origin URL also
+  returned 200. No application change or guard relaxation was made for this harness error.
+
+Passwords/cookies were never printed; only disposable data was used. Detailed command/audit
+evidence is retained in the session's gitignored execution ledger. No image was pushed,
+released or deployed, and no owner corpus was inspected or rewritten.

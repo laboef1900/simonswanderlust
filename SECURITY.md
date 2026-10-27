@@ -343,6 +343,25 @@ multiple replicas, limits would be counted per replica.)
   consumes the body itself, so without these an authenticated caller could stream an effectively
   unbounded request. (`uploader/src/server.ts`)
 
+### Native image decoders
+
+Image decoding uses sharp's prebuilt libvips in the app image. The #347 candidate DHI builds
+were exercised on Linux ARM64 (native) and AMD64 (emulated): both application trees loaded
+sharp **0.35.5**, libheif **1.23.5**, librsvg **2.63.2** and libvips **8.18.7**. Both DHI Node
+executables were measured as PIE (`ELF e_type = DYN`) on glibc 2.41; this is hardening evidence,
+not a substitute for patched decoders. See the [approved codec specification](docs/superpowers/specs/2026-10-27-issue-347-sharp-codec-upgrade.md)
+for advisory references and verification.
+
+Changing a lockfile or rebuilding the static blog does not patch a running container. Shipping
+this fix requires a new release image and an owner-controlled redeployment. Recovery is
+**roll forward only** while retaining the patched codec floors: restoring sharp 0.35.3/0.35.4
+would reopen vulnerable decoding, including boot/rescan of retained originals. Preserve data;
+do not re-import or bulk re-encode as a dependency rollback.
+
+The metadata allow-list below, private-original restrictions, SVG original naming, accepted
+formats, and upload/import/preview authorization are unchanged. Benign JPEG, AVIF and SVG
+runtime checks retained those contracts, including EXIF-free previews and zero GPS variants.
+
 ### Published image metadata (allow-list)
 
 Public image variants carry an explicit **allow-list** of EXIF tags, built in
