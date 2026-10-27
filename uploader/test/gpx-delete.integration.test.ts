@@ -1,3 +1,4 @@
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { publishTokens } from './publish-tokens.js';
 import { createPublicTrackWorker, type PublicTrackWorker } from '../src/gpx-public-worker.js';
 import { randomUUID } from 'node:crypto';
@@ -56,6 +57,7 @@ maybe('private GPX post deletion and durable cleanup', () => {
     const media = memoryMediaStore({ baseUrl: 'https://images.test' });
     queue = createEncodeQueue({ store: media, storageDir: join(root, 'images'), lock: createWorkLock() });
     app = buildServer({
+      trustProxy: TEST_TRUST,
       storageDir: join(root, 'images'), baseUrl: 'https://images.test', imgHost: 'images.test',
       siteDir: join(root, 'site'), backupDir,
       users: pgUserStore(pool), sessions: pgSessionStore(pool), posts,

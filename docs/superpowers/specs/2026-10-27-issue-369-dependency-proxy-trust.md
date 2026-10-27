@@ -81,10 +81,23 @@ that moves in a lock diff must appear in this table or in §2, or the implemente
 | `minimatch` / `brace-expansion` (transitive) | none | 10.2.6 / 5.0.12 | `sha512-vpLQ…4Ll1A==` / `sha512-YovQ…NEimQ==` |
 | `vitest` (dev) | `^4.1.9` → `^4.1.12` | 4.1.12 | `sha512-5eWd…0NiWA==` |
 | dev transitives (vite, postcss, nanoid, source-map-js) | none | as resolved by `npm update vite postcss nanoid source-map-js` | |
+| required fastify/static transitives | upstream dependency ranges | `fast-json-stringify` 7.2.0 + its `fast-uri` 4.2.3; `@fastify/send` 4.2.0; nested `fastify-plugin` 6.0.1; `content-disposition` 3.0.0 | required by the approved new majors/ranges, not independent upgrades |
+| required Vitest family | exact upstream pins | `@vitest/{expect,mocker,pretty-format,runner,snapshot,spy,utils}` 4.1.12 | matches vitest 4.1.12 |
+| required Vite transitives | upstream dependency ranges | `picomatch` 4.0.7; `lightningcss` + platform packages 1.33.0; `rolldown` + platform bindings 1.2.15; `@oxc-project/types` 0.155.0 | Vite 8.3.5 requires these newer ranges; Rolldown no longer carries the WASI binding, removing its private `@emnapi/core`, `@emnapi/wasi-threads`, `@napi-rs/wasm-runtime`, `@tybys/wasm-util` and old nested `@emnapi/runtime` dependency chain |
 
 Commands: `npm install fastify@^5.12.7 @fastify/static@^10.1.7 && npm install -D vitest@^4.1.12 && npm update minimatch brace-expansion vite postcss nanoid source-map-js`.
 `@fastify/cookie` and `@fastify/multipart` do not move: they have no advisory, and @fastify/static 10's `fastify-plugin ^6` coexists with their `^5`.
 `allowScripts` keeps #347's `"sharp@0.35.5"`. If `esbuild` moves, the `esbuild@<ver>` key is renamed to the exact new version, and nothing else changes.
+
+Uploader implementation metadata recheck (2026-10-27): npm registry versions/integrities for
+fastify 5.12.7, static 10.1.8, minimatch 10.2.6, brace-expansion 5.0.12 and vitest 4.1.12
+agree with this contract. Fastify/static remain latest; Vitest latest is now 5.0.5, but this
+approved same-major change stays on 4.1.12. The rebased pre-install audit reported 7 high
+and 2 moderate findings across uploader production/dev dependencies (sharp already patched).
+Required dependency-range changes are listed above; unrelated refreshes of chai, tinyrainbow
+and @jridgewell/sourcemap-codec were backed out of the lock. This records metadata and intent,
+not executed application, container or topology proof. #347's sharp 0.35.5 and required
+@emnapi/runtime 1.11.3 resolution remain unchanged.
 
 **Site** (`site/package.json` + lock):
 
