@@ -216,9 +216,12 @@ article. This does not publish any draft text or change gallery order.
 **More actions → Unpublish** returns both languages to draft and rebuilds the site.
 The previous release remains visible until that rebuild succeeds; if it fails, the
 old live pages remain until a successful rebuild. After your own successful unpublish,
-you can edit and **Save draft** in the same tab without reloading. The editor adopts
-that unpublish's concurrency token, not a later writer's: a save made elsewhere,
-including while the rebuild is running, still produces the normal conflict dialog.
+you can edit and **Save draft** in the same tab without reloading, provided nobody
+else saved since the version you loaded. The editor adopts the unpublish's new
+concurrency token only when its transaction-captured predecessor matches the
+editor's current token. Unpublish still removes the story when your form is stale,
+but a save made elsewhere before unpublish or while its rebuild is running still
+produces the normal conflict dialog on your next save rather than overwriting it.
 Choose **Cancel** there to keep your unsaved edits on screen for copying.
 
 ### Import and trim a private GPX route

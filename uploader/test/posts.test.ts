@@ -211,6 +211,7 @@ describe('memoryPostStore', () => {
     const c = await s.upsertDraft(pair());
     const published = await s.publish(c.translationKey, await publishTokens(s, c.translationKey));
     const unpublished = await s.unpublish(c.translationKey);
+    expect(unpublished.previousUpdatedAt).toEqual(published.updatedAt);
     expect(unpublished.updatedAt.getTime()).toBeGreaterThan(published.updatedAt.getTime());
     expect(await s.get(c.translationKey)).toMatchObject({ status: 'draft', updatedAt: unpublished.updatedAt });
     const saved = await s.upsertDraft({ ...c, de: { ...c.de, title: 'After unpublish' } }, unpublished.updatedAt);

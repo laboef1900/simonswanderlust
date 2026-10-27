@@ -299,7 +299,7 @@ function minimalPair(): StashPayload {
 }
 
 describe('unpublish concurrency token in the real editor', () => {
-  it.each([false, true])('adopts only its unpublish token (later writer: %s)', async (laterWriter) => {
+  it.each(['none', 'before', 'after'] as const)('preserves version ownership (other writer: %s)', async (otherWriter) => {
     const posts = memoryPostStore();
     await posts.upsertDraft(fullPair());
     await posts.publish('tk1', await publishTokens(posts, 'tk1'));
@@ -308,11 +308,11 @@ describe('unpublish concurrency token in the real editor', () => {
       if (url === '/posts/tk1/unpublish') {
         const committed = await posts.unpublish('tk1');
         unpublishToken = committed.updatedAt.toISOString();
-        if (laterWriter) {
+        if (otherWriter === 'after') {
           const pair = (await posts.get('tk1'))!;
           await posts.upsertDraft({ ...pair, de: { ...pair.de, title: 'Another tab' } }, pair.updatedAt);
         }
-        return response({ unpublished: true, updatedAt: committed.updatedAt, build: { ok: true } });
+        return response({ unpublished: true, ...committed, build: { ok: true } });
       }
       if (url === '/posts/tk1' && options?.method === 'PUT') {
         const payload = JSON.parse(String(options.body)) as PostPair & { updatedAt: string };
@@ -326,16 +326,18 @@ describe('unpublish concurrency token in the real editor', () => {
       return response(url === '/posts/tk1' ? await posts.get('tk1') : []);
     } });
     expect(await h.api.loadPost('tk1')).toBe(true);
+    const loadedToken = h.api.buildPayload().updatedAt;
+    if (otherWriter === 'before') {
+      const pair = (await posts.get('tk1'))!;
+      await posts.upsertDraft({ ...pair, de: { ...pair.de, title: 'Another tab' } }, pair.updatedAt);
+    }
     h.el('unpublishBtn').click();
     await settle();
-    expect(h.api.buildPayload().updatedAt).toBe(unpublishToken);
+    expect(h.api.buildPayload().updatedAt).toBe(otherWriter === 'before' ? loadedToken : unpublishToken);
     h.el('deTitle').value = 'My edit after unpublish';
     h.el('deTitle').fire('input');
-    expect(await h.api.doSaveDraft()).toBe(!laterWriter);
-    expect(h.confirmations).toEqual(laterWriter
-      ? ['Unpublish this trip?', 'Reload the latest version?']
-      : ['Unpublish this trip?']);
-    expect((await posts.get('tk1'))!.de.title).toBe(laterWriter ? 'Another tab' : 'My edit after unpublish');
+    expect(await h.api.doSaveDraft()).toBe(otherWriter === 'none');
+    expect((await posts.get('tk1'))!.de.title).toBe(otherWriter === 'none' ? 'My edit after unpublish' : 'Another tab');
   });
 
   it('keeps the loaded token and published state when unpublish fails', async () => {

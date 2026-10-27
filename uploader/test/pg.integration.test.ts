@@ -366,6 +366,7 @@ maybe('pgPostStore (integration)', () => {
     expect((await store.list()).find((p) => p.translationKey === created.translationKey)?.hasEnBody).toBe(true);
     const published = await store.publish(created.translationKey, await publishTokens(store, created.translationKey));
     const unpublished = await store.unpublish(created.translationKey);
+    expect(unpublished.previousUpdatedAt).toEqual(published.updatedAt);
     expect(unpublished.updatedAt.getTime()).toBeGreaterThan(published.updatedAt.getTime());
     expect(await store.get(created.translationKey)).toMatchObject({ status: 'draft', updatedAt: unpublished.updatedAt });
     const saved = await store.upsertDraft({ ...created, de: { ...created.de, title: 'After unpublish' } }, unpublished.updatedAt);

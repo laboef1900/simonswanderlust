@@ -2513,11 +2513,14 @@ describe('posts editor', () => {
     const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(s.calls.length).toBe(1);
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
-    expect(un.json()).toEqual({ unpublished: true, build: { ok: true, release: 'r1' }, updatedAt: expect.any(String) });
+    expect(un.json()).toEqual({
+      unpublished: true, build: { ok: true, release: 'r1' },
+      previousUpdatedAt: published.json().updatedAt, updatedAt: expect.any(String),
+    });
     expect(s.calls.length).toBe(2);
     const got = await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie });
     expect(got.json().status).toBe('draft');
@@ -2561,16 +2564,49 @@ describe('posts editor', () => {
     expect((await posts.get(tk))!.de.title).toBe('Another tab');
   });
 
+  it('reports the locked predecessor when another tab saves after the route preflight', async () => {
+    const posts = memoryPostStore();
+    const b = build({ posts, builder: stubBuilder().builder });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const published = await posts.publish(tk, await publishTokens(posts, tk));
+    const get = posts.get.bind(posts);
+    let precedingToken: Date | undefined;
+    vi.spyOn(posts, 'get').mockImplementationOnce(async (key) => {
+      const before = (await get(key))!;
+      const saved = await posts.upsertDraft({
+        ...before, de: { ...before.de, title: 'Saved between preflight and lock' },
+      }, before.updatedAt);
+      precedingToken = saved.updatedAt;
+      return before;
+    });
+    const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    expect(un.statusCode).toBe(200);
+    expect(un.json().previousUpdatedAt).toBe(precedingToken?.toISOString());
+    expect(un.json().previousUpdatedAt).not.toBe(published.updatedAt.toISOString());
+    const stale = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), updatedAt: published.updatedAt.toISOString() },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect((await posts.get(tk))!.de.title).toBe('Saved between preflight and lock');
+  });
+
   it('a failed rebuild is surfaced but the store change still lands (unpublish + delete)', async () => {
     const s = stubBuilder({ ok: false, error: 'a build is already running' });
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
-    expect(un.json()).toEqual({ unpublished: true, build: { ok: false, error: 'a build is already running' }, updatedAt: (await b.posts.get(tk))!.updatedAt.toISOString() });
+    expect(un.json()).toEqual({
+      unpublished: true, build: { ok: false, error: 'a build is already running' },
+      previousUpdatedAt: published.json().updatedAt,
+      updatedAt: (await b.posts.get(tk))!.updatedAt.toISOString(),
+    });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('draft');
     // re-publish, then delete while the builder keeps failing: DB delete lands, outcome surfaced
     await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
