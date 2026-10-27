@@ -7,9 +7,9 @@ contract is approved. This design PR changes no runtime routes; #284/#285 must i
 the contract, its collision guards and the rule/documentation amendments together.
 
 Independent review requested changes; the correctness clarifications below do not replace that
-review with a clean verdict or revoke the recorded approval. **One additional cross-contract
-owner decision remains pending:** secondary-language activation with incomplete published pages
-(§8.1, Q18). The original O1–O17 approval does not approve Q18.
+review with a clean verdict or revoke the recorded approval. The owner additionally selected
+**“Prepare translations before activation”** on 2026-10-27 for Q18 / #287 Q12 (§8.1), approving
+the explicit inactive-locale preparation flow and activation preflight.
 
 - **Issue:** #283 (parent epic #282). Blocks #284, #285, #287 and #308.
 - **Baseline:** `origin/dev` at `11e16d1` (after #271 and the v10 dump with private GPX archives).
@@ -31,9 +31,9 @@ four modes are the four combinations: DE+EN DE-primary (today, byte-identical), 
 DE-only and EN-only. Each locale keeps its own slugs (German route words in DE, English in EN) in
 every mode. Only the prefix depends on the mode. The primary locale is **locked at the first story
 publish**. After that, the only mode change allowed is *adding* the secondary locale, which adds
-URLs and moves none. Its interaction with published basic pages awaits Q18 (§8.1); no
-implementation may silently choose that transition. Every other change is refused with a named
-error, so no redirect machinery is needed.
+URLs and moves none. Published basic pages follow the approved prepare-before-activation
+transition in §8.1. Every other change is refused with a named error, so no redirect machinery
+is needed.
 
 Both locale rows of a story always exist, as today. An intentionally absent locale is the existing
 row plus a new `omitted` flag, and a database CHECK makes an omitted row unpublishable. In DE+EN
@@ -391,7 +391,7 @@ installation (simonswanderlust.com) is therefore locked to DE+EN DE-primary at f
 | From → To | Unlocked | Locked |
 |---|---|---|
 | Change primary (any DE-primary mode ⇄ any EN-primary mode) | allowed | **409 `language_primary_locked`** |
-| Enable secondary (DE-only → DE+EN DE-primary; EN-only → DE+EN EN-primary) | allowed in principle; published-page preflight awaits Q18 (§8.1) | **allowed in principle**: adds URLs, moves none; same pending Q18 preflight |
+| Enable secondary (DE-only → DE+EN DE-primary; EN-only → DE+EN EN-primary) | allowed after published-page preflight (§8.1) | **allowed** after the same preflight: adds URLs, moves none |
 | Disable secondary (DE+EN → single) | allowed (secondary rows set `omitted`, §5.1) | **409 `language_locale_published`**: the secondary home, About, map, regions index and feed are published URLs |
 | Same mode | no-op 200 | no-op 200 |
 
@@ -463,19 +463,19 @@ spec. A redirect migration, once shipped, cannot be undone.
 - About is **built only in enabled locales**, at the route in §4.2. In DE+EN, both are built, as
   today, with no per-page omission in this contract. #287 requires complete enabled-locale
   content for published non-About pages and does not approve per-page locale omission. The
-  interaction with enabling another locale is the pending decision below, not an implicit
-  exception to either contract.
+  interaction with enabling another locale follows the approved preparation/preflight transition
+  below, not an exception to either contract.
 - Enabling the secondary builds the secondary About from stored content. If that body is empty, the
   page uses `AboutPage.astro`'s existing fallback heading. That is the installer's explicit choice
   and is named in the confirm copy (§9).
 - `about.html:179`'s "Live:" URLs come from the uploader mirror (§11).
 
-**Q18 / #287 Q12 — pending owner decision, not covered by the existing approvals.**
+**Q18 / #287 Q12 — approved: prepare translations before activation.**
 DE-only can have a published contact page with empty retained EN fields. Enabling EN cannot
 simultaneously promise immediate rebuilding, complete bilingual pages and no empty pages without
 an explicit transition rule.
 
-- **Recommended, awaiting approval:** preflight every published registry page's candidate locale.
+- **Approved:** preflight every published registry page's candidate locale.
   Non-About pages require complete secondary title/body/slug and the image gate; About requires
   its fixed route and image safety, but may retain its empty-title/body fallback. Refuse
   `PUT /language` with `409 language_pages_incomplete` and admin-only page/locale/field-reason
@@ -491,15 +491,14 @@ an explicit transition rule.
   history/slug locks and changes the mode without changing pair statuses (§D5.1 of #287).
   It commits before requesting a rebuild. Navigation resolves the new locale only after successful
   release activation; existing primary links remain unchanged.
-- **Alternative:** omit incomplete secondary pages until valid. This requires a new per-locale
+- **Rejected alternative:** omit incomplete secondary pages until valid. This requires a new per-locale
   public-eligibility rule and an explicit exception to #287's bilingual completeness rule, with
   eligibility sticky once public. It is not already approved story omission semantics.
-- **Alternative (not recommended):** require explicitly confirmed whole-page unpublication
+- **Rejected alternative:** require explicitly confirmed whole-page unpublication
   **before** activation. Never unpublish automatically. This separate action removes primary URLs;
   it cannot itself be claimed as §7.4's additive language transition.
-- Until the owner chooses, implementation of this cross-contract transition is blocked. The
-  recommendation is not authorization to ship preparation UI, a new refusal or silent omission.
-  Test the selected DE-only published-page → bilingual transition (and EN mirror), incomplete
+- The owner approved the preparation/preflight option, not omission or automatic unpublication.
+  Test the DE-only published-page → bilingual transition (and EN mirror), incomplete
   retained fields, image refusal, active-content preservation, navigation, concurrent page saves
   and build failure. After a committed activation whose build fails, the prior release stays
   live; retry rebuild under the committed mode, never silently roll metadata back.
@@ -680,8 +679,8 @@ region, `/feed`, `/en/feed`, and an identity/domain change with unchanged langua
   ("Locked since <date>: stories have been published"). Allowed changes are offered with a
   confirmation that names their scope:
   - "Adds /en/ (home, About, map, destinations, feed). No existing URL changes." Name the
-    About empty-body fallback when relevant. Published basic-page activation follows pending Q18;
-    do not promise immediate success or offer its preparation flow before that decision.
+    About empty-body fallback when relevant. Published basic pages must pass Q18's preflight;
+    show its explicit preparation flow when translations are incomplete, not a promise of immediate activation.
   - Refused transitions are shown disabled with the error's text.
 
 ---
@@ -711,7 +710,7 @@ CREATE TABLE IF NOT EXISTS site_language (
   - `PUT /language`: `requireAdmin`. It uses the shared **database transaction protocol** below,
     not the build work lock, to serialize mode changes with publication. It applies §7.2 and is
     refused with `400 invalid_language`, `409 language_primary_locked` or
-    `409 language_locale_published`; the page-preflight refusal awaits Q18.
+    `409 language_locale_published`, or `409 language_pages_incomplete` under §8.1.
   - On success it commits first, releases database locks, then awaits the ordinary builder
     (owner choice O16). It must not wrap `builder.build()` in `workLock.runExclusive`: that
     method already acquires the non-reentrant lock. Build failure preserves the prior release
@@ -770,9 +769,9 @@ CREATE TABLE IF NOT EXISTS site_language (
 
 | Consumer | Contract |
 |---|---|
-| **#284** | `site_language`, boot/API and §10.1's shared transaction protocol for single/bulk publication and coverage writes. Requested versus committed locale sets, explicit public-comment projection, `posts.omitted` CHECK, primary-row pair status, per-row slug lock and primary-title draft rule. WXR buckets. Every §8.5 GPX dump/export/restore consumer. Version-aware atomic language/content restore and CLI flag. Uploader URL mirror `publicPath(lang, locale, kind, slug?)` / `publicUrlSet(lang, rows)` replacing editor/confirm/About literals. Tests §7.4 (1)(2)(5); Q18 transition awaits owner decision. |
+| **#284** | `site_language`, boot/API and §10.1's shared transaction protocol for single/bulk publication and coverage writes. Requested versus committed locale sets, explicit public-comment projection, `posts.omitted` CHECK, primary-row pair status, per-row slug lock and primary-title draft rule. WXR buckets. Every §8.5 GPX dump/export/restore consumer. Version-aware atomic language/content restore and CLI flag. Uploader URL mirror `publicPath(lang, locale, kind, slug?)` / `publicUrlSet(lang, rows)` replacing editor/confirm/About literals. Tests §7.4 (1)(2)(5); approved Q18 preparation/preflight transition. |
 | **#285** | `SITE_LANGUAGE_JSON` parsing. `localePrefix`, the route table §4.2, hreflang/`x-default`/`og:locale:alternate`, switcher, feeds, 404, legacy redirects §8.7. Tests §7.4 (3)(4). Owns the Golden Rule 2 amendment and doc comments, conditional on §20. |
-| **#287** | Reserves `de`/`en`, locale fixed words in their namespaces and every top-level Fastify route (including new `/language`) plus `/map/` at root before EN-at-root is selectable. About retains its DE-primary routes. Published non-About pages require complete enabled locales; secondary activation awaits Q18 / #287 Q12 (§8.1). Page writes join the language-first transaction protocol. |
+| **#287** | Reserves `de`/`en`, locale fixed words in their namespaces and every top-level Fastify route (including new `/language`) plus `/map/` at root before EN-at-root is selectable. About retains its DE-primary routes. Published non-About pages require complete enabled locales; secondary activation follows approved Q18 / #287 Q12 (§8.1). Page writes join the language-first transaction protocol. |
 | **#308** | Journey routes use `localePrefix(locale) + <locale's journey word>/<slug>/`. A journey page in a locale lists only member stories published in that locale. Journey routes are built only in enabled locales. |
 | **#281** | Offers the language choice only while unlocked. Once locked, the choice is read-only, showing the lock reason. |
 | **#273** | Same storage family (Postgres, in dumps) and the same env handoff. Identity per-locale validation reads `enabled_locales`. The dump version bump is coordinated. |
@@ -954,11 +953,13 @@ CREATE TABLE IF NOT EXISTS site_language (
 | O16 | `PUT /language` publishes immediately | awaits a rebuild | persist only |
 | O17 | Pre-launch fixed pages may move before the lock | accept | lock earlier (O9 alternative) |
 
-**Additional decision Q18 (same as #287 Q12), pending:** choose the published-page transition
-when enabling a secondary locale. §8.1 recommends activation preflight plus explicit inactive-locale
-preparation, versus per-locale omission or confirmed whole-page unpublication. This newly identified
-cross-contract choice is outside the approval below. F2–F6 are correctness clarifications of the
-approved route, publication, snapshot and recovery invariants, not new owner approvals.
+**Additional decision Q18 (same as #287 Q12), approved 2026-10-27:** the repository owner
+selected **“Prepare translations before activation”** after the corrected contracts were pushed
+to PR #406 at `8542d78fa1f9168c0313d2cffdef3d17830eba6d` and PR #407 at
+`93619a0ccb665c27152dff67fce496b779a3b38d`. This approves §8.1's explicit inactive-locale
+preparation and activation preflight, preserving primary URLs and pair-level page lifecycle.
+It does not approve per-locale page omission, automatic unpublication or existing URL migration.
+F2–F6 remain correctness clarifications of the approved invariants, not new product choices.
 
 **Approval record: approved.**
 - **Approver/date:** repository owner, interactive implementation session, 2026-10-27.
