@@ -362,8 +362,9 @@ keys, non-object maps and non-string values are rejected in every path.
 
 Inside `runOnce` → `lock.runExclusive`, before `buildAndDeploy` starts the child, the builder:
 
-1. reads `site_identity` and `site_identity_assets` in one `REPEATABLE READ` transaction
-   (together with #283's `site_language` once it exists);
+1. opens one `REPEATABLE READ READ ONLY` transaction on a dedicated connection, exports its
+   snapshot with `pg_export_snapshot()`, and reads `site_identity` and `site_identity_assets`
+   through that connection (together with #283's `site_language` once it exists);
 2. validates the complete stored identity, then serializes its enabled-locale **projection**:
    ```ts
    interface IdentitySnapshot {
@@ -382,11 +383,34 @@ Inside `runOnce` → `lock.runExclusive`, before `buildAndDeploy` starts the chi
    }
    ```
    (`studioDescriptor` is admin-only and is not passed);
-3. passes it to the child as **one environment variable, `SITE_IDENTITY_JSON`**, which
-   `runChildBuild` sets **unconditionally**, overriding anything inherited;
-4. after `astro build` succeeds and **before** the staging copy, writes each asset's bytes to
-   `<buildTmp>/_identity/<role>-<sha256[0:16]>.png`. The release therefore contains its own
-   assets and is served by the existing release mount.
+3. passes the projection as **`SITE_IDENTITY_JSON`** and the exported PostgreSQL snapshot
+   identifier as **`SITE_DATABASE_SNAPSHOT`**, both set unconditionally by `runChildBuild`
+   rather than inherited. Every database-backed build loader imports that same snapshot
+   before reading content, as specified below;
+4. after `astro build` succeeds and **before** the staging copy, writes the already captured
+   asset bytes to `<buildTmp>/_identity/<role>-<sha256[0:16]>.png`. It must not fetch newer asset
+   bytes after the child finishes. The release contains and serves its own assets;
+5. closes/releases the exporter transaction in `finally`, on success, child error, timeout,
+   cancellation or lost ownership. Its lifetime is bounded by the existing build deadline.
+
+**One database view, not just one parent configuration read.** The trips, pages, gallery-media
+metadata and future navigation loaders use a shared `loader-pool.ts` read helper. For each loader
+connection it begins `REPEATABLE READ READ ONLY`, executes `SET TRANSACTION SNAPSHOT '<id>'`
+**before its first query**, performs every related read through that same checked-out connection,
+then ends/releases the transaction. The exporter remains open until the child exits. Never use
+`pool.query` for a later read that could escape the imported transaction. A malformed, expired or
+unavailable supplied snapshot fails the build; it never falls back to fresh reads. The identifier
+is builder-generated, validated as hexadecimal/hyphen PostgreSQL snapshot syntax before SQL
+literal interpolation, and never accepted from HTTP input. When absent, standalone development
+commands retain their existing reads; an empty or invalid supplied value is not absence.
+
+This protocol applies to database **content/configuration reads**, not live storage-lease checks,
+authorization or mutations. Those must continue using current state. No mutation transaction
+waits for the work lock; MVCC lets saves commit while the older build sees only its original
+data. Holding a bounded read transaction can retain old row versions until the build ends.
+PostgreSQL 18 requires snapshot import before the first query and a compatible isolation level:
+[SET TRANSACTION](https://www.postgresql.org/docs/18/sql-set-transaction.html).
+#274 owns this shared build-read protocol; #284 and #289 extend/reuse it, not separate snapshots.
 
 `SITE_IDENTITY_JSON` is **not an operator knob**:
 
@@ -394,6 +418,9 @@ Inside `runOnce` → `lock.runExclusive`, before `buildAndDeploy` starts the chi
 - `.env.example`, compose and the README never mention it;
 - `ARCHITECTURE.md` lists it as internal and builder-set (§22);
 - an operator value is overwritten at every spawn.
+
+The same internal-only and unconditional-override rules apply to `SITE_DATABASE_SNAPSHOT`;
+its short opaque identifier, not database credentials or content, crosses the process boundary.
 
 The snapshot is bounded: the field caps plus six links stay far below Linux's 128 KiB
 per-string `MAX_ARG_STRLEN`. Assets are passed as paths, never as bytes.
@@ -453,7 +480,18 @@ The input is parsed with WHATWG `new URL(input)`. It is **refused** unless all o
 - there is no query or fragment;
 - the host is not an IP literal, except loopback;
 - the serialized origin differs from `new URL(PUBLIC_BASE_URL).origin`, unless both are
-  loopback. In production the image host never serves the blog (§2.1).
+  loopback;
+- its authority is not the configured non-loopback **`IMG_HOST`**. That independent setting,
+  not `PUBLIC_BASE_URL`, controls the actual Fastify image-host constraint and blog refusal.
+  Compare complete authorities, including ports, using the configured routing authority
+  normalized with the candidate scheme (DNS case/default-port normalization); never a prefix
+  or suffix match. Do not infer `IMG_HOST` from the public image URL when explicitly supplied.
+  Invalid configured authority fails this role check closed. A loopback image authority keeps
+  the existing local combined-host exception.
+
+Save, build capture and restore perform these role checks with the actual `cfg.baseUrl` and
+`cfg.imgHost`. Site-side snapshot parsing validates the already-authoritative public fields;
+it must not guess the serving topology from the canonical origin.
 
 The value stored is **`url.origin`**. WHATWG lowercases the host, removes the default port, and
 converts IDNs to Punycode. Settings displays the stored ASCII form, and shows an explicit
@@ -814,14 +852,20 @@ never-saved installs.
 ### 13.1 Dump
 
 `site_identity` (one row; `bytes` base64 in `site_identity_assets`) is added to `tables`. This
-takes **the next free `DUMP_VERSION`**: 11 if this lands before #283's `site_language`,
-otherwise 12. `SUPPORTED_DUMP_VERSIONS` widens in the same change (`backup.ts:701` warning).
+takes **the next free `DUMP_VERSION`**: 11 only if no other format change lands first.
+`SUPPORTED_DUMP_VERSIONS` widens in the same change (`backup.ts:701` warning).
 Older application versions reject the new dump, which is the existing precedent for v9/v10.
 Identity rows are part of the `REPEATABLE READ` dump snapshot.
 
+Record the actual landing version as `IDENTITY_DUMP_VERSION` in the versioned restore contract.
+Normalize by that introduction version, not by field presence or a permanently hardcoded v10
+cutoff: if language lands at v11 and identity at v12, a supported language-only v11 dump still
+predates identity. Identity-capable versions require both identity tables and valid metadata;
+omitting them is corruption, not permission to seed defaults.
+
 ### 13.2 Restore
 
-- **New dump:** `readDump` validates every identity field with the same full-storage
+- **Identity-capable dump (`version >= IDENTITY_DUMP_VERSION`):** `readDump` validates every identity field with the same full-storage
   `normalizeIdentity` used by saves/builds, plus §7.2, before any destructive restore work.
   Valid retained DE/EN values are accepted regardless of the dump's enabled locales or the
   destination's current mode; unknown keys and malformed inactive values are refused.
@@ -831,9 +875,11 @@ Identity rows are part of the `REPEATABLE READ` dump snapshot.
   A crafted dump is the realistic attacker here; refusing is safer than repairing (unlike
   comments, where row-level demotion keeps reader data). Then replace both tables in the
   content-restore transaction, together with language metadata when #283 is installed.
-- **Dump v≤10 (O3):** replace the identity with the §12.2 legacy values, `seed_source =
-  'restored-legacy'`, `saved_at = NULL`, no assets, and keep the live `canonical_origin` if one
-  is set. The CLI's summary prints "identity: restored legacy brand (dump predates identity).
+- **Supported pre-identity dump (`version < IDENTITY_DUMP_VERSION`, O3):** replace identity
+  with the §12.2 legacy values, `seed_source = 'restored-legacy'`, `saved_at = NULL`, no assets,
+  and keep the live `canonical_origin` if one is set. This includes v≤10 and any supported
+  intermediate language-only format. Preserve and restore that format's language metadata
+  under #283's contract. The CLI prints "identity: restored legacy brand (dump predates identity).
   Review Settings → Site identity".
 - **Pre-restore undo dump:** written by the same `dumpDatabase`, so it includes the live
   identity and assets.
@@ -917,8 +963,8 @@ joins #296's operator-managed `settings.json` row, and #295's rehearsal must res
    upgrade (same release content for an unchanged database), with only these exceptions:
    - new `/_identity/` paths, which do not exist without assets;
    - the `robots.txt` source moving from a static file to an endpoint, with identical bytes.
-6. A fresh install never renders a legacy string from §12.2 unless `restore` of a v≤10 dump put
-   it there.
+6. A fresh install never renders a legacy string from §12.2 unless restoring a supported
+   pre-identity dump put it there.
 7. Seeding never sets `saved_at`.
 8. A release is consistent: identity, assets and content come from one build snapshot taken
    under the exclusive lock.
@@ -1001,6 +1047,11 @@ joins #296's operator-managed `settings.json` row, and #295's rehearsal must res
   survives unchanged, stays absent from editor/public/build projections while disabled,
   and returns on re-enable. Cover active key omission/clearing, inactive request-key refusal,
   stale identity revision refusal and active-only payloads not wiping retained keys;
+- Shared build snapshot regression (§6.1): pause a build after capture, disable the secondary
+  in an unlocked install, then save private inactive page/identity text before loaders run.
+  The old build may render only pre-capture content; a failed later build must not expose the
+  new private text. Cover nav/page coherence, malformed/expired snapshot refusal and exporter
+  release after failure/timeout.
 - a browser smoke of the Settings tab and a built story page.
 
 **#275:**
@@ -1075,7 +1126,7 @@ joins #296's operator-managed `settings.json` row, and #295's rehearsal must res
   - served from the blog origin under content-hashed names with `nosniff`;
   - no server-side remote fetch.
 - **Backups:** the dump includes `site_identity` and `site_identity_assets`. Restore refuses
-  a dump with an invalid identity value or asset, and a v≤10 dump restores the legacy brand.
+  a dump with an invalid identity value or asset, and a supported pre-identity dump restores the legacy brand.
 - **Gallery allow-list wording:** unchanged. It names the image origin, not the canonical one.
   #276 adds one sentence saying the two are distinct roles.
 - **Finding F1:** record that author replies publish the configured author name, not the
