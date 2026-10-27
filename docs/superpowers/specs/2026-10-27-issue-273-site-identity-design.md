@@ -10,6 +10,10 @@ contract”** for PR #405 at `4692ecf30785fa911084e6f328345f255263e7d4`. The ide
 contract and its upgrade/recovery rules are approved; #274, #275 and #276 may proceed in
 dependency order. This design PR itself changes no runtime or owner content. The implementation
 must apply the applicable SECURITY.md, ARCHITECTURE.md and CLAUDE.md deltas in §21–§22.
+**Owner amendment, 2026-10-27:** the owner selected **“Reject control characters”** to
+resolve the conflict with #274 acceptance criterion 1. Identity input containing `\p{C}`
+is rejected with HTTP 400 **before trimming**, rather than silently stripped (§5.2).
+NFC normalization and ordinary trimming remain; existing stored content is not rewritten.
 **Baseline:** `origin/dev` at `11e16d1` (v0.17.1, dump version 10 with private GPX archives
 after #271). All `file:line` references below were verified at that commit unless marked
 `[INFERENCE]`.
@@ -339,10 +343,12 @@ Rules, applied in this order to every text field:
 
 1. It must be a string.
 2. Unicode NFC.
-3. Strip `\p{C}`. This removes control, format (including bidi overrides and zero-width
-   characters), surrogate, private-use and unassigned code points, and also strips newlines.
-   It is the same rule as comment names (`2026-09-14-comments-design.md`, rule 9) and
-   `cleanText` (#133).
+3. Reject any `\p{C}` with HTTP 400 and the field-specific `invalid_identity` error. This
+   includes control, format (including bidi overrides and zero-width characters), surrogate,
+   private-use and unassigned code points. Check **before trimming**, so leading/trailing
+   tabs and newlines cannot disappear before validation. Unlike comment names and `cleanText`
+   (#133), identity input is never silently stripped. Existing multiline review prompts are
+   not identity text fields and retain their existing rules.
 4. Trim.
 5. Check the length (§5.1).
 
@@ -935,7 +941,7 @@ joins #296's operator-managed `settings.json` row, and #295's rehearsal must res
 | 6 | Homograph domain (`xn--` label resembling a real one) | stored and displayed as Punycode, with an `xn--` notice | #276 |
 | 7 | Canonical with a path, query, fragment, IP literal, `http:` on a public host, or equal to the image origin | 400 with a field-specific code | #276 |
 | 8 | Site name `</script><script>…`, or `"><img onerror>` | escaped interpolation; JSON-LD `\u003c`; the admin uses `textContent` | #274 |
-| 9 | RTL override or zero-width characters in names | stripped by `\p{C}` | #274 |
+| 9 | RTL override, zero-width characters, or leading/trailing tabs/newlines in names | `\p{C}` refusal before trimming → 400; no stored-content rewrite | #274 |
 | 10 | 81-character name, 7 links, 2049-character URL | 400 per field | #274 |
 | 11 | `X-Title` with an emoji crashes `fetch` | Latin-1 check, otherwise omitted | #276 |
 | 12 | SVG logo with `<script>`, an SVG renamed `.png`, a PNG/HTML polyglot | content-sniffed format; SVG → 415; output always re-encoded PNG + `nosniff` | #275 |
@@ -1111,7 +1117,7 @@ joins #296's operator-managed `settings.json` row, and #295's rehearsal must res
   is never accepted."
 - **New section "Site identity":**
   - admin-only writes (`/settings/identity*`);
-  - one shared validator (`site/src/lib/site-identity.ts`): NFC, `\p{C}` strip, length caps;
+  - one shared validator (`site/src/lib/site-identity.ts`): NFC, `\p{C}` refusal before trim, length caps;
   - social URLs `https:` only, no credentials;
   - canonical origin rules (§7.2) with Punycode display;
   - values rendered only through escaping sinks;
