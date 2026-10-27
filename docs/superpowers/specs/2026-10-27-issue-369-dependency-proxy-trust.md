@@ -120,6 +120,66 @@ Rejected alternatives:
 - **An npm `overrides` entry for postcss-selector-parser**: it adds a forced cross-version edge for a finding that is not reachable.
 - **Dropping the direct `@astrojs/markdown-satteri` dependency and importing Astro's copy**: that relies on hoisting, and npm does not guarantee it.
 
+### 3.1 Site implementation resolution inventory (2026-10-27)
+
+The registry recheck retains all six approved direct targets. Vitest's current `latest` is
+5.0.5; this change deliberately stays on 4.1.12, not that unapproved major. The targeted
+`fast-uri` refresh resolves **3.1.9**, covering the newer 3.x advisories as well as those in
+§2.3: [GHSA-qw65-cvwx-89v3](https://github.com/advisories/GHSA-qw65-cvwx-89v3),
+[GHSA-hrr3-gc8f-f4qj](https://github.com/advisories/GHSA-hrr3-gc8f-f4qj),
+[GHSA-w74x-v6f9-j3xg](https://github.com/advisories/GHSA-w74x-v6f9-j3xg),
+[GHSA-xhq7-xmqj-769h](https://github.com/advisories/GHSA-xhq7-xmqj-769h),
+[GHSA-wjr9-j795-jxcr](https://github.com/advisories/GHSA-wjr9-j795-jxcr), and
+[GHSA-333x-w4r6-6crp](https://github.com/advisories/GHSA-333x-w4r6-6crp).
+
+The following are required transitive edges of the §3 site targets, not independently
+selected upgrades. Platform package families mean every platform variant in the lock,
+including added Android compiler/rolldown bindings.
+
+| Parent / contract | Resolved changes and reason |
+| --- | --- |
+| Astro 7.4.2 | `@astrojs/compiler-rs` and `@astrojs/compiler-binding*` 0.3.0 → 0.5.2; Astro now requires compiler-rs `^0.5.1`, whose binding version is exact. |
+| Compiler WASM / satteri | `@napi-rs/wasm-runtime` 1.1.6 → 1.2.6; compiler WASM requires `^1.2.5`. `@emnapi/core` 1.11.2 → 1.11.3 and `@emnapi/wasi-threads` 1.2.2 → 1.2.3 follow the compiler's exact core/runtime 1.11.3 requirements. The existing root `@emnapi/runtime` 1.11.3 is retained. Satteri's exact 1.11.1 WASM runtime/core remain nested, with their own 1.2.2 threads; these are not the sharp runtime. |
+| Astro / markdown-satteri / MDX | `@astrojs/internal-helpers` 0.10.1 → exact 0.13.0; `@astrojs/prism` 4.0.2 → exact 4.1.1 via markdown-satteri. `satteri` and all `@bruits/satteri-*` bindings 0.9.4 → 0.10.5. |
+| Internal helpers / Shiki / satteri | `@types/hast` 3.0.4 → 3.0.5, `yaml` 2.9.0 → 2.9.1, `picomatch` 4.0.4 → 4.0.7 satisfy raised floors. All `@shikijs/{core,engine-javascript,engine-oniguruma,langs,primitive,themes,types}` move together from 4.3.1 to exact 4.5.0. |
+| Astro telemetry and CLI | `@astrojs/telemetry` 3.3.2 → exact 3.4.1; `package-manager-detector` 1.7.0 → 1.9.0; `@clack/prompts` 1.7.0 → 1.8.1 and its exact `@clack/core` 1.4.3 → 1.5.1. |
+| Astro raised direct floors | `am-i-vibing` 0.4.0 → 0.5.0; `cookie` 1.1.1 → 2.0.1; `diff` 8.0.4 → 9.0.0; `get-tsconfig` beta.4 → exact 5.0.0-beta.6; `magicast` 0.5.3 → 0.5.5; `neotraverse` 0.6.18 → 1.0.1; `p-limit` 7.3.0 → 7.3.3; `p-queue` 9.3.1 → 9.3.5; `tinyclip` 0.1.15 → 1.0.3; `tinyexec` 1.2.4 → 1.3.1; `ultrahtml` 1.6.0 → 1.7.0. |
+| New Astro dependencies | `tinyps` 0.5.1 and `verkit` 0.5.0; nested `obug` 3.0.0 and `magic-string` 1.4.5. The latter requires `@jridgewell/sourcemap-codec ^1.6.0`, raising the shared codec from 1.5.5 to 1.6.0. Astro and MDX each resolve a nested `es-module-lexer` 3.0.4 for their new `^3.0.3` requirement. Existing consumers of older majors remain unchanged. |
+| Astro fonts | `unifont` 0.7.4 → 1.0.3 requires new `fnv1a-64` 0.1.2 and `undici` 8.12.3; its `std-env ^4.2.0` raises the shared version 4.1.0 → 4.3.0. |
+| Vite 8.3.5 / Astro | `rolldown` and its native binding family 1.1.4 → 1.2.15 satisfy Vite's `~1.2.14`; `@oxc-project/types` 0.138.0 → exact 0.155.0 follows rolldown. Vite's `lightningcss ^1.33.0` adds a nested 1.33.0 platform family, leaving Tailwind's existing version unchanged. |
+| SVGO 4.1.0 | `css-select` 5.2.2 → 6.0.0, `css-what` 6.2.2 → 7.0.0, and `sax` 1.6.0 → exact 1.6.1 are its raised requirements. |
+| Vitest 4.1.12 | `@vitest/{expect,mocker,pretty-format,runner,snapshot,spy,utils}` 4.1.9 → exact 4.1.12. `estree-walker` 3.0.3 is hoisted from the mocker's former nested location after MDX removes the old root 2.0.2 consumer. |
+| Explicit advisory refresh (§2) | `devalue` 6.0.3, `http-cache-semantics` 4.3.0, `smol-toml` 1.9.1, `svgo` 4.1.0, `zod` 4.6.7, `vite` 8.3.5, `postcss` 8.5.32, `nanoid` 3.3.20, `source-map-js` 1.2.2, and `fast-uri` 3.1.9. |
+
+The MDX 8 processor cutover removes `@astrojs/markdown-remark`, `@mdx-js/mdx`,
+`@rollup/pluginutils`, and their now-unused remark/recma/retext, mdast, micromark, acorn,
+estree/esast, raw-HTML/JSX-conversion and character-parsing dependency closures. It also
+removes their private `estree-walker` copies, `@types/{debug,mdx,ms}`, `debug`, `ms`,
+`source-map`, style conversion helpers and otherwise-unused unist traversal helpers.
+Astro drops its private esbuild 0.28.1 platform family, `ohash`, and the old
+`is-inside-container` / nested `is-docker` / `is-wsl` / `which-pm-runs` CLI closure.
+The YAML migration removes `js-yaml` and `argparse`. Rolldown drops its WASM binding and
+the associated private emnapi copies. These removals prune dependencies, not application code.
+
+Avoidable resolver churn was reverted: Babel parser/types/string-parser, TextMate,
+`@tybys/wasm-util`, chai, tinyrainbow, unstorage, lru-cache, node-mock-http, p-timeout and
+readdirp keep their prior versions. No unrelated direct dependency changes; no override,
+downgrade of typography, uploader lock edit, or sharp range change. Sharp and every sharp
+platform package remain 0.35.5, with libvips packages 1.3.4.
+
+**Inventory evidence, not runtime proof:** targeted package-lock resolution and a
+script-disabled installation succeeded. `npm ls` showed a single markdown-satteri 0.4.5,
+Shiki 4.5.0 and themes 4.5.0, with sharp 0.35.5. The post-refresh audit returned zero
+production findings; full audit reported only happy-dom plus postcss-selector-parser
+and its affected typography parent (one high, two moderate). This audit preceded the final
+restoration of unchanged TextMate 10.0.2. Both approved deferrals in §2.3 remain:
+happy-dom 20.11.1 is test-only (the current fix is 21.0.4), and typography 0.5.20 parses
+repository-owned selectors only. No blanket audit fix was run.
+
+No builds, tests, typechecks, render diffs or codec smokes were run in this implementation
+slice. The integrator must execute §7 against the final combined lockfiles.
+
+
 ## 4. Recommended proxy-trust contract
 
 ### 4.1 Who is the socket peer? (the topology question)
@@ -287,7 +347,7 @@ None changes a documented contract here. The suites in §7 cover the not-found, 
 ### 6.3 Astro 7.0.6 → 7.4.2, satteri 0.3.3 → 0.4.5, mdx 7 → 8
 
 The Astro changelog (7.1–7.4.2) contains:
-- minimum Node 22.22.0 (the image runs Node 26);
+- minimum Node 22.23.4 in the exact 7.4.2 release (the image runs Node 26);
 - the sharp ≥0.35.4 floor;
 - the satteri 0.4 line;
 - `<script>`/`<style>` escaping in MDX;
@@ -349,10 +409,11 @@ affected (Golden Rule 2).
      `src/main.ts` with `TRUSTED_PROXY=bogus` exits non-zero with the named error. Unset, it boots,
      and over **real TCP** from `127.0.0.1` a forwarded `X-Forwarded-Proto: https` login sets `Secure`.
      This proves `main.ts` wires the policy into `buildServer`.
-   - `site/src/lib/` lock test: `package-lock.json` contains exactly one
-     `node_modules/@astrojs/markdown-satteri` entry. Its version equals
-     `packages["node_modules/astro"].dependencies["@astrojs/markdown-satteri"]`, and the direct dependency
-     in `package.json` equals it exactly. This catches the next Astro bump.
+   - Site behavior regressions: heading IDs deduplicate within each document and reset across
+     repeated, interleaved and concurrent renders; real highlighted code beside raw HTML retains
+     stylesheet-backed classes after sanitization while author styles, scripts and handlers
+     disappear. Per the implementation assignment, singleton lock resolution is a one-off §7.1
+     inventory, not a permanent lockfile/source-wiring assertion.
 3. **Existing suites.** In uploader: `npx tsc --noEmit` and `npm test` with `TEST_DATABASE_URL`
    (full Postgres-backed). In site: `npm test`, `npx astro check` and `npm run build` against a
    disposable Postgres (CI). CI must be green on both jobs. Before the bump, CI was also green on the
@@ -518,5 +579,16 @@ If no suitable patched image exists, fix forward without weakening proxy or outp
   `markdown/satteri` CHANGELOG.md on `withastro/astro@main`. npm metadata for `astro@7.4.2`
   (exact `@astrojs/markdown-satteri: "0.4.5"`) and `@astrojs/mdx@8.1.1` / `7.0.8` peers.
 - npm registry `dist.integrity`, `time` and provenance for every target in §3 (read 2026-10-27).
+- Site recheck: [Astro 7.4.2 release](https://github.com/withastro/astro/releases/tag/astro%407.4.2)
+  (including its Node 22.23.4 minimum), [MDX 8 migration](https://github.com/withastro/astro/releases/tag/%40astrojs%2Fmdx%408.0.0),
+  and exact npm metadata at
+  [astro/7.4.2](https://registry.npmjs.org/astro/7.4.2),
+  [markdown-satteri/0.4.5](https://registry.npmjs.org/@astrojs%2Fmarkdown-satteri/0.4.5),
+  [mdx/8.1.1](https://registry.npmjs.org/@astrojs%2Fmdx/8.1.1),
+  [shiki/4.5.0](https://registry.npmjs.org/shiki/4.5.0),
+  [themes/4.5.0](https://registry.npmjs.org/@shikijs%2Fthemes/4.5.0), and
+  [vitest/4.1.12](https://registry.npmjs.org/vitest/4.1.12). Installed processor declarations and
+  implementation retain `satteri().createRenderer(options).render(markdown)`; no application
+  API migration was needed on source inspection. Behavioral verification remains §7.
 - Docker: the [port publishing](https://docs.docker.com/engine/network/port-publishing/) docs and
   [docker/docs#17312](https://github.com/docker/docs/issues/17312) for the userland-proxy source address.
