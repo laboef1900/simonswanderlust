@@ -59,17 +59,17 @@ window.EditorGalleries = (function () {
         return;
       }
     });
-    cm.on('beforeSelectionChange', (_editor, selection) => {
+    cm.on('change', (_editor, change) => {
       if (!boundarySelection) return;
       const end = cm.posFromIndex(boundarySelection.end);
       const cursor = cm.posFromIndex(boundarySelection.cursor);
       boundarySelection = null;
-      // CodeMirror calls this after applying the filtered change. Use its
-      // selection update API, never a nested document edit in beforeChange.
-      selection.update(selection.ranges.map((range) => ({
+      // Updating the selection after the change records the corrected caret
+      // in its history event; beforeSelectionChange only changes the live view.
+      cm.setSelections(cm.listSelections().map((range) => ({
         anchor: samePosition(range.anchor, end) ? cursor : range.anchor,
         head: samePosition(range.head, end) ? cursor : range.head,
-      })));
+      })), null, { origin: change.origin });
     });
 
     function previewUrl(photo) {

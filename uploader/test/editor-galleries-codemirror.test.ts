@@ -118,6 +118,10 @@ describe('real CodeMirror collapsed gallery boundaries', () => {
     expect(h.cm.getValue()).toBe(body);
     h.cm.redo();
     expect(h.cm.getValue()).toBe(pasted);
+    expect(h.cm.indexFromPos(h.cm.getCursor())).toBe(pasted.indexOf('Another paragraph') + 'Another paragraph'.length);
+    h.cm.replaceSelection(' after redo', 'end', '+input');
+    expect(h.cm.getValue()).toBe(pasted.replace('Another paragraph', 'Another paragraph after redo'));
+    expectGallery(h);
   });
 
   it.each(['before', 'after'] as const)('supports a gallery-only document at its %s edge, including EOF', (edge) => {
@@ -132,6 +136,21 @@ describe('real CodeMirror collapsed gallery boundaries', () => {
     expectGallery(h);
     h.cm.undo();
     expect(h.cm.getValue()).toBe(gallery);
+  });
+
+  it('continues typing at the restored EOF paste caret rather than after its padding', () => {
+    const h = editor(gallery);
+    h.cm.setCursor(h.cm.posFromIndex(gallery.length));
+    h.cm.replaceSelection('Hello', 'end', 'paste');
+    const pasted = gallery + '\n\nHello\n\n';
+    expect(h.cm.getValue()).toBe(pasted);
+    h.cm.undo();
+    expect(h.cm.getValue()).toBe(gallery);
+    h.cm.redo();
+    expect(h.cm.indexFromPos(h.cm.getCursor())).toBe(pasted.indexOf('Hello') + 5);
+    h.cm.replaceSelection(' world', 'end', '+input');
+    expect(h.cm.getValue()).toBe(gallery + '\n\nHello world\n\n');
+    expectGallery(h);
   });
 
   it('keeps pasted trailing newlines and leaves the opener on its own line', () => {
