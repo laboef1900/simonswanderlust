@@ -968,6 +968,12 @@ and the `<dialog>`s appended to `<body>` share one set:
   lightbox captions. Edits apply only to this gallery in the active locale, commit with
   Insert/Update gallery, and Cancel discards them. The manuscript widget marks hidden
   captions explicitly. On phones, each reset button sits below its textarea.
+- With gallery previews enabled, typing or pasting at either collapsed fence edge
+  inserts prose on separate lines outside the gallery, including at the start or
+  end of the manuscript. Arrow-key navigation and clicking the visually empty
+  boundary must not prefix the opener or suffix the closer. Undo/redo, local alt
+  edits, picker replacements, and the raw-Markdown toggle retain their existing
+  behavior; the saved Markdown remains the source of truth.
 - Story details sits beside the manuscript on desktop. Its header carries one
   icon-only panel toggle (`panel-right-close` / `panel-right-open`, named Collapse /
   Expand story details); collapsing slides the panel right into a slim rail that
