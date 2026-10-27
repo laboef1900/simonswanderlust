@@ -628,6 +628,43 @@ describe('comments.html moderation view', () => {
     expect(page.row('A').ta.selectionStart).toBe(5);
   });
 
+  it.each(['success', 'failure'] as const)('keeps recreated replies single-flight and releases the visible control after %s', async (outcome) => {
+    const sent = Promise.withResolvers<CommentResponse>();
+    const posted: string[] = [];
+    const page = commentsPage(async (url, options) => {
+      if (url.endsWith('/reply')) {
+        posted.push(String(options.body));
+        return posted.length === 1 ? sent.promise : response();
+      }
+      return response({ comments: url.endsWith('approved') ? [] : [comment('A'), comment('B')] });
+    });
+    await page.load();
+    await page.type('A', 'Publish only once');
+    page.row('A').send.focus();
+    const pending = page.row('A').form.fire('submit');
+    page.doc.activeElement = page.doc.body;
+    await page.row('B').action('Approve').click();
+    expect(page.row('A').send.disabled).toBe(true);
+    page.el('statusFilter').value = 'approved';
+    await page.load();
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Publish only once');
+    expect(page.row('A').send.disabled).toBe(true);
+    await page.row('A').form.fire('submit');
+    expect(posted).toHaveLength(1);
+    await page.type('A', 'Newer unsent text');
+    if (outcome === 'success') sent.resolve(response());
+    else sent.reject(NETWORK_DOWN);
+    await pending;
+    expect(page.row('A').send.disabled).toBe(false);
+    expect(page.row('A').ta.value).toBe('Newer unsent text');
+    await page.row('A').form.fire('submit');
+    const bodies: unknown[] = posted.map((body) => JSON.parse(body));
+    expect(bodies).toEqual([{ body: 'Publish only once' }, { body: 'Newer unsent text' }]);
+    expect(page.row('A').ta.value).toBe('');
+  });
+
   it('does not resurrect a sent draft when the follow-up list request fails', async () => {
     let reads = 0;
     const page = commentsPage(async (_url, options) => {

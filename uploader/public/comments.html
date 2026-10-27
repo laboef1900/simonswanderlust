@@ -41,6 +41,7 @@
 
       // Page-lifetime only: changing views must not discard another reply.
       const replyDrafts = new Map();
+      const pendingReplies = new Set();
       const renderedRows = new Map();
 
       function focusedReplyControl() {
@@ -141,15 +142,17 @@
         });
         const send = el('button', 'Reply as author', 'btn-secondary');
         send.type = 'submit';
+        send.disabled = pendingReplies.has(c.id);
         form.append(ta, send);
         controls.push(ta, send);
-        renderedRows.set(c.id, { controls, ta });
+        renderedRows.set(c.id, { controls, ta, send });
         form.addEventListener('submit', async (e) => {
           e.preventDefault();
-          if (!ta.value.trim()) return;
+          if (pendingReplies.has(c.id) || !ta.value.trim()) return;
           const body = ta.value;
           replyDrafts.set(c.id, body);
           const focus = focusedReplyControl();
+          pendingReplies.add(c.id);
           send.disabled = true;
           try {
             const result = await api('POST', '/moderation/comments/' + encodeURIComponent(c.id) + '/reply', { body });
@@ -164,7 +167,13 @@
             $('out').textContent = 'Reply published.';
             await load(focus);
           } catch (err) { $('out').textContent = 'Reply failed: ' + err.message; }
-          finally { send.disabled = false; }
+          finally {
+            pendingReplies.delete(c.id);
+            send.disabled = false;
+            const current = renderedRows.get(c.id);
+            if (current) current.send.disabled = false;
+            if (document.activeElement === document.body) restoreReplyFocus(focus);
+          }
         });
         li.appendChild(form);
         return li;
