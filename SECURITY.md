@@ -905,18 +905,32 @@ deliberate trade-off, not an oversight:
 - The download route (`GET /backups/:name`) is **admin-only** and validates the filename against a
   strict pattern (`^db-\d{8}-\d{6}\.json\.gz$` or `^images-\d{8}-\d{6}\.tar$`) before touching the
   filesystem — no path traversal.
-- Restore is **CLI-only**
-  (`docker compose exec app node --import tsx src/cli.ts restore [--yes] /data/backup/db/<file>`
-  — the shell-less runtime image requires invoking `node` directly), never a web route, because
-  it's destructive: it deletes and re-inserts `users`, `posts`, media, and `pages` in one
-  transaction (`pages` only when present in the dump — v1 dumps predate them and leave existing
-  pages untouched). Deleting `users` cascades to `sessions`, so a restore invalidates every login.
-  The CLI is guarded against operator mistakes, not attackers (#114): the file name must match
-  the dump pattern, the operator confirms against a summary of the dump and of the live rows
-  (`--yes` for scripts; the printed target is `host:port/dbname` — the `DATABASE_URL` password is
-  never echoed), and a **pre-restore dump** of the current state is written into the backup
-  directory first — the restore aborts if that dump fails, so a restore that cannot be undone is
-  never run.
+- Restore is **CLI-only**, never a web route. Confirm the intended image, database and `/data`
+  mount, retain the source recovery set, stop every app/maintenance writer sharing them and
+  wait for exit and drained database sessions; keep Postgres running. Use:
+
+  ```sh
+  docker compose stop app
+  docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore /data/backup/db/db-YYYYMMDD-HHmmss.json.gz
+  ```
+
+  The explicit Node entrypoint supports the shell-less image. Do not add service ports.
+  Fresh-schema recovery keeps all ingress closed throughout the zero-user/setup window;
+  see the [major-upgrade alternative](ARCHITECTURE.md#upgrading-a-postgres-major-eg-17--18).
+  This guidance reconfirms the unchanged [GPX storage-owner boundary](#gpx-routes--private-source-and-public-snapshot):
+  exclusive ownership and absence of app sessions are mandatory, never bypassed by killing
+  sessions or disabling fencing.
+  Current v10 recovery replaces `users`, `posts`, `pages`, `media`, `media_folders`,
+  `app_secrets`, `comments` and `post_routes`, with manifest-paired private originals.
+  [Database dumps](ARCHITECTURE.md#database-dumps) documents legacy absent-field behavior.
+  Sessions are not restored; deleting users invalidates every login. Settings/key escrow
+  remain external. The CLI validates the source set, prints a credential-free target and
+  live/dump counts, and requires literal `yes`. `--yes` skips only that prompt, never ownership,
+  source validation or the **verified pre-restore recovery set** written before replacement.
+  If undo capture/verification fails, replacement aborts. Restart with `docker compose up -d app`
+  only after successful completion and result inspection, reconcile settings/key escrow,
+  then sign in and explicitly rebuild. Failed or ambiguous completion: leave the app stopped,
+  preserve input/undo/staged sets and investigate rather than retrying blindly.
 - In-app backups live on the **same disk** as the live data; disaster recovery requires an
   offsite host-level backup of `./uploader/data` — see
   [ARCHITECTURE.md](ARCHITECTURE.md#backups--disaster-recovery).
