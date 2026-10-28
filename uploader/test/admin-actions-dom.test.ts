@@ -853,6 +853,61 @@ describe('comments.html moderation view', () => {
     expect(names).toEqual(action === 'reply' ? ['A', 'B', 'Reply-A', 'Reply-B'] : []);
   });
 
+  it.each([
+    ['approve', 'reply'], ['approve', 'filter'], ['approve', 'filter-then-body'],
+    ['reply', 'reply'], ['reply', 'filter'], ['reply', 'filter-then-body'],
+  ] as const)('preserves the latest focus across overlapping %s refreshes unless navigation supersedes it: %s', async (action, destination) => {
+    const mutations = { A: Promise.withResolvers<CommentResponse>(), B: Promise.withResolvers<CommentResponse>() };
+    const firstRefresh = Promise.withResolvers<CommentResponse>();
+    const refreshStarted = Promise.withResolvers<void>();
+    let stored = [comment('A'), comment('B'), comment('C')];
+    let reads = 0;
+    const page = commentsPage(async (url, options) => {
+      if (options.method === 'GET') {
+        if (++reads === 2) { refreshStarted.resolve(); return firstRefresh.promise; }
+        return response({ comments: [...stored] });
+      }
+      const id = url.includes('/A') ? 'A' : 'B';
+      await mutations[id].promise;
+      if (action === 'approve') stored = stored.filter((c) => c.id !== id);
+      return response();
+    });
+    await page.load();
+    await page.type('A', 'Reply to A');
+    await page.type('B', 'Reply to B');
+    const start = (id: string) => {
+      const row = page.row(id);
+      (action === 'reply' ? row.send : row.action('Approve')).focus();
+      return action === 'reply' ? row.form.fire('submit') : row.action('Approve').click();
+    };
+    const first = start('A');
+    const second = start('B');
+    const draft = await page.type('C', 'Keep this unsent reply');
+    draft.focus();
+    draft.setSelectionRange(5, 9, 'backward');
+    mutations.A.resolve(response());
+    await refreshStarted.promise;
+    expect(page.doc.activeElement).toBe(page.doc.body);
+    if (destination !== 'reply') {
+      page.el('statusFilter').focus();
+      await page.doc.fire('focusin');
+      if (destination === 'filter-then-body') page.doc.activeElement = page.doc.body;
+    }
+    mutations.B.resolve(response());
+    await second;
+    firstRefresh.resolve(response({ comments: [comment('B'), comment('C')] }));
+    await first;
+    expect(page.row('C').ta.value).toBe('Keep this unsent reply');
+    expect(page.el('list').children.map((row) => row.children[0]?.children[0]?.textContent))
+      .toEqual(action === 'reply' ? ['A', 'B', 'C'] : ['C']);
+    if (destination === 'reply') {
+      expect(page.doc.activeElement).toBe(page.row('C').ta);
+      expect([page.row('C').ta.selectionStart, page.row('C').ta.selectionEnd, page.row('C').ta.selectionDirection]).toEqual([5, 9, 'backward']);
+    } else {
+      expect(page.doc.activeElement).toBe(destination === 'filter' ? page.el('statusFilter') : page.doc.body);
+    }
+  });
+
   it.each(['approve', 'reply'] as const)('suppresses a late %s failure while the newer filter is loading', async (action) => {
     const mutation = Promise.withResolvers<CommentResponse>();
     const refresh = Promise.withResolvers<CommentResponse>();

@@ -46,6 +46,7 @@
       let viewRequest = 0;
       let filterRevision = 0;
       let loadedFilter = null;
+      let refreshFocus = null;
 
       function focusedReplyControl() {
         for (const [id, { controls, ta }] of renderedRows) {
@@ -66,6 +67,11 @@
         control.focus({ preventScroll: true });
         if (focus.selection) control.setSelectionRange(...focus.selection);
       }
+
+      // A real focus move cancels restoration, even if the user later blurs it.
+      // Removing the rows does not emit focusin, so overlapping loads keep the
+      // latest caret until the owning response restores it.
+      document.addEventListener('focusin', () => { refreshFocus = null; });
 
       async function api(method, url, body) {
         const res = await fetch(url, {
@@ -164,11 +170,13 @@
           const focus = focusedReplyControl();
           const view = filterRevision;
           let focusRequest = viewRequest;
+          let refreshing = false;
           pendingReplies.add(c.id);
           send.disabled = true;
           try {
             const result = await api('POST', '/moderation/comments/' + encodeURIComponent(c.id) + '/reply', { body });
             if (result === null) return;
+            pendingReplies.delete(c.id);
             // Keep anything written while the request was pending, even if a
             // different action has already replaced this row's textarea.
             if (replyDrafts.get(c.id) === body) {
@@ -178,6 +186,7 @@
             }
             if (view === filterRevision) {
               focusRequest = viewRequest + 1;
+              refreshing = true;
               await load(focus, 'Reply published.');
             }
           } catch (err) {
@@ -188,7 +197,7 @@
             send.disabled = false;
             const current = renderedRows.get(c.id);
             if (current) current.send.disabled = false;
-            if (focusRequest === viewRequest && document.activeElement === document.body) restoreReplyFocus(focus);
+            if (!refreshing && focusRequest === viewRequest && document.activeElement === document.body) restoreReplyFocus(focus);
           }
         });
         li.appendChild(form);
@@ -200,12 +209,18 @@
         const status = $('statusFilter').value;
         // A refresh does not leave the filter: concurrent successful writes must
         // each refresh it, while an actual filter change retires their old view.
-        if (status !== loadedFilter) { loadedFilter = status; filterRevision++; }
+        if (status !== loadedFilter) {
+          loadedFilter = status;
+          filterRevision++;
+          refreshFocus = null;
+        }
         const ul = $('list');
         // Capture the latest draft/caret before removing obsolete actions.
         // Draft text itself lives in replyDrafts, not in the cleared rows.
-        const focus = focusedReplyControl()
-          || (document.activeElement === document.body ? fallbackFocus : null);
+        refreshFocus = focusedReplyControl()
+          || (document.activeElement === document.body
+            ? ul.getAttribute('aria-busy') === 'true' ? refreshFocus : fallbackFocus
+            : null);
         renderedRows.clear();
         ul.replaceChildren();
         ul.setAttribute('aria-busy', 'true');
@@ -215,13 +230,16 @@
           if (request !== viewRequest || !data) return;
           for (const c of data.comments) ul.appendChild(row(c));
           $('out').textContent = data.comments.length ? message : 'No ' + status + ' comments.';
-          if (document.activeElement === document.body) restoreReplyFocus(focus);
+          if (document.activeElement === document.body) restoreReplyFocus(refreshFocus);
         } catch (e) {
           if (request !== viewRequest) return;
           $('out').textContent = 'Could not load comments: ' + e.message;
-          if (focus && document.activeElement === document.body) $('statusFilter').focus({ preventScroll: true });
+          if (refreshFocus && document.activeElement === document.body) $('statusFilter').focus({ preventScroll: true });
         } finally {
-          if (request === viewRequest) ul.setAttribute('aria-busy', 'false');
+          if (request === viewRequest) {
+            ul.setAttribute('aria-busy', 'false');
+            refreshFocus = null;
+          }
         }
       }
 
