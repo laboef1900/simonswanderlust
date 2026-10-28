@@ -1,7 +1,7 @@
 # Public author badges independent of moderation pagination (#349)
 
 Date: 2026-10-27. Risk: **High — public comment response boundary.**
-Status: **OWNER APPROVED 2026-10-28** — public-row author projection, preserving reply-time names and existing public limits. Implementation and verification remain required; no historical rewrite or deployment is authorized.
+Status: **OWNER APPROVED 2026-10-28** — public-row author projection implemented; isolated real-main/Postgres and browser acceptance recorded below. Final automated verification and PR review remain the integration owner's responsibility. No historical rewrite or deployment is authorized.
 Baseline: `11e16d1b8e43141d296b801ee663a351ae3fe415`.
 
 ## Root cause and outcome
@@ -62,7 +62,43 @@ rendering and sanitized errors remain unchanged.
    existing public cap, both-locale merge, closed-thread and unknown/draft 404 regressions.
 5. Runtime smoke: newest owner reply displays the localized Author badge after the large
    cross-story fixture. Run full affected uploader tests/typecheck with `TEST_DATABASE_URL`;
-   don't call skipped integration coverage a pass. None has been run for this proposal.
+   don't call skipped integration coverage a pass.
+
+## Runtime acceptance recorded 2026-10-28
+
+The actual `uploader/src/main.ts` ran on `127.0.0.1:33449` against disposable Postgres 18
+database `swl_349_dev` (separate from `swl_349_test`). All writable paths and `SITE_APP_DIR`
+were checked under this issue's worktree. An authenticated `POST /rebuild` returned 200 and
+produced release `1793188974811-73684-0000`, with four published locale entries and 15 pages.
+Vite reported its existing large-chunk warning; no standalone build or automated suite was
+run by the runtime-proof worker.
+
+- Seeded **505 older approved reader comments on story A**, then created a real reply on
+  story B through authenticated `POST /moderation/comments/:id/reply` (201). The moderation
+  list still returned its oldest 500 without this reply; public GET B returned the reply
+  with `isAuthor:true`, its reply-time admin name, and the unchanged six-key allow-list.
+- Anonymous and admin-cookie public responses matched. Two ordinary DE/EN reader rows
+  remained false; pending/rejected/spam fixtures with stored true flags stayed private.
+  Reader POST supplying `isAuthor:true` and email still stored pending/false/null.
+  Story A returned exactly its oldest 500 in merged-locale chronological order.
+  Unknown/draft keys remained 404; disabling comments retained the approved thread and
+  refused POST with 409.
+- **Injected faults, not naturally occurring failures:** a real PostgreSQL
+  `ACCESS EXCLUSIVE` lock on `sessions` demonstrably blocked a guarded session query
+  (`wait_event_type=Lock`, `wait_event=relation`), while public GET with the same real
+  admin cookie returned 200 and the author flag. Separately, temporarily renaming the
+  disposable `comments.email` column made the real moderation listing return a sanitized
+  500; public GET was unchanged. The column was restored and moderation recovered to 200.
+  This second probe simulates a moderation-only query failure, not a privilege failure.
+- Managed Chromium (`relay:false`) loaded the actual rebuilt DE and EN story routes at
+  desktop 1440×1000 and mobile 390×844. Each showed the localized **Autor / Author** text
+  badge and author styling, three approved rows, no private fixture, and no horizontal
+  overflow. This is focused comment-island proof, not a whole-site accessibility audit.
+
+Sanitized evidence: `.issue-runtime/author-projection-proof.json`; four retained captures
+under `.issue-runtime/screenshots/author-badge-{de,en}-{desktop,mobile}.png`.
+Synthetic database records are removed after capture, services/tabs stopped, and static
+release/screenshot evidence retained. No owner data, live slug or deployed instance changed.
 
 ## Dependencies, documentation and recovery
 
@@ -82,4 +118,4 @@ changing persisted `is_author` values. No data migration or restoration is warra
 **Exact owner approval requested:** “Approve #349: derive public author badges from each approved
 public-store row through the unchanged explicit JSON allow-list, remove the admin-list lookup,
 and retain the existing public cap, permissions, privacy and verification contract.”
-The owner approved this contract on 2026-10-28; implementation and verification remain required.
+The owner approved this contract on 2026-10-28; runtime acceptance is recorded above.

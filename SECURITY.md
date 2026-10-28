@@ -188,6 +188,13 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
   comments_enabled`; when false the approved thread is still readable (closed, not hidden) and
   `POST` answers 409 `comments_disabled`. `GET` 404s for an unknown key and for a draft-only
   key with the same body, so it cannot enumerate unpublished posts. Response is `no-store`.
+- **Author badges use the approved public row's stored flag** (#349), never an admin-list
+  lookup or a reader-supplied name/cookie. The explicit public key set above is unchanged.
+  An author reply returned for one story remains marked even after another story has more
+  than 500 approved comments. The existing per-story response cap and moderation permissions
+  are unchanged. Real-main/Postgres runtime proof on 2026-10-28 also kept public GET working
+  during a session-table lock and a deliberately injected moderation-query failure; neither
+  proves availability when the public comments/posts queries themselves fail.
 - **`POST` order of checks is load-bearing** and pinned by tests: (1) per-IP rate limit → 429,
   no insert; (2) **honeypot** — a non-blank `website` field answers **204 with an empty body**,
   no row, no log line (a 400 would train the bot; 204 does not look like the real 201);
