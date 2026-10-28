@@ -17,6 +17,7 @@
       </div>
     </header>
     <main>
+      <div id="galleryMetadataWarnings" class="notice-warn" hidden></div>
       <div class="lang-switch-bar about-tabs" role="tablist" aria-label="Page language">
         <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">Deutsch <span class="lang-code" aria-hidden="true">DE</span></button>
         <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">English <span class="lang-code" aria-hidden="true">EN</span></button>
@@ -67,7 +68,9 @@
     <script src="/admin/vendor/easymde.min.js"></script>
     <script src="/admin/tabs.js"></script>
     <script src="/admin/image-markdown.js"></script>
-    <script>
+    <script src="/admin/gallery-metadata-warnings.js"></script>
+    <script type="module">
+      import './gallery-fence.js';
       'use strict';
       const $ = (id) => document.getElementById(id);
       const KEY = 'about';
@@ -98,8 +101,17 @@
       deMDE.codemirror.on('change', () => guard.markDirty());
       enMDE.codemirror.on('change', () => guard.markDirty());
 
-      Tabs.wire(document.querySelector('[role="tablist"]'), {
+      const tabsApi = Tabs.wire(document.querySelector('[role="tablist"]'), {
         onChange: (tab) => { (tab === 'en' ? enMDE : deMDE).codemirror.refresh(); },
+      });
+      const galleryMetadataWarnings = GalleryMetadataWarnings.create({
+        root: $('galleryMetadataWarnings'),
+        editors: { de: deMDE.codemirror, en: enMDE.codemirror },
+        activate: (locale) => {
+          tabsApi.select(locale);
+          (locale === 'de' ? deMDE : enMDE).codemirror.refresh();
+        },
+        onUnauthed: () => guard.redirectToLogin(),
       });
 
       function showErr(msg) { const el = $('actionError'); el.textContent = msg; el.hidden = !msg; }
@@ -171,6 +183,8 @@
             return;
           }
           if (!res.ok) { showErr(body.error || ('Save failed: ' + res.status)); setStatus(''); return; }
+          // The page write succeeded even when its subsequent rebuild failed.
+          galleryMetadataWarnings.saved(body.galleryWarnings, payload);
           if (body.build && !body.build.ok) { showErr('Build error: ' + (body.build.error || 'unknown')); setStatus(''); return; }
           const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
           guard.markClean(snap);
@@ -245,6 +259,7 @@
         $(loc + 'Title').value = data.title || '';
         (loc === 'de' ? deMDE : enMDE).value(data.bodyMarkdown || '');
         if (data.images) Object.assign(loc === 'de' ? deImages : enImages, data.images);
+        void galleryMetadataWarnings.reopen(loc);
       }
 
       (async () => {

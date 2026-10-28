@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { exportPost, renderPostToMdx } from '../src/export.js';
 import { normalizeBodyImages, type PostPair } from '../src/posts.js';
-import { escapeMeta } from '../../site/src/lib/gallery-layout.js';
+import { escapeMeta } from '../public/gallery-photo-line.js';
 import * as bodyContent from '../src/body-content.js';
 
 const pair: PostPair = {
@@ -165,6 +165,30 @@ describe('renderPostToMdx', () => {
     const back = (await normalizeBodyImages(mdx.slice(mdx.indexOf('Intro')), {}));
     expect(back.bodyMarkdown).toBe(stored);
     expect(back.images).toEqual(images);
+  });
+
+  it('exports and pastes malformed gallery source without interpreting image-like metadata', async () => {
+    const src = 'https://img/x/y';
+    const line = `  ${src} | 800x600 | alt="ignored" | capton="![not an image](${src}) <BodyImage src=&quot;${src}&quot; width={99} height={88} />"  `;
+    const body = `Intro\r\n\r\n~~~gallery extra\r\n${line}\r\n~~~\r\n`;
+    const images = { [src]: { width: 1600, height: 1067, caption: 'Retained' } };
+    const saved = await normalizeBodyImages(body, images);
+    expect(saved.bodyMarkdown).toBe(body);
+    expect(saved.images).toEqual(images);
+    const mdx = await renderPostToMdx({ ...pair, de: { ...pair.de, bodyMarkdown: saved.bodyMarkdown, images: saved.images } }, 'de');
+    const exportedBody = mdx.slice(mdx.indexOf('Intro'));
+    expect(exportedBody).toBe(body);
+    const pasted = await normalizeBodyImages(exportedBody, images);
+    expect(pasted).toEqual(saved);
+    expect(Object.keys(pasted.images)).toEqual([src]);
+  });
+
+  it('does not trim retained invalid metadata at an unterminated gallery EOF', async () => {
+    const raw = 'https://img/x/y | 30x20 | alt = "Keep trailing spaces"   ';
+    const body = 'Intro\n\n```gallery\n' + raw;
+    const mdx = await renderPostToMdx({ ...pair, de: { ...pair.de, bodyMarkdown: body } }, 'de');
+    expect(mdx.slice(mdx.indexOf('Intro'))).toBe(body);
+    expect((await normalizeBodyImages(mdx.slice(mdx.indexOf('Intro')), pair.de.images)).bodyMarkdown).toBe(body);
   });
 
   it('round-trips a bracketed alt: escaped in the body, plain in the tag, escaped again on paste-back (#140)', async () => {

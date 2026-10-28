@@ -1,7 +1,6 @@
 /**
- * Justified-row geometry plus the readers for what a ```gallery fence says
- * about itself: the `#layout:` and `#captions:` directives and a photo line's
- * gallery-local `caption-override="…"`.
+ * Justified-row geometry and gallery-wide layout/caption directive readers.
+ * Photo-line metadata is decoded by uploader/public/gallery-photo-line.js.
  *
  * @ai-context docs/superpowers/specs/2026-07-29-gallery-layout-modes-and-lightbox-design.md
  *
@@ -110,43 +109,6 @@ export function readLayoutMode(fenceText: string): GalleryMode {
   return DEFAULT_GALLERY_MODE;
 }
 
-/**
- * Longest alt/caption a gallery line may carry. The uploader's `images`-map
- * validation (`body-content.ts`) uses the same cap.
- */
-export const MAX_GALLERY_TEXT = 1000;
-
-/**
- * Escape a gallery-line alt/caption value: the HTML-ish `& " < >` rule plus
- * the two characters this one-line-per-photo format adds — `|` is the field
- * separator and a newline would end the line. `unescapeMeta` is the exact
- * inverse.
- *
- * @ai-warning `uploader/public/gallery-fence.js` duplicates this pair (a
- * browser IIFE cannot import a module); `uploader/test/gallery-fence.test.ts`
- * compares them character for character. The uploader (`body-content.ts`,
- * `wp-content.ts`) imports this pair cross-tree rather than keeping a third copy.
- */
-export function escapeMeta(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\|/g, '&#124;')
-    .replace(/\r?\n/g, '&#10;');
-}
-
-/** Inverse of escapeMeta — `&amp;` last, so `&amp;quot;` round-trips to `&quot;`. */
-export function unescapeMeta(s: string): string {
-  return s
-    .replace(/&#10;/g, '\n')
-    .replace(/&#124;/g, '|')
-    .replace(/&quot;/g, '"')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&');
-}
 
 /**
  * A whole line reading `#captions: <value>` — the same shape and tolerance as
@@ -177,28 +139,6 @@ export function readCaptionsVisible(fenceText: string): boolean {
   return true;
 }
 
-/** One trimmed `|`-separated photo-line field holding a gallery-local caption. */
-export const CAPTION_OVERRIDE_FIELD_RE = /^caption-override="([^"]*)"$/;
-
-/**
- * A photo line's gallery-local caption: `undefined` when the line carries no
- * `caption-override="…"` field (inherit the library/stored caption), the
- * unescaped, capped text otherwise — `''` included, which is an intentional
- * clear. The last such field wins, like `alt=`/`caption=` on the same line.
- *
- * @ai-warning This value MUST stay on the photo line. Lifting it into the
- * URL-keyed `images` map would apply one gallery's caption to every gallery
- * (and inline use) of the same photo — the save normalizer and the MDX
- * exporter in `uploader/src/body-content.ts` both keep it inline.
- */
-export function readCaptionOverride(line: string): string | undefined {
-  let value: string | undefined;
-  for (const field of String(line ?? '').split('|').slice(1)) {
-    const m = CAPTION_OVERRIDE_FIELD_RE.exec(field.trim());
-    if (m) value = unescapeMeta(m[1] ?? '').slice(0, MAX_GALLERY_TEXT);
-  }
-  return value;
-}
 
 /** The container a justified mode partitions against. `slider` never partitions. */
 export function containerWidthFor(mode: Exclude<GalleryMode, 'slider'>): number {

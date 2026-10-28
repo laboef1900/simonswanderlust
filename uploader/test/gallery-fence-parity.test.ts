@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { normalizeGalleryFences, galleryFencesToMdx, rewriteOutsideGalleries } from '../src/body-content.js';
@@ -9,6 +8,7 @@ import { analyzeRenderedBody, transformBodyImages } from '../../site/src/lib/bod
 import { analyzeBodyContent } from '../src/publish-gate.js';
 import { auditAltText } from '../src/alt-audit.js';
 import type { PostLocale } from '../src/posts.js';
+import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 
 const URL = 'https://i/a';
 const PHOTO = `${URL} | 10x20 | alt="Lake" | caption="Morning"`;
@@ -59,8 +59,9 @@ interface BrowserApi {
 }
 function browser(): BrowserApi {
   const window: { GalleryFence?: BrowserApi } = {};
-  vm.runInNewContext(readFileSync('public/gallery-fence.js', 'utf8'), {
+  vm.runInNewContext(browserScript('gallery-fence.js'), {
     window, AbortController, setTimeout, clearTimeout,
+    ...galleryCodecBindings,
     fetch: async (_url: string, init: RequestInit) => ({ ok: true, json: () => analyzeGallerySource(JSON.parse(String(init.body)).bodyMarkdown) }),
   }, { filename: resolve('public/gallery-fence.js'), importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER });
   return window.GalleryFence!;
@@ -139,4 +140,35 @@ describe('source identity protects captions and ambiguous repeated text', () => 
       expect(body.slice(0, edit.start) + edit.text + body.slice(edit.end)).toBe(body);
     }
   });
+});
+
+describe('invalid metadata obeys the same authoritative gallery definition', () => {
+  for (const [name, shape, recognized] of GALLERY_CORPUS) {
+    it(`preserves bytes and original coordinates across save/export/picker: ${name}`, async () => {
+      const line = `${URL} | 10x20 | alt="🦋 valid" | capton="retained" | caption-override="must not apply"  `;
+      const body = shape(line);
+      const images = { [URL]: { width: 40, height: 30, alt: 'Original', caption: 'Original caption' } };
+      const saved = await normalizeGalleryFences(body, images);
+      expect(saved.bodyMarkdown).toBe(body);
+      expect(saved.images).toEqual(images);
+      expect(await galleryFencesToMdx(body, images)).toBe(body);
+      expect(await normalizeGalleryFences(saved.bodyMarkdown, saved.images)).toEqual(saved);
+      if (!recognized) {
+        expect(saved.galleryWarnings).toEqual([]);
+        return;
+      }
+      const beforeField = body.slice(0, body.indexOf('capton=')).split(/\r\n|\r|\n/);
+      expect(saved.galleryWarnings).toEqual([{ code: 'invalid_gallery_metadata',
+        line: beforeField.length, column: beforeField.at(-1)!.length + 1,
+        field: 'unknown', reason: 'unknown_field' }]);
+      const G = browser();
+      const edit = await G.replaceFenceAt(body, body.indexOf(URL), '```gallery\nhttps://i/b\n```');
+      expect(edit.blocked).toBeTruthy();
+      expect(body.slice(0, edit.start) + edit.text + body.slice(edit.end)).toBe(body);
+      const rendered = await transformBodyImages(await renderMarkdown(body), images, 'https://i');
+      expect(rendered).toContain('alt="Original"');
+      expect(rendered.includes('Original caption')).toBe(!body.includes('#captions: hidden'));
+      expect(rendered).not.toContain('must not apply');
+    });
+  }
 });
