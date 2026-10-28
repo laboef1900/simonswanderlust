@@ -2117,9 +2117,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
       if (e instanceof ImportInsufficientSpaceError) return reply.code(507).send({ error: e.message });
       throw e;
     }
-    // 400 only when the export yielded no groups at all. Every group lands in exactly
-    // one bucket (issue #100), so an all-published or all-rejected export is a job
-    // with an honest summary — a 400 cannot say WHICH groups were rejected and why.
+    // 400 only when there are no reportable units: Polylang groups plus individual
+    // untranslated DE/EN posts (#387). All-published or all-rejected exports are
+    // jobs with honest summaries — a generic 400 would hide each refusal's reason.
     if (prepared.groups === 0) {
       return reply.code(400).send({ error: 'no importable posts found in export' });
     }

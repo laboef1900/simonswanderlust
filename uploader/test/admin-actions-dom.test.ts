@@ -195,6 +195,29 @@ function loadPosts(extraGlobals: Record<string, unknown> = {}) {
   });
 }
 
+describe('import.html rejection accounting', () => {
+  it('shows a rejection-only completed summary and renders HTML-like slugs only as text', () => {
+    const { ctx, el } = loadPage('public/import.html', {});
+    const warning = '<img src=x onerror=alert(1)> (de): no translation (untranslated post) — rejected';
+    const renderFinished = vm.runInContext('renderFinished', ctx) as (job: unknown) => void;
+    renderFinished({
+      status: 'done',
+      summary: {
+        imported: 0, updated: 0, skippedPublished: 0, rejected: 1, failed: 0,
+        images: { total: 0, hosted: 0, failed: 0 }, warnings: [warning],
+      },
+    });
+    expect(el('results').style.display).toBe('');
+    expect(el('counts').textContent).toContain('Rejected: 1');
+    expect(el('importRejected').style.display).toBe('');
+    expect(el('importRejected').textContent).toContain('1 post group(s)');
+    expect(el('warnings').children).toHaveLength(1);
+    expect(el('warnings').children[0]!.textContent).toBe(warning);
+    expect(el('warnings').children[0]!.innerHTML).toBe('');
+    expect(el('warnings').children[0]!.children).toEqual([]);
+  });
+});
+
 const post = { translationKey: 'tk1', titleDe: 'Bukarest', slugDe: 'bukarest', slugEn: 'bucharest', status: 'published' };
 
 describe('posts.html actions survive a dropped connection', () => {

@@ -43,6 +43,18 @@ two different posts, or a slug equals another post's slug in the *other* languag
 are filed by slug, without a language) — is **rejected** with a warning naming the owner, and
 nothing is written. Resolve the slug in the editor and run the import again.
 
+**Untranslated stories:** The current importer requires a published DE/EN pair. A published
+German or English post without a Polylang translation group is counted individually as
+**Rejected**, with its unchanged slug and language in the warning list; a group missing its
+other published language is rejected too. Neither creates a draft nor downloads photos, even
+with **Replace existing drafts with the export** selected. An export containing only these
+refusals still completes as an import job with a rejection summary and zero planned work —
+it does not mean those stories were migrated. The five post counters sum to distinct Polylang
+groups plus individual untranslated published DE/EN items, not the number of XML rows in pairs.
+The warning list is capped, but the rejected count remains exact. Unknown/missing languages,
+non-post items and unpublished posts remain excluded; an export with no reportable items
+still fails as empty. No translation or replacement slug is generated.
+
 ---
 
 ## Stage 1 — Upload the photos (do this first)
