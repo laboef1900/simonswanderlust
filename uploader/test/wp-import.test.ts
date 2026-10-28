@@ -107,6 +107,57 @@ const run = (
 });
 
 describe('importWxr', () => {
+  it('shares scoped opening conversion with preflight, preserves edited merges, and only reformats an explicit overwrite', async () => {
+    const store = memoryPostStore();
+    const h = harness();
+    const photo = 'https://wp/a.jpg';
+    const source = pairOf('opening-breaks', 'anfang', 'opening',
+      '<div><h2>Anfang</h2><p>Eins<br>Zwei</p><h3>Eckdaten</h3><p>Zeile<br>Wert</p></div>' + imgs(photo),
+      '<h2>Opening</h2><p>One<br>Two</p><h2>On the road</h2><p>Hours:<br>9–17</p>' + imgs(photo),
+    );
+    const deps: ImportDeps = {
+      postStore: store, storageDir: '/tmp', baseUrl: 'https://img',
+      rehost: h.rehost, sleep: h.sleep, now: h.now, delayMs: 0, retries: 0, maxImages: 1,
+    };
+    const prepared = await prepareImport(source, deps);
+    expect(prepared.planned.images.planned).toBe(1);
+    expect(h.calls).toEqual([]);
+    expect(await store.list()).toEqual([]);
+    expect(await prepared.run()).toMatchObject({
+      imported: 1, failed: 0, images: { total: 1, hosted: 1, failed: 0 },
+    });
+    expect(h.calls).toEqual([photo]);
+    const tk = (await store.list())[0]!.translationKey;
+    const fresh = (await store.get(tk))!;
+    const hosted = SRC('anfang', photo);
+    const freshDe = `## Anfang\n\nEins\n\nZwei\n\n### Eckdaten\n\nZeile  \nWert\n\n![a](${hosted})`;
+    const freshEn = `## Opening\n\nOne  \nTwo\n\n## On the road\n\nHours:  \n9–17\n\n![a](${hosted})`;
+    expect(fresh.de.bodyMarkdown).toBe(freshDe);
+    expect(fresh.en.bodyMarkdown).toBe(freshEn);
+    expect(fresh.de.images[hosted]).toMatchObject({ width: 100, height: 80 });
+    expect(fresh.en.images[hosted]).toMatchObject({ width: 100, height: 80 });
+
+    const editedDe = `Handarbeit  \nBewusst verbunden\n\n### Eckdaten\n\nFakt  \nWert\n\n![Mein Alt](${photo})`;
+    const editedEn = 'My opening\n\nSeparate thought\n\n> Keep this  \n> together';
+    await store.upsertDraft({
+      ...fresh,
+      de: { ...fresh.de, bodyMarkdown: editedDe },
+      en: { ...fresh.en, bodyMarkdown: editedEn },
+    }, fresh.updatedAt);
+    h.calls.length = 0;
+    expect(await importWxr(source, deps)).toMatchObject({ updated: 1, failed: 0 });
+    expect(h.calls).toEqual([photo]);
+    const merged = (await store.get(tk))!;
+    expect(merged.de.bodyMarkdown).toBe(editedDe.replace(photo, hosted));
+    expect(merged.en.bodyMarkdown).toBe(editedEn);
+
+    expect(await importWxr(source, { ...deps, overwriteDrafts: true }))
+      .toMatchObject({ updated: 1, failed: 0 });
+    const overwritten = (await store.get(tk))!;
+    expect(overwritten.de.bodyMarkdown).toBe(freshDe);
+    expect(overwritten.en.bodyMarkdown).toBe(freshEn);
+  });
+
   it.each([false, true])('does not resurrect a matched draft deleted after preparation (overwrite=%s)', async (overwriteDrafts) => {
     const store = memoryPostStore();
     const body = pairOf('g', 'de-a', 'en-a', '<p>original</p>');
