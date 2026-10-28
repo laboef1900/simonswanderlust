@@ -517,8 +517,14 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   are recorded and logged, never crash the app.
 - **Images archive safety (#113,
   [spec](docs/superpowers/specs/2026-09-05-images-archive-safety-design.md))** — the incremental
-  `images-*.tar` is streamed to a `.<pid>.tmp` that is unlinked on any failure, including the
-  process exiting mid-stream; stale temps from a SIGKILL are swept at boot and before each run.
+  `images-*.tar` is streamed to a `.<pid>.tmp`. Since [#430](docs/superpowers/specs/2026-10-28-image-archive-stream-settlement-design.md),
+  the owned pack/destination pipeline waits for pending destination open, writes and close before
+  unlinking failed output or atomically activating a successful archive. The original error survives
+  cleanup; an unlink failure is logged for the next sweep. Exit cleanup remains best-effort; stale
+  temps from SIGKILL are swept at boot and before each run. Backup quiescence waits for writer
+  settlement, and cancellation prevents activation/cutoff advancement. Private tar input jobs can
+  still finish read-only work after pack destruction, but cannot write the closed destination.
+  Recovery is a new attempt after settlement, **not deleting prior archives**.
   The archive refuses (recorded as `lastError`, cutoff unchanged) when its estimated size plus the
   same 2 GiB reserve `/upload` keeps would not fit. Since [#335](docs/superpowers/specs/2026-10-25-image-archive-publication-boundary-design.md),
   selection includes content mtime **or publication ctime**, excluding atomic-write `.part-*`
