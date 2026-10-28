@@ -25,6 +25,9 @@ import { fixedWindowLimiter, accountLockoutLimiter } from '../src/rate-limit.js'
 import type { SiteBuilder, BuildOutcome } from '../src/build.js';
 import { memorySecretsStore, SecretsError } from '../src/secrets.js';
 import type { AiProvider, AiProviderKind } from '../src/ai-providers.js';
+import { memorySiteIdentityStore } from '../src/site-identity.js';
+import { normalizeIdentityUpload } from '../src/site-identity-assets.js';
+import * as disk from '../src/disk.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -3673,5 +3676,143 @@ describe('POST /settings/image-preview', () => {
     expect((await first).statusCode).toBe(200);
     // The slot is released once the first finishes.
     expect((await preview(b, cookie, { format: 'webp', quality: '75' })).statusCode).toBe(200);
+  });
+});
+
+describe('identity asset administration and release serving (#275)', () => {
+  function assetRequest(b: Built, cookie: { sid: string }, files: Buffer[], revision = 1, role = 'logo') {
+    const form = new FormData();
+    form.append('revision', String(revision));
+    for (const bytes of files) form.append('file', bytes, { filename: 'untrusted-name.png', contentType: 'image/png' });
+    return b.app.inject({ method: 'PUT', url: '/settings/identity/assets/' + role, cookies: cookie, headers: form.getHeaders(), payload: form.getBuffer() });
+  }
+  it('authorizes PUT and DELETE before inspecting bytes or revision', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const b = build({ identityStore, workLock: createWorkLock() });
+    const { cookie } = await authed(b, { isAdmin: false });
+    try {
+      for (const method of ['PUT', 'DELETE'] as const) {
+        const url = '/settings/identity/assets/logo';
+        expect((await b.app.inject({ method, url, payload: { revision: 1 } })).statusCode).toBe(401);
+        expect((await b.app.inject({ method, url, cookies: cookie, payload: { revision: 1 } })).statusCode).toBe(403);
+      }
+      expect(identityStore.get().revision).toBe(1);
+    } finally { await b.app.close(); }
+  });
+  it('saves one role group under the real shared lock, shares text revisions, removes to defaults and never builds or retains originals', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const lock = createWorkLock();
+    const replace = identityStore.replaceAssets.bind(identityStore);
+    const mutation = vi.spyOn(identityStore, 'replaceAssets').mockImplementation((revision, group, assets) => {
+      if (assets.length) expect(lock.stats().sharedRunning).toBe(1);
+      return replace(revision, group, assets);
+    });
+    const builder = stubBuilder();
+    const b = build({ identityStore, workLock: lock, builder: builder.builder });
+    const { cookie } = await authed(b);
+    try {
+      const source = await jpeg();
+      const uploaded = await assetRequest(b, cookie, [source]);
+      expect(uploaded.statusCode).toBe(200);
+      expect(uploaded.json()).toEqual({ revision: 2, savedAt: null, takesEffect: 'next_build', assets: { logo: true, favicon: false } });
+      expect(uploaded.headers['cache-control']).toBe('no-store');
+      expect(mutation).toHaveBeenCalledOnce();
+      expect(mutation.mock.calls[0]![2][0]!.bytes.equals(source)).toBe(false);
+      expect(await readdir(dir)).toEqual([]);
+      expect(b.enqueued).toEqual([]);
+      expect(builder.calls).toEqual([]);
+      const { canonicalOrigin: _reserved, ...identity } = identityStore.get().identity;
+      const text = await b.app.inject({ method: 'PUT', url: '/settings/identity', cookies: cookie, payload: { revision: 2, identity: { ...identity, siteName: 'Field notes' } } });
+      expect(text.statusCode).toBe(200);
+      const stale = await assetRequest(b, cookie, [source], 2);
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json().code).toBe('identity_conflict');
+      const favicon = await assetRequest(b, cookie, [source], 3, 'favicon');
+      expect(favicon.statusCode).toBe(200);
+      const settings = await b.app.inject({ url: '/settings/identity', cookies: cookie });
+      expect(settings.json()).toMatchObject({ revision: 4, assets: { logo: true, favicon: true }, identity: { siteName: 'Field notes' } });
+      expect(settings.json()).not.toHaveProperty('bytes');
+      const removed = await b.app.inject({ method: 'DELETE', url: '/settings/identity/assets/favicon', cookies: cookie, payload: { revision: 4 } });
+      expect(removed.statusCode).toBe(200);
+      expect(removed.json()).toMatchObject({ revision: 5, assets: { logo: true, favicon: false } });
+      const removedLogo = await b.app.inject({ method: 'DELETE', url: '/settings/identity/assets/logo', cookies: cookie, payload: { revision: 5 } });
+      expect(removedLogo.json()).toMatchObject({ revision: 6, assets: { logo: false, favicon: false } });
+      expect(builder.calls).toEqual([]);
+    } finally { mutation.mockRestore(); await b.app.close(); }
+  });
+  it('returns specific errors without replacing the previous asset or advancing its revision', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const source = await jpeg();
+    await identityStore.replaceAssets(1, 'logo', await normalizeIdentityUpload(source, 'logo'));
+    const b = build({ identityStore, workLock: createWorkLock() });
+    const { cookie } = await authed(b);
+    try {
+      const frames = Buffer.concat([Buffer.alloc(180 * 180 * 3, 30), Buffer.alloc(180 * 180 * 3, 200)]);
+      const animated = await sharp(frames, { raw: { width: 180, height: 360, channels: 3, pageHeight: 180 } })
+        .webp({ loop: 0, delay: [100, 100] }).toBuffer();
+      const cases: [Buffer[], number, string][] = [
+        [[source, source], 413, 'too_many_files'],
+        [[Buffer.alloc(2 * 1024 * 1024 + 1)], 413, 'asset_too_large'],
+        [[Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(2)</script><image href="https://example.com/evil.png"/></svg>')], 415, 'unsupported_image_type'],
+        [[Buffer.from('not an image')], 415, 'unsupported_image_type'],
+        [[animated], 400, 'animated_image'],
+        [[await sharp({ create: { width: 4097, height: 4097, channels: 3, background: '#000' } }).png().toBuffer()], 400, 'image_too_large'],
+        [[(await sharp(source).png().toBuffer()).subarray(0, 40)], 400, 'image_invalid'],
+        [[await sharp(source).resize(31, 31).png().toBuffer()], 400, 'image_too_small'],
+      ];
+      for (const [files, status, code] of cases) {
+        const response = await assetRequest(b, cookie, files, 2);
+        expect(response.statusCode, code).toBe(status);
+        expect(response.json().code).toBe(code);
+        expect(identityStore.get().revision).toBe(2);
+        expect(identityStore.getAssetState()).toEqual({ logo: true, favicon: false });
+      }
+      expect((await assetRequest(b, cookie, [source], 2, 'other')).statusCode).toBe(400);
+      expect((await assetRequest(b, cookie, [source], 0)).statusCode).toBe(400);
+      const lowDisk = vi.spyOn(disk, 'diskSpace').mockResolvedValue({ free: 0, total: 1 });
+      try {
+        const response = await assetRequest(b, cookie, [source], 2);
+        expect(response.statusCode).toBe(507);
+        expect(response.json().code).toBe('insufficient_space');
+      } finally { lowDisk.mockRestore(); }
+      expect(identityStore.get().revision).toBe(2);
+    } finally { await b.app.close(); }
+  });
+  it('does not report success or change cached identity when persistence fails', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const mutation = vi.spyOn(identityStore, 'replaceAssets').mockRejectedValue(new Error('private database failure'));
+    const b = build({ identityStore, workLock: createWorkLock() });
+    const { cookie } = await authed(b);
+    try {
+      const response = await assetRequest(b, cookie, [await jpeg()]);
+      expect(response.statusCode).toBe(500);
+      expect(response.body).not.toContain('private database failure');
+      expect(identityStore.get().revision).toBe(1);
+      expect(identityStore.getAssetState()).toEqual({ logo: false, favicon: false });
+    } finally { mutation.mockRestore(); await b.app.close(); }
+  });
+  it.each(['blog.example', 'localhost'])('serves release-owned PNG with nosniff and immutable caching on %s, not the dedicated image host', async (host) => {
+    const assets = await normalizeIdentityUpload(await jpeg(), 'logo');
+    const asset = assets[0]!;
+    const path = '/_identity/logo-' + asset.sha256.slice(0, 16) + '.png';
+    await mkdir(join(dir, 'site/current/_identity'), { recursive: true });
+    await writeFile(join(dir, 'site/current', path), asset.bytes);
+    const b = build({ imgHost: host === 'localhost' ? 'localhost' : 'images.example' });
+    try {
+      const response = await b.app.inject({ url: path, headers: { host } });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-type']).toMatch(/^image\/png/);
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+      expect(response.rawPayload.equals(asset.bytes)).toBe(true);
+      if (host !== 'localhost') {
+        const foreign = await b.app.inject({ url: path, headers: { host: 'images.example' } });
+        expect(foreign.statusCode).toBe(404);
+        expect(foreign.headers['cache-control'] ?? '').not.toContain('immutable');
+      }
+      const missing = await b.app.inject({ url: path.replace(asset.sha256.slice(0, 16), '0'.repeat(16)), headers: { host } });
+      expect(missing.statusCode).toBe(404);
+      expect(missing.headers['cache-control'] ?? '').not.toContain('immutable');
+    } finally { await b.app.close(); }
   });
 });
