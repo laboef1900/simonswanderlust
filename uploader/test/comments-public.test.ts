@@ -298,12 +298,66 @@ describe('POST /comments (SPEC-API-001)', () => {
     expect((await post(b, good(tk))).statusCode).toBe(201);
   });
 
+  it.each([80, 443])('normalizes explicit image port %i under the request protocol without blocking unrelated ports', async (port) => {
+    // Deliberately distinct: PUBLIC_BASE_URL must not hide an IMG_HOST bypass.
+    const b = build({ baseUrl: 'https://cdn.example', imgHost: `images.example:${port}` });
+    const tk = await published(b);
+    for (const scheme of ['http', 'https']) {
+      for (const host of [`images.example:${port}`, 'images.example', 'cdn.example']) {
+        const res = await post(b, good(tk), {
+          host, origin: new URL(`${scheme}://${host}`).origin, 'x-forwarded-proto': scheme,
+        });
+        expect(res.statusCode, `${scheme}://${host}`).toBe(403);
+        expect(res.json()).toEqual({ error: 'forbidden' });
+        expect(b.comments.all()).toHaveLength(0);
+      }
+    }
+    expect((await post(b, good(tk))).statusCode).toBe(201);
+    for (const host of ['images.example:8443', 'cdn.example:8443']) {
+      expect((await post(b, good(tk), { host, origin: `https://${host}` })).statusCode).toBe(201);
+    }
+    expect(b.comments.all()).toHaveLength(3);
+  });
+
+  it.each([
+    { baseUrl: 'https://cdn.example:80', scheme: 'http', port: 80 },
+    { baseUrl: 'http://cdn.example:443', scheme: 'https', port: 443 },
+  ])('normalizes the image-base authority under $scheme too', async ({ baseUrl, scheme, port }) => {
+    const b = build({ baseUrl, imgHost: 'images.example:8443' });
+    const tk = await published(b);
+    for (const host of ['cdn.example', `cdn.example:${port}`]) {
+      expect((await post(b, good(tk), { host, origin: `${scheme}://cdn.example`, 'x-forwarded-proto': scheme })).statusCode).toBe(403);
+      expect(b.comments.all()).toHaveLength(0);
+    }
+    expect((await post(b, good(tk))).statusCode).toBe(201);
+  });
+
+  it('keeps explicit origin precedence and fails closed on malformed image authority', async () => {
+    const b = build({ baseUrl: 'https://cdn.example', imgHost: 'images.example:443', commentsOrigin: 'https://images.example' });
+    const tk = await published(b);
+    expect((await post(b, good(tk), { host: 'images.example:443', origin: 'https://images.example' })).statusCode).toBe(201);
+    expect(b.comments.all()).toHaveLength(1);
+    for (const imgHost of ['images.example:', 'user@images.example', 'images.example/path']) {
+      const invalid = build({ imgHost });
+      const key = await published(invalid);
+      expect((await post(invalid, good(key))).statusCode).toBe(403);
+      expect(invalid.comments.all()).toHaveLength(0);
+    }
+  });
+
   it('retains only the documented single-origin loopback image/blog topology', async () => {
     for (const host of ['localhost:3000', '127.0.0.1:3000', '[::1]:3000']) {
       const origin = `http://${host}`;
       const b = build({ baseUrl: origin, imgHost: host });
       const tk = await published(b);
       expect((await post(b, good(tk), { host, origin, 'x-forwarded-proto': 'http' })).statusCode).toBe(201);
+    }
+    for (const [scheme, port] of [['http', 80], ['https', 443]] as const) {
+      const host = `localhost:${port}`;
+      const b = build({ baseUrl: `${scheme}://${host}`, imgHost: host });
+      const tk = await published(b);
+      expect((await post(b, good(tk), { host, origin: `${scheme}://localhost`, 'x-forwarded-proto': scheme })).statusCode).toBe(201);
+      expect(b.comments.all()).toHaveLength(1);
     }
     const b = build({ baseUrl: 'https://cdn.example', imgHost: 'localhost:3000' });
     const tk = await published(b);

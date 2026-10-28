@@ -1849,8 +1849,12 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const fresh = commentLimiters();
     const imageOrigin = new URL(cfg.baseUrl).origin;
     const imageAuthority = new URL(imageOrigin).host;
-    const servingImageOrigin = commentAuthorityOrigin('http', cfg.imgHost);
-    const servingImageAuthority = servingImageOrigin === null ? null : new URL(servingImageOrigin).host;
+    // Preserve alternate-scheme exclusions, including an explicitly configured
+    // default port, without excluding unrelated ports on the same hostname.
+    const servingImageAuthorities = ['http', 'https'].map((protocol) => {
+      const origin = commentAuthorityOrigin(protocol, cfg.imgHost);
+      return origin === null ? null : new URL(origin).host;
+    });
     registerPublicComments(app, {
       comments: cfg.comments,
       posts: cfg.posts,
@@ -1860,11 +1864,13 @@ export function buildServer(cfg: ServerConfig): AppServer {
         // a boot snapshot. Until then, do not infer identity from reader input.
         const origin = commentAuthorityOrigin(req.protocol, req.headers.host);
         if (origin === null) return null;
-        const authority = new URL(origin).host;
-        // Both PUBLIC_BASE_URL and IMG_HOST identify images, even when their
-        // authorities differ. Changing scheme cannot turn either into a blog.
-        if (authority === imageAuthority || authority === servingImageAuthority) {
-          return imgHostServesBlog && authority === servingImageAuthority && origin === imageOrigin ? origin : null;
+        if (servingImageAuthorities.some((authority) => authority === null)) return null;
+        // Normalize every authority under the actual request protocol. A default
+        // port in either image setting must not evade the image-host exclusion.
+        const servesImages = servingImageAuthorities.some((authority) =>
+          commentAuthorityOrigin(req.protocol, authority) === origin);
+        if (commentAuthorityOrigin(req.protocol, imageAuthority) === origin || servesImages) {
+          return imgHostServesBlog && servesImages && origin === imageOrigin ? origin : null;
         }
         return origin;
       },

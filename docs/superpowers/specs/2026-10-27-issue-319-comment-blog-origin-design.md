@@ -131,6 +131,45 @@ The fixture now uses the real HTTP transport for comment POSTs, retaining every 
 origin assertion and the default loopback trust policy. The previously reported suite
 failures were not rerun here; full automated verification belongs to the integration owner.
 
+### PR #442 default-port review fix — 2026-10-28
+
+The review found that normalizing `IMG_HOST` only under HTTP left
+`images.example:443` unequal to a trusted HTTPS request's normalized
+`images.example`, allowing an image-host submission when `PUBLIC_BASE_URL` used
+the distinct `cdn.example` authority. Both image settings now compare authorities
+under the actual request protocol. The serving-authority candidates retain both
+HTTP and HTTPS normalization so changing scheme does not remove an existing
+exclusion; unrelated non-default ports on that hostname remain eligible for the
+temporary fallback. A malformed serving authority fails closed. Explicit
+`commentsOrigin` still wins, and the combined loopback exception is unchanged.
+
+Additional real runtime evidence: `.issue-runtime/comment-origin-port-proof.json`.
+The original `comment-origin-proof.json` and screenshots remain untouched.
+
+- Booted an isolated source copy with the exact `0b976e2` `server.ts`, then the
+  changed real `src/main.ts`, using the existing synthetic `swl_319_dev` database
+  on port 55427 and worktree-only writable paths. `node:http` sent raw Host over
+  TCP to port 33419; no mocked stores, `inject`, test runner or typecheck was used.
+- Reproduced the review finding: baseline HTTPS `Host: images.example:443`,
+  `Origin: https://images.example` returned **201**, inserting one pending row.
+  The fixed version returned **403** with no insertion.
+- **33 actual requests** covered explicit `IMG_HOST` ports 443 and 80, both
+  schemes and normalized/default-port Host spellings, distinct image-base
+  authorities, and image-base ports that become default under the request's
+  alternate scheme. Every fixed rejection inserted zero rows.
+- Valid blog requests and unrelated `:8443` authorities still returned **201**.
+  Malformed Origin plus valid Referer, malformed raw Host, and spoofed forwarded
+  Host returned **403**. Combined loopback topologies with explicit `:80` and
+  `:443` returned **201**. Eleven synthetic rows (including the baseline
+  reproduction) are retained, all **pending**, with their published synthetic
+  post; no owner content was used.
+- All owned app processes were closed and the throwaway source/probe removed.
+  HTTPS here means trusted forwarded protocol over local TCP, not TLS ingress.
+  New automated regressions cover these port cases, no-insert refusals,
+  explicit override precedence, malformed image authority and loopback behavior;
+  their execution remains the parent's full-suite verification gate.
+
+
 
 ## Security, documentation and recovery
 

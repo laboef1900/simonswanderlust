@@ -207,8 +207,12 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
   policy governs forwarded protocol and client IP; the proxy must preserve Host, overwrite
   forwarded protocol and reject unintended public hostnames. Missing/malformed authority
   fails closed. Both `PUBLIC_BASE_URL`'s image authority and actual `IMG_HOST` are excluded,
-  including alternate schemes. The only exception is the existing single-origin loopback
-  image/blog topology (`imgHostServesBlog`), with matching image origin and serving authority.
+  including alternate schemes. Authority comparisons normalize default ports under the
+  actual request protocol; explicit `:443`/`:80` cannot bypass the exclusion. A different
+  non-default port is not excluded merely for sharing a hostname. Malformed `IMG_HOST`
+  refuses the fallback, without overriding an explicit valid `commentsOrigin`. The only
+  exception is the existing single-origin loopback image/blog topology (`imgHostServesBlog`),
+  with matching image origin and serving authority.
   This is CSRF equality, not authorization or a deployment-domain allow-list: until configured,
   a non-image authority deliberately forwarded by the trusted proxy can accept its own
   same-origin submissions. #276 will insert the current validated canonical identity between
