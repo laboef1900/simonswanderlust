@@ -254,7 +254,11 @@ bursts. **Clear finished** is not needed to show the accepted photos; queue entr
 visible until cleared. Refreshes retain the current folder, search, status filter, sort and
 page, so a photo outside that query will not appear there. Selections still in view and
 unsaved detail edits survive the refresh; switching to another photo still asks before
-discarding edits. The queue's **done** means the upload was accepted, not that encoding has
+discarding edits. Keyboard focus stays on the same visible photo even if its sort position
+changes. The refresh preserves whichever photo is focused when the response is rendered,
+not when the request started, and does not pull focus away from search, upload or dirty
+detail controls. Arrow and Space navigation continue from the restored photo.
+The queue's **done** means the upload was accepted, not that encoding has
 finished: the grid displays the status returned by the server, including **processing**.
 This is a completion-triggered refresh, not continuous polling for encoding progress.
 

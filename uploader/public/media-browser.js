@@ -89,7 +89,11 @@
       // Drop selections for photos no longer in view.
       var visible = state.items.map(function (i) { return i.key; });
       state.selected = state.selected.filter(function (k) { return visible.indexOf(k) !== -1; });
+      // Capture at response time: the author may have moved focus while loading.
+      var active = document.activeElement;
+      var focusedKey = active && $('grid').contains(active) ? active.dataset.key : null;
       render();
+      if (focusedKey) focusCell(visible.indexOf(focusedKey));
       say(msg != null ? msg : state.total + ' photo(s)');
     } catch (e) {
       if (loads.isCurrent(ticket)) fail(e);

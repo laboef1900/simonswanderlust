@@ -38,13 +38,20 @@ class FakeNode {
   attrs: Record<string, string> = {};
   children: FakeNode[] = [];
   listeners: Record<string, Listener[]> = {};
-  constructor(public tagName: string) {}
+  constructor(public tagName: string, private focusState?: { activeElement: FakeNode | null }) {}
   get innerHTML(): string { return ''; }
-  set innerHTML(v: string) { if (v === '') this.children = []; }
+  set innerHTML(v: string) {
+    if (v !== '') return;
+    if (this.focusState && this.children.some((child) => child.contains(this.focusState!.activeElement))) {
+      this.focusState.activeElement = null;
+    }
+    this.children = [];
+  }
   get firstElementChild(): FakeNode | null { return this.children[0] ?? null; }
   appendChild(c: FakeNode): FakeNode { this.children.push(c); return c; }
   remove(): void {}
-  focus(): void {}
+  focus(): void { if (this.focusState) this.focusState.activeElement = this; }
+  contains(node: FakeNode | null): boolean { return this === node || this.children.some((child) => child.contains(node)); }
   showModal(): void { this.open = true; }
   close(): void { this.open = false; this.dispatch('close'); }
   setAttribute(k: string, v: string): void { this.attrs[k] = v; }
@@ -105,6 +112,7 @@ type Describe = (url: string, signal: AbortSignal) => Promise<Details>;
 /** The loaded page: the DOM stub plus everything the page sent over the wire. */
 interface Page {
   el(id: string): FakeNode;
+  activeElement(): FakeNode | null;
   /** The page's global object, for replacing a module's function after load. */
   win: Record<string, unknown>;
   timers: { fn: () => void; cleared: boolean }[];
@@ -119,9 +127,10 @@ interface Page {
 }
 
 function loadPage(opts: { describe?: Describe; folders?: string[] } = {}): Page {
+  const focusState = { activeElement: null as FakeNode | null };
   const roots = new Map<string, FakeNode>();
   for (const id of pageIds) {
-    const n = new FakeNode('div');
+    const n = new FakeNode('div', focusState);
     n.id = id;
     n.checked = checkedIds.has(id);
     roots.set(id, n);
@@ -163,8 +172,9 @@ function loadPage(opts: { describe?: Describe; folders?: string[] } = {}): Page 
   const ctx: Record<string, unknown> = {
     document: {
       getElementById,
-      createElement: (tag: string) => new FakeNode(tag),
-      createTextNode: (text: string) => Object.assign(new FakeNode('#text'), { textContent: text }),
+      get activeElement() { return focusState.activeElement; },
+      createElement: (tag: string) => new FakeNode(tag, focusState),
+      createTextNode: (text: string) => Object.assign(new FakeNode('#text', focusState), { textContent: text }),
     },
     location: { href: '', origin: 'https://app.example', protocol: 'https:' },
     fetch,
@@ -222,7 +232,7 @@ function loadPage(opts: { describe?: Describe; folders?: string[] } = {}): Page 
   vm.runInContext(dialogSrc, ctx);
   vm.runInContext(browserSrc, ctx);
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await setImmediate(); };
-  return { el, win: ctx, timers, listRequests, uploadRequests, patches, rows, described, confirms, confirmAnswer, flush };
+  return { el, activeElement: () => focusState.activeElement, win: ctx, timers, listRequests, uploadRequests, patches, rows, described, confirms, confirmAnswer, flush };
 }
 
 function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
@@ -232,6 +242,40 @@ function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
 }
 
 describe('media-browser upload completion', () => {
+  it('keeps keyboard navigation on the same photo when completion changes its grid index', async () => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('first'), item('focused')], total: 2 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[1]!.focus();
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'ready' });
+    await page.flush();
+    runTimers(page.timers);
+    page.listRequests.shift()!.resolve({ items: [item('first'), item('new'), item('focused')], total: 3 });
+    await page.flush();
+    expect(page.activeElement()).toBe(page.el('grid').querySelectorAll('.media-cell')[2]);
+    page.activeElement()!.dispatch('keydown', { key: 'ArrowLeft' });
+    expect(page.activeElement()?.dataset.key).toBe('new');
+    expect(page.el('grid').querySelectorAll('.is-selected').map((node) => node.dataset.key)).toEqual(['new']);
+  });
+
+  it('does not reclaim grid focus after the author moves elsewhere during the refresh', async () => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('existing')], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.focus();
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'ready' });
+    await page.flush();
+    runTimers(page.timers);
+    page.el('dropZone').focus();
+    page.listRequests.shift()!.resolve({ items: [item('existing'), item('new')], total: 2 });
+    await page.flush();
+    expect(page.activeElement()).toBe(page.el('dropZone'));
+  });
+
   it('refreshes once for completed uploads, keeps queue results and unsaved details, and renders the server status', async () => {
     const page = loadPage();
     await page.flush();
