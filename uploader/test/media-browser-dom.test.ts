@@ -276,6 +276,56 @@ describe('media-browser upload completion', () => {
     expect(page.activeElement()).toBe(page.el('dropZone'));
   });
 
+  it('keeps a clean focused detail input until typing, but refreshes it after an explicit save', async () => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('existing')], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    const input = page.el('dTitle');
+    input.focus();
+    expect(page.el('dUnsaved').hidden).toBe(true);
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'ready' });
+    await page.flush();
+    runTimers(page.timers);
+    page.listRequests.shift()!.resolve({ items: [item('existing'), item('new')], total: 2 });
+    await page.flush();
+    expect(page.activeElement()).toBe(input);
+    expect(page.el('dTitle')).toBe(input);
+    input.value = 'Continued typing';
+    page.el('detail').dispatch('input');
+    page.el('dSave').focus();
+    page.el('dSave').dispatch('click');
+    await page.flush();
+    expect(page.patches.at(-1)?.body).toEqual({ title: 'Continued typing' });
+    page.listRequests.shift()!.resolve({ items: [{ ...item('existing'), title: 'Continued typing' }, item('new')], total: 2 });
+    await page.flush();
+    expect(page.el('dTitle').value).toBe('Continued typing');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+  });
+
+  it.each([
+    ['folderTree', '.folder-btn'],
+    ['uploadQueue', '.btn-secondary'],
+  ])('does not replace focused %s controls during background completion', async (id, selector) => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('existing')], total: 1 });
+    await page.flush();
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'ready' });
+    await page.flush();
+    const control = page.el(id).querySelectorAll(selector)[0]!;
+    control.focus();
+    runTimers(page.timers);
+    page.listRequests.shift()!.resolve({ items: [item('existing'), item('new')], total: 2 });
+    await page.flush();
+    expect(page.activeElement()).toBe(control);
+    expect(page.el(id).querySelectorAll(selector)[0]).toBe(control);
+    expect(page.el('grid').querySelectorAll('.media-cell').map((node) => node.dataset.key)).toEqual(['existing', 'new']);
+  });
+
   it('refreshes once for completed uploads, keeps queue results and unsaved details, and renders the server status', async () => {
     const page = loadPage();
     await page.flush();

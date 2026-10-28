@@ -43,7 +43,7 @@
   // Upload completion means the original was accepted, not that encoding is
   // ready. Reload the current query so the server supplies its actual status
   // and applies the author's folder, filters, sorting and page.
-  var refreshUploads = api.debounce(function () { reload(); }, 200);
+  var refreshUploads = api.debounce(function () { reload(undefined, true); }, 200);
   var uploads = api.createUploadQueue(client, {
     onChange: function (snap) {
       var previousDone = state.queue ? state.queue.done : 0;
@@ -73,7 +73,7 @@
   // a query the author has already typed past. See makeSequence.
   var loads = api.makeSequence();
 
-  async function reload(msg) {
+  async function reload(msg, background) {
     var ticket = loads.next();
     try {
       var res = await client.list({
@@ -92,7 +92,7 @@
       // Capture at response time: the author may have moved focus while loading.
       var active = document.activeElement;
       var focusedKey = active && $('grid').contains(active) ? active.dataset.key : null;
-      render();
+      render(background);
       if (focusedKey) focusCell(visible.indexOf(focusedKey));
       say(msg != null ? msg : state.total + ' photo(s)');
     } catch (e) {
@@ -235,11 +235,15 @@
   // is left untouched — whatever reload() or a selection change did to the rest
   // of the page — until the edits are saved or explicitly discarded
   // (see detailReplaceable).
-  function renderDetail() {
+  function renderDetail(background) {
     if (state.detailDirty) return;
     var panel = $('detail');
-    panel.innerHTML = '';
     var item = state.items.filter(function (i) { return i.key === state.detailKey; })[0];
+    // Background completion must not remove a control between focus and typing.
+    // Explicit actions (including Save) still refresh the clean panel normally.
+    if (background && item && panel.dataset.key === item.key
+      && panel.contains(document.activeElement)) return;
+    panel.innerHTML = '';
     // A suggestion belongs to the photo it was asked for: once the panel shows
     // another photo (or none), the request is abandoned, never applied, and
     // the offers it left under fields are dropped.
@@ -370,12 +374,14 @@
     }
   }
 
-  function render() {
-    renderFolders();
+  function render(background) {
+    // Completion changes photos, not folder navigation. Queue emissions already
+    // repaint their own state; replacing either here would discard focused controls.
+    if (!background) renderFolders();
     renderGrid();
     renderToolbar();
-    renderDetail();
-    renderQueue();
+    renderDetail(background);
+    if (!background) renderQueue();
   }
 
   // ---- selection ----------------------------------------------------------
