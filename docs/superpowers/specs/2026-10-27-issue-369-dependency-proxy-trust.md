@@ -484,12 +484,12 @@ deliberately absent, so this probe claims no Publish, renderer or full-site serv
   - It re-runs #347's throwaway codec smoke (§7.5).
 
   If #369 were forced first, it would carry no sharp change, and #347 would regenerate its locks afterwards.
-- **Split into two PRs** (§11 D4), each independently deployable from one image. Both ship in the
-  same image, so whichever lands second rebases on the first.
-  - **PR-A (uploader):** fastify, @fastify/static, the trust policy, compose, docs and tests.
-  - **PR-B (site):** astro, mdx, satteri, shiki and the transitives. PR-B also changes uploader
-    runtime behaviour (preview and publish gate import `render-markdown.ts`), so its uploader
-    suites run too. PR-B does not depend on the proxy design and can be approved separately.
+- **One focused issue PR with separately reviewable commits** (§11 approval record).
+  The uploader commit patches Fastify/static, proxy trust, Compose and their tests.
+  The site commit patches Astro, MDX, Satteri, Shiki and transitives. It also affects
+  uploader preview/publication through `render-markdown.ts`, so verification covers
+  both trees together. This supersedes the proposal's two-PR split; neither slice
+  is omitted.
 - **#319** (comment origin) and **#372** (rate-limit `return`) touch `comments-public.ts`,
   `server.ts` and `rate-limit.ts` near the same lines. The trust change is orthogonal: it changes
   only how `req.ip` and `req.protocol` are derived. Whichever lands later rebases, and the tests in
