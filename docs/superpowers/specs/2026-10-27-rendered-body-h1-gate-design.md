@@ -50,6 +50,48 @@ Tests to implement, not results claimed: shared sanitized-tree H1 cases; `upload
 
 Amend `2026-09-20-imported-content-semantics-design.md` to describe the semantic gate and reconfirm `SECURITY.md` publication-image analysis/output-sanitization sections. This is not a new security claim that one H1 prevents XSS.
 
+## Isolated runtime acceptance — 2026-10-28
+
+Observed against implementation `61e30b4e020f5f26f52bbad601134145705d7db0`,
+using the actual `uploader/src/main.ts`, loopback port `33475` and isolated
+Postgres `swl_375_dev` on `55427`. Only synthetic posts, one generated image and
+a temporary administrator were used. Detailed redacted evidence and desktop/mobile
+captures are retained locally under `.issue-runtime/evidence/`.
+
+- Single Publish refused Setext, blockquote, list-item and surviving raw HTML H1s
+  independently in DE and EN: eight HTTP 400 responses, each naming the locale
+  and `body` in the existing H1 message. Full queried working rows, snapshots,
+  publication timestamps and the release target/list were unchanged.
+- An all-refused bulk returned eight per-pair failures, zero successes and no
+  build; snapshots and the release were unchanged. A mixed bulk returned five
+  successful eligible pairs and eight correctly classified failures, with one
+  successful build result; refused rows remained unchanged.
+- A single bilingual post combining inline code, indented code, HTML/Markdown
+  fences, escaped Markdown/HTML, character references and a sanitizer-removed
+  script containing H1 text published successfully. Each of those five case
+  groups also published independently through bulk.
+- All twelve accepted locale URLs served HTTP 200 from a real generated release.
+  DOM inspection found exactly one page H1 and no body H1 on each. Literal code
+  and escaped text survived; the removed-script sentinel did not.
+- After saving a Setext H1 over the successful story's working copy, both single
+  and bulk republish refused without changing its existing snapshot or release.
+  Subsequent successful About rebuilds still served the accepted snapshot,
+  never the invalid working copy.
+- About's existing policy remained unchanged: synthetic DE ATX and EN Setext H1s
+  saved and built successfully and appeared in the served About pages. The seeded
+  About content was subsequently restored through its API and rebuilt.
+- The editor's confirmed Publish action displayed the same locale/body error in
+  a `role="alert"`. At 1440px desktop and 390px mobile, the error remained readable
+  and the document had no horizontal overflow. Published story screenshots
+  retained literal examples and loaded the generated hero image.
+
+The image origin `proof375.localhost:33475` intentionally does not serve blog
+paths; public output was inspected on `proof375-blog.localhost:33475`.
+No automated suites, typechecks or standalone builds were run in this acceptance
+pass. Final integrated-head checks remain the parent's responsibility. Basemap
+assets were not provisioned, and map appearance is outside this proof. No gallery
+optimizer, deployment or owner-content change is included.
+
 ## Dependencies and rollback
 
 Coordinate with #356/#358/#378 on shared renderer signatures; those changes must not alter the H1 predicate. No dependency on importer normalization or a content migration. Revert code and semantic-gate documentation together if necessary, preserving the last good release and stored bodies; reverting reintroduces false positives/negatives, so prefer a forward correction. Do not mass-edit existing articles to make a broken gate pass.
