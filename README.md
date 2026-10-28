@@ -179,12 +179,43 @@ to signed-in authors for browser-direct requests.
 
 ## Backups
 
-Your journal deserves a copy somewhere else. The built-in database dumps and incremental
-image archives live under `/data/backup/db`, on the **same disk as the running app**.
-Schedule a host-level offsite backup of `./uploader/data` as well; keep any AI encryption
-master key separately. A local backup alone is not disaster recovery.
+Your journal deserves a copy somewhere else. App-created database dumps, image archives and
+private GPX companion archives normally live under `/data/backup/db`, on the **same disk as
+the running app**. Settings lists local files, not verified offsite delivery.
 
-[Backup and restore procedures](ARCHITECTURE.md#backups--disaster-recovery).
+A complete recovery generation needs:
+
+- A validated database dump (content, accounts, comments, media metadata, encrypted AI
+  credentials and private routes), its manifest-matched GPX original archive, and image
+  originals/variants or the **complete required image archive chain**.
+- Operator-managed copies of the actual `settings.json`, any `settings.json.pre-ai-registry`,
+  bootstrap/deployment configuration, pinned image identity and storage/custom-map overrides.
+  Freeze and drain writes before capture so provider settings and encrypted keys belong to
+  the same generation; these files are not in the database dump.
+- **Independent separate escrow** for every still-needed AI master key and the encrypted
+  repository's access/decryption material. Remove master-key values from bootstrap copies
+  placed in the data repository. A repository cannot be its own only key escrow.
+
+Site releases and public tracks are rebuildable; MDX exports and backup scheduling state
+are not full recovery sets. Sessions, unsaved edits and excluded job/revision history are
+not restored. Include configured paths outside the default `./uploader/data` bind.
+Protect all copies with restricted access and encryption in transit and at rest: originals
+may retain EXIF/GPS and GPX locations/times. Deleting a live photo does not erase archive
+history or offsite copies.
+
+The approved **operator policy** retains **14 completed daily offsite generations**, plus
+older image-chain material and GPX companions needed by retained generations. Failed copies
+must preserve the last-known-restorable generation. This is not an app-implemented pruner
+or the local “Backups to keep” setting. The selected existing encrypted backup system still
+needs its tool, non-secret destination and independent escrow/recovery details recorded;
+no successful offsite restore is claimed.
+
+If an AI master key is lost, content/photos still restore but its old encrypted credentials
+do not: use private bootstrap configuration and Settings to replace/reissue credentials,
+without weakening encryption. Keep failed recovery attempts isolated and retain their
+input/undo sets. Independent #295 recovery and #296 offsite-only drills remain required.
+
+[Full inventory, coherent capture and offline restore procedures](ARCHITECTURE.md#backups--disaster-recovery).
 
 ## Under the hood
 
