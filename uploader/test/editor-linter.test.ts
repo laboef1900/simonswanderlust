@@ -229,6 +229,30 @@ describe('photo repair locations', () => {
   it('does not target examples, links or gallery fences as body images', async () => { const src = 'https://img/photo';
   const markdown = '`![example](' + src + ')`\n\n````markdown\n![](' + src + ')\n````\n\n[link](' + src + ')\n\n```gallery\n' + src + '\n```';
   expect((await L.findImage(markdown, src))).toBeNull(); });
+
+  it('masks nested HTML ranges once without displacing later repair locations', async () => {
+    const markdown = [
+      '🦋 Intro', '',
+      '<pre>literal before',
+      '<pre><code class="language-gallery">https://images.example/a</code></pre>',
+      '# Literal heading',
+      '![](https://img/literal)',
+      '</pre>', '',
+      '![Actual alt](https://img/after)',
+      '# Real heading',
+    ].join('\r\n');
+    const start = markdown.indexOf('Actual alt');
+    expect(await L.findImage(markdown, 'https://img/after')).toEqual({
+      start, end: start + 'Actual alt'.length, line: 9,
+    });
+    expect(await L.findImage(markdown, 'https://img/literal')).toBeNull();
+    expect(locations(await L.lintHeadings(markdown))).toEqual([
+      { code: 'body-h1', line: 10, target: undefined },
+    ]);
+    expect(locations(await L.lintAltText({ markdown }))).toEqual([
+      { code: 'missing-alt', line: 4, target: 'gallery' },
+    ]);
+  });
 });
 
 describe('authoritative gallery quick checks', () => {

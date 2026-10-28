@@ -119,8 +119,9 @@ No migration or automatic content rewrite. Before any later production rollout, 
 - Non-gallery raw-HTML `pre` containers do not hide nested gallery nodes. Source
   ranges may nest only inside such literal containers; crossing/duplicate ranges
   remain invalid, and cursor selection chooses the innermost containing block.
-  Decoded text units are appended iteratively, without spreading an input-sized
-  array into a JavaScript call.
+  The linter masks each source byte once even when those ranges nest, while
+  retaining every gallery block for its alt checks. Decoded text units are
+  appended iteratively, without spreading an input-sized array into a JavaScript call.
 - Manual post-local descriptions retain the latest intent per URL and locale.
   Applying an intent rechecks its identity and exact body; a source shift requests
   new ranges, while an intentional form replacement clears old intents. Save
@@ -224,4 +225,24 @@ and evidence were retained. Mobile means a measured Chromium viewport, not a
 physical device. No external model, deployment or owner-content migration ran.
 The existing `SECURITY.md` authorization, nonpersisting analysis, provenance,
 post-sanitize URL/markup guards and Media-first metadata policy remain unchanged.
+
+## Nested linter consumer qualification (2026-10-28)
+
+The full-range review found one remaining consumer that assumed disjoint ranges:
+the linter appended a nested range twice and displaced subsequent repair offsets.
+The failing-before regression located an inline alt at UTF-16 offset 291 instead
+of 165. The fix skips already-masked contained ranges without removing the nested
+gallery from the analysis result.
+
+Full six-check wave `1793226390750_58264` passed, including exact repair offsets,
+heading line numbers, hidden literal examples and retained nested gallery checks.
+The actual editor's audit buttons then selected the complete filename-pattern alt
+after a nested raw-HTML gallery: DE at 1440px and EN at 390px. The fresh mobile
+navigation had no horizontal overflow; the earlier resize capture retained open
+desktop panels and is not the qualified mobile image. Source stayed unchanged.
+Evidence and source hashes are in
+`.local/backlog-execution-2026-10-27/issue-354-nested-linter-runtime/`.
+Only a new synthetic draft and temporary test accounts were used; retained fixtures
+were not published. Accounts/sessions, browser profiles and the owned service were
+removed. No physical-device or optional AI-provider coverage is claimed.
 

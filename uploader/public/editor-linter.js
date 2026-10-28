@@ -86,6 +86,9 @@ window.EditorLinter = (function () {
     var inlineParts = [];
     var pos = 0;
     blocks.forEach(function (block) {
+      // A non-gallery HTML pre may contain another analyzed pre. Its outer
+      // range already masks those bytes; keep nested blocks for gallery checks.
+      if (block.end <= pos) return;
       var prose = source.slice(pos, block.start);
       var fenced = blank(source.slice(block.start, block.end));
       parts.push(prose, fenced);
