@@ -158,11 +158,22 @@ An empty `SITE_DIR` starts a build from `SITE_APP_DIR`, so check both paths befo
    bridge gateway at hop zero. Do not put it in `.env`; a different network/proxy topology
    requires a new spec. Failed gateway discovery refuses boot rather than losing `Secure`
    cookies or collapsing every reader into one limiter bucket.
+   Reject unintended public hostnames at the proxy. Reader comments compare Origin (or Referer
+   only when Origin is absent/empty) with the trusted scheme plus raw `Host`, **not**
+   `PUBLIC_BASE_URL` and never `X-Forwarded-Host`. This is #319's temporary request-authority
+   fallback, not a domain allow-list. The image authority and `IMG_HOST` cannot receive
+   same-origin comments, even under another scheme; single-origin loopback development remains
+   supported. No new blog-origin env setting is required. #276 will give validated canonical
+   identity precedence over this fallback; the explicit server override remains highest.
 6. Open `https://simonswanderlust.com/login` to create the first admin account, then upload.
    Before public cutover, inspect the target server's observed proxy peer, confirm `Secure`
    on an HTTPS login, and verify independent login-limit buckets from two external networks.
    The #369 Docker Desktop production-image TCP probe covers the Linux VM host-network
    proxy → app bridge path, not the target VPS's published-loopback/NAT configuration.
+   Also submit a synthetic comment from the blog origin: expect 201, a pending moderation row,
+   and no public entry until approval. The image origin, a third party and hostname-prefix or
+   userinfo lookalikes must receive 403. The local #319 proof used real `main.ts`/Postgres,
+   split `.localhost` hosts and a loopback proxy; it does not replace this target-server check.
 
 The admin panel is reachable directly at `https://simonswanderlust.com/admin/` — the same process
 serves it, so there's nothing to proxy to separately anymore.

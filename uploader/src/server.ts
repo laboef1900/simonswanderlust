@@ -46,7 +46,7 @@ import { createImportRunner, memoryImportJobStore, ImportBusyError, type ImportR
 import { createRehostResume } from './wp-images.js';
 import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, commentLimiters, type RateLimiter, type AccountLimiter } from './rate-limit.js';
 import type { CommentStore } from './comments.js';
-import { registerPublicComments } from './comments-public.js';
+import { commentAuthorityOrigin, commentOrigin, registerPublicComments } from './comments-public.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
 import { compressionHook } from './compress.js';
@@ -126,8 +126,8 @@ export interface ServerConfig {
   /** Site-wide comments switch. Defaults to OFF (fail closed): POST answers 409. */
   commentsEnabled?: () => boolean;
   /**
-   * Exact Origin a browser POST /comments must carry. Defaults to the origin
-   * of `baseUrl` (PUBLIC_BASE_URL). Compared by equality, never prefix.
+   * Explicit blog-origin override for POST /comments. Invalid values fail closed.
+   * Otherwise use trusted protocol + raw Host, excluding production image hosts.
    */
   commentsOrigin?: string;
   /** Injectable for tests; defaults to fresh `commentLimiters()` maps. */
@@ -1847,10 +1847,27 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // The limiter maps are the comment route's own, never `loginLimiter`.
   {
     const fresh = commentLimiters();
+    const imageOrigin = new URL(cfg.baseUrl).origin;
+    const imageAuthority = new URL(imageOrigin).host;
+    const servingImageOrigin = commentAuthorityOrigin('http', cfg.imgHost);
+    const servingImageAuthority = servingImageOrigin === null ? null : new URL(servingImageOrigin).host;
     registerPublicComments(app, {
       comments: cfg.comments,
       posts: cfg.posts,
-      allowedOrigin: cfg.commentsOrigin ?? new URL(cfg.baseUrl).origin,
+      allowedOrigin: (req) => {
+        if (cfg.commentsOrigin !== undefined) return commentOrigin(cfg.commentsOrigin);
+        // #276 inserts the CURRENT validated identity.canonicalOrigin here, not
+        // a boot snapshot. Until then, do not infer identity from reader input.
+        const origin = commentAuthorityOrigin(req.protocol, req.headers.host);
+        if (origin === null) return null;
+        const authority = new URL(origin).host;
+        // Both PUBLIC_BASE_URL and IMG_HOST identify images, even when their
+        // authorities differ. Changing scheme cannot turn either into a blog.
+        if (authority === imageAuthority || authority === servingImageAuthority) {
+          return imgHostServesBlog && authority === servingImageAuthority && origin === imageOrigin ? origin : null;
+        }
+        return origin;
+      },
       // Falls back to the persisted global switch (default false = fail closed).
       commentsEnabled: cfg.commentsEnabled ?? (() => cfg.settings.get().commentsEnabled === true),
       ipLimiter: cfg.commentIpLimiter ?? fresh.ip,

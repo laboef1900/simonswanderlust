@@ -1,15 +1,15 @@
 # Comment submissions on separate blog and image origins (#319)
 
 Date: 2026-10-27. Risk: **High — public unauthenticated write boundary.**
-Status: **OWNER APPROVED 2026-10-28** — temporary fallback and exclusions approved with #369's immediate-peer trust policy. Implementation and runtime verification remain required; no deployment or owner-data mutation is authorized.
+Status: **OWNER APPROVED 2026-10-28** — temporary fallback and exclusions approved with #369's immediate-peer trust policy. Implementation and local runtime proof recorded below; automated verification remains the integration owner's gate. No deployment or owner-data mutation is authorized.
 Baseline: `11e16d1b8e43141d296b801ee663a351ae3fe415`.
 
 ## Evidence and decision
 
 `main.ts:76` supplies `PUBLIC_BASE_URL` as the image base URL; it never supplies
 `commentsOrigin`. `server.ts:1859` consequently compares submissions to the image origin.
-The island submits to relative `/comments`. The issue's split-host failure is source-derived,
-not a recorded reproduction; this proposal does not claim the requested before/after run exists.
+The island submits to relative `/comments`. The split-host failure was initially source-derived;
+the 2026-10-28 runtime record below now reproduces it against an untouched baseline source copy.
 
 There is **no existing bootstrap setting containing the blog origin**. `IMG_HOST` is also an
 image-host setting. Reinterpreting either would break image URLs/routing. No new env knob,
@@ -68,9 +68,9 @@ read identity per request (or its approved current in-memory store), not capture
 
 ## Required evidence after approval
 
-- Before editing, record the issue-required split-domain baseline once using disposable Postgres
-  and two hostnames through the existing trusted-proxy topology: blog Origin currently 403.
-  This is pending evidence, not a claim that this run was performed here.
+- Record the issue-required split-domain baseline using isolated Postgres and two hostnames
+  through the existing trusted-proxy topology: blog Origin currently 403. The record below
+  uses an untouched HEAD source copy, without switching or overwriting the implementation.
 - Boot real `src/main.ts` with `TEST_DATABASE_URL`, distinct blog/image hosts and a published
   synthetic post. Blog-origin POST → 201, pending row, not yet in GET. Same URL with image,
   third-party, prefix-lookalike and both userinfo directions → 403, no row. Keep limiter budgets
@@ -84,7 +84,53 @@ read identity per request (or its approved current in-memory store), not capture
 - Real browser smoke through two proxy hostnames: submit on the blog, approve in admin, read
   through the island. Record before 403 / after 201 without reader-data logs.
 - Run affected full suites/typecheck and Postgres integration; preserve no-session, honeypot,
-  404/409, output-key and body-cap tests. No tests were run for this proposal.
+  404/409, output-key and body-cap tests. The runtime proof below does not replace those checks.
+
+### Recorded local runtime proof — 2026-10-28
+
+Evidence: `.issue-runtime/comment-origin-proof.json` and the adjacent
+`comment-origin-{baseline,pending,approved}.png` captures (local, untracked).
+
+- Booted real `main.ts` on port 33419 against dedicated synthetic `swl_319_dev`, **not**
+  `TEST_DATABASE_URL`, with all writable paths inside this worktree. The empty isolated site
+  directory triggered one successful normal bootstrap build (13 pages; chunk-size warning).
+  No separate build, test or typecheck command was run during this proof.
+- Before: copied `HEAD:uploader/src` at `b6c4208fa726620ffaf2bbd866608ece5300ea0f`
+  into a throwaway source directory. Real raw-Host TCP and the browser island both returned
+  **403** for the blog origin; no row was inserted. The implementation was never switched out.
+- After: current `src/main.ts` returned **201**, inserted `pending`, and returned an empty
+  public list before approval. A real loopback proxy served `blog.localhost:33420` and
+  `img.localhost:33420`, preserving Host and replacing forwarded protocol/client headers.
+  The managed browser submitted through the real island, received its pending notice,
+  approved that comment through the real admin queue (**200**), and read it back through the
+  public island (**one approved comment**).
+- Real TCP refusals were **403** for image/third-party origins, hostname-prefix lookalikes,
+  both userinfo directions, null/path-bearing Origin plus a valid Referer, absent headers,
+  credential-bearing Referer, spoofed forwarded Host, wrong/invalid scheme, wrong port,
+  image-host targets (including alternate scheme), and userinfo/path/query/fragment Host
+  tricks. No refusal inserted a row. Raw socket missing, empty and whitespace Host cases
+  also returned **403**. Matching Referer with Origin absent returned **201**; a valid Origin
+  still won over a foreign Referer.
+- Trusted loopback forwarded HTTPS supplied the allowed scheme. A real socket bound to the
+  machine's **non-loopback interface**, with the same forwarded HTTPS, refused HTTPS Origin
+  (**403**) but accepted the actual HTTP origin (**201**). Changing its spoofed XFF values
+  did not reset the real per-IP budget: request six returned **429**. No trust policy changed.
+  A separate real app boot with matching loopback image/blog origin returned **201**.
+- Held an actual Postgres `ACCESS EXCLUSIVE` lock on `sessions`: public GET (**200**) and
+  POST (**201**) with a real session cookie completed while the lock was held. As a positive
+  control, `/auth/status` was observed waiting for the session relation and completed
+  **200** after unlock. This proves no public-route session lookup without a mocked store.
+- The browser proxy was HTTP; HTTPS was exercised as trusted forwarded protocol over real
+  TCP, **not** as local TLS termination. This is not target-VPS/Docker ingress proof.
+  All app/proxy processes and browser tabs were closed; the synthetic post, comments and
+  admin were removed, as were the throwaway source copy and probe scripts.
+
+The integration fixture's raw Host must use `node:http.request`: the integration owner
+observed that native Node 26 `fetch` overwrites a supplied Host with the URL authority.
+The fixture now uses the real HTTP transport for comment POSTs, retaining every original
+origin assertion and the default loopback trust policy. The previously reported suite
+failures were not rerun here; full automated verification belongs to the integration owner.
+
 
 ## Security, documentation and recovery
 
