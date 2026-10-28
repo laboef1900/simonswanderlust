@@ -67,11 +67,59 @@ recorded digests as history. This branch includes #347's codec upgrade: rolling 
 vulnerable codecs is not authorized; its recovery remains roll-forward. No schema migration,
 restore, re-encoding or deletion of `/data` is needed for this naming change.
 
-## Verification hand-off
+## Observed local qualification — 2026-10-28
 
-No builds, tests, lint, formatters or registry mutations run in this implementation slice.
-The parent integration owner checks Compose interpolation (empty/unset tag fails; explicit
-version and local tag resolve only to the new name), release workflow configuration and
-local-image build/run evidence. These configuration/runtime checks are the substantive
-regression evidence; no source-string or wording-only tests are added. Publication and
-registry access checks remain part of the separately authorized future release.
+The isolated qualification used committed tree
+`028552ca6926ffcd3b2c96a96f276b422151ba2d`, before this evidence-only update.
+No automated tests, lint or formatters were run in this slice.
+
+- Real Compose interpolation with an isolated environment refused both unset and empty
+  `IMAGE_TAG`. Explicit `local` and the unique local fixture tag resolved only to
+  `ghcr.io/laboef1900/wanderlust-studio`; neither was represented as a published release.
+- The integrated release workflow retains the version/major-minor/latest tag shapes,
+  amd64/arm64 matrix, and `SOURCE_REPOSITORY=${{ github.repository }}` /
+  `SOURCE_REVISION=${{ github.sha }}` build arguments. Current operator callers use the
+  new name; historical `simonswanderlust-app:0.17.1` references remain historical.
+- The actual current Dockerfile built successfully for **linux/arm64**, using its default
+  DHI bases and full default map extraction, without a push. The retained unique tag is
+  `ghcr.io/laboef1900/wanderlust-studio:qualification-20261028192804`;
+  image ID is
+  `sha256:b657a5af6088efe39c60cd78fe1af9c1d1fb5115041df00f91254f68620c819c`.
+  Runtime DHI base digest:
+  `sha256:dc87c509f7279f734d04036f696bf9aad1b8d66f34750f32c30c5b85e033187f`;
+  build DHI base digest:
+  `sha256:c8939885965365c675a024d062bcb761bda4b47e95ce0323aa998ac9bc312fd6`.
+- The real Compose app ran on loopback `33491`, with only a new absolute fixture data
+  directory and disposable database `swl_291_image_20261028192804` on the recovered
+  test Postgres. The validated override removed the default data mount, DB dependency
+  and `pgdata` volume. The app resolved `docker-gateway` to its own bridge gateway.
+  `/health` returned 200 with `ok`, `db` and `release` true. Boot generated a release;
+  authenticated `POST /rebuild` generated another real release successfully.
+- Anonymous public DE/EN pages, admin static pages, both legal indexes/source records,
+  both third-party notice bundles, and `/map/fonts/OFL.txt` returned 200.
+  A managed browser rendered the public English page, legal index and authenticated
+  posts page. This is an empty synthetic-content installation, not a populated-story
+  or production-load qualification.
+- Actual versions: Node `26.12.1`, sharp `0.35.5`, sharp-libvips package `1.3.4`,
+  libvips `8.18.7`, libheif `1.23.5`, libaom `3.15.1`. The image carries basemap
+  build `20261028`, glyph revision `028c18f713baecad011301ff7a69acc39bcc2ae7`,
+  readable map OFL text, and the three expected admin WOFF2 fonts.
+  The Linux ARM64 libvips package itself still lacks a license file, as recorded by
+  the inherited evidence; emitted bundles include the reviewed supplemental
+  `sharp-libvips-1.3.4` component/third-party notices and Satteri notice text.
+  This inspection is not a new legal-compliance or corresponding-source verdict.
+- No source build arguments were supplied: `/app/source-release.json` and both served
+  source records are honestly `null`; the rendered legal page explicitly says no
+  exact revision is recorded for this local/unversioned installation.
+
+Evidence (build/container logs, selected safe Compose fields, runtime JSON and browser
+screenshots) remains in the qualification worktree at
+`.issue-runtime/image-20261028192804/`. The image, fixture database and generated site
+data are retained. Only the owned app container/network, browser tab and temporary
+admin credentials/sessions were removed; the shared test Postgres was not stopped.
+
+**Limits:** this cutover qualification did not build or exercise AMD64, execute the
+release workflow, publish anything, or establish new-package registry availability.
+Inherited historical/native evidence is not relabeled as a new-platform runtime result.
+The first owner-authorized publication, both-platform release qualification and registry
+access checks remain the future release gate described above.
