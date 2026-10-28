@@ -28,6 +28,8 @@
       </form>
       <section class="card form-narrow">
         <h2 class="card-heading">Existing users</h2>
+        <button id="reloadUsers" type="button" aria-describedby="listout"></button>
+        <p id="listout" class="page-status" role="status"></p>
         <ul id="list" class="user-list"></ul>
       </section>
       <form class="card form-narrow" id="pwForm">
@@ -47,76 +49,126 @@
     <script src="/admin/admin-confirm.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
+      const copy = EditorCopy.en;
+      $('reloadUsers').textContent = copy.usersReload;
       let me = null;
       async function load() {
-        const res = await fetch('/users');
-        if (res.status === 401) { location.href = '/login'; return; }
-        if (res.status === 403) { location.href = '/admin/'; return; }
-        const users = await res.json();
+        const reload = $('reloadUsers');
+        if (reload.disabled) return;
+        reload.disabled = true;
         const ul = $('list');
-        ul.innerHTML = '';
-        for (const u of users) {
-          const li = document.createElement('li');
-          const role = u.isAdmin ? 'admin' : 'author';
-          const name = document.createElement('span');
-          name.className = 'user-list__name';
-          name.textContent = u.username;
-          const roleLabel = document.createElement('span');
-          roleLabel.className = 'user-list__role';
-          roleLabel.textContent = u.isAdmin ? 'Admin' : 'Author';
-          li.append(name, roleLabel);
-          if (!(me && u.username === me.username)) {
-            const btn = document.createElement('button');
-            btn.textContent = 'Remove';
-            btn.className = 'btn-remove';
-            btn.setAttribute('aria-label', 'Remove user ' + u.username);
-            btn.addEventListener('click', async () => {
-              const ok = await AdminConfirm.ask({
-                title: 'Remove this account?',
-                body: 'Remove the ' + role + ' account "' + u.username + '"?\n\nThey are logged out of every session immediately, and their name is cleared from the photos they uploaded. This cannot be undone.',
-                confirmLabel: 'Remove',
-                danger: true,
-              });
-              if (!ok) return;
-              btn.disabled = true;
-              $('out').textContent = 'Removing ' + u.username + '…';
-              try {
-                const d = await fetch('/users/' + u.id, { method: 'DELETE' });
-                if (d.status === 401) { location.href = '/login'; return; }
-                if (d.ok) { $('out').textContent = 'Removed ' + u.username + '.'; load(); return; }
-                const r = await d.json().catch(() => ({}));
-                $('out').textContent = r.error || ('Failed: ' + d.status);
-              } catch (e) {
-                $('out').textContent = 'Failed: ' + (e && e.message ? e.message : 'network error');
-              } finally {
-                btn.disabled = false;
-              }
-            });
-            li.appendChild(btn);
+        ul.replaceChildren();
+        $('listout').textContent = copy.usersLoading;
+        try {
+          const res = await fetch('/users');
+          if (res.status === 401) { location.href = '/login'; return; }
+          if (res.status === 403) { location.href = '/admin/'; return; }
+          if (!res.ok) {
+            $('listout').textContent = copy.usersLoadFailed.replace('{status}', String(res.status));
+            return;
           }
-          ul.appendChild(li);
+          const users = await res.json();
+          for (const u of users) {
+            const li = document.createElement('li');
+            const role = u.isAdmin ? 'admin' : 'author';
+            const name = document.createElement('span');
+            name.className = 'user-list__name';
+            name.textContent = u.username;
+            const roleLabel = document.createElement('span');
+            roleLabel.className = 'user-list__role';
+            roleLabel.textContent = u.isAdmin ? 'Admin' : 'Author';
+            li.append(name, roleLabel);
+            if (!(me && u.username === me.username)) {
+              const btn = document.createElement('button');
+              btn.textContent = 'Remove';
+              btn.className = 'btn-remove';
+              btn.setAttribute('aria-label', 'Remove user ' + u.username);
+              btn.addEventListener('click', async () => {
+                const ok = await AdminConfirm.ask({
+                  title: 'Remove this account?',
+                  body: 'Remove the ' + role + ' account "' + u.username + '"?\n\nThey are logged out of every session immediately, and their name is cleared from the photos they uploaded. This cannot be undone.',
+                  confirmLabel: 'Remove',
+                  danger: true,
+                });
+                if (!ok) return;
+                btn.disabled = true;
+                $('out').textContent = 'Removing ' + u.username + '…';
+                try {
+                  const d = await fetch('/users/' + u.id, { method: 'DELETE' });
+                  if (d.status === 401) { location.href = '/login'; return; }
+                  if (d.ok) { $('out').textContent = 'Removed ' + u.username + '.'; load(); return; }
+                  const r = await d.json().catch(() => ({}));
+                  $('out').textContent = r.error || ('Failed: ' + d.status);
+                } catch (e) {
+                  $('out').textContent = 'Failed: ' + (e && e.message ? e.message : 'network error');
+                } finally {
+                  btn.disabled = false;
+                }
+              });
+              li.appendChild(btn);
+            }
+            ul.appendChild(li);
+          }
+          $('listout').textContent = copy.usersLoaded.replace('{count}', String(users.length));
+        } catch {
+          $('listout').textContent = copy.usersLoadNetworkFailed;
+        } finally {
+          reload.disabled = false;
         }
       }
+      $('reloadUsers').addEventListener('click', load);
       $('addForm').addEventListener('submit', async (ev) => {
         ev.preventDefault();
+        if ($('add').disabled) return;
         const username = $('username').value.trim();
         const password = $('password').value;
         const isAdmin = $('isAdmin').checked;
-        if (!username || !password) { $('out').textContent = 'Enter a username and password.'; return; }
-        const res = await fetch('/users', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password, isAdmin }) });
-        if (res.status === 401) { location.href = '/login'; return; }
-        if (res.ok) { $('out').textContent = 'Added ' + username + '.'; $('username').value = ''; $('password').value = ''; $('isAdmin').checked = false; load(); }
-        else { const r = await res.json().catch(() => ({})); $('out').textContent = r.error || ('Failed: ' + res.status); }
+        if (!username || !password) { $('out').textContent = copy.usersAddRequired; return; }
+        $('add').disabled = true;
+        $('out').textContent = copy.usersAdding;
+        try {
+          const res = await fetch('/users', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password, isAdmin }) });
+          if (res.status === 401) { location.href = '/login'; return; }
+          if (res.ok) {
+            $('out').textContent = copy.usersAdded;
+            if ($('username').value.trim() === username) $('username').value = '';
+            if ($('password').value === password) $('password').value = '';
+            if ($('isAdmin').checked === isAdmin) $('isAdmin').checked = false;
+            await load();
+          } else {
+            const r = await res.json().catch(() => ({}));
+            $('out').textContent = r.error || copy.usersActionFailed.replace('{status}', String(res.status));
+          }
+        } catch {
+          $('out').textContent = copy.usersAddNetworkFailed;
+        } finally {
+          $('add').disabled = false;
+        }
       });
       $('pwForm').addEventListener('submit', async (ev) => {
         ev.preventDefault();
+        if ($('changepw').disabled) return;
         const currentPassword = $('curpw').value;
         const newPassword = $('newpw').value;
-        if (!currentPassword || !newPassword) { $('pwout').textContent = 'Enter your current and new password.'; return; }
-        const res = await fetch('/users/me/password', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ currentPassword, newPassword }) });
-        if (res.status === 401) { location.href = '/login'; return; }
-        if (res.ok) { $('pwout').textContent = 'Password changed. Your other sessions were logged out.'; $('curpw').value = ''; $('newpw').value = ''; }
-        else { const r = await res.json().catch(() => ({})); $('pwout').textContent = r.error || ('Failed: ' + res.status); }
+        if (!currentPassword || !newPassword) { $('pwout').textContent = copy.usersPasswordRequired; return; }
+        $('changepw').disabled = true;
+        $('pwout').textContent = copy.usersPasswordChanging;
+        try {
+          const res = await fetch('/users/me/password', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ currentPassword, newPassword }) });
+          if (res.status === 401) { location.href = '/login'; return; }
+          if (res.ok) {
+            $('pwout').textContent = copy.usersPasswordChanged;
+            if ($('curpw').value === currentPassword) $('curpw').value = '';
+            if ($('newpw').value === newPassword) $('newpw').value = '';
+          } else {
+            const r = await res.json().catch(() => ({}));
+            $('pwout').textContent = r.error || copy.usersActionFailed.replace('{status}', String(res.status));
+          }
+        } catch {
+          $('pwout').textContent = copy.usersPasswordNetworkFailed;
+        } finally {
+          $('changepw').disabled = false;
+        }
       });
       (async () => {
         me = await Auth.ensureAuthed({ admin: true });
