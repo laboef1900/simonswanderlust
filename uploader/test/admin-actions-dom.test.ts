@@ -908,6 +908,44 @@ describe('comments.html moderation view', () => {
     }
   });
 
+  it('keeps a newer same-comment reply locked when an older refresh finishes', async () => {
+    const oldRefresh = Promise.withResolvers<CommentResponse>();
+    const oldRefreshStarted = Promise.withResolvers<void>();
+    const newReply = Promise.withResolvers<CommentResponse>();
+    const newReplyStarted = Promise.withResolvers<void>();
+    const bodies: string[] = [];
+    let reads = 0;
+    const page = commentsPage(async (url, options) => {
+      if (options.method === 'GET') {
+        if (++reads === 2) { oldRefreshStarted.resolve(); return oldRefresh.promise; }
+        return response({ comments: url.endsWith('approved') ? [] : [comment('A')] });
+      }
+      bodies.push(JSON.parse(options.body!).body);
+      if (bodies.length === 2) { newReplyStarted.resolve(); return newReply.promise; }
+      return response();
+    });
+    await page.load();
+    await page.type('A', 'First reply');
+    const first = page.row('A').form.fire('submit');
+    await oldRefreshStarted.promise;
+    page.el('statusFilter').value = 'approved';
+    await page.load();
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    await page.type('A', 'Second reply');
+    const second = page.row('A').form.fire('submit');
+    await newReplyStarted.promise;
+    oldRefresh.resolve(response({ comments: [comment('A')] }));
+    await first;
+    expect(page.row('A').send.disabled).toBe(true);
+    await page.row('A').form.fire('submit');
+    expect(bodies).toEqual(['First reply', 'Second reply']);
+    newReply.resolve(response());
+    await second;
+    expect(page.row('A').send.disabled).toBe(false);
+    expect(page.row('A').ta.value).toBe('');
+  });
+
   it.each(['approve', 'reply'] as const)('suppresses a late %s failure while the newer filter is loading', async (action) => {
     const mutation = Promise.withResolvers<CommentResponse>();
     const refresh = Promise.withResolvers<CommentResponse>();

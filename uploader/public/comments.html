@@ -171,12 +171,22 @@
           const view = filterRevision;
           let focusRequest = viewRequest;
           let refreshing = false;
+          let ownsPendingReply = true;
           pendingReplies.add(c.id);
           send.disabled = true;
+          // This handler may outlive its refresh; release only its own admission.
+          function releasePendingReply() {
+            if (!ownsPendingReply) return;
+            ownsPendingReply = false;
+            pendingReplies.delete(c.id);
+            send.disabled = false;
+            const current = renderedRows.get(c.id);
+            if (current) current.send.disabled = false;
+          }
           try {
             const result = await api('POST', '/moderation/comments/' + encodeURIComponent(c.id) + '/reply', { body });
             if (result === null) return;
-            pendingReplies.delete(c.id);
+            releasePendingReply();
             // Keep anything written while the request was pending, even if a
             // different action has already replaced this row's textarea.
             if (replyDrafts.get(c.id) === body) {
@@ -193,10 +203,7 @@
             if (focusRequest === viewRequest) $('out').textContent = 'Reply failed: ' + err.message;
           }
           finally {
-            pendingReplies.delete(c.id);
-            send.disabled = false;
-            const current = renderedRows.get(c.id);
-            if (current) current.send.disabled = false;
+            releasePendingReply();
             if (!refreshing && focusRequest === viewRequest && document.activeElement === document.body) restoreReplyFocus(focus);
           }
         });
