@@ -64,6 +64,11 @@ Implementation approval and merge authorization remain separate from design appr
   A failed build leaves the previous release served, not a partially updated public route.
   Single/bulk Publish responses are `no-store` at the response hook, including authorization
   and body-parser refusals that never reach the handler.
+  Explicit editor Reload awaits both the post and private route reads before admitting
+  queued writes. Pending/failed route reads cannot supply a Publish/Attach/Detach token;
+  a detached route keeps its non-null tombstone version. Reads neither publish nor
+  acknowledge uncertain mutations, discard previews, or advance a token without loading
+  its corresponding state. Initial stash recovery precedes the final route read.
 - Public projection uses 25 m per-run spherical simplification, four decimal places and
   strict 2D coordinates, capped at 100 runs, 2,000 vertices and 64 KiB. Discontinuities
   remain separate; ambiguous antipodal or antimeridian-crossing shortcuts are subdivided

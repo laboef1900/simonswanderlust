@@ -115,6 +115,9 @@ save. A genuine edit from another tab still produces the conflict dialog:
 **Reload** replaces your editing base and cancels already queued older requests.
 If that reload fails, saving remains blocked until the page loads successfully;
 keep or recover your local draft rather than assuming it reached the server.
+If a GPX preview is open while Reload reconciles a newly attached or replaced route,
+its trimming selections remain intact. The replacement warning becomes available
+for the current route; a changed route version requires fresh replacement confirmation.
 If your session expires during a save, the editor keeps a browser recovery copy
 and returns you to sign-in. Those edits remain unsaved; signing in is not a save.
 
@@ -264,6 +267,14 @@ or other fields. For a new post, **Save draft and attach route** first saves the
 if attachment fails afterwards, keep the saved draft and retry the preview. A conflict
 requires reloading current state. An unknown network outcome blocks further changes
 until reload rather than risking a second replacement.
+
+When another tab attaches, replaces or detaches a route, **Save draft** can report a
+conflict. Its **Reload** choice reloads both the story fields and route state; review
+the refreshed attachment status before choosing **Publish** again. **Cancel** keeps
+your unsaved text on screen and does not reload the route. While route state is loading
+or unavailable, Attach, Detach and Publish cannot change it. If **Route state unavailable**
+appears, reload the page explicitly and review the route after it loads successfully.
+Detachment still retains the private original; it is not the same as never attaching a route.
 
 If the first draft save fails, its reason appears inside the GPX dialog; the preview
 remains available for retry and nothing is attached. Closing to correct the form

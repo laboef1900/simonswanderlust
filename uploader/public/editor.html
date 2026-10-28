@@ -541,10 +541,11 @@
       let writeTail = Promise.resolve();
       let writeEpoch = 0;
       function enqueueWrite(write) {
+        if (loadBlocked) return Promise.resolve(false);
         const epoch = writeEpoch;
         pendingSaves += 1;
         renderDraftState();
-        const result = writeTail.then(() => epoch === writeEpoch ? write() : false).finally(() => {
+        const result = writeTail.then(() => epoch === writeEpoch && !loadBlocked ? write() : false).finally(() => {
           pendingSaves -= 1;
           renderDraftState();
         });
@@ -2061,10 +2062,10 @@
 
       // Returns false only when it redirected to /login (callers must stop);
       // true otherwise — even on a failed load, so a local stash can still be offered.
-      async function loadPost(tk) {
+      async function loadPost(tk, { deferRouteRefresh = false } = {}) {
         // Reload explicitly replaces the editing base; older queued intents
         // must never be replayed against that newly accepted foreign version.
-        writeEpoch += 1;
+        const reloadEpoch = ++writeEpoch;
         loadBlocked = true;
         setStatus('Loading…');
         let post;
@@ -2082,6 +2083,7 @@
           setStatus('');
           return true;
         }
+        if (reloadEpoch !== writeEpoch) return true;
         // Never pair a partly populated bilingual form with a fresh concurrency
         // token. Retain the pre-reload payload independently of the live form:
         // even a second failure while rolling back cannot corrupt its stash.
@@ -2109,7 +2111,6 @@
         loadedSlugs.de = post.de?.slug || '';
         loadedSlugs.en = post.en?.slug || '';
         recoveryDraft = null;
-        loadBlocked = false;
         $('pageTitle').textContent = 'Edit post';
         showErr('');
 
@@ -2125,6 +2126,10 @@
         setStatus(isPublished
           ? (post.hasUnpublishedChanges ? editorCopy.loadedPublishedChanges : editorCopy.loadedPublished)
           : '');
+        // Initialization alone defers this read until after local stash recovery.
+        // Explicit Reload holds the write queue closed across both reads.
+        const routeReady = deferRouteRefresh || await gpxEditor.refresh();
+        if (reloadEpoch === writeEpoch) loadBlocked = !routeReady;
         return true;
       }
 
@@ -2232,7 +2237,7 @@
         const params = new URLSearchParams(location.search);
         const tk = params.get('tk');
         if (tk) {
-          const proceed = await loadPost(tk);
+          const proceed = await loadPost(tk, { deferRouteRefresh: true });
           if (!proceed) return; // redirecting to /login
         } else {
           setStatus('New post. Fill in the fields and Save draft.');
@@ -2263,7 +2268,9 @@
         } else {
           guard.markClean();
         }
-        await gpxEditor.refresh();
+        // A failed post load is not a reconciled baseline, even if a stash was
+        // recovered. Do not promote a route-only read to a reviewed token.
+        if (!loadBlocked && !await gpxEditor.refresh()) loadBlocked = true;
         document.querySelector('main').addEventListener('input', updateLocaleChip);
         updateLocaleChip();
       })();
