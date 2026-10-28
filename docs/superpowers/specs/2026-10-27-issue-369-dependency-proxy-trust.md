@@ -304,7 +304,7 @@ and both are already pinned by existing suites. Heading-id changes may alter in-
 including Story Contents links, which are generated from the same render. No slugs or routes are
 affected (Golden Rule 2).
 
-## 7. Verification plan (all must pass; nothing here was run for this proposal)
+## 7. Verification plan (original proposal; recorded implementation evidence below)
 
 0. **Re-check metadata.** Re-run `npm view <pkg> version dist.integrity` and the read-only
    `npm audit --json` in both trees on the rebased #347 head. Any new advisory or newer patch is
@@ -337,10 +337,14 @@ affected (Golden Rule 2).
    - `uploader/test/gpx-private.integration.test.ts`: with the trusted peer and
      `X-Forwarded-Proto: https`, the Origin `https://journal.test` is accepted. With an untrusted
      peer and the same headers → 403. The existing `X-Forwarded-Host` refusal is kept.
-   - `uploader/test/server.test.ts` (static): on the image host these return 404: `//<key>-orig.jpg`,
-     `/./<key>-orig.jpg`, `/x/../<key>-orig.jpg`, `/x/%2e%2e/<key>-orig.jpg` and their `.part-`
-     equivalents. A variant still returns 200 with `Access-Control-Allow-Origin: *`
-     (`routing.test.ts:127`). Blog `/foo` → 301 `/foo/`; `/admin` → 301 `/admin/`.
+   - `uploader/test/server.test.ts` (static): canonical `/<key>-orig.jpg` and `.part-` files
+     return 404. Ambiguous paths `//<key>-orig.jpg`, `/./<key>-orig.jpg`,
+     `/x/../<key>-orig.jpg`, `/x/%2e%2e/<key>-orig.jpg` and their `.part-` equivalents
+     must return only 403 or 404 and never contain the private file bytes. Static 10.1.8
+     deliberately rejects noncanonical syntax with 403 before the `allowedPath` check
+     (`index.js:291–306`); the recorded combined-suite run observed that rejection on `//`.
+     A variant still returns 200 with `Access-Control-Allow-Origin: *` (`routing.test.ts:127`).
+     Blog `/foo` → 301 `/foo/`; `/admin` → 301 `/admin/`.
    - `uploader/test/main-boot.integration.test.ts` (`TEST_DATABASE_URL`): booting the real
      `src/main.ts` with `TRUSTED_PROXY=bogus` exits non-zero with the named error. Unset, it boots,
      and over **real TCP** from `127.0.0.1` a forwarded `X-Forwarded-Proto: https` login sets `Secure`.
@@ -378,6 +382,38 @@ affected (Golden Rule 2).
      from the compose network. Its bad logins share that container's bucket regardless of the
      forwarded headers, and any cookie lacks `Secure`. This is the spoof refusal across the Docker bridge.
    - Record the observed peer, and the `userland-proxy` setting from `docker info`, in the PR.
+
+### Recorded TCP proof — Docker Desktop Linux VM, not the target VPS
+
+The parent-built ARM64 production image `swl-issue369:arm64`,
+`sha256:888c4b4ee54b802fe6f24e795826406fc5e7a29deee96f0581b081b1878fb7c9`,
+was exercised with a new synthetic database, disposable image files and two bridge clients.
+A TLS proxy in the Linux VM's host network namespace connected directly to the app bridge
+address `172.31.0.3`. An auxiliary diagnostic listener using the production trust resolver
+reported the actual socket peer; all authentication, GPX and static-file checks used the real
+`main.ts` app, not the diagnostic listener.
+
+- The trusted socket peer was `172.31.0.1`, the discovered gateway. The two proxy-accepted
+  clients were `172.31.0.4` and `.5`; forwarded protocol was `https` even when a client supplied
+  `http`. Rotating leftmost XFF entries exhausted one client's existing login bucket, while
+  the other client's HTTPS login still succeeded.
+- HTTPS setup and login set `Secure`; a plain host/gateway login without forwarded protocol
+  did not. Direct traffic from `.5` remained `.5`/`http` despite forged XFF and HTTPS headers;
+  its successful login lacked `Secure`, and rotating spoofed XFF still exhausted that bucket.
+- An XFF chain ending in the gateway itself stopped there instead of continuing left.
+- A trusted HTTPS GPX mutation with matching raw Host/Origin returned 204; the same HTTPS
+  Origin from an untrusted direct peer returned 403. Forwarded-host spoofing also returned 403.
+- A real WebP variant returned 200 with ACAO `*`. Canonical synthetic originals and temps
+  returned 404; `//`, `/./`, `/x/../` and `/x/%2e%2e/` forms returned 403 without private bytes.
+- The first attempt on an internal bridge with no default route refused boot with the named
+  gateway-discovery error. Explicit `TRUSTED_PROXY=bogus` also exited 1 with its named error.
+
+All owned containers, the temporary bridge, synthetic database, certificate, scripts and data
+were removed. Sanitized local evidence: `.issue-runtime/issue369-tcp-proof.json`.
+This does **not** prove published-loopback DNAT/userland-proxy behavior on the target server,
+nor independent clients on two external networks. Those remain §7 step 7's pre-cutover gate.
+No production configuration or owner data was changed. The synthetic site application was
+deliberately absent, so this probe claims no Publish, renderer or full-site serving proof.
 
 ## 8. Dependency contracts and ordering
 
