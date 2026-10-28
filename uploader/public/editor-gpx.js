@@ -56,6 +56,7 @@
     let routeLoaded = !host.getPost().tk;
     let routeTk = null;
     let routeEpoch = 0;
+    let routeRefreshFailed = false;
     let candidate = null;
     let candidateWorker = null;
     let candidateTimer = null;
@@ -119,9 +120,8 @@
     function setBusy(value) {
       busy = value;
       dialog.querySelectorAll('button,input,select').forEach((el) => { el.disabled = el === $('gpxClose') ? mutationPending : value; });
-      ['gpxImportOpen', 'gpxReimport', 'gpxDetach'].forEach((id) => { $(id).disabled = value || outcomeUnknown; });
-      $('gpxDetach').disabled = value || outcomeUnknown || !routeLoaded;
-      $('gpxDownload').disabled = value;
+      $('gpxImportOpen').disabled = value || outcomeUnknown;
+      ['gpxReimport', 'gpxDetach', 'gpxDownload'].forEach((id) => { $(id).disabled = value || outcomeUnknown || !routeLoaded; });
       attach.textContent = msg(host.getPost().tk ? 'attach' : 'newPostSaveFirst');
       attach.disabled = value || outcomeUnknown || !routeLoaded || !candidate || !preview || !preview.geometry.segments.length || !renderStats().valid || (route.version !== null && !$('gpxReplaceConfirm').checked);
       syncTrimControls();
@@ -334,17 +334,30 @@
       const tk = host.getPost().tk;
       const current = ++routeEpoch;
       routeLoaded = false;
+      routeRefreshFailed = false;
+      renderRoute();
       setBusy(busy);
       if (!tk) {
         route = { version: null, geometry: null, originalAvailable: false };
-        routeTk = null; routeLoaded = true; renderRoute(); setBusy(busy); return;
+        routeTk = null; routeLoaded = true; renderRoute(); setBusy(busy); return true;
       }
       try {
         const loaded = await request('/posts/' + encodeURIComponent(tk) + '/route', { method: 'GET' });
-        if (current !== routeEpoch || tk !== host.getPost().tk) return;
+        if (current !== routeEpoch || tk !== host.getPost().tk) return false;
         if (!loaded || !(loaded.version === null || (typeof loaded.version === 'string' && loaded.version))) throw new Error('invalid route state');
-        route = loaded; routeTk = tk; routeLoaded = true; renderRoute(); setBusy(busy);
-      } catch (e) { if (current === routeEpoch && !e.handled) fail(errorKey(e)); }
+        route = loaded; routeTk = tk; routeLoaded = true;
+        // A read reconciles only route state, never an uncertain write or preview.
+        if (errorCode === 'routeRefreshFailed' || errorCode === 'routeNotReviewed') clearError();
+        renderRoute(); setBusy(busy);
+        return true;
+      } catch (e) {
+        if (current === routeEpoch && tk === host.getPost().tk) {
+          routeRefreshFailed = true;
+          renderRoute(); setBusy(busy);
+          if (!e.handled && !outcomeUnknown) fail('routeRefreshFailed');
+        }
+        return false;
+      }
     }
     function publishVersion() {
       if (!routeLoaded || routeTk !== host.getPost().tk || outcomeUnknown || mutationPending || preview) {
@@ -354,13 +367,16 @@
       return route.version;
     }
     function renderRoute() {
-      $('gpxRouteStatus').textContent = route.geometry ? msg('statusAttached') : msg(route.version === null ? 'statusNone' : 'statusDetached');
+      $('gpxRouteStatus').textContent = !routeLoaded
+        ? msg(routeRefreshFailed ? 'statusUnavailable' : 'statusLoading')
+        : route.geometry ? msg('statusAttached') : msg(route.version === null ? 'statusNone' : 'statusDetached');
       $('gpxReimport').hidden = !route.originalAvailable;
       $('gpxDownload').hidden = !route.originalAvailable;
       $('gpxDetach').hidden = !route.geometry || outcomeUnknown;
       $('gpxImportOpen').hidden = false;
     }
     function openDialog(button) {
+      if (outcomeUnknown) return;
       clearError();
       setBusy(false);
       opener = button;
@@ -379,6 +395,7 @@
       if (opener && opener.isConnected) opener.focus();
     }
     async function importOriginal(button) {
+      if (!routeLoaded || outcomeUnknown) return;
       openDialog(button);
       teardownPreview();
       const myEpoch = ++epoch;
@@ -405,6 +422,10 @@
       let savedNewPost = false;
       try {
         await host.runWrite(async (saveDraft) => {
+          if (!routeLoaded || outcomeUnknown) return;
+          // Our queued create can bind the new draft to its key before this runs.
+          // Its reviewed null route still uses the server's baseVersion check.
+          if (routeTk !== host.getPost().tk && !(saveBeforeAttach && routeTk === null && route.version === null)) return;
           if (saveBeforeAttach) {
             if (!await saveDraft() || !host.getPost().tk) {
               fail('saveFailedNotAttached', true, host.saveError?.() || '');
@@ -433,13 +454,14 @@
       } finally { mutationPending = false; setBusy(false); }
     }
     async function detachRoute() {
-      if (busy || outcomeUnknown || !route.geometry) return;
+      if (busy || outcomeUnknown || !routeLoaded || routeTk !== host.getPost().tk || !route.geometry) return;
       const ok = await host.confirm({ title: msg('detachTitle'), body: msg('detachBody'), confirmLabel: msg('detachLabel'), danger: true });
       if (!ok) return;
       mutationPending = true; setBusy(true); clearError();
       let detached = false;
       try {
         const result = await host.runWrite(async () => {
+          if (!routeLoaded || routeTk !== host.getPost().tk || outcomeUnknown) return;
           const tokens = host.getPost();
           const result = await request(postUrl(''), { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ baseVersion: route.version, baseUpdatedAt: tokens.baseUpdatedAt, confirmDetach: true }) }, true);
           host.setBaseUpdatedAt(result.updatedAt); route = result; renderRoute();

@@ -232,7 +232,7 @@ function loadEditor(options: EditorOptions = {}) {
     ])),
     GpxCopy: { en: new Proxy({}, { get: (_target, key) => String(key) }) },
     GpxMap: { create: async () => ({ render() {}, destroy() {}, resize() {} }) },
-    GpxEditor: { wire: () => ({ refresh: async () => {}, publishVersion: options.publishVersion ?? (() => null), publishError: () => null, noteCreated() {}, hasPreview: () => false, discard() {}, revisionNotice() {}, guardAction: () => true }) },
+    GpxEditor: { wire: () => ({ refresh: async () => true, publishVersion: options.publishVersion ?? (() => null), publishError: () => null, noteCreated() {}, hasPreview: () => false, discard() {}, revisionNotice() {}, guardAction: () => true }) },
     EditorGalleryImageOrigin: 'https://img',
     AltSuggest: { wire() {}, suggestHosted: options.caption ?? (() => Promise.reject(new Error('no model in test'))) },
   };
