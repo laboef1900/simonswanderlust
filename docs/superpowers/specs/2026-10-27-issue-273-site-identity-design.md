@@ -1179,3 +1179,18 @@ joins #296's operator-managed `settings.json` row, and #295's rehearsal must res
 - **Owner clarification (2026-10-27):** reject all Unicode `\p{C}` in identity text with HTTP
   400, after NFC and before trim, rather than stripping. This supersedes the earlier §5.3
   stripping rule, does not rewrite stored content, and leaves multiline review prompts unchanged.
+
+## 24. #274 public identity reflow verification (2026-10-28)
+
+Accepted unbroken identity values must wrap without clipping or horizontal scrolling. The About
+profile and empty-home masthead retain the same content and typography; shrinkable profile/grid
+items and arbitrary-word wrapping handle the validator's full limits.
+
+A separate empty-content Postgres fixture supplied validated identity snapshots with 80-character
+author/role values, 200-character equipment text and 160-character taglines. Actual Astro output
+overflowed at 320px before the fix (About 1895px; empty home 2618px). Afterward both locale routes
+fit at 320, 360, 375, 390, 640, 768 and 1440px, with every character retained. Browser observations
+and captures are retained in `.issue-runtime/identity-about-home-reflow-proof.json`; the original
+development database was unchanged. This supplements, not replaces, the API/Unicode and
+header/footer acceptance evidence for #274.
+

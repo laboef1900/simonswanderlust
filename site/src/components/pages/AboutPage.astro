@@ -34,15 +34,15 @@ const description = plain ? plain.slice(0, 150) : t('about.title');
   <section class="mx-auto max-w-6xl px-5 py-14">
     <div class="grid gap-12 lg:grid-cols-[1fr_2.2fr] lg:items-start">
       <!-- Author Profile Card -->
-      <div class="rounded-md border border-navy/10 bg-canvas p-6 shadow-sm">
+      <div class="min-w-0 rounded-md border border-navy/10 bg-canvas p-6 shadow-sm [overflow-wrap:anywhere]">
         <div class="flex items-center gap-4">
-          <div class="flex h-14 w-14 items-center justify-center rounded-full bg-navy text-white shadow-md">
+          <div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-navy text-white shadow-md">
             <svg aria-hidden="true" focusable="false" class="h-7 w-7 text-brand-red-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
               <circle cx="12" cy="12" r="10" />
               <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" />
             </svg>
           </div>
-          <div>
+          <div class="min-w-0">
             {identity.authorName && <h2 class="text-xl font-extrabold text-navy">{identity.authorName}</h2>}
             {identity.aboutRole[locale] && <p class="font-mono text-xs font-semibold tracking-widest text-brand-red uppercase">
               {identity.aboutRole[locale]}
