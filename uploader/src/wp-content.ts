@@ -1,5 +1,5 @@
 import TurndownService from 'turndown';
-import { escapeMeta } from '../../site/src/lib/gallery-layout.js';
+import { escapeMeta } from '../public/gallery-photo-line.js';
 import { rewriteOutsideGalleries } from './body-content.js';
 
 const td = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced' });

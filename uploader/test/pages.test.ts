@@ -49,6 +49,46 @@ describe('page images-map validation', () => {
 describe('page gallery normalization', () => {
   const a = 'https://img/g/a-1a2b3c4d';
 
+  it.each([false, true])('preserves malformed metadata in both locales with existing images=%s', async (existingImages) => {
+    const store = memoryPageStore();
+    const input = pair();
+    const fields = [
+      String.raw`caption="The \"Old\" Bridge"`, 'caption="Rom | Tag 2"',
+      'capton="Tippfehler"', 'alt = "Blick mit Leerzeichen"', "alt='Blick'",
+      'caption-override="broken',
+    ];
+    const lines = fields.map((field, index) => `> ${a}-${index} | 3000x2000 | alt="😀" | ${field}  `);
+    for (const locale of ['de', 'en'] as const) {
+      input[locale].bodyMarkdown = ['> ~~~gallery extra', ...lines, '> ~~~'].join('\r\n');
+      input[locale].images = existingImages
+        ? Object.fromEntries(fields.map((_, index) => [`${a}-${index}`, { width: 8, height: 6, caption: 'Keep' }]))
+        : {};
+    }
+    const saved = await store.save(input);
+    expect(saved.de).toEqual(input.de);
+    expect(saved.en).toEqual(input.en);
+    expect(saved.galleryWarnings).toHaveLength(fields.length * 2);
+    for (const locale of ['de', 'en'] as const) {
+      expect(saved.galleryWarnings.filter((warning) => warning.locale === locale).map((warning) => warning.line))
+        .toEqual(fields.map((_, index) => index + 2));
+    }
+    expect(saved.galleryWarnings[0]).toEqual({
+      code: 'invalid_gallery_metadata', locale: 'de', line: 2,
+      column: lines[0]!.indexOf('caption=') + 1, field: 'caption', reason: 'malformed_field',
+    });
+    expect(await store.get(input.key)).not.toHaveProperty('galleryWarnings');
+    const again = await store.save(saved);
+    expect(again.galleryWarnings).toEqual(saved.galleryWarnings);
+    const before = await store.get(input.key);
+    expect(before).not.toHaveProperty('galleryWarnings');
+    await expect(store.save(saved, new Date(0))).rejects.toMatchObject({ code: 'conflict' });
+    expect(await store.get(input.key)).toEqual(before);
+    const [revision] = await store.listRevisions(input.key);
+    expect((await store.getRevision(input.key, revision!.id))!.snapshot).not.toHaveProperty('galleryWarnings');
+    const repaired = await store.save({ ...again, de: { ...again.de, bodyMarkdown: 'Fixed' }, en: { ...again.en, bodyMarkdown: 'Fixed' } });
+    expect(repaired.galleryWarnings).toEqual([]);
+  });
+
   it('normalizes nested and raw gallery nodes through direct saves in both locales', async () => {
     const store = memoryPageStore();
     const input = pair();
@@ -72,7 +112,9 @@ describe('page gallery normalization', () => {
     });
     try {
       await expect(store.save(input)).rejects.toThrow('source mapping unavailable');
-      expect(await store.get(saved.key)).toEqual(saved);
+      const { galleryWarnings, ...stored } = saved;
+      expect(galleryWarnings).toEqual([]);
+      expect(await store.get(saved.key)).toEqual(stored);
       expect(await store.listRevisions(saved.key)).toEqual([]);
       expect(input.de.images).toEqual({});
     } finally { analysis.mockRestore(); }

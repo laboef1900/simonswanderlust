@@ -1,4 +1,4 @@
-// Advisory checks of one unsaved locale. Load gallery-fence.js first.
+// Advisory checks of one unsaved locale. GalleryFence is loaded by the module entry.
 // Gallery identity comes from authenticated source analysis; no draft mutation.
 window.EditorLinter = (function () {
   function text(value) {
@@ -81,7 +81,8 @@ window.EditorLinter = (function () {
 
   async function prepare(markdown) {
     var source = text(markdown);
-    var blocks = (await window.GalleryFence.analyze(source)).blocks;
+    var analysis = await window.GalleryFence.analyze(source);
+    var blocks = analysis.blocks;
     var parts = [];
     var inlineParts = [];
     var pos = 0;
@@ -101,7 +102,7 @@ window.EditorLinter = (function () {
     for (var i = 0; i < source.length; i++) {
       if (source.charAt(i) === '\n') starts.push(i + 1);
     }
-    return { source: source, blockSource: parts.join(''), visible: inlineParts.join(''), blocks: blocks, starts: starts };
+    return { source: source, analysis: analysis, blockSource: parts.join(''), visible: inlineParts.join(''), blocks: blocks, starts: starts };
   }
 
   function lineAt(starts, offset) {
@@ -196,6 +197,20 @@ window.EditorLinter = (function () {
     return checked;
   }
 
+  function metadataIn(input, doc) {
+    var locale = input.locale === 'en' ? 'en' : 'de';
+    var copy = window.EditorGalleryCopy[locale];
+    return result(window.GalleryFence.galleryWarnings(doc.analysis, locale).map(function (warning) {
+      return Object.assign({}, warning, {
+        target: 'gallery',
+        message: window.GalleryMetadataWarnings.label(warning, copy) + '. ' + copy.metadataAdvisory + ' ' + copy.metadataSyntax,
+      });
+    }));
+  }
+
+  async function lintGalleryMetadata(input) {
+    return metadataIn(input, await prepare(input.markdown));
+  }
   async function lintHeadings(markdown) { return headingsIn(await prepare(markdown)); }
   async function lintAltText(input) {
     input = input || {};
@@ -223,6 +238,8 @@ window.EditorLinter = (function () {
     var excerpt = lintExcerpt(input.excerpt);
     var headings = headingsIn(doc);
     var altText = altIn(input, doc, inline);
+    var metadata = metadataIn(input, doc);
+    altText = result(altText.findings.concat(metadata.findings));
     var internalLinks = linksIn(inline);
     var warningCount = (title.status === 'warn' ? 1 : 0) + (excerpt.status === 'warn' ? 1 : 0)
       + headings.findings.length + altText.findings.length + internalLinks.findings.length;
@@ -235,6 +252,7 @@ window.EditorLinter = (function () {
     lintHeadings: lintHeadings,
     lintAltText: lintAltText,
     lintInternalLinks: lintInternalLinks,
+    lintGalleryMetadata: lintGalleryMetadata,
     lintStory: lintStory,
     findImage: findImage,
   };

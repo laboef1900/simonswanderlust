@@ -12,47 +12,14 @@
 // the author-facing format means the picker remains an authoring aid. Gallery
 // identity and source ranges come exclusively from the authenticated analyzer.
 //
-// @ai-warning The escape rule below duplicates `escapeMeta`/`unescapeMeta` in
-// site/src/lib/gallery-layout.ts. They cannot import one another (browser IIFE vs. an ESM
-// module in a different tsconfig), so `test/gallery-fence.test.ts` asserts they
-// agree character for character. Change one and you MUST change the other: a
-// divergence corrupts alt text and captions containing `|`, a newline or a
-// quote, silently, at save time.
-//
+import { escapeMeta, unescapeMeta, parsePhotoLine, galleryWarnings, MAX_GALLERY_TEXT as MAX_TEXT } from './gallery-photo-line.js';
+
 // Same rules as media-picker.js: textContent only, one state object, no innerHTML.
 window.GalleryFence = (function () {
-  // Mirrors site/src/lib/gallery-layout.ts. Order is load-bearing in both directions:
-  // `&` is escaped FIRST so that a literal `&quot;` in the source round-trips,
-  // and `&amp;` is unescaped LAST for the same reason.
-  function escapeMeta(s) {
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/"/g, '&quot;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/\|/g, '&#124;')
-      .replace(/\r?\n/g, '&#10;');
-  }
-
-  function unescapeMeta(s) {
-    return String(s)
-      .replace(/&#10;/g, '\n')
-      .replace(/&#124;/g, '|')
-      .replace(/&quot;/g, '"')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&amp;/g, '&');
-  }
 
   // ── the #layout: directive (#66) ───────────────────────────────────────
   //
-  // @ai-warning LAYOUT_RE and LAYOUTS duplicate LAYOUT_DIRECTIVE_RE and
-  // GALLERY_MODES in site/src/lib/gallery-layout.ts, for the same reason
-  // escapeMeta does: a browser IIFE cannot import an ESM module from the other
-  // tree. The two MUST agree about what counts as a directive and what values
-  // are known, or the picker shows "Break-out" for a gallery the site renders
-  // as a slider — a silent lie about the author's own choice, only visible
-  // after publishing. test/gallery-fence.test.ts runs both over one corpus.
+  // Layout directives mirror the renderer; parity tests pin their vocabulary.
   var LAYOUTS = ['column', 'breakout', 'slider'];
   var DEFAULT_LAYOUT = 'column';
   var LAYOUT_RE = /^\s*#\s*layout\s*:\s*(\S*)\s*$/i;
@@ -101,10 +68,7 @@ window.GalleryFence = (function () {
     return visible === false ? ['#captions: hidden'].concat(kept) : kept;
   }
 
-  // Mirrors DIMS_RE / ATTR_RE and MAX_TEXT in src/body-content.ts.
-  var DIMS_RE = /^(\d{1,6})x(\d{1,6})$/;
-  var ATTR_RE = /^(alt|caption|caption-override|format)="([^"]*)"$/;
-  var MAX_TEXT = 1000;
+  // Photo fields are parsed atomically by the shared, dependency-free codec.
 
   function usableDim(n) {
     return typeof n === 'number' && isFinite(n) && Math.floor(n) === n && n > 0 && n <= 999999;
@@ -222,26 +186,11 @@ window.GalleryFence = (function () {
       if (line === '') return;
       if (line.charAt(0) === '#') { directives.push(line); return; }
 
-      var fields = line.split('|').map(function (f) { return f.trim(); });
-      var src = fields[0] || '';
-      if (src === '') return;
-
-      var out = { src: src };
-      fields.slice(1).forEach(function (field) {
-        var dims = DIMS_RE.exec(field);
-        if (dims) {
-          out.width = Number(dims[1]);
-          out.height = Number(dims[2]);
-          return;
-        }
-        var attr = ATTR_RE.exec(field);
-        if (attr) {
-          var value = unescapeMeta(attr[2] || '').slice(0, MAX_TEXT);
-          if (attr[1] === 'alt') out.alt = value;
-          else if (attr[1] === 'caption') out.caption = value;
-          else if (attr[1] === 'caption-override') out.captionOverride = value;
-          else if (value === 'jpeg') out.format = value;
-        }
+      var photo = parsePhotoLine(raw);
+      if (!photo.valid) { lines.push(photo); return; }
+      var out = { src: photo.src };
+      ['width', 'height', 'alt', 'caption', 'captionOverride', 'format'].forEach(function (name) {
+        if (photo[name] !== undefined) out[name] = photo[name];
       });
       lines.push(out);
     });
@@ -253,21 +202,18 @@ window.GalleryFence = (function () {
   function withAlt(text, src, value) {
     var field = 'alt="' + escapeMeta(String(value).slice(0, MAX_TEXT)) + '"';
     return String(text).split('\n').map(function (raw) {
-      var photo = parse(raw).lines[0];
-      if (!photo || photo.src !== src) return raw;
-      var cr = raw.endsWith('\r') ? '\r' : '';
-      var fields = (cr ? raw.slice(0, -1) : raw).split('|');
-      var replaced = false;
-      var rest = fields.slice(1).flatMap(function (part) {
-        var attr = ATTR_RE.exec(part.trim());
-        if (!attr || attr[1] !== 'alt') return [part];
-        if (replaced) return [];
-        replaced = true;
-        return [part.slice(0, part.length - part.trimStart().length) + field
-          + part.slice(part.trimEnd().length)];
-      });
-      var changed = [fields[0]].concat(rest).join('|');
-      return (replaced ? changed : changed.trimEnd() + ' | ' + field) + cr;
+      var photo = parsePhotoLine(raw);
+      if (!photo.valid || photo.src !== src) return raw;
+      var alts = photo.fields.filter(function (part) { return part.name === 'alt'; });
+      if (alts.length) {
+        // Replace all duplicate alt values without touching other field spelling.
+        for (var i = alts.length - 1; i >= 0; i--) {
+          raw = raw.slice(0, alts[i].start) + field + raw.slice(alts[i].end);
+        }
+        return raw;
+      }
+      var suffix = raw.slice(raw.trimEnd().length);
+      return raw.trimEnd() + ' | ' + field + suffix;
     }).join('\n');
   }
 
@@ -414,6 +360,9 @@ window.GalleryFence = (function () {
     if (enclosing && enclosing.unterminated) {
       return { text: '', start: enclosing.start, end: enclosing.start, cursor: enclosing.start, replaced: false, blocked: 'unterminated' };
     }
+    if (found && parse(found.content).lines.some(function (line) { return line.valid === false; })) {
+      return { text: '', start: found.start, end: found.start, cursor: found.start, replaced: false, blocked: 'invalid_metadata' };
+    }
     if (found && block === '') {
       // Never swallow neighboring list items, quotes, or prose.
       return { text: '', start: found.start, end: found.end, cursor: found.start, replaced: true };
@@ -439,11 +388,7 @@ window.GalleryFence = (function () {
   }
 
   return {
-    // escapeMeta/unescapeMeta have no caller in the page — serialize and parse
-    // use them internally. They are exported so test/gallery-fence.test.ts can
-    // compare them character for character against gallery-layout.ts's pair,
-    // which is the only thing keeping the duplicated rule honest. Do not drop
-    // them as dead exports; that deletes the test's handle on the invariant.
+    galleryWarnings: galleryWarnings,
     escapeMeta: escapeMeta,
     unescapeMeta: unescapeMeta,
     LAYOUTS: LAYOUTS,

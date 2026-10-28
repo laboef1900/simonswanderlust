@@ -2643,6 +2643,51 @@ describe('posts editor', () => {
     en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
 
+  it('POST and PUT return snapshot warnings, never persist them, and keep refusal precedence', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    try {
+      const { cookie } = await authed(b);
+      const input = sample();
+      const line = '> https://i/gallery | 30x20 | alt="😀" | capton="Wrong"';
+      input.en.bodyMarkdown = `<BodyImage\n src="https://i/body"\n width={30} height={20} alt="View"\n/>\n\n> ~~~gallery extra\n${line}\n> ~~~`;
+      const expected = [{ code: 'invalid_gallery_metadata', locale: 'en', line: 7, column: line.indexOf('capton=') + 1, field: 'unknown', reason: 'unknown_field' }];
+      const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: input });
+      expect(created.statusCode).toBe(200);
+      expect(created.json().galleryWarnings).toEqual(expected);
+      expect(created.json()).toMatchObject({ status: 'draft', de: input.de, en: { title: input.en.title } });
+      const url = `/posts/${created.json().translationKey}`;
+      const saved = await b.app.inject({ method: 'PUT', url, cookies: cookie, payload: { ...input, updatedAt: created.json().updatedAt } });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json().galleryWarnings).toEqual(expected);
+      const before = (await b.app.inject({ url, cookies: cookie })).json();
+      expect(before).not.toHaveProperty('galleryWarnings');
+      expect(before.en.bodyMarkdown).toContain(line);
+      const stale = await b.app.inject({ method: 'PUT', url, cookies: cookie, payload: { ...input, updatedAt: new Date(0).toISOString() } });
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json()).toMatchObject({ code: 'conflict' });
+      expect(stale.json()).not.toHaveProperty('galleryWarnings');
+      const duplicate = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: input });
+      expect(duplicate.statusCode).toBe(409);
+      expect(duplicate.json()).not.toHaveProperty('galleryWarnings');
+      const renamed = await b.app.inject({ method: 'PUT', url, cookies: cookie, payload: { ...input, de: { ...input.de, slug: 'renamed' } } });
+      expect(renamed.statusCode).toBe(409);
+      expect(renamed.json()).toMatchObject({ code: 'slug_change_unconfirmed' });
+      expect(renamed.json()).not.toHaveProperty('galleryWarnings');
+      const write = vi.spyOn(b.posts, 'upsertDraft').mockRejectedValueOnce(new Error('private storage failure'));
+      const failed = await b.app.inject({ method: 'PUT', url, cookies: cookie, payload: input });
+      write.mockRestore();
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json()).not.toHaveProperty('galleryWarnings');
+      expect(failed.body).not.toContain('private storage failure');
+      expect((await b.app.inject({ url, cookies: cookie })).json()).toEqual(before);
+      const repaired = await b.app.inject({ method: 'PUT', url, cookies: cookie, payload: { ...input, en: { ...input.en, bodyMarkdown: 'Fixed' } } });
+      expect(repaired.statusCode).toBe(200);
+      expect(repaired.json().galleryWarnings).toEqual([]);
+      expect(s.calls).toEqual([]);
+    } finally { await b.app.close(); }
+  });
+
   it('requires the strict 4KiB explicit publish body without a bodyless compatibility path', async () => {
     const b = build(); const { cookie } = await authed(b);
     const saved = await b.posts.upsertDraft({ ...sample(), status: 'draft', de: { ...sample().de, locale: 'de' }, en: { ...sample().en, locale: 'en' } });
@@ -3578,6 +3623,46 @@ describe('backup routes', () => {
 });
 
 describe('pages routes', () => {
+  it('returns saved warnings beside a failed build, but none for conflict or write failure', async () => {
+    const outcome = { ok: false as const, error: 'synthetic build failure' };
+    const s = stubBuilder(outcome);
+    const b = build({ builder: s.builder });
+    try {
+      const { cookie } = await authed(b);
+      const line = 'https://i/gallery | 30x20 | caption="Rom | Tag 2"';
+      const input = {
+        de: { locale: 'de', title: 'Über mich', bodyMarkdown: `~~~gallery\n${line}\n~~~`, images: {} },
+        en: { locale: 'en', title: 'About', bodyMarkdown: 'Keep', images: {} },
+      };
+      const response = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: cookie, payload: input });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().build).toEqual(outcome);
+      expect(response.json().saved).toMatchObject({ key: 'about', de: input.de, en: input.en });
+      expect(response.json().saved).not.toHaveProperty('galleryWarnings');
+      expect(response.json().galleryWarnings).toEqual([{
+        code: 'invalid_gallery_metadata', locale: 'de', line: 2,
+        column: line.indexOf('caption=') + 1, field: 'caption', reason: 'malformed_field',
+      }]);
+      const before = await b.pages.get('about');
+      expect(before).not.toHaveProperty('galleryWarnings');
+      const stale = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: cookie, payload: { ...input, updatedAt: new Date(0).toISOString() } });
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json()).not.toHaveProperty('galleryWarnings');
+      const write = vi.spyOn(b.pages, 'save').mockRejectedValueOnce(new Error('private storage failure'));
+      const failed = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: cookie, payload: input });
+      write.mockRestore();
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json()).not.toHaveProperty('galleryWarnings');
+      expect(failed.body).not.toContain('private storage failure');
+      expect(await b.pages.get('about')).toEqual(before);
+      expect(s.calls).toHaveLength(1);
+      const repaired = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: cookie, payload: { ...input, de: { ...input.de, bodyMarkdown: 'Fixed' } } });
+      expect(repaired.statusCode).toBe(200);
+      expect(repaired.json().galleryWarnings).toEqual([]);
+      expect(s.calls).toHaveLength(2);
+    } finally { await b.app.close(); }
+  });
+
   it('GET /pages/:key requires auth and returns the pair', async () => {
     const b = build();
     expect((await b.app.inject({ method: 'GET', url: '/pages/about' })).statusCode).toBe(401);

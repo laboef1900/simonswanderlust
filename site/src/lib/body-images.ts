@@ -10,11 +10,11 @@ import {
   containerWidthFor,
   partitionRowsAsync,
   type PartitionOptions,
-  readCaptionOverride,
   readCaptionsVisible,
   readLayoutMode,
   type GalleryMode,
 } from './gallery-layout.js';
+import { readCaptionOverride } from '../../../uploader/public/gallery-photo-line.js';
 
 /**
  * One entry of a post/page `images` map: the intrinsic dimensions plus the

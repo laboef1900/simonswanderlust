@@ -3,19 +3,16 @@ import {
   BREAKOUT_WIDTH,
   COLUMN_WIDTH,
   GALLERY_MODES,
-  MAX_GALLERY_TEXT,
   MIN_ROW_HEIGHT,
   ROW_GAP,
   containerWidthFor,
-  escapeMeta,
   galleryHeightAt,
   partitionRows,
-  readCaptionOverride,
   readCaptionsVisible,
   readLayoutMode,
   rowHeightAt,
-  unescapeMeta,
 } from './gallery-layout.js';
+import { MAX_GALLERY_TEXT, escapeMeta, readCaptionOverride, unescapeMeta } from '../../../uploader/public/gallery-photo-line.js';
 
 const LANDSCAPE = 3000 / 2000; // 1.5
 const PORTRAIT = 2000 / 3000; // 0.667
