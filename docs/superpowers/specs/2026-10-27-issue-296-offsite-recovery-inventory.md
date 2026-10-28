@@ -1,7 +1,7 @@
 # #296 — Complete recovery inventory, offsite copies and separate key escrow
 
 Date: 2026-10-27. Risk: **High — backups, private location data and keys.**
-Status: **OWNER APPROVED, 2026-10-28 — inventory/UI/docs, operator-managed settings/configuration coverage, and 14 completed daily offsite generations.** The owner selected an existing encrypted backup system; its tool, non-secret destination identifier and independent escrow/recovery method are still required before the offsite-only drill. No purchase, production operation or owner-data transfer is authorized. Implementation and actual restore evidence remain required.
+Status: **OWNER APPROVED, 2026-10-28 — inventory/UI/docs implemented; offsite recovery evidence blocked.** The owner selected operator-managed settings/configuration coverage, 14 completed daily offsite generations and an existing encrypted backup system. Its tool, non-secret destination identifier and independent escrow/recovery method are still required before the offsite-only drill. No purchase, production operation or owner-data transfer is authorized. Reachable implementation and synthetic browser evidence are recorded below; actual restore acceptance remains required.
 Baseline: `11e16d1b8e43141d296b801ee663a351ae3fe415`. Native dependency: **#295, independent and pending**. Related: #399 archive classification; #398 offline restore instructions; #298 upgrade generations.
 
 ## Current facts
@@ -27,9 +27,13 @@ Paths derive from configuration: `main.ts:42–43` locates image storage and set
 
 Treat the data repository as sensitive even with the AI key elsewhere: it still contains password hashes, comments, private photo/route locations and source metadata. Encryption must cover transfer and storage at the offsite destination; separate key escrow does not make a DB dump public.
 
-## Minimal implementation proposal
+## Approved implementation
 
-**Recommend operator-managed settings coverage, not an app-native settings snapshot.** Record the owner's explicit yes/no decision on app-native settings snapshots: recommended answer **no**, because the host copy already needs bootstrap/escrow and private files. This keeps `backup.ts`, dump format, retention and restore unchanged. A yes decision needs a revised settings-snapshot contract (consistency, naming, retention, failure and restore behavior) approved before code; this proposal does not pretend that alternative is implemented or designed.
+**Operator-managed settings coverage; no app-native settings snapshot.** The owner selected
+this option on 2026-10-28. The host copy already needs bootstrap/escrow and private files,
+so `backup.ts`, dump format, retention and restore remain unchanged. Any future native
+snapshot needs a separately approved consistency, naming, retention, failure and restore
+contract; it is not part of this implementation.
 
 Update existing `ARCHITECTURE.md` Backups/DR and `README.md` Backups with the inventory, generation selection and offsite workflow. In `uploader/public/settings.html`, replace/extend the existing same-disk note with two concise groups: **app-created recovery files** (DB, images, private route archive) and **operator-managed material** (settings/migration copy, bootstrap config, separate key escrow), plus rebuildable releases. Reuse current backup lists/status, including degraded GPX counts; do not imply that listing a file proves recoverability or offsite delivery.
 
@@ -43,23 +47,56 @@ The runbook describes this tool-neutral sequence; command syntax is filled from 
 2. **Establish the operational write freeze before creating the recovery set.** Block new author/admin/public mutations and scheduled/storage writers, drain already-admitted changes (especially provider URL/key updates), and resolve known partial failures. Keep only the designated existing backup control available for capture; use the existing stopped-app ownership procedure for subsequent filesystem copying where needed. This is an operator-maintained maintenance window, not an application transaction or a new snapshot feature. If a complete freeze cannot be maintained, do not declare a coherent generation.
 3. While that freeze remains in force, create a current app recovery set; inspect success/degraded status and validate the dump plus referenced private archives. Capture the matching configured settings/migration copy, bootstrap configuration and non-secret key-generation association before releasing the freeze, together with all required image material. A DB snapshot taken before a provider change must never be paired with settings captured afterward: that can bind an old credential to a new destination. Verify every selected dump's companion/image coverage and refuse an incomplete generation rather than advancing a success marker.
 4. Copy that frozen recovery generation, complete required image chain and bootstrap material (excluding separately escrowed master keys) into one encrypted offsite generation. Preserve earlier valid generations if copying fails. Capture originals only as private data, never web assets. Release the write freeze only after the selected material has been coherently captured; do not resume writers while a tool is still reading the live files.
-5. Retention proposal for owner approval: keep **14 completed daily offsite generations**, retaining a last-known-restorable generation if later attempts fail. This is a proposed operator policy, not today's app behavior or a capacity guarantee. Never prune individual image tars out of a retained chain or orphan a retained dump's GPX companion. Existing in-app nonpruning of image archives is unchanged. Measure space/cost with the chosen tool before enabling pruning; no destination or budget is assumed.
+5. Approved operator policy: keep **14 completed daily offsite generations**, retaining a last-known-restorable generation if later attempts fail. This is not an implemented app pruner or a capacity guarantee. Preserve older archives still needed by retained generations; never prune individual image tars out of a retained chain or orphan a retained dump's GPX companion. Existing in-app nonpruning of image archives is unchanged. Measure space/cost with the chosen tool before enabling pruning; no destination or budget is assumed.
 6. Recover using only that offsite generation plus independent escrow in #295's isolated topology: distinct data bind/project/database, non-3000 loopback port, ingress blocked. Do not let source data on the original disk silently fill a gap. Check dump/route integrity, counts, image rescan, rendered story/gallery/comments and settings fidelity. Exercise encrypted credential recovery without paid/provider calls or logging keys. Record only redacted evidence.
 
 Key-loss scenario: content and photos still restore; encrypted AI credentials cannot decrypt. Keep local AI workflows available. Restore provider settings, configure a valid replacement master key through the existing private bootstrap mechanism, and re-enter/reissue each remote provider credential via admin Settings; revoke obsolete provider credentials where appropriate. Do not bypass encryption, copy ciphertext into a different provider assignment or claim replacing the key decrypts old envelopes. Keep the original escrow key for generations still intended to restore those credentials.
 
 ## Approval, dependencies and evidence
 
-Exact decisions requested:
+Decisions approved on 2026-10-28:
 
-1. Approve this inventory/UI/docs and SECURITY.md *Secrets*, *Backups* and private-GPX reconfirmation, without changing application backup semantics.
-2. Decide settings coverage: **operator-managed only (recommended)** versus request a separately specified app-native snapshot.
-3. Approve or revise the proposed 14 daily-generation retention; identify an operator-controlled destination/tool and separate escrow custodian/access method before any actual setup, expense or transfer. No vendor/cost is chosen by this spec.
+1. Inventory/UI/docs and SECURITY.md *Secrets*, *Backups* and private-GPX reconfirmation, without changing application backup semantics.
+2. Settings coverage: **operator-managed only**, not an app-native snapshot.
+3. **14 completed daily offsite generations**, preserving older required chain material. The existing encrypted backup system must still be identified by its tool and non-secret destination, with independent escrow/recovery access, before setup, expense or transfer. No vendor/cost is chosen by this spec.
 
 Owner decision recorded 2026-10-28: **Approve operator-managed coverage** and **Approve 14 generations**. The existing-system choice does not identify a tool or destination and is not evidence of a successful backup or restore. Obtain the non-secret system and escrow details before that drill; complete the independent approved UI/documentation work meanwhile.
 
 #295 must supply independent disposable restore evidence; #296 additionally requires an **offsite-only** drill. Neither has occurred here and neither is waived by approving documentation. #399 supplies the archive privacy clause; #398 supplies the runnable offline restore sequence. Future #297/#316 build records/manifests, if approved, remain rebuildable operational state rather than a new source of content truth.
 
-Verification after approval: meaningful Settings DOM/browser checks for both locale copy sets, visible coverage categories, no secret/environment values; `/backups` authorization and sensitive-data exclusion tests; actual chosen-tool encrypted restore evidence without secrets. Main integrator runs affected suites/typechecks. No infrastructure, restore matrix or successful check is claimed.
+Verification scope: meaningful Settings DOM/browser checks for both locale copy sets, visible coverage categories, no secret/environment values; `/backups` authorization and sensitive-data exclusion tests; actual chosen-tool encrypted restore evidence without secrets. Main integrator runs affected suites/typechecks. The evidence below covers only synthetic local UI/API behavior, not infrastructure recovery or an offsite restore.
 
 Containment: an incomplete copy must leave earlier valid generations intact; never delete live data or recovery history to make space. UI/docs can be corrected without data mutation. Failed restore drills preserve the isolated target for diagnosis and cannot touch production. This spec authorizes no production operation or cryptographic-key rotation.
+
+## Reachable implementation and evidence — 2026-10-28
+
+- Settings now groups app-created files and operator-managed material, with rebuildable
+  releases and the explicit operator-only retention policy. DE/EN strings use the existing
+  server-delivered `EditorCopy` dictionary and `textContent`. Existing backup lists,
+  degraded-GPX status and #399 image-archive privacy copy are unchanged.
+- `ARCHITECTURE.md`, `README.md` and `SECURITY.md` record the full inventory, write freeze,
+  coherent provider/settings generation, separate escrow, chain/companion dependencies,
+  failed-copy retention, key loss and isolated recovery containment. No API, settings snapshot,
+  environment/key probe, uploader or automatic offsite pruner was added.
+- Added a permanent API privacy-boundary regression: `/backups` returns only existing
+  recovery metadata without reading operator settings or provider secret values/presence.
+  Automated suites/typechecks are left to the parent integrator; no pass is claimed here.
+- Actual `src/main.ts` ran against synthetic `swl_296_dev` on loopback port 33396 with all
+  writable paths under this worktree's `.issue-runtime`. The real **Back up now** control
+  produced a local dump; admin metadata/download returned 200 (download `no-store`).
+  Anonymous/author GET, POST and DB/image/GPX download requests returned 401/403.
+  `/backups/settings.json` was refused. Rendered markup/metadata contained neither the
+  synthetic password, database URL nor actual configured settings path.
+- Managed Chromium captured 1440×1000 desktop and 390×844 mobile coverage without horizontal
+  document overflow. Settings remains English by incumbent design; German evidence explicitly
+  renders the real delivered `EditorCopy.de` copy set via text nodes, not a claimed locale
+  switch. Screenshots and redacted `inventory-browser-evidence.json` are retained under
+  `.issue-runtime`. The optional existing local-model discovery failed at localhost:1234
+  because no model server was supplied; no remote/provider call or secret was required.
+  Owned browser tab and runtime were stopped.
+
+This synthetic account-only local backup has no image/GPX fixture and is **not** a restore
+drill, encrypted offsite proof or #295 acceptance. The precise remaining prerequisite for
+#296 is the owner's existing encrypted backup **tool/system, non-secret destination
+identifier and independently recoverable escrow/access method**, followed by the authorized
+offsite-only drill using that system. Neither #295 nor #296 recovery acceptance is waived.

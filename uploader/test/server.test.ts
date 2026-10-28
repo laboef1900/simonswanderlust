@@ -3215,6 +3215,31 @@ describe('backup routes', () => {
     expect(list.json().imageArchives[0].name).toBe('images-20260703-120000.tar');
   });
 
+  it('lists recovery metadata without reading operator settings or provider secrets', async () => {
+    const settings = fakeStore({ ...SETTINGS, captionPrompt: 'private-settings-fixture' });
+    const secrets = memorySecretsStore();
+    await secrets.set('ai_provider_key:openrouter', 'private-provider-fixture');
+    const b = build({ settings, secrets });
+    const { cookie } = await authed(b);
+    const settingsRead = vi.spyOn(settings, 'get');
+    const secretRead = vi.spyOn(secrets, 'get');
+    const secretPresence = vi.spyOn(secrets, 'has');
+    const response = await b.app.inject({ method: 'GET', url: '/backups', cookies: cookie });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      state: {}, running: false,
+      files: [{ name: 'db-20260703-120000.json.gz', size: 3 }],
+      imageArchives: [{ name: 'images-20260703-120000.tar', size: 7 }],
+      routeArchives: [],
+    });
+    expect(settingsRead).not.toHaveBeenCalled();
+    expect(secretRead).not.toHaveBeenCalled();
+    expect(secretPresence).not.toHaveBeenCalled();
+    expect(response.body).not.toContain('private-settings-fixture');
+    expect(response.body).not.toContain('private-provider-fixture');
+    await b.app.close();
+  });
+
   it('answers 409 to a second run while one is in flight, and reports running', async () => {
     const b = build({ dbBackup: stubBackup('/tmp/none', true).backup });
     const { cookie } = await authed(b);

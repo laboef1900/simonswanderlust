@@ -318,6 +318,16 @@
           <button id="backupNow" type="button" class="btn-secondary">Back up now</button>
           <button id="rebuild" type="button" class="btn-primary">Rebuild site now</button>
         </div>
+        <section aria-labelledby="recoveryHeading">
+          <h3 id="recoveryHeading"></h3>
+          <p id="recoveryLocal" class="muted"></p>
+          <h4 id="recoveryAppHeading"></h4>
+          <p id="recoveryApp"></p>
+          <h4 id="recoveryOperatorHeading"></h4>
+          <p id="recoveryOperator"></p>
+          <p id="recoveryRebuild" class="muted"></p>
+          <p id="recoveryRetention" class="muted"></p>
+        </section>
         <p class="section-label">Last backup</p>
         <p id="backupStatus" class="page-status" role="status"></p>
         <p class="section-label">Backup files</p>
@@ -331,12 +341,6 @@
         <p id="routeCleanupStatus" class="page-status" role="status"></p>
         <p id="routeArchivesHeading" class="section-label"></p>
         <ul id="routeArchives"></ul>
-        <p class="muted">
-          Note: DB dumps and image archives are written to <code>/data/backup/db</code> —
-          the same server disk as the live data. They are not offsite copies; keep a
-          host-level backup (e.g. restic/rsync cron) of <code>/data</code>
-          (host: <code>./uploader/data</code>).
-        </p>
       </section>
       </section>
 
@@ -361,6 +365,10 @@
         settingsIntro: 'settingsIntro', imageHeading: 'settingsImages', commentsHeading: 'settingsComments',
         siteSettingsHeading: 'settingsSite', reviewUseCaseLabel: 'settingsWriting', captionUseCaseLabel: 'settingsCaptions',
         imageArchivePrivacy: 'imageArchivePrivacy',
+        recoveryHeading: 'recoveryHeading', recoveryLocal: 'recoveryLocal',
+        recoveryAppHeading: 'recoveryAppHeading', recoveryApp: 'recoveryApp',
+        recoveryOperatorHeading: 'recoveryOperatorHeading', recoveryOperator: 'recoveryOperator',
+        recoveryRebuild: 'recoveryRebuild', recoveryRetention: 'recoveryRetention',
         reviewDetailsHeading: 'settingsWriting', captionDetailsHeading: 'settingsCaptions',
         reviewPrivacy: 'writingPrivacy', reviewTimeoutLabel: 'writingTimeout', reviewPromptLabel: 'writingInstructions',
         reviewPromptHelp: 'writingInstructionsHelp', testReview: 'reviewTestLabel',
