@@ -39,6 +39,7 @@ interface StubElement {
   getAttribute(name: string): string | null;
   hasAttribute(name: string): boolean;
   appendChild(child: StubElement): void;
+  prepend(child: StubElement): void;
   addEventListener(type: string, listener: Listener): void;
   querySelector(selector: string): StubElement | null;
   querySelectorAll(selector: string): StubElement[];
@@ -98,6 +99,7 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
       getAttribute(name) { return attrs.get(name) ?? null; },
       hasAttribute(name) { return attrs.has(name); },
       appendChild(child) { element.children.push(child); },
+      prepend(child) { element.children.unshift(child); },
       addEventListener(type, listener) {
         const registered = listeners.get(type);
         if (registered) registered.push(listener);
@@ -200,6 +202,7 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
             '.cms-masthead-right > .cms-brand-sub': makeElement(),
             '#cmsAccountMenu': accountMenu,
             '.cms-account-menu__trigger': accountTrigger,
+            '.cms-sidebar-footer': makeElement(),
             '#cmsSidebar': sidebar,
             '#cmsMenuBtn': menu,
             '#cmsNavScrim': scrim,
