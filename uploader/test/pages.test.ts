@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { memoryPageStore, validatePagePair, isSafePageKey, PageError, type PagePair } from '../src/pages.js';
 import { REVISION_CAP } from '../src/posts.js';
+import * as bodyContent from '../src/body-content.js';
 
 const pair = (key = 'about'): PagePair => ({
   key,
@@ -47,6 +48,35 @@ describe('page images-map validation', () => {
 
 describe('page gallery normalization', () => {
   const a = 'https://img/g/a-1a2b3c4d';
+
+  it('normalizes nested and raw gallery nodes through direct saves in both locales', async () => {
+    const store = memoryPageStore();
+    const input = pair();
+    input.de.bodyMarkdown = `- ~~~gallery extra\n  ${a} | 30x20 | alt="Blick"\n  ~~~`;
+    input.en.bodyMarkdown = `<pre><code class="language-gallery">${a} | 30x20 | alt="View"\n</code></pre>`;
+    const saved = await store.save(input);
+    expect(saved.de.bodyMarkdown).toBe(`- ~~~gallery extra\n  ${a}\n  ~~~`);
+    expect(saved.en.bodyMarkdown).toBe(`<pre><code class="language-gallery">${a}\n</code></pre>`);
+    expect(saved.de.images[a]).toEqual({ width: 30, height: 20, alt: 'Blick' });
+    expect(saved.en.images[a]).toEqual({ width: 30, height: 20, alt: 'View' });
+  });
+
+  it('leaves both locales, timestamp and revisions untouched after later locale analysis fails', async () => {
+    const store = memoryPageStore();
+    const saved = await store.save(pair());
+    const input = { ...saved, de: { ...saved.de, bodyMarkdown: `~~~gallery\n${a} | 30x20\n~~~` }, en: { ...saved.en, bodyMarkdown: 'EN analysis failure' } };
+    const normalize = bodyContent.normalizeGalleryFences;
+    const analysis = vi.spyOn(bodyContent, 'normalizeGalleryFences').mockImplementation((body, images) => {
+      if (body === input.en.bodyMarkdown) return Promise.reject(new Error('source mapping unavailable'));
+      return normalize(body, images);
+    });
+    try {
+      await expect(store.save(input)).rejects.toThrow('source mapping unavailable');
+      expect(await store.get(saved.key)).toEqual(saved);
+      expect(await store.listRevisions(saved.key)).toEqual([]);
+      expect(input.de.images).toEqual({});
+    } finally { analysis.mockRestore(); }
+  });
 
   it('lifts per-line gallery metadata into the images map on save', async () => {
     const s = memoryPageStore();

@@ -20,6 +20,23 @@ window.EditorGalleries = (function () {
     let previews = true;
     let editing = false;
     let controllers = [];
+    let refreshVersion = 0;
+    let altVersion = 0;
+    let refreshTimer;
+    let analysisSnapshot = null;
+    const analysisStatus = el('p', 'muted editor-gallery__status');
+    analysisStatus.setAttribute('role', 'status');
+    const analysisRetry = el('button', 'btn-secondary', copy.retry);
+    analysisRetry.type = 'button';
+    analysisRetry.hidden = true;
+    toggle.parentElement.appendChild(analysisStatus);
+    toggle.parentElement.appendChild(analysisRetry);
+    function failed(error) {
+      if (error?.status === 401) onUnauthed();
+      analysisStatus.textContent = copy.analysisFailed;
+      analysisRetry.hidden = false;
+    }
+    analysisRetry.addEventListener('click', () => refresh(true));
 
     function previewUrl(photo) {
       const thumbnail = PostsFilter.thumbUrl({ heroSrc: photo.src, heroWidth: photo.width, heroFormat: photo.format });
@@ -31,7 +48,10 @@ window.EditorGalleries = (function () {
       } catch { return null; }
     }
 
-    function cancel() { controllers.forEach((controller) => controller.cancel()); }
+    function cancel() {
+      ++altVersion;
+      controllers.forEach((controller) => controller.cancel());
+    }
     function dispose(controller) {
       controller.alive = false;
       // setValue may already have removed the widget's CodeMirror line. Stop
@@ -44,39 +64,42 @@ window.EditorGalleries = (function () {
       controller.marker.clear();
     }
 
-    function writeAlt(src, value) {
-      // The existing images map is keyed by URL, not occurrence. Keep every
-      // gallery use in this locale consistent without mutating that map outside undo.
-      editing = true;
+    async function writeAlt(src, value) {
+      const body = cm.getValue();
+      const version = ++altVersion;
+      // Manual intent wins immediately, even while authoritative range analysis
+      // is pending or fails. Duplicate occurrences edit the same post-local alt.
+      controllers.forEach((controller) => controller.fields.forEach((field) => {
+        if (field.src === src) field.cancel();
+      }));
       try {
-        cm.operation(() => {
-          for (const controller of controllers) {
-            const range = controller.marker.find();
-            if (!range) continue;
-            const old = cm.getRange(range.from, range.to);
-            const next = GalleryFence.withAlt(old, src, value);
-            if (next !== old) {
-              // Keep the opener/closer intact: replacing the entire collapsed
-              // range would clear its marker, detach the focused input and lose caret.
-              const start = cm.indexFromPos(range.from);
-              cm.replaceRange(next.slice(next.indexOf('\n') + 1, next.lastIndexOf('\n') + 1),
-                cm.posFromIndex(start + old.indexOf('\n') + 1),
-                cm.posFromIndex(start + old.lastIndexOf('\n') + 1), '+gallery-alt');
-              controller.text = next;
-            }
-            controller.fields.forEach((field) => {
-              if (field.src !== src) return;
-              field.cancel();
-              if (field.input.value !== value) field.input.value = value;
-              field.image.alt = value;
+        const edits = await GalleryFence.altEdit(body, src, value);
+        if (version !== altVersion || cm.getValue() !== body) return;
+        editing = true;
+        try {
+          cm.operation(() => {
+            edits.forEach((edit) => cm.replaceRange(edit.text,
+              cm.posFromIndex(edit.start), cm.posFromIndex(edit.end), '+gallery-alt'));
+            controllers.forEach((controller) => {
+              const range = controller.marker.find();
+              if (range) controller.text = cm.getRange(range.from, range.to);
+              controller.fields.forEach((field) => {
+                if (field.src !== src) return;
+                field.cancel();
+                field.input.value = value;
+                field.image.alt = value;
+              });
             });
-          }
-        });
-      } finally { editing = false; }
+          });
+        } finally { editing = false; }
+        schedule();
+      } catch (error) {
+        if (version === altVersion && cm.getValue() === body) failed(error);
+      }
     }
 
     function create(block, text, number) {
-      const parsed = GalleryFence.parse(text);
+      const parsed = GalleryFence.parse(block.content);
       const root = el('section', 'editor-gallery');
       root.setAttribute('lang', locale);
       root.setAttribute('aria-label', copy.gallery + ' ' + number);
@@ -306,16 +329,32 @@ window.EditorGalleries = (function () {
       return controller;
     }
 
-    function refresh(reset = false) {
+    async function refresh(reset = false) {
+      clearTimeout(refreshTimer);
       if (editing) return;
-      cm.operation(() => {
-        if (reset || !previews) {
+      const version = ++refreshVersion;
+      const body = cm.getValue();
+      if (reset || !previews) {
+        controllers.forEach(dispose);
+        controllers = [];
+      }
+      if (!previews) return;
+      let analysis;
+      try { analysis = await GalleryFence.analyze(body, { fresh: reset }); }
+      catch (error) {
+        if (version === refreshVersion && body === cm.getValue()) {
           controllers.forEach(dispose);
           controllers = [];
+          failed(error);
         }
-        if (!previews) return;
-        const body = cm.getValue();
-        const blocks = GalleryFence.scanFences(body).filter((block) => block.isGallery && !block.unterminated);
+        return;
+      }
+      if (version !== refreshVersion || body !== cm.getValue() || !previews) return;
+      analysisSnapshot = analysis;
+      analysisStatus.textContent = '';
+      analysisRetry.hidden = true;
+      cm.operation(() => {
+        const blocks = analysis.blocks.filter((block) => block.isGallery && !block.unterminated);
         const old = controllers;
         const next = [];
         blocks.forEach((block, index) => {
@@ -345,6 +384,13 @@ window.EditorGalleries = (function () {
       });
     }
 
+    function schedule() {
+      if (editing) return;
+      ++refreshVersion;
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => refresh(), 250);
+    }
+
     toggle.textContent = copy.showMarkdown;
     toggle.setAttribute('aria-pressed', 'false');
     toggle.addEventListener('click', () => {
@@ -353,12 +399,19 @@ window.EditorGalleries = (function () {
       toggle.setAttribute('aria-pressed', String(!previews));
       refresh();
     });
-    cm.on('changes', () => refresh());
+    cm.on('changes', () => {
+      if (editing) return;
+      ++altVersion;
+      controllers.forEach(dispose);
+      controllers = [];
+      schedule();
+    });
     refresh();
     return {
       refresh: () => refresh(true), cancel,
-      focusPhoto(src) {
+      async focusPhoto(src) {
         if (!previews) toggle.click();
+        await refresh();
         for (const controller of controllers) {
           const field = controller.fields.find((entry) => entry.src === src);
           const range = controller.marker.find();
@@ -391,14 +444,16 @@ window.EditorGalleries = (function () {
         const stored = Object.create(null);
         const body = cm.getValue();
         const map = images();
-        GalleryFence.scanFences(body).forEach((block) => {
-          if (!block.isGallery) return;
-          GalleryFence.parse(body.slice(block.start, block.end)).lines.forEach((line) => {
+        const sources = new Set(Object.keys(map));
+        if (analysisSnapshot?.bodyMarkdown === body) analysisSnapshot.blocks.forEach((block) => {
+          if (block.isGallery) GalleryFence.parse(block.content).lines.forEach((line) => sources.add(line.src));
+        });
+        sources.forEach((src) => {
+            const line = { src };
             const entry = library ? library.peek(line.src) : undefined;
             if (entry && entry.row) fromLibrary[line.src] = GalleryLibrary.describe(entry.row, locale).alt;
             const saved = Object.prototype.hasOwnProperty.call(map, line.src) ? map[line.src] : undefined;
             if (saved && typeof saved.alt === 'string') stored[line.src] = saved.alt;
-          });
         });
         return { library: fromLibrary, stored };
       },

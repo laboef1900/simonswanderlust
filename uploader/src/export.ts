@@ -32,13 +32,13 @@ function imageYaml(name: string, image: HeroImage): string[] {
  * a gallery line's text — a `caption-override` above all — may read like an
  * inline image and must reach the backup byte-for-byte.
  */
-function bodyToMdx(p: PostLocale): string {
-  return rewriteOutsideGalleries(galleryFencesToMdx(p.bodyMarkdown, p.images), (text) => {
+async function bodyToMdx(p: PostLocale): Promise<string> {
+  return rewriteOutsideGalleries(await galleryFencesToMdx(p.bodyMarkdown, p.images), async (text) => {
     let out = text;
     // `markdownImages` reads the label with its backslash escapes (posts.ts
     // writes `\[`/`\]` via `imageMarkdown`); a naive `[^\]]*` stopped at the
     // first escaped bracket and exported the photo without its dimensions.
-    for (const img of markdownImages(text)) {
+    for (const img of await markdownImages(text)) {
       const dims = p.images[img.url];
       if (!dims) continue;
       // Escape &, ", <, > (& first) so posts.ts normalizeBodyImages can decode the exact
@@ -53,7 +53,7 @@ function bodyToMdx(p: PostLocale): string {
   });
 }
 
-export function renderPostToMdx(pair: PostPair, locale: Locale, track?: PublicTrack): string {
+export async function renderPostToMdx(pair: PostPair, locale: Locale, track?: PublicTrack): Promise<string> {
   const p = locale === 'de' ? pair.de : pair.en;
   const s = pair.shared;
   const lines = [
@@ -80,12 +80,18 @@ export function renderPostToMdx(pair: PostPair, locale: Locale, track?: PublicTr
     lines.push('keyFacts:');
     for (const [k, v] of Object.entries(p.keyFacts)) lines.push(`  ${q(k)}: ${q(v)}`);
   }
-  lines.push('---', '', bodyToMdx(p).trim(), '');
+  lines.push('---', '', (await bodyToMdx(p)).trim(), '');
   return lines.join('\n');
 }
 
 export async function exportPost(pair: PostPair, baseDir: string, track?: PublicTrack): Promise<string[]> {
   const out: string[] = [];
+  // Analyze both locales before writing either file: a later source-map failure
+  // must not leave one half of a translation pair exported.
+  const rendered: Partial<Record<Locale, string>> = {};
+  for (const locale of ['de', 'en'] as const) {
+    if (pair[locale].slug !== '') rendered[locale] = await renderPostToMdx(pair, locale, track);
+  }
   for (const locale of ['de', 'en'] as Locale[]) {
     const slug = pair[locale].slug;
     // An unset slug (DE-first draft without an EN title, issue #119) has no
@@ -94,7 +100,7 @@ export async function exportPost(pair: PostPair, baseDir: string, track?: Public
     const dir = join(baseDir, 'trips', locale);
     await mkdir(dir, { recursive: true });
     const path = join(dir, `${slug}.mdx`);
-    await writeFile(path, renderPostToMdx(pair, locale, track), 'utf8');
+    await writeFile(path, rendered[locale]!, 'utf8');
     out.push(path);
   }
   return out;

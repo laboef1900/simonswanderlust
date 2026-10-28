@@ -1,5 +1,5 @@
 // Advisory checks of one unsaved locale. Load gallery-fence.js first.
-// No DOM, network, persistence, or draft mutation; all markdown lines are 1-indexed.
+// Gallery identity comes from authenticated source analysis; no draft mutation.
 window.EditorLinter = (function () {
   function text(value) {
     return String(value == null ? '' : value);
@@ -79,9 +79,9 @@ window.EditorLinter = (function () {
     return parts.join('\n');
   }
 
-  function prepare(markdown) {
+  async function prepare(markdown) {
     var source = text(markdown);
-    var blocks = window.GalleryFence.scanFences(source);
+    var blocks = (await window.GalleryFence.analyze(source)).blocks;
     var parts = [];
     var inlineParts = [];
     var pos = 0;
@@ -169,18 +169,14 @@ window.EditorLinter = (function () {
     var own = function (map, key) { return Object.prototype.hasOwnProperty.call(map, key); };
     doc.blocks.forEach(function (block) {
       if (!block.isGallery) return;
-      var firstLine = lineAt(doc.starts, block.start);
-      var lines = doc.source.slice(block.start, block.end).split('\n');
-      var end = block.unterminated ? lines.length : lines.length - 1;
-      for (var i = 1; i < end; i++) {
-        // Parse each line through the picker's metadata decoder, preserving the
-        // original line even when blank/directive lines occur between photos.
-        var photo = window.GalleryFence.parse(lines[i]).lines[0];
+      for (var i = 0; i < block.lines.length; i++) {
+        var line = block.lines[i];
+        var photo = window.GalleryFence.parse(line.text).lines[0];
         if (!photo) continue;
         var alt = own(fromLibrary, photo.src) ? fromLibrary[photo.src]
           : photo.alt !== undefined ? photo.alt
             : own(stored, photo.src) ? stored[photo.src] : '';
-        if (!text(alt).trim()) findings.push({ code: 'missing-alt', message: 'Add alt text to this gallery image.', line: firstLine + i, target: 'gallery' });
+        if (!text(alt).trim()) findings.push({ code: 'missing-alt', message: 'Add alt text to this gallery image.', line: lineAt(doc.starts, line.start), target: 'gallery' });
       }
     });
     findings.sort(function (a, b) { return (a.line || 0) - (b.line || 0); });
@@ -197,28 +193,28 @@ window.EditorLinter = (function () {
     return checked;
   }
 
-  function lintHeadings(markdown) { return headingsIn(prepare(markdown)); }
-  function lintAltText(input) {
+  async function lintHeadings(markdown) { return headingsIn(await prepare(markdown)); }
+  async function lintAltText(input) {
     input = input || {};
-    var doc = prepare(input.markdown);
+    var doc = await prepare(input.markdown);
     return altIn(input, doc, inlineIn(doc));
   }
-  function lintInternalLinks(markdown) {
-    return linksIn(inlineIn(prepare(markdown)));
+  async function lintInternalLinks(markdown) {
+    return linksIn(inlineIn(await prepare(markdown)));
   }
 
   // Reuse the same offset-preserving scanner as Review Story: a URL in a
   // code example or ordinary link must never receive an image-repair jump.
-  function findImage(markdown, src) {
-    var image = inlineIn(prepare(markdown)).find(function (item) {
+  async function findImage(markdown, src) {
+    var image = inlineIn(await prepare(markdown)).find(function (item) {
       return item.image && item.destination === src;
     });
     return image ? { start: image.start, end: image.end, line: image.line } : null;
   }
 
-  function lintStory(input) {
+  async function lintStory(input) {
     input = input || {};
-    var doc = prepare(input.markdown);
+    var doc = await prepare(input.markdown);
     var inline = inlineIn(doc);
     var title = lintTitle(input.title);
     var excerpt = lintExcerpt(input.excerpt);

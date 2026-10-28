@@ -23,6 +23,8 @@ import {
   readCaptionOverride,
   unescapeMeta,
 } from '../../site/src/lib/gallery-layout.js';
+import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
+import { applyGalleryEdits, galleryLineEdits } from '../public/gallery-source-edits.js';
 
 /**
  * One `images` entry: intrinsic dimensions plus the optional per-locale alt and
@@ -147,118 +149,37 @@ export function imageMarkdown(alt: string, src: string): string {
   return `![${escapeAltText(alt)}](${src})`;
 }
 
-/**
- * Opens a fenced block: up to 3 spaces of indent (CommonMark), then a run of
- * 3+ backticks or tildes, then the info string.
- */
-const FENCE_OPEN_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
-
-/** A line is a comment/spacer when blank or `#`-prefixed (spec §Body encoding). */
-function isSkippableLine(line: string): boolean {
-  const t = line.trim();
-  return t === '' || t.startsWith('#');
+/** Rewrite only parser-owned logical photo lines, preserving all other bytes. */
+export async function rewriteFences(body: string, rewriteLine: (line: string) => string): Promise<string> {
+  const analysis = await analyzeGallerySource(body);
+  const edits = analysis.blocks.filter((block) => block.isGallery).flatMap((block) =>
+    block.lines.filter((line) => line.text.trim() !== '' && !line.text.trim().startsWith('#'))
+      .flatMap((line) => galleryLineEdits(line, rewriteLine(line.text))),
+  );
+  // Callbacks run in source order (import identity and duplicate-URL metadata
+  // precedence depend on it); batch application copies the document only once.
+  return applyGalleryEdits(body, edits);
 }
 
 /**
- * What one body line is to the fence scanner: outside every fence (`text`),
- * inside or delimiting a non-gallery fence (`fence`), a ```gallery delimiter,
- * blank or `#` line (`gallery`), or a gallery photo line (`photo`).
+ * Inline Markdown/MDX passes must not consume gallery-local captions which
+ * happen to contain image syntax. Gallery identity comes from the same sanitized
+ * render predicate as publish and preview, including raw HTML and containers.
  */
-type LineRole = 'text' | 'fence' | 'gallery' | 'photo';
-
-/**
- * Classify every line of a body split on `\n` (a trailing `\r` is ignored).
- *
- * @ai-warning A line scanner, deliberately NOT a regex over the whole body. The
- * regex this replaced (`/^((`{3,})gallery…)([\s\S]*?)(^\2…)/gm`) got two things
- * wrong, both of which corrupt an author's text rather than merely missing a
- * gallery:
- *
- *  1. It matched a ```gallery fence NESTED INSIDE another fence. That is
- *     exactly how docs/authoring-workflow.md demonstrates the syntax — a
- *     4-backtick wrapper around a 3-backtick gallery example — so a post
- *     *about* galleries had its example silently rewritten to a bare URL on
- *     save, destroying the dimensions and captions being demonstrated.
- *  2. Its closing fence had to be exactly as long as the opening one (`\2`).
- *     CommonMark lets a closing fence be LONGER, so a ```gallery closed with
- *     ```` was not matched at all — and since the renderer *does* follow
- *     CommonMark, that block rendered as a gallery while never being
- *     normalized, i.e. the two disagreed about what the block was.
- *
- * Opening a gallery fence still requires column 0 (what the editor and
- * `export.ts` produce). Recognising an ENCLOSING fence is deliberately more
- * liberal — indent and tildes included — because being generous about what
- * protects content is the safe direction to be wrong in.
- */
-function lineRoles(lines: string[]): LineRole[] {
-  let open: { marker: string; len: number; isGallery: boolean } | null = null;
-  return lines.map((raw): LineRole => {
-    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
-
-    if (open) {
-      // A closing fence is the same character, at least as long, nothing else.
-      const close = new RegExp(`^ {0,3}\\${open.marker}{${open.len},}[ \\t]*$`).test(line);
-      const role: LineRole = !open.isGallery ? 'fence' : close || isSkippableLine(line) ? 'gallery' : 'photo';
-      if (close) open = null;
-      return role;
-    }
-
-    const m = FENCE_OPEN_RE.exec(line);
-    if (!m) return 'text';
-    const [, indent = '', fence = '', info = ''] = m;
-    const marker = fence[0] ?? '`';
-    // CommonMark: a backtick fence's info string may not contain a backtick.
-    if (marker === '`' && info.includes('`')) return 'text';
-    open = {
-      marker,
-      len: fence.length,
-      isGallery: indent === '' && marker === '`' && info.trim() === 'gallery',
-    };
-    return open.isGallery ? 'gallery' : 'fence';
-  });
-}
-
-/** Apply `rewriteLine` to every photo line of every ```gallery fence (see `lineRoles`). */
-export function rewriteFences(body: string, rewriteLine: (line: string) => string): string {
-  const lines = body.split('\n');
-  const roles = lineRoles(lines);
-  return lines
-    .map((raw, i) => {
-      if (roles[i] !== 'photo') return raw;
-      // Keep CRLF intact: split('\n') leaves the '\r' on the line.
-      const cr = raw.endsWith('\r') ? '\r' : '';
-      return rewriteLine(cr ? raw.slice(0, -1) : raw) + cr;
-    })
-    .join('\n');
-}
-
-/**
- * Apply `rewrite` to each maximal run of lines OUTSIDE every ```gallery fence;
- * gallery lines (delimiters, directives and photo lines) come back verbatim.
- *
- * @ai-warning Body-wide passes that look for inline Markdown or MDX image
- * syntax MUST go through this. A gallery line's `alt=`/`caption=`/
- * `caption-override=` text may legitimately read `![x](https://…)`; a pass
- * over the whole body would rewrite it into a `<BodyImage>` tag, whose quotes
- * then break the field and the save normalizer drops it — the export would
- * silently lose the author's gallery-local caption.
- */
-export function rewriteOutsideGalleries(body: string, rewrite: (text: string) => string): string {
-  const lines = body.split('\n');
-  const roles = lineRoles(lines);
-  const out: string[] = [];
-  let run: string[] = [];
-  lines.forEach((raw, i) => {
-    if (roles[i] === 'text' || roles[i] === 'fence') {
-      run.push(raw);
-      return;
-    }
-    if (run.length > 0) out.push(rewrite(run.join('\n')));
-    run = [];
-    out.push(raw);
-  });
-  if (run.length > 0) out.push(rewrite(run.join('\n')));
-  return out.join('\n');
+export async function rewriteOutsideGalleries(
+  body: string,
+  rewrite: (text: string) => string | Promise<string>,
+): Promise<string> {
+  const analysis = await analyzeGallerySource(body);
+  const parts: string[] = [];
+  let at = 0;
+  for (const block of analysis.blocks) {
+    if (!block.isGallery) continue;
+    parts.push(await rewrite(body.slice(at, block.start)), body.slice(block.start, block.end));
+    at = block.end;
+  }
+  parts.push(await rewrite(body.slice(at)));
+  return parts.join('');
 }
 
 const DIMS_RE = /^(\d{1,6})x(\d{1,6})$/;
@@ -287,12 +208,12 @@ const ATTR_RE = /^(alt|caption|format)="([^"]*)"$/;
  * the line in canonical form (`url | caption-override="…"`, re-escaped and
  * capped), which makes the normalizer idempotent over its own output.
  */
-export function normalizeGalleryFences(
+export async function normalizeGalleryFences(
   bodyMarkdown: string,
   images: Record<string, ImageMeta>,
-): { bodyMarkdown: string; images: Record<string, ImageMeta> } {
+): Promise<{ bodyMarkdown: string; images: Record<string, ImageMeta> }> {
   const merged: Record<string, ImageMeta> = { ...images };
-  const normalized = rewriteFences(bodyMarkdown, (line) => {
+  const normalized = await rewriteFences(bodyMarkdown, (line) => {
     const fields = line.split('|').map((f) => f.trim());
     const src = fields[0] ?? '';
     if (src === '') return line;
@@ -350,10 +271,10 @@ export function normalizeGalleryFences(
  * on its line, last, so re-importing the backup normalizes back to the same
  * stored line.
  */
-export function galleryFencesToMdx(
+export async function galleryFencesToMdx(
   bodyMarkdown: string,
   images: Record<string, ImageMeta>,
-): string {
+): Promise<string> {
   return rewriteFences(bodyMarkdown, (line) => {
     const fields = line.split('|').map((f) => f.trim());
     // Anything beyond a gallery-local caption means the line already carries
@@ -364,8 +285,8 @@ export function galleryFencesToMdx(
     if (!meta) return line;
     const parts = [src, `${meta.width}x${meta.height}`];
     if (meta.format === 'jpeg') parts.push('format="jpeg"');
-    if (meta.alt) parts.push(`alt="${escapeMeta(meta.alt)}"`);
-    if (meta.caption) parts.push(`caption="${escapeMeta(meta.caption)}"`);
+    if (meta.alt != null) parts.push(`alt="${escapeMeta(meta.alt)}"`);
+    if (meta.caption != null) parts.push(`caption="${escapeMeta(meta.caption)}"`);
     const override = readCaptionOverride(line);
     if (override !== undefined) parts.push(`caption-override="${escapeMeta(override)}"`);
     return parts.join(' | ');

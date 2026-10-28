@@ -7,6 +7,7 @@ import { pgUserStore, verifyPassword, UserExistsError, UsernamePolicyError } fro
 import { pgSessionStore } from '../src/sessions.js';
 import { pgPostStore, PostError, REVISION_CAP } from '../src/posts.js';
 import { lockPostPair } from '../src/post-pair-lock.js';
+import * as bodyContent from '../src/body-content.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -593,6 +594,30 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     await pool.query('DELETE FROM posts');
   });
   afterAll(async () => { await pool.end(); });
+
+  it('normalizes direct-import galleries and refuses a later locale analysis failure without writes', async () => {
+    const store = pgPostStore(pool);
+    const input = base(`gallery-${randomUUID()}`);
+    const src = 'https://i/gallery';
+    input.de.bodyMarkdown = `> ~~~gallery extra\n> ${src} | 30x20 | alt="Blick"\n> ~~~`;
+    input.en.bodyMarkdown = `<pre><code class="language-gallery">${src} | 30x20 | alt="View"\n</code></pre>`;
+    const saved = await store.upsertDraft(input);
+    expect(saved.de.bodyMarkdown).toBe(`> ~~~gallery extra\n> ${src}\n> ~~~`);
+    expect(saved.en.bodyMarkdown).toBe(`<pre><code class="language-gallery">${src}\n</code></pre>`);
+    expect(saved.de.images[src]).toEqual({ width: 30, height: 20, alt: 'Blick' });
+    expect(saved.en.images[src]).toEqual({ width: 30, height: 20, alt: 'View' });
+    const edit = { ...saved, de: { ...saved.de, bodyMarkdown: input.de.bodyMarkdown }, en: { ...saved.en, bodyMarkdown: 'EN analysis failure' } };
+    const normalize = bodyContent.normalizeGalleryFences;
+    const analysis = vi.spyOn(bodyContent, 'normalizeGalleryFences').mockImplementation((body, images) => {
+      if (body === edit.en.bodyMarkdown) return Promise.reject(new Error('source mapping unavailable'));
+      return normalize(body, images);
+    });
+    try {
+      await expect(store.upsertDraft(edit, saved.updatedAt)).rejects.toThrow('source mapping unavailable');
+      expect(await store.get(saved.translationKey)).toEqual(saved);
+      expect(await store.listRevisions(saved.translationKey)).toEqual([]);
+    } finally { analysis.mockRestore(); }
+  });
 
   it('snapshots the pre-save pair on overwrite; echoing get().updatedAt never false-conflicts', async () => {
     const store = pgPostStore(pool);

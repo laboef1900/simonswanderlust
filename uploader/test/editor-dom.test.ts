@@ -1,15 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { resolve } from 'node:path';
 import type { PostPair } from '../src/posts.js';
 import type { EditorialReviewResult } from '../src/editorial-review.js';
 import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { normalizeGalleryFences } from '../src/body-content.js';
+import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
 import { readCaptionOverride, readCaptionsVisible } from '../../site/src/lib/gallery-layout.js';
 import { REGIONS } from '../src/db.js';
 import type { AltAudit } from '../src/alt-audit.js';
 
+
+beforeAll(async () => { await analyzeGallerySource(''); });
 // editor.html's inline script is plain top-level browser code. Run it in a vm
 // context whose `document.getElementById` answers from the REAL markup's ids —
 // null for anything the page does not contain — so populateForm()/buildPayload()
@@ -37,6 +41,7 @@ type Fetch = (url: string, options?: RequestInit) => Promise<Response>;
 
 interface EditorOptions {
   fetch?: Fetch;
+  galleryFetch?: Fetch;
   review?: Review;
   isAdmin?: boolean;
   mobile?: boolean;
@@ -51,7 +56,7 @@ interface EditorOptions {
 interface GalleryPicker {
   multiple: true;
   captions?: { locale: 'de' | 'en'; visible: boolean; overrides: Record<string, string>; fallback: Record<string, string> };
-  onPick(items: unknown[], options: { layout: string | null; captions?: { visible: boolean; overrides: Record<string, string> } }): void;
+  onPick(items: unknown[], options: { layout: string | null; captions?: { visible: boolean; overrides: Record<string, string> } }): Promise<void>;
 }
 type PickerSettings = GalleryPicker | { multiple?: false; onPick?: (item: EditorOptions['pickImage']) => void };
 interface EditorApi {
@@ -75,6 +80,9 @@ function loadEditor(options: EditorOptions = {}) {
     addEventListener(_type: string, listener: () => void) { mediaChanged = listener; },
   };
   const requests: { url: string; options: RequestInit }[] = [];
+  const galleryRequests: { url: string; options: RequestInit }[] = [];
+  const timers = new Map<number, () => void>();
+  let nextTimer = 0;
   const galleryPickers: GalleryPicker[] = [];
   const el = (id: string): Element => {
     const element = dom.document.getElementById(id);
@@ -100,11 +108,20 @@ function loadEditor(options: EditorOptions = {}) {
     private readonly changes: (() => void)[] = [];
     private readonly markers = new Set<{ start: number; end: number; cleared: boolean }>();
     private documentVersion = 0;
+    readonly undoHistory: string[] = [];
     input = dom.document.createElement('textarea');
     cursor: { line: number; ch: number } | null = null;
     selection: { from: { line: number; ch: number }; to: { line: number; ch: number } } | null = null;
     focusCalls = 0;
     codemirror = {
+      getCursor: () => this.cursor ?? { line: 0, ch: 0 },
+      undo: () => {
+        const previous = this.undoHistory.pop();
+        if (previous !== undefined) {
+          this.text = previous;
+          for (const callback of this.changes) callback();
+        }
+      },
       on: (event: string, callback: () => void) => { if (event === 'change' || event === 'changes') this.changes.push(callback); },
       refresh() {},
       getValue: () => this.text,
@@ -145,6 +162,7 @@ function loadEditor(options: EditorOptions = {}) {
       replaceRange: (value: string, from: { line: number; ch: number }, to: { line: number; ch: number }) => {
         const start = this.codemirror.indexFromPos(from);
         const end = this.codemirror.indexFromPos(to);
+        this.undoHistory.push(this.text);
         this.text = this.text.slice(0, start) + value + this.text.slice(end);
         const delta = value.length - (end - start);
         for (const marker of this.markers) {
@@ -173,12 +191,27 @@ function loadEditor(options: EditorOptions = {}) {
     history: { replaceState() {} },
     sessionStorage: storage(),
     localStorage: local,
-    fetch: (url: string, init: RequestInit = {}) => {
+    fetch: async (url: string, init: RequestInit = {}) => {
+      if (String(url) === '/gallery/analyze') {
+        galleryRequests.push({ url: String(url), options: init });
+        if (options.galleryFetch) return options.galleryFetch(String(url), init);
+        const { bodyMarkdown } = JSON.parse(String(init.body)) as { bodyMarkdown: string };
+        return response(await analyzeGallerySource(bodyMarkdown));
+      }
       requests.push({ url: String(url), options: init });
       return options.fetch?.(String(url), init) ?? Promise.reject(new Error('no network in test'));
     },
-    setTimeout: () => 0,
-    clearTimeout() {},
+    // Advance only the gallery debounce at the next microtask; deadline and
+    // draft-backup timers remain controlled as in the original harness.
+    setTimeout: (callback: () => void, delay: number) => {
+      const id = ++nextTimer;
+      if (delay === 250) {
+        timers.set(id, callback);
+        queueMicrotask(() => { const run = timers.get(id); timers.delete(id); run?.(); });
+      }
+      return id;
+    },
+    clearTimeout: (id: number) => { timers.delete(id); },
     setInterval: () => 0,
     clearInterval() {},
     addEventListener: dom.document.addEventListener,
@@ -252,13 +285,16 @@ function loadEditor(options: EditorOptions = {}) {
     return guard;
   };
   for (const file of ['waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
-    vm.runInContext(readFileSync('public/' + file, 'utf8'), ctx, { filename: file });
+    vm.runInContext(readFileSync('public/' + file, 'utf8'), ctx, {
+      filename: resolve('public/' + file),
+      importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
+    });
   }
   if (options.review) (ctx.LLM as { reviewStory: Review }).reviewStory = options.review;
   vm.runInContext(script, ctx);
   const api = vm.runInContext('({ populateForm, buildPayload, loadPost, doSaveDraft, renderAltAudit })', ctx) as EditorApi;
   return {
-    api, el, editors, created: dom.created, document: dom.document, requests, local, galleryPickers,
+    api, el, editors, created: dom.created, document: dom.document, requests, galleryRequests, local, galleryPickers,
     flushDialogEvents: dom.flushDialogEvents,
     setMobile(mobile: boolean) { media.matches = mobile; mediaChanged?.(); },
     dirtyCalls: () => dirty, redirects: () => redirects,
@@ -881,7 +917,7 @@ function required(root: Element, selector: string): Element {
 }
 
 describe('Story review in the real editor', () => {
-  it('opens an accessible dialog and renders all quick checks before configuration resolves', () => {
+  it('opens an accessible dialog and renders all quick checks before configuration resolves', async () => {
     const config = Promise.withResolvers<Response>();
     const h = loadEditor({ fetch: () => config.promise });
     h.api.populateForm(fullPair());
@@ -892,6 +928,7 @@ describe('Story review in the real editor', () => {
     const before = h.api.buildPayload();
     h.el('reviewStory').focus();
     h.el('reviewStory').click();
+    await settle();
 
     const dialog = h.el('storyReviewDialog');
     expect(dialog.tagName).toBe('DIALOG');
@@ -961,6 +998,7 @@ describe('Story review in the real editor', () => {
   ])('preserves instant checks and offers recovery after $name', async ({ provider }) => {
     const h = loadEditor({ fetch: reviewNetwork(provider) });
     h.el('reviewStory').click();
+    await settle();
     const quickChecks = h.el('reviewInstant').textContent;
     await settle();
 
@@ -981,6 +1019,7 @@ describe('Story review in the real editor', () => {
     const h = loadEditor({ isAdmin: false, fetch: reviewNetwork(async () => completion(reviewResult()), { ...reviewConfig, aiProvider }) });
     await settle();
     h.el('reviewStory').click();
+    await settle();
     const instant = h.el('reviewInstant').textContent;
     await settle();
 
@@ -998,6 +1037,7 @@ describe('Story review in the real editor', () => {
     const h = loadEditor({ isAdmin: true, fetch: async () => response({ error: 'private-config-detail' }, 503) });
     await settle();
     h.el('reviewStory').click();
+    await settle();
     const instant = h.el('reviewInstant').textContent;
     await settle();
 
@@ -1071,7 +1111,7 @@ describe('Story review in the real editor', () => {
     h.flushDialogEvents();
   });
 
-  it('jumps to real inline and gallery lines, then hero alt, without a queued close stealing focus', () => {
+  it('jumps to real inline and gallery lines, then hero alt, without a queued close stealing focus', async () => {
     const config = Promise.withResolvers<Response>();
     const h = loadEditor({ fetch: () => config.promise });
     h.el('tabbtn-en').click();
@@ -1084,7 +1124,9 @@ describe('Story review in the real editor', () => {
 
     for (const [line, cursor] of [[3, 2], [8, 7]]) {
       h.el('reviewStory').click();
+      await settle();
       required(h.el('reviewInstant'), `[data-review-action="jump"][data-line="${line}"]`).click();
+      await settle();
       expect(h.el('storyReviewDialog').open).toBe(false);
       expect(h.editors[1]!.cursor).toEqual({ line: cursor, ch: 0 });
       expect(h.document.activeElement).toBe(h.editors[1]!.input);
@@ -1092,6 +1134,7 @@ describe('Story review in the real editor', () => {
       expect(h.document.activeElement).toBe(h.editors[1]!.input);
     }
     h.el('reviewStory').click();
+    await settle();
     required(h.el('reviewInstant'), '[data-review-action="jump"][data-target="hero"]').click();
     expect(h.el('storyReviewDialog').open).toBe(false);
     expect(h.document.activeElement).toBe(h.el('enHeroAlt'));
@@ -1444,6 +1487,218 @@ describe('inline gallery editing', () => {
   }
   const settleAll = async () => { for (let i = 0; i < 12; i++) await settle(); };
 
+  const pickerOptions = { layout: 'column', captions: { visible: true, overrides: {} } };
+  const pickedPhoto = { ...mediaRow('replacement', { de: 'A & <view>', en: 'View' }, { de: '', en: '' }), width: 900, height: 600 };
+  const analyzeRequest: Fetch = async (_url, init) => {
+    const { bodyMarkdown } = JSON.parse(String(init?.body)) as { bodyMarkdown: string };
+    return response(await analyzeGallerySource(bodyMarkdown));
+  };
+  interface PickerHarness {
+    editors: { codemirror: {
+      setCursor(position: { line: number; ch: number }): void;
+      posFromIndex(index: number): { line: number; ch: number };
+    } }[];
+    el(id: string): Element;
+    galleryPickers: GalleryPicker[];
+  }
+  async function openPicker(h: PickerHarness, cursor: number) {
+    h.editors[0]!.codemirror.setCursor(h.editors[0]!.codemirror.posFromIndex(cursor));
+    h.el('deGallery').click();
+    await settleAll();
+    const picker = h.galleryPickers.at(-1);
+    if (!picker) throw new Error('The authenticated analysis did not open a gallery picker');
+    return picker;
+  }
+
+  it('sends the exact unsaved snapshot once per debounced change, not once per photo', async () => {
+    const h = loadEditor({ fetch: mediaNetwork([]) });
+    await settleAll();
+    const count = h.galleryRequests.length;
+    const editor = h.editors[0]!;
+    editor.value('A first unsaved edit');
+    editor.value('A newer edit');
+    const body = '🧭 Current\r\n\r\n> ~~~gallery extra\r\n> https://img/photo\r\n> https://img/photo\r\n> ~~~';
+    editor.value(body);
+    expect(h.galleryRequests).toHaveLength(count);
+    await settleAll();
+    const requests = h.galleryRequests.slice(count);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.url).toBe('/gallery/analyze');
+    expect(requests[0]!.options).toMatchObject({
+      method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(JSON.parse(String(requests[0]!.options.body))).toEqual({ bodyMarkdown: body });
+    expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(1);
+    expect(h.document.querySelectorAll('.editor-gallery__alt')).toHaveLength(2);
+    expect(editor.value()).toBe(body);
+    expect(editor.undoHistory).toEqual([]);
+  });
+
+  it('discards a late analysis of old source instead of installing stale widget ranges', async () => {
+    const old = '~~~gallery\nhttps://img/old\n~~~';
+    const current = '> ~~~gallery extra\n> https://img/current\n> ~~~';
+    const late = Promise.withResolvers<Response>();
+    const h = loadEditor({
+      fetch: mediaNetwork([]),
+      galleryFetch: (url, init) => JSON.parse(String(init?.body)).bodyMarkdown === old
+        ? late.promise : analyzeRequest(url, init),
+    });
+    const pair = fullPair();
+    pair.de.bodyMarkdown = old;
+    h.api.populateForm(pair);
+    await settleAll();
+    expect(h.document.querySelectorAll('.editor-gallery')).toEqual([]);
+    h.editors[0]!.value(current);
+    await settleAll();
+    expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(1);
+    const before = h.api.buildPayload();
+    const dirty = h.dirtyCalls();
+    late.resolve(response(await analyzeGallerySource(old)));
+    await settleAll();
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(h.editors[0]!.undoHistory).toEqual([]);
+    expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(1);
+    expect(h.document.querySelector('.editor-gallery')!.textContent).not.toContain('old');
+    const picker = await openPicker(h, current.indexOf('https://img/current'));
+    await picker.onPick([pickedPhoto], pickerOptions);
+    expect(h.editors[0]!.value()).toContain('https://img/replacement');
+    expect(h.editors[0]!.value()).not.toContain('https://img/old');
+  });
+
+  it('leaves raw source and undo untouched offline, with localized retry and no lexical fallback', async () => {
+    let offline = true;
+    const h = loadEditor({
+      fetch: mediaNetwork([]),
+      galleryFetch: (url, init) => offline ? Promise.reject(new Error('offline')) : analyzeRequest(url, init),
+    });
+    const pair = pairWithGallery();
+    h.api.populateForm(pair);
+    const before = h.api.buildPayload();
+    const dirty = h.dirtyCalls();
+    await settleAll();
+    expect(h.document.querySelectorAll('.editor-gallery')).toEqual([]);
+    for (const locale of ['de', 'en'] as const) {
+      const status = h.el(locale + 'GalleryView').parentElement!;
+      expect(status.textContent).toContain(ui[locale]['editor.gallery.analysisFailed']);
+      expect(status.querySelectorAll('button').some((button) =>
+        !button.hidden && button.textContent === ui[locale]['editor.gallery.retry'])).toBe(true);
+    }
+    h.editors[0]!.codemirror.setCursor({ line: 3, ch: 0 });
+    h.el('deGallery').click();
+    await settleAll();
+    expect(h.galleryPickers).toEqual([]);
+    expect(h.el('deBodyImgStatus').textContent).toContain(ui.de['editor.gallery.analysisFailed']);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(h.editors[0]!.undoHistory).toEqual([]);
+    offline = false;
+    required(h.el('deBodyImgStatus'), 'button').click();
+    await settleAll();
+    expect(h.galleryPickers).toHaveLength(1);
+    expect(h.api.buildPayload()).toEqual(before);
+  });
+
+  it.each(['new source', 'edited then restored'] as const)('refuses picker application after %s while analyzing the current snapshot', async (change) => {
+    const h = loadEditor({ fetch: mediaNetwork([]) });
+    const pair = pairWithGallery();
+    h.api.populateForm(pair);
+    await settleAll();
+    const picker = await openPicker(h, pair.de.bodyMarkdown.indexOf('https://img/photo'));
+    const editor = h.editors[0]!;
+    editor.value('A newly typed paragraph\n\n' + pair.de.bodyMarkdown);
+    if (change === 'edited then restored') editor.value(pair.de.bodyMarkdown);
+    const before = h.api.buildPayload();
+    const dirty = h.dirtyCalls();
+    const requests = h.galleryRequests.length;
+    await picker.onPick([pickedPhoto], pickerOptions);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(editor.undoHistory).toEqual([]);
+    expect(h.el('deBodyImgStatus').textContent).toBe(ui.de['editor.gallery.stale']);
+    expect(h.galleryRequests.slice(requests).some((request) =>
+      JSON.parse(String(request.options.body)).bodyMarkdown === before.de.bodyMarkdown)).toBe(true);
+  });
+
+  it('opening and cancelling a picker never commits source or metadata or creates undo history', async () => {
+    const h = loadEditor({ fetch: mediaNetwork([]) });
+    const pair = pairWithGallery();
+    h.api.populateForm(pair);
+    await settleAll();
+    const before = h.api.buildPayload();
+    const dirty = h.dirtyCalls();
+    const picker = await openPicker(h, pair.de.bodyMarkdown.indexOf('https://img/photo'));
+    expect(picker.multiple).toBe(true);
+    // MediaPicker's cancellation contract closes without invoking onPick.
+    // Discard that open picker, then open a fresh one against the same draft.
+    h.galleryPickers.pop();
+    await openPicker(h, pair.de.bodyMarkdown.indexOf('https://img/photo'));
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(h.editors[0]!.undoHistory).toEqual([]);
+  });
+
+  it.each([
+    { name: 'nested CRLF tilde', body: '🧭 Before\r\n\r\n> ~~~gallery extra\r\n> https://img/photo\r\n> ~~~\r\n>\r\n> Neighbor\r\n\r\nTail',
+      opener: '> ~~~gallery extra\r\n> ', closer: '\r\n> ~~~\r\n>\r\n> Neighbor\r\n\r\nTail' },
+    { name: 'raw HTML', body: '🧭 Before\n\n<pre><code class="language-gallery">https://img/photo | alt="A &amp; B"</code></pre>\n\nNeighbor',
+      opener: '<pre><code class="language-gallery">', closer: '</code></pre>\n\nNeighbor' },
+  ])('edits and removes $name galleries without losing wrappers or neighbors, with one undoable range edit', async ({ body, opener, closer }) => {
+    const h = loadEditor({ fetch: mediaNetwork([]) });
+    const pair = fullPair();
+    pair.de.bodyMarkdown = body;
+    pair.de.images = { 'https://img/photo': { width: 900, height: 600, alt: 'Original' } };
+    h.api.populateForm(pair);
+    await settleAll();
+    const block = (await analyzeGallerySource(body)).blocks.find((entry) => entry.isGallery)!;
+    const picker = await openPicker(h, body.indexOf('https://img/photo'));
+    await picker.onPick([pickedPhoto], pickerOptions);
+    const editor = h.editors[0]!;
+    const edited = editor.value();
+    expect(edited).toContain(opener);
+    expect(edited.endsWith(closer)).toBe(true);
+    expect(edited.slice(0, block.start)).toBe(body.slice(0, block.start));
+    expect(edited).toContain('https://img/replacement');
+    expect(edited).not.toContain('https://img/photo');
+    expect(h.api.buildPayload().de.images).toEqual(pair.de.images);
+    expect(h.api.buildPayload().en).toEqual(pair.en);
+    const logical = (await analyzeGallerySource(edited)).blocks.find((entry) => entry.isGallery)!.content;
+    expect(logical).toContain('alt="A &amp; &lt;view&gt;"');
+    expect(editor.undoHistory).toEqual([body]);
+    editor.codemirror.undo();
+    expect(editor.value()).toBe(body);
+    await settleAll();
+    const removal = await openPicker(h, body.indexOf('https://img/photo'));
+    await removal.onPick([], pickerOptions);
+    expect(editor.value()).toBe(body.slice(0, block.start) + body.slice(block.end));
+    expect(editor.undoHistory).toEqual([body]);
+    editor.codemirror.undo();
+    expect(editor.value()).toBe(body);
+  });
+
+  it('refuses picker editing of an unterminated gallery without changing source, metadata or undo history', async () => {
+    const h = loadEditor({ fetch: mediaNetwork([]) });
+    const pair = fullPair();
+    pair.de.bodyMarkdown = '> ~~~gallery\n> https://img/photo';
+    h.api.populateForm(pair);
+    await settleAll();
+    expect(h.document.querySelectorAll('.editor-gallery')).toEqual([]);
+    const before = h.api.buildPayload();
+    const dirty = h.dirtyCalls();
+    h.editors[0]!.codemirror.setCursor(
+      h.editors[0]!.codemirror.posFromIndex(pair.de.bodyMarkdown.indexOf('https://img/photo')));
+    h.el('deGallery').click();
+    await settleAll();
+    // Refusal happens before opening: neither replacement nor removal can
+    // acquire a picker callback for the unsafe range.
+    expect(h.galleryPickers).toEqual([]);
+    expect(h.el('deBodyImgStatus').textContent).toBe(ui.de['editor.gallery.unterminated']);
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.editors[0]!.undoHistory).toEqual([]);
+  });
+
   it('keeps post-local alt editing for photos with no Media row: every occurrence, clears on save, survives reload', async () => {
     const h = loadEditor({ fetch: mediaNetwork([]) });
     const pair = pairWithGallery();
@@ -1456,17 +1711,20 @@ describe('inline gallery editing', () => {
     expect(h.document.querySelectorAll('.editor-gallery__source').map((note) => note.hidden)).toEqual([true, true, true, true]);
     fields[0]!.value = 'A \"quote\" | and\nnewline';
     fields[0]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    await settleAll();
     expect(fields[1]!.value).toBe(fields[0]!.value);
     expect(h.api.buildPayload().en).toEqual(pair.en);
-    expect(normalizeGalleryFences(h.api.buildPayload().de.bodyMarkdown, pair.de.images).images['https://img/photo']?.alt)
+    expect((await normalizeGalleryFences(h.api.buildPayload().de.bodyMarkdown, pair.de.images)).images['https://img/photo']?.alt)
       .toBe('A \"quote\" | and\nnewline');
     fields[0]!.value = '';
     fields[0]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
-    const saved = normalizeGalleryFences(h.api.buildPayload().de.bodyMarkdown, pair.de.images);
+    await settleAll();
+    const saved = await normalizeGalleryFences(h.api.buildPayload().de.bodyMarkdown, pair.de.images);
     expect(saved.images['https://img/photo']).toEqual({ ...pair.de.images['https://img/photo'], alt: '' });
     expect(saved.bodyMarkdown).toBe(pair.de.bodyMarkdown);
     pair.de = { ...pair.de, ...saved };
     h.api.populateForm(pair);
+    await settleAll();
     expect(h.document.querySelectorAll('.editor-gallery__alt').map((field) => field.value))
       .toEqual(['', '', 'English', 'English']);
   });
@@ -1474,7 +1732,13 @@ describe('inline gallery editing', () => {
   it('requires explicit AI acceptance and ignores a late answer after manual input or a locale change', async () => {
     let pending = Promise.withResolvers<string>();
     const calls: { lang: string; signal: AbortSignal }[] = [];
-    const h = loadEditor({ fetch: mediaNetwork([]), caption: (options) => { calls.push(options); return pending.promise; } });
+    let holdAnalysis = false;
+    const analysis = Promise.withResolvers<Response>();
+    const h = loadEditor({
+      fetch: mediaNetwork([]),
+      galleryFetch: (url, init) => holdAnalysis ? analysis.promise : analyzeRequest(url, init),
+      caption: (options) => { calls.push(options); return pending.promise; },
+    });
     h.api.populateForm(pairWithGallery());
     await settleAll();
     const field = h.document.querySelector('.editor-gallery__alt')!;
@@ -1485,17 +1749,32 @@ describe('inline gallery editing', () => {
     expect(h.document.querySelector('.editor-gallery__suggestion')!.hidden).toBe(false);
     expect(field.value).toBe('Original');
     h.document.querySelector('.editor-gallery__suggestion')!.querySelector('button')!.click();
+    await settleAll();
     expect(field.value).toBe('Suggested description');
     expect(calls[0]?.lang).toBe('de');
+    const beforeManual = h.api.buildPayload();
+    const dirty = h.dirtyCalls();
+    const undo = [...h.editors[0]!.undoHistory];
+    holdAnalysis = true;
     pending = Promise.withResolvers<string>();
     suggest.click();
     field.value = 'My current edit';
     field.dispatchEvent(new EditorEvent('input'));
     expect(calls[1]?.signal.aborted).toBe(true);
+    expect(h.api.buildPayload()).toEqual(beforeManual);
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(h.editors[0]!.undoHistory).toEqual(undo);
     pending.resolve('Obsolete answer');
     await settle();
     expect(field.value).toBe('My current edit');
     expect(h.document.querySelector('.editor-gallery__suggestion')!.hidden).toBe(true);
+    expect(h.api.buildPayload()).toEqual(beforeManual);
+    holdAnalysis = false;
+    analysis.resolve(response(await analyzeGallerySource(beforeManual.de.bodyMarkdown)));
+    await settleAll();
+    expect((await normalizeGalleryFences(h.api.buildPayload().de.bodyMarkdown, beforeManual.de.images))
+      .images['https://img/photo']?.alt).toBe('My current edit');
+    const beforeLocaleChange = h.api.buildPayload();
     pending = Promise.withResolvers<string>();
     suggest.click();
     h.el('tabbtn-en').click();
@@ -1503,19 +1782,66 @@ describe('inline gallery editing', () => {
     pending.resolve('Wrong locale answer');
     await settle();
     expect(field.value).toBe('My current edit');
+    expect(h.api.buildPayload()).toEqual(beforeLocaleChange);
+  });
+
+  it('cancels AI for every occurrence immediately when a manual alt edit cannot be analyzed', async () => {
+    let offline = false;
+    const analysis = Promise.withResolvers<Response>();
+    const answer = Promise.withResolvers<string>();
+    const signals: AbortSignal[] = [];
+    const h = loadEditor({
+      fetch: mediaNetwork([]),
+      galleryFetch: (url, init) => offline ? analysis.promise : analyzeRequest(url, init),
+      caption: ({ signal }) => { signals.push(signal); return answer.promise; },
+    });
+    h.api.populateForm(pairWithGallery());
+    await settleAll();
+    const before = h.api.buildPayload();
+    const dirty = h.dirtyCalls();
+    const fields = h.document.querySelectorAll('.editor-gallery__alt');
+    const buttons = h.document.querySelectorAll('.editor-gallery__suggest');
+    buttons[0]!.click();
+    buttons[1]!.click();
+    expect(signals).toHaveLength(2);
+    offline = true;
+    fields[0]!.value = 'My unsaved description';
+    fields[0]!.dispatchEvent(new EditorEvent('input'));
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    answer.resolve('Late description');
+    analysis.reject(new Error('offline'));
+    await settleAll();
+    expect(fields[0]!.value).toBe('My unsaved description');
+    expect(h.document.querySelectorAll('.editor-gallery__suggestion').every((node) => node.hidden)).toBe(true);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(h.editors[0]!.undoHistory).toEqual([]);
+    const status = h.el('deGalleryView').parentElement!;
+    expect(status.textContent).toContain(ui.de['editor.gallery.analysisFailed']);
+    expect(status.querySelectorAll('button').some((button) =>
+      !button.hidden && button.textContent === ui.de['editor.gallery.retry'])).toBe(true);
   });
 
   it('shows current Media alt and caption per locale read-only, links to Media, and never edits the article', async () => {
     const row = mediaRow('photo', { de: 'Neu aus der Mediathek', en: 'Fresh from Media' }, { de: '', en: 'Morning light' });
-    const h = loadEditor({ fetch: mediaNetwork([row]) });
+    const pending = Promise.withResolvers<Response>();
+    const network = mediaNetwork([row]);
+    let waiting = true;
+    const h = loadEditor({ fetch: (url, init) =>
+      waiting && url === '/media/items/photo' ? pending.promise : network(url, init) });
     const pair = pairWithGallery();
     h.api.populateForm(pair);
     const before = h.api.buildPayload();
-    // Until Media answers nobody knows which text applies, so nothing is editable.
-    expect(h.document.querySelectorAll('.editor-gallery__alt').map((field) => field.readOnly)).toEqual([true, true, true, true]);
-    expect(h.document.querySelector('.editor-gallery__lookup')!.textContent).toBe(ui.de['editor.gallery.checking']);
+    // Source analysis completes before any widget exists; until then no
+    // editable photo field may be shown from guessed lexical ranges.
+    expect(h.document.querySelectorAll('.editor-gallery__alt')).toEqual([]);
     await settleAll();
     const fields = h.document.querySelectorAll('.editor-gallery__alt');
+    expect(fields.map((field) => field.readOnly)).toEqual([true, true, true, true]);
+    expect(h.document.querySelector('.editor-gallery__lookup')!.textContent).toBe(ui.de['editor.gallery.checking']);
+    waiting = false;
+    pending.resolve(response(row));
+    await settleAll();
     expect(fields.map((field) => field.value))
       .toEqual(['Neu aus der Mediathek', 'Neu aus der Mediathek', 'Fresh from Media', 'Fresh from Media']);
     expect(fields.map((field) => field.readOnly)).toEqual([true, true, true, true]);
@@ -1596,6 +1922,7 @@ describe('inline gallery editing', () => {
     h.api.populateForm(pair);
     await settleAll();
     h.el('reviewStory').click();
+    await settleAll();
     // The post still carries a copied alt, but Media's empty one is what renders.
     expect(h.el('reviewInstant').textContent).toContain('Add alt text to this gallery image.');
     h.el('closeReview').click();
@@ -1604,19 +1931,22 @@ describe('inline gallery editing', () => {
     h.api.populateForm(pair);
     await settleAll();
     h.el('reviewStory').click();
+    await settleAll();
     expect(h.el('reviewInstant').textContent).not.toContain('Add alt text to this gallery image.');
   });
 
-  it('leaves nested examples and unfinished fences editable, and cancels previews when showing raw Markdown', () => {
+  it('leaves nested examples and unfinished fences editable, and cancels previews when showing raw Markdown', async () => {
     const h = loadEditor();
     const pair = pairWithGallery();
     pair.de.bodyMarkdown += '\n\n````markdown\n```gallery\nhttps://img/example\n```\n````\n\n```gallery\nhttps://img/unfinished';
     h.api.populateForm(pair);
+    await settleAll();
     expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(2);
     h.el('deGalleryView').click();
     expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(1);
     expect(h.api.buildPayload().de.bodyMarkdown).toBe(pair.de.bodyMarkdown);
     h.el('deGalleryView').click();
+    await settleAll();
     expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(2);
   });
 
@@ -1642,8 +1972,8 @@ describe('inline gallery editing', () => {
     pair.en.images = { 'https://img/photo': { width: 900, height: 600 } };
     h.api.populateForm(pair);
     const before = h.api.buildPayload();
-    // Neither a local caption nor a hidden gallery waits for Media.
-    expect(shownCaptions(h).slice(0, 3)).toEqual([null, 'Nur hier | "lokal" <b>', null]);
+    // Local captions and hidden galleries need source analysis, not a
+    // successful Media description, before the widget can display them.
     await settleAll();
     expect(shownCaptions(h)).toEqual([null, 'Nur hier | "lokal" <b>', null, 'Aus der Mediathek', 'Morning light']);
     expect(h.document.querySelectorAll('.editor-gallery__caption').flatMap((caption) => caption.querySelectorAll('b'))).toEqual([]);
@@ -1670,8 +2000,9 @@ describe('inline gallery editing', () => {
     };
     h.api.populateForm(pair);
     await settleAll();
-    const editGallery = (index: number) => {
+    const editGallery = async (index: number) => {
       h.document.querySelectorAll('.editor-gallery')[index]!.querySelector('.editor-gallery__head')!.querySelector('button')!.click();
+      await settleAll();
       const picker = h.galleryPickers.at(-1);
       if (!picker) throw new Error('Edit did not open the gallery picker');
       return picker;
@@ -1679,12 +2010,12 @@ describe('inline gallery editing', () => {
     const fences = (body: string) => body.split(/\n\n(?:Middle\n\n)?/).filter((part) => part.startsWith('```gallery'));
     const lineOf = (fence: string, src: string) => fence.split('\n').find((line) => line.split('|')[0]!.trim() === src) ?? '';
 
-    const first = editGallery(0);
+    const first = await editGallery(0);
     expect(first.captions).toMatchObject({ locale: 'de', visible: true, overrides: { [photo]: '' } });
     expect(first.captions?.fallback[other]).toBe('Gespeichert');
     // The author resets the photo to Media, edits the other one, and hides captions.
     const local = 'Nur | "hier"\nzwei';
-    first.onPick([row, placeholder], { layout: 'slider', captions: { visible: false, overrides: { [other]: local } } });
+    await first.onPick([row, placeholder], { layout: 'slider', captions: { visible: false, overrides: { [other]: local } } });
 
     const edited = h.api.buildPayload().de;
     // The caret is parked past the blank line after the updated gallery — on
@@ -1693,7 +2024,7 @@ describe('inline gallery editing', () => {
     const caret = h.editors[0]!.codemirror.indexFromPos(h.editors[0]!.cursor!);
     expect(edited.bodyMarkdown.slice(caret, caret + 'Middle'.length)).toBe('Middle');
     expect(edited.bodyMarkdown.slice(0, caret).endsWith('```\n\n')).toBe(true);
-    const saved = normalizeGalleryFences(edited.bodyMarkdown, edited.images);
+    const saved = await normalizeGalleryFences(edited.bodyMarkdown, edited.images);
     // The shared images map keeps Media's / the stored caption: the edit is not in it.
     expect(saved.images[other]).toEqual({ width: 300, height: 200, alt: 'Andere', caption: 'Gespeichert' });
     expect(saved.images[photo]).toMatchObject({ alt: 'Markt', caption: 'Aus der Mediathek' });
@@ -1710,12 +2041,12 @@ describe('inline gallery editing', () => {
     h.api.populateForm({ ...pair, de: { ...pair.de, ...saved } });
     await settleAll();
     expect(shownCaptions(h)).toEqual([null, null, 'Aus der Mediathek']);
-    const reopened = editGallery(0);
+    const reopened = await editGallery(0);
     expect(reopened.captions).toMatchObject({ locale: 'de', visible: false, overrides: { [other]: local } });
     expect(reopened.captions?.overrides).not.toHaveProperty(photo);
 
     // Showing captions again removes only the captions directive and keeps the text.
-    reopened.onPick([row, placeholder], { layout: 'slider', captions: { visible: true, overrides: { [other]: local } } });
+    await reopened.onPick([row, placeholder], { layout: 'slider', captions: { visible: true, overrides: { [other]: local } } });
     const [shownFence] = fences(h.api.buildPayload().de.bodyMarkdown);
     expect(readCaptionsVisible(shownFence!)).toBe(true);
     expect(shownFence).not.toMatch(/#\s*captions/i);
@@ -1777,7 +2108,7 @@ describe('manuscript-first editor refinements', () => {
     expect(h.document.activeElement).toBe(h.el('deTitle'));
   });
 
-  it('opens the warned locale and targets the matching photo across galleries, including raw Markdown mode', () => {
+  it('opens the warned locale and targets the matching photo across galleries, including raw Markdown mode', async () => {
     const h = loadEditor({ mobile: true });
     const pair = fullPair();
     pair.en.bodyMarkdown = '```gallery\nhttps://img/first\n```\n\nText\n\n```gallery\nhttps://img/target\n```';
@@ -1786,6 +2117,7 @@ describe('manuscript-first editor refinements', () => {
       'https://img/target': { width: 900, height: 600, alt: 'Target' },
     };
     h.api.populateForm(pair);
+    await settle();
     h.el('tabbtn-en').click();
     h.el('enGalleryView').click();
     h.el('tabbtn-de').click();
@@ -1793,6 +2125,7 @@ describe('manuscript-first editor refinements', () => {
     h.api.renderAltAudit({ count: 1, images: [{ locale: 'en', kind: 'gallery', src: 'https://img/target', reason: 'filename' }] }, false);
     h.el('altAudit').open = true;
     h.el('altAuditList').querySelector('button')!.click();
+    await settle();
     h.flushDialogEvents();
     expect(h.el('tab-en').hidden).toBe(false);
     expect(h.el('enGalleryView').getAttribute('aria-pressed')).toBe('false');
@@ -1801,25 +2134,27 @@ describe('manuscript-first editor refinements', () => {
     expect(h.api.buildPayload()).toEqual(before);
   });
 
-  it('selects the real body image alt instead of matching a code example or ordinary link', () => {
+  it('selects the real body image alt instead of matching a code example or ordinary link', async () => {
     const h = loadEditor();
     const pair = fullPair();
     pair.de.bodyMarkdown = '`![example](https://img/body)`\n\n[Link](https://img/body)\n\n![file\\]name](<https://img/body> "title")';
     h.api.populateForm(pair);
     h.api.renderAltAudit({ count: 1, images: [{ locale: 'de', kind: 'body', src: 'https://img/body', reason: 'filename' }] }, false);
     h.el('altAuditList').querySelector('button')!.click();
+    await settle();
     const editor = h.editors[0]!;
     expect(h.document.activeElement).toBe(editor.input);
     expect(editor.codemirror.getRange(editor.selection!.from, editor.selection!.to)).toBe('file\\]name');
     expect(editor.value()).toBe(pair.de.bodyMarkdown);
   });
 
-  it.each(['gallery', 'hero'] as const)('does not jump to a different %s photo when a saved warning is stale', (kind) => {
+  it.each(['gallery', 'hero'] as const)('does not jump to a different %s photo when a saved warning is stale', async (kind) => {
     const h = loadEditor();
     h.api.populateForm(fullPair());
     h.api.renderAltAudit({ count: 1, images: [{ locale: 'de', kind, src: 'https://img/removed', reason: 'empty' }] }, false);
     const before = h.api.buildPayload();
     h.el('altAuditList').querySelector('button')!.click();
+    await settle();
     expect(h.el('altAuditFeedback').hidden).toBe(false);
     expect(h.el('altAuditFeedback').textContent).toBe(copy['editor.chrome.auditMissing']);
     expect(h.document.activeElement).not.toBe(h.el('deGallery'));

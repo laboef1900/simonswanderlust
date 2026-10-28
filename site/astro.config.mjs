@@ -3,7 +3,7 @@ import { defineConfig } from 'astro/config';
 import mdx from '@astrojs/mdx';
 import sitemap from '@astrojs/sitemap';
 import tailwindcss from '@tailwindcss/vite';
-import { SHIKI_THEME, shikiStyleToClass } from './src/lib/shiki-classes.js';
+import { MARKDOWN_OPTIONS } from './src/lib/render-markdown.js';
 
 export default defineConfig({
   site: 'https://simonswanderlust.com',
@@ -28,10 +28,7 @@ export default defineConfig({
   // rehype-sanitize so body-images.ts can turn it into a photo grid.
   // shikiStyleToClass turns Shiki's inline colours into classes so the
   // sanitizer can drop `style` from author markup altogether (#124).
-  markdown: {
-    syntaxHighlight: { type: 'shiki', excludeLangs: ['math', 'gallery'] },
-    shikiConfig: { theme: SHIKI_THEME, transformers: [shikiStyleToClass] },
-  },
+  markdown: MARKDOWN_OPTIONS,
   integrations: [mdx(), sitemap()],
   vite: { plugins: [tailwindcss()] },
 });

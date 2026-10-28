@@ -1,7 +1,7 @@
 # #354 — One gallery grammar across the content pipeline
 
 Date: 2026-10-27
-Status: **OWNER APPROVED 2026-10-28 — server-authoritative analysis**, including the authenticated non-persisting bridge and server-dependent visual editing. Implementation and verification remain required.
+Status: **OWNER APPROVED 2026-10-28 — server-authoritative analysis**, including the authenticated non-persisting bridge and server-dependent visual editing. Implemented; isolated runtime/browser qualification recorded below. Integration review and release remain separate.
 Risk: High — source rewriting, backups, publish checks and post-sanitize rendering.
 Baseline: `11e16d1b8e43141d296b801ee663a351ae3fe415`. No code or owner data changed; no probes/checks run for this proposal. The issue's reproductions are accepted evidence.
 
@@ -64,7 +64,7 @@ Reconfirm `SECURITY.md` sections “Content injected after sanitize” and publi
 
 Metadata is lifted only from the actual gallery photo line. Identical URL/caption text outside that node is untouched. Preserve byte-for-byte source outside intentional edit spans, including CRLF, whitespace, HTML wrappers and container prefixes. Preserve every unrelated `images` entry, gallery order, directives, explicit empty overrides and localized data. An analysis failure must not partially save one locale, partially export a post or trigger a build. Existing write conflict checks remain authoritative.
 
-## Required verification after approval (not run)
+## Required verification after approval
 
 One shared corpus must assert real renderer recognition, normalizer recognition, export metadata restoration, audit membership, browser ranges and publish source discovery. For render-output assertions supply a same-origin URL with valid dimensions; an unresolved photo remaining as `<pre>` is not evidence that the block is not a gallery.
 
@@ -77,3 +77,105 @@ Browser tests: stale analysis response, edits while picker open, no network, Can
 No migration or automatic content rewrite. Before any later production rollout, retain the normal database backup and current release; use disposable fixtures for development. Failure leaves the old static release active. If the new analysis is defective, stop gallery save/export/edit operations rather than deploying the old lossy scanners against newly normalized noncanonical galleries. Roll back serving code only with that containment; restore only explicitly affected drafts from retained revisions/backups after owner review, never overwrite the corpus. Prefer a targeted roll-forward source-map fix.
 
 **Owner approval recorded 2026-10-28:** “Approve server-authoritative analysis.” This authorizes preserving the complete current render grammar, a single Satteri-backed source analysis, and the authenticated non-persisting `/gallery/analyze` bridge with server-dependent visual editing. It does not authorize content conversion, owner-data changes, deployment or merge.
+
+## Implementation contract (2026-10-28)
+
+- `site/src/lib/gallery-identity.ts` owns the unchanged sanitized-tree predicate
+  and schema; `markdown-features.ts` pins the real parser feature options in both
+  Astro and `MARKDOWN_OPTIONS`. `satteri@0.9.4` and the installed HTML parser's
+  `entities@6.0.1` decoder are declared direct, lockfile-aligned dependencies.
+- Real API probes established that Satteri 0.9.4's positions count **Unicode scalar
+  values**, not UTF-8 bytes or JavaScript code units. `gallery-source.ts` explicitly
+  maps those positions to UTF-16; the existing HTML parser's offsets are already
+  UTF-16. The analyzer serializes the actual HAST with source provenance and parses
+  the complete resulting HTML before sanitization/classification, so raw fragments
+  and HTML tree repair share the renderer's identity.
+- `analyzeGallerySource(bodyMarkdown)` returns a promise of `{ bodyMarkdown, blocks }`.
+  Blocks expose `start/end`, `kind`, `isGallery`, `unterminated`, logical `content`,
+  `contentStart/contentEnd`, continuation `prefix`, `newline`, and `lines`.
+  Each logical line carries `text`, source `start/end`, `prefix`, `newline`, `html`
+  and `spans`: `{ start, end, from, to }` maps logical UTF-16 positions to editable
+  source text, excluding wrappers/container prefixes. HTML entities are indivisible
+  spans. Repeated source text is mapped within its parser-owned node, never globally.
+  Multiline inline-HTML text uses the parser's actual quote/list ancestors to
+  exclude continuation prefixes; entity newlines are counted after decoding, and
+  smart-punctuation provenance never consumes a neighbouring logical line.
+- `uploader/public/gallery-source-edits.js` is a pure ESM range editor shared by
+  server and the unbundled browser via dynamic import. It does not classify blocks.
+  `galleryLineEdits` preserves unchanged spellings and wrappers, and
+  `applyGalleryEdits` batches those edits without copying the document per photo.
+  `galleryContentEdit` returns one undoable range edit.
+- **#355 integration:** use these logical `line.text` values for photo-line policy
+  and these spans for edits. Do not reparse block delimiters/container prefixes or
+  treat an HTML entity layer as photo metadata escaping. The existing metadata
+  validity/normalization policy is intentionally unchanged by #354. All four
+  body-content gallery APIs now return promises; outside-gallery callbacks may
+  also be asynchronous. Callback visitation stays in source order even though
+  source edits apply backwards.
+- Browser analysis is snapshot-correlated, debounced and failure-recoverable with
+  DE/EN copy. Store/import/export/audit consumers await the same analysis. Both
+  locales normalize before persistence, and both export documents render before
+  writing files. No owner content is migrated or published by this implementation.
+
+## Isolated runtime/browser qualification (2026-10-28)
+
+The integration owner's six-check wave `1793219813393_85825` passed before this
+smoke. Those tests/type checks/build checks were not repeated by the runtime worker.
+The following evidence is from the actual `uploader/src/main.ts`, retained isolated
+Postgres database `swl_354_dev`, and `http://127.0.0.1:33454`, not injected stores or
+an alternate classifier. Only generated solid-colour photos and synthetic posts
+were used. The real Publish action built release `1793220538145-95934-0001`.
+
+- Anonymous analysis returned 401; an author analyzed the exact unsaved
+  Unicode/CRLF, nested list/quote tilde/info-argument and raw-HTML source. Invalid
+  shapes returned 400 and an oversized body 413; all analysis responses were
+  `no-store`. Post/revision/media counts were unchanged. Author Publish returned
+  403; admin Publish succeeded. Preview retained `no-store` and its restrictive CSP.
+- Both locales saved through the real API/PG store. Readback retained localized
+  dimensions/alt/caption, explicit empty alt/caption and unrelated image-map entries.
+  Source outside gallery ranges, container/HTML wrappers, directives, CRLF and
+  duplicate-URL order survived. Export files were read from disk, pasted into a
+  second synthetic pair and saved; localized metadata and explicit empties survived
+  that roundtrip.
+- The actual editor exercised nested DE reorder/layout update and Cancel, EN
+  nested removal and new insertion, and exact one-step Undo. A raw-HTML picker edit
+  preserved its wrapper and outside source; its decoded semantic URL (not literal
+  entity spelling) was asserted. Unterminated replacement/removal never opened a
+  picker, altered source or added an undo step.
+- A picker whose source changed and was undone back to identical text was refused
+  by its revision guard. A delayed **real** analysis request could not open a picker
+  against newer source. Explicit network aborts produced DE/EN retry feedback
+  without source/undo mutations; raw Markdown remained editable and a real retry
+  recovered. Eight rapid edits produced one body-analysis request for four photo
+  cards, not one request per photo. No fabricated successful response or provider
+  response was used; optional live AI inference was not exercised.
+- Public and authenticated preview DOM/screenshots were retained at measured
+  1440px desktop and 390px mobile viewports. Each DOM contained three galleries/four
+  photos in order `[0, 1, 2, 0]`, with `complete` and positive `naturalWidth` checked
+  before capture and no horizontal overflow. The initial `preview-en-mobile.png`
+  has a blank region for the green column photo despite its positive natural width.
+  A targeted follow-up on the same release scrolled that gallery into view, awaited
+  image decoding and two animation frames, and visually confirmed the green photo
+  at 390px in `preview-en-mobile-column-decoded.png`; the corresponding paint-proof
+  JSON records its source, dimensions and visible styles. The initial capture's
+  missing paint has no established cause. Enclosing and four-space code examples
+  remained code. The publish audit
+  covered all three distinct gallery photos in each locale. Empty rendered alts
+  correctly followed the intentionally empty Media descriptions; localized stored
+  metadata was asserted separately, not mistaken for the public precedence rule.
+
+Evidence is retained outside tracked source in the integration checkout's
+`.local/backlog-execution-2026-10-27/issue-354-browser/`: `proof.json`,
+`source-hashes.json`, exported MDX, generated photos, and editor/public/preview
+screenshots plus DOM captures. Runtime files and synthetic content remain under
+this worktree's `.issue-runtime`; temporary accounts, sessions and browser profile
+are removed after capture. No owner content, external import/fetch, deployment,
+commit or push was involved. No functional grammar defect was found by this smoke;
+the targeted follow-up also established the previously missing mobile-preview
+visual evidence without a source change.
+
+Security confirmation: the documented `SECURITY.md` grammar/provenance,
+post-sanitize image guards, Media-first descriptions, preview CSP and publication
+authorization remain intact. This smoke does not replace the integration owner's
+automated XSS/origin/mapping regression suites or final review.
+
