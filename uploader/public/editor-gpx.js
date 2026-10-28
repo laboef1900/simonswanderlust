@@ -397,13 +397,15 @@
       const computed = renderStats(); if (!computed.valid) { fail('allTrimmed'); return; }
       if (!candidate || !routeLoaded) { fail('candidateUnavailable'); return; }
       if (route.version !== null && !$('gpxReplaceConfirm').checked) { fail('replaceUnconfirmed'); $('gpxReplaceConfirm').focus(); return; }
+      // Keep the scope promised at the click even if an earlier queued Save
+      // creates the pair before this action runs.
+      const saveBeforeAttach = !host.getPost().tk;
       mutationPending = true;
       setBusy(true); clearError(); say('loading');
       let savedNewPost = false;
       try {
         await host.runWrite(async (saveDraft) => {
-          const existing = !!host.getPost().tk;
-          if (!existing) {
+          if (saveBeforeAttach) {
             if (!await saveDraft() || !host.getPost().tk) {
               fail('saveFailedNotAttached', true, host.saveError?.() || '');
               return;

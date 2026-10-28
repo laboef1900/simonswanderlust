@@ -484,6 +484,56 @@ describe('serialized writes in the real editor', () => {
     expect(h.el('deTitle').value).toBe(reload ? 'Foreign writer' : 'My queued intent');
     expect(h.el('draftSaveState').textContent).toBe(ui.en[reload ? 'editor.chrome.saveSaved' : 'editor.chrome.saveUnsaved']);
   });
+
+  it('rejects Publish during a held conflict reload without replaying the old form against the foreign version', async () => {
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    const send = storeFetch(posts);
+    const reload = Promise.withResolvers<void>();
+    let loads = 0;
+    const h = loadEditor({ confirm: true, fetch: async (url, options) => {
+      if (url === '/posts/tk1' && !options?.method && ++loads === 2) await reload.promise;
+      return send(url, options);
+    } });
+    await h.api.loadPost('tk1');
+    const initial = (await posts.get('tk1'))!;
+    const foreign = await posts.upsertDraft({
+      ...initial,
+      de: { ...initial.de, title: 'Foreign DE', bodyMarkdown: 'Foreign German body' },
+      en: { ...initial.en, title: 'Foreign EN', bodyMarkdown: 'Foreign English body' },
+    }, initial.updatedAt);
+    h.el('deTitle').value = 'Stale local title';
+    h.el('deTitle').fire('input');
+    const saving = h.api.doSaveDraft();
+    const olderQueuedSave = h.api.doSaveDraft();
+    await settle();
+    expect(loads).toBe(2);
+    expect(h.el('deTitle').value).toBe('Stale local title');
+    expect(h.confirmations).toEqual(['Reload the latest version?']);
+
+    h.el('publishBtn').click();
+    await settle();
+    expect(h.el('actionError').textContent).toBe(ui.en['editor.chrome.reloadFailed']);
+    expect(h.confirmations).toEqual(['Reload the latest version?']);
+    reload.resolve();
+    expect(await Promise.all([saving, olderQueuedSave])).toEqual([false, false]);
+    await settle();
+    expect(h.requests.filter(({ options }) => options.method === 'PUT' || options.method === 'POST')
+      .map(({ url }) => url)).toEqual(['/posts/tk1']);
+    expect(await posts.get('tk1')).toEqual(foreign);
+    expect(h.el('deTitle').value).toBe('Foreign DE');
+    expect(h.el('enTitle').value).toBe('Foreign EN');
+    expect(h.editors.map((editor) => editor.value())).toEqual(['Foreign German body', 'Foreign English body']);
+    expect(h.api.buildPayload().updatedAt).toBe(foreign.updatedAt.toISOString());
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
+
+    // A new explicit action after the completed reload uses the accepted form.
+    h.el('publishBtn').click();
+    await settle();
+    expect(h.confirmations).toEqual(['Reload the latest version?', 'Publish to the live site?']);
+    expect((await posts.get('tk1'))!.status).toBe('published');
+    expect((await posts.get('tk1'))!.en.bodyMarkdown).toBe('Foreign English body');
+  });
 });
 
 describe('unpublish concurrency token in the real editor', () => {

@@ -1827,6 +1827,10 @@
       });
 
       $('publishBtn').addEventListener('click', async () => {
+        if (loadBlocked) {
+          showErr(editorCopy.reloadFailed);
+          return;
+        }
         if (!gpxEditor.guardAction()) return;
         let reviewedRouteVersion;
         try { reviewedRouteVersion = gpxEditor.publishVersion(); }
@@ -2185,7 +2189,7 @@
         getPost: () => ({ tk: currentTk, baseUpdatedAt: loadedUpdatedAt }),
         runWrite: (write) => {
           const intent = captureSaveIntent();
-          // Save-and-attach owns one queue slot; its optional first save must
+          // Save-and-attach owns one queue slot; its requested draft save must
           // use the click's form snapshot without trying to reacquire the slot.
           return enqueueWrite(() => write(() => saveDraftNow(intent)));
         },
