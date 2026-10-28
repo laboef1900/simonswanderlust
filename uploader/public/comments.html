@@ -43,6 +43,7 @@
       const replyDrafts = new Map();
       const pendingReplies = new Set();
       const renderedRows = new Map();
+      let viewRequest = 0;
 
       function focusedReplyControl() {
         for (const [id, { controls, ta }] of renderedRows) {
@@ -107,9 +108,15 @@
           b.type = 'button';
           if (variant) b.className = variant;
           b.addEventListener('click', async () => {
+            const view = viewRequest;
             const focus = focusedReplyControl();
             b.disabled = true;
-            try { await fn(); await load(focus); } catch (e) { $('out').textContent = 'Failed: ' + e.message; }
+            try {
+              await fn();
+              if (view === viewRequest) await load(focus);
+            } catch (e) {
+              if (view === viewRequest) $('out').textContent = 'Failed: ' + e.message;
+            }
             finally { b.disabled = false; }
           });
           actions.appendChild(b);
@@ -152,6 +159,8 @@
           const body = ta.value;
           replyDrafts.set(c.id, body);
           const focus = focusedReplyControl();
+          const view = viewRequest;
+          let focusRequest = view;
           pendingReplies.add(c.id);
           send.disabled = true;
           try {
@@ -164,45 +173,53 @@
               const current = renderedRows.get(c.id);
               if (current) current.ta.value = '';
             }
-            $('out').textContent = 'Reply published.';
-            await load(focus);
-          } catch (err) { $('out').textContent = 'Reply failed: ' + err.message; }
+            if (view === viewRequest) {
+              focusRequest = view + 1;
+              await load(focus, 'Reply published.');
+            }
+          } catch (err) {
+            if (view === viewRequest) $('out').textContent = 'Reply failed: ' + err.message;
+          }
           finally {
             pendingReplies.delete(c.id);
             send.disabled = false;
             const current = renderedRows.get(c.id);
             if (current) current.send.disabled = false;
-            if (document.activeElement === document.body) restoreReplyFocus(focus);
+            if (focusRequest === viewRequest && document.activeElement === document.body) restoreReplyFocus(focus);
           }
         });
         li.appendChild(form);
         return li;
       }
 
-      async function load(fallbackFocus = null) {
+      async function load(fallbackFocus = null, message = '') {
+        const request = ++viewRequest;
         const status = $('statusFilter').value;
-        let data;
-        try { data = await api('GET', '/moderation/comments?status=' + encodeURIComponent(status)); }
-        catch (e) { $('out').textContent = 'Could not load comments: ' + e.message; return; }
-        if (!data) return;
         const ul = $('list');
-        // Capture at render time, not request time: the author can keep typing
-        // and moving the caret while moderation or the list request is pending.
+        // Capture the latest draft/caret before removing obsolete actions.
+        // Draft text itself lives in replyDrafts, not in the cleared rows.
         const focus = focusedReplyControl()
           || (document.activeElement === document.body ? fallbackFocus : null);
         renderedRows.clear();
         ul.replaceChildren();
-        for (const c of data.comments) ul.appendChild(row(c));
-        restoreReplyFocus(focus);
-        if (!data.comments.length) $('out').textContent = 'No ' + status + ' comments.';
+        ul.setAttribute('aria-busy', 'true');
+        $('out').textContent = 'Loading ' + status + ' comments…';
+        try {
+          const data = await api('GET', '/moderation/comments?status=' + encodeURIComponent(status));
+          if (request !== viewRequest || !data) return;
+          for (const c of data.comments) ul.appendChild(row(c));
+          $('out').textContent = data.comments.length ? message : 'No ' + status + ' comments.';
+          if (document.activeElement === document.body) restoreReplyFocus(focus);
+        } catch (e) {
+          if (request !== viewRequest) return;
+          $('out').textContent = 'Could not load comments: ' + e.message;
+          if (focus && document.activeElement === document.body) $('statusFilter').focus({ preventScroll: true });
+        } finally {
+          if (request === viewRequest) ul.setAttribute('aria-busy', 'false');
+        }
       }
 
-      // A new view starts with a clean status line: the previous view's "No
-      // pending comments." must not sit above a populated approved list.
-      $('statusFilter').addEventListener('change', () => {
-        $('out').textContent = '';
-        load();
-      });
+      $('statusFilter').addEventListener('change', () => load());
 
       (async () => {
         const s = await Auth.ensureAuthed({ admin: true });

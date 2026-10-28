@@ -500,11 +500,16 @@ describe('comments.html moderation view', () => {
           this.selectionDirection = direction;
         },
       });
-      node.focus = () => { doc.activeElement = node; };
+      node.focus = () => { if (!node.disabled) doc.activeElement = node; };
       return node;
     };
     page.el('statusFilter').focus = () => { doc.activeElement = page.el('statusFilter'); };
     page.el('statusFilter').value = 'pending';
+    const list = page.el('list');
+    list.replaceChildren = () => {
+      if (list.contains(doc.activeElement)) doc.activeElement = doc.body;
+      list.children.length = 0;
+    };
     const load = vm.runInContext('load', page.ctx) as () => Promise<void>;
     const row = (id: string) => {
       const node = page.el('list').children.find((child) => child.children[0]?.children[0]?.textContent === id);
@@ -529,16 +534,17 @@ describe('comments.html moderation view', () => {
     return { ...page, doc, load, row, type };
   }
 
-  it('keeps A’s latest draft and selection while approving B and awaiting the list', async () => {
+  it('keeps A’s latest draft and selection while approving B, then clears actions during refresh', async () => {
     const refresh = Promise.withResolvers<CommentResponse>();
     const loading = Promise.withResolvers<void>();
+    const mutation = Promise.withResolvers<CommentResponse>();
     let reads = 0;
     const fetch = vi.fn(async (_url: string, options: { method: string }) => {
       if (options.method === 'GET') {
         if (++reads === 2) { loading.resolve(); return refresh.promise; }
         return response({ comments: [comment('A'), comment('B')] });
       }
-      return response();
+      return mutation.promise;
     });
     const page = commentsPage(fetch);
     await page.load();
@@ -546,10 +552,13 @@ describe('comments.html moderation view', () => {
     const approve = page.row('B').action('Approve');
     approve.focus();
     const pending = approve.click();
-    await loading.promise;
     const ta = await page.type('A', 'Thanks Anna, the hike was');
     ta.focus();
     ta.setSelectionRange(7, 11, 'backward');
+    mutation.resolve(response());
+    await loading.promise;
+    expect(page.el('list').children).toHaveLength(0);
+    expect(page.el('list').getAttribute('aria-busy')).toBe('true');
     refresh.resolve(response({ comments: [comment('A')] }));
     await pending;
     expect(fetch).toHaveBeenCalledWith('/moderation/comments/B/status', expect.objectContaining({
@@ -675,7 +684,7 @@ describe('comments.html moderation view', () => {
     await page.type('A', 'Published once');
     await page.row('A').form.fire('submit');
     expect(page.el('out').textContent).toContain('Could not load comments: Failed to fetch');
-    expect(page.row('A').ta.value).toBe('');
+    expect(page.el('list').children).toHaveLength(0);
     await page.load();
     expect(page.row('A').ta.value).toBe('');
   });
@@ -730,14 +739,118 @@ describe('comments.html moderation view', () => {
     expect(page.doc.activeElement).toBe(page.el('statusFilter'));
   });
 
+  it('clears obsolete rows and actions immediately and retains drafts after a failed filter refresh', async () => {
+    const failed = Promise.withResolvers<CommentResponse>();
+    const page = commentsPage(async (url) => url.endsWith('approved')
+      ? failed.promise : response({ comments: [comment('A')] }));
+    await page.load();
+    await page.type('A', 'Unsent through failure');
+    page.el('statusFilter').focus();
+    page.el('statusFilter').value = 'approved';
+    const refresh = page.el('statusFilter').fire('change');
+    expect(page.el('list').children).toHaveLength(0);
+    expect(page.el('out').textContent).toBe('Loading approved comments…');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('true');
+    failed.reject(NETWORK_DOWN);
+    await refresh;
+    expect(page.el('list').children).toHaveLength(0);
+    expect(page.el('out').textContent).toBe('Could not load comments: Failed to fetch');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('false');
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Unsent through failure');
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+  });
+
+  it.each(['success', 'failure'] as const)('ignores an obsolete list %s after the newest view has rendered', async (outcome) => {
+    const old = Promise.withResolvers<CommentResponse>();
+    const newest = Promise.withResolvers<CommentResponse>();
+    let reads = 0;
+    const page = commentsPage(async () => ++reads === 1 ? old.promise : newest.promise);
+    const previous = page.load();
+    page.el('statusFilter').value = 'approved';
+    page.el('statusFilter').focus();
+    const current = page.load();
+    newest.resolve(response({ comments: [{ ...comment('Newest'), status: 'approved' }] }));
+    await current;
+    if (outcome === 'success') old.resolve(response({ comments: [comment('Obsolete')] }));
+    else old.reject(NETWORK_DOWN);
+    await previous;
+    expect(page.el('list').children).toHaveLength(1);
+    expect(page.row('Newest').action('Unapprove')).toBeDefined();
+    expect(page.el('out').textContent).toBe('');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('false');
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+  });
+
+  it('keeps the newest loading state when an obsolete request fails first', async () => {
+    const old = Promise.withResolvers<CommentResponse>();
+    const newest = Promise.withResolvers<CommentResponse>();
+    let reads = 0;
+    const page = commentsPage(async () => ++reads === 1 ? old.promise : newest.promise);
+    const previous = page.load();
+    page.el('statusFilter').value = 'approved';
+    const current = page.load();
+    old.reject(NETWORK_DOWN);
+    await previous;
+    expect(page.el('out').textContent).toBe('Loading approved comments…');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('true');
+    newest.resolve(response({ comments: [] }));
+    await current;
+    expect(page.el('out').textContent).toBe('No approved comments.');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('false');
+  });
+
+  it.each(['approve', 'reply'] as const)('does not let a late %s completion replace the newer filter view or status', async (action) => {
+    const mutation = Promise.withResolvers<CommentResponse>();
+    const fetch = vi.fn(async (url: string, options: { method: string }) => options.method === 'POST'
+      ? mutation.promise : response({ comments: url.endsWith('approved') ? [] : [comment('A')] }));
+    const page = commentsPage(fetch);
+    await page.load();
+    await page.type('A', 'Sent reply');
+    const pending = action === 'reply' ? page.row('A').form.fire('submit') : page.row('A').action('Approve').click();
+    page.el('statusFilter').value = 'approved';
+    page.el('statusFilter').focus();
+    await page.load();
+    mutation.resolve(response());
+    await pending;
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(page.el('list').children).toHaveLength(0);
+    expect(page.el('out').textContent).toBe('No approved comments.');
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    expect(page.row('A').ta.value).toBe(action === 'reply' ? '' : 'Sent reply');
+  });
+
+  it.each(['approve', 'reply'] as const)('suppresses a late %s failure while the newer filter is loading', async (action) => {
+    const mutation = Promise.withResolvers<CommentResponse>();
+    const refresh = Promise.withResolvers<CommentResponse>();
+    const page = commentsPage(async (url, options) => options.method === 'POST'
+      ? mutation.promise : url.endsWith('approved') ? refresh.promise : response({ comments: [comment('A')] }));
+    await page.load();
+    await page.type('A', 'Unsent after failure');
+    const pending = action === 'reply' ? page.row('A').form.fire('submit') : page.row('A').action('Approve').click();
+    page.el('statusFilter').value = 'approved';
+    const current = page.load();
+    mutation.reject(NETWORK_DOWN);
+    await pending;
+    expect(page.el('out').textContent).toBe('Loading approved comments…');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('true');
+    refresh.resolve(response({ comments: [] }));
+    await current;
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Unsent after failure');
+    expect(page.row('A').send.disabled).toBe(false);
+  });
+
   it('switching the view clears the previous view\'s empty-state message', async () => {
     const approved = {
       id: 'c1', name: 'Reader', isAuthor: false, translationKey: 'tk1', locale: 'de',
       createdAt: '2026-09-29T04:56:50Z', status: 'approved', body: 'Hallo',
     };
-    const { el } = loadPage('public/comments.html', {
-      fetch: async () => ({ status: 200, ok: true, json: async () => ({ comments: [approved] }) }),
-    });
+    const { el } = commentsPage(async () => response({ comments: [approved] }));
     el('out').textContent = 'No pending comments.';
     el('statusFilter').value = 'approved';
     await el('statusFilter').fire('change');
