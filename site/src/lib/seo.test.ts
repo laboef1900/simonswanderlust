@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { blogPostingJsonLd, isoDate, serializeJsonLd, type BlogPostingInput } from './seo';
+import { blogPostingJsonLd, isoDate, proseDescription, serializeJsonLd, type BlogPostingInput } from './seo';
+import { renderMarkdown } from './render-markdown';
+import { transformBodyImages } from './body-images';
 
 const input: BlogPostingInput = {
   title: 'Roadtrip durch Rumänien',
@@ -78,5 +80,67 @@ describe('serializeJsonLd', () => {
   it('round-trips: parsing the serialized output yields the original object', () => {
     const obj = blogPostingJsonLd({ ...input, title: 'a < b </script>' });
     expect(JSON.parse(serializeJsonLd(obj))).toEqual(obj);
+  });
+});
+
+describe('proseDescription', () => {
+  const origin = 'https://img.simonswanderlust.com';
+  const photo = `${origin}/pages/about/simon-ab12cd34`;
+  const images = {
+    [photo]: { width: 1600, height: 1000, alt: 'Simon am Strand', caption: 'A photo caption, not the introduction.' },
+  };
+  const fallback = 'Über mich';
+  const intro = 'Ich bin Simon und reise seit 2015. Hier erzähle ich von unterwegs.';
+  const rendered = async (body: string) => transformBodyImages(await renderMarkdown(body), images, origin);
+
+  it('starts with prose after a leading responsive photo, not its alt, caption or URL', async () => {
+    const html = await rendered(`![Simon am Strand](${photo})\n\n${intro}`);
+    expect(html).toContain('<picture>');
+    expect(proseDescription(html, fallback)).toBe(intro);
+  });
+
+  it.each(['column', 'breakout', 'slider'])('skips a leading %s gallery and its directives and captions', async (layout) => {
+    const html = await rendered(`\`\`\`gallery\n#layout: ${layout}\n${photo}\n\`\`\`\n\n${intro}`);
+    expect(html).toContain('<figcaption');
+    expect(proseDescription(html, fallback)).toBe(intro);
+  });
+
+  it('preserves inline link text, formatting text and entities with readable paragraph and line spacing', async () => {
+    const html = await rendered(
+      '## Über mich\n\nIch bin **Simon** &amp; reise nach [Südamerika](https://example.com/reisen).\n\n' +
+      'Mit dem Ruck<strong>sack</strong>  \nund viel Neugier.',
+    );
+    expect(proseDescription(html, fallback)).toBe(
+      'Ich bin Simon & reise nach Südamerika. Mit dem Rucksack und viel Neugier.',
+    );
+  });
+
+  it('ignores code blocks before the first prose paragraph', async () => {
+    const html = await rendered(`\`\`\`text\nhttps://example.com/not-prose\n\`\`\`\n\n${intro}`);
+    expect(proseDescription(html, fallback)).toBe(intro);
+  });
+
+  it('ends at a whole word within 150 characters', async () => {
+    const prefix = 'Eine Reise mit vielen Geschichten. '.repeat(4).trim();
+    const html = await rendered(`${prefix} Unterwegs entdecken wir mehr.`);
+    expect(proseDescription(html, fallback)).toBe(`${prefix} Unterwegs`);
+    expect(proseDescription(html, fallback).length).toBeLessThanOrEqual(150);
+  });
+
+  it('keeps a complete 150-character description and falls back rather than cutting an oversized first word', async () => {
+    const exact = `${'Reise '.repeat(20)}unterwegs unterwegs unterwegs.`;
+    expect(exact.length).toBe(150);
+    expect(proseDescription(await rendered(exact), fallback)).toBe(exact);
+    expect(proseDescription(await rendered('a'.repeat(151)), fallback)).toBe(fallback);
+  });
+
+  it.each([
+    '',
+    ' \n\n ',
+    '## Über mich',
+    `![Simon am Strand](${photo})`,
+    `\`\`\`gallery\n#layout: column\n${photo}\n\`\`\``,
+  ])('uses the localized fallback when the body has no prose (%j)', async (body) => {
+    expect(proseDescription(await rendered(body), fallback)).toBe(fallback);
   });
 });

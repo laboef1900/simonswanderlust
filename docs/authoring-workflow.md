@@ -533,6 +533,15 @@ Galleries work in **page** bodies (the About page) on the same terms. Clicking a
 lightbox, in all three modes. The draft preview renders galleries but **not** the lightbox — it is
 a separate island that only runs on the built site.
 
+The About page's search and social descriptions come from its rendered prose paragraphs,
+not the raw Markdown. You can begin either language with an image, gallery or fenced code:
+their URLs, alt text, captions and fence directives do not become the description. Inline
+emphasis and links contribute their visible text; entities are decoded and line breaks become
+spaces. Descriptions stop at a whole-word boundary within 150 characters. An empty or
+media-only body uses the localized “Über mich” / “About me” fallback. Use **About → Publish**
+to save both languages and rebuild the public pages; changing this metadata does not remove
+the images, captions, code or formatting from the page itself.
+
 ### Comments
 
 Reader comments are stored in Postgres and served at request time — they are **never** baked
