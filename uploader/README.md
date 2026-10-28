@@ -639,6 +639,8 @@ The admin-only Users page reports list-load errors separately from account actio
 **Reload users** clears obsolete rows and their Remove buttons before fetching; a failed
 request or unreadable JSON response leaves an explicit error, not an apparently empty
 successful list. Reloading does not discard entries in the Add user or password forms.
+After an account is added or removed, its refresh supersedes any older list request;
+late responses cannot hide the new account or restore a deleted account's Remove button.
 Both forms support Enter to submit, disable their submit button while waiting, and
 re-enable it after success or failure. A transport failure preserves the entries and
 reports that the outcome could not be confirmed: reload the list before retrying Add user,

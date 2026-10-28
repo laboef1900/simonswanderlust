@@ -52,15 +52,17 @@
       const copy = EditorCopy.en;
       $('reloadUsers').textContent = copy.usersReload;
       let me = null;
+      let loadGeneration = 0;
       async function load() {
         const reload = $('reloadUsers');
-        if (reload.disabled) return;
+        const generation = ++loadGeneration;
         reload.disabled = true;
         const ul = $('list');
         ul.replaceChildren();
         $('listout').textContent = copy.usersLoading;
         try {
           const res = await fetch('/users');
+          if (generation !== loadGeneration) return;
           if (res.status === 401) { location.href = '/login'; return; }
           if (res.status === 403) { location.href = '/admin/'; return; }
           if (!res.ok) {
@@ -68,6 +70,7 @@
             return;
           }
           const users = await res.json();
+          if (generation !== loadGeneration) return;
           for (const u of users) {
             const li = document.createElement('li');
             const role = u.isAdmin ? 'admin' : 'author';
@@ -111,12 +114,14 @@
           }
           $('listout').textContent = copy.usersLoaded.replace('{count}', String(users.length));
         } catch {
-          $('listout').textContent = copy.usersLoadNetworkFailed;
+          if (generation === loadGeneration) $('listout').textContent = copy.usersLoadNetworkFailed;
         } finally {
-          reload.disabled = false;
+          if (generation === loadGeneration) reload.disabled = false;
         }
       }
-      $('reloadUsers').addEventListener('click', load);
+      $('reloadUsers').addEventListener('click', () => {
+        if (!$('reloadUsers').disabled) return load();
+      });
       $('addForm').addEventListener('submit', async (ev) => {
         ev.preventDefault();
         if ($('add').disabled) return;

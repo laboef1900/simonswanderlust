@@ -239,6 +239,55 @@ describe('users.html failure recovery', () => {
     expect(el('password').value).toBe('unsaved-password');
   });
 
+  it('refreshes after Add even while an older user list is pending', async () => {
+    const stale = Promise.withResolvers<Response>();
+    const fresh = Promise.withResolvers<Response>();
+    const fetcher = vi.fn()
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce(Response.json(user, { status: 201 }))
+      .mockReturnValueOnce(fresh.promise);
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    const oldLoad = el('reloadUsers').click();
+    el('username').value = user.username;
+    el('password').value = 'fixture-new-password';
+    const add = el('addForm').fire('submit');
+    await Promise.resolve();
+    await Promise.resolve();
+    stale.resolve(Response.json([]));
+    await oldLoad;
+    expect(el('reloadUsers').disabled).toBe(true);
+    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoading']);
+    fresh.resolve(Response.json([user]));
+    await add;
+    expect(el('list').children.map((row) => row.children[0]?.textContent)).toEqual([user.username]);
+    expect(el('reloadUsers').disabled).toBe(false);
+  });
+
+  it('does not restore a removed account when an older reload completes last', async () => {
+    const deletion = Promise.withResolvers<Response>();
+    const stale = Promise.withResolvers<Response>();
+    const deletionStarted = Promise.withResolvers<void>();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json([user]))
+      .mockImplementationOnce(() => { deletionStarted.resolve(); return deletion.promise; })
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce(Response.json([]));
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    await el('reloadUsers').click();
+    const remove = el('list').children[0]!.children[2]!.click();
+    await deletionStarted.promise;
+    const oldLoad = el('reloadUsers').click();
+    deletion.resolve(new Response(null, { status: 204 }));
+    await remove;
+    // The successful mutation's fresh read must finish independently of the old GET.
+    for (let index = 0; index < 12; index++) await Promise.resolve();
+    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoaded'].replace('{count}', '0'));
+    stale.resolve(Response.json([user]));
+    await oldLoad;
+    expect(el('list').children).toHaveLength(0);
+    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoaded'].replace('{count}', '0'));
+  });
+
   const actions = [
     { form: 'addForm', button: 'add', status: 'out',
       fields: [['username', 'author2'], ['password', 'fixture-new-password']] },
