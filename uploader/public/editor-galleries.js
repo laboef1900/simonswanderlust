@@ -21,7 +21,9 @@ window.EditorGalleries = (function () {
     let editing = false;
     let controllers = [];
     let refreshVersion = 0;
-    let altVersion = 0;
+    const pendingAlts = new Map();
+    let altWork = null;
+    let altFailed = false;
     let refreshTimer;
     let analysisSnapshot = null;
     const analysisStatus = el('p', 'muted editor-gallery__status');
@@ -36,7 +38,10 @@ window.EditorGalleries = (function () {
       analysisStatus.textContent = copy.analysisFailed;
       analysisRetry.hidden = false;
     }
-    analysisRetry.addEventListener('click', () => refresh(true));
+    analysisRetry.addEventListener('click', async () => {
+      await drainAlts();
+      await refresh(true);
+    });
 
     function previewUrl(photo) {
       const thumbnail = PostsFilter.thumbUrl({ heroSrc: photo.src, heroWidth: photo.width, heroFormat: photo.format });
@@ -49,7 +54,6 @@ window.EditorGalleries = (function () {
     }
 
     function cancel() {
-      ++altVersion;
       controllers.forEach((controller) => controller.cancel());
     }
     function dispose(controller) {
@@ -64,38 +68,73 @@ window.EditorGalleries = (function () {
       controller.marker.clear();
     }
 
-    async function writeAlt(src, value) {
-      const body = cm.getValue();
-      const version = ++altVersion;
-      // Manual intent wins immediately, even while authoritative range analysis
-      // is pending or fails. Duplicate occurrences edit the same post-local alt.
+    function writeAlt(src, value) {
+      // Keep the latest intent per photo, in edit order. Neither another photo
+      // nor switching locales cancels a manual edit awaiting source analysis.
+      pendingAlts.delete(src);
+      pendingAlts.set(src, { value });
       controllers.forEach((controller) => controller.fields.forEach((field) => {
-        if (field.src === src) field.cancel();
+        if (field.src !== src) return;
+        field.cancel();
+        field.input.value = value;
+        field.image.alt = value;
       }));
-      try {
-        const edits = await GalleryFence.altEdit(body, src, value);
-        if (version !== altVersion || cm.getValue() !== body) return;
-        editing = true;
-        try {
-          cm.operation(() => {
-            edits.forEach((edit) => cm.replaceRange(edit.text,
-              cm.posFromIndex(edit.start), cm.posFromIndex(edit.end), '+gallery-alt'));
-            controllers.forEach((controller) => {
-              const range = controller.marker.find();
-              if (range) controller.text = cm.getRange(range.from, range.to);
-              controller.fields.forEach((field) => {
-                if (field.src !== src) return;
-                field.cancel();
-                field.input.value = value;
-                field.image.alt = value;
+      drainAlts();
+    }
+
+    function drainAlts() {
+      if (altWork) return altWork;
+      altFailed = false;
+      altWork = (async () => {
+        while (pendingAlts.size) {
+          const [src, intent] = pendingAlts.entries().next().value;
+          const body = cm.getValue();
+          let edits;
+          try { edits = await GalleryFence.altEdit(body, src, intent.value); }
+          catch (error) {
+            if (pendingAlts.get(src) !== intent || cm.getValue() !== body) continue;
+            altFailed = true;
+            failed(error);
+            return false;
+          }
+          // A source edit needs new ranges; a replaced form or newer intent
+          // must never receive this response's edits.
+          if (pendingAlts.get(src) !== intent || cm.getValue() !== body) continue;
+          editing = true;
+          try {
+            cm.operation(() => {
+              edits.forEach((edit) => cm.replaceRange(edit.text,
+                cm.posFromIndex(edit.start), cm.posFromIndex(edit.end), '+gallery-alt'));
+              controllers.forEach((controller) => {
+                const range = controller.marker.find();
+                if (range) controller.text = cm.getRange(range.from, range.to);
+                controller.fields.forEach((field) => {
+                  if (field.src !== src) return;
+                  field.cancel();
+                  field.input.value = intent.value;
+                  field.image.alt = intent.value;
+                });
               });
             });
-          });
-        } finally { editing = false; }
-        schedule();
-      } catch (error) {
-        if (version === altVersion && cm.getValue() === body) failed(error);
+          } finally { editing = false; }
+          pendingAlts.delete(src);
+          schedule();
+        }
+        return true;
+      })().finally(() => { altWork = null; });
+      return altWork;
+    }
+
+    async function flush() {
+      while (pendingAlts.size) {
+        if (!await drainAlts()) throw new Error(copy.analysisFailed);
       }
+    }
+
+    function reset() {
+      pendingAlts.clear();
+      altFailed = false;
+      cancel();
     }
 
     function create(block, text, number) {
@@ -137,7 +176,7 @@ window.EditorGalleries = (function () {
       parsed.lines.forEach((line, index) => {
         const stored = images()[line.src] || {};
         const photo = { ...stored, ...line };
-        const postAlt = typeof photo.alt === 'string' ? photo.alt : '';
+        const postAlt = pendingAlts.get(line.src)?.value ?? (typeof photo.alt === 'string' ? photo.alt : '');
         const localCaption = typeof line.captionOverride === 'string' ? line.captionOverride : undefined;
         const postCaption = localCaption ?? (typeof photo.caption === 'string' ? photo.caption : '');
         const card = el('li', 'editor-gallery__photo');
@@ -251,7 +290,8 @@ window.EditorGalleries = (function () {
         dismiss.addEventListener('click', () => { field.cancel(); suggest.focus(); });
         use.addEventListener('click', () => {
           if (!controller.alive || suggestion.hidden || field.state !== 'missing') return;
-          writeAlt(line.src, suggestedText.textContent);
+          input.value = suggestedText.textContent;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
           input.focus();
         });
         suggest.addEventListener('click', async () => {
@@ -351,8 +391,10 @@ window.EditorGalleries = (function () {
       }
       if (version !== refreshVersion || body !== cm.getValue() || !previews) return;
       analysisSnapshot = analysis;
-      analysisStatus.textContent = '';
-      analysisRetry.hidden = true;
+      if (!altFailed) {
+        analysisStatus.textContent = '';
+        analysisRetry.hidden = true;
+      }
       cm.operation(() => {
         const blocks = analysis.blocks.filter((block) => block.isGallery && !block.unterminated);
         const old = controllers;
@@ -401,14 +443,13 @@ window.EditorGalleries = (function () {
     });
     cm.on('changes', () => {
       if (editing) return;
-      ++altVersion;
       controllers.forEach(dispose);
       controllers = [];
       schedule();
     });
     refresh();
     return {
-      refresh: () => refresh(true), cancel,
+      refresh: () => refresh(true), cancel, flush, reset,
       async focusPhoto(src) {
         if (!previews) toggle.click();
         await refresh();

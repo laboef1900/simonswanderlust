@@ -302,6 +302,14 @@ offline/failing analysis leaves raw Markdown editable and offers retry. A stale
 picker selection never replaces newer text. The body-content normalization and
 rewriting APIs, export, audit, import extraction and browser analysis are asynchronous.
 
+Manual descriptions for photos absent from Media keep their latest pending value per
+photo and locale. Save (and therefore Publish/Preview) waits for source analysis and
+all pending descriptions, including edits made in another locale while it waits.
+Unrelated source edits trigger fresh ranges rather than dropping the description.
+A failed analysis leaves the value available for retry and does not send a post write.
+Loading a post or restoring a revision discards the former form's pending descriptions
+and cancels a Save that was still waiting for them.
+
 
 Three layout modes, selected by a `#layout:` line **inside** the fence — `column` (default,
 justified rows aligned to body text), `breakout` (justified rows wider than the story column), and

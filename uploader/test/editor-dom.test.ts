@@ -1729,6 +1729,131 @@ describe('inline gallery editing', () => {
       .toEqual(['', '', 'English', 'English']);
   });
 
+  it('flushes every pending manual photo description before saving, across locale switches', async () => {
+    const pair = pairWithGallery();
+    pair.de.bodyMarkdown = pair.de.bodyMarkdown.replace('https://img/photo\n```', 'https://img/other\n```');
+    pair.de.images['https://img/other'] = { width: 900, height: 600, alt: 'Other' };
+    const network = mediaNetwork([]);
+    let hold = false;
+    const waiting: { body: string; reply: PromiseWithResolvers<Response> }[] = [];
+    const h = loadEditor({
+      fetch: async (url, init) => {
+        if (url.startsWith('/media')) return network(url, init);
+        if (url.endsWith('/revisions')) return response([]);
+        if (url.endsWith('/alt-audit')) return response(null);
+        return response({ ...pair, translationKey: 'saved' });
+      },
+      galleryFetch: (url, init) => {
+        if (!hold) return analyzeRequest(url, init);
+        const reply = Promise.withResolvers<Response>();
+        waiting.push({ body: JSON.parse(String(init?.body)).bodyMarkdown, reply });
+        return reply.promise;
+      },
+    });
+    h.api.populateForm(pair);
+    await settleAll();
+    hold = true;
+    const fields = h.document.querySelectorAll('.editor-gallery__alt');
+    fields[0]!.value = 'First draft';
+    fields[0]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    await settle();
+    fields[1]!.value = 'Second photo';
+    fields[1]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    fields[0]!.value = 'Latest first photo';
+    fields[0]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    const saving = h.api.doSaveDraft();
+    await settle();
+    h.el('tabbtn-en').click();
+    fields[2]!.value = 'English description';
+    fields[2]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    await settleAll();
+    expect(h.requests.filter((request) => request.options.method === 'POST')).toEqual([]);
+    hold = false;
+    for (const request of waiting.filter((request) => request.body !== pair.en.bodyMarkdown)) {
+      request.reply.resolve(response(await analyzeGallerySource(request.body)));
+    }
+    await settleAll();
+    // EN was edited after its first flush returned, while DE was still pending.
+    expect(h.requests.some((request) => request.options.method === 'POST')).toBe(false);
+    for (const request of waiting.filter((request) => request.body === pair.en.bodyMarkdown)) {
+      request.reply.resolve(response(await analyzeGallerySource(request.body)));
+    }
+    expect(await saving).toBe(true);
+    const request = h.requests.find((entry) => entry.url === '/posts' && entry.options.method === 'POST')!;
+    const sent = JSON.parse(String(request.options.body)) as PostPair;
+    const de = await normalizeGalleryFences(sent.de.bodyMarkdown, sent.de.images);
+    const en = await normalizeGalleryFences(sent.en.bodyMarkdown, sent.en.images);
+    expect(de.images['https://img/photo']?.alt).toBe('Latest first photo');
+    expect(de.images['https://img/other']?.alt).toBe('Second photo');
+    expect(en.images['https://img/photo']?.alt).toBe('English description');
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe(sent.de.bodyMarkdown);
+  });
+
+  it('reanalyzes pending manual descriptions after unrelated source shifts', async () => {
+    let hold = false;
+    const waiting: { body: string; reply: PromiseWithResolvers<Response> }[] = [];
+    const h = loadEditor({
+      fetch: mediaNetwork([]),
+      galleryFetch: (url, init) => {
+        if (!hold) return analyzeRequest(url, init);
+        const reply = Promise.withResolvers<Response>();
+        waiting.push({ body: JSON.parse(String(init?.body)).bodyMarkdown, reply });
+        return reply.promise;
+      },
+    });
+    const pair = pairWithGallery();
+    h.api.populateForm(pair);
+    await settleAll();
+    hold = true;
+    const field = h.document.querySelector('.editor-gallery__alt')!;
+    field.value = 'Retained description';
+    field.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    await settle();
+    h.editors[0]!.value('New introduction\n\n' + pair.de.bodyMarkdown);
+    await settle();
+    hold = false;
+    for (const request of waiting) request.reply.resolve(response(await analyzeGallerySource(request.body)));
+    await settleAll();
+    const current = h.api.buildPayload();
+    expect(current.de.bodyMarkdown.startsWith('New introduction\n\nIntro')).toBe(true);
+    expect((await normalizeGalleryFences(current.de.bodyMarkdown, current.de.images)).images['https://img/photo']?.alt)
+      .toBe('Retained description');
+    expect(current.en).toEqual(pair.en);
+  });
+
+  it('does not carry pending descriptions or an awaiting Save into a deliberately loaded post', async () => {
+    let hold = false;
+    const waiting: { body: string; reply: PromiseWithResolvers<Response> }[] = [];
+    const h = loadEditor({
+      fetch: mediaNetwork([]),
+      galleryFetch: (url, init) => {
+        if (!hold) return analyzeRequest(url, init);
+        const reply = Promise.withResolvers<Response>();
+        waiting.push({ body: JSON.parse(String(init?.body)).bodyMarkdown, reply });
+        return reply.promise;
+      },
+    });
+    h.api.populateForm(pairWithGallery());
+    await settleAll();
+    hold = true;
+    const field = h.document.querySelector('.editor-gallery__alt')!;
+    field.value = 'Former post edit';
+    field.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    await settle();
+    const saving = h.api.doSaveDraft();
+    const next = pairWithGallery();
+    next.de.images['https://img/photo']!.alt = 'New post description';
+    h.api.populateForm(next);
+    await settle();
+    hold = false;
+    for (const request of waiting) request.reply.resolve(response(await analyzeGallerySource(request.body)));
+    await settleAll();
+    expect(await saving).toBe(false);
+    expect(h.requests.some((request) => request.options.method === 'POST')).toBe(false);
+    expect(h.api.buildPayload().de).toEqual(next.de);
+    expect(h.editors[0]!.undoHistory).toEqual([]);
+  });
+
   it('requires explicit AI acceptance and ignores a late answer after manual input or a locale change', async () => {
     let pending = Promise.withResolvers<string>();
     const calls: { lang: string; signal: AbortSignal }[] = [];
@@ -1820,6 +1945,16 @@ describe('inline gallery editing', () => {
     expect(status.textContent).toContain(ui.de['editor.gallery.analysisFailed']);
     expect(status.querySelectorAll('button').some((button) =>
       !button.hidden && button.textContent === ui.de['editor.gallery.retry'])).toBe(true);
+    expect(await h.api.doSaveDraft()).toBe(false);
+    expect(h.requests.some((request) => request.options.method === 'POST')).toBe(false);
+    expect(h.api.buildPayload()).toEqual(before);
+    offline = false;
+    status.querySelectorAll('button').find((button) =>
+      !button.hidden && button.textContent === ui.de['editor.gallery.retry'])!.click();
+    await settleAll();
+    const restored = h.api.buildPayload();
+    expect((await normalizeGalleryFences(restored.de.bodyMarkdown, restored.de.images)).images['https://img/photo']?.alt)
+      .toBe('My unsaved description');
   });
 
   it('shows current Media alt and caption per locale read-only, links to Media, and never edits the article', async () => {
@@ -2187,10 +2322,11 @@ describe('manuscript-first editor refinements', () => {
 
   it('reports loaded, edited, in-flight and saved states without clearing edits made during a save', async () => {
     const pending = Promise.withResolvers<Response>();
+    const started = Promise.withResolvers<void>();
     let firstSave = true;
     const h = loadEditor({ fetch: async (url, options) => {
       if (options?.method !== 'PUT') return readPost(url, options);
-      if (firstSave) { firstSave = false; return pending.promise; }
+      if (firstSave) { firstSave = false; started.resolve(); return pending.promise; }
       return response(saved);
     } });
     await h.api.loadPost('tk1');
@@ -2200,6 +2336,7 @@ describe('manuscript-first editor refinements', () => {
     h.el('deTitle').fire('input');
     expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveUnsaved']);
     const saving = h.api.doSaveDraft();
+    await started.promise;
     expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveSaving']);
     h.el('deTitle').value = 'Newer edit';
     h.el('deTitle').fire('input');

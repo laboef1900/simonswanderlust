@@ -310,7 +310,12 @@ window.GalleryFence = (function () {
   async function scanFences(body, options) { return (await analyze(body, options)).blocks; }
 
   function blockAt(analysis, cursor) {
-    return analysis.blocks.find(function (block) { return cursor >= block.start && cursor <= block.end; }) || null;
+    var found = null;
+    analysis.blocks.forEach(function (block) {
+      if (cursor >= block.start && cursor <= block.end
+        && (!found || (block.start >= found.start && block.end <= found.end))) found = block;
+    });
+    return found;
   }
 
   async function fenceAt(body, cursor, options) {

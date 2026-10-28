@@ -84,6 +84,36 @@ describe('gallery source provenance and bounded edits', () => {
     expect((await analyzeGallerySource(body)).blocks).toMatchObject([{ kind: 'html', isGallery: false, unterminated: false, start: 0, end: body.length }]);
   });
 
+  it('normalizes and exports a rendered gallery nested in nongallery HTML code', async () => {
+    const prefix = '<pre>literal before\n';
+    const suffix = '\nliteral after</pre>';
+    const metadata = ' | 20x10 | alt=&quot;Lake&quot;';
+    const body = `${prefix}<pre><code class="language-gallery">${photo}${metadata}</code></pre>${suffix}`;
+    const analysis = await analyzeGallerySource(body);
+    expect(analysis.blocks.map((block) => block.isGallery)).toEqual([false, true]);
+    const gallery = analysis.blocks[1]!;
+    expect(body.slice(gallery.start, gallery.end)).toBe(`<pre><code class="language-gallery">${photo}${metadata}</code></pre>`);
+    const saved = await normalizeGalleryFences(body, {});
+    expect(saved).toEqual({
+      bodyMarkdown: body.replace(metadata, ''),
+      images: { [photo]: { width: 20, height: 10, alt: 'Lake' } },
+    });
+    expect(analyzeRenderedBody(await renderMarkdown(saved.bodyMarkdown)).galleryLines).toEqual([photo]);
+    expect(await normalizeGalleryFences(await galleryFencesToMdx(saved.bodyMarkdown, saved.images), {})).toEqual(saved);
+  });
+
+  it('maps a large raw-HTML text node within the supported body limit without argument expansion', async () => {
+    const line = `${photo} | 640x480 | caption="${'a'.repeat(900)}"`;
+    const body = `<pre><code class="language-gallery">${Array(350).fill(line).join('\n')}</code></pre>`;
+    const analysis = await analyzeGallerySource(body);
+    const block = analysis.blocks[0]!;
+    expect(block.lines.map((entry) => entry.text)).toEqual(Array(350).fill(line));
+    const last = block.lines.at(-1)!;
+    expect(body.slice(last.start, last.end)).toBe(line);
+    const changed = applyGalleryEdits(body, galleryLineEdits(last, photo));
+    expect(changed).toBe(body.slice(0, last.start) + photo + body.slice(last.end));
+  });
+
   it('supports empty nested HTML and fenced galleries without deleting the closer', async () => {
     for (const body of ['> <pre><code class="language-gallery"></code></pre>', '> ~~~gallery\n> ~~~']) {
       const block = (await analyzeGallerySource(body)).blocks[0]!;

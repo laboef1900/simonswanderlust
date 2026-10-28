@@ -570,6 +570,18 @@ describe('scanFences public seam', () => {
 describe('fenceAt', () => {
   const body = 'intro\n\n```gallery\n#layout: slider\nhttps://i/a\n```\n\nouttro';
 
+  it('edits the innermost rendered gallery while protecting its nongallery HTML container', async () => {
+    const inner = '<pre><code class="language-gallery">https://i/a</code></pre>';
+    const nested = '<pre>literal before\n' + inner + '\nliteral after</pre>';
+    expect((await G.fenceAt(nested, nested.indexOf('https://i/a')))?.text).toBe(inner);
+    expect(await G.fenceAt(nested, nested.indexOf('literal before'))).toBeNull();
+    const edit = await G.replaceFenceAt(nested, nested.indexOf('https://i/a'), '```gallery\nhttps://i/b\n```');
+    const changed = apply(nested, edit);
+    expect(changed.startsWith('<pre>literal before\n<pre><code class="language-gallery">')).toBe(true);
+    expect(changed.endsWith('</code></pre>\nliteral after</pre>')).toBe(true);
+    expect((await G.fenceAt(changed, changed.indexOf('https')))?.content).toBe('https://i/b');
+  });
+
   it('returns the whole fence when the cursor is inside it', async () => { const found = (await G.fenceAt(body, body.indexOf('https://i/a')));
   expect(found?.text).toBe('```gallery\n#layout: slider\nhttps://i/a\n```'); });
 

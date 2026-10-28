@@ -539,6 +539,7 @@
       let reviewIsAdmin = false;
       let pendingSaves = 0;
       let populatingBody = false;
+      let formVersion = 0;
       const deImages = {};        // src → {width, height}
       const enImages = {};
       const galleryEditors = {};
@@ -1765,6 +1766,21 @@
         if (!gpxAttach && !gpxEditor.guardAction()) return false;
         showErr('');
         setStatus('');
+        const version = formVersion;
+        try {
+          let before;
+          do {
+            before = guard.snapshot();
+            await Promise.all(Object.values(galleryEditors).map((editor) => editor.flush()));
+            if (version !== formVersion) return false;
+            // Another locale can receive a new edit after its flush returned
+            // while this round still waits for the first locale.
+          } while (before !== guard.snapshot());
+        }
+        catch (error) {
+          if (version === formVersion) showErr(error.message);
+          return false;
+        }
         const snap = guard.snapshot(); // edits typed after this point must survive markClean
         const payload = buildPayload();
         const url = currentTk ? '/posts/' + encodeURIComponent(currentTk) : '/posts';
@@ -2025,8 +2041,10 @@
       // restored revision. Every field is overwritten (with '' when absent) so it
       // never merges with what was already on screen.
       function populateForm(post) {
+        ++formVersion;
         storyReview?.invalidate();
         excerptAssist?.invalidate();
+        Object.values(galleryEditors).forEach((editor) => editor.reset());
         // A (re)loaded post shows what Media says now, not what an earlier
         // load of this page saw — the author may have just edited it there.
         galleryLibrary.forget();

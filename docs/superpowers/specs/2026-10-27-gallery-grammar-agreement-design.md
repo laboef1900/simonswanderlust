@@ -116,6 +116,17 @@ No migration or automatic content rewrite. Before any later production rollout, 
   DE/EN copy. Store/import/export/audit consumers await the same analysis. Both
   locales normalize before persistence, and both export documents render before
   writing files. No owner content is migrated or published by this implementation.
+- Non-gallery raw-HTML `pre` containers do not hide nested gallery nodes. Source
+  ranges may nest only inside such literal containers; crossing/duplicate ranges
+  remain invalid, and cursor selection chooses the innermost containing block.
+  Decoded text units are appended iteratively, without spreading an input-sized
+  array into a JavaScript call.
+- Manual post-local descriptions retain the latest intent per URL and locale.
+  Applying an intent rechecks its identity and exact body; a source shift requests
+  new ranges, while an intentional form replacement clears old intents. Save
+  flushes both locales until the existing dirty-generation token is stable.
+  A form-generation token cancels an awaiting Save after a post/revision replacement.
+  Analysis failure retains the intent for retry and prevents that post write.
 
 ## Isolated runtime/browser qualification (2026-10-28)
 
@@ -178,4 +189,39 @@ Security confirmation: the documented `SECURITY.md` grammar/provenance,
 post-sanitize image guards, Media-first descriptions, preview CSP and publication
 authorization remain intact. This smoke does not replace the integration owner's
 automated XSS/origin/mapping regression suites or final review.
+
+## Review-fix qualification (2026-10-28)
+
+Full six-check wave `1793225380688_49333` passed after the review fixes, including
+the permanent failing-before regressions for nested HTML, a large HTML gallery,
+multi-photo/manual-description retention, source shifts, retry, form replacement
+and a second-locale edit started after Save.
+
+Focused real-runtime evidence is retained in
+`.local/backlog-execution-2026-10-27/issue-354-review-fix-runtime/`:
+
+- `proof.json` covers actual authenticated analysis of a 350-row raw-HTML gallery,
+  nested non-gallery `pre` save/export/paste/save, desktop/mobile DE/EN manual edits,
+  latest-value coalescing, source insertion with Undo/Redo, failed analysis and retry.
+  Real Save and confirmed Publish sent no write while required responses were held;
+  release `1793224743909-41424-0000` contains the latest descriptions. Responses were
+  delayed, not replaced with fabricated successful data.
+- The additional boundary probes reproduced two remaining races before fixing
+  them: an awaiting Save wrote a restored form, and a locale edited after its first
+  flush was omitted while the other locale still waited. Final-source
+  `replacement-save-boundary-final.json` records zero post writes after a revision
+  replacement; `late-locale-save-boundary-after-fix.json` records zero writes while
+  EN remains held and the latest EN value persisted after release.
+- Each probe records its own source hashes. The initial focused proof predates
+  the final two Save guards; `boundary-followup.json` records the final hashes and
+  separate reproof, not a retroactive claim that the earlier captures used them.
+  A service restart reconciled the earlier synthetic photos into Media; the
+  follow-up used fresh post-local photos with no matching Media rows.
+
+Only synthetic local content was changed. Temporary accounts/sessions, owned
+services, browser profiles and launch scaffolds were removed; fixtures, releases
+and evidence were retained. Mobile means a measured Chromium viewport, not a
+physical device. No external model, deployment or owner-content migration ran.
+The existing `SECURITY.md` authorization, nonpersisting analysis, provenance,
+post-sanitize URL/markup guards and Media-first metadata policy remain unchanged.
 

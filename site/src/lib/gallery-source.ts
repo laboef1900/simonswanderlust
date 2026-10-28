@@ -407,7 +407,7 @@ export async function analyzeGallerySource(bodyMarkdown: string): Promise<Galler
       blocks.push({ start: rangeStart, end: rangeEnd, isGallery: false, unterminated: !closed,
         kind: 'html', content: textOf(pre), lines: [], contentStart: rangeStart,
         contentEnd: rangeEnd, prefix: '', newline: '\n' });
-      return SKIP;
+      return;
     }
     const units: Unit[] = [];
     visit(code, 'text', (node) => {
@@ -416,7 +416,7 @@ export async function analyzeGallerySource(bodyMarkdown: string): Promise<Galler
       if (from === undefined || to === undefined) return fail();
       const decoded = decodedUnits(mapped.html.slice(from, to), (offset) => sourceAt(from + offset));
       if (decoded.map((unit) => unit.value).join('') !== node.value) return fail();
-      units.push(...decoded);
+      for (const unit of decoded) units.push(unit);
     });
     const content = textOf(code);
     const lines: GalleryLine[] = [];
@@ -465,8 +465,17 @@ export async function analyzeGallerySource(bodyMarkdown: string): Promise<Galler
     blocks.push({ start: rangeStart, end: rangeEnd, isGallery: true, unterminated: !closed || !codeClosed, kind: 'html', content: content.replace(/\n$/, ''), lines, contentStart, contentEnd: lines.at(-1)?.end ?? contentStart, prefix: continuation, newline: lines[0]?.newline ?? '\n' });
     return SKIP;
   });
-  blocks.sort((a, b) => a.start - b.start);
-  for (let i = 1; i < blocks.length; i++) if (blocks[i]!.start < blocks[i - 1]!.end) fail();
+  blocks.sort((a, b) => a.start - b.start || b.end - a.end);
+  const ancestors: GalleryBlock[] = [];
+  for (const block of blocks) {
+    while (ancestors.length && block.start >= ancestors.at(-1)!.end) ancestors.pop();
+    const parent = ancestors.at(-1);
+    // The renderer descends through nongallery HTML <pre> containers. Only
+    // proper containment there is valid; crossing or duplicate ranges are not.
+    if (parent && (parent.kind !== 'html' || parent.isGallery
+      || block.start === parent.start || block.end > parent.end)) fail();
+    ancestors.push(block);
+  }
   for (const block of blocks) {
     let previousEnd = block.start;
     for (const line of block.lines) {
