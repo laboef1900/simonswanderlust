@@ -153,6 +153,17 @@ are in the specification.
    and any `releases/.*` leftover from a killed predecessor. The app serves `current` directly via
    `@fastify/static` — no separate web server.
 
+   The successful `current` rename is the build's commit point (#397). After that, a
+   pruning failure cannot turn the promoted release into a failed build response.
+   Retention remains best-effort under the same exclusive lock: enumeration or current-link
+   inspection failure (including an unexpected current target) skips the pass; an ordinary
+   old-release removal failure skips only that candidate. Every removal checks storage
+   ownership first, and observed lease loss stops further mutations without undoing promotion.
+   Current, the promoted release and staging entries are never pruning candidates.
+   Cleanup warnings use the fixed `release promoted; old-release cleanup incomplete` message,
+   the promotion stamp, stage and bounded errno only; no paths or raw exception messages.
+   Success means promotion completed, not that retention completed; the response shape is unchanged.
+
 The child is bounded (#110): it is SIGKILLed after `BUILD_TIMEOUT_MS` (15 min) and the build
 reports `timed out`, releasing the shared build/encode lock instead of holding every later
 publish, rebuild and encode until a manual restart. Its stderr is streamed to the container log
@@ -566,6 +577,11 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   healthy and no restore is running, then restart the same app configuration
   (`docker compose restart app`, or restart the bare Node process). Writes never resume
   automatically in a process that lost its lease.
+- **Promoted release with incomplete cleanup (#397):** inspect the fixed cleanup warning
+  and filesystem permissions/capacity. Do not republish merely because old releases remain.
+  An ordinary later authorized build retries retention; no retry worker is added. After lease
+  loss, follow the storage-lease recovery above. Never delete current, wipe `/data`, blindly
+  change ownership or bypass fencing to clear a warning.
 - **Admin password recovery** — a forgotten password is reset from the host via the CLI (the
   runtime image has no shell, so use the exec form):
   `docker compose exec app node --import tsx src/cli.ts set-password <username>` — prompts for
