@@ -16,6 +16,42 @@ describe('parseWxr', () => {
     expect(attachments.get('100')).toBe('https://wp.example/uploads/hero.jpg');
   });
 
+  it('reassembles adjacent CDATA sections without adding separators to scalar fields', () => {
+    const split = 'left,]]]]><![CDATA[> middle\nline, ]]]]><![CDATA[>right';
+    const source = `<rss><channel>${(['de', 'en'] as const).map((locale) => `<item>
+      <wp:post_type>post</wp:post_type><wp:status>publish</wp:status>
+      <category domain="language" nicename="${locale}"/>
+      <category domain="post_translations" nicename="split"/>
+      <wp:post_name>split-${locale}</wp:post_name>
+      <title><![CDATA[${split}]]></title>
+      <excerpt:encoded><![CDATA[${split}]]></excerpt:encoded>
+      <content:encoded><![CDATA[<p>a[[x]]]]><![CDATA[>b</p>]]></content:encoded>
+    </item>`).join('')}</channel></rss>`;
+    expect(parseWxr(source).posts.map(({ locale, title, excerpt, contentHtml }) =>
+      ({ locale, title, excerpt, contentHtml }))).toEqual(['de', 'en'].map((locale) => ({
+      locale, title: 'left,]]> middle\nline, ]]>right',
+      excerpt: 'left,]]> middle\nline, ]]>right', contentHtml: '<p>a[[x]]>b</p>',
+    })));
+  });
+
+  it.each([
+    ['<![CDATA[One, uninterrupted\nsection]]>', 'One, uninterrupted\nsection'],
+    ['Ordinary &amp; text', 'Ordinary & text'],
+    ['<![CDATA[]]>', ''],
+    ['', ''],
+  ])('preserves scalar field decoding for %s', (field, expected) => {
+    const source = `<rss><channel><item>
+      <wp:post_type>post</wp:post_type><wp:status>publish</wp:status>
+      <category domain="language" nicename="de"/>
+      <category domain="post_translations" nicename="scalar"/>
+      <wp:post_name>scalar</wp:post_name><title>${field}</title>
+      <content:encoded>${field}</content:encoded>
+    </item></channel></rss>`;
+    expect(parseWxr(source).posts[0]).toMatchObject({
+      title: expected, contentHtml: expected, excerpt: '', thumbnailId: null,
+    });
+  });
+
   it('skips (not crashes) a published post that has a language but no post_translations group', () => {
     const noGroupWxr = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:wp="http://wordpress.org/export/1.2/" xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/">

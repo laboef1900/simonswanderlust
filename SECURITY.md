@@ -278,6 +278,12 @@ logs the full error server-side (stdout, captured by Docker) and returns a **gen
 never reach the client. Intentional 4xx framework responses (body-size 413, malformed JSON 400)
 keep their sanitized messages. (`uploader/src/server.ts`)
 
+WXR scalar text reconstruction (#388) concatenates adjacent CDATA fragments without
+inventing separators; it preserves actual commas and the existing parser policy.
+This does not relax XML/entity limits or `WxrParseError`'s fixed public error,
+slug admission, safe remote fetching, gallery-text isolation or render sanitization.
+Reconstructed source text remains untrusted. No persisted-content rewrite is performed.
+
 ## Rate limiting
 
 A per-client-IP fixed-window limiter throttles the password-verifying endpoints — the
