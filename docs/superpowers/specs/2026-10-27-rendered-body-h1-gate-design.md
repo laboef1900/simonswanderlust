@@ -17,6 +17,25 @@ The 2026-09-20 imported-content specification describes an ATX/raw-HTML scanner 
 
 No new endpoint, schema, renderer dependency or Markdown options. `render-markdown.ts`/`astro.config.mjs` parity remains authoritative. Do not invoke gallery partitioning merely to detect a heading; reuse the pre-transform tree already needed for image analysis. Existing #334 readiness behavior still runs for eligible bodies.
 
+### Implemented interface contract for #356 / #358 / #378
+
+- `analyzeRenderedBody(html: string)` in `site/src/lib/body-images.ts` returns
+  `{ hasH1: boolean; sources: string[]; galleryLines: string[] }` from the shared
+  sanitize-first preparation. `hasH1` means any actual sanitized H1 element,
+  including nested elements; image-source traversal policy is unchanged.
+- `analyzeBodyContent(body, images, imageOrigin)` in `uploader/src/publish-gate.ts`
+  remains asynchronous and returns `{ hasH1: boolean; foreign: string[]; sources: string[] }`.
+  It renders Markdown once, gathers headings/foreign references before transformation,
+  and gathers readiness sources after transformation. No image-only alias remains.
+- `publicationBody` is the private server pair gate, returning `{ foreign, keys }`
+  or throwing the locale-specific `PostError` for an H1. Both publication routes use it;
+  structural `validateForPublish` stays synchronous. Future language-mode integration
+  must use the same publishable-locale set here as the other publication gates.
+- Future renderer changes must preserve this predicate and error classification.
+  This change does not implement an asynchronous rendering optimizer or change Markdown
+  options, gallery partitioning, About/page policy, or stored content.
+
+
 ## Invariants and misuse cases
 
 - Reject ATX, Setext, quoted/list-nested and surviving raw-HTML H1s, irrespective of heading text or nesting.

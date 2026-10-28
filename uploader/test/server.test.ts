@@ -25,6 +25,7 @@ import { fixedWindowLimiter, accountLockoutLimiter } from '../src/rate-limit.js'
 import type { SiteBuilder, BuildOutcome } from '../src/build.js';
 import { memorySecretsStore, SecretsError } from '../src/secrets.js';
 import type { AiProvider, AiProviderKind } from '../src/ai-providers.js';
+import * as bodyRenderer from '../../site/src/lib/render-markdown.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -2263,7 +2264,7 @@ describe('alt-text audit (advisory, never a gate)', () => {
   });
 });
 
-describe('publish gate (foreign images, #91)', () => {
+describe('publish body gates (#91, #375)', () => {
   const IMG = 'https://img.simonswanderlust.com';
   const pairWithBody = (deBody: string, enBody = '## b') => ({
     translationKey: '', status: 'draft',
@@ -2273,6 +2274,144 @@ describe('publish gate (foreign images, #91)', () => {
   });
   const create = async (b: Built, cookie: { sid: string }, payload: Record<string, unknown>) =>
     (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload })).json().translationKey;
+
+  it.each(['single', 'bulk'] as const)('%s refuses rendered H1s in either locale before writes, exports or builds', async (mode) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const publish = vi.spyOn(b.posts, 'publish');
+    const render = vi.spyOn(bodyRenderer, 'renderMarkdown');
+    try {
+      const { cookie } = await authed(b);
+      for (const locale of ['de', 'en'] as const) {
+        for (const body of ['# Title', 'Intro\n=====', '> # Title', '- # Title', '<div><h1 class="legacy">Title</h1></div>']) {
+          const input = pairWithBody('## Body');
+          input[locale].bodyMarkdown = body;
+          const tk = await create(b, cookie, input);
+          publish.mockClear();
+          render.mockClear();
+          const response = await b.app.inject(mode === 'single'
+            ? { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) }
+            : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+          const error = `${locale}: body must not contain an H1; the story hero provides the page H1`;
+          if (mode === 'single') {
+            expect(response.statusCode, body).toBe(400);
+            expect(response.json().error).toBe(error);
+          } else {
+            expect(response.statusCode).toBe(200);
+            expect(response.json()).toMatchObject({ succeeded: 0, failed: 1, results: [{ key: tk, ok: false, error }] });
+            expect(response.json().build).toBeUndefined();
+          }
+          expect(render).toHaveBeenCalledTimes(locale === 'de' ? 1 : 2);
+          expect(publish).not.toHaveBeenCalled();
+          expect(s.calls).toEqual([]);
+          expect((await b.posts.get(tk))?.status).toBe('draft');
+          expect((await b.posts.usageRows()).filter(row => row.source === 'published')).toEqual([]);
+          expect(existsSync(join(dir, 'backup'))).toBe(false);
+          await b.posts.remove(tk);
+        }
+      }
+    } finally {
+      render.mockRestore();
+      publish.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it.each(['single', 'bulk'] as const)('%s publishes literal H1 examples in either locale with one render per locale', async (mode) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const render = vi.spyOn(bodyRenderer, 'renderMarkdown');
+    try {
+      const { cookie } = await authed(b);
+      let published = 0;
+      for (const locale of ['de', 'en'] as const) {
+        for (const body of [
+          'Use `<h1>` for the page title.',
+          '    <h1>Indented example</h1>',
+          '````markdown\n# Example heading\n<h1>Example HTML</h1>\n````\n\n## Real section',
+          '&lt;h1&gt;Escaped title&lt;/h1&gt;',
+          '<script><h1>Removed by sanitation</h1></script>\n\nSafe body',
+        ]) {
+          const input = pairWithBody('## Body');
+          input[locale].bodyMarkdown = body;
+          const tk = await create(b, cookie, input);
+          render.mockClear();
+          const response = await b.app.inject(mode === 'single'
+            ? { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) }
+            : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+          expect(response.statusCode, body).toBe(200);
+          if (mode === 'bulk') expect(response.json()).toMatchObject({ succeeded: 1, failed: 0 });
+          expect(render).toHaveBeenCalledTimes(2);
+          expect(s.calls).toHaveLength(++published);
+          expect((await b.posts.get(tk))?.status).toBe('published');
+          expect((await b.posts.usageRows()).find(row => row.source === 'published' && row.locale === locale)?.bodyMarkdown).toBe(body);
+          expect(existsSync(join(dir, 'backup', 'trips', locale, `fgn-${locale}.mdx`))).toBe(true);
+          await b.posts.remove(tk);
+        }
+      }
+    } finally {
+      render.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it('bulk publishes eligible pairs while leaving an H1 pair untouched, exporting and rebuilding only successes', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const publish = vi.spyOn(b.posts, 'publish');
+    try {
+      const { cookie } = await authed(b);
+      const bad = await create(b, cookie, pairWithBody('## Body', '> # Title'));
+      const goodPair = pairWithBody('Use `<h1>` for a title.');
+      goodPair.de.slug = 'good-de';
+      goodPair.en.slug = 'good-en';
+      const good = await create(b, cookie, goodPair);
+      const response = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [bad, good] } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        succeeded: 1, failed: 1,
+        results: [{ key: bad, ok: false, error: expect.stringMatching(/^en: body must not contain an H1/) }, { key: good, ok: true }],
+      });
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(publish.mock.calls[0]?.[0]).toBe(good);
+      expect((await b.posts.get(bad))?.status).toBe('draft');
+      expect((await b.posts.get(good))?.status).toBe('published');
+      expect(existsSync(join(dir, 'backup', 'trips', 'en', 'fgn-en.mdx'))).toBe(false);
+      expect(existsSync(join(dir, 'backup', 'trips', 'en', 'good-en.mdx'))).toBe(true);
+      expect(s.calls).toHaveLength(1);
+    } finally {
+      publish.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it.each(['single', 'bulk'] as const)('%s preserves renderer failures as internal errors, not validation refusals', async (mode) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const publish = vi.spyOn(b.posts, 'publish');
+    const render = vi.spyOn(bodyRenderer, 'renderMarkdown');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { cookie } = await authed(b);
+      const tk = await create(b, cookie, pairWithBody('## Body'));
+      render.mockRejectedValueOnce(new Error('private renderer failure'));
+      const response = await b.app.inject(mode === 'single'
+        ? { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) }
+        : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+      if (mode === 'single') expect(response.statusCode).toBe(500);
+      else expect(response.json()).toMatchObject({ succeeded: 0, failed: 1, results: [{ key: tk, ok: false, error: 'internal error' }] });
+      expect(response.body).not.toMatch(/private renderer failure|H1/);
+      expect(publish).not.toHaveBeenCalled();
+      expect(s.calls).toEqual([]);
+      expect(existsSync(join(dir, 'backup'))).toBe(false);
+      expect((await b.posts.get(tk))?.status).toBe('draft');
+    } finally {
+      render.mockRestore();
+      publish.mockRestore();
+      log.mockRestore();
+      await b.app.close();
+    }
+  });
 
   it('409s with the count and examples while a body still hot-links another host, and publishes nothing', async () => {
     const s = stubBuilder();
@@ -3277,6 +3416,23 @@ describe('pages routes', () => {
     expect(res.json().saved.de.title).toBe('Über mich');
     expect(res.json().build).toEqual({ ok: true, release: 'r7' });
     expect(s.calls.length).toBe(1);
+  });
+
+  it('does not apply the story-only H1 gate to About publication', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    try {
+      const { cookie } = await authed(b);
+      const body = {
+        de: { locale: 'de', title: 'Über mich', bodyMarkdown: 'Über mich\n=========', images: {} },
+        en: { locale: 'en', title: 'About me', bodyMarkdown: '<h1>About me</h1>', images: {} },
+      };
+      const response = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: cookie, payload: body });
+      expect(response.statusCode).toBe(200);
+      expect((await b.pages.get('about')).de.bodyMarkdown).toBe(body.de.bodyMarkdown);
+      expect((await b.pages.get('about')).en.bodyMarkdown).toBe(body.en.bodyMarkdown);
+      expect(s.calls).toHaveLength(1);
+    } finally { await b.app.close(); }
   });
 
   it('PUT /pages/:key rejects an unsafe key with 400', async () => {

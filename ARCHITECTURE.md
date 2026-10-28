@@ -219,10 +219,10 @@ standing between a lost encode job and a published page full of broken images. A
 `media` row never blocks (WordPress-imported and legacy files predate the library). The same gate
 also refuses (409, with a count and up to five example URLs) while the rendered body of either
 locale would emit an `<img>`, or holds a ` ```gallery ` line, whose **origin is not the image
-host** (#91; both readings come from one render per locale in `analyzeBodyImages`,
+host** (#91; both readings come from one render per locale in `analyzeBodyContent`,
 `uploader/src/publish-gate.ts`): that is what a failed WXR re-host leaves behind, and the render
 path would hot-link the old domain or drop the photo silently. The body is judged from the
-renderer's own sanitized tree (`renderMarkdown` + `bodyImageSources`), so code fences, code spans
+renderer's own sanitized tree (`renderMarkdown` + `analyzeRenderedBody`), so code fences, code spans
 and every other Markdown/HTML subtlety are decided by the renderer itself, not a second parser.
 
 The queue runs at concurrency **2** (the measured throughput plateau) and shares a lock with the

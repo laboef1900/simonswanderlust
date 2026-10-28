@@ -557,22 +557,6 @@ describe('post validation', () => {
     // side knows either fails the build or is unpickable.
     expect([...REGIONS]).toEqual([...siteRegions]);
   });
-  it('publish rejects Markdown and raw-HTML body H1s with the locale named', () => {
-    expect(() => validateForPublish(pair({
-      de: { ...pair().de, bodyMarkdown: '# Duplicate document title\n\nCopy' },
-    }))).toThrow(/de: body must not contain an H1; the story hero provides the page H1/);
-    expect(() => validateForPublish(pair({
-      en: { ...pair().en, bodyMarkdown: '<h1 class="legacy">Legacy title</h1>\n\nCopy' },
-    }))).toThrow(/en: body must not contain an H1/);
-  });
-
-  it('publish permits H1 examples inside fenced code blocks', () => {
-    const bodyMarkdown = '````markdown\n# Example heading\n<h1>Example HTML</h1>\n````\n\n## Real section';
-    expect(() => validateForPublish(pair({
-      de: { ...pair().de, bodyMarkdown },
-      en: { ...pair().en, bodyMarkdown },
-    }))).not.toThrow();
-  });
   it('publish rejects out-of-range coordinates', () => {
     expect(() => validateForPublish(pair({ shared: { ...pair().shared, coordinates: { lat: 91, lng: 0 } } }))).toThrow(/lat/);
     expect(() => validateForPublish(pair({ shared: { ...pair().shared, coordinates: { lat: -91, lng: 0 } } }))).toThrow(/lat/);

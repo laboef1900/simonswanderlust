@@ -332,6 +332,12 @@ function galleryNode(
   return h('div', { class: `jgal jgal--${mode} not-prose` }, children);
 }
 
+/** Shared sanitize-first preparation for body transformation and publication analysis. */
+function sanitizedBodyTree(html: string) {
+  const parser = unified().use(rehypeParse, { fragment: true }).use(rehypeSanitize, BODY_SCHEMA);
+  return parser.runSync(parser.parse(html));
+}
+
 /**
  * @param imageOrigin the ONLY origin a gallery may reference — passed in
  *   explicitly rather than read from the environment, because this function
@@ -351,8 +357,7 @@ export function transformBodyImages(
   // <script>, inline event handlers, and javascript: URLs — then inject our own
   // trusted <picture> nodes, so the injected nodes keep their srcset/loading
   // attributes while the body itself can't carry stored XSS to the public site.
-  const parser = unified().use(rehypeParse, { fragment: true }).use(rehypeSanitize, BODY_SCHEMA);
-  const tree = parser.runSync(parser.parse(html));
+  const tree = sanitizedBodyTree(html);
   visit(tree, 'element', (node, index, parent) => {
     if (index === null || index === undefined || !parent) return;
     if (node.tagName === 'pre') {
@@ -406,8 +411,8 @@ function srcsetUrls(value: unknown): string[] {
 }
 
 /**
- * Every image source the SANITIZED body would load, read from the same hast
- * tree `transformBodyImages` starts from, BEFORE any `images` resolution:
+ * Heading semantics and every image source the SANITIZED body would load,
+ * read from the same hast tree `transformBodyImages` starts from, BEFORE resolution:
  * the `src`/`srcset` of every `<img>` and `<source>` (a raw `<picture>` is
  * allowed through by the schema), plus the raw photo lines of every gallery
  * fence exactly as `galleryPhotos` would read them.
@@ -419,9 +424,14 @@ function srcsetUrls(value: unknown): string[] {
  * the serialized HTML did (attribute values keep a raw `>`, `<pre>` may carry
  * `id`/whitespace) and a Markdown text scanner did worse.
  */
-export function bodyImageSources(html: string): { sources: string[]; galleryLines: string[] } {
-  const parser = unified().use(rehypeParse, { fragment: true }).use(rehypeSanitize, BODY_SCHEMA);
-  const tree = parser.runSync(parser.parse(html));
+export function analyzeRenderedBody(html: string): { hasH1: boolean; sources: string[]; galleryLines: string[] } {
+  const tree = sanitizedBodyTree(html);
+  let hasH1 = false;
+  // Separate from the source walk's gallery SKIP: even raw HTML inside a code
+  // container counts if it survives sanitation as a real heading element.
+  visit(tree, 'element', (node) => {
+    if (node.tagName === 'h1') hasH1 = true;
+  });
   const sources: string[] = [];
   const galleryLines: string[] = [];
   visit(tree, 'element', (node) => {
@@ -440,5 +450,5 @@ export function bodyImageSources(html: string): { sources: string[]; galleryLine
       sources.push(...srcsetUrls(node.properties?.srcSet));
     }
   });
-  return { sources, galleryLines };
+  return { hasH1, sources, galleryLines };
 }
