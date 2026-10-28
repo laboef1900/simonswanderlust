@@ -71,8 +71,8 @@ node uploader/scripts/generate-third-party-inventory.mjs
 ```
 
 The initial preparation produced 911 entries (site 611, uploader 300). That
-count is historical, not a claim about the rebased locks. Regenerate after every
-lock change; the parent owns the final refresh after #369 integration. The
+count is historical, not a claim about the final integrated locks. Regenerate after
+every lock change; the parent requested the final #369 refresh recorded below. The
 [`third-party-inventory.json`](../../third-party-inventory.json) records both
 lockfile SHA-256 values, every package path/version/resolution/integrity and
 verbatim license metadata. [`third-party-evidence.json`](../../third-party-evidence.json)
@@ -80,10 +80,24 @@ contains the separately maintained dated sources, artifact observations,
 non-lockfile assets and per-license obligation summaries. Its digest is recorded
 in the generated inventory. Exact name/version/integrity matching prevents an
 old reviewed license from silently applying to a new package version.
-This implementation's metadata-only generator run produced **917 entries** from
-the rebased head after the approved root license fields were added.
+The intermediate #347-rebased snapshot produced **917 entries** after the root
+license fields were added. The final #369A/#369B integration refresh produced
+**787 entries: site 489, uploader 298**, with final lock hashes recorded.
 
-Ten third-party missing-license entries are resolved as **MIT**: `satteri@0.9.4`
+`third-party-evidence.json` → `finalLockRefresh` records updated native source
+identities and exact tarball notices for Satteri **0.10.5**, Astro compiler binding
+**0.5.2**, Rolldown **1.2.15** and Lightning CSS **1.33.0**. Tarballs matched final
+lock SHA-512. Source revisions come from registry `gitHead` or read npm SLSA
+statements; the latter signatures were not independently verified here.
+Pinned source archives/trees and native Cargo.lock hashes accompany the notices.
+The existing libvips **1.3.4** package remains unchanged in both trees.
+
+Historical `0.17.1` and #347 image/compiler evidence remains separate. In
+particular, Satteri 0.9.4's full crate/compiler notices are not asserted to be an
+inventory of new 0.10.5 binaries. Parent inspection covers final emitted native
+coverage; no new artifact, exact rebuild or legal certification is claimed.
+
+Ten historical missing-license entries were resolved as **MIT**: `satteri@0.9.4`
 and its nine `@bruits/satteri-*` platform/WASI packages. All ten registry tarballs
 were read without installing/executing code and matched their lock SHA-512.
 The wrapper contains `package/LICENSE`; native/WASI packages omit a named license
@@ -246,6 +260,47 @@ The attested source-image indexes are reachable and recorded by digest. This is
 stronger than the embedded SPDX file's single `NOASSERTION` aggregate; it is
 still not a claim that all source archives have been unpacked or rebuilt.
 
+## Installed notice-gap dispositions
+
+The parent's final installed-package scan reports **17 site rows and 13 uploader
+rows**, representing **22 distinct name/version pairs**. Those are filename-scan
+results, not 30 independent missing-license verdicts. `installedNoticeGapReview`
+in `third-party-evidence.json` records every row, exact lock integrity, source
+identity/basis, recovered texts and remaining limitations.
+
+All 22 npm tarballs were SHA-512-matched to the final locks without installation
+or execution. `installed-gap-NOTICES.txt` now delivers:
+
+- Six existing supplemental coverages identified explicitly, including native
+  wrapper notices, PMTiles and Font Awesome. Original font copyright metadata is
+  also preserved; native package-level coverage is not a linkage/source verdict.
+- Six packages' recovered upstream notice files, plus original README license
+  notices for `murmurhash-js`, `pg-types` and `pgpass`.
+- `stackback`'s original **V8 2012 BSD-style header**. Its package's MIT label
+  does not erase those embedded conditions.
+- `typo-js`'s complete distributed dictionary README, preserving the distinct
+  **SCOWL, Ispell, WordNet and other contributor** notices, not just wrapper BSD.
+- Original README declarations/copyright where that is all upstream supplies,
+  the package-linked `abstract-logging` license article, and the ISC notice from
+  the credited `piccolore` fork origin.
+
+Genuine limits are retained rather than filled with invented notices:
+`@nodable/entities 2.1.1`'s published source commit returns 404 from tree/history
+and source-archive endpoints; `boolbase 1.0.0` has an ISC declaration but no
+original notice in its reviewed package/source; `process-ancestry` supplies an
+MIT/author declaration without a copyright year. `am-i-vibing` supplies its
+actual README copyright and MIT declaration, not a separate full license file.
+`stackback`'s V8 notice is complete, while no separate original MIT notice was
+found. The linked license page is mutable (it presently says 2026), and
+`piccolore` does not identify the exact copied `picocolors` revision.
+
+For `xml-naming`, the available initial source commit is after npm publication:
+its README and implementation were byte-matched to the locked tarball before
+preserving its license; this is not misrepresented as registry build provenance.
+Raw gap counts should remain honest. Parent regenerates the static notice files
+and checks the final artifacts; this review changes no application code or
+dependencies and certifies neither legality nor exact native rebuildability.
+
 ## Verification and remaining artifact gates
 
 Regression tests exercise real MapLibre attribution sanitization/disclosure
@@ -260,14 +315,19 @@ source identifiers. They are added but **not run by this worker**.
    were inspected. Exact DHI source artifacts and retrieval directions are now
    recorded, and existing base copyright/common-license files were observed.
 2. Resolve or explicitly account for genuine upstream notice gaps before release:
-   `json-escape-simd 3.0.2` declares MIT but its archive, pinned repository root
-   and leading source comments contain no original notice. Some source-only or
-   non-Linux crates also omit notices; no owners/years were invented. Review-time
+   `json-escape-simd 3.0.2` has an explicit `license = "MIT"` declaration in its
+   pinned source manifest, but no original notice in the reviewed archive/root/
+   leading comments. Its exact README credits `sonic-rs` as the implementation
+   origin without naming the copied revision; the reviewed origin declares
+   Apache-2.0. Both primary declarations are preserved, not treated as permission
+   to invent copyright or as proof that the MIT label resolves copied-code duties.
+   Final compiler binding 0.5.2 still locks 3.0.2; Satteri 0.10.5 locks 3.1.1.
+   Some source-only/non-Linux crates also omit notices. Review-time
    source/patch hashes do not attest the bytes returned by a mutable PR-patch URL
    at a historical binary build. Rebuild/relink and final binary/source matching
    remain artifact checks, not findings established by source review alone.
-3. Refresh inventory after final #369 locks, inspect `notice-gaps.json`, final
-   image notice files, emitted browser/font assets and exact-version source
+3. The inventory is refreshed against final #369 locks. Parent inspects
+   `notice-gaps.json`, final image notice files, emitted browser/font assets and source
    availability. Publish clear Corresponding Source directions alongside each
    authorized image/release; a source archive of project files alone is not
    automatically the complete native dependency Corresponding Source.

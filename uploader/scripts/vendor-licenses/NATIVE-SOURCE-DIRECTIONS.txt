@@ -4,6 +4,20 @@ uninspected historical images or a future build that resolves different inputs.
 The application imposes no restriction on modifying/replacing LGPL-covered
 libraries or reverse engineering for debugging those modifications.
 
+Final integrated #369 locks (not yet an inspected release image):
+Satteri 0.10.5:
+https://github.com/bruits/satteri/tree/b3d38e1e341c809b20b76a655e9b1601d11bd1f0
+Astro compiler binding 0.5.2:
+https://github.com/withastro/compiler-rs/tree/342e26603bf6416545a85b506b434d25226e1435
+Rolldown 1.2.15:
+https://github.com/rolldown/rolldown/tree/89d821ca07cf9ccd84dd92bd3f48af0f579ab21a
+Lightning CSS 1.33.0:
+https://github.com/parcel-bundler/lightningcss/tree/1d680fa14e9a089c92dc0929f869d6757ae91c30
+Their exact package notices, source archives, Cargo.lock directions and source
+identity basis are in final-lock-native-NOTICES.txt / third-party-evidence.json.
+Historical Satteri 0.9.4 notices below do not claim to cover every new binary.
+Libvips remains 1.3.4 in both final trees; final image/compiler checks are separate.
+
 sharp-libvips 1.3.4 (inspected #347 candidates, libvips 8.18.7):
 https://github.com/lovell/sharp-libvips/archive/ebb95f8add54eee8bed840e3fb587e4cbec857d7.tar.gz
 https://github.com/lovell/sharp-libvips/tree/ebb95f8add54eee8bed840e3fb587e4cbec857d7
@@ -31,7 +45,7 @@ a generic unmodified libvips source download is not a substitute for those input
 No rebuild/relink run is claimed here. Review-time hashes do not establish which
 bytes a mutable upstream PR patch URL returned when an older binary was built.
 
-Satteri 0.9.4:
+Satteri 0.9.4 (historical public 0.17.1 and #347 candidates):
 https://github.com/bruits/satteri/archive/815424811e52f097b4052d2ddd0051b32fbbbc55.tar.gz
 https://github.com/bruits/satteri/tree/815424811e52f097b4052d2ddd0051b32fbbbc55
 Its pinned Cargo.lock identifies 154 registry archives. All were checksum-matched
@@ -40,6 +54,11 @@ included. This includes build/dev/optional targets, not just linked code.
 json-escape-simd 3.0.2 declares MIT but its archive, pinned repository root and
 leading source comments provide no original notice; no owner/year was invented.
 Other source-only/platform crates with absent notices are explicitly recorded.
+The pinned 3.0.2 source manifest explicitly declares MIT, while its README credits
+sonic-rs without identifying the copied revision. The reviewed origin declares
+Apache-2.0. Both primary declarations are preserved in final-lock-native-NOTICES.txt;
+this does not invent a missing copyright or resolve copied-code duties by assumption.
+The final compiler-binding 0.5.2 source lock still includes json-escape-simd 3.0.2.
 
 DHI Node runtime used by public 0.17.1:
 dhi.io/node@sha256:dc87c509f7279f734d04036f696bf9aad1b8d66f34750f32c30c5b85e033187f
