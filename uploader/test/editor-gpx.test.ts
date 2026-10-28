@@ -1256,17 +1256,21 @@ describe('explicit conflict Reload reconciles the real editor and GPX controller
     expect(saves).toBe(1);
   });
 
-  it('preserves a pending preview while route loading blocks Attach, then uses the reconciled version', async () => {
+  it.each([false, true])('preserves a pending preview while route loading blocks Attach, then uses the reconciled version (initial attachment: %s)', async (initiallyAttached) => {
     const pending = Promise.withResolvers<Reply>();
     let reads = 0;
     const h = fullEditor(preview, async (url, options) => {
       if (url === '/posts/pair-1') return response(reloadPostFixture());
-      if (url.endsWith('/route') && options.method === 'GET') return ++reads === 1 ? response(emptyRoute) : pending.promise;
+      if (url.endsWith('/route') && options.method === 'GET') return ++reads === 1 ? response(initiallyAttached ? { ...attachedRoute, version: 'earlier-version' } : emptyRoute) : pending.promise;
       if (url.endsWith('/route') && options.method === 'PUT') return response({ ...attachedRoute, updatedAt: '2026-10-28T10:03:00.000Z' });
       return undefined;
     });
     await h.editor.loadPost('pair-1');
     await importPreview(h);
+    if (initiallyAttached) check(h, 'gpxReplaceConfirm');
+    h.element('gpxStart').value = '1';
+    h.element('gpxStart').fire('input');
+    await settle();
     const loading = h.editor.loadPost('pair-1');
     await settle();
     h.element('gpxAttach').fire('click');
@@ -1276,7 +1280,12 @@ describe('explicit conflict Reload reconciles the real editor and GPX controller
     pending.resolve(response(attachedRoute));
     await loading;
     expect(h.api.hasPreview()).toBe(true);
+    expect(h.element('gpxStart').value).toBe('1');
     expect(() => h.api.publishVersion()).toThrow();
+    expect(h.element('gpxReplaceScope').hidden).toBe(false);
+    expect(h.element('gpxReplaceConfirmLabel').hidden).toBe(false);
+    expect(h.element('gpxReplaceConfirm').checked).toBe(false);
+    expect(h.element('gpxAttach').disabled).toBe(true);
     check(h, 'gpxReplaceConfirm');
     h.element('gpxAttach').click();
     await settle();

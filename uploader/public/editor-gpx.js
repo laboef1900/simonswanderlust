@@ -122,6 +122,8 @@
       dialog.querySelectorAll('button,input,select').forEach((el) => { el.disabled = el === $('gpxClose') ? mutationPending : value; });
       $('gpxImportOpen').disabled = value || outcomeUnknown;
       ['gpxReimport', 'gpxDetach', 'gpxDownload'].forEach((id) => { $(id).disabled = value || outcomeUnknown || !routeLoaded; });
+      $('gpxReplaceScope').hidden = route.version === null;
+      $('gpxReplaceConfirmLabel').hidden = route.version === null;
       attach.textContent = msg(host.getPost().tk ? 'attach' : 'newPostSaveFirst');
       attach.disabled = value || outcomeUnknown || !routeLoaded || !candidate || !preview || !preview.geometry.segments.length || !renderStats().valid || (route.version !== null && !$('gpxReplaceConfirm').checked);
       syncTrimControls();
@@ -271,8 +273,6 @@
       await Promise.all([geometry(), publicTrack()]);
       if (expectedEpoch !== epoch) return;
       $('gpxCounts').textContent = msg('counts').replace('{points}', String(data.counts.points)).replace('{segments}', String(data.counts.segments)).replace('{waypoints}', String(data.counts.waypoints));
-      $('gpxReplaceScope').hidden = route.version === null;
-      $('gpxReplaceConfirmLabel').hidden = route.version === null;
       $('gpxReplaceConfirm').checked = false;
       $('gpxStart').value = '0'; $('gpxEnd').value = '0'; $('gpxStartDistance').value = '0'; $('gpxEndDistance').value = '0';
       const segmentList = $('gpxSegments');
@@ -345,6 +345,7 @@
         const loaded = await request('/posts/' + encodeURIComponent(tk) + '/route', { method: 'GET' });
         if (current !== routeEpoch || tk !== host.getPost().tk) return false;
         if (!loaded || !(loaded.version === null || (typeof loaded.version === 'string' && loaded.version))) throw new Error('invalid route state');
+        if (loaded.version !== route.version) $('gpxReplaceConfirm').checked = false;
         route = loaded; routeTk = tk; routeLoaded = true;
         // A read reconciles only route state, never an uncertain write or preview.
         if (errorCode === 'routeRefreshFailed' || errorCode === 'routeNotReviewed') clearError();

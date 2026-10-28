@@ -115,6 +115,9 @@ save. A genuine edit from another tab still produces the conflict dialog:
 **Reload** replaces your editing base and cancels already queued older requests.
 If that reload fails, saving remains blocked until the page loads successfully;
 keep or recover your local draft rather than assuming it reached the server.
+If a GPX preview is open while Reload reconciles a newly attached or replaced route,
+its trimming selections remain intact. The replacement warning becomes available
+for the current route; a changed route version requires fresh replacement confirmation.
 If your session expires during a save, the editor keeps a browser recovery copy
 and returns you to sign-in. Those edits remain unsaved; signing in is not a save.
 
