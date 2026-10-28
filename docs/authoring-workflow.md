@@ -534,7 +534,9 @@ lightbox, in all three modes. The draft preview renders galleries but **not** th
 a separate island that only runs on the built site.
 
 The About page's search and social descriptions come from its rendered prose paragraphs,
-not the raw Markdown. You can begin either language with an image, gallery or fenced code:
+before responsive images are inserted, not the raw Markdown. Prose remains eligible when an
+image shares its paragraph: a single newline after a leading image is enough, and readable
+text on both sides of an inline image is preserved. You can begin either language with an image, gallery or fenced code:
 their URLs, alt text, captions and fence directives do not become the description. Inline
 emphasis and links contribute their visible text; entities are decoded and line breaks become
 spaces. Descriptions stop at a whole-word boundary within 150 characters. An empty or

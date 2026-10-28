@@ -25,7 +25,7 @@ const nonProseTags: Record<string, true> = {
   style: true,
 };
 
-/** First rendered paragraphs, excluding media/captions and code, on a whole-word boundary. */
+/** First rendered paragraphs before image decoration, excluding media/captions and code. */
 export function proseDescription(html: string, fallback: string): string {
   const parts: string[] = [];
   function collect(node: Root | RootContent, inParagraph = false): void {
