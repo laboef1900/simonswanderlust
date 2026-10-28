@@ -94,6 +94,11 @@ const DETAILS: Details = {
 };
 
 interface Deferred { url: string; resolve(body: unknown): void; fail(status: number, error: string): void }
+interface PendingUpload {
+  fields: Map<string, unknown>;
+  resolve(body: unknown): void;
+  progress(loaded: number, total: number): void;
+}
 /** The model seam: receives the thumbnail URL the page chose and the request's signal. */
 type Describe = (url: string, signal: AbortSignal) => Promise<Details>;
 
@@ -104,6 +109,7 @@ interface Page {
   win: Record<string, unknown>;
   timers: { fn: () => void; cleared: boolean }[];
   listRequests: Deferred[];
+  uploadRequests: PendingUpload[];
   patches: { url: string; body: Record<string, unknown> }[];
   rows: Map<string, Item>;
   described: string[];
@@ -112,7 +118,7 @@ interface Page {
   flush(): Promise<void>;
 }
 
-function loadPage(opts: { describe?: Describe } = {}): Page {
+function loadPage(opts: { describe?: Describe; folders?: string[] } = {}): Page {
   const roots = new Map<string, FakeNode>();
   for (const id of pageIds) {
     const n = new FakeNode('div');
@@ -131,6 +137,7 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
   };
   const timers: { fn: () => void; cleared: boolean }[] = [];
   const listRequests: Deferred[] = [];
+  const uploadRequests: PendingUpload[] = [];
   const patches: { url: string; body: Record<string, unknown> }[] = [];
   const rows = new Map<string, Item>();
   const described: string[] = [];
@@ -138,7 +145,7 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
   const confirmAnswer = { value: false };
   const ok = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
   const fetch = (url: string, init?: { method?: string; body?: string }): Promise<unknown> => {
-    if (url.startsWith('/media/folders')) return ok([]);
+    if (url.startsWith('/media/folders')) return ok(opts.folders ?? []);
     if (init?.method === 'PATCH') {
       patches.push({ url, body: JSON.parse(init.body ?? '{}') as Record<string, unknown> });
       return ok({});
@@ -167,8 +174,28 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
     confirm: (msg: string) => { confirms.push(msg); return confirmAnswer.value; },
     prompt: () => null,
     console,
-    FormData: class { append() {} },
-    XMLHttpRequest: class {},
+    FormData: class {
+      fields = new Map<string, unknown>();
+      append(key: string, value: unknown): void { this.fields.set(key, value); }
+    },
+    XMLHttpRequest: class {
+      status = 0;
+      responseText = '';
+      onload = (): void => {};
+      upload = { onprogress: (_event: { lengthComputable: boolean; loaded: number; total: number }): void => {} };
+      open(): void {}
+      send(data: { fields: Map<string, unknown> }): void {
+        uploadRequests.push({
+          fields: data.fields,
+          resolve: (body) => {
+            this.status = 202;
+            this.responseText = JSON.stringify(body);
+            this.onload();
+          },
+          progress: (loaded, total) => this.upload.onprogress({ lengthComputable: true, loaded, total }),
+        });
+      }
+    },
     Auth: { ensureAuthed: async () => ({ id: 'u1', username: 'simon', isAdmin: true }), renderHeader() {} },
     EditorGalleryImageOrigin: 'https://img.example',
     AltSuggest: {
@@ -195,7 +222,7 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
   vm.runInContext(dialogSrc, ctx);
   vm.runInContext(browserSrc, ctx);
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await setImmediate(); };
-  return { el, win: ctx, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush };
+  return { el, win: ctx, timers, listRequests, uploadRequests, patches, rows, described, confirms, confirmAnswer, flush };
 }
 
 function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
@@ -203,6 +230,114 @@ function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
   timers.length = 0;
   for (const t of due) t.fn();
 }
+
+describe('media-browser upload completion', () => {
+  it('refreshes once for completed uploads, keeps queue results and unsaved details, and renders the server status', async () => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('existing')], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    page.el('dAltDe').value = 'Unsaved description';
+    page.el('detail').dispatch('input');
+
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }, { name: 'ready.jpg' }] } });
+    expect(page.uploadRequests).toHaveLength(2);
+    page.uploadRequests[0]!.progress(100, 100);
+    await page.flush();
+    runTimers(page.timers);
+    expect(page.listRequests).toHaveLength(0);
+    expect(page.el('grid').querySelectorAll('.media-cell').map((n) => n.dataset.key)).toEqual(['existing']);
+
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'processing' });
+    page.uploadRequests[1]!.resolve({ key: 'ready', status: 'ready' });
+    await page.flush();
+    runTimers(page.timers);
+    expect(page.listRequests).toHaveLength(1);
+    const processing = { ...item('new'), status: 'processing', thumbSrc: '' };
+    page.listRequests.shift()!.resolve({ items: [item('ready'), processing, item('existing')], total: 3 });
+    await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell').map((n) => n.dataset.key)).toEqual(['ready', 'new', 'existing']);
+    expect(page.el('grid').querySelectorAll('.media-cell__badge').map((n) => n.textContent)).toEqual(['processing']);
+    expect(page.el('uploadQueue').querySelectorAll('.upload-row')).toHaveLength(2);
+    expect(page.el('uploadQueue').querySelectorAll('.upload-row__state').map((n) => n.textContent)).toEqual(['done', 'done']);
+    expect(page.el('dAltDe').value).toBe('Unsaved description');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('grid').querySelectorAll('.is-selected').map((n) => n.dataset.key)).toEqual(['existing']);
+  });
+
+  it('shows an upload in the current folder without changing the query or clearing the queue', async () => {
+    const page = loadPage({ folders: ['journey'] });
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [], total: 0 });
+    await page.flush();
+    page.el('folderTree').querySelectorAll('.folder-btn')[1]!.dispatch('click');
+    const query = page.listRequests[0]!.url;
+    page.listRequests.shift()!.resolve({ items: [], total: 0 });
+    await page.flush();
+
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    expect(page.uploadRequests[0]!.fields.get('folder')).toBe('journey');
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'processing' });
+    await page.flush();
+    runTimers(page.timers);
+    expect(page.listRequests).toHaveLength(1);
+    expect(page.listRequests[0]!.url).toBe(query);
+    page.listRequests.shift()!.resolve({ items: [{ ...item('new'), folder: 'journey', status: 'processing' }], total: 1 });
+    await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell').map((n) => n.dataset.key)).toEqual(['new']);
+    expect(page.el('grid').querySelectorAll('.media-cell__badge')[0]!.textContent).toBe('processing');
+    expect(page.el('uploadQueue').querySelectorAll('.upload-row')).toHaveLength(1);
+  });
+
+  it.each(['other folder', 'ready filter'])('does not insert a nonmatching upload under the %s and preserves sorting and page', async (context) => {
+    const page = loadPage({ folders: ['journey', 'other'] });
+    const settle = async (): Promise<void> => {
+      page.listRequests.shift()!.resolve({ items: [item('visible')], total: 121 });
+      await page.flush();
+    };
+    await page.flush();
+    await settle();
+    page.el('folderTree').querySelectorAll('.folder-btn')[1]!.dispatch('click');
+    await settle();
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    expect(page.uploadRequests[0]!.fields.get('folder')).toBe('journey');
+
+    if (context === 'other folder') {
+      page.el('folderTree').querySelectorAll('.folder-btn')[2]!.dispatch('click');
+    } else {
+      page.el('fStatus').value = 'ready';
+      page.el('fStatus').dispatch('change');
+    }
+    await settle();
+    page.el('fRecursive').checked = false;
+    page.el('fRecursive').dispatch('change');
+    await settle();
+    page.el('fSort').value = 'title';
+    page.el('fSort').dispatch('change');
+    await settle();
+    page.el('fOrder').value = 'asc';
+    page.el('fOrder').dispatch('change');
+    await settle();
+    page.el('nextPage').dispatch('click');
+    const query = page.listRequests[0]!.url;
+    await settle();
+
+    page.uploadRequests[0]!.resolve({ key: 'new', folder: 'journey', status: 'processing' });
+    await page.flush();
+    runTimers(page.timers);
+    expect(page.listRequests).toHaveLength(1);
+    expect(page.listRequests[0]!.url).toBe(query);
+    expect(query).toContain('page=2');
+    expect(query).toContain('sort=title');
+    expect(query).toContain('order=asc');
+    expect(query).toContain(context === 'other folder' ? 'folder=other' : 'status=ready');
+    await settle();
+    expect(page.el('grid').querySelectorAll('.media-cell').map((n) => n.dataset.key)).toEqual(['visible']);
+    expect(page.el('uploadQueue').querySelectorAll('.upload-row__state')[0]!.textContent).toBe('done');
+    expect(page.el('pageInfo').textContent).toBe('Page 2 of 3');
+  });
+});
 
 describe('media-browser detail panel', () => {
   it('keeps unsaved edits across a reload and asks before switching photos', async () => {

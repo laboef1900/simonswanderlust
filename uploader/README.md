@@ -249,6 +249,15 @@ longer complete for its original's width — and then `encodeQueue.recover()` re
 from `status = 'processing'`). Variant and original files are written atomically (temp +
 rename), so a crash never leaves a truncated file under a final name.
 
+The Media grid refreshes automatically when uploads complete, with a 200 ms debounce for
+bursts. **Clear finished** is not needed to show the accepted photos; queue entries stay
+visible until cleared. Refreshes retain the current folder, search, status filter, sort and
+page, so a photo outside that query will not appear there. Selections still in view and
+unsaved detail edits survive the refresh; switching to another photo still asks before
+discarding edits. The queue's **done** means the upload was accepted, not that encoding has
+finished: the grid displays the status returned by the server, including **processing**.
+This is a completion-triggered refresh, not continuous polling for encoding progress.
+
 Three consequences worth knowing:
 
 - **Publishing is gated on encode state.** A post referencing a photo that is not yet `ready` is

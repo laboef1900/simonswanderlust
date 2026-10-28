@@ -40,8 +40,17 @@
   };
 
   var client = api.makeClient({ onUnauthed: function () { location.href = '/login'; } });
+  // Upload completion means the original was accepted, not that encoding is
+  // ready. Reload the current query so the server supplies its actual status
+  // and applies the author's folder, filters, sorting and page.
+  var refreshUploads = api.debounce(function () { reload(); }, 200);
   var uploads = api.createUploadQueue(client, {
-    onChange: function (snap) { state.queue = snap; renderQueue(); },
+    onChange: function (snap) {
+      var previousDone = state.queue ? state.queue.done : 0;
+      state.queue = snap;
+      renderQueue();
+      if (snap.done > previousDone) refreshUploads();
+    },
   });
 
   function say(msg) { $('out').textContent = msg; }
