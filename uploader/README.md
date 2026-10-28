@@ -383,9 +383,11 @@ fields. It is sent as untrusted JSON in a user message, separate from the review
 `EDITORIAL_REVIEW_SCHEMA`, and the matching pure parser.
 
 The parser accepts JSON wrapped in prose/fences or preceded by `<think>` reasoning,
-but rejects missing fields, wrong types/statuses, and extra keys. It strips Unicode
-control characters, caps text at 1,000 UTF-16 units, and caps each list at 10 strings
-of 200 units (without splitting surrogate pairs). Empty strings/lists are allowed;
+but rejects missing fields, wrong types/statuses, and extra keys. Whitespace runs
+(including newlines and tabs) become one space before other Unicode controls are
+removed and outer whitespace is trimmed, preserving word boundaries in suggestions.
+Text is capped at 1,000 UTF-16 units, and each list at 10 strings of 200 units
+(without splitting surrogate pairs). Empty strings/lists are allowed;
 title suggestions and the suggested excerpt are optional. Alt-text observations use
 `practicalDetails`, because the agreed result contract has no separate alt-text section.
 Parsing also bounds synchronous work: raw output may contain at most 128 Ki UTF-16

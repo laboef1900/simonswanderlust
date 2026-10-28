@@ -85,7 +85,7 @@ function isReview(value: unknown): value is EditorialReviewResult {
 
 // Match the existing caption contract's UTF-16 limits without splitting a pair.
 function cleanText(value: string, max = 1000): string {
-  const text = value.replace(/\p{C}/gu, '').slice(0, max);
+  const text = value.replace(/\s+/gu, ' ').replace(/\p{C}/gu, '').trim().slice(0, max);
   return /[\uD800-\uDBFF]$/.test(text) ? text.slice(0, -1) : text;
 }
 
