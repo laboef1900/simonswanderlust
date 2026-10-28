@@ -1861,16 +1861,6 @@ export function buildServer(cfg: ServerConfig): AppServer {
       commentsEnabled: cfg.commentsEnabled ?? (() => cfg.settings.get().commentsEnabled === true),
       ipLimiter: cfg.commentIpLimiter ?? fresh.ip,
       globalLimiter: cfg.commentGlobalLimiter ?? fresh.global,
-      // Author replies (#205) are `approved` + `is_author`; the public store's
-      // shape has no flag, so the id set comes from the admin store's approved
-      // list — a read of approved rows only, never pending ones.
-      ...(cfg.commentsAdmin ? {
-        isAuthorIds: async (tk: string) => new Set(
-          (await cfg.commentsAdmin!.list('approved'))
-            .filter((c) => c.translationKey === tk && c.isAuthor)
-            .map((c) => c.id),
-        ),
-      } : {}),
     });
   }
 
