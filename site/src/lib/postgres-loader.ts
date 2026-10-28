@@ -124,7 +124,7 @@ export function postgresTripsLoader(): Loader {
           const input = rowToEntryInput(row, galleryOrigin);
           const data = await parseData({ id: input.id, data: input.data });
           const rendered = await renderMarkdown(input.body);
-          rendered.html = transformBodyImages(rendered.html, input.images, galleryOrigin, descriptions[row.locale]);
+          rendered.html = await transformBodyImages(rendered.html, input.images, galleryOrigin, descriptions[row.locale]);
           store.set({ id: input.id, data, body: input.body, rendered });
         }
         logger.info(`postgres-trips: loaded ${rows.length} published entries`);

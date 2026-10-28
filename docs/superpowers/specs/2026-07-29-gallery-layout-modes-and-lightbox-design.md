@@ -19,6 +19,23 @@ portrait) at the square's height. `COLUMN_WIDTH` is 800, the centred story body 
 column beside the rail is 728 and renders the same rows a tenth narrower). Owner decision, with
 the floor chosen over a strict square after seeing the 37-photo case. See `DESIGN.md` → Galleries.
 
+**Amended 2026-10-28 (#356, owner-approved):** the exact square/evenness objective and
+predecessor ties are unchanged, but exhaustive row-count DPs are replaced by legal-edge
+precomputation, reachable-prefix/suffix filtering and conservative attainable-height
+interval pruning. Current design widths are **1056px column / 1112px breakout**, superseding
+the historical widths above. `partitionRowWork` is one resumable kernel;
+`partitionRows` drains it synchronously and `partitionRowsAsync` awaits an injected scheduler.
+`transformBodyImages(html, images, imageOrigin, galleryMetadata?, options?)` now returns
+`Promise<string>` everywhere. Preview/publication inject real `setImmediate` yields after
+at most 4096 accounted operations; static loaders await completion but do not schedule.
+The visitor itself stays synchronous, collecting gallery replacements that are then awaited.
+No photo cap, approximation, changed layout, reordered photo or slider partition was introduced.
+Measured 400-photo mixed whole-transform medians were 77.47ms (column) / 67.93ms (breakout)
+on Node v26.12.1, Darwin arm64; authenticated runtime static-response interleaving also passed.
+Thin-portrait total work remains larger and superlinear; see the honest bounds and complete
+benchmark protocol in [the #356 specification](2026-10-27-gallery-partition-work-design.md).
+
+
 ## Why this exists
 
 The 07-26 spec deferred Phase 4 behind an explicit gate: *look at a real Phase 3 gallery first —

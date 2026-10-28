@@ -9,7 +9,8 @@ import {
   BREAKOUT_WIDTH,
   ROW_GAP,
   containerWidthFor,
-  partitionRows,
+  partitionRowsAsync,
+  type PartitionOptions,
   readCaptionOverride,
   readCaptionsVisible,
   readLayoutMode,
@@ -254,10 +255,10 @@ function itemNode(
   ]);
 }
 
-/** `breakout` / `column`: photos partitioned into justified rows that stack to a square, at build time. */
-function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 'slider'>) {
+/** `breakout` / `column`: photos partitioned into justified rows that stack to a square, at render time. */
+async function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 'slider'>, options: PartitionOptions) {
   const width = containerWidthFor(mode);
-  const rows = partitionRows(photos.map((p) => p.image.width / p.image.height), width);
+  const rows = await partitionRowsAsync(photos.map((p) => p.image.width / p.image.height), width, options);
   // @ai-note Photos are re-associated with their ratios BY POSITION, which is
   // only sound because partitionRows cannot drop one here: galleryPhotos has
   // already rejected any photo whose width/height are not positive integers, so
@@ -310,12 +311,13 @@ function sliderNode(photos: GalleryPhoto[]) {
   ];
 }
 
-function galleryNode(
+async function galleryNode(
   fenceText: string,
   images: Record<string, ImageDims>,
   imageOrigin: string,
-  metadata?: GalleryMetadata,
-): ReturnType<typeof h> | null {
+  metadata: GalleryMetadata | undefined,
+  options: PartitionOptions,
+): Promise<ReturnType<typeof h> | null> {
   let allowedOrigin: string;
   try {
     allowedOrigin = new URL(imageOrigin).origin;
@@ -325,7 +327,7 @@ function galleryNode(
   const photos = galleryPhotos(fenceText, images, allowedOrigin, metadata);
   if (photos.length === 0) return null;
   const mode = readLayoutMode(fenceText);
-  const children = mode === 'slider' ? sliderNode(photos) : justifiedRows(photos, mode);
+  const children = mode === 'slider' ? sliderNode(photos) : await justifiedRows(photos, mode, options);
   // `not-prose` opts the gallery out of @tailwindcss/typography, which would
   // otherwise apply its own figure/figcaption margins inside StoryPage's
   // `prose` article and fight the row arithmetic.
@@ -345,29 +347,35 @@ function sanitizedBodyTree(html: string) {
  *   the uploader's tsx runtime via `preview.ts` (where it does not). Keep it
  *   pure and env-free.
  * @param galleryMetadata current library alt/caption; only galleries consult it.
+ * @param options request callers inject a real event-loop scheduler; builds drain
+ *   the identical optimizer synchronously. Completion must always be awaited.
  */
-export function transformBodyImages(
+export async function transformBodyImages(
   html: string,
   images: Record<string, ImageDims>,
   imageOrigin: string,
   galleryMetadata?: GalleryMetadata,
-): string {
+  options: PartitionOptions = {},
+): Promise<string> {
   // @ai-warning: post body HTML is rendered from DB-stored Markdown authored
   // through the admin editor (untrusted-ish). Sanitize it FIRST — stripping
   // <script>, inline event handlers, and javascript: URLs — then inject our own
   // trusted <picture> nodes, so the injected nodes keep their srcset/loading
   // attributes while the body itself can't carry stored XSS to the public site.
   const tree = sanitizedBodyTree(html);
+  // The visitor is synchronous. Collect replacements, then await each gallery
+  // before serializing this request-local tree; never give visit an async callback.
+  const galleries: Array<() => Promise<void>> = [];
   visit(tree, 'element', (node, index, parent) => {
     if (index === null || index === undefined || !parent) return;
     if (node.tagName === 'pre') {
       const code = galleryCode(node);
       if (!code) return;
-      const gallery = galleryNode(textOf(code), images, imageOrigin, galleryMetadata);
-      // No resolvable photo ⇒ keep the sanitized <pre> so the URLs stay
-      // visible rather than the block vanishing without a trace.
-      if (!gallery) return SKIP;
-      parent.children[index] = gallery;
+      galleries.push(async () => {
+        const gallery = await galleryNode(textOf(code), images, imageOrigin, galleryMetadata, options);
+        // No resolvable photo ⇒ retain the sanitized fence and its visible URLs.
+        if (gallery) parent.children[index] = gallery;
+      });
       return SKIP;
     }
     if (node.tagName === 'p') {
@@ -401,6 +409,7 @@ export function transformBodyImages(
       });
     }
   });
+  for (const render of galleries) await render();
   return unified().use(rehypeStringify, { allowDangerousHtml: true }).stringify(tree);
 }
 
