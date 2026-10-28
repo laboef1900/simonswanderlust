@@ -1176,3 +1176,6 @@ joins #296's operator-managed `settings.json` row, and #295's rehearsal must res
   semantics and #283 precedence for redirects clarify the approved contract; they are not
   new owner decisions or a claim of a clean independent review. The original approval
   above remains the evidence; no additional approval or owner URL migration is inferred.
+- **Owner clarification (2026-10-27):** reject all Unicode `\p{C}` in identity text with HTTP
+  400, after NFC and before trim, rather than stripping. This supersedes the earlier §5.3
+  stripping rule, does not rewrite stored content, and leaves multiline review prompts unchanged.

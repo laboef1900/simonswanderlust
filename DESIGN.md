@@ -1009,7 +1009,7 @@ and the `<dialog>`s appended to `<body>` share one set:
   dialog is the exception that saves, so it states scope, fields, destination and photo
   count first; overwriting renames the action to **Generate and overwrite**.
 - Settings is one flat document per tab beside a quiet vertical tab index (**AI models**,
-  Images, Comments, Site & backups), not a stack of competing cards. The active tab sits
+  Images, Comments, Site identity, Site & backups), not a stack of competing cards. The active tab sits
   on the accent-soft surface, is mirrored in the URL hash (unknown → AI models) and in
   the title (**Settings · AI models**, the tab in muted weight). AI models holds the
   **Providers** list — name with a small `default` badge, kind and key state as text,
@@ -1024,6 +1024,14 @@ and the `<dialog>`s appended to `<body>` share one set:
   picker, a WebP/AVIF segmented choice and **Preview**, then the original and the result in
   two equal panes (stacked below 48rem) captioned with format, pixels, file size and saving,
   with a synchronized **1:1 pixels** view. Tabs still save independently.
+- Site identity uses the same paired fields for enabled-locale taglines, profile details and
+  admin descriptors, with shared site/author names above. Social links are an ordered list
+  with labelled Move up, Move down and Remove actions; a seventh link cannot be added.
+  Saving checks the loaded revision: conflicts retain the author's inputs until an explicit,
+  confirmed reload. Save never rebuilds. The timing note distinguishes the next public
+  Publish/Rebuild from immediate new author replies and next-load admin chrome; **Rebuild
+  site now** confirms that it uses saved values, not unsaved form input. Domain and asset
+  controls remain owned by #276 and #275.
 - Below 72rem the index becomes a horizontal, wrapping strip above the panel (its arrow
   keys follow) and paired fields stack; provider rows and use-case rows stack below
   48rem. The topbar stays in normal flow.

@@ -17,6 +17,10 @@ import {
   type RouteDumpRow, type RouteRecoverySummary, type StagedRouteRestore,
 } from './gpx-backup.js';
 import { publishedTrackOf, type PublishedTrackRow } from './published-track.js';
+import { IdentityError, IDENTITY_LOCALIZED_FIELDS, normalizeIdentity } from '../../site/src/lib/site-identity.js';
+import { identityFromRow, type IdentityRow } from './site-identity.js';
+import { LEGACY_IDENTITY } from './site-identity-legacy.js';
+import { IDENTITY_ASSET_ROLES, validateIdentityAsset, validateIdentityAssetMetadata, type StoredIdentityAsset } from './site-identity-assets.js';
 
 /**
  * v8 (issue #204) added reader `comments` (no email — the spec stores none;
@@ -27,6 +31,8 @@ import { publishedTrackOf, type PublishedTrackRow } from './published-track.js';
  * v9 adds the optional story-only `posts.title_image`; older dumps restore it as NULL.
  * v10 adds private `post_routes` and a full manifest-matched original archive.
  * These recovery sets deliberately contain private coordinates and timestamps.
+ * v11 adds the singleton site identity and bounded PNG identity assets.
+ * Pre-identity restores recover the legacy brand while retaining a live canonical origin.
  * v7 added media `format` + `encoding`, preserving JPEG-only sets and their
  * snapped retry/recovery profile across restore.
  * v6 added encrypted `app_secrets` (never the encryption master key);
@@ -34,9 +40,11 @@ import { publishedTrackOf, type PublishedTrackRow } from './published-track.js';
  * v3 added `media` + `media_folders`; v2 added `pages`.
  * @ai-warning Bumping this ALSO requires widening the allow-list guard below.
  */
-export const DUMP_VERSION = 10;
+export const DUMP_VERSION = 11;
+/** Introduction boundary, independent of later language/content format additions. */
+export const IDENTITY_DUMP_VERSION = 11;
 /** Every version `readDump` accepts — an allow-list, not a minimum. */
-export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
 export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 /**
@@ -147,6 +155,8 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
   let mediaFolders: Record<string, unknown>[];
   let appSecrets: Record<string, unknown>[];
   let comments: Record<string, unknown>[];
+  let siteIdentity: Record<string, unknown>[];
+  let identityAssets: Record<string, unknown>[];
   let routeRows: RouteDumpRow[] = [];
   let routeArchive: RouteArchiveManifest | undefined;
   try {
@@ -181,6 +191,21 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
     } catch {
       throw new BackupError('Encrypted credentials could not be backed up.');
     }
+    siteIdentity = (await client.query('SELECT * FROM site_identity ORDER BY id')).rows.map((row) => ({
+      ...row,
+      saved_at: row.saved_at instanceof Date ? row.saved_at.toISOString() : row.saved_at,
+      updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+    }));
+    identityAssets = (await client.query(
+      "SELECT role, sha256, width, height, encode(bytes, 'base64') AS bytes, created_at FROM site_identity_assets ORDER BY role",
+    )).rows.map((row) => ({
+      ...row,
+      // PostgreSQL's base64 encoder wraps at 76 columns; dumps use canonical base64.
+      bytes: typeof row.bytes === 'string' ? row.bytes.replace(/\n/g, '') : row.bytes,
+      created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+    }));
+    await validateIdentityAssets({ version: DUMP_VERSION, createdAt: now.toISOString(),
+      tables: { users, posts, site_identity: siteIdentity, site_identity_assets: identityAssets } });
     const rawRoutes = (await client.query(
       'SELECT translation_key, version, geometry, source_id, source_sha256, source_bytes, updated_at FROM post_routes ORDER BY translation_key',
     )).rows.map((row) => ({
@@ -206,7 +231,8 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const payload = gzipSync(JSON.stringify({
       version: DUMP_VERSION, createdAt: now.toISOString(),
-      tables: { users, posts, pages, media, media_folders: mediaFolders, app_secrets: appSecrets, comments, post_routes: routeRows },
+      tables: { users, posts, pages, media, media_folders: mediaFolders, app_secrets: appSecrets, comments,
+        post_routes: routeRows, site_identity: siteIdentity, site_identity_assets: identityAssets },
       routeArchive,
     }));
     // Claim the final name atomically: a same-second backup or pre-restore
@@ -692,7 +718,82 @@ export interface Dump {
     app_secrets?: SecretDumpRow[];
     comments?: Record<string, unknown>[];
     post_routes?: RouteDumpRow[];
+    site_identity?: Record<string, unknown>[];
+    site_identity_assets?: Record<string, unknown>[];
   };
+}
+
+function identityFailure(field: string): never { throw new BackupError(`Invalid identity field in backup: ${field}.`); }
+function isIdentityTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string'
+    || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(value)
+    || !Number.isFinite(Date.parse(value))) return false;
+  // Date.parse normalizes impossible dates such as February 30; Postgres does not.
+  const day = new Date(`${value.slice(0, 10)}T00:00:00Z`);
+  return Number.isFinite(day.getTime()) && day.toISOString().slice(0, 10) === value.slice(0, 10);
+}
+
+/** Validate metadata and the complete stored locale maps, never an active projection.
+ * Version, not field presence, decides whether legacy recovery is permitted. */
+function validateDumpIdentity(dump: Dump): void {
+  const rows = dump.tables.site_identity;
+  const assets = dump.tables.site_identity_assets;
+  if (dump.version < IDENTITY_DUMP_VERSION) {
+    if (rows !== undefined || assets !== undefined) identityFailure('version');
+    return;
+  }
+  if (!Array.isArray(rows) || rows.length !== 1) identityFailure('site_identity');
+  const row = rows[0];
+  if (!row || typeof row !== 'object' || Array.isArray(row)) identityFailure('site_identity');
+  if (row.id !== true) identityFailure('id');
+  if (!Number.isInteger(row.revision) || (row.revision as number) < 1 || (row.revision as number) > 2147483647) identityFailure('revision');
+  if (!['neutral', 'legacy', 'restored-legacy'].includes(row.seed_source as string)) identityFailure('seed_source');
+  if (row.saved_at !== null && !isIdentityTimestamp(row.saved_at)) identityFailure('saved_at');
+  if (!isIdentityTimestamp(row.updated_at)) identityFailure('updated_at');
+  try {
+    const identity = identityFromRow(row as unknown as IdentityRow);
+    row.site_name = identity.siteName;
+    row.author_name = identity.authorName;
+    row.canonical_origin = identity.canonicalOrigin;
+    row.localized = Object.fromEntries(IDENTITY_LOCALIZED_FIELDS
+      .filter((field) => Object.hasOwn(row.localized as object, field)).map((field) => [field, identity[field]]));
+    row.social_links = identity.socialLinks;
+  } catch (error) {
+    identityFailure(error instanceof IdentityError ? error.field : 'site_identity');
+  }
+  if (!Array.isArray(assets) || assets.length > IDENTITY_ASSET_ROLES.length) identityFailure('site_identity_assets');
+  const roles = new Set<string>();
+  for (const asset of assets) {
+    if (!asset || typeof asset !== 'object' || Array.isArray(asset) || typeof asset.role !== 'string' || !IDENTITY_ASSET_ROLES.includes(asset.role as typeof IDENTITY_ASSET_ROLES[number])
+      || roles.has(asset.role)) identityFailure('assets.role');
+    roles.add(asset.role);
+    if (typeof asset.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(asset.sha256)) identityFailure('assets.sha256');
+    if (!isIdentityTimestamp(asset.created_at)) identityFailure('assets.created_at');
+    if (typeof asset.bytes !== 'string' || asset.bytes.length > 4 * Math.ceil(262144 / 3)) identityFailure('assets.bytes');
+    const bytes = Buffer.from(asset.bytes, 'base64');
+    if (!bytes.length || bytes.length > 262144 || bytes.toString('base64') !== asset.bytes) identityFailure('assets.bytes');
+    try {
+      validateIdentityAssetMetadata({ ...asset, bytes } as StoredIdentityAsset);
+    } catch (error) {
+      identityFailure(error instanceof IdentityError ? error.field : 'assets');
+    }
+  }
+  const faviconCount = [...roles].filter((role) => role !== 'logo').length;
+  if (faviconCount !== 0 && faviconCount !== 3) identityFailure('assets.favicon');
+}
+
+/** Full decoding is asynchronous in sharp. Both restore entry points call this
+ * before staging files, capturing the undo set, or opening a mutation transaction.
+ * `readDump` retains its synchronous structural/hash-validation API. */
+export async function validateIdentityAssets(dump: Dump): Promise<void> {
+  validateDumpIdentity(dump);
+  for (const asset of dump.tables.site_identity_assets ?? []) {
+    try {
+      await validateIdentityAsset({ ...asset, bytes: Buffer.from(asset.bytes as string, 'base64') } as StoredIdentityAsset);
+    } catch (error) {
+      identityFailure(error instanceof IdentityError ? error.field : 'assets');
+    }
+  }
 }
 
 /** Parse a dump file and reject versions this code cannot restore. Shared by
@@ -763,6 +864,7 @@ export function readDump(filePath: string): Dump {
   } else if (dump.tables.post_routes !== undefined || dump.routeArchive !== undefined) {
     throw new BackupError('Private routes require a version 10 recovery set.');
   }
+  validateDumpIdentity(dump);
   return dump;
 }
 
@@ -798,6 +900,7 @@ export async function restoreDatabase(pool: DbPool, filePath: string, options: R
 
 async function restoreDatabaseContents(pool: DbPool, filePath: string, options: RestoreOptions): Promise<RestoreCounts> {
   const dump = readDump(filePath);
+  await validateIdentityAssets(dump);
   const routes = dump.tables.post_routes ?? [];
   if (routes.length && !options.routeFiles) throw new BackupError('Private route storage is required for this restore.');
   let staged: StagedRouteRestore | undefined;
@@ -813,6 +916,41 @@ async function restoreDatabaseContents(pool: DbPool, filePath: string, options: 
     client = await pool.connect();
     await options.assertOwner?.();
     await client.query('BEGIN');
+    // Read before replacing anything. Legacy recovery keeps the destination's
+    // configured domain, but never its text or assets.
+    const liveOrigin = dump.version < IDENTITY_DUMP_VERSION
+      ? (await client.query('SELECT canonical_origin FROM site_identity WHERE id = true')).rows[0]?.canonical_origin
+      : null;
+    let legacy = LEGACY_IDENTITY;
+    if (dump.version < IDENTITY_DUMP_VERSION) {
+      try { legacy = normalizeIdentity({ ...legacy, canonicalOrigin: liveOrigin ?? legacy.canonicalOrigin }); }
+      catch (error) { identityFailure(error instanceof IdentityError ? error.field : 'site_identity'); }
+    }
+    await client.query('DELETE FROM site_identity_assets');
+    await client.query('DELETE FROM site_identity');
+    if (dump.version >= IDENTITY_DUMP_VERSION) {
+      const row = dump.tables.site_identity![0]!;
+      await client.query(
+        `INSERT INTO site_identity (id, revision, seed_source, saved_at, updated_at, site_name, author_name, canonical_origin, localized, social_links)
+         VALUES (true,$1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb)`,
+        [row.revision, row.seed_source, row.saved_at, row.updated_at, row.site_name, row.author_name,
+          row.canonical_origin, asJsonb(row.localized), asJsonb(row.social_links)],
+      );
+      for (const asset of dump.tables.site_identity_assets!) {
+        await client.query(
+          'INSERT INTO site_identity_assets (role, sha256, width, height, bytes, created_at) VALUES ($1,$2,$3,$4,$5,$6)',
+          [asset.role, asset.sha256, asset.width, asset.height, Buffer.from(asset.bytes as string, 'base64'), asset.created_at],
+        );
+      }
+    } else {
+      await client.query(
+        `INSERT INTO site_identity (id, revision, seed_source, saved_at, site_name, author_name, canonical_origin, localized, social_links)
+         VALUES (true,1,'restored-legacy',NULL,$1,$2,$3,$4::jsonb,$5::jsonb)`,
+        [legacy.siteName, legacy.authorName, legacy.canonicalOrigin,
+          asJsonb({ tagline: legacy.tagline, aboutRole: legacy.aboutRole, aboutGear: legacy.aboutGear,
+            studioDescriptor: legacy.studioDescriptor }), asJsonb(legacy.socialLinks)],
+      );
+    }
     // Comments are always replaced: an older dump (no `comments` key) restores
     // an EMPTY table rather than leaving live comments attached to posts the
     // dump may not contain (comments spec M14).

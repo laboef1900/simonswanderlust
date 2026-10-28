@@ -1,3 +1,4 @@
+import { seedSiteIdentity } from '../src/site-identity.js';
 import { publishTokens } from './publish-tokens.js';
 import { createPublicTrackWorker, type PublicTrackWorker } from '../src/gpx-public-worker.js';
 import { randomUUID } from 'node:crypto';
@@ -73,6 +74,7 @@ maybe('private GPX post deletion and durable cleanup', () => {
     await observer.query(`CREATE SCHEMA ${schema}`);
     pool = new pg.Pool({ connectionString: url, options: `-c search_path=${schema}` });
     await ensureSchema(pool);
+    await seedSiteIdentity(pool);
     root = await mkdtemp(join(await realpath(tmpdir()), 'gpx-delete-'));
     backupDir = join(root, 'backup', 'db');
     for (const dir of ['images', 'site', 'backup/db']) await mkdir(join(root, dir), { recursive: true });

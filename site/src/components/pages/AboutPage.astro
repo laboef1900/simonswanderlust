@@ -5,6 +5,7 @@ import { getCollection, getEntry, render } from 'astro:content';
 import { useTranslations, type Locale } from '../../i18n/ui';
 import { aboutPath } from '../../lib/paths';
 import { byLocale, tripStats } from '../../lib/trips';
+import { identity } from '../../lib/build-identity';
 
 interface Props {
   locale: Locale;
@@ -42,10 +43,10 @@ const description = plain ? plain.slice(0, 150) : t('about.title');
             </svg>
           </div>
           <div>
-            <h2 class="text-xl font-extrabold text-navy">Simon</h2>
-            <p class="font-mono text-xs font-semibold tracking-widest text-brand-red uppercase">
-              {t('about.role')}
-            </p>
+            {identity.authorName && <h2 class="text-xl font-extrabold text-navy">{identity.authorName}</h2>}
+            {identity.aboutRole[locale] && <p class="font-mono text-xs font-semibold tracking-widest text-brand-red uppercase">
+              {identity.aboutRole[locale]}
+            </p>}
           </div>
         </div>
 
@@ -64,12 +65,12 @@ const description = plain ? plain.slice(0, 150) : t('about.title');
           </div>
         </div>
 
-        <div class="mt-6 rounded border border-navy/10 bg-navy/5 p-4 text-xs text-ink/75">
+        {identity.aboutGear[locale] && <div class="mt-6 rounded border border-navy/10 bg-navy/5 p-4 text-xs text-ink/75">
           <p class="font-mono font-semibold uppercase tracking-wider text-navy">
             {t('about.equipment')}
           </p>
-          <p class="mt-1">{t('about.gear')}</p>
-        </div>
+          <p class="mt-1">{identity.aboutGear[locale]}</p>
+        </div>}
       </div>
 
       <!-- Main Content Block -->

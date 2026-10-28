@@ -12,6 +12,7 @@ import { pgPostStore } from '../src/posts.js';
 import { pgUserStore } from '../src/users.js';
 import { pgSecretsStore } from '../src/secrets.js';
 
+import type { IdentityRecord } from '../src/site-identity.js';
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
 
@@ -163,6 +164,36 @@ maybe('production boot (src/main.ts, Postgres)', () => {
     const after = await fetch(`${base}/comments?tk=${tk}`);
     const listed = commentsOf(await after.json());
     expect(listed.map((c) => [c.authorName, c.body])).toEqual([['Leserin', 'Schöne Reise!']]);
+
+    const identityResponse = await fetch(`${base}/settings/identity`, { headers: { cookie } });
+    expect(identityResponse.status).toBe(200);
+    const original = await identityResponse.json() as IdentityRecord;
+    const { canonicalOrigin: _reserved, ...editable } = original.identity;
+    let revision = original.revision;
+    try {
+      for (const authorName of ['Configured author', 'Renamed author', '']) {
+        const saved = await fetch(`${base}/settings/identity`, {
+          method: 'PUT', headers: { 'content-type': 'application/json', cookie },
+          body: JSON.stringify({ revision, identity: { ...editable, authorName } }),
+        });
+        expect(saved.status).toBe(200);
+        revision = (await saved.json() as { revision: number }).revision;
+        const reply = await fetch(`${base}/moderation/comments/${String(id)}/reply`, {
+          method: 'POST', headers: { 'content-type': 'application/json', cookie },
+          body: JSON.stringify({ body: 'Thank you for reading.' }),
+        });
+        expect(reply.status).toBe(201);
+      }
+      const publicReplies = commentsOf(await (await fetch(`${base}/comments?tk=${tk}`)).json());
+      expect(publicReplies.map((comment) => comment.authorName)).toEqual(['Leserin', 'Configured author', 'Renamed author', 'Author']);
+      expect(JSON.stringify(publicReplies)).not.toContain(username);
+    } finally {
+      const restored = await fetch(`${base}/settings/identity`, {
+        method: 'PUT', headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ revision, identity: editable }),
+      });
+      expect(restored.status).toBe(200);
+    }
   });
 
   it('migrated a legacy settings file and the shared key to the provider registry before listening', async () => {

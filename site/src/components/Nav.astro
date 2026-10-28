@@ -2,6 +2,7 @@
 import { useTranslations, type Locale } from '../i18n/ui';
 import { aboutPath, homePath, mapPath } from '../lib/paths';
 import LangSwitcher from './LangSwitcher.astro';
+import { identitySiteName } from '../lib/build-identity';
 
 interface Props {
   locale: Locale;
@@ -43,7 +44,7 @@ const idle = 'text-ink/80 hover:text-brand-red';
       href={homePath(locale)}
       class={`${link} -ml-2 self-start text-sm font-extrabold tracking-wide text-navy uppercase hover:text-brand-red sm:self-auto`}
     >
-      {t('site.title')}
+      {identitySiteName(locale)}
     </a>
     <nav
       aria-label={t('nav.ariaLabel')}

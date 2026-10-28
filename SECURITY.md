@@ -208,8 +208,48 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
   value or translation key (spec invariant 11). A store failure is caught in the route and logged
   as the driver message only, because the global error handler logs `req.url`, which on `GET`
   carries the key. The client still gets the sanitized 500.
+- **Author reply identity (#274):** new admin replies store the cached site-identity
+  `authorName`, falling back to the literal `Author` when empty. The login username is never
+  used as the public display name. Existing comment rows keep their historical names.
 - **Not done by design:** no `workLock`, no rebuild (comments are runtime, never baked), no
   `safeFetch` or any outbound call, no markdown/HTML, no `parentId`.
+
+### Site identity
+
+The [owner-approved contract](docs/superpowers/specs/2026-10-27-issue-273-site-identity-design.md)
+is implemented in stages. **#274** adds admin-only, `no-store` `GET`/`PUT /settings/identity`,
+revision-conflict protection, text/social settings, boot seeding and shared build snapshots.
+Identity lives in Postgres with content; operational settings remain in `settings.json`.
+
+- `site/src/lib/site-identity.ts` is the shared validator for saves, stored rows, builds and
+  restores. Names/localized text use NFC, reject any `\p{C}` before trimming, then enforce field caps.
+  Every retained DE/EN map is checked, including inactive values; unknown locale keys and malformed
+  maps are refused. No missing locale is filled with another locale's text.
+- Social links are bounded (six), `https:` only, without credentials, whitespace/control
+  characters, IP literals or loopback destinations. Labels are plain text. Rendered links use
+  escaped text/attribute interpolation and `rel="noopener noreferrer"`, never raw HTML.
+- Identity reaches HTML/JSON-LD/RSS through escaping serializers; admin consumers use
+  `textContent`. The unauthenticated copy script exposes only site name, the localized studio
+  descriptor and reserved canonical origin, never author identity, social links or credentials.
+- Runtime identity reads use a boot-loaded cache refreshed on successful saves, not a
+  per-request DB lookup. The build captures identity, assets and content in one exported
+  PostgreSQL snapshot under the exclusive lock; child loaders import it before reading.
+  Malformed snapshots fail closed, preserving the live release. Builder-set internal env
+  values override inherited ones. The exporter is bounded by the build deadline and released.
+- Fresh databases seed neutral; evidence of a pre-existing user/post seeds legacy once.
+  Neither seed sets `saved_at`; a later boot never overwrites a saved or neutral identity.
+- Restore treats a dump as untrusted. v11 requires both tables, valid singleton metadata,
+  full-field validation, canonical base64 assets, unique roles and complete favicon groups.
+  The shared asset validator checks SHA-256, ≤256 KiB, PNG format, role dimensions and full
+  pixel decode, and refuses embedded EXIF/XMP/IPTC/ICC. The CLI and direct restore perform
+  decoding before mutation. Recovered bytes are never repaired or silently skipped.
+
+**Not implemented by #274:** logo/favicon upload routes and rendering (#275); canonical-origin
+editing, topology checks, comment-Origin switching, noindex/robots and outbound headers (#276).
+Canonical values currently receive serialized-origin shape validation only. The comment Origin
+source documented above is unchanged by #274; #319/#276 own replacing its image-origin fallback.
+Do not infer these future controls from the reserved columns/snapshot fields. Gallery image
+allow-listing, existing upload limits and EXIF policy are unchanged.
 
 ### Media metadata redaction
 
@@ -670,8 +710,8 @@ text, the configured image origin, and a known `ready` media item. Single and bu
 apply the same checks. Working and published title references both participate in media usage
 and deletion protection, so replacing a draft banner cannot orphan the live banner.
 Existing upload authorization, EXIF filtering and preview CSP remain unchanged. The
-`/admin/editor-image-copy.js` asset contains only public DE/EN interface strings, never
-post data or credentials. Schema and v9 backup recovery are documented in the
+`/admin/editor-image-copy.js` asset contains public DE/EN interface strings and the restricted
+`window.SiteIdentity` chrome subset described above, never post data or credentials. Schema and v9 backup recovery are documented in the
 [approved title-image spec](docs/superpowers/specs/2026-10-16-story-title-image-design.md).
 
 > We deliberately use a maintained, allow-list sanitizer rather than hand-rolled escaping — the
@@ -880,6 +920,13 @@ deliberate trade-off, not an oversight:
   logical dumps do not capture the settings file. A lost master key requires reissuing
   the provider credential, not bypassing encryption. Removing a row does not revoke the
   key externally or remove copies in old backups.
+- Version 11 (`IDENTITY_DUMP_VERSION`) adds `site_identity` and `site_identity_assets` to the
+  same snapshot and restore transaction. Missing identity tables in identity-capable formats
+  are corruption. Invalid metadata, retained localized text, social URLs or asset bytes refuse
+  the whole restore before replacement. Supported older formats restore the legacy brand,
+  unset `saved_at`, clear assets and keep the live canonical origin if set; otherwise they use
+  the legacy origin. The CLI announces the legacy recovery and includes live identity/assets
+  in the verified undo set. Restart loads the restored cache; public output waits for Rebuild.
 - Image archives (`/data/backup/db/images-*.tar`) contain no password hashes — only the already
   publicly served image files — but their download route stays behind the same admin gate and
   strict filename validation as the dumps.
