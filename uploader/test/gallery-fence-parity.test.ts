@@ -166,7 +166,8 @@ describe('invalid metadata obeys the same authoritative gallery definition', () 
       expect(edit.blocked).toBeTruthy();
       expect(body.slice(0, edit.start) + edit.text + body.slice(edit.end)).toBe(body);
       const rendered = await transformBodyImages(await renderMarkdown(body), images, 'https://i');
-      expect(rendered).toContain('Original caption');
+      expect(rendered).toContain('alt="Original"');
+      expect(rendered.includes('Original caption')).toBe(!body.includes('#captions: hidden'));
       expect(rendered).not.toContain('must not apply');
     });
   }

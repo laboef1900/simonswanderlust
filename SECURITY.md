@@ -788,13 +788,22 @@ protections, so they carry their own:
   matters is that hastscript treats a node-shaped object in a children array **as a node**, so a
   caption of `{"type":"raw","value":"<script>…</script>"}` would emit a live script tag — the
   render boundary additionally coerces with `String()` as a backstop.
+- **Photo metadata is line-atomic** (#355, owner-approved preserve-and-warn). The shared
+  `uploader/public/gallery-photo-line.js` codec validates every non-empty field before the
+  stores, exporter, browser tools or caption-override renderer use any of that line's metadata.
+  Invalid lines remain byte-identical and supply no partial map/override update. Successful
+  save responses carry bounded transient diagnostics with submitted-source coordinates;
+  diagnostics are text, never HTML or persisted fields. Visual rewrites cannot replace a
+  partially parsed line. This adds no publication refusal: preserved malformed text remains
+  untrusted and may not render as the author intended. Origin, HTTP(S), dimension/format,
+  map-validation, escaping, Media precedence, preview CSP and authorization guards remain.
 - **Gallery-local captions are fence text, rendered as text** (2026-10-19, owner-approved). A
   photo line's `caption-override="…"` and the fence's `#captions: hidden` directive are read by
-  `readCaptionOverride` / `readCaptionsVisible` in `site/src/lib/gallery-layout.ts` — the same
-  readers the save normalizer and MDX exporter in `uploader/src/body-content.ts` use. The override
-  is author-controlled text the sanitizer never sees, so it only ever becomes a hast **text node**
+  `readCaptionOverride` in the shared photo-line codec and `readCaptionsVisible` in
+  `site/src/lib/gallery-layout.ts` — the same readers used by the normalizer and MDX exporter.
+  The override is author-controlled text the sanitizer never sees, so it only becomes a hast **text node**
   (`String()`-coerced, entity-escaped on output): HTML or fence syntax in it renders literally.
-  On the line it is stored `escapeMeta`-encoded and capped at 1,000 characters, so it can neither
+  On the line it is stored entity-encoded and capped at 1,000 characters, so it can neither
   end the photo line, add a `|` field, nor fake a directive line. It changes only the caption:
   the URL is still read from the line's first field and passes the same origin, dimension and
   format guards before any override is consulted, and alt stays library/`images`-map

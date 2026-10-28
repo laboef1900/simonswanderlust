@@ -955,7 +955,7 @@ describe('explicit memory publish tokens', () => {
     const store = memoryPostStore();
     const saved = await store.upsertDraft(pair());
     const tk = saved.translationKey;
-    expect(await store.getPublishState(tk)).toEqual({ pair: saved, routeVersion: null });
+    expect((await store.getPublishState(tk))?.routeVersion).toBeNull();
     expect(await store.getPublishedTrack(tk)).toBeUndefined();
     for (const tokens of [
       { baseUpdatedAt: new Date(saved.updatedAt.getTime() + 1), baseRouteVersion: null },

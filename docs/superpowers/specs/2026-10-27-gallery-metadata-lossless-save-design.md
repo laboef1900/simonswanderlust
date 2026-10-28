@@ -1,7 +1,7 @@
 # #355 — Preserve malformed gallery metadata on save
 
 Date: 2026-10-27
-Status: **OWNER APPROVED 2026-10-28 — preserve line and warn.** Implementation and verification remain required.
+Status: **OWNER APPROVED 2026-10-28 — preserve line and warn.** Initial implementation and runtime qualification completed below; final dependency integration remains separately qualified.
 Risk: High — author content normalization and post-sanitize caption inputs.
 Baseline: `11e16d1b8e43141d296b801ee663a351ae3fe415`. Issue reproductions are accepted evidence; no tests/probes or code/data changes were performed for this proposal.
 
@@ -52,7 +52,7 @@ Affected implementation: `uploader/src/body-content.ts`, store normalization in 
 
 Reconfirm/update `SECURITY.md` “Content injected after sanitize” to describe the shared line codec and lossless-invalid-input behavior. Origin equality, HTTP(S) checks, dimension/format validation, `String()` coercion, hast escaping, images-map validation, preview CSP and authorization stay unchanged. Preserved text is still untrusted; neither diagnostics nor renderer may use it as HTML. No fetching metadata-like Markdown links, no Media writes, no EXIF/original exposure, slug changes, schema changes or owner-data cleanup.
 
-## Required verification after approval (not run)
+## Required verification
 
 1. Every issue probe and malformed caption-override, with and without an existing map entry: stored source byte-identical, no metadata contribution, actionable coordinates. Cover LF/CRLF, Unicode before the field, multiple malformed fields, an unknown field following a valid override, and a valid-looking suffix after a raw pipe.
 2. A mixed document/pair: malformed lines preserved, unrelated valid lines still normalize, unrelated map entries and opposite-locale content preserved; re-save is idempotent. Two galleries sharing a URL do not leak local overrides.
@@ -61,7 +61,7 @@ Reconfirm/update `SECURITY.md` “Content injected after sanitize” to describe
 5. Save → export → paste/import → re-save retains malformed source; inline-image or BodyImage-looking caption text is never interpreted as another image or fetched. Export must not claim to repair malformed metadata. Valid export round-trips remain unchanged.
 6. Browser save/reopen, linter focus, picker refusal/Cancel, inline-alt behavior, undo and DE/EN messages. Repair restores normal visual editing without removing other photos. Run the same cases inside #354's accepted nested/tilde/indented/info-string forms, testing original source coordinates rather than flattened logical-line coordinates.
    Include a multiline `<BodyImage … />` before the malformed gallery and edits made while Save is pending: normalization and later typing must not make a warning link select unrelated text. A warning that no longer exists in current text must not cause a stale jump.
-7. Existing gallery-caption escaping, origin-spoofing, image-map validation and preview security tests stay enforced. Parent runs affected suites, type checks, isolated PostgreSQL and browser checks after implementation; none is claimed here.
+7. Existing gallery-caption escaping, origin-spoofing, image-map validation and preview security tests stay enforced. Parent runs affected suites, type checks, isolated PostgreSQL and browser checks after implementation; qualification is recorded below.
 
 ## Recovery and exact owner approval
 
@@ -70,3 +70,31 @@ No corpus migration or automatic repair. Already deleted metadata cannot be reco
 Retain the normal pre-rollout database backup and existing release. If a regression is found, contain gallery writes/visual rewrites rather than reverting to the known lossy normalizer and asking the author to re-save. Retained malformed source needs no rollback migration. A targeted fix can resume normalization after the author repairs the line; restoring a prior draft requires owner review and must not overwrite unrelated later edits.
 
 **Owner approval recorded 2026-10-28:** “Preserve line and warn.” Successful line-atomic preservation and mandatory actionable save warnings are approved, including page-save/rebuild behavior and unchanged publication policy. Whole-request rejection was not selected. This does not authorize content repair, owner-data changes, deployment or merge.
+
+## Initial integrated qualification (2026-10-28)
+
+Full six-check wave `1793227694004_65564` passed, including both application suites,
+type checks, isolated PostgreSQL integration, Astro check and build. The browser VM
+harness now loads the same shared codec used by the production ES modules; its
+declaration file follows the repository's existing shared-JavaScript typing pattern.
+
+Actual `main.ts`, API, Postgres, export, preview and released-page evidence is in
+`.local/backlog-execution-2026-10-27/issue-355-runtime/RESULT.json`, with source hashes,
+thirteen screenshots and cleanup. It covers all five issue probes plus malformed
+override, with/without maps; exact invalid-line preservation and no partial lift;
+submitted CRLF/Unicode/multiline-BodyImage coordinates; nested and raw-HTML galleries;
+export/editor/save roundtrips; and no fetch from image-looking caption text.
+
+Measured 1440px and fresh 390px DE/EN editing proved persistent warnings, safe picker
+and inline controls, repair and restored editing, Cancel and undo. Held real save
+responses proved current-source focus and no stale jump after repair. Actual About
+save/build retained warnings, while a concurrent-write 409 remained an honest failure.
+Malformed content still published successfully; repaired output escaped captions and
+retained Media precedence. GET/revisions stayed free of transient warning fields.
+
+This proof uses the #354 dependency at `9492981`, before its later authentication
+recovery fix, and does not claim to qualify the later combined source. The clipboard
+helper failure and recovery through native input are disclosed in the evidence.
+Temporary accounts/sessions, runtime, browser profile and launcher were removed;
+synthetic fixtures/releases remain. No owner content, physical device, external
+provider, deployment or merge was exercised.
