@@ -308,7 +308,9 @@ and link activation for full/mini maps at narrow/wide sizes, without WebGL.
 Filesystem tests exercise notice collection, nested dependency notices, missing
 notice reporting, verbatim preservation, localized link targets, regeneration,
 exact source archive/tree links, unknown local provenance and malformed/injected
-source identifiers. They are added but **not run by this worker**.
+source identifiers. The inventory workers did not run them; the parent owns
+automated verification. The separate runtime qualification below does not
+substitute for those suites.
 
 1. Preserve historical artifacts and apply the recorded findings to remediation
    planning for already-public `0.17.1`. Do not claim other historical versions
@@ -331,12 +333,89 @@ source identifiers. They are added but **not run by this worker**.
    availability. Publish clear Corresponding Source directions alongside each
    authorized image/release; a source archive of project files alone is not
    automatically the complete native dependency Corresponding Source.
-4. Parent runs affected suites, typechecks, image/static-path inspection and
-   DE/EN desktop/mobile browser verification (public full/mini and admin maps,
-   keyboard disclosure/link access, legal indexes and notices).
+4. Parent owns affected suites, typechecks and integrated image inspection.
+   The 2026-10-28 local static-path/browser qualification below covers the
+   public full/mini maps, admin context map, keyboard access and legal delivery.
 
 These duties include the **already-public `simonswanderlust-app` package**,
 not just the future renamed package. The approved license and this packaging
-patch do not retroactively certify prior distributions. No application build,
-test, typecheck, lint, formatter, browser, deployment or owner-data operation
-was performed by this worker. The inventory generator is metadata-only.
+patch do not retroactively certify prior distributions. The original inventory
+work was metadata-only; the following separately assigned runtime smoke used
+only a disposable database and synthetic content, not owner data.
+
+### Local runtime qualification — 2026-10-28
+
+Qualified the actual `uploader/src/main.ts` at
+`9e79c65759c8f2f4268e0f81427e489305d14383`, after the final #369 integration,
+on loopback port **33391** with **`swl_291_dev`**. Storage, settings, backups,
+releases and map fixtures stayed under the issue-291 worktree's `.issue-runtime`.
+An inherited base URL was corrected by explicitly loading the isolated
+environment before publishing. The real Publish endpoint returned **200** and
+`build.ok: true`, generating release `1793215802782-22359-0000` from one synthetic
+DE/EN story pair and a generated image. This was a runtime-required build, not
+another automated-suite run.
+
+Managed Chromium exercised the following at **1440px and 390px**:
+
+- DE and EN public footer links opened their localized legal indexes with
+  **Enter**. From each index, keyboard activation reached the license, rights
+  NOTICE, inventory and aggregate third-party notices. The admin shell's source
+  link worked on desktop and through the mobile menu.
+- Real WebGL full maps and story mini-maps in both locales displayed linked
+  OpenStreetMap credit, the exact **ESA WorldCover 2020** credit and CC BY 4.0.
+  Compact disclosures closed/reopened with Enter; Tab traversed all three
+  attribution links. Actual link activation reached the OSM copyright and
+  Creative Commons destinations. Attribution remained inside the map and no
+  document-width overflow was observed.
+- The admin GPX context map rendered a four-point synthetic preview and its
+  linked **OpenStreetMap-only** credit, without inventing an ESA attribution
+  for its non-landcover style. Its mobile disclosure and keyboard link worked;
+  desktop credit stayed directly visible. Loaded desktop/mobile screenshots
+  show the basemap and route, not only an empty canvas.
+
+Both served legal trees were byte-matched to their inputs: LICENSE (**34,523
+bytes**, SHA-256 above), NOTICE, inventory, evidence files, notice-gap report,
+aggregate notices and source record. Reconstructing the aggregates from their
+installed original notice files and retained supplements matched exactly:
+
+| Tree | Installed notice texts | Supplements | Scan gaps | Aggregate bytes | SHA-256 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Site | 370 | 15 | 17 | 14,201,435 | `259aafc74b74ae010f923bc3e8e903b034c7d8c47df2ad5f4484eaf8e3690e98` |
+| Uploader | 210 | 15 | 13 | 13,944,223 | `4927ce1defddabd2fa3f24565c69b5a77ade3f189ee5df796f52e85c9dd70b36` |
+
+**54 served browser/font assets** matched their copied package inputs or emitted
+release files; all **27 emitted public font files** also matched their original
+installed font bytes. The delivered aggregates retain the installed Inter,
+IBM Plex Mono, MapLibre, fflate, Protomaps theme, EasyMDE, CodeMirror, htm and
+Preact notices, plus reviewed PMTiles and Font Awesome supplements. This proves
+delivery/correspondence of the inspected texts and assets, not a complete legal
+analysis of every embedded bundle component.
+
+The actual local runtime honestly served **`null`** in both source records and
+the localized **unknown provenance** explanation, without a release-source
+claim. Separately, an isolated copy of the real generator exercised both trees
+and locales with the already-recorded historical full revision
+`1ed903466ff62fbd62b12cbb82f4e619b65d0219`: exact `/archive/<revision>.tar.gz`
+and `/tree/<revision>` paths were emitted. That fixture establishes path
+generation only; it was never installed as this runtime's provenance and does
+not establish correspondence of current code to that historical revision.
+
+Evidence: `.issue-runtime/license-smoke/proof.json` records response results,
+per-file bytes/hashes, notice composition, asset origins, keyboard/overflow
+observations and limits; adjacent PNGs preserve rendered proof. Synthetic
+content, image, GPX fixture and release output were retained. The owned preview
+was discarded, temporary administrator and all its sessions removed, and the
+owned service/tab closed; shared Postgres was left running. No commits, pushes,
+deployment, owner-data mutation, tests, typechecks, lint or formatter were run
+by this runtime worker.
+
+**Limits remain:** the basemap/glyph files were retained historical #347
+fixtures, not a new image build. Final pinned glyph notice/revision delivery and
+integrated image qualification remain the image worker's separate evidence.
+The full-public mobile capture proves attribution visibility and keyboard access,
+not completed basemap painting: its canvas is gray, with no established cause.
+Geography is visible in the retained full-public desktop, story mini-map
+desktop/mobile and admin-map desktop/mobile captures.
+This smoke establishes neither native binary reproducibility nor complete
+Corresponding Source/relink provision, resolves none of the recorded genuine
+upstream notice gaps, and grants no legal clearance or retroactive compliance.
