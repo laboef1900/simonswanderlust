@@ -5,10 +5,40 @@ How to write a new travel post, add its photos, and get it live. Three stages:
 
 **Post content lives in Postgres** — not in git or baked into the Docker image. The in-admin
 editor (Phase B) is the authoring interface: you write DE and EN content directly in the browser
-and hit **Publish** to trigger a rebuild. Photos are kept out of git and Postgres: they go to
+and hit **Publish** to trigger a rebuild. Story photos are kept out of git and Postgres: they go to
 the self-hosted **image uploader**, which stores optimized variants on the server and serves them
 from `https://img.simonswanderlust.com`. A post only ever references image **URLs** — and you
 can upload images inline from the editor without visiting a separate page.
+
+---
+
+## Site name, logo and favicon (admin only)
+
+Open **Settings → Site identity** to edit the public name, author, localized text and social
+links. The About page's body remains separate content. Save stores identity without
+rebuilding; the public site changes at the next **Publish** or **Rebuild site now**.
+
+Logo and favicon have their own upload/remove actions, separate from the text Save:
+
+- Choose one PNG, JPEG or **static WebP**, at most **2 MiB** and **4096 × 4096 pixels**.
+  SVG and animated images are not accepted. A logo must be at least 32 pixels tall;
+  a favicon source must be at least 180 × 180 pixels.
+- Upload saves the selected file after normalization to metadata-free PNG. A logo is fitted
+  inside 960 × 240 without enlargement. A favicon generates the 32px and 192px icons plus
+  a 180px Apple icon on the site's light canvas background.
+- The saved/custom indicator describes the saved settings, not the currently published site.
+  Selecting a filename alone does not save it, and neither upload nor removal rebuilds.
+- Uploading/removing an asset preserves unsaved text edits. Both use the same revision:
+  if another save wins first, resolve the conflict with the explicit reload action rather
+  than silently overwriting the newer identity. Reload discards unsaved changes.
+- Confirm removal to return to the text site name or bundled favicon on the **next build**.
+  Keep the source image if you may want to upload it again; originals are not retained.
+
+**Rebuild site now uses saved values**, not unsaved form text or merely selected files.
+These small identity images live in Postgres and travel with database backups, unlike story
+photos in the image library. After a database restore, restart the app and rebuild to publish
+the recovered identity. A supported pre-identity backup restores the legacy text identity
+and default assets; it does not preserve destination-only custom logos/favicons.
 
 ---
 

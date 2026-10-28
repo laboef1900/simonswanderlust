@@ -137,4 +137,89 @@ describe('configured identity rendered at public escaping boundaries', () => {
     const hero = documentOf(await container.renderToString(FeaturedHero, { props: { trip } }));
     expect(hero.querySelector('h1')?.textContent).toBe('From the road');
   });
+
+  it.each(['de', 'en'] as const)('renders the saved logo as one named home link with intrinsic dimensions in %s', async (locale) => {
+    identity.siteName = 'Our field notes';
+    identity.assets.logo = { path: '/_identity/logo-0123456789abcdef.png', width: 960, height: 240 };
+    const document = await about(locale);
+    const home = document.querySelector('header a');
+    const logo = home?.querySelector('img');
+    expect(home?.getAttribute('href')).toBe(locale === 'de' ? '/' : '/en/');
+    expect(home?.querySelectorAll('img')).toHaveLength(1);
+    expect(home?.textContent?.trim()).toBe('');
+    expect(home?.hasAttribute('aria-label')).toBe(false);
+    expect(logo?.getAttribute('alt')).toBe('Our field notes');
+    expect(logo?.getAttribute('src')).toBe('/_identity/logo-0123456789abcdef.png');
+    expect(logo?.getAttribute('width')).toBe('960');
+    expect(logo?.getAttribute('height')).toBe('240');
+    expect(logo?.classList.contains('h-8')).toBe(true);
+    expect(logo?.classList.contains('w-auto')).toBe(true);
+    expect(logo?.classList.contains('object-contain')).toBe(true);
+    expect(home?.classList.contains('min-h-[44px]')).toBe(true);
+    expect(home?.hasAttribute('tabindex')).toBe(false);
+    expect(home?.className).not.toContain('outline-none');
+    home?.focus();
+    expect(document.activeElement).toBe(home);
+  });
+
+  it.each(['de', 'en'] as const)('uses the localized fallback for an unnamed logo and restores text when removed in %s', async (locale) => {
+    identity.assets.logo = { path: '/_identity/logo-0123456789abcdef.png', width: 48, height: 240 };
+    const fallback = locale === 'de' ? 'Reisejournal' : 'Travel journal';
+    const custom = await about(locale);
+    expect(custom.querySelector('header a img')?.getAttribute('alt')).toBe(fallback);
+    identity.assets.logo = null;
+    const removed = await about(locale);
+    expect(removed.querySelector('header a img')).toBeNull();
+    expect(removed.querySelector('header a')?.textContent?.trim()).toBe(fallback);
+  });
+
+  it('keeps a wide logo shrinkable within the mobile home link without clipping its focus ring', async () => {
+    identity.assets.logo = { path: '/_identity/logo-0123456789abcdef.png', width: 960, height: 32 };
+    const document = await about('de');
+    const home = document.querySelector('header a');
+    const logo = home?.querySelector('img');
+    // Structural guards for the 320px browser check: no fixed logo width or
+    // overflow clipping, and the navigation still gets its own mobile row.
+    for (const element of [home, logo]) {
+      expect(element?.classList.contains('min-w-0')).toBe(true);
+      expect(element?.classList.contains('max-w-full')).toBe(true);
+      expect(element?.className).not.toContain('overflow-hidden');
+    }
+    expect(home?.parentElement?.classList.contains('flex-col')).toBe(true);
+    expect(document.querySelector('header nav')?.classList.contains('flex-wrap')).toBe(true);
+  });
+
+  it('escapes the configured name in logo alternative text', async () => {
+    identity.siteName = '"><img src=x onerror=alert(1)>';
+    identity.assets.logo = { path: '/_identity/logo-0123456789abcdef.png', width: 320, height: 80 };
+    const document = await about('en');
+    expect(document.querySelector('header a img')?.getAttribute('alt')).toBe(identity.siteName);
+    expect(document.querySelectorAll('header img')).toHaveLength(1);
+    expect(document.querySelectorAll('img[onerror]')).toHaveLength(0);
+  });
+
+  it.each(['de', 'en'] as const)('renders all saved favicon variants and restores the default on removal in %s', async (locale) => {
+    identity.assets.favicon = {
+      png32: '/_identity/favicon-32-0123456789abcdef.png',
+      png192: '/_identity/favicon-192-fedcba9876543210.png',
+      appleTouch180: '/_identity/apple-touch-180-abcdef0123456789.png',
+    };
+    const document = await about(locale);
+    const icons = [...document.querySelectorAll('link[rel="icon"]')];
+    expect(icons.map((icon) => ({
+      href: icon.getAttribute('href'), type: icon.getAttribute('type'), sizes: icon.getAttribute('sizes'),
+    }))).toEqual([
+      { href: identity.assets.favicon.png32, type: 'image/png', sizes: '32x32' },
+      { href: identity.assets.favicon.png192, type: 'image/png', sizes: '192x192' },
+    ]);
+    expect(document.querySelectorAll('link[rel="apple-touch-icon"]')).toHaveLength(1);
+    expect(document.querySelector('link[rel="apple-touch-icon"]')?.getAttribute('href')).toBe(identity.assets.favicon.appleTouch180);
+    expect(document.querySelector('link[href="/favicon.svg"]')).toBeNull();
+    identity.assets.favicon = null;
+    const removed = await about(locale);
+    expect(removed.querySelectorAll('link[rel="icon"]')).toHaveLength(1);
+    expect(removed.querySelector('link[rel="icon"]')?.getAttribute('href')).toBe('/favicon.svg');
+    expect(removed.querySelector('link[rel="icon"]')?.getAttribute('type')).toBe('image/svg+xml');
+    expect(removed.querySelector('link[rel="apple-touch-icon"]')).toBeNull();
+  });
 });
