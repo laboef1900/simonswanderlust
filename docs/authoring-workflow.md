@@ -557,6 +557,9 @@ into the static site, so none of the switches below need a Publish or a rebuild.
    Unsent replies stay attached to their comment for this page session, including after a
    failed refresh or a filter change; navigating away or reloading the page discards them.
    A successful reply clears only its submitted draft, not newer text written meanwhile.
+   Concurrent actions in the same filter each refresh after success, even when another
+   action has already refreshed the list. A real filter change retires those old-view
+   completions; it does not discard the current view's unsent reply or keyboard focus.
 4. **No rebuild** — closing or opening comments (either switch) takes effect on the next request.
    It does not require **Publish** and never triggers a site build.
 5. **Deleting a post deletes its comments** — the thread is removed in the same transaction as the

@@ -823,6 +823,36 @@ describe('comments.html moderation view', () => {
     expect(page.row('A').ta.value).toBe(action === 'reply' ? '' : 'Sent reply');
   });
 
+  it.each(['approve', 'delete', 'reply'] as const)('refreshes both concurrent %s completions in the same filter', async (action) => {
+    const mutations = { A: Promise.withResolvers<CommentResponse>(), B: Promise.withResolvers<CommentResponse>() };
+    let stored = [comment('A'), comment('B')];
+    if (action === 'reply') stored = stored.map((c) => ({ ...c, status: 'approved' }));
+    const page = commentsPage(async (url, options) => {
+      if (options.method === 'GET') return response({ comments: [...stored] });
+      const id = url.includes('/A') ? 'A' : 'B';
+      await mutations[id].promise;
+      if (action === 'reply') stored.push({ ...comment('Reply-' + id), status: 'approved', isAuthor: true });
+      else stored = stored.filter((c) => c.id !== id);
+      return response();
+    });
+    if (action === 'reply') page.el('statusFilter').value = 'approved';
+    await page.load();
+    await page.type('A', 'Reply to A');
+    await page.type('B', 'Reply to B');
+    const start = (id: string) => action === 'reply'
+      ? page.row(id).form.fire('submit')
+      : page.row(id).action(action === 'approve' ? 'Approve' : 'Delete').click();
+    const first = start('A');
+    const second = start('B');
+    mutations.A.resolve(response());
+    await first;
+    expect(page.row('B')).toBeDefined();
+    mutations.B.resolve(response());
+    await second;
+    const names = page.el('list').children.map((row) => row.children[0]?.children[0]?.textContent);
+    expect(names).toEqual(action === 'reply' ? ['A', 'B', 'Reply-A', 'Reply-B'] : []);
+  });
+
   it.each(['approve', 'reply'] as const)('suppresses a late %s failure while the newer filter is loading', async (action) => {
     const mutation = Promise.withResolvers<CommentResponse>();
     const refresh = Promise.withResolvers<CommentResponse>();

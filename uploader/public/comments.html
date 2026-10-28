@@ -44,6 +44,8 @@
       const pendingReplies = new Set();
       const renderedRows = new Map();
       let viewRequest = 0;
+      let filterRevision = 0;
+      let loadedFilter = null;
 
       function focusedReplyControl() {
         for (const [id, { controls, ta }] of renderedRows) {
@@ -108,14 +110,15 @@
           b.type = 'button';
           if (variant) b.className = variant;
           b.addEventListener('click', async () => {
-            const view = viewRequest;
+            const view = filterRevision;
+            const request = viewRequest;
             const focus = focusedReplyControl();
             b.disabled = true;
             try {
               await fn();
-              if (view === viewRequest) await load(focus);
+              if (view === filterRevision) await load(focus);
             } catch (e) {
-              if (view === viewRequest) $('out').textContent = 'Failed: ' + e.message;
+              if (request === viewRequest) $('out').textContent = 'Failed: ' + e.message;
             }
             finally { b.disabled = false; }
           });
@@ -159,8 +162,8 @@
           const body = ta.value;
           replyDrafts.set(c.id, body);
           const focus = focusedReplyControl();
-          const view = viewRequest;
-          let focusRequest = view;
+          const view = filterRevision;
+          let focusRequest = viewRequest;
           pendingReplies.add(c.id);
           send.disabled = true;
           try {
@@ -173,12 +176,12 @@
               const current = renderedRows.get(c.id);
               if (current) current.ta.value = '';
             }
-            if (view === viewRequest) {
-              focusRequest = view + 1;
+            if (view === filterRevision) {
+              focusRequest = viewRequest + 1;
               await load(focus, 'Reply published.');
             }
           } catch (err) {
-            if (view === viewRequest) $('out').textContent = 'Reply failed: ' + err.message;
+            if (focusRequest === viewRequest) $('out').textContent = 'Reply failed: ' + err.message;
           }
           finally {
             pendingReplies.delete(c.id);
@@ -195,6 +198,9 @@
       async function load(fallbackFocus = null, message = '') {
         const request = ++viewRequest;
         const status = $('statusFilter').value;
+        // A refresh does not leave the filter: concurrent successful writes must
+        // each refresh it, while an actual filter change retires their old view.
+        if (status !== loadedFilter) { loadedFilter = status; filterRevision++; }
         const ul = $('list');
         // Capture the latest draft/caret before removing obsolete actions.
         // Draft text itself lives in replyDrafts, not in the cleared rows.
