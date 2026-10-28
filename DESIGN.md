@@ -1032,6 +1032,10 @@ and the `<dialog>`s appended to `<body>` share one set:
   Publish/Rebuild from immediate new author replies and next-load admin chrome; **Rebuild
   site now** confirms that it uses saved values, not unsaved form input. Domain and asset
   controls remain owned by #276 and #275.
+  Text limits count NFC-normalized, trimmed Unicode code points; supplementary characters
+  do not consume two slots. Excess input stays intact and receives focus on Save rather
+  than being truncated by an HTML UTF-16 length cap. Configured wordmarks and footer text
+  wrap even when a valid name or social label contains no spaces.
 - Below 72rem the index becomes a horizontal, wrapping strip above the panel (its arrow
   keys follow) and paired fields stack; provider rows and use-case rows stack below
   48rem. The topbar stays in normal flow.

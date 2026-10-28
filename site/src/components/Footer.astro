@@ -43,7 +43,7 @@ const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
   class="relative overflow-hidden border-t border-white/10 bg-navy text-white [content-visibility:auto] [contain-intrinsic-size:auto_500px]"
 >
   <Contours />
-  <div class="relative mx-auto grid max-w-6xl gap-6 px-5 py-8 md:grid-cols-[2.2fr_1fr_1fr] md:gap-10 md:py-10">
+  <div class="relative mx-auto grid max-w-6xl gap-6 px-5 py-8 [overflow-wrap:anywhere] md:grid-cols-[2.2fr_1fr_1fr] md:gap-10 md:py-10">
     <div>
       <p class="text-lg font-extrabold tracking-wider text-white uppercase">{identitySiteName(locale)}</p>
       <p class="mt-1 text-sm text-white/70">{identityTagline(locale)}</p>

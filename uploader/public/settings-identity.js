@@ -45,7 +45,8 @@ window.SettingsIdentity = (function () {
       const control = document.createElement('input');
       control.id = id;
       control.type = type;
-      control.maxLength = maxLength;
+      if (type === 'url') control.maxLength = maxLength;
+      else control.dataset.identityMaxLength = String(maxLength);
       control.value = value || '';
       group.append(caption, control);
       parent.append(group);
@@ -146,6 +147,17 @@ window.SettingsIdentity = (function () {
     $('identityForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       if (busy || conflicted || revision === null || !$('identityForm').reportValidity()) return;
+      // HTML maxlength counts UTF-16 units, not the contract's NFC code points.
+      // Never truncate typed identity text; reject excess with its input intact.
+      for (const control of $('identityForm').querySelectorAll('input')) {
+        const limit = Number(control.dataset.identityMaxLength);
+        if (Number.isFinite(limit) && [...control.value.normalize('NFC').trim()].length > limit) {
+          const label = document.querySelector('label[for="' + control.id + '"]');
+          status(copy.identityInvalid + ' ' + (label?.textContent || ''));
+          control.focus();
+          return;
+        }
+      }
       const identity = { siteName: $('identitySiteName').value, authorName: $('identityAuthorName').value, socialLinks: links };
       for (const field of fields) {
         identity[field] = Object.fromEntries(locales.map((language) => [language, $('identity-' + field + '-' + language).value]));

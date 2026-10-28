@@ -69,6 +69,30 @@ describe('Site identity settings form', () => {
     expect(h.el('identityStatus').textContent).toBe(copy.identitySaved);
   });
 
+  it.each([
+    ['identitySiteName', 80],
+    ['identityAuthorName', 80],
+    ['identity-tagline-de', 160],
+    ['identity-aboutRole-en', 80],
+    ['identity-aboutGear-de', 200],
+    ['identity-studioDescriptor-en', 80],
+    ['identity-link-label-0', 40],
+  ] as const)('preserves Unicode at the normalized boundary and refuses excess: %s', async (id, limit) => {
+    const h = await page();
+    const valid = '  ' + 'e\u0301'.repeat(limit - 1) + '\u{1D11E}' + '  ';
+    h.edit(id, valid);
+    await h.submit();
+    expect(h.el('identityStatus').textContent).toBe(copy.identitySaved);
+    expect(h.requests).toHaveLength(2);
+    const excess = valid.trim() + 'x';
+    h.edit(id, excess);
+    await h.submit();
+    expect(h.requests).toHaveLength(2);
+    expect(h.el(id).value).toBe(excess);
+    expect(h.el('identityStatus').textContent).toContain(copy.identityInvalid);
+    expect(h.document.activeElement).toBe(h.el(id));
+  });
+
   it('keeps hostile identity text as input values and social order through move/save', async () => {
     const h = await page();
     const hostile = '\"><img src=x onerror=alert(1)>';

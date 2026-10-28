@@ -42,13 +42,13 @@ const idle = 'text-ink/80 hover:text-brand-red';
   >
     <a
       href={homePath(locale)}
-      class={`${link} -ml-2 self-start text-sm font-extrabold tracking-wide text-navy uppercase hover:text-brand-red sm:self-auto`}
+      class={`${link} -ml-2 min-w-0 max-w-full self-start text-sm font-extrabold tracking-wide text-navy uppercase hover:text-brand-red sm:self-auto`}
     >
-      {identitySiteName(locale)}
+      <span class="min-w-0 [overflow-wrap:anywhere]">{identitySiteName(locale)}</span>
     </a>
     <nav
       aria-label={t('nav.ariaLabel')}
-      class="-mx-2 flex flex-wrap items-center gap-x-1 text-sm font-medium sm:mx-0 sm:justify-end"
+      class="-mx-2 flex shrink-0 flex-wrap items-center gap-x-1 text-sm font-medium sm:mx-0 sm:justify-end"
     >
       <a
         href={homePath(locale) + '#stories'}
