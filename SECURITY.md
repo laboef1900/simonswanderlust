@@ -687,6 +687,13 @@ failed/stale analysis cannot edit the manuscript. Both locales are normalized be
 store writes, and both export documents are prepared before either file is written.
 The warning-only alt audit is prepared before publication side effects.
 
+Pending accepted photo descriptions join the existing local draft recovery snapshot
+as locale-specific URL/value pairs, not source offsets. Explicit Restore obtains fresh
+authenticated analysis; it neither writes a post automatically nor sends recovery-only
+fields in the post payload. No credentials or unaccepted provider output are added.
+Recovery ownership/lifetime and authentication redirect policy are unchanged; the
+broader #304 recovery decisions remain deferred.
+
 Content injected after sanitize retains origin equality, HTTP(S)-only image URLs,
 dimension/format validation, string coercion/escaping and library-description
 precedence. Publish image guards still inspect the actual rendered tree. Preview

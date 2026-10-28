@@ -597,7 +597,7 @@
         // share one and the first save deletes the other's work (#138).
         storageKey: initialTk ? 'swl:draft:' + initialTk : DraftGuard.tabScopedKey('swl:draft:new'),
         ...(initialTk ? {} : { orphanPrefix: 'swl:draft:new' }),
-        collect: () => recoveryDraft || buildPayload(),
+        collect: () => recoveryDraft || collectDraft(),
         onChange: (dirty) => {
           if (dirty && !pendingSaves) setStatus('');
           renderDraftState();
@@ -1512,6 +1512,18 @@
         };
       }
 
+      function collectDraft() {
+        const payload = buildPayload();
+        for (const locale of ['de', 'en']) {
+          const pending = galleryEditors[locale]?.snapshotAlts() || [];
+          if (pending.length) {
+            payload.galleryAlts ||= {};
+            payload.galleryAlts[locale] = pending;
+          }
+        }
+        return payload;
+      }
+
       // ---- error helpers ----
       function showErr(msg) {
         const el = $('actionError');
@@ -2089,6 +2101,7 @@
         $('slugFieldEn').disabled = isPublished;
         countryCoords.reset();
         updateLocaleChip();
+        for (const locale of ['de', 'en']) galleryEditors[locale]?.restoreAlts(post.galleryAlts?.[locale]);
       }
 
       // Returns false only when it redirected to /login (callers must stop);
@@ -2114,7 +2127,7 @@
         // Never pair a partly populated bilingual form with a fresh concurrency
         // token. Retain the pre-reload payload independently of the live form:
         // even a second failure while rolling back cannot corrupt its stash.
-        if (currentTk && !recoveryDraft) recoveryDraft = structuredClone(buildPayload());
+        if (currentTk && !recoveryDraft) recoveryDraft = structuredClone(collectDraft());
         if (recoveryDraft) guard.stashNow();
         const wasPublished = isPublished;
         try {

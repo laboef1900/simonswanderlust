@@ -137,6 +137,21 @@ window.EditorGalleries = (function () {
       cancel();
     }
 
+    function snapshotAlts() {
+      return Array.from(pendingAlts, ([src, intent]) => ({ src, value: intent.value }));
+    }
+
+    function restoreAlts(entries) {
+      if (!Array.isArray(entries)) return;
+      for (const entry of entries) {
+        if (!entry || typeof entry.src !== 'string' || !entry.src || typeof entry.value !== 'string') continue;
+        pendingAlts.delete(entry.src);
+        pendingAlts.set(entry.src, { value: entry.value });
+      }
+      // Only text intent survives recovery. Source ranges are always reanalyzed.
+      if (pendingAlts.size) drainAlts();
+    }
+
     function create(block, text, number) {
       const parsed = GalleryFence.parse(block.content);
       const root = el('section', 'editor-gallery');
@@ -449,7 +464,7 @@ window.EditorGalleries = (function () {
     });
     refresh();
     return {
-      refresh: () => refresh(true), cancel, flush, reset,
+      refresh: () => refresh(true), cancel, flush, reset, snapshotAlts, restoreAlts,
       async focusPhoto(src) {
         if (!previews) toggle.click();
         await refresh();

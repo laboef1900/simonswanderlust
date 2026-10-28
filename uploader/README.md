@@ -309,6 +309,10 @@ Unrelated source edits trigger fresh ranges rather than dropping the description
 A failed analysis leaves the value available for retry and does not send a post write.
 Loading a post or restoring a revision discards the former form's pending descriptions
 and cancels a Save that was still waiting for them.
+If the session expires during analysis, the existing local draft recovery also
+retains those pending descriptions, including explicit empty values. After login,
+**Restore** re-analyzes the restored source before applying them; **Save draft**
+remains a separate action. Recovery-only values are never sent in the post payload.
 
 
 Three layout modes, selected by a `#layout:` line **inside** the fence — `column` (default,

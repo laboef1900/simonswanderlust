@@ -128,6 +128,17 @@ No migration or automatic content rewrite. Before any later production rollout, 
   flushes both locales until the existing dirty-generation token is stable.
   A form-generation token cancels an awaiting Save after a post/revision replacement.
   Analysis failure retains the intent for retry and prevents that post write.
+- Pending accepted/manual descriptions are form content, just as synchronous
+  Markdown descriptions were before this migration. The existing best-effort
+  draft stash must include their locale/URL/text intent before any login redirect
+  or navigation. Recovery restores those intents and obtains fresh authoritative
+  source ranges before applying them; no saved offset is trusted and no post is
+  written until explicit Save. Ordinary server/revision replacement still clears
+  prior intents. The private recovery field never enters post-save payloads.
+  This preserves the existing content-recovery contract; it does not change stash
+  ownership, key scope, lifetime, storage-failure guarantees, session policy or the
+  deferred #304 write-receipt/shared-device decisions. No credentials or unaccepted
+  model suggestions are added to browser storage.
 
 ## Isolated runtime/browser qualification (2026-10-28)
 
@@ -246,3 +257,26 @@ Only a new synthetic draft and temporary test accounts were used; retained fixtu
 were not published. Accounts/sessions, browser profiles and the owned service were
 removed. No physical-device or optional AI-provider coverage is claimed.
 
+## Pending-description recovery qualification (2026-10-28)
+
+The final review found that a 401 interrupted analysis before pending manual
+descriptions reached the Markdown, so the existing recovery snapshot omitted them.
+The failing-before DOM regression lost the latest first-photo description. The
+snapshot now carries URL/value pairs per locale; Restore re-analyzes the restored
+source rather than trusting persisted offsets. Ordinary post payloads stay unchanged.
+
+Full six-check wave `1793227694004_65563` passed. Actual `main.ts`, API and Postgres
+qualification at measured 1440px and fresh-navigation 390px exercised real logout,
+held real 401 responses, login, explicit Restore, fresh analysis and explicit Save.
+Latest descriptions for multiple DE/EN photos and an explicit empty value survived;
+no automatic post write or recovery-only payload field was observed.
+
+Evidence, screenshots, source hashes and cleanup are retained in
+`.local/backlog-execution-2026-10-27/issue-354-auth-recovery-runtime/`.
+Existing twelve post-locale rows and seven Media rows were unchanged. New synthetic
+photos remained post-local; temporary accounts/sessions, service, browser profile
+and launcher were removed. Initial thumbnail placement and capture-harness issues
+are disclosed separately; corrected final captures show decoded photographs.
+This preserves the existing recovery contract, not the deferred #304 ownership,
+lifetime, authentication-policy or save-receipt design. No physical-device,
+optional-provider, owner-content or deployment coverage is claimed.

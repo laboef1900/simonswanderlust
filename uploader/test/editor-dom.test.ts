@@ -1789,6 +1789,63 @@ describe('inline gallery editing', () => {
     expect(h.api.buildPayload().de.bodyMarkdown).toBe(sent.de.bodyMarkdown);
   });
 
+  it('recovers every pending description after analysis expires the session, before saving', async () => {
+    const pair = pairWithGallery();
+    pair.de.bodyMarkdown = pair.de.bodyMarkdown.replace('https://img/photo\n```', 'https://img/other\n```');
+    pair.de.images['https://img/other'] = { width: 900, height: 600, alt: 'Other' };
+    const network = mediaNetwork([]);
+    const fetch: Fetch = async (url, init) => {
+      if (url.startsWith('/media')) return network(url, init);
+      if (url.endsWith('/revisions')) return response([]);
+      if (url.endsWith('/alt-audit')) return response(null);
+      return response({ ...pair, updatedAt: '2026-10-01T12:00:00Z' });
+    };
+    let hold = false;
+    let expired = false;
+    const waiting: PromiseWithResolvers<Response>[] = [];
+    const h = loadEditor({
+      search: '?tk=tk1', fetch,
+      galleryFetch: (url, init) => {
+        if (expired) return Promise.resolve(response({}, 401));
+        if (!hold) return analyzeRequest(url, init);
+        const reply = Promise.withResolvers<Response>();
+        waiting.push(reply);
+        return reply.promise;
+      },
+    });
+    await h.api.loadPost('tk1');
+    await settleAll();
+    hold = true;
+    const fields = h.document.querySelectorAll('.editor-gallery__alt');
+    for (const [index, value] of [[0, 'First draft'], [1, 'Second photo'], [0, 'Latest first photo'], [2, '']] as const) {
+      fields[index]!.value = value;
+      fields[index]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    }
+    await settleAll();
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe(pair.de.bodyMarkdown);
+    expired = true;
+    waiting.forEach((reply) => reply.resolve(response({}, 401)));
+    await settleAll();
+    const stash = JSON.parse(h.local.getItem('swl:draft:tk1')!) as { payload: unknown };
+    const recovered = loadEditor({
+      isAdmin: true, search: '?tk=tk1', confirm: true, fetch,
+      stash: { key: 'swl:draft:tk1', payload: stash.payload },
+    });
+    await settleAll();
+    expect(await recovered.api.doSaveDraft()).toBe(true);
+    const request = recovered.requests.find((entry) => entry.url === '/posts/tk1' && entry.options.method === 'PUT')!;
+    const sent = JSON.parse(String(request.options.body)) as PostPair;
+    const de = await normalizeGalleryFences(sent.de.bodyMarkdown, sent.de.images);
+    const en = await normalizeGalleryFences(sent.en.bodyMarkdown, sent.en.images);
+    expect(de.images['https://img/photo']?.alt).toBe('Latest first photo');
+    expect(de.images['https://img/other']?.alt).toBe('Second photo');
+    expect(en.images['https://img/photo']?.alt).toBe('');
+    expect(de.bodyMarkdown).toBe(pair.de.bodyMarkdown);
+    expect(en.bodyMarkdown).toBe(pair.en.bodyMarkdown);
+    expect(sent).not.toHaveProperty('galleryAlts');
+    expect(recovered.local.getItem('swl:draft:tk1')).toBeNull();
+  });
+
   it('reanalyzes pending manual descriptions after unrelated source shifts', async () => {
     let hold = false;
     const waiting: { body: string; reply: PromiseWithResolvers<Response> }[] = [];
