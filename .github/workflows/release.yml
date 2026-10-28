@@ -1,7 +1,8 @@
 name: release
 
 # Build and publish the app image to GHCR, and cut a GitHub Release,
-# whenever a version tag (e.g. v0.2.0) is pushed.
+# whenever a new, owner-authorized version tag is pushed.
+# Image-name cutover applies to future releases only; never replay old tags here.
 on:
   push:
     tags:
@@ -44,7 +45,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/simonswanderlust-app
+          images: ghcr.io/laboef1900/wanderlust-studio
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
