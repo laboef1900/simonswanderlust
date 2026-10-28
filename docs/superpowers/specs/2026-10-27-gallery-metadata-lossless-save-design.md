@@ -1,7 +1,7 @@
 # #355 — Preserve malformed gallery metadata on save
 
 Date: 2026-10-27
-Status: **OWNER APPROVED 2026-10-28 — preserve line and warn.** Initial implementation and runtime qualification completed below; final dependency integration remains separately qualified.
+Status: **OWNER APPROVED 2026-10-28 — preserve line and warn.** Implementation and integrated runtime qualification are recorded below; final review/CI remain merge gates.
 Risk: High — author content normalization and post-sanitize caption inputs.
 Baseline: `11e16d1b8e43141d296b801ee663a351ae3fe415`. Issue reproductions are accepted evidence; no tests/probes or code/data changes were performed for this proposal.
 
@@ -98,3 +98,33 @@ helper failure and recovery through native input are disclosed in the evidence.
 Temporary accounts/sessions, runtime, browser profile and launcher were removed;
 synthetic fixtures/releases remain. No owner content, physical device, external
 provider, deployment or merge was exercised.
+
+## Final dependency and recovery qualification (2026-10-28)
+
+The implementation was rebased onto #354 `d13ded87a9d498a9dcfef254305699ecec0b00f1`,
+including its pending-description recovery fix. Full six-check wave
+`1793229695105_80417` passed on the combined source. Focused runtime evidence at
+`c08b22f2e0505bdfe7be93f6c1ee40d798e86d85` is retained separately in
+`.local/backlog-execution-2026-10-27/issue-355-combined-runtime/proof.json`.
+
+Actual `main.ts`, authenticated browser/API and Postgres at 1440px and fresh 390px
+combined a valid post-local gallery with a malformed gallery in each language.
+Pending latest German descriptions and explicit empty English descriptions survived
+real session refusal, login and explicit Restore. Fresh analysis preceded an
+explicit Save 200 with two metadata warnings: malformed source stayed byte-identical,
+its existing map entry stayed unchanged, and the valid gallery received the latest
+description. Restore sent no post write; PUT omitted recovery-only fields; GET omitted
+transient warnings. Eight pre-existing locale rows were unchanged.
+
+The companion artifacts disclose fixture-key and request-harness corrections,
+synthetic-session rotation and incomplete CDP capture timing. Desktop qualification
+used an actual analysis timeout followed by Retry and a real 401; mobile reached login
+after interception cleanup. Incomplete held-response captures are not passing proofs.
+The prior broad grammar/metadata evidence retains its original source qualification.
+Production-source hashes stayed unchanged during this focused run.
+
+Both new photos remained outside Media. Boot reconciliation did adopt older synthetic
+photos, so no unchanged-Media-corpus claim is made. The temporary user/sessions,
+service, browser profile and launcher were removed; synthetic fixtures remain.
+No owner content, production data, optional provider, physical device or deployment
+was involved. Recovery ownership/lifetime and the deferred #304 decisions are unchanged.
