@@ -25,6 +25,7 @@
  * @ai-context docs/superpowers/specs/2026-09-06-publish-gate-foreign-images-design.md
  * @ai-context docs/superpowers/specs/2026-10-25-publish-readiness-references-design.md
  */
+import { setImmediate } from 'node:timers/promises';
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
 import { analyzeRenderedBody, transformBodyImages, type ImageDims } from '../../site/src/lib/body-images.js';
 
@@ -56,7 +57,9 @@ export async function analyzeBodyContent(
   return {
     hasH1,
     foreign: [...found],
-    sources: analyzeRenderedBody(transformBodyImages(html, images, allowed)).sources,
+    sources: analyzeRenderedBody(await transformBodyImages(html, images, allowed, undefined, {
+      schedule: () => setImmediate(),
+    })).sources,
   };
 }
 

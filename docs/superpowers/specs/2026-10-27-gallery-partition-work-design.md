@@ -43,3 +43,85 @@ Files: `site/src/lib/gallery-layout.ts`/tests and `body-images.ts`/tests; `postg
 ## Recovery
 
 No data/schema migration. Previous static releases remain valid; rebuild only through the normal admin flow. Revert the async renderer/caller cutover atomically if required; never leave an un-awaited Promise in rendered HTML. Reverting reopens the availability defect, so prefer a forward optimizer/scheduler correction. No owner photograph or gallery text may be removed to make preview responsive.
+
+## Implementation and runtime evidence — 2026-10-28
+
+Implemented the legal-edge DAG, minimum prefix/suffix row reachability, rolling attainable
+height bounds and exact ascending-count objective search. Bounds use direct row sums (matching
+final height selection); the objective retains original prefix subtraction and ascending
+predecessors with strict `<`. Interval rejection has conservative floating-point slack and
+evaluates ties/overlaps rather than pruning them. The kernel emits chunks of at most **4096**
+accounted operations, with partial chunks at phase boundaries; yielding once per individual
+edge was measured and discarded because generator overhead was unnecessarily expensive.
+
+The standalone repeatable benchmark is `site/scripts/benchmark-gallery.ts`, run from `site/`:
+
+```sh
+node --import ../uploader/node_modules/tsx/dist/loader.mjs scripts/benchmark-gallery.ts
+```
+
+Node **v26.12.1**, Darwin arm64; one warmup per shape/width/size, then three measured runs.
+Numbers below are medians in milliseconds, **partition / whole sanitized HTML transform**.
+The transform includes HTML parsing/sanitization/emission, but not Markdown rendering.
+The machine was shared with other backlog work; individual timings vary substantially and are
+not CI thresholds. Operation counts are deterministic, independent of scheduling.
+
+| Shape | Width | 100 photos | 200 photos | 400 photos | Operations at 100 / 200 / 400 |
+|---|---:|---:|---:|---:|---:|
+| mixed 3:2 / 2:3 | 1056 | 1.97 / 8.55 | 8.74 / 54.38 | 31.76 / 77.47 | 32,740 / 127,091 / 496,290 |
+| mixed 3:2 / 2:3 | 1112 | 10.15 / 14.70 | 4.35 / 14.32 | 27.40 / 67.93 | 32,740 / 127,091 / 496,290 |
+| panorama-heavy 10:1 / 3:2 | 1056 | 0.40 / 9.87 | 3.88 / 10.94 | 2.88 / 15.75 | 21,201 / 82,401 / 324,801 |
+| panorama-heavy 10:1 / 3:2 | 1112 | 0.15 / 3.47 | 1.03 / 10.72 | 3.47 / 49.90 | 21,201 / 82,401 / 324,801 |
+| thin portraits 1:50 | 1056 | 23.85 / 30.02 | 364.97 / 283.34 | 307.50 / 417.22 | 313,631 / 1,385,029 / 5,633,655 |
+| thin portraits 1:50 | 1112 | 10.85 / 23.31 | 46.46 / 45.25 | 579.17 / 641.77 | 324,551 / 1,458,139 / 5,955,951 |
+
+The mixed 400-photo column transform falls from the issue's **9712ms** to **77.47ms median**
+(different runs/hardware conditions, not a controlled paired speedup). The benchmark's
+process-wide cumulative peak RSS was **177,936 KiB**; this includes the renderer and previous
+cases and is not an isolated per-gallery allocation measurement. Raw trials retain heap-used
+snapshots and cumulative peak RSS. The largest tabulated thin-portrait transform trial was
+1296.77ms: total latency is not bounded by one quantum and is not claimed to be linear.
+
+A final-source repeat (`benchmark-gallery-final.jsonl`) additionally asserts every kernel
+chunk is positive and at most **4096 operations**; all 18 cases passed, with a 4096 maximum.
+The mixed 400-photo gallery emitted **125 chunks**, matching the observed request scheduler
+calls. Final 400-photo medians (partition / transform): mixed **25.87 / 34.55ms** column and
+**20.37 / 46.77ms** breakout; thin **292.78 / 366.45ms** column and **280.16 / 355.61ms** breakout.
+Its cumulative process peak was **183,632 KiB**. The optional kernel candidate inspector is
+used only by oracle tests to judge every excluded count against that count's original-DP
+winner; production drivers do not collect candidate records.
+
+Actual production-composition runtime proof used the isolated `swl_356_dev` database on
+disposable PostgreSQL 18, port **33456**, generated landscape/portrait uploads encoded by the
+real queue, and an authenticated admin. A 400-photo mixed gallery (repeated photos intentionally
+preserved) returned preview **200**, 400 figures, **1169.34ms**. Publication returned **200** with
+`published: true` and a successful real Astro release build (**10217.59ms**, build included);
+the resulting public page returned **200** with all 400 figures.
+
+A temporary observer wrapped the actual Node `setImmediate`, preserving its implementation,
+and initiated an unrelated static HTTP request on the first renderer yield:
+
+- Preview: **125** scheduler calls; static **200** completed at call **17**, before the last
+  partition yield. First-to-last yields: **331.32ms**; largest observed gap: **41.72ms**.
+- Publication (both locales): **250** calls; static **200** completed at call **13**, before
+  the last partition yield. First-to-last yields: **346.08ms**; largest gap **115.96ms** includes
+  work between locale transforms, not solely one optimizer quantum.
+- App cumulative peak RSS: **217,504 KiB**. All services used for proof were stopped.
+
+The first observer attempt used the mutable process image-origin environment value and its
+static fetch failed; it is retained as failed evidence, **not** claimed as an interleaving
+success. The final observer explicitly targeted the assigned listener `127.0.0.1:33456`.
+Raw local evidence: `.issue-runtime/benchmark-gallery.jsonl`, `.issue-runtime/benchmark-gallery-final.jsonl`,
+`.issue-runtime/runtime-http.json`, `.issue-runtime/runtime-scheduling.json`, and
+`.issue-runtime/runtime-scheduling-failed-origin.json`.
+
+Regression coverage adds a frozen original-DP oracle, exhaustive small sequences, deterministic
+mixed/portrait/floor/tie/fallback corpora, operation-count and phase/resumption invariants,
+concurrent request isolation, slider bypass and awaited multi-gallery output. Automated suites
+and typechecks are intentionally left to the integration owner after handoff; the runtime proof
+above is observed evidence, not a claim that those suites have run.
+
+**Residual bounds:** O(n³ B) worst-case total work, O(n² B) bound construction, O(n² + nB)
+optimizer memory. Native allocation/GC and the surrounding Markdown/sanitize/HTML pipeline are
+not preemptible by the partition scheduler. The quantum bounds accounted optimizer work,
+not wall-clock milliseconds or arbitrary author-content latency.
