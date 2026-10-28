@@ -1,7 +1,7 @@
 # Complete bounded moderation traversal (#350)
 
 Date: 2026-10-27. Risk: **High — moderation/reader-erasure boundary.**
-Status: **OWNER APPROVED 2026-10-28** — 50-row offset pagination, oldest-first timestamp/UUID ordering and mutation resets, with concurrent-change limitations disclosed. Implementation and verification remain required; no owner-data mutation or deployment is authorized.
+Status: **OWNER APPROVED 2026-10-28** — source implementation and regression tests added; verification is pending the integration owner's checks and isolated runtime proof. No owner-data mutation or deployment is authorized.
 Baseline: `11e16d1b8e43141d296b801ee663a351ae3fe415`.
 
 ## Evidence and scope
@@ -61,12 +61,12 @@ successful reply's own draft or successfully deleted target. No browser storage,
 new persistent reader data. Paging moves focus to the new page's sensible heading/control;
 a refresh preserves an extant focused field/caret per #367.
 
-#396 will stack later and remains owner of the failed-load/out-of-order-response fix. Give it
-one view key `{status, offset}`: its latest-request check must bind both values, and its failed
-load handling must disable navigation belonging to stale results as well as stale row actions.
-Do not create a second loader or request-state mechanism in #350; rebase onto whichever shared
-loader exists at integration. Until #396 lands, do not claim its separate acceptance criteria
-are solved by pagination alone.
+The implementation stacks on #349, #367 and #396. The existing shared loader owns one
+view key `{status, offset}`; its latest-request check binds both values and failed loads
+disable stale navigation as well as clearing stale row actions. There is no second loader
+or request-state mechanism. User navigation retires old mutation completions, while
+mutation-driven page-one resets preserve the same navigation revision so overlapping
+successful writes each refresh. The inherited focus-cancellation behavior remains in place.
 
 All added labels, empty-page and pagination-error display copy belongs to DE/EN `site/src/i18n/ui.ts`
 and the existing admin copy delivery mechanism (`server.ts`'s editor-image-copy route). Keep
@@ -99,6 +99,12 @@ Required after approval (not run here):
   #367 focus behavior. Include status+offset identity in the later #396 ordering/failure tests.
 - Full affected uploader suite/typecheck, real Postgres integration, site i18n tests/typecheck
   for added copy, and browser keyboard smoke. Never report skipped DB tests as coverage.
+
+Source coverage is in `uploader/test/comments-admin.test.ts` (memory and optional real
+Postgres contracts, route authorization/validation and public removal without a build)
+and `uploader/test/admin-actions-dom.test.ts` (paging, drafts, mutation resets, cancellation,
+empty pages and status/offset response ownership). No automated checks or runtime proof
+were run by the implementation worker; these are verification requirements, not results.
 
 ## Documentation, containment and exact owner decision
 

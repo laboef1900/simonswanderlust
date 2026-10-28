@@ -50,7 +50,7 @@ import { registerPublicComments } from './comments-public.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
 import { compressionHook } from './compress.js';
-import { CommentError, isCommentStatus, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
+import { CommentError, isCommentStatus, isModerationOffset, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { createGeocoder, GeocodingError } from './geocoding.js';
 import { registerGpxRoutes } from './gpx-routes.js';
@@ -1879,10 +1879,16 @@ export function buildServer(cfg: ServerConfig): AppServer {
   const noStore = (reply: FastifyReply) => { void reply.code(503).send({ error: 'comments are not available' }); };
 
   app.get('/moderation/comments', { preHandler: requireAdmin }, async (req, reply) => {
-    const status = (req.query as { status?: string }).status ?? 'pending';
+    reply.header('cache-control', 'no-store');
+    const query = req.query as { status?: unknown; offset?: unknown };
+    const status = query.status ?? 'pending';
     if (!isCommentStatus(status)) return reply.code(400).send({ error: 'status must be pending or approved' });
+    const rawOffset = query.offset ?? '0';
+    if (typeof rawOffset !== 'string' || !/^[0-9]+$/.test(rawOffset) || !isModerationOffset(Number(rawOffset))) {
+      return reply.code(400).send({ error: 'invalid pagination' });
+    }
     if (!commentsAdmin) return noStore(reply);
-    return reply.header('cache-control', 'no-store').send({ comments: await commentsAdmin.list(status) });
+    return reply.send(await commentsAdmin.list(status, Number(rawOffset)));
   });
 
   app.post('/moderation/comments/:id/status', { preHandler: requireAdmin }, async (req, reply) => {

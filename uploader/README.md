@@ -280,18 +280,31 @@ routes behind it (`GET /moderation/comments`, `POST /moderation/comments/:id/sta
 `DELETE /moderation/comments/:id`, `POST /moderation/comments/:id/reply`) are all
 `requireAdmin`: unauthenticated callers get 401, authors 403, and a non-UUID id is a 400.
 Approving does not rebuild the site — comments are runtime data, never baked by `astro build`.
+Both views are oldest-first by timestamp and UUID, with **50 comments per page** and
+**Previous / Next** controls. `GET /moderation/comments?status=pending|approved&offset=N`
+returns `{ comments, hasMore }` with `Cache-Control: no-store`; offset defaults to zero,
+must be a single nonnegative decimal safe integer with room to add 50, and invalid
+pagination returns 400 only after authorization. A page beyond the end is empty.
+Successful moderation (including Reply) and filter changes restart at page one;
+cancelled confirmations do not. Other moderators can shift offsets between reads,
+so restart traversal to see the current state rather than treating pages as a snapshot.
+Every admin row remains reachable; the public thread's oldest-500 response cap is unchanged.
+Deletion and unapproval take effect on the next public comment read, without a rebuild.
 
 Unsent author replies stay in memory, keyed by comment ID, while this page is open.
 Only one reply can be sending per comment ID: its submit button stays disabled even
 when filtering or moderation recreates the row, and becomes available again after
 success or failure so a later intentional reply or retry is possible.
-Moderation actions and switching between Pending and Approved preserve other replies;
+Moderation actions, paging and switching between Pending and Approved preserve other replies;
 hidden rows recover their own draft when shown again. A successful reply clears only
 the submitted text, preserving newer edits made while it was sending; failed replies
 keep their input. List refreshes restore the active row control and textarea selection
 when that row remains visible, or focus the status filter when it disappears. Drafts
 are not saved to browser storage or the server: navigating away or reloading the page
 discards them.
+Paging focuses the page indicator. While loading, or after a failed page request,
+old rows and paging actions are unavailable; reselect the filter to retry from page one.
+An externally emptied page keeps Previous available.
 
 ## Galleries
 
