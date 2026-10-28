@@ -265,6 +265,14 @@ if attachment fails afterwards, keep the saved draft and retry the preview. A co
 requires reloading current state. An unknown network outcome blocks further changes
 until reload rather than risking a second replacement.
 
+When another tab attaches, replaces or detaches a route, **Save draft** can report a
+conflict. Its **Reload** choice reloads both the story fields and route state; review
+the refreshed attachment status before choosing **Publish** again. **Cancel** keeps
+your unsaved text on screen and does not reload the route. While route state is loading
+or unavailable, Attach, Detach and Publish cannot change it. If **Route state unavailable**
+appears, reload the page explicitly and review the route after it loads successfully.
+Detachment still retains the private original; it is not the same as never attaching a route.
+
 If the first draft save fails, its reason appears inside the GPX dialog; the preview
 remains available for retry and nothing is attached. Closing to correct the form
 discards that preview, so choose the file again afterwards. An expired, cancelled or
