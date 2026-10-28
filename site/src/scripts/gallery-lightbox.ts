@@ -79,7 +79,7 @@ function slidesOf(gallery: Element): Slide[] {
       height: Number(img.getAttribute('height')) || 0,
       sources,
       fallback: img.getAttribute('src') ?? '',
-      thumbnail: img.currentSrc || img.getAttribute('src') || '',
+      thumbnail: img.complete && img.naturalWidth > 0 ? img.currentSrc : '',
     });
   }
   return slides;
@@ -135,11 +135,13 @@ function createLightbox(labels: GalleryLabels): Lightbox | null {
     // Keep the already-decoded grid candidate visible while the larger
     // responsive source decodes. Rebuilt rather than mutated: changing a
     // <source>'s srcset in place does not reliably re-run format selection.
-    const thumbnail = document.createElement('img');
-    thumbnail.className = 'jgal__lb-thumb';
-    thumbnail.src = slide.thumbnail;
-    thumbnail.alt = '';
-    thumbnail.setAttribute('aria-hidden', 'true');
+    const thumbnail = slide.thumbnail ? document.createElement('img') : null;
+    if (thumbnail) {
+      thumbnail.className = 'jgal__lb-thumb';
+      thumbnail.src = slide.thumbnail;
+      thumbnail.alt = '';
+      thumbnail.setAttribute('aria-hidden', 'true');
+    }
 
     const picture = document.createElement('picture');
     picture.className = 'jgal__lb-picture';
@@ -155,8 +157,10 @@ function createLightbox(labels: GalleryLabels): Lightbox | null {
     img.src = slide.fallback;
     img.alt = slide.alt;
     if (slide.width && slide.height) {
-      thumbnail.width = slide.width;
-      thumbnail.height = slide.height;
+      if (thumbnail) {
+        thumbnail.width = slide.width;
+        thumbnail.height = slide.height;
+      }
       img.width = slide.width;
       img.height = slide.height;
     }
@@ -168,7 +172,8 @@ function createLightbox(labels: GalleryLabels): Lightbox | null {
     img.addEventListener('load', reveal, { once: true });
     picture.append(img);
     frame.classList.remove('is-ready');
-    frame.replaceChildren(thumbnail, picture);
+    if (thumbnail) frame.replaceChildren(thumbnail, picture);
+    else frame.replaceChildren(picture);
     if (img.complete && img.naturalWidth > 0) reveal();
     else if (typeof img.decode === 'function') void img.decode().then(reveal).catch(() => {});
 
