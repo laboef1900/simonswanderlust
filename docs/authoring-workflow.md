@@ -101,6 +101,23 @@ Unpublish. The save indicator distinguishes **Not saved yet**, **Unsaved changes
 leaves edits unsaved; edits typed while a save is running still need another save.
 Browser recovery copies do not mean the draft has been saved to the server.
 
+Writes from one editor tab run in order. Repeated **Save draft** clicks or
+**Cmd/Ctrl+S** requests each keep the form as it was when requested; a second
+save waits for the first response and uses its updated version. This also applies
+when saving during **Building…**: the save waits for Publish to finish, then
+stores a draft without changing the published snapshot. New posts are created
+once; subsequent queued saves update that same bilingual pair. Preview's save,
+Unpublish and GPX attachment/detachment share the same ordering.
+
+Typing after the last requested save stays on screen as **Unsaved changes**, even
+when earlier requests succeed. A rejected save does not prevent a later corrected
+save. A genuine edit from another tab still produces the conflict dialog:
+**Reload** replaces your editing base and cancels already queued older requests.
+If that reload fails, saving remains blocked until the page loads successfully;
+keep or recover your local draft rather than assuming it reached the server.
+If your session expires during a save, the editor keeps a browser recovery copy
+and returns you to sign-in. Those edits remain unsaved; signing in is not a save.
+
 Alt-text warnings start as a compact, collapsed **Alt-text review** disclosure
 above the story, within the writing column. Expand it to see photos grouped by
 language and issue. Selecting a photo opens the correct language and focuses its
