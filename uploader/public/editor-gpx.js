@@ -397,26 +397,28 @@
       const computed = renderStats(); if (!computed.valid) { fail('allTrimmed'); return; }
       if (!candidate || !routeLoaded) { fail('candidateUnavailable'); return; }
       if (route.version !== null && !$('gpxReplaceConfirm').checked) { fail('replaceUnconfirmed'); $('gpxReplaceConfirm').focus(); return; }
-      const existing = !!host.getPost().tk;
       mutationPending = true;
       setBusy(true); clearError(); say('loading');
       let savedNewPost = false;
       try {
-        if (!existing) {
-          if (!await host.saveDraft() || !host.getPost().tk) {
-            fail('saveFailedNotAttached', true, host.saveError?.() || '');
-            return;
+        await host.runWrite(async (saveDraft) => {
+          const existing = !!host.getPost().tk;
+          if (!existing) {
+            if (!await saveDraft() || !host.getPost().tk) {
+              fail('saveFailedNotAttached', true, host.saveError?.() || '');
+              return;
+            }
+            savedNewPost = true;
           }
-          savedNewPost = true;
-        }
-        const tokens = host.getPost();
-        const body = { importId: preview.importId, baseVersion: route.version, baseUpdatedAt: tokens.baseUpdatedAt, selection, confirmReplace: true };
-        const result = await request(postUrl(''), { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, true);
-        host.setBaseUpdatedAt(result.updatedAt);
-        route = result; routeTk = host.getPost().tk; routeLoaded = true; renderRoute();
-        preview = null; mutationPending = false;
-        closeDialog();
-        if (result.cleanupPending) fail('cleanupPending'); else say('attachSuccess');
+          const tokens = host.getPost();
+          const body = { importId: preview.importId, baseVersion: route.version, baseUpdatedAt: tokens.baseUpdatedAt, selection, confirmReplace: true };
+          const result = await request(postUrl(''), { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, true);
+          host.setBaseUpdatedAt(result.updatedAt);
+          route = result; routeTk = host.getPost().tk; routeLoaded = true; renderRoute();
+          preview = null; mutationPending = false;
+          closeDialog();
+          if (result.cleanupPending) fail('cleanupPending'); else say('attachSuccess');
+        });
       } catch (e) {
         if (e.code === 'gpx_outcome_unknown') {
           outcomeUnknown = true;
@@ -435,9 +437,13 @@
       mutationPending = true; setBusy(true); clearError();
       let detached = false;
       try {
-        const tokens = host.getPost();
-        const result = await request(postUrl(''), { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ baseVersion: route.version, baseUpdatedAt: tokens.baseUpdatedAt, confirmDetach: true }) }, true);
-        host.setBaseUpdatedAt(result.updatedAt); route = result; renderRoute();
+        const result = await host.runWrite(async () => {
+          const tokens = host.getPost();
+          const result = await request(postUrl(''), { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ baseVersion: route.version, baseUpdatedAt: tokens.baseUpdatedAt, confirmDetach: true }) }, true);
+          host.setBaseUpdatedAt(result.updatedAt); route = result; renderRoute();
+          return result;
+        });
+        if (!result) return;
         detached = true;
         if (result.cleanupPending) fail('cleanupPending'); else say('detachSuccess');
       } catch (e) {

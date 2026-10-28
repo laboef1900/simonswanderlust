@@ -142,8 +142,14 @@ function setup(options: SetupOptions = {}) {
   vm.runInContext(script, context, { filename: 'editor-gpx.js' });
   const host = {
     getPost: () => ({ ...state }),
+    runWrite: async <T>(write: (saveDraft: () => Promise<boolean>) => Promise<T>) => write(async () => {
+      saveCalls++;
+      if (options.failSave) return false;
+      state.tk = 'new-pair';
+      state.baseUpdatedAt = '2026-10-24T10:00:30.000Z';
+      return true;
+    }),
     setBaseUpdatedAt: (value: string) => { state.baseUpdatedAt = value; },
-    saveDraft: async () => { saveCalls++; if (options.failSave) return false; state.tk = 'new-pair'; state.baseUpdatedAt = '2026-10-24T10:00:30.000Z'; return true; },
     adoptStops(stops: { name: string; lat: number; lng: number }[]) { adopted.push(stops); },
     inspector: { isOpen: () => false, close() {}, open() {}, reveal(target: EditorElement) { target.focus(); } },
     on401() {},
@@ -248,6 +254,7 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
     clearTimeout() {},
     addEventListener: dom.document.addEventListener,
     URLSearchParams, URL, AbortController, Event: EditorEvent, KeyboardEvent: EditorEvent, console,
+    structuredClone,
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     navigator: {},
     alert() {},
@@ -684,6 +691,99 @@ describe('private GPX editor lifecycle', () => {
     expect(h.adopted).toEqual([]);
     expect(h.element('gpxError').textContent).toBe('waypointNameRequired');
     expect(h.api.hasPreview()).toBe(true);
+  });
+});
+
+describe('GPX shares the real editor write queue', () => {
+  it('captures Save-and-attach before its queue slot starts and leaves later typing dirty', async () => {
+    const h = fullEditor(preview);
+    await settle();
+    h.element('deTitle').value = 'Attach this version';
+    h.element('deTitle').fire('input');
+    await importPreview(h);
+    h.element('gpxAttach').click();
+    h.element('deTitle').value = 'Later unsaved typing';
+    h.element('deTitle').fire('input');
+    await settle();
+    const save = h.requests.find(({ url, options }) => url === '/posts' && options.method === 'POST')!;
+    expect(JSON.parse(String(save.options.body)).de.title).toBe('Attach this version');
+    expect(h.element('deTitle').value).toBe('Later unsaved typing');
+    expect(h.editor.guard.isDirty()).toBe(true);
+    expect(h.saveCalls).toBe(1);
+    expect(routeWrites(h)).toHaveLength(1);
+  });
+
+  it('waits for a pending first Save before attaching and never creates a second pair', async () => {
+    const firstSave = Promise.withResolvers<Reply>();
+    const attachedAt = '2026-10-24T10:01:00.000Z';
+    const h = fullEditor(preview, async (url, request) => {
+      if (url === '/posts' && request.method === 'POST') return firstSave.promise;
+      if (url.endsWith('/route') && request.method === 'PUT') return response({ ...attachedRoute, updatedAt: attachedAt });
+      return undefined;
+    });
+    await settle();
+    const saving = h.editor.doSaveDraft();
+    await settle();
+    await importPreview(h);
+    h.element('gpxAttach').click();
+    await settle();
+    expect(h.saveCalls).toBe(1);
+    expect(routeWrites(h)).toHaveLength(0);
+    expect(h.element('gpxAttach').disabled).toBe(true);
+    firstSave.resolve(response({
+      translationKey: 'saved-pair', updatedAt: '2026-10-24T10:00:30.000Z',
+      de: { slug: 'private-walk' }, en: { slug: '' },
+    }));
+    expect(await saving).toBe(true);
+    await settle();
+    expect(h.saveCalls).toBe(1);
+    expect(routeWrites(h)).toHaveLength(1);
+    expect(JSON.parse(String(routeWrites(h)[0]!.options.body)).baseUpdatedAt).toBe('2026-10-24T10:00:30.000Z');
+    expect(h.state.baseUpdatedAt).toBe(attachedAt);
+    expect(h.api.hasPreview()).toBe(false);
+    expect(await h.editor.doSaveDraft()).toBe(true);
+    const nextSave = h.requests.find(({ url, options }) => url === '/posts/saved-pair' && options.method === 'PUT')!;
+    expect(JSON.parse(String(nextSave.options.body)).updatedAt).toBe(attachedAt);
+  });
+
+  it('waits for a pending Save before detaching and keeps its busy guard until the route response', async () => {
+    const pendingSave = Promise.withResolvers<Reply>();
+    const pendingDetach = Promise.withResolvers<Reply>();
+    const h = fullEditor(preview, async (url, request) => {
+      if (url.endsWith('/route') && request.method === 'PUT') return response({
+        ...attachedRoute, updatedAt: '2026-10-24T10:01:00.000Z',
+      });
+      if (url.endsWith('/route') && request.method === 'DELETE') return pendingDetach.promise;
+      if (url === '/posts/saved-pair' && request.method === 'PUT') return pendingSave.promise;
+      return undefined;
+    });
+    await settle();
+    await importPreview(h);
+    h.element('gpxAttach').click();
+    await settle();
+    expect(h.state.tk).toBe('saved-pair');
+    const saving = h.editor.doSaveDraft();
+    await settle();
+    h.element('gpxDetach').click();
+    await settle();
+    expect(routeWrites(h).map(({ options }) => options.method)).toEqual(['PUT']);
+    pendingSave.resolve(response({
+      translationKey: 'saved-pair', updatedAt: '2026-10-24T10:02:00.000Z',
+      de: { slug: 'private-walk' }, en: { slug: '' },
+    }));
+    expect(await saving).toBe(true);
+    await settle();
+    const detach = routeWrites(h).at(-1)!;
+    expect(detach.options.method).toBe('DELETE');
+    expect(JSON.parse(String(detach.options.body))).toEqual({
+      baseVersion: attachedRoute.version, baseUpdatedAt: '2026-10-24T10:02:00.000Z', confirmDetach: true,
+    });
+    expect(await h.editor.doSaveDraft()).toBe(false);
+    expect(h.element('gpxDetach').disabled).toBe(true);
+    pendingDetach.resolve(response({ ...emptyRoute, version: 'd'.repeat(36), updatedAt: '2026-10-24T10:03:00.000Z' }));
+    await settle();
+    expect(h.state.baseUpdatedAt).toBe('2026-10-24T10:03:00.000Z');
+    expect(h.element('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
   });
 });
 
