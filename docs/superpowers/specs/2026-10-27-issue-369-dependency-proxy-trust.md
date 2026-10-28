@@ -98,7 +98,6 @@ Required dependency-range changes are listed above; unrelated refreshes of chai,
 and @jridgewell/sourcemap-codec were backed out of the lock. This records metadata and intent,
 not executed application, container or topology proof. #347's sharp 0.35.5 and required
 @emnapi/runtime 1.11.3 resolution remain unchanged.
-
 **Site** (`site/package.json` + lock):
 
 | Change | Range | Lock | Why |
@@ -178,7 +177,6 @@ repository-owned selectors only. No blanket audit fix was run.
 
 No builds, tests, typechecks, render diffs or codec smokes were run in this implementation
 slice. The integrator must execute §7 against the final combined lockfiles.
-
 
 ## 4. Recommended proxy-trust contract
 
@@ -475,7 +473,6 @@ This does **not** prove published-loopback DNAT/userland-proxy behavior on the t
 nor independent clients on two external networks. Those remain §7 step 7's pre-cutover gate.
 No production configuration or owner data was changed. The synthetic site application was
 deliberately absent, so this probe claims no Publish, renderer or full-site serving proof.
-
 ## 8. Dependency contracts and ordering
 
 - **#347 lands first** as a lock-only sharp change in both trees. This issue rebases on it:
