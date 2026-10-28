@@ -11,10 +11,12 @@ see [SECURITY.md](SECURITY.md).
 
 | Service (compose) | Image | Role | Exposure |
 | :-- | :-- | :-- | :-- |
-| `app` | `ghcr.io/laboef1900/simonswanderlust-app` (built from the repo-root `Dockerfile`, DHI node base) | Single Fastify 5 process: admin CMS (editor, WordPress import), image service (sharp, host-routed on the img subdomain), public blog static serving, in-process `astro build` on Publish/boot/manual rebuild, `/map/` PMTiles basemap, and DB backups | Public (via host port → reverse proxy / TLS) |
+| `app` | `ghcr.io/laboef1900/wanderlust-studio` (built from the repo-root `Dockerfile`, DHI node base; first release under this name pending) | Single Fastify 5 process: admin CMS (editor, WordPress import), image service (sharp, host-routed on the img subdomain), public blog static serving, in-process `astro build` on Publish/boot/manual rebuild, `/map/` PMTiles basemap, and DB backups | Public (via host port → reverse proxy / TLS) |
 | `db` | `postgres:18-alpine` | Source of truth for posts, users, and sessions | Internal only (`:5432`) |
 
-The `app` image is **released to GHCR** by CI and pulled on the server (pinned via `IMAGE_TAG`).
+The `app` image is released to GHCR by CI and pulled on the server (pinned via required
+`IMAGE_TAG`, with no default). The first `wanderlust-studio` release is a future owner
+action; this source cutover does not publish it. See the release prerequisites below.
 `docker-compose.yml` has no `build:` key, so `docker compose up -d --build` is a no-op — to build
 the image locally, run `docker build .` from the repo root instead. See [Packaging & release
 pipeline](#packaging--release-pipeline). Note: rebuilding the image does not regenerate the
@@ -670,12 +672,24 @@ warns about.
 1. logs in to GHCR (`GITHUB_TOKEN`) and to `dhi.io` (repo variable `DHI_USERNAME` + secret
    `DHI_TOKEN`) to pull the DHI bases,
 2. `buildx` multi-arch (**amd64 + arm64**) with the DHI build-args, pushed to
-   `ghcr.io/laboef1900/simonswanderlust-app` tagged `{version}`, `{major}.{minor}`, and `latest`,
+   `ghcr.io/laboef1900/wanderlust-studio` tagged `{version}`, `{major}.{minor}`, and `latest`,
 3. creates the GitHub Release with generated notes.
 
-On the server: pull the GHCR image directly (no `dhi.io` login needed there — that's CI-only), set
-`IMAGE_TAG` in `.env`, then `docker compose pull && docker compose up -d`. Cutting a release = bump
-the `IMAGE_TAG` defaults (`docker-compose.yml`, `uploader/.env.example`), commit, tag, push the tag.
+The first release under this name requires a future owner-authorized **new** version tag on
+merged `main`, a successful multi-architecture workflow run, and confirmation of the published
+version/digest and GHCR package access. Only after that may the operator set `IMAGE_TAG` in
+their private `.env` to that published version and run
+`docker compose pull && docker compose up -d` (no `dhi.io` login needed there — that's CI-only).
+Compose requires an explicit tag; the example leaves it empty instead of inventing a release.
+Until publication, build locally with the new name and `IMAGE_TAG=local` as described in README.
+
+Historical images remain at `ghcr.io/laboef1900/simonswanderlust-app`, including `:0.17.1`.
+Old tags are not available under the new name merely because this source changed.
+Keep existing deployment configuration until an authorized upgrade; do not reuse an old
+private `IMAGE_TAG` with the new Compose file. No republishing, alias, dual push, image deletion,
+data migration or operator-secret change is part of this cutover. Product, repository and npm
+package names stay unchanged. See the
+[separate image-name cutover record](docs/superpowers/specs/2026-10-27-issue-291-image-name-cutover.md).
 
 **Native codec updates (#347):** record the current image digest before an owner-controlled
 upgrade, then release and deploy a newly built image; changing `package-lock.json` or running
