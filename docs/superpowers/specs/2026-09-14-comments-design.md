@@ -60,6 +60,16 @@ not re-litigate product behaviour.
    The explicit six-key public shape, reply-time name, oldest-first order and 500-row
    per-story response cap remain unchanged; see the approved
    `2026-10-27-issue-349-public-author-projection-design.md` for runtime evidence and recovery.
+   **Approved moderation traversal correction (#350, 2026-10-28):** the separate admin
+   list is now fixed at 50 rows per page with a 51st-row lookahead and `hasMore`, rather
+   than a site-wide 500-row ceiling. Both filters use oldest-first timestamp/canonical
+   UUID order. Auth precedes strict offset validation; admin replies remain `no-store`.
+   Previous/Next makes every erasure target reachable for a fixed dataset. Successful
+   mutations reset page one; external changes can shift offsets, requiring a restart.
+   Reply drafts survive paging, and #396's shared latest-request loader binds status
+   and offset together. Public behavior and the exception below are unchanged. See
+   `2026-10-27-issue-350-moderation-pagination-design.md` for approval, verification
+   requirements and rollback containment.
 6. **Runtime, never baked.** The static story page hosts a small island that `GET`s JSON from
    Fastify; a comment MUST NOT spawn `astro build`, take `workLock`, or trigger a rebuild.
    *Rejected:* baking approved comments into the release with a debounced rebuild — every
