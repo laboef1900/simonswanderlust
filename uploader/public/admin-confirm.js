@@ -75,6 +75,14 @@ window.AdminConfirm = (function () {
       typedInput.id = 'adminConfirmTyped';
       typedInput.type = 'text';
       typedInput.autocomplete = 'off';
+      typedInput.addEventListener('keydown', function (event) {
+        if (event.key !== 'Enter' || event.isComposing) return;
+        // The form's first submit button is Cancel; never use its implicit submit.
+        event.preventDefault();
+        if (typedInput.value !== typed) return;
+        dlg.returnValue = 'ok';
+        dlg.close();
+      });
       extra.appendChild(lab);
       extra.appendChild(typedInput);
     }
