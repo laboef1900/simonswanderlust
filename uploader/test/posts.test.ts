@@ -1,6 +1,6 @@
 import { publishTokens } from './publish-tokens.js';
 import { describe, expect, it, vi } from 'vitest';
-import { memoryPostStore, normalizeBodyImages, PostError, REVISION_CAP, validateDraft, validateForPublish, type PostPair } from '../src/posts.js';
+import { memoryPostStore, normalizeBodyImages, PostError, REVISION_CAP, MAX_SLUG_BYTES, isSafeSlug, validateDraft, validateForPublish, type PostPair } from '../src/posts.js';
 import { renderPostToMdx } from '../src/export.js';
 import { imageUsage } from '../src/media-files.js';
 import { REGIONS } from '../src/db.js';
@@ -19,6 +19,46 @@ function pair(overrides: Partial<PostPair> = {}): PostPair {
     ...overrides,
   };
 }
+
+describe('story slug byte bound (#353)', () => {
+  it.each(['de', 'en'] as const)('%s accepts 250/251 bytes unchanged and refuses 252/multi-kilobyte input at every save boundary', async (locale) => {
+    expect(MAX_SLUG_BYTES).toBe(251);
+    for (const length of [250, 251, 252, 8192]) {
+      const store = memoryPostStore();
+      const input = pair();
+      input[locale].slug = 'a'.repeat(length);
+      if (length <= MAX_SLUG_BYTES) {
+        expect(isSafeSlug(input[locale].slug)).toBe(true);
+        expect(() => validateDraft(input)).not.toThrow();
+        expect(() => validateForPublish(input)).not.toThrow();
+        const saved = await store.upsertDraft(input);
+        expect(saved[locale].slug).toBe(input[locale].slug);
+        await store.publish(saved.translationKey, await publishTokens(store, saved.translationKey));
+        expect((await store.get(saved.translationKey))?.[locale].slug).toBe(input[locale].slug);
+      } else {
+        const message = `${locale}.slug must be at most 251 ASCII bytes (received ${length})`;
+        expect(isSafeSlug(input[locale].slug)).toBe(false);
+        expect(() => validateDraft(input)).toThrow(message);
+        expect(() => validateForPublish(input)).toThrow(message);
+        await expect(store.upsertDraft(input)).rejects.toThrow(message);
+        expect(await store.list()).toEqual([]);
+        const saved = await store.upsertDraft(pair());
+        const revisions = await store.listRevisions(saved.translationKey);
+        await expect(store.upsertDraft({ ...input, translationKey: saved.translationKey })).rejects.toThrow(message);
+        expect(await store.get(saved.translationKey)).toEqual(saved);
+        expect(await store.listRevisions(saved.translationKey)).toEqual(revisions);
+      }
+    }
+  });
+
+  it.each(['de', 'en'] as const)('%s keeps the unset draft sentinel but never publishes it', async (locale) => {
+    const input = pair();
+    input[locale].slug = '';
+    expect(() => validateDraft(input)).not.toThrow();
+    expect((await memoryPostStore().upsertDraft(input))[locale].slug).toBe('');
+    expect(() => validateForPublish(input)).toThrow(`${locale}.slug`);
+  });
+});
 
 describe('memoryPostStore', () => {
   it('keeps title images independent and protects the published banner after a draft removal', async () => {

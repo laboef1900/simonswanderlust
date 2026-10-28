@@ -332,8 +332,20 @@ multiple replicas, limits would be counted per replica.)
   write, so a refused upload leaves no orphan original for the reconcile to adopt.
 - **Media text fields** (`title`, `alt`, `caption`) strip `\p{C}` before the length cap, like tags
   and EXIF strings, so a NUL can never reach Postgres `text` (which rejects it with a 500).
-- **Imported slugs** are validated at the WordPress-import boundary; a group with an unsafe slug is
-  skipped with a warning and never reaches the database, the storage path, or the MDX export.
+- **Story slugs** retain the ASCII grammar `[a-z0-9][a-z0-9-]*` and are bounded to
+  **251 bytes**, leaving four bytes for the `.mdx` export extension. HTTP draft validation
+  and both stores' shared normalization boundary reject excessive nonempty values before
+  writing; errors name the locale field, limit and byte count, not the submitted slug.
+  The empty draft sentinel remains allowed. Single/bulk publish validation requires both
+  bounded nonempty slugs, including legacy loaded rows, before publishing or building.
+  MDX export validates both filenames before writing either locale. No filename encoding,
+  slug rewriting, schema migration, or authorization/confirmation relaxation is involved.
+- **Imported slugs** use the same story-slug check in preflight; an unsafe group is counted
+  as `rejected` with a bounded diagnostic before image fetches or database writes.
+  The owner-approved #353 rollout requires a read-only inventory of **working and published
+  snapshot** slugs, including imported drafts. Any over-bound value blocks activation on
+  that installation; it is not renamed, unpublished, omitted, or repaired automatically.
+  See `uploader/scripts/slug-length-inventory.sql` and the approved slug-length spec.
 - **Coordinates** are bounded on publish (`lat ∈ [-90,90]`, `lng ∈ [-180,180]`, finite).
 - **SQL** is parameterized throughout (`pg` placeholders) — no string-built queries.
 - **Uploads** — `POST /upload` is capped at one file per request (`files: 1`); a second file in the
