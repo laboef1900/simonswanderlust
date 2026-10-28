@@ -3808,11 +3808,11 @@ describe('identity asset administration and release serving (#275)', () => {
       if (host !== 'localhost') {
         const foreign = await b.app.inject({ url: path, headers: { host: 'images.example' } });
         expect(foreign.statusCode).toBe(404);
-        expect(foreign.headers['cache-control']).not.toContain('immutable');
+        expect(foreign.headers['cache-control'] ?? '').not.toContain('immutable');
       }
       const missing = await b.app.inject({ url: path.replace(asset.sha256.slice(0, 16), '0'.repeat(16)), headers: { host } });
       expect(missing.statusCode).toBe(404);
-      expect(missing.headers['cache-control']).not.toContain('immutable');
+      expect(missing.headers['cache-control'] ?? '').not.toContain('immutable');
     } finally { await b.app.close(); }
   });
 });
