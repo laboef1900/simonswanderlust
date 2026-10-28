@@ -259,7 +259,10 @@ changes. The refresh preserves whichever photo is focused when the response is r
 not when the request started, and does not pull focus away from search, upload, folder,
 queue or detail controls. A focused detail field keeps its caret and selection even before
 the first edit; explicit **Save details** still refreshes the saved values and clears the
-unsaved state. Arrow and Space navigation continue from the restored photo.
+unsaved state. If an automatic completion refresh overtakes an explicit Save or folder
+change, the winning response still completes that explicit update rather than retaining
+an old detail baseline or folder navigation. Arrow and Space navigation continue from the
+restored photo.
 The queue's **done** means the upload was accepted, not that encoding has
 finished: the grid displays the status returned by the server, including **processing**.
 This is a completion-triggered refresh, not continuous polling for encoding progress.

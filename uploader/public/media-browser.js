@@ -72,9 +72,17 @@
   // win, or the grid, the total in say() and the pruned selection all describe
   // a query the author has already typed past. See makeSequence.
   var loads = api.makeSequence();
+  var foregroundPending = false;
+  var foregroundMessage;
 
   async function reload(msg, background) {
     var ticket = loads.next();
+    // A newer completion request may win the response race, but must still
+    // finish an explicit Save/filter/folder action's pending render.
+    if (!background) {
+      foregroundPending = true;
+      foregroundMessage = msg;
+    }
     try {
       var res = await client.list({
         folder: state.folder, recursive: state.recursive, q: state.q, tag: state.tag,
@@ -92,9 +100,12 @@
       // Capture at response time: the author may have moved focus while loading.
       var active = document.activeElement;
       var focusedKey = active && $('grid').contains(active) ? active.dataset.key : null;
-      render(background);
+      var message = foregroundPending ? foregroundMessage : msg;
+      render(!foregroundPending);
       if (focusedKey) focusCell(visible.indexOf(focusedKey));
-      say(msg != null ? msg : state.total + ' photo(s)');
+      say(message != null ? message : state.total + ' photo(s)');
+      foregroundPending = false;
+      foregroundMessage = undefined;
     } catch (e) {
       if (loads.isCurrent(ticket)) fail(e);
     }

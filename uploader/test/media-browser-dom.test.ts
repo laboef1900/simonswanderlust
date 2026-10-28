@@ -305,6 +305,63 @@ describe('media-browser upload completion', () => {
     expect(page.el('dUnsaved').hidden).toBe(true);
   });
 
+  it('finishes an explicit save when upload completion supersedes its reload', async () => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('existing')], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    page.el('dTitle').value = 'Saved title';
+    page.el('detail').dispatch('input');
+    page.el('dSave').focus();
+    page.el('dSave').dispatch('click');
+    await page.flush();
+    const explicit = page.listRequests.shift()!;
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'ready' });
+    await page.flush();
+    runTimers(page.timers);
+    page.listRequests.shift()!.resolve({ items: [{ ...item('existing'), title: 'Saved title' }, item('new')], total: 2 });
+    await page.flush();
+    expect(page.el('dUnsaved').hidden).toBe(true);
+    expect(page.el('dTitle').value).toBe('Saved title');
+    explicit.resolve({ items: [{ ...item('existing'), title: 'Saved title' }], total: 1 });
+    await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell').map((node) => node.dataset.key)).toEqual(['existing', 'new']);
+    // The saved row must become the diff baseline, even though its reload lost.
+    page.el('dTitle').value = 'existing';
+    page.el('detail').dispatch('input');
+    page.el('dSave').dispatch('click');
+    await page.flush();
+    expect(page.patches.at(-1)?.body).toEqual({ title: 'existing' });
+    page.listRequests.shift()!.resolve({ items: [item('existing'), item('new')], total: 2 });
+    await page.flush();
+  });
+
+  it('finishes folder selection when upload completion supersedes its reload', async () => {
+    const page = loadPage({ folders: ['trips'] });
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('existing')], total: 1 });
+    await page.flush();
+    const folder = page.el('folderTree').querySelectorAll('.folder-btn')[1]!;
+    folder.focus();
+    folder.dispatch('click');
+    await page.flush();
+    const explicit = page.listRequests.shift()!;
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'ready' });
+    await page.flush();
+    runTimers(page.timers);
+    const background = page.listRequests.shift()!;
+    expect(background.url).toContain('folder=trips');
+    background.resolve({ items: [{ ...item('new'), folder: 'trips' }], total: 1 });
+    await page.flush();
+    expect(page.el('folderTree').querySelectorAll('.is-current').map((node) => node.textContent)).toEqual(['trips']);
+    explicit.resolve({ items: [], total: 0 });
+    await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell').map((node) => node.dataset.key)).toEqual(['new']);
+  });
+
   it.each([
     ['folderTree', '.folder-btn'],
     ['uploadQueue', '.btn-secondary'],
