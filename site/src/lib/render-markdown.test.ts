@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MARKDOWN_OPTIONS, renderMarkdown } from './render-markdown';
 import { SHIKI_CSS } from './shiki-classes';
+import { MARKDOWN_FEATURES } from './markdown-features';
 import astroConfig from '../../astro.config.mjs';
 
 describe('MARKDOWN_OPTIONS parity with astro.config.mjs', () => {
@@ -10,6 +11,12 @@ describe('MARKDOWN_OPTIONS parity with astro.config.mjs', () => {
   // BOTH files, never by relaxing this assertion.
   it('matches the markdown block the build runs with', () => {
     expect(astroConfig.markdown).toEqual(MARKDOWN_OPTIONS);
+  });
+
+  it('passes source-analysis features through the actual Satteri processor option API', () => {
+    expect(MARKDOWN_OPTIONS.processor.name).toBe('satteri');
+    expect(MARKDOWN_OPTIONS.processor.options.features).toEqual(MARKDOWN_FEATURES);
+    expect(MARKDOWN_FEATURES).toEqual({ gfm: true, smartPunctuation: true });
   });
 
   it("excludes 'gallery' from syntax highlighting so the fence keeps its class", () => {

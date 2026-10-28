@@ -1,7 +1,8 @@
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgPageStore, type PagePair } from '../src/pages.js';
 import { REVISION_CAP } from '../src/posts.js';
+import * as bodyContent from '../src/body-content.js';
 
 const about = (title: string): PagePair => ({
   key: 'about',
@@ -16,6 +17,37 @@ maybe('pgPageStore (Postgres)', () => {
   let pool: DbPool;
   beforeAll(async () => { pool = createPool(url as string); await ensureSchema(pool); });
   afterAll(async () => { await pool.end(); });
+
+  it('normalizes both gallery locales and never commits half a page when analysis fails', async () => {
+    const store = pgPageStore(pool);
+    const src = 'https://img/gallery';
+    const input = about('Gallery');
+    input.key = 'gallery-analysis';
+    input.de.bodyMarkdown = `> ~~~gallery extra\n> ${src} | 30x20 | alt="Blick"\n> ~~~`;
+    input.en.bodyMarkdown = `<pre><code class="language-gallery">${src} | 30x20 | alt="View"\n</code></pre>`;
+    try {
+      const saved = await store.save(input);
+      expect(saved.de.bodyMarkdown).toBe(`> ~~~gallery extra\n> ${src}\n> ~~~`);
+      expect(saved.en.bodyMarkdown).toBe(`<pre><code class="language-gallery">${src}\n</code></pre>`);
+      expect(saved.de.images[src]).toEqual({ width: 30, height: 20, alt: 'Blick' });
+      expect(saved.en.images[src]).toEqual({ width: 30, height: 20, alt: 'View' });
+      const edit = { ...saved, de: { ...saved.de, bodyMarkdown: input.de.bodyMarkdown }, en: { ...saved.en, bodyMarkdown: 'EN analysis failure' } };
+      const revisions = await store.listRevisions(saved.key);
+      const normalize = bodyContent.normalizeGalleryFences;
+      const analysis = vi.spyOn(bodyContent, 'normalizeGalleryFences').mockImplementation((body, images) => {
+        if (body === edit.en.bodyMarkdown) return Promise.reject(new Error('source mapping unavailable'));
+        return normalize(body, images);
+      });
+      try {
+        await expect(store.save(edit, saved.updatedAt!)).rejects.toThrow('source mapping unavailable');
+        expect(await store.get(saved.key)).toEqual(saved);
+        expect(await store.listRevisions(saved.key)).toEqual(revisions);
+      } finally { analysis.mockRestore(); }
+    } finally {
+      await pool.query('DELETE FROM page_revisions WHERE key=$1', [input.key]);
+      await pool.query('DELETE FROM pages WHERE key=$1', [input.key]);
+    }
+  });
 
   it('saves and reads back both locales with images', async () => {
     const store = pgPageStore(pool);

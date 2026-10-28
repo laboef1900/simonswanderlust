@@ -30,66 +30,66 @@ const hero = (alt: string) => ({ heroImage: { src: `${IMG}/trips/rhodos/hero`, w
 const dims: ImageDims = { width: 3000, height: 2000 };
 
 describe('auditAltText — hero', () => {
-  it('reports a hero whose alt only repeats the title, and passes a real description', () => {
-    const repeated = auditAltText(post({ title: 'Rhodos', ...hero('Rhodos') }));
+  it('reports a hero whose alt only repeats the title, and passes a real description', async () => {
+    const repeated = (await auditAltText(post({ title: 'Rhodos', ...hero('Rhodos') })));
     expect(repeated.count).toBe(1);
     expect(repeated.images).toEqual([
       { locale: 'de', kind: 'hero', src: `${IMG}/trips/rhodos/hero`, reason: 'repeats-title' },
     ]);
-    expect(auditAltText(post({ title: 'Rhodos', ...hero('Fischerboote im Hafen von Lindos') })).count).toBe(0);
+    expect((await auditAltText(post({ title: 'Rhodos', ...hero('Fischerboote im Hafen von Lindos') }))).count).toBe(0);
   });
 
-  it('reports an alt that is empty or only whitespace', () => {
-    expect(auditAltText(post({ title: 'Rhodos', ...hero('') })).images[0]?.reason).toBe('empty');
-    expect(auditAltText(post({ title: 'Rhodos', ...hero('   \t ') })).images[0]?.reason).toBe('empty');
+  it('reports an alt that is empty or only whitespace', async () => {
+    expect((await auditAltText(post({ title: 'Rhodos', ...hero('') }))).images[0]?.reason).toBe('empty');
+    expect((await auditAltText(post({ title: 'Rhodos', ...hero('   \t ') }))).images[0]?.reason).toBe('empty');
   });
 
-  it('ignores case and surrounding whitespace on both sides of the comparison', () => {
-    expect(auditAltText(post({ title: 'Rhodos', ...hero('  rHODOS ') })).count).toBe(1);
-    expect(auditAltText(post({ title: '  Rhodos  ', ...hero('RHODOS') })).count).toBe(1);
+  it('ignores case and surrounding whitespace on both sides of the comparison', async () => {
+    expect((await auditAltText(post({ title: 'Rhodos', ...hero('  rHODOS ') }))).count).toBe(1);
+    expect((await auditAltText(post({ title: '  Rhodos  ', ...hero('RHODOS') }))).count).toBe(1);
   });
 
-  it('says nothing about a locale that has no hero photo at all', () => {
-    expect(auditAltText(post({ title: 'Rhodos', bodyMarkdown: 'Text' })).count).toBe(0);
+  it('says nothing about a locale that has no hero photo at all', async () => {
+    expect((await auditAltText(post({ title: 'Rhodos', bodyMarkdown: 'Text' }))).count).toBe(0);
   });
 });
 
 describe('auditAltText — body and gallery photos', () => {
-  it('audits a gallery photo against the images-map alt the renderer reads', () => {
+  it('audits a gallery photo against the images-map alt the renderer reads', async () => {
     const body = '```gallery\n' + `${IMG}/trips/rhodos/g1\n` + `${IMG}/trips/rhodos/g2\n` + '```';
-    const audit = auditAltText(post({
+    const audit = (await auditAltText(post({
       title: 'Rhodos',
       bodyMarkdown: body,
       images: {
         [`${IMG}/trips/rhodos/g1`]: { ...dims, alt: 'Rhodos' },
         [`${IMG}/trips/rhodos/g2`]: { ...dims, alt: 'Ziegen auf der Küstenstraße' },
       },
-    }));
+    })));
     expect(audit.images).toEqual([
       { locale: 'de', kind: 'gallery', src: `${IMG}/trips/rhodos/g1`, reason: 'repeats-title' },
     ]);
   });
 
-  it('warns when a WordPress attachment filename is used as alt text', () => {
+  it('warns when a WordPress attachment filename is used as alt text', async () => {
     const body = '```gallery\n' + `${IMG}/trips/rhodos/g1\n` + `${IMG}/trips/rhodos/g2\n` + '```';
-    const audit = auditAltText(post({
+    const audit = (await auditAltText(post({
       title: 'Rhodos',
       bodyMarkdown: body,
       images: {
         [`${IMG}/trips/rhodos/g1`]: { ...dims, alt: 'Ecuador-Quito - 8.10.2023 171833' },
         [`${IMG}/trips/rhodos/g2`]: { ...dims, alt: 'Fischerboote am frühen Morgen' },
       },
-    }));
+    })));
     expect(audit.images).toEqual([
       { locale: 'de', kind: 'gallery', src: `${IMG}/trips/rhodos/g1`, reason: 'filename' },
     ]);
   });
 
-  it('reports a gallery photo the map carries no alt for', () => {
+  it('reports a gallery photo the map carries no alt for', async () => {
     const body = '```gallery\n' + `${IMG}/trips/rhodos/g1\n` + '```';
-    const audit = auditAltText(post({
+    const audit = (await auditAltText(post({
       title: 'Rhodos', bodyMarkdown: body, images: { [`${IMG}/trips/rhodos/g1`]: dims },
-    }));
+    })));
     expect(audit.images).toEqual([
       { locale: 'de', kind: 'gallery', src: `${IMG}/trips/rhodos/g1`, reason: 'empty' },
     ]);
@@ -98,7 +98,7 @@ describe('auditAltText — body and gallery photos', () => {
   // 2026-10-19 gallery-library-metadata spec: a library photo renders with the
   // Media alt, so auditing the stale copy on the post would ask the author to
   // repair text no reader sees — and miss a library alt that was cleared.
-  it('judges a library gallery photo by its current Media alt, per locale, and a missing row by the post copy', () => {
+  it('judges a library gallery photo by its current Media alt, per locale, and a missing row by the post copy', async () => {
     const g1 = `${IMG}/trips/rhodos/g1`;
     const g2 = `${IMG}/trips/rhodos/g2`;
     const g3 = `${IMG}/trips/rhodes/g3`;
@@ -115,14 +115,14 @@ describe('auditAltText — body and gallery photos', () => {
       },
       { title: 'Rhodes', bodyMarkdown: '```gallery\n' + `${g3}\n` + '```', images: { [g3]: { ...dims, alt: 'Rhodes' } } },
     );
-    const audit = auditAltText(pair, {
+    const audit = (await auditAltText(pair, {
       de: new Map([
         [g1, { alt: 'Fischerboote im Hafen', caption: '' }],
         [g2, { alt: '', caption: 'Unterschrift' }],
         [inline, { alt: 'never consulted for inline', caption: '' }],
       ]),
       en: new Map(), // no row for g3 → its stored copy is what renders
-    });
+    }));
     expect(audit.images).toEqual([
       { locale: 'de', kind: 'gallery', src: g2, reason: 'empty' },
       { locale: 'de', kind: 'body', src: inline, reason: 'repeats-title' },
@@ -130,77 +130,77 @@ describe('auditAltText — body and gallery photos', () => {
     ]);
   });
 
-  it('reads an inline body image\'s alt from the Markdown label, not from the images map', () => {
+  it('reads an inline body image\'s alt from the Markdown label, not from the images map', async () => {
     // The trap: an `images` entry for an inline photo holds only width/height,
     // so treating a missing `images[src].alt` as "undescribed" would report
     // every properly described body photo in the corpus.
-    const described = auditAltText(post({
+    const described = (await auditAltText(post({
       title: 'Rhodos',
       bodyMarkdown: `![Blick über die Altstadt](${IMG}/trips/rhodos/b1)`,
       images: { [`${IMG}/trips/rhodos/b1`]: dims },
-    }));
+    })));
     expect(described.count).toBe(0);
 
-    const repeated = auditAltText(post({
+    const repeated = (await auditAltText(post({
       title: 'Rhodos',
       bodyMarkdown: `![Rhodos](${IMG}/trips/rhodos/b1)\n\n![](${IMG}/trips/rhodos/b2)`,
       images: { [`${IMG}/trips/rhodos/b1`]: dims, [`${IMG}/trips/rhodos/b2`]: dims },
-    }));
+    })));
     expect(repeated.images).toEqual([
       { locale: 'de', kind: 'body', src: `${IMG}/trips/rhodos/b1`, reason: 'repeats-title' },
       { locale: 'de', kind: 'body', src: `${IMG}/trips/rhodos/b2`, reason: 'empty' },
     ]);
   });
 
-  it('says nothing about an images-map entry the body no longer references', () => {
+  it('says nothing about an images-map entry the body no longer references', async () => {
     // The map is never pruned (#91), so a stale key is normal — and it puts no
     // photo on the page to describe.
-    expect(auditAltText(post({
+    expect((await auditAltText(post({
       title: 'Rhodos', bodyMarkdown: 'Nur Text.', images: { [`${IMG}/trips/rhodos/old`]: dims },
-    })).count).toBe(0);
+    }))).count).toBe(0);
   });
 
   // Gallery-local captions (2026-10-19): caption text that reads like an
   // inline image puts no photo on the page, so it has no alt to audit.
-  it('does not read image-like text in a gallery caption override as a body photo', () => {
+  it('does not read image-like text in a gallery caption override as a body photo', async () => {
     const g1 = `${IMG}/trips/rhodos/g1`;
     const stale = `${IMG}/trips/rhodos/old`;
-    expect(auditAltText(post({
+    expect((await auditAltText(post({
       title: 'Rhodos',
       bodyMarkdown: '```gallery\n' + `${g1} | caption-override="Wie ![](${stale})"\n` + '```',
       images: { [g1]: { ...dims, alt: 'Hafen bei Nacht' }, [stale]: dims },
-    })).count).toBe(0);
+    }))).count).toBe(0);
   });
 });
 
 describe('auditAltText — locales', () => {
-  it('judges each locale against its own title', () => {
+  it('judges each locale against its own title', async () => {
     // The EN hero alt is the DE title: different words to an English reader,
     // and the EN page's heading never says them — a real description.
-    const audit = auditAltText(post(
+    const audit = (await auditAltText(post(
       { title: 'Rhodos', ...hero('Rhodos') },
       { title: 'Rhodes', heroImage: { src: `${IMG}/trips/rhodes/hero`, width: 3000, height: 2000, alt: 'Rhodos' } },
-    ));
+    )));
     expect(audit.images).toEqual([
       { locale: 'de', kind: 'hero', src: `${IMG}/trips/rhodos/hero`, reason: 'repeats-title' },
     ]);
   });
 
-  it('contributes nothing for a locale nobody has written yet', () => {
+  it('contributes nothing for a locale nobody has written yet', async () => {
     // Write-DE-first: EN is a blank title, a blank body and the placeholder
     // hero. Its images map may still hold entries from a duplicate/import.
-    const audit = auditAltText(post(
+    const audit = (await auditAltText(post(
       { title: 'Rhodos', ...hero('Fischerboote im Hafen') },
       { images: { [`${IMG}/trips/rhodes/g1`]: dims } },
-    ));
+    )));
     expect(audit).toEqual({ count: 0, images: [] });
   });
 
-  it('reports both locales when both are written', () => {
-    const audit = auditAltText(post(
+  it('reports both locales when both are written', async () => {
+    const audit = (await auditAltText(post(
       { title: 'Rhodos', ...hero('') },
       { title: 'Rhodes', heroImage: { src: `${IMG}/trips/rhodes/hero`, width: 10, height: 10, alt: 'rhodes' } },
-    ));
+    )));
     expect(audit.count).toBe(2);
     expect(audit.images.map((i) => `${i.locale}:${i.reason}`)).toEqual(['de:empty', 'en:repeats-title']);
   });

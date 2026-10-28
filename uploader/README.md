@@ -289,6 +289,32 @@ multi-select mode with an ordering strip; the button writes exactly the text a p
 hand. Per-line `| WxH | alt="…" | caption="…"` metadata is lifted into the post's `images` map at
 the store chokepoint (`normalizeGalleryFences`), leaving the body as bare URLs.
 
+Gallery identity is server-authoritative (`site/src/lib/gallery-source.ts`), using
+the actual Satteri parser features and shared sanitized render predicate. Tildes,
+indentation, list/quote containers, extra info words and raw HTML gallery markup
+receive the same save/export/audit coverage as canonical fences. Source edits
+preserve outside bytes, container prefixes and the HTML entity layer.
+
+`POST /gallery/analyze` is session-authenticated, nonpersisting and `no-store`.
+It accepts `{ bodyMarkdown }` under the existing post-body limit and returns that
+exact snapshot plus UTF-16 block/line spans. Visual tools require successful analysis;
+offline/failing analysis leaves raw Markdown editable and offers retry. A stale
+picker selection never replaces newer text. The body-content normalization and
+rewriting APIs, export, audit, import extraction and browser analysis are asynchronous.
+
+Manual descriptions for photos absent from Media keep their latest pending value per
+photo and locale. Save (and therefore Publish/Preview) waits for source analysis and
+all pending descriptions, including edits made in another locale while it waits.
+Unrelated source edits trigger fresh ranges rather than dropping the description.
+A failed analysis leaves the value available for retry and does not send a post write.
+Loading a post or restoring a revision discards the former form's pending descriptions
+and cancels a Save that was still waiting for them.
+If the session expires during analysis, the existing local draft recovery also
+retains those pending descriptions, including explicit empty values. After login,
+**Restore** re-analyzes the restored source before applying them; **Save draft**
+remains a separate action. Recovery-only values are never sent in the post payload.
+
+
 Three layout modes, selected by a `#layout:` line **inside** the fence — `column` (default,
 justified rows aligned to body text), `breakout` (justified rows wider than the story column), and
 `slider`. All three get a `<dialog>` lightbox. An unknown or absent directive falls back to
@@ -533,25 +559,28 @@ OpenRouter/DeepSeek keys refuse the request locally; a keyless custom endpoint i
 `gallery-fence.js` first. It is a pure, network-free advisory module, not a save/publish
 gate, and supplies the Review Story drawer's immediate quick checks.
 
-Call `lintStory({ title, excerpt, markdown, heroSrc, heroAlt })`, or the individual
-`lintTitle`, `lintExcerpt`, `lintHeadings`, `lintAltText`, and `lintInternalLinks` checks.
+Await `lintStory({ title, excerpt, markdown, heroSrc, heroAlt })`, or the body-dependent
+`lintHeadings`, `lintAltText`, and `lintInternalLinks` checks. `lintTitle` and
+`lintExcerpt` remain synchronous.
 Title (20–70) and excerpt (100–160) limits use the exact field's JavaScript string length,
 including spaces. The result contains each check, `pass`, and `warningCount` (individual
 findings, not categories). Findings have stable `code` values and readable `message`s;
 alt findings identify `target: 'hero' | 'inline' | 'gallery'`. Markdown `line` values are
 **1-indexed**; subtract one for CodeMirror. Hero and document-wide link findings have no line.
 
-ATX headings and inline image/link syntax ignore fenced examples through the same
-`GalleryFence.scanFences` used by the picker. Headings are checked before inline syntax;
-inline image/link checks hide code spans without crossing blank lines or ATX headings.
-Gallery metadata uses `GalleryFence.parse`. Inline checks cover `![alt](url)` / `[label](path)`, including
+ATX headings and inline image/link syntax ignore parser-established code blocks
+through the same asynchronous `GalleryFence.scanFences` used by the picker.
+Headings are checked before inline syntax; inline image/link checks hide code spans
+without crossing blank lines or ATX headings. Gallery metadata uses
+`GalleryFence.parse` on the analysis's logical content, never a second block scanner.
+Inline checks cover `![alt](url)` / `[label](path)`, including
 escaped labels, optional titles, and angle destinations; reference links and raw HTML are
 outside this check. Another-story links can be root-relative or path-relative, not remote
 URLs, fragment-only links, or query-only links. Alt checks flag missing/whitespace-only text,
 not generic wording; they inspect the supplied markdown rather than the saved `images` map.
 
-`findImage(markdown, src)` reuses that inline scanner to locate a body image's
-editable alt label. It returns `{ start, end, line }` (zero-based string offsets,
+Await `findImage(markdown, src)` to locate a body image's editable alt label using
+the inline scanner outside authoritative gallery/code ranges. It returns `{ start, end, line }` (zero-based string offsets,
 exclusive end, one-based line), or `null` when the image is absent. Code examples
 and ordinary links are not repair targets.
 

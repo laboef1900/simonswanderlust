@@ -9,8 +9,8 @@
 // It deliberately does not touch the post's `images` map. `normalizeGalleryFences`
 // (src/body-content.ts) already lifts that metadata into `images` at the store
 // chokepoint on save, and the WXR importer depends on the same path. Emitting
-// the author-facing format means the picker is an authoring aid, not a second
-// data path — and needs no server change at all.
+// the author-facing format means the picker remains an authoring aid. Gallery
+// identity and source ranges come exclusively from the authenticated analyzer.
 //
 // @ai-warning The escape rule below duplicates `escapeMeta`/`unescapeMeta` in
 // site/src/lib/gallery-layout.ts. They cannot import one another (browser IIFE vs. an ESM
@@ -105,10 +105,6 @@ window.GalleryFence = (function () {
   var DIMS_RE = /^(\d{1,6})x(\d{1,6})$/;
   var ATTR_RE = /^(alt|caption|caption-override|format)="([^"]*)"$/;
   var MAX_TEXT = 1000;
-
-  // Mirrors FENCE_OPEN_RE in src/body-content.ts: up to 3 spaces of indent
-  // (CommonMark), a run of 3+ backticks or tildes, then the info string.
-  var FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 
   function usableDim(n) {
     return typeof n === 'number' && isFinite(n) && Math.floor(n) === n && n > 0 && n <= 999999;
@@ -212,11 +208,10 @@ window.GalleryFence = (function () {
   }
 
   /**
-   * parse(text) → { directives, lines }
+   * parse(content) → { directives, lines }
    *
-   * Accepts a full fence block or bare lines, and both the authored form
-   * (`url | WxH | alt="…"`) and the stored form (a bare URL, after
-   * normalizeGalleryFences has lifted the metadata away).
+   * Accepts logical gallery content supplied by source analysis, never source
+   * delimiters or container prefixes. Photo metadata policy is unchanged.
    */
   function parse(text) {
     var directives = [];
@@ -225,7 +220,6 @@ window.GalleryFence = (function () {
     String(text == null ? '' : text).split('\n').forEach(function (raw) {
       var line = raw.trim();
       if (line === '') return;
-      if (FENCE_RE.test(line)) return; // the ```gallery delimiters themselves
       if (line.charAt(0) === '#') { directives.push(line); return; }
 
       var fields = line.split('|').map(function (f) { return f.trim(); });
@@ -263,118 +257,89 @@ window.GalleryFence = (function () {
       if (!photo || photo.src !== src) return raw;
       var cr = raw.endsWith('\r') ? '\r' : '';
       var fields = (cr ? raw.slice(0, -1) : raw).split('|');
-      var rest = fields.slice(1).filter(function (part) {
+      var replaced = false;
+      var rest = fields.slice(1).flatMap(function (part) {
         var attr = ATTR_RE.exec(part.trim());
-        return !attr || attr[1] !== 'alt';
+        if (!attr || attr[1] !== 'alt') return [part];
+        if (replaced) return [];
+        replaced = true;
+        return [part.slice(0, part.length - part.trimStart().length) + field
+          + part.slice(part.trimEnd().length)];
       });
-      return [fields[0]].concat(rest).join('|').trimEnd() + ' | ' + field + cr;
+      var changed = [fields[0]].concat(rest).join('|');
+      return (replaced ? changed : changed.trimEnd() + ' | ' + field) + cr;
     }).join('\n');
   }
 
-  /**
-   * fenceAt(body, cursor) → { text, start, end } | null
-   *
-   * Locate the ```gallery fence the cursor sits inside, so "Edit gallery" can
-   * reopen the picker with the current photos preselected and the current
-   * directives preserved.
-   *
-   * @ai-warning What counts as a gallery, and where a fence ends, MUST match
-   * `rewriteFences` in src/body-content.ts exactly, or the two disagree about
-   * which block is which: a fence the picker thinks it owns but the server does
-   * not gets replaced without ever being normalized, and one the server treats
-   * as a gallery but the picker cannot see gets a second fence nested inside it.
-   * `test/gallery-fence.test.ts` runs both scanners over one corpus and compares
-   * — add cases there rather than trusting this comment. Three rules earn their
-   * keep, all of them found by that comparison disagreeing:
-   *
-   *  1. The gallery test is the server's three conditions — column 0, backticks,
-   *     info string exactly `gallery` — not `startsWith('```gallery')`, which
-   *     claimed ```gallery-notes and missed a 4-backtick ````gallery.
-   *  2. A closer's tail is `[ \t]*`, NOT `.trim() === ''`. `String.trim` also
-   *     strips NBSP, U+2028 and friends, so a fence line ending in a pasted NBSP
-   *     closed the block here and not on the server.
-   *  3. An unterminated fence runs to EOF, as CommonMark and the server both
-   *     have it. Returning null instead made the picker nest a second gallery
-   *     inside the first.
-   *  4. A trailing '\r' is stripped before the fence test, as the server does.
-   *     Left on the line it lands in the info string, so a CRLF closer never
-   *     matched rule 2 and a perfectly closed gallery was "unterminated" (#142).
-   *
-   * Recognising an ENCLOSING fence stays deliberately liberal (indent and tildes
-   * included), also matching the server: being generous about what protects
-   * content is the safe direction to be wrong in.
-   */
-  /** Mirrors the server's closing-fence regex tail — space and tab only. */
-  var CLOSER_TAIL_RE = /^[ \t]*$/;
-
-  /** Every top-level fenced block in `text`, in order. */
-  function scanFences(text) {
-    var lines = text.split('\n');
-    var blocks = [];
-    var pos = 0;
-    var open = null;
-
-    for (var i = 0; i < lines.length; i++) {
-      var raw = lines[i];
-      var lineStart = pos;
-      var lineEnd = pos + raw.length;
-      pos = lineEnd + 1; // + newline
-
-      // Keep CRLF intact: split('\n') leaves the '\r' on the line, and the
-      // server (`rewriteFences`) strips it before testing the fence. Left in,
-      // it lands in `info` and a closer never matches CLOSER_TAIL_RE (#142).
-      var line = raw.charAt(raw.length - 1) === '\r' ? raw.slice(0, -1) : raw;
-
-      var m = FENCE_RE.exec(line);
-      if (!m) continue;
-      var indent = m[1] || '';
-      var run = m[2] || '';
-      var info = m[3] || '';
-      var marker = run.charAt(0);
-
-      if (open === null) {
-        // CommonMark: a backtick fence's info string may not contain a backtick.
-        if (marker === '`' && info.indexOf('`') >= 0) continue;
-        open = {
-          start: lineStart,
-          marker: marker,
-          len: run.length,
-          isGallery: indent === '' && marker === '`' && info.trim() === 'gallery',
-        };
-        continue;
-      }
-
-      // A closer is the same character, at least as long, and nothing else.
-      if (marker !== open.marker || run.length < open.len || !CLOSER_TAIL_RE.test(info)) continue;
-      blocks.push({ start: open.start, end: lineEnd, isGallery: open.isGallery, unterminated: false });
-      open = null;
-    }
-
-    if (open !== null) {
-      blocks.push({ start: open.start, end: text.length, isGallery: open.isGallery, unterminated: true });
-    }
-    return blocks;
-  }
-
-  /** The fenced block the cursor sits in, gallery or not — null outside every fence. */
-  function blockAt(text, cursor) {
-    var blocks = scanFences(text);
-    for (var i = 0; i < blocks.length; i++) {
-      if (cursor >= blocks[i].start && cursor <= blocks[i].end) return blocks[i];
-    }
-    return null;
-  }
-
-  function fenceAt(body, cursor) {
+  // A small snapshot cache shares one request between widgets and quick checks.
+  // Mutations explicitly request fresh analysis; failures are never cached.
+  var analyses = new Map();
+  async function analyze(body, options) {
     var text = String(body == null ? '' : body);
-    var block = blockAt(text, cursor);
-    if (!block || !block.isGallery) return null;
-    return {
-      text: text.slice(block.start, block.end),
-      start: block.start,
-      end: block.end,
-      unterminated: block.unterminated,
-    };
+    if (!(options && options.fresh) && analyses.has(text)) return analyses.get(text);
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, 10000);
+    var pending = (async function () {
+      try {
+        var response = await fetch('/gallery/analyze', {
+          method: 'POST', credentials: 'same-origin', cache: 'no-store',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bodyMarkdown: text }), signal: controller.signal,
+        });
+        if (!response.ok) {
+          var error = new Error('Gallery analysis unavailable');
+          error.status = response.status;
+          throw error;
+        }
+        var result = await response.json();
+        if (!result || result.bodyMarkdown !== text || !Array.isArray(result.blocks)) {
+          throw new Error('Gallery analysis snapshot mismatch');
+        }
+        return result;
+      } finally { clearTimeout(timer); }
+    })();
+    analyses.set(text, pending);
+    while (analyses.size > 2) analyses.delete(analyses.keys().next().value);
+    try { return await pending; }
+    catch (error) {
+      if (analyses.get(text) === pending) analyses.delete(text);
+      throw error;
+    }
+  }
+
+  async function scanFences(body, options) { return (await analyze(body, options)).blocks; }
+
+  function blockAt(analysis, cursor) {
+    var found = null;
+    analysis.blocks.forEach(function (block) {
+      if (cursor >= block.start && cursor <= block.end
+        && (!found || (block.start >= found.start && block.end <= found.end))) found = block;
+    });
+    return found;
+  }
+
+  async function fenceAt(body, cursor, options) {
+    var analysis = await analyze(body, options);
+    var block = blockAt(analysis, cursor);
+    return block && block.isGallery
+      ? Object.assign({ text: analysis.bodyMarkdown.slice(block.start, block.end) }, block) : null;
+  }
+
+
+  async function altEdit(body, src, value) {
+    var analysis = await analyze(body, { fresh: true });
+    var helpers = await import('./gallery-source-edits.js');
+    var edits = [];
+    var lines = analysis.blocks.filter(function (block) { return block.isGallery && !block.unterminated; })
+      .flatMap(function (block) { return block.lines; });
+    for (var i = lines.length - 1; i >= 0; i--) {
+      var line = lines[i];
+      var replacement = withAlt(line.text, src, value);
+      if (replacement !== line.text) {
+        helpers.galleryLineEdits(line, replacement).forEach(function (edit) { edits.push(edit); });
+      }
+    }
+    return edits.sort(function (a, b) { return b.start - a.start || b.end - a.end; });
   }
 
   /** Newlines immediately before `at`, capped at the 2 a blank line needs. */
@@ -415,104 +380,62 @@ window.GalleryFence = (function () {
    * fence has no closer, as replaceFenceAt reports it — there is no "after"
    * to relocate to, and the caller must make no edit.
    */
-  function insertBlockAt(body, cursor, block) {
+  async function insertBlockAt(body, cursor, block) {
     var text = String(body == null ? '' : body);
     var line = String(block == null ? '' : block);
     var at = Math.max(0, Math.min(text.length, Number(cursor) || 0));
-    var enclosing = blockAt(text, at);
+    var enclosing = blockAt(await analyze(text, { fresh: true }), at);
     if (!enclosing) return { text: line, start: at, cursor: at + line.length, relocated: false };
     if (enclosing.unterminated) {
       return { text: '', start: at, cursor: at, relocated: false, blocked: 'unterminated' };
     }
-    var pad = padding(text, enclosing.end);
-    return {
-      text: pad.prefix + line + pad.suffix,
-      start: enclosing.end,
-      cursor: enclosing.end + pad.prefix.length + line.length + 2,
-      relocated: true,
-    };
+    return insertAfterBlock(text, enclosing, line);
   }
 
-  /**
-   * replaceFenceAt(body, cursor, fence) → { text, start, end, cursor, replaced, blocked? }
-   *
-   * A RANGE EDIT, not a new document: `text` replaces `[start, end)`. The caller
-   * applies it with `cm.replaceRange`, which keeps CodeMirror's undo history —
-   * `mde.value()` would discard it, so a mis-inserted gallery could not be undone.
-   * `cursor` is where the caret belongs in the NEW document: after the block
-   * and the blank line that follows it, so what the author writes next can
-   * never land on the closing ``` (#333).
-   *
-   * Replaces the gallery fence under the cursor ("Edit gallery"), or inserts at
-   * the cursor when there is none ("Insert gallery"). An empty `fence` removes
-   * the block under the cursor, and is a no-op when there is none.
-   *
-   * When `blocked` is set the caller must make NO edit and show the reason:
-   *   'unterminated' — the gallery under the cursor has no closing fence, so its
-   *                    extent runs to EOF and replacing it would eat the rest of
-   *                    the post. Ask the author to close it instead of guessing.
-   *
-   * @ai-note Insertion pads with blank lines as needed, and relocates out of an
-   * enclosing fence. A fence must open at column 0 to be a fence at all, so
-   * splicing raw at a mid-paragraph cursor produces literal text the renderer and
-   * `normalizeGalleryFences` both ignore — a gallery that silently is not one.
-   * Worse, splicing inside a ```js block makes the new gallery's CLOSER close the
-   * js fence, turning the code into prose and leaving the js closer to open an
-   * unterminated block over the rest of the body.
-   */
-  function replaceFenceAt(body, cursor, fence) {
+  function insertAfterBlock(text, enclosing, line) {
+    var newline = enclosing.newline || '\n';
+    var prefix = enclosing.prefix || '';
+    if (!prefix) {
+      var pad = padding(text, enclosing.end);
+      return { text: pad.prefix + line + pad.suffix, start: enclosing.end,
+        cursor: enclosing.end + pad.prefix.length + line.length + 2, relocated: true };
+    }
+    var inserted = newline + prefix + newline + prefix + line.replace(/\n/g, newline + prefix) + newline + prefix + newline + prefix;
+    return { text: inserted, start: enclosing.end, cursor: enclosing.end + inserted.length, relocated: true };
+  }
+
+  /** Fresh, authoritative range edit; never replace an author's whole document. */
+  async function replaceFenceAt(body, cursor, fence) {
     var text = String(body == null ? '' : body);
     var block = String(fence == null ? '' : fence);
-    var found = fenceAt(text, cursor);
-
-    if (found && found.unterminated) {
-      return { text: '', start: found.start, end: found.start, cursor: found.start, replaced: false, blocked: 'unterminated' };
+    var analysis = await analyze(text, { fresh: true });
+    var enclosing = blockAt(analysis, cursor);
+    var found = enclosing && enclosing.isGallery ? enclosing : null;
+    if (enclosing && enclosing.unterminated) {
+      return { text: '', start: enclosing.start, end: enclosing.start, cursor: enclosing.start, replaced: false, blocked: 'unterminated' };
     }
-
     if (found && block === '') {
-      // Removal: swallow the blank line the fence left behind, so repeated
-      // insert/remove cycles do not stack up empty lines.
-      var end = found.end;
-      var after = 0;
-      while (text.charAt(end + after) === '\n') after++;
-      var keep = Math.max(0, Math.min(after, 2 - runBefore(text, found.start)));
-      return { text: '', start: found.start, end: end + after - keep, cursor: found.start, replaced: true };
+      // Never swallow neighboring list items, quotes, or prose.
+      return { text: '', start: found.start, end: found.end, cursor: found.start, replaced: true };
     }
     if (found) {
-      // The text around the fence is left byte for byte; the caret skips the
-      // separator that is already there (up to the blank line).
+      // `fence` is our canonical serializer's output, not arbitrary Markdown.
+      var content = block.slice(block.indexOf('\n') + 1, block.lastIndexOf('\n'));
+      var helpers = await import('./gallery-source-edits.js');
+      var edit = helpers.galleryContentEdit(text, found, content);
       var following = 0;
       while (following < 2 && text.charAt(found.end + following) === '\n') following++;
-      return { text: block, start: found.start, end: found.end, cursor: found.start + block.length + following, replaced: true };
+      return Object.assign(edit, { cursor: found.end + edit.text.length - (edit.end - edit.start) + following, replaced: true });
     }
-    if (block === '') {
-      var noop = Math.max(0, Math.min(text.length, Number(cursor) || 0));
-      return { text: '', start: noop, end: noop, cursor: noop, replaced: false };
-    }
-
     var at = Math.max(0, Math.min(text.length, Number(cursor) || 0));
-
-    // The cursor is inside some OTHER fenced block (a ```js example, say).
-    // Inserting there would make this gallery's closer close that block. Land
-    // after it instead — the only position that is both safe and predictable.
-    var enclosing = blockAt(text, at);
+    if (!block) return { text: '', start: at, end: at, cursor: at, replaced: false };
     if (enclosing) {
-      if (enclosing.unterminated) {
-        return { text: '', start: at, end: at, cursor: at, replaced: false, blocked: 'unterminated' };
-      }
-      at = enclosing.end;
+      var relocated = insertAfterBlock(text, enclosing, block);
+      return Object.assign(relocated, { end: relocated.start, replaced: false });
     }
-
-    // Existing newlines at `at` plus the suffix always make exactly one blank
-    // line, so the caret lands on the first line after it.
     var pad = padding(text, at);
-    return {
-      text: pad.prefix + block + pad.suffix,
-      start: at,
-      end: at,
-      cursor: at + pad.prefix.length + block.length + 2,
-      replaced: false,
-    };
+    return { text: pad.prefix + block + pad.suffix, start: at, end: at,
+      cursor: at + pad.prefix.length + block.length + 2, replaced: false };
   }
 
   return {
@@ -532,6 +455,8 @@ window.GalleryFence = (function () {
     serialize: serialize,
     parse: parse,
     withAlt: withAlt,
+    analyze: analyze,
+    altEdit: altEdit,
     scanFences: scanFences,
     fenceAt: fenceAt,
     replaceFenceAt: replaceFenceAt,

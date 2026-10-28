@@ -1,5 +1,6 @@
 import { satteri } from '@astrojs/markdown-satteri';
 import { SHIKI_THEME, shikiStyleToClass } from './shiki-classes.js';
+import { MARKDOWN_FEATURES } from './markdown-features.js';
 
 /**
  * Standalone Markdown → HTML renderer that reproduces what the Astro Content
@@ -34,17 +35,18 @@ type MarkdownOptions = Parameters<ReturnType<typeof satteri>['createRenderer']>[
  * `shikiStyleToClass` is what lets `body-images.ts` strip every inline
  * `style` (#124): Shiki's colours arrive as classes backed by `SHIKI_CSS`.
  */
-export const MARKDOWN_OPTIONS: Pick<MarkdownOptions, 'syntaxHighlight' | 'shikiConfig'> = {
+export const MARKDOWN_OPTIONS = {
+  processor: satteri({ features: MARKDOWN_FEATURES }),
   syntaxHighlight: { type: 'shiki', excludeLangs: ['math', 'gallery'] },
   shikiConfig: { theme: SHIKI_THEME, transformers: [shikiStyleToClass] },
-};
+} satisfies Pick<MarkdownOptions, 'syntaxHighlight' | 'shikiConfig'> & { processor: unknown };
 
 let rendererPromise: Promise<Renderer> | undefined;
 
 function getRenderer(): Promise<Renderer> {
   // Lazy module-level cache: the first call pays the one-time Shiki setup;
   // subsequent calls reuse the same renderer.
-  rendererPromise ??= satteri().createRenderer(MARKDOWN_OPTIONS);
+  rendererPromise ??= MARKDOWN_OPTIONS.processor.createRenderer(MARKDOWN_OPTIONS);
   return rendererPromise;
 }
 

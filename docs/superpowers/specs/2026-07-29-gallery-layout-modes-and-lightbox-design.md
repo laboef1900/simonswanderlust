@@ -54,6 +54,15 @@ among landscapes leaves roughly a third of the block as dead background.
 - No new **runtime** packages, no new server endpoints, no data-model change. (`happy-dom` was
   added to `site/` as a dev dependency for the island's test suite — nothing ships to a reader.)
 
+**Amended 2026-10-28 (#354):** the later owner-approved
+[grammar/source-provenance contract](2026-10-27-gallery-grammar-agreement-design.md)
+adds the narrowly authenticated, nonpersisting `/gallery/analyze` bridge. The
+no-endpoint statement above describes #66's scope, not a restriction on that
+explicitly approved cutover. Gallery classification now comes from the real
+Satteri/sanitized render tree, including nested/tilde/info-argument/raw HTML forms;
+the picker receives logical content and UTF-16 source spans asynchronously.
+
+
 ## Layout modes
 
 | Mode | Behaviour |

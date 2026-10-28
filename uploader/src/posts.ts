@@ -401,14 +401,14 @@ const PLACEHOLDER_REGION = 'europe';
  * regex; this version is additionally quote/brace-aware so alt text containing '>' (legacy
  * exports escaped only '"') converts instead of surviving to be sanitizer-stripped.
  */
-export function normalizeBodyImages(
+export async function normalizeBodyImages(
   bodyMarkdown: string,
   images: Record<string, ImageDims>,
-): { bodyMarkdown: string; images: Record<string, ImageDims> } {
+): Promise<{ bodyMarkdown: string; images: Record<string, ImageDims> }> {
   // Gallery fences first: a ```gallery line may carry `| WxH | alt="…"`
   // metadata that belongs in the images map (see body-content.ts). Its output
   // contains no <BodyImage> tags, so the two passes are independent.
-  const gal = normalizeGalleryFences(bodyMarkdown, images);
+  const gal = await normalizeGalleryFences(bodyMarkdown, images);
   bodyMarkdown = gal.bodyMarkdown;
   const merged: Record<string, ImageDims> = { ...gal.images };
   // Attrs are consumed in disjoint chunks — "quoted", {braced}, or any char that opens
@@ -416,7 +416,7 @@ export function normalizeBodyImages(
   // Only outside gallery fences: a gallery line's text (a gallery-local caption above
   // all) is content, never a tag to convert.
   const tagRe = /<BodyImage\s+((?:"[^"]*"|\{[^}]*\}|[^>"{])*?)\/>/g;
-  const normalized = rewriteOutsideGalleries(bodyMarkdown, (text) => text.replace(tagRe, (match, attrs: string) => {
+  const normalized = await rewriteOutsideGalleries(bodyMarkdown, (text) => text.replace(tagRe, (match, attrs: string) => {
     const get = (name: string): string | undefined => {
       const quoted = attrs.match(new RegExp(`${name}="([^"]*)"`));
       if (quoted?.[1] !== undefined) return quoted[1];
@@ -463,11 +463,11 @@ export function normalizeBodyImages(
  * post's `images` map unchecked. See body-content.ts `imagesMapError` for why
  * an unchecked map is an XSS vector rather than a tidiness problem.
  */
-function draftWithDefaults(pair: PostPair): PostPair {
+async function draftWithDefaults(pair: PostPair): Promise<PostPair> {
   // The locale is passed in rather than read off `l`: a partial draft payload
   // can omit `locale` at runtime despite the TS type, and the error message
   // must still name which side failed.
-  const fillLocale = (l: PostLocale, locale: Locale): PostLocale => {
+  const fillLocale = async (l: PostLocale, locale: Locale): Promise<PostLocale> => {
     const err = imagesMapError(l.images) ?? heroImageError(l.heroImage);
     if (err) throw new PostError(`${locale}: ${err}`);
     const titleError = heroImageError(l.titleImage);
@@ -489,7 +489,7 @@ function draftWithDefaults(pair: PostPair): PostPair {
       bodyMarkdown: l.bodyMarkdown ?? '',
       images: l.images ?? {},
     };
-    const n = normalizeBodyImages(filled.bodyMarkdown, filled.images);
+    const n = await normalizeBodyImages(filled.bodyMarkdown, filled.images);
     return { ...filled, bodyMarkdown: n.bodyMarkdown, images: n.images };
   };
   const s = pair.shared;
@@ -508,8 +508,8 @@ function draftWithDefaults(pair: PostPair): PostPair {
       // Absent = enabled per post; the site-wide setting is the default-off gate.
       commentsEnabled: s.commentsEnabled ?? true,
     },
-    de: fillLocale(pair.de, 'de'),
-    en: fillLocale(pair.en, 'en'),
+    de: await fillLocale(pair.de, 'de'),
+    en: await fillLocale(pair.en, 'en'),
   };
 }
 
@@ -584,9 +584,11 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
       });
     },
     async upsertDraft(pair, baseUpdatedAt) {
-      pair = draftWithDefaults(pair);
       const key = pair.translationKey || randomUUID();
-      return withPair(key, () => {
+      return withPair(key, async () => {
+        // Reserve save order before asynchronous analysis; a later Publish must
+        // not overtake this edit. Both locales still normalize before any write.
+        pair = await draftWithDefaults(pair);
         const existing = byKey.get(key);
         if (!existing && baseUpdatedAt) throw new PostError('post not found', 'not_found');
         if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
@@ -905,7 +907,7 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
       }));
     },
     async upsertDraft(pair, baseUpdatedAt) {
-      pair = draftWithDefaults(pair);
+      pair = await draftWithDefaults(pair);
       const tk = pair.translationKey || randomUUID();
       writable();
       const client = await pool.connect();
