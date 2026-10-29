@@ -122,7 +122,8 @@
 
       // ---- draft guard: dirty tracking, beforeunload warning, local autosave ----
       const guard = DraftGuard.createDraftGuard({
-        resource: 'page:' + KEY,
+        // A save sends only this mode's locales; it must never clean another mode's copy.
+        resource: 'page:' + KEY + (prepareLocale ? ':prepare:' + prepareLocale : ''),
         recovery: () => writeRecovery?.exportState(),
         collect: () => ({ de: localeObj('de'), en: localeObj('en') }),
       });

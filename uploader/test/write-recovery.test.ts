@@ -179,17 +179,24 @@ describe('scoped draft recovery', () => {
     const c = fixture({ storage: local, owner }); c.edit('C'); c.guard.markClean();
     expect([...local.map.values()].some(raw => raw.includes('A newer'))).toBe(true);
   });
-  it('refuses stored-version replacement when the current local copy cannot be preserved', () => {
-    const local = storage(); const f = fixture({ storage: local });
+  it.each(['writeUseStored', 'writeRebase'])('refuses %s with a storage warning when the current local copy cannot be preserved', async (action) => {
+    const local = storage(); const resource = randomUUID();
+    const f = fixture({ storage: local, resource });
     f.edit('Earlier'); f.guard.stashNow();
+    f.handle(async () => response({ translationKey: resource, ownerUserId: f.owner, lastSaveId: null,
+      updatedAt: '2026-10-03T00:00:00.000Z', de: { title: 'Server' }, en: { title: 'Server EN' } }));
+    await f.recovery.probe();
     const retained = [...local.map.entries()];
     f.edit('Latest unsaved');
     local.setItem = () => { throw new Error('Quota exceeded'); };
-    expect(() => f.guard.freshContext()).toThrow('draft_recovery_unavailable');
+    f.dom.document.querySelectorAll('button').find(button => button.textContent === action)!.click();
+    await Promise.resolve();
     expect(f.guard.isDirty()).toBe(true);
-    expect(f.guard.snapshot()).toBe(2);
     expect([...local.map.entries()]).toEqual(retained);
-    expect(f.calls).toEqual([]);
+    expect(f.dom.document.querySelector('.write-recovery')!.querySelector('p')!.textContent).toBe('writeStorageUnavailable');
+    expect(f.dom.document.querySelector('pre')!.textContent).toContain('Latest unsaved');
+    expect(f.dom.document.querySelector('details')!.hidden).toBe(false);
+    expect(f.calls).toHaveLength(1); // The comparison GET; replacement never sends or re-reads.
   });
   it('restores a new-post create identity and unresolved snapshots without performing a request', async () => {
     const local = storage(); const owner = randomUUID(); const a = fixture({ storage: local, owner });
