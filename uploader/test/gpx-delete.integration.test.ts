@@ -1,3 +1,4 @@
+import { idleBuildState } from './build-fixture.js';
 import { seedSiteIdentity } from '../src/site-identity.js';
 import { publishTokens } from './publish-tokens.js';
 import { createPublicTrackWorker, type PublicTrackWorker } from '../src/gpx-public-worker.js';
@@ -46,7 +47,7 @@ maybe('private GPX post deletion and durable cleanup', () => {
   let authorId: string;
   let cookies: { sid: string };
   let writable: boolean;
-  const build = vi.fn(async () => ({ ok: true as const, release: 'synthetic' }));
+  const build = vi.fn(async () => ({ ok: true as const, attemptId: 'synthetic', release: 'synthetic' }));
 
   function start() {
     files = createGpxFiles({ storageDir: join(root, 'images'), isWritable: () => writable });
@@ -62,7 +63,7 @@ maybe('private GPX post deletion and durable cleanup', () => {
       users: pgUserStore(pool), sessions: pgSessionStore(pool), posts,
       pages: memoryPageStore(), media, encodeQueue: queue, secrets: memorySecretsStore(),
       settings: createSettingsStore({ path: join(root, 'settings.json'), defaults: defaultSettings() }),
-      builder: { build, hasRelease: () => true, quiesce: async () => {} },
+      builder: { ...idleBuildState, build, hasRelease: () => true, quiesce: async () => {} },
       dbBackup: createDbBackup({ db: pool, dir: backupDir, retention: () => 10, routeFiles: files }),
       dbCheck: async () => { await pool.query('SELECT 1'); }, gpx: service, isWritable: () => writable,
     });

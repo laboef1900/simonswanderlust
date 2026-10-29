@@ -1,3 +1,5 @@
+import { idleBuildState } from './build-fixture.js';
+import { buildFailureMessage, type BuildTrigger } from '../src/build-state.js';
 import { publishBody, publishTokens } from './publish-tokens.js';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { mkdtemp, mkdir, readdir, writeFile } from 'node:fs/promises';
@@ -42,12 +44,13 @@ function fakeStore(init: Settings = SETTINGS): SettingsStore {
   return { get: () => ({ ...cur }), update: (p) => { cur = validate({ ...cur, ...p }); return { ...cur }; } };
 }
 
-function stubBuilder(outcome: BuildOutcome = { ok: true, release: 'r1' }) {
-  const calls: number[] = [];
+function stubBuilder(outcome: BuildOutcome = { ok: true, attemptId: 'r1', release: 'r1' }) {
+  const calls: BuildTrigger[] = [];
   return {
     calls,
     builder: {
-      build: async () => { calls.push(1); return outcome; },
+      ...idleBuildState,
+      build: async (trigger: BuildTrigger) => { calls.push(trigger); return outcome; },
       hasRelease: () => true,
       quiesce: async () => {},
     } satisfies SiteBuilder,
@@ -1957,12 +1960,12 @@ describe('POST /posts/bulk', () => {
   });
 
   it('a failed rebuild is surfaced but the store changes still land', async () => {
-    const s = stubBuilder({ ok: false, error: 'a build is already running' });
+    const s = stubBuilder({ ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') });
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
     const tk = await create(b, cookie, 'a');
     const body = (await bulk(b, cookie, { action: 'publish', keys: [tk] })).json();
-    expect(body).toMatchObject({ succeeded: 1, build: { ok: false, error: 'a build is already running' } });
+    expect(body).toMatchObject({ succeeded: 1, build: { ok: false, code: 'internal', error: buildFailureMessage('internal') } });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('published');
   });
 });
@@ -2406,12 +2409,13 @@ describe('posts editor', () => {
     let committed: Date | undefined;
     let tk = '';
     const b = build({ posts, builder: {
+      ...idleBuildState,
       hasRelease: () => true, quiesce: async () => {},
       build: async () => {
         const published = (await posts.get(tk))!;
         committed = published.updatedAt;
         await posts.upsertDraft({ ...published, de: { ...published.de, title: 'Later draft' } });
-        return { ok: false, error: 'synthetic build failure' };
+        return { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') };
       },
     } });
     const { cookie } = await authed(b);
@@ -2536,7 +2540,7 @@ describe('posts editor', () => {
     expect(s.calls.length).toBe(1); // publish built once
     const del = await b.app.inject({ method: 'DELETE', url: `/posts/${tk}`, cookies: cookie });
     expect(del.statusCode).toBe(200);
-    expect(del.json()).toEqual({ deleted: true, build: { ok: true, release: 'r1' } });
+    expect(del.json()).toEqual({ deleted: true, build: { ok: true, attemptId: 'r1', release: 'r1' } });
     expect(s.calls.length).toBe(2);
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).statusCode).toBe(404);
   });
@@ -2559,32 +2563,61 @@ describe('posts editor', () => {
     const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(s.calls.length).toBe(1);
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
-    expect(un.json()).toEqual({ unpublished: true, build: { ok: true, release: 'r1' } });
+    expect(un.json()).toEqual({ unpublished: true, previousUpdatedAt: published.json().updatedAt, updatedAt: expect.any(String), build: { ok: true, attemptId: 'r1', release: 'r1' } });
     expect(s.calls.length).toBe(2);
     const got = await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie });
     expect(got.json().status).toBe('draft');
   });
 
+  it('reports the locked predecessor when another tab saves after the route preflight', async () => {
+    const posts = memoryPostStore();
+    const b = build({ posts, builder: stubBuilder().builder });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const published = await posts.publish(tk, await publishTokens(posts, tk));
+    const get = posts.get.bind(posts);
+    let precedingToken: Date | undefined;
+    vi.spyOn(posts, 'get').mockImplementationOnce(async (key) => {
+      const before = (await get(key))!;
+      const saved = await posts.upsertDraft({
+        ...before, de: { ...before.de, title: 'Saved between preflight and lock' },
+      }, before.updatedAt);
+      precedingToken = saved.updatedAt;
+      return before;
+    });
+    const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    expect(un.statusCode).toBe(200);
+    expect(un.json().previousUpdatedAt).toBe(precedingToken?.toISOString());
+    expect(un.json().previousUpdatedAt).not.toBe(published.updatedAt.toISOString());
+    const stale = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), updatedAt: published.updatedAt.toISOString() },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect((await posts.get(tk))!.de.title).toBe('Saved between preflight and lock');
+  });
+
   it('a failed rebuild is surfaced but the store change still lands (unpublish + delete)', async () => {
-    const s = stubBuilder({ ok: false, error: 'a build is already running' });
+    const s = stubBuilder({ ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') });
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
-    expect(un.json()).toEqual({ unpublished: true, build: { ok: false, error: 'a build is already running' } });
+    expect(un.json()).toEqual({ unpublished: true, previousUpdatedAt: published.json().updatedAt, updatedAt: expect.any(String), build: { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') } });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('draft');
     // re-publish, then delete while the builder keeps failing: DB delete lands, outcome surfaced
     await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     const del = await b.app.inject({ method: 'DELETE', url: `/posts/${tk}`, cookies: cookie });
     expect(del.statusCode).toBe(200);
-    expect(del.json()).toEqual({ deleted: true, build: { ok: false, error: 'a build is already running' } });
+    expect(del.json()).toEqual({ deleted: true, build: { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') } });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).statusCode).toBe(404);
   });
 
@@ -3185,7 +3218,7 @@ describe('POST /rebuild and GET /health', () => {
   it('reports whether a release exists, as information — a missing one is not a verdict', async () => {
     // #110: a fresh volume has no release for the first minutes and a persistent
     // build failure is healed by a publish, not by a container restart.
-    const none = build({ builder: { build: async () => ({ ok: true, release: 'r' }), hasRelease: () => false, quiesce: async () => {} } });
+    const none = build({ builder: { ...idleBuildState, build: async () => ({ ok: true, attemptId: 'r', release: 'r' }), hasRelease: () => false, quiesce: async () => {} } });
     const res = await none.app.inject({ method: 'GET', url: '/health' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, release: false });
@@ -3219,24 +3252,24 @@ describe('POST /rebuild and GET /health', () => {
   });
 
   it('rebuild triggers the builder and returns its outcome', async () => {
-    const s = stubBuilder({ ok: true, release: 'r9' });
+    const s = stubBuilder({ ok: true, attemptId: 'r9', release: 'r9' });
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
     const res = await b.app.inject({ method: 'POST', url: '/rebuild', cookies: cookie });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, release: 'r9' });
+    expect(res.json()).toEqual({ ok: true, attemptId: 'r9', release: 'r9' });
     expect(s.calls.length).toBe(1);
   });
 
   it('publish reports a failed build without unpublishing', async () => {
-    const s = stubBuilder({ ok: false, error: 'astro build exited 1' });
+    const s = stubBuilder({ ok: false, attemptId: 'failed', code: 'build_failed', error: buildFailureMessage('build_failed') });
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
     const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(res.statusCode).toBe(200);
-    expect(res.json().build).toEqual({ ok: false, error: 'astro build exited 1' });
+    expect(res.json().build).toEqual({ ok: false, attemptId: 'failed', code: 'build_failed', error: buildFailureMessage('build_failed') });
   });
 });
 
@@ -3308,7 +3341,7 @@ describe('pages routes', () => {
   });
 
   it('PUT /pages/:key is admin-only and saves + rebuilds', async () => {
-    const s = stubBuilder({ ok: true, release: 'r7' });
+    const s = stubBuilder({ ok: true, attemptId: 'r7', release: 'r7' });
     const b = build({ builder: s.builder });
     const body = {
       de: { locale: 'de', title: 'Über mich', bodyMarkdown: 'Hallo', images: {} },
@@ -3321,7 +3354,7 @@ describe('pages routes', () => {
     const res = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: admin.cookie, payload: body });
     expect(res.statusCode).toBe(200);
     expect(res.json().saved.de.title).toBe('Über mich');
-    expect(res.json().build).toEqual({ ok: true, release: 'r7' });
+    expect(res.json().build).toEqual({ ok: true, attemptId: 'r7', release: 'r7' });
     expect(s.calls.length).toBe(1);
   });
 
@@ -3333,7 +3366,7 @@ describe('pages routes', () => {
   });
 
   it('PUT /pages/:key with a stale updatedAt echo is a 409 conflict that rebuilds nothing (#141)', async () => {
-    const s = stubBuilder({ ok: true, release: 'r8' });
+    const s = stubBuilder({ ok: true, attemptId: 'r8', release: 'r8' });
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
     const body = (title: string) => ({

@@ -495,6 +495,7 @@
     <script src="/admin/gpx-map.js"></script>
     <script src="/admin/editor-gpx.js"></script>
     <script src="/admin/editor-image-copy.js"></script>
+    <script src="/admin/build-reporting.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/language.js"></script>
     <script src="/admin/admin-confirm.js"></script>
@@ -546,6 +547,7 @@
       let language = null;
       const omitted = { de: false, en: false };
       const publishedLocales = { de: false, en: false };
+      let savedRequestedLocales = [];
       function requestedLocales() {
         return language ? language.locales.filter((locale) => !omitted[locale]) : [];
       }
@@ -1608,28 +1610,6 @@
         if (unpub) unpub.hidden = !isPublished;
       }
 
-      function setPublishedLive(slugs, release) {
-        const el = $('actionStatus');
-        el.textContent = '';
-        const urls = AdminConfirm.liveUrls(slugs);
-        el.appendChild(document.createTextNode(
-          'Published' + (release ? ' (release ' + release + ')' : '') + '. Live: '
-        ));
-        const links = language.locales.filter((locale) => urls[locale]).map((locale) => ({ href: urls[locale], label: locale.toUpperCase() }));
-        if (!links.length) {
-          el.appendChild(document.createTextNode('open the site from View site.'));
-          return;
-        }
-        links.forEach((u, i) => {
-          if (i) el.appendChild(document.createTextNode(' · '));
-          const a = document.createElement('a');
-          a.href = u.href;
-          a.textContent = u.label;
-          a.target = '_blank';
-          a.rel = 'noopener';
-          el.appendChild(a);
-        });
-      }
 
       // ---- alt-text audit (advisory; server: src/alt-audit.ts) ----
       // A photo whose alt is empty, only repeats the post title (which the site
@@ -1829,6 +1809,7 @@
         if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
         loadedSlugs.de = (body.de && body.de.slug) || '';
         loadedSlugs.en = (body.en && body.en.slug) || '';
+        savedRequestedLocales = language.locales.filter((locale) => body[locale] && !body[locale].omitted);
         loadRevisions().catch(() => {});
         // What was just stored is what the audit judges — refresh from the
         // server rather than re-deriving the rule in the browser.
@@ -1873,6 +1854,7 @@
         const saved = await doSaveDraft();
         if (!saved) return;
         const btn = $('publishBtn');
+        const publishingLocales = [...savedRequestedLocales];
         btn.disabled = true;
         const started = Date.now();
         setStatus('Building…');
@@ -1888,31 +1870,29 @@
           if (res.status === 401) { guard.redirectToLogin(); return; }
           const body = await res.json().catch(() => ({}));
           if (!res.ok) {
+            if (res.status >= 500) { showErr(BuildReporting.text('unknown')); setStatus(''); return; }
             const examples = Array.isArray(body.foreignImages) && body.foreignImages.length
               ? ' Examples: ' + body.foreignImages.join(', ') : '';
             showErr(gpxEditor.publishError(body.code || body.error) || (SiteLanguage.error(body) || ('Publish failed: ' + res.status)) + examples);
             setStatus('');
             return;
           }
-          if (body.build && !body.build.ok) {
-            showErr('Build error: ' + (body.build.error || 'unknown'));
-            setStatus('');
-            return;
+          if (body.published !== true || !body.updatedAt) {
+            showErr(BuildReporting.text('unknown')); setStatus(''); return;
           }
-          const release = (body.build && body.build.release) ? body.build.release : '';
-          setPublishedLive(slugs, release);
           isPublished = true;
           if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
-          for (const locale of requestedLocales()) {
+          for (const locale of publishingLocales) {
             publishedLocales[locale] = true;
             slugFieldFor(locale).disabled = true;
           }
           syncCoverage();
-          // The publish reply carries the audit of what actually went live.
+          // The audit describes the acknowledged publication, not current story liveness.
           renderAltAudit(body.altAudit, true);
           updateLocaleChip();
+          BuildReporting.renderOutcome($('actionStatus'), 'publish', body);
         } catch (e) {
-          showErr('Publish failed: ' + e);
+          showErr(BuildReporting.text('unknown'));
           setStatus('');
         } finally {
           clearInterval(tick);
@@ -1937,13 +1917,19 @@
           const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/unpublish', { method: 'POST' });
           if (res.status === 401) { guard.redirectToLogin(); return; }
           const body = await res.json().catch(() => ({}));
-          if (!res.ok) { showErr('Unpublish failed: ' + (body.error || res.status)); setStatus(''); return; }
+          if (!res.ok) { showErr(res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status)); setStatus(''); return; }
+          if (body.unpublished !== true || !body.updatedAt) { showErr(BuildReporting.text('unknown')); setStatus(''); return; }
+          // Unpublish is an emergency brake even from a stale tab. Advancing
+          // its save token is safe only if no unseen edit preceded the brake.
+          if (body.previousUpdatedAt === loadedUpdatedAt && body.updatedAt) {
+            loadedUpdatedAt = body.updatedAt;
+          }
           isPublished = false;
           for (const locale of ['de', 'en']) slugFieldFor(locale).disabled = publishedLocales[locale];
-          setStatus('Unpublished "' + title + '".');
+          BuildReporting.renderOutcome($('actionStatus'), 'unpublish', body, { title });
           updateLocaleChip();
         } catch (e) {
-          showErr('Unpublish failed: ' + e);
+          showErr(BuildReporting.text('unknown'));
           setStatus('');
         } finally {
           btn.disabled = false;

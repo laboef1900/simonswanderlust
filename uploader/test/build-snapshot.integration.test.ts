@@ -157,9 +157,10 @@ suite('one PostgreSQL view for the complete build', () => {
       },
     });
     try {
-      expect((await builder.build()).ok).toBe(true);
+      await builder.initialize();
+      expect((await builder.build('rebuild')).ok).toBe(true);
       await pool.query(`UPDATE site_identity SET localized='{"tagline":{"xx":"invalid"}}'`);
-      expect((await builder.build()).ok).toBe(false);
+      expect((await builder.build('rebuild')).ok).toBe(false);
       expect(calls).toBe(1);
       expect(await readFile(join(root, 'site', 'current', 'index.html'), 'utf8')).toBe('previous release');
     } finally {

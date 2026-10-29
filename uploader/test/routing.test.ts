@@ -1,3 +1,4 @@
+import { idleBuildState } from './build-fixture.js';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -74,7 +75,7 @@ function stubBackup(backupDir: string): DbBackup {
 
 function build(extra: Partial<ServerConfig> = {}) {
   const hasRelease = () => existsSync(join(siteDir, 'current'));
-  const builder: SiteBuilder = { build: async () => ({ ok: true, release: 'r' }), hasRelease, quiesce: async () => {} };
+  const builder: SiteBuilder = { ...idleBuildState, build: async () => ({ ok: true, attemptId: 'r', release: 'r' }), hasRelease, quiesce: async () => {} };
   const backupDir = join(dir, 'backup');
   return buildServer({
     storageDir: join(dir, 'images'), baseUrl: `https://${IMG}`, imgHost: IMG,

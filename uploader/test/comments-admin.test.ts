@@ -1,3 +1,4 @@
+import { idleBuildState } from './build-fixture.js';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -54,7 +55,7 @@ function build(extra: Partial<ServerConfig> = {}) {
     posts: memoryPostStore(), pages: memoryPageStore(),
     media: memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' }), encodeQueue: queue,
     imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'),
-    builder: { build: async () => ({ ok: true, release: 'r1' }), hasRelease: () => true, quiesce: async () => {} },
+    builder: { ...idleBuildState, build: async () => ({ ok: true, attemptId: 'r1', release: 'r1' }), hasRelease: () => true, quiesce: async () => {} },
     backupDir: join(dir, 'backup'), dbBackup: backup, dbCheck: async () => {},
     commentsAdmin: store,
     ...extra,
@@ -200,7 +201,7 @@ describe('site identity administration', () => {
   it('requires admin authorization, returns no-store even on refusals, and never builds on save', async () => {
     let builds = 0;
     const identityStore = memorySiteIdentityStore({ ...neutralIdentity(), canonicalOrigin: 'https://blog.example' });
-    const b = build({ identityStore, builder: { build: async () => { builds++; return { ok: true, release: 'r' }; }, hasRelease: () => true, quiesce: async () => {} } });
+    const b = build({ identityStore, builder: { ...idleBuildState, build: async () => { builds++; return { ok: true, attemptId: 'r', release: 'r' }; }, hasRelease: () => true, quiesce: async () => {} } });
     const author = await authed(b, false);
     const admin = await authed(b, true);
     const { canonicalOrigin: _reserved, ...edit } = identityStore.get().identity;

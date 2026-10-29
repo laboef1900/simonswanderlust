@@ -1,3 +1,5 @@
+import { idleBuildState } from './build-fixture.js';
+import { buildFailureMessage } from '../src/build-state.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -34,7 +36,7 @@ async function fixture(initial: LanguageConfig = modes[0]!) {
   const lock = createWorkLock();
   const queue = createEncodeQueue({ store: media, storageDir: dir, lock });
   let settings = defaultSettings();
-  let outcome: BuildOutcome = { ok: true, release: 'language-release' };
+  let outcome: BuildOutcome = { ok: true, attemptId: 'language-release', release: 'language-release' };
   // Acquiring the real non-reentrant work lock here also catches a route that
   // incorrectly wraps an ordinary builder invocation in that same lock.
   const build = vi.fn(async () => lock.runExclusive(async () => ({ ...outcome })));
@@ -44,7 +46,7 @@ async function fixture(initial: LanguageConfig = modes[0]!) {
     posts, pages, media, users, sessions, secrets: memorySecretsStore(),
     // Deliberately omit cfg.language: the server must use posts.language.
     settings: { get: () => ({ ...settings }), update: (patch) => (settings = validate({ ...settings, ...patch })) },
-    builder: { build, hasRelease: () => true, quiesce: async () => {} },
+    builder: { ...idleBuildState, build, hasRelease: () => true, quiesce: async () => {} },
     workLock: lock, encodeQueue: queue, backupDir: join(dir, 'backup'), dbCheck: unavailable,
     dbBackup: { dir, runNow: unavailable, running: () => false, sweepTempFiles: () => [], list: () => [],
       listImageArchives: () => [], listRouteArchives: () => [], state: () => ({}), quiesce: async () => {} },
@@ -67,8 +69,8 @@ async function fixture(initial: LanguageConfig = modes[0]!) {
       de: locale('de'), en: locale('en') });
   }
   return { app, language, posts, pages, media, cookies, login, put, story, build,
-    failBuild: () => { outcome = { ok: false, error: 'Synthetic build failure' }; },
-    recoverBuild: () => { outcome = { ok: true, release: 'recovered-release' }; } };
+    failBuild: () => { outcome = { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') }; },
+    recoverBuild: () => { outcome = { ok: true, attemptId: 'recovered-release', release: 'recovered-release' }; } };
 }
 
 describe('language API', () => {
@@ -170,9 +172,10 @@ describe('language API', () => {
     const f = await fixture();
     f.failBuild();
     const response = await f.put(modes[3]);
-    expect(response.statusCode).toBe(502);
+    expect(response.statusCode).toBe(200);
     expect(response.headers['cache-control']).toBe('no-store');
-    expect(response.json()).toMatchObject({ code: 'language_build_failed', persisted: true, language: modes[3] });
+    expect(response.json()).toMatchObject({ ...modes[3], build: { ok: false, code: 'internal' } });
+    expect(f.build).toHaveBeenCalledWith('rebuild');
     expect(await f.language.get()).toMatchObject(modes[3]!);
     f.recoverBuild();
     const retried = await f.app.inject({ method: 'POST', url: '/rebuild', cookies: f.cookies });
@@ -243,9 +246,8 @@ describe('inactive About preparation', () => {
     const before = await f.pages.get('about');
     f.failBuild();
     const failed = await f.put({ primary: 'de', locales: ['de', 'en'] });
-    expect(failed.statusCode).toBe(502);
-    expect(failed.json()).toMatchObject({ code: 'language_build_failed', persisted: true,
-      language: { primary: 'de', locales: ['de', 'en'] } });
+    expect(failed.statusCode).toBe(200);
+    expect(failed.json()).toMatchObject({ primary: 'de', locales: ['de', 'en'], build: { ok: false } });
     expect(await f.pages.get('about')).toEqual(before);
     expect(await f.language.get()).toMatchObject({ primary: 'de', locales: ['de', 'en'] });
     f.recoverBuild();

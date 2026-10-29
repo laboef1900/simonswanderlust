@@ -13,6 +13,7 @@ import { createGpxFiles } from './gpx-files.js';
 import { verifyRouteArchive, routeRecoverySummary } from './gpx-backup.js';
 import type { DbPool } from './db.js';
 import { readLanguage, type LanguageConfig } from './language.js';
+import { buildFailureMessage, type BuildFailureCode } from './build-state.js';
 
 /** Reusable: process an in-memory image and store its variants.
  * Keys are content-hash versioned like POST /upload, so a re-upload mints a
@@ -344,13 +345,19 @@ export async function triggerRebuild(
     // /rebuild answers 200 with `{ ok: false, error }` for a FAILED build — a
     // status check alone would report a schema error as success.
     if (status !== 200) throw new Error(`the app answered ${status}: ${body.slice(0, 300)}`);
-    let outcome: { ok?: boolean; release?: string; error?: string };
+    let outcome: { ok?: boolean; release?: string; code?: unknown };
     try {
       outcome = JSON.parse(body) as typeof outcome;
     } catch {
       throw new Error(`the app answered 200 with a non-JSON body: ${body.slice(0, 300)}`);
     }
-    if (!outcome.ok) throw new Error(outcome.error ?? 'the build failed without a message');
+    if (!outcome.ok) {
+      const code: BuildFailureCode = outcome.code === 'build_timeout' || outcome.code === 'build_failed'
+        || outcome.code === 'build_unavailable' || outcome.code === 'no_space'
+        || outcome.code === 'release_write_failed' || outcome.code === 'build_stopped'
+        ? outcome.code : 'internal';
+      throw new Error(`rebuild failed (${code}): ${buildFailureMessage(code)} — details: docker compose logs app`);
+    }
     return outcome.release ?? '(unnamed release)';
   } finally {
     await sessions.destroy(token);
@@ -405,7 +412,7 @@ async function rebuildMain(): Promise<void> {
         ? `nothing is listening on 127.0.0.1:${port}. A rebuild runs INSIDE the app process, which holds ` +
           'the build/encode lock, so the app has to be up. Start it (`docker compose up -d app`); if there ' +
           'is no release at all yet, boot builds one by itself.'
-        : `rebuild failed: ${msg}`,
+        : msg,
     );
     process.exitCode = 1;
   } finally {
