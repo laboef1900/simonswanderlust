@@ -184,9 +184,14 @@ signal.signal(signal.SIGINT, interrupted)
 try:
     assert platform.system() == 'Linux'
     assert platform.machine() == {'amd64': 'x86_64', 'arm64': 'aarch64'}[arch]
-    assert run(['git', '-C', str(PACKET.parent.parent), 'rev-parse', 'HEAD']).stdout.strip() == os.environ['CHECKOUT_SHA']
+    observed_head = run(['git', '-C', str(PACKET.parent.parent), 'rev-parse', 'HEAD']).stdout.strip()
+    provenance['observedCheckout'] = observed_head
+    stage = 'host-checkout'
+    assert observed_head == os.environ['CHECKOUT_SHA']
     binfmt = Path('/proc/sys/fs/binfmt_misc')
     entries = {p.name: p.read_text() for p in binfmt.iterdir() if p.name not in ('register', 'status')} if binfmt.exists() else {}
+    stage = 'host-binfmt'
+    provenance['enabledBinfmtNames'] = [name for name, value in entries.items() if 'enabled' in value]
     assert not any('enabled' in v for v in entries.values())
     context = json.loads(docker('context', 'inspect').stdout)[0]
     assert context['Endpoints']['docker']['Host'] == 'unix:///var/run/docker.sock'
@@ -284,9 +289,15 @@ try:
         stage = kind + '-independent-containers'
         cross_container(kind, identity, mount)
     provenance['status'] = 'passed-for-recorded-ci-mounts-only'
-except BaseException:
+except BaseException as error:
     provenance['status'] = 'failed'
     provenance['failedStage'] = stage
+    provenance['failureType'] = type(error).__name__
+    trace = error.__traceback__
+    while trace and trace.tb_next:
+        trace = trace.tb_next
+    provenance['failureLocation'] = {'file': Path(trace.tb_frame.f_code.co_filename).name,
+                                     'line': trace.tb_lineno} if trace else None
 finally:
     # Stop only names this invocation planned AND whose creation label matches.
     # No daemon-wide cleanup, removal, volume deletion or lock-file unlink.
