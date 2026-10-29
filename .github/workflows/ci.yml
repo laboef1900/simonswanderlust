@@ -79,10 +79,9 @@ jobs:
             uploader/package-lock.json
       - run: npm ci
         working-directory: site
-      # The Content Layer loader queries Postgres during astro check, so
-      # bootstrap the schema first via the uploader's db module. The script
-      # only needs pg (+ tsx to run TS) — skip the full uploader install.
-      - run: npm install --no-save pg tsx
+      # The site snapshot integration exercises the uploader's real builder and
+      # schema alongside Astro loaders. Install its locked dependencies too.
+      - run: npm ci
         working-directory: uploader
       - run: npx tsx scripts/ci-ensure-schema.ts
         working-directory: uploader
@@ -90,6 +89,8 @@ jobs:
           DATABASE_URL: postgres://ci:ci@localhost:5432/ci
       - run: npm test
         working-directory: site
+        env:
+          TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/ci
       - run: npx astro check
         working-directory: site
         env:

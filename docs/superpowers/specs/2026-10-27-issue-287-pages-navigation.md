@@ -1005,3 +1005,99 @@ for both primary-language modes and a failed-build/rebuild recovery. #289 must
 add public output/build collision/nav resolution evidence before deployment;
 successful #288 CMS publication alone does not establish those public routes.
 
+## #289 public-output and navigation interface — verification pending
+
+The implementation extends the existing #285 `[...path].astro` catalogue, not
+parallel fixed route files. `pages` and `navigation` Content Layer collections
+import the same exported snapshot already used by trips/identity/language.
+Eligibility is applied before row parsing; Zod then rejects malformed published
+registry rows, missing enabled counterparts and invalid images. The original
+sanitized body is checked for foreign image origins before portability rewriting
+and guarded responsive-picture/gallery rendering. About stays the existing
+resource and fixed localized route exactly once, including its fallback text.
+Generic pages have canonical/sitemap/actual-counterpart hreflang, not story feeds.
+The existing #288 sanitized saved-draft preview remains the preview surface.
+
+`publicRoutes` is the one full emitted HTML catalogue. Its deterministic guard
+names both competing owners and rejects page/story/static/locale collisions
+regardless of input creation order. Page reservations are strict; grandfathered
+app/legacy story names retain the approved warning policy. Navigation accepts only
+the existing version-1 schema, resolves each enabled locale against this catalogue
+(plus actual RSS/sitemap/error artifacts), omits unavailable page targets and warns
+on non-emitted relative paths. External URLs retain only the validator's HTTPS
+form and render escaped labels with the approved new-tab semantics. Footer legal
+links are optional; the existing identity social slot remains separate.
+
+### Owner editing and response contract
+
+- `GET /settings/navigation`: admin-only/no-store; `{ config, updatedAt, language,
+  socialLinks }`. `socialLinks` is the current read-only identity list, not a second
+  navigation setting.
+- `PUT /settings/navigation`: admin-only/no-store; strict `{ config, updatedAt }`
+  payload. Lock `site_language` first, then `site_nav`, validate the complete
+  document and active-locale URL/label pairs against that locked mode, compare the
+  optimistic token, save and commit. No model/provider/browser-storage involvement.
+- After commit and lock release, build once. Success is `{ saved, build }`; failed
+  returned or thrown builds are `502 { code: "navigation_build_failed",
+  persisted: true, saved, error }`, retaining the last successful release. Invalid
+  input is 400; stale token is 409 with no write/build.
+- Settings → Navigation edits header/footer/legal in stored order, bounded by
+  5/8/4 items, with all four kinds, target choice and enabled-locale label/URL
+  fields. Disabled-locale values survive ordinary edits. Move actions preserve
+  focus; removal/reload/rebuild use the existing confirmation helper. Missing
+  targets are author notices. Failed-build acknowledgements adopt the saved token;
+  conflicts or unacknowledged transport failures retain edits and require reload.
+  Retry rebuild does not resave. Social links link back to Site identity.
+
+### Deterministic evidence matrix for integration owner
+
+No checks/builds were run by the implementation worker. Run the full affected site
+and uploader suites/type checks once after integration, with `TEST_DATABASE_URL`
+set for actual PostgreSQL coverage. New focused suites cover page schema/filtering,
+all-mode routes/collisions, malicious navigation URLs, loader snapshot rejection,
+sanitized image rendering, navigation API roles/tokens/failure acknowledgement,
+memory/Postgres writer races and the real Settings DOM.
+
+`navigation-snapshot.integration.test.ts` uses a disposable schema and real exported
+snapshot for both primary languages. Its builder seam pauses after capture,
+mutates live page/navigation/identity/language rows, then imports the captured
+snapshot through actual page/navigation/trip loaders. A queued failed successor
+must preserve the earlier release; an expired supplied snapshot must fail without
+new-row fallback. This is a real database/loader/release test, not a claim that an
+Astro subprocess or browser has been exercised.
+
+For actual Astro output, build `BUILT_PAGE_CONTRACT_ROOT/<mode>/{seed,configured}`
+for `de-bilingual`, `en-bilingual`, `de-only`, `en-only`. Use the same disposable
+identity/trips as the #285 fixture matrix, plus:
+
+1. About keeps its existing row, empty slug and fixed route. Publish Contact
+   (`de: kontakt`, `en: contact`) and Legal (`de: impressum`, `en: legal`) with
+   nonempty localized title/body. Keep Privacy draft (`datenschutz`/`privacy`) with
+   `PRIVATE289` in its body. In single-locale builds put `PRIVATE289` in every
+   retained inactive page title/body, not enabled content. No real legal text.
+2. Identity social links contain `{ label: "Author", url:
+   "https://social.example/author" }`. No provider credentials or owner data.
+3. `seed` uses `DEFAULT_NAVIGATION`; configured header is Contact page, a relative
+   path to the locale's actual map URL, then external
+   `https://example.org/source?lang=<locale>` labeled literally
+   `<img src=x onerror=alert(289)> & source` in each locale. Configured footer keeps
+   About plus a missing relative `/missing-289/` and draft Privacy target; legal
+   contains Legal plus draft Privacy. Give relative paths nonempty localized
+   labels. Respect each slot's schema bounds.
+4. Run `BUILT_PAGE_CONTRACT_ROOT=... npx vitest run --config
+   vitest.built.config.ts test/built/pages.test.ts`. This project deliberately
+   refuses missing artifacts. Existing #285 route inventory tests use their own
+   `BUILT_ROUTE_CONTRACT_ROOT` without the new generic-page fixture; run separately
+   or supply both roots when running the entire built project.
+
+The actual-output suite asserts emitted/sitemap equality, all enabled page paths,
+no private bytes, one About/title per locale, correct canonical/alternate links,
+seed link preservation, escaped hostile labels, external attributes/indicator,
+current-page semantics, absent dangling/draft links and the preserved social slot.
+Parent still must exercise real admin save/reload/conflict/rebuild recovery,
+keyboard focus and 320px/desktop rendering, including long localized labels and
+single-locale modes. Existing design-context metadata is stale; the worker used
+the current DESIGN/spec and inspected the synthetic incumbent About UI, without
+mutating its content. This appendix records implemented contracts and unrun
+evidence, not approval of a scope change or a claim of completed runtime proof.
+
