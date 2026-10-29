@@ -42,17 +42,18 @@ class FakeNode {
   attrs: Record<string, string> = {};
   children: FakeNode[] = [];
   listeners: Record<string, Listener[]> = {};
-  constructor(public tagName: string) {}
+  constructor(public tagName: string, private onFocus?: (node: FakeNode) => void) {}
   get innerHTML(): string { return ''; }
   set innerHTML(v: string) { if (v === '') this.children = []; }
   get firstElementChild(): FakeNode | null { return this.children[0] ?? null; }
   appendChild(c: FakeNode): FakeNode { this.children.push(c); return c; }
   append(...nodes: FakeNode[]): void { nodes.forEach(node => this.appendChild(node)); }
+  contains(node: FakeNode | null): boolean { return node === this || this.children.some(child => child.contains(node)); }
   adjacent: FakeNode[] = [];
   insertAdjacentElement(_position: string, node: FakeNode): FakeNode { this.adjacent.push(node); return node; }
   remove(): void {}
   focused = false;
-  focus(): void { this.focused = true; }
+  focus(): void { this.focused = true; this.onFocus?.(this); }
   click(): void { this.dispatch('click'); }
   showModal(): void { this.open = true; }
   close(): void { this.open = false; this.dispatch('close'); }
@@ -109,6 +110,7 @@ type Describe = (url: string, signal: AbortSignal) => Promise<Details>;
 /** The loaded page: the DOM stub plus everything the page sent over the wire. */
 interface Page {
   el(id: string): FakeNode;
+  activeElement(): FakeNode | null;
   /** The page's global object, for replacing a module's function after load. */
   win: Record<string, unknown>;
   timers: { fn: () => void; cleared: boolean }[];
@@ -124,8 +126,10 @@ interface Page {
 function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en'; prompt?: string; xhr?: new () => object;
   request?: (url: string, init?: { method?: string; body?: string }) => Promise<unknown> | undefined } = {}): Page {
   const roots = new Map<string, FakeNode>();
+  let activeElement: FakeNode | null = null;
+  const createElement = (tag: string): FakeNode => new FakeNode(tag, node => { activeElement = node; });
   for (const id of pageIds) {
-    const n = new FakeNode('div');
+    const n = createElement('div');
     n.id = id;
     n.checked = checkedIds.has(id);
     roots.set(id, n);
@@ -169,8 +173,9 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   const ctx: Record<string, unknown> = {
     document: {
       documentElement: { lang: opts.locale ?? 'en' },
+      get activeElement() { return activeElement; },
       getElementById,
-      createElement: (tag: string) => new FakeNode(tag),
+      createElement,
       createTextNode: (text: string) => Object.assign(new FakeNode('#text'), { textContent: text }),
     },
     location: { href: '', origin: 'https://app.example', protocol: 'https:' },
@@ -213,7 +218,7 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   vm.runInContext(dialogSrc, ctx);
   vm.runInContext(browserSrc, ctx);
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await setImmediate(); };
-  return { el, win: ctx, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush };
+  return { el, activeElement: () => activeElement, win: ctx, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush };
 }
 
 function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
@@ -704,8 +709,9 @@ describe('media-browser search', () => {
 });
 
 describe('upload receipt recovery visibility', () => {
-  it('shows the recovered photo without retransmitting or replacing dirty detail fields', async () => {
+  it('recovers the photo and keyboard focus without retransmitting or replacing dirty detail fields', async () => {
     let sends = 0; let probes = 0;
+    let releaseCheck: (() => void) | undefined;
     const page = loadPage({
       xhr: class {
         open() {}
@@ -715,11 +721,13 @@ describe('upload receipt recovery visibility', () => {
       request: (url) => {
         if (!url.startsWith('/upload/receipts/')) return;
         probes++;
-        const status = probes === 1 ? 503 : 200;
-        return Promise.resolve({ status, ok: status === 200, json: async () => status === 503
-          ? { error: 'unavailable' }
-          : { state: 'accepted', ownerUserId: '11111111-1111-4111-8111-111111111111', uploadId: url.split('/').pop(),
-              result: { key: 'recovered-photo', src: 'https://img.example/recovered-photo', width: 10, height: 10 } } });
+        if (probes === 1) return Promise.resolve({ status: 503, ok: false, json: async () => ({ error: 'unavailable' }) });
+        return new Promise(resolve => {
+          releaseCheck = () => resolve({ status: 200, ok: true, json: async () => ({
+            state: 'accepted', ownerUserId: '11111111-1111-4111-8111-111111111111', uploadId: url.split('/').pop(),
+            result: { key: 'recovered-photo', src: 'https://img.example/recovered-photo', width: 10, height: 10 },
+          }) });
+        });
       },
     });
     await page.flush();
@@ -730,14 +738,20 @@ describe('upload receipt recovery visibility', () => {
     page.el('fileInput').dispatch('change'); await page.flush();
     expect(sends).toBe(1); expect(probes).toBe(1);
     expect(page.listRequests).toHaveLength(0);
-    page.el('uploadQueue').querySelectorAll('.btn-secondary')[0]!.click(); await page.flush();
+    const check = page.el('uploadQueue').querySelectorAll('.btn-secondary')[0]!;
+    check.focus(); check.click(); await page.flush();
+    expect(page.activeElement()).toBe(page.el('uploadQueue').querySelectorAll('.upload-row')[0]);
+    releaseCheck!(); await page.flush();
+    expect(page.activeElement()).toBe(page.el('uploadQueue').querySelectorAll('.upload-row')[0]);
     expect(sends).toBe(1); expect(probes).toBe(2);
     expect(page.listRequests).toHaveLength(1);
+    page.el('dAltDe').focus();
     page.listRequests.shift()!.resolve({ items: [item('existing', 'Other stored text'), item('recovered-photo')], total: 2 });
     await page.flush();
     expect(page.el('grid').querySelectorAll('.media-cell').map(cell => cell.dataset.key)).toEqual(['existing', 'recovered-photo']);
     expect(page.el('dAltDe').value).toBe('Keep this unsaved description');
     expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.activeElement()).toBe(page.el('dAltDe'));
     expect(page.listRequests).toHaveLength(0);
   });
 });
