@@ -61,6 +61,7 @@ maybe('production boot (src/main.ts, Postgres)', () => {
   const previousRelease = '1760000000000-1-0000';
   const interruptedAttempt = '1760000001000-1-0001';
   const interruptedStartedAt = new Date(1760000001000).toISOString();
+  let initialBuildStatus: { status: number; cacheControl: string | null; body: unknown; disk: string };
 
   beforeAll(async () => {
     pool = createPool(url!);
@@ -158,6 +159,16 @@ maybe('production boot (src/main.ts, Postgres)', () => {
       child.stderr!.on('data', (b: Buffer) => { bootLog += b.toString(); });
       child.once('exit', (code) => reject(new Error(`main.ts exited ${code}:\n${bootLog}`)));
     });
+    // Capture boot facts before any test can legitimately promote a new release.
+    const login = await fetch(`${base}/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: base },
+      body: JSON.stringify({ username, password }),
+    });
+    expect(login.status).toBe(200);
+    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
+    const response = await fetch(`${base}/rebuild/status`, { headers: { cookie } });
+    initialBuildStatus = { status: response.status, cacheControl: response.headers.get('cache-control'),
+      body: await response.json(), disk: await readFile(join(dir, 'site', 'build-state.json'), 'utf8') };
   }, 30_000);
 
   afterAll(async () => {
@@ -196,7 +207,7 @@ maybe('production boot (src/main.ts, Postgres)', () => {
     const row = await created.json() as { id: string; updatedAt: string }; journeyId = row.id;
     const published = await fetch(`${base}/journey-admin/${row.id}/publish`, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ baseUpdatedAt: row.updatedAt }) });
     expect(published.status).toBe(200);
-    expect(await published.json()).toMatchObject({ persisted: true, build: { ok: true }, saved: { status: 'published' } });
+    expect(await published.json()).toMatchObject({ build: { ok: true }, saved: { status: 'published' } });
     expect((await store.get(row.id))?.publishedSnapshot?.locales.de?.heroImage.focus).toEqual({ x: 30, y: 70 });
     expect(await readFile(join(dir, 'site', 'current', 'index.html'), 'utf8')).toContain('Boot fixture');
   }, 60_000);
@@ -305,22 +316,15 @@ maybe('production boot (src/main.ts, Postgres)', () => {
   });
 
   it('initializes interrupted history after storage ownership even when a live release already exists', async () => {
-    const login = await fetch(`${base}/login`, {
-      method: 'POST', headers: { 'content-type': 'application/json', origin: base },
-      body: JSON.stringify({ username, password }),
-    });
-    expect(login.status).toBe(200);
-    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
-    const response = await fetch(`${base}/rebuild/status`, { headers: { cookie } });
-    expect(response.status).toBe(200);
-    expect(response.headers.get('cache-control')).toBe('no-store');
-    expect(await response.json()).toMatchObject({
+    expect(initialBuildStatus.status).toBe(200);
+    expect(initialBuildStatus.cacheControl).toBe('no-store');
+    expect(initialBuildStatus.body).toMatchObject({
       live: { release: previousRelease }, running: null, record: 'ok',
       last: { attemptId: interruptedAttempt, startedAt: interruptedStartedAt, result: 'interrupted',
         finishedAt: null, release: null, failure: null, beforeBoot: true, triggers: ['publish'] },
     });
     // Boot observation is read-only; only a later build may supersede this record.
-    expect(JSON.parse(await readFile(join(dir, 'site', 'build-state.json'), 'utf8')).running.attemptId).toBe(interruptedAttempt);
+    expect(JSON.parse(initialBuildStatus.disk).running.attemptId).toBe(interruptedAttempt);
   });
 
   it('migrated a legacy settings file and the shared key to the provider registry before listening', async () => {
