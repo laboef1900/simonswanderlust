@@ -1,12 +1,12 @@
 # #379 — Match body-image hints to opening and remainder widths
 
-**Status: OWNER APPROVED 2026-10-28 — layout-specific image hints. Risk: High:** generated responsive-image markup. Implementation and verification remain required; no photo re-encoding, owner-data change or deployment is authorized.
+**Status: OWNER APPROVED 2026-10-28; implemented and locally qualified. Risk: High:** generated responsive-image markup. Final-head review/CI and the unmerged dependency stack are PR gates; no existing-library re-encoding, owner-data change or deployment is authorized.
 
-## Decision requested
+## Approved decision
 
-Approve build-time, layout-specific `sizes` for generated inline pictures: the desktop opening's narrow column and the wider remainder get separate hints. Keep layout, variant formats/widths, no-upscale behavior, EXIF policy and lazy loading unchanged. Do not fix under-fetch by serving the largest image everywhere or by relabeling every opening image as 1056px.
+Use build-time, layout-specific `sizes` for generated inline pictures: the desktop opening's narrow column and the wider remainder get separate hints. Keep layout, variant formats/widths, no-upscale behavior, EXIF policy and lazy loading unchanged. Do not fix under-fetch by serving the largest image everywhere or by relabeling every opening image as 1056px.
 
-The issue supplies the Chromium 1365px/DPR 1.5/cache-isolated reproduction; it is accepted evidence, not rerun here. Current `body-images.ts:SIZES` claims 720px from 768px upward. Current CSS and `DESIGN.md` use **66rem/1056px**, not the older 60rem/960px in historical context; `gallery-layout.ts:COLUMN_WIDTH` is already 1056. `StoryPage.astro` owns the opening/rest split, after loader rendering.
+The issue's Chromium 1365px/DPR 1.5/cache-isolated pre-fix reproduction was accepted without repeating it. The former `body-images.ts:SIZES` claimed 720px from 768px upward. Current CSS and `DESIGN.md` use **66rem/1056px**, not the older 60rem/960px in historical context; `gallery-layout.ts:COLUMN_WIDTH` is already 1056. `StoryPage.astro` owns the opening/rest split, after loader rendering. Post-fix source selection is qualified below.
 
 ## Width contract (default 16px root size)
 
@@ -36,7 +36,7 @@ The 1096px lock is 1056 + 40; the outer 1152px maximum does not constrain the na
 
 Reconfirm `SECURITY.md` post-sanitize rendering and published-image metadata sections. Sizes values come only from trusted layout constants; never author text. Sanitization, image-origin rules, dimension/format validation, AVIF/WebP versus JPEG-only selection, fallback URLs, variant width limits and private originals remain unchanged. No photo re-encoding, new format, URL change, schema change or dependency on #347's codec upgrade.
 
-Implementation acceptance, not performed here:
+Implemented acceptance coverage:
 
 - Deterministic sizing tests around 767/768, 1023/1024, 1095/1096 and 1152px; CSS-token/COLUMN_WIDTH parity; source-hint updates for figures and bare/linked pictures, with galleries and unrelated author pictures untouched.
 - Loader/page composition coverage proves **final** opening/rest markup differs as required; unknown/empty opening and no-rest cases remain valid. About and script-free preview retain adequate, context-specific hints.
@@ -44,6 +44,35 @@ Implementation acceptance, not performed here:
 - JS-disabled inspection confirms all hints are present; layout, aspect ratio, keyboard link behavior and source-format policy are unchanged. Run affected site/uploader suites/typechecks and a disposable build after implementation. Do not claim a wall-clock/perceptual result from string tests alone.
 
 Update `DESIGN.md` imagery/source-hint notes and the relevant gallery/body-image documentation with the exact width contract.
+
+## Local qualification
+
+- Source `5718aacf71262bc430079deaab63e02cde56104d`, integrated onto #378's qualified
+  structure fix. Full six-check wave `1793237862386_16569` passed: uploader types and
+  Postgres-enabled tests, fixture schema, Astro check, site tests and build.
+- Actual `main.ts` and authenticated APIs published main/no-remainder DE/EN fixtures
+  and saved/built About in isolated `swl_379_dev`. Five genuine pipeline photos include
+  distinct-content 3000px opening/remainder originals, a separate hero, JPEG-only output
+  and an 800px original whose available widths stop at 800.
+- 96 JS-disabled cases each use a fresh browser context with cache disabled: 54 story
+  cases across DE/EN, DPR 1/1.25/1.5 and 390/767/768/1023/1024/1095/1096/1152/1365px;
+  20 About cases, 16 authenticated script-free previews and six no-remainder cases.
+  All 366 generated image instances decode; actual CSS slots match the approved
+  equations. No data-saver mode; root font is 16px.
+- At 1365px/DPR 1.5 in both locales, the 720px opening selects 1280px AVIF, while
+  the 1056px remainder selects 1920px AVIF and the JPEG-only image selects 1920px JPEG.
+  The small original selects its existing 800px maximum, not an invented larger variant.
+  About's desktop slot is 731.5px; preview's is 696px. No phantom remainder appears.
+- Authored provenance markers are stripped, gallery/authored hints remain separate,
+  and aspect ratio, lazy/async loading and picture structure are preserved. Two native
+  Tab/Shift-Tab/Enter cases keep link order and open the genuine 3000×2000 destination.
+  Eight raw server responses retain the script-denying preview CSP.
+- Evidence: `.local/backlog-execution-2026-10-27/issue-379-runtime/` contains source
+  hashes, full slot/candidate records, screenshots, native-navigation records and final
+  readback. Four stored/published body rows and their image maps plus About content
+  remain unchanged after exercise; five photos remain ready. Temporary account/sessions,
+  browser application/profile/launcher and runtime are removed; synthetic state is retained.
+  No physical-device, screen-reader-speech or before/after perceptual comparison is claimed.
 
 ## Dependencies and recovery
 

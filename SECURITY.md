@@ -778,6 +778,13 @@ protections, so they carry their own:
   cloned or reconstructed from raw attributes. Authored pictures remain sanitized units.
   No allow-list expansion or DOM repair script is involved. Existing map validation,
   source/format/dimension policy, private-original restrictions and EXIF allow-list remain.
+- **Section sizing trusts only renderer-owned pictures** (#379). `data-body-image` is
+  stripped from author markup and injected after sanitization only on generated inline
+  pictures, never galleries. `resizeBodyImages` accepts already trusted rendered HTML
+  and layout constants, then changes only direct `source.sizes` properties through HAST.
+  It does not accept author sizing policy, rewrite URLs/srcsets/image properties or
+  re-sanitize trusted gallery markup. Unmarked authored pictures remain untouched.
+  Source validation, formats, private originals, EXIF metadata and preview CSP are unchanged.
 - **Gallery URLs are allow-listed by origin equality.** A ` ```gallery ` fence's URLs arrive as
   *text* content, which `rehype-sanitize` never protocol-checks (unlike an `<img src>`), and they
   land in an `<a href>`. A `javascript:` line would fire. The check is
