@@ -34,6 +34,15 @@ describe.each(modes)('post coverage in $primary / $locales', (mode) => {
     expect(await posts.getPublishedLocales(saved.translationKey)).toEqual(mode.locales);
     expect((await posts.getPublishedTrack(saved.translationKey)).locales).toEqual(expect.arrayContaining(mode.locales));
     expect((await posts.get(saved.translationKey))?.status).toBe('published');
+    expect((await posts.get(saved.translationKey))?.publication).toEqual({
+      availability: 'available', status: 'published',
+      requestedLocales: [...mode.locales].sort(), committedLocales: [...mode.locales].sort(),
+      draftDiffers: false, live: { de: 'unknown', en: 'unknown' },
+    });
+    expect((await posts.publicationFacts())[0]).toMatchObject({
+      primaryLocale: mode.primary, requestedLocales: [...mode.locales].sort(),
+      committedLocales: [...mode.locales].sort(), draftDiffers: false,
+    });
     expect((await language.get()).lockedAt).toBeInstanceOf(Date);
     await posts.upsertDraft({ ...saved, [mode.primary]: { ...saved[mode.primary], title: 'Edited primary' } });
     expect((await posts.listRevisions(saved.translationKey))[0]?.title).toBe('Primary');
@@ -67,20 +76,33 @@ describe.each(['de', 'en'] as const)('%s primary coverage lifecycle', (primary) 
     await posts.publish(tk, await publishTokens(posts, tk));
     expect(await posts.getPublishedLocales(tk)).toEqual([primary]);
     expect((await posts.getPublishedTrack(tk)).locales).toEqual([primary]);
+    expect((await posts.publicationFacts())[0]).toMatchObject({
+      primaryLocale: primary, status: 'published', requestedLocales: [primary], committedLocales: [primary], draftDiffers: false,
+    });
     const translated = await posts.upsertDraft({ ...saved, [secondary]: { ...saved[secondary], omitted: false, slug: 'new-translation', bodyMarkdown: '' } });
-    expect(translated.hasUnpublishedChanges).toBe(true);
+    expect(translated.publication).toMatchObject({ availability: 'available', draftDiffers: true });
     expect(translated[secondary].publishedAt).toBeNull();
     expect((await posts.list())[0]?.secondaryStatus).toBe('empty');
     expect(await posts.getPublishedLocales(tk)).toEqual([primary]);
     await expect(posts.publish(tk, await publishTokens(posts, tk))).rejects.toThrow(/body required/);
     expect(await posts.getPublishedLocales(tk)).toEqual([primary]);
+    expect((await posts.publicationFacts())[0]).toMatchObject({
+      status: 'published', requestedLocales: ['de', 'en'], committedLocales: [primary], draftDiffers: true,
+      rowDigest: { [secondary]: null },
+    });
+    const omittedAgain = await posts.upsertDraft({ ...translated, [secondary]: { ...translated[secondary], omitted: true } });
+    expect(omittedAgain.publication).toMatchObject({ requestedLocales: [primary], committedLocales: [primary], draftDiffers: false });
     const complete = await posts.upsertDraft({ ...translated, [secondary]: { ...translated[secondary], bodyMarkdown: 'Translation' } });
     await expect(posts.publish(tk, await publishTokens(posts, tk), async () => { throw new Error('photo not ready'); })).rejects.toThrow('photo not ready');
     expect(await posts.getPublishedLocales(tk)).toEqual([primary]);
     expect((await posts.getPublishedTrack(tk)).locales).toEqual([primary]);
+    expect((await posts.publicationFacts())[0]?.draftDiffers).toBe(true);
     await posts.publish(tk, await publishTokens(posts, tk));
     expect(await posts.getPublishedLocales(tk)).toEqual([primary, secondary]);
-    expect((await posts.get(tk))?.hasUnpublishedChanges).toBe(false);
+    expect((await posts.get(tk))?.publication).toMatchObject({ availability: 'available', draftDiffers: false });
+    expect((await posts.publicationFacts())[0]).toMatchObject({
+      requestedLocales: ['de', 'en'], committedLocales: ['de', 'en'], draftDiffers: false,
+    });
     const revisions = await posts.listRevisions(tk);
     const old = await posts.getRevision(tk, revisions[revisions.length - 1]!.id);
     await expect(posts.upsertDraft({ ...old!.snapshot, translationKey: tk })).rejects.toMatchObject({ code: 'locale_published' });

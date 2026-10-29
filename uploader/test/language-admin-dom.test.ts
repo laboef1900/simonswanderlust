@@ -26,12 +26,14 @@ function settings(initial = state('de', ['de'])) {
   };
   const requests: { url: string; init: RequestInit }[] = [];
   const questions: { body: string }[] = [];
+  const lifecycle: string[] = [];
   let answer = response(state(initial.primary, [initial.primary, initial.primary === 'de' ? 'en' : 'de']));
   let confirmed = true;
   const context: Record<string, unknown> = {
     document: dom.document, location: { href: '/admin/settings.html' },
     fetch: async (url: string, init: RequestInit = {}) => {
       requests.push({ url, init });
+      if (init.method === 'PUT') lifecycle.push('request');
       if (url === '/rebuild/status') return response({ record: 'missing', running: null, last: null, live: null });
       return init.method === 'PUT' ? answer : response(initial);
     },
@@ -43,9 +45,9 @@ function settings(initial = state('de', ['de'])) {
   vm.createContext(context);
   for (const file of ['build-reporting.js', 'language.js', 'settings-language.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
   // The VM boundary loses the type of this production entry point.
-  const controller = context.SettingsLanguage as { init(): Promise<void> };
-  return { el, requests, questions, context,
-    init: () => controller.init(),
+  const controller = context.SettingsLanguage as { init(publication: { beginAction(): void; endAction(): void }): Promise<void> };
+  return { el, requests, questions, context, lifecycle,
+    init: () => controller.init({ beginAction: () => { lifecycle.push('begin'); }, endAction: () => { lifecycle.push('end'); } }),
     answer: (body: unknown, status: number) => { answer = response(body, status); },
     confirm: (value: boolean) => { confirmed = value; },
     submit: async () => { el('languageForm').fire('submit'); await settle(); },
@@ -69,6 +71,7 @@ describe('Language Settings', () => {
     await h.submit();
     const put = h.requests.find(({ init }) => init.method === 'PUT')!;
     expect(JSON.parse(String(put.init.body))).toEqual({ primary, locales: [primary, secondary] });
+    expect(h.lifecycle).toEqual(['begin', 'request', 'end']);
   });
 
   it('keeps candidate input and exposes blockers without claiming activation', async () => {
@@ -82,6 +85,7 @@ describe('Language Settings', () => {
     expect(h.el('languageStatus').textContent).toContain('Nothing was changed');
     expect(h.el('prepareLanguage').hidden).toBe(false);
     expect(h.el('languageFields').disabled).toBe(false);
+    expect(h.lifecycle).toEqual(['begin', 'request', 'end']);
   });
 
   it('shows committed mode after build failure and directs recovery to rebuild, never metadata rollback', async () => {
@@ -105,6 +109,7 @@ describe('Language Settings', () => {
     h.confirm(false);
     await h.submit();
     expect(h.requests.some(({ init }) => init.method === 'PUT')).toBe(false);
+    expect(h.lifecycle).toEqual([]);
     expect(h.el('languageFields').disabled).toBe(false);
   });
 });

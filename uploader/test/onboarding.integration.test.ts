@@ -513,7 +513,7 @@ describe.skipIf(!url)('onboarding PostgreSQL boot and snapshot boundary', () => 
     expect((await pool.query('SELECT * FROM onboarding_state')).rows).toEqual([]);
     expect((await pool.query("SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='posts' AND column_name='title_image'")).rows).toEqual([]);
     expect(await readRestoreFence(paths.storageDir)).toBe(false);
-  });
+  }, 30_000); // Full schema creation plus two catalogue scans use a bounded integration deadline.
   it('refuses an invalid same-definition unique index left by interrupted concurrent creation', async () => {
     await ensureSchema(pool);
     await pool.query('DROP INDEX users_username_lower_idx');

@@ -1,5 +1,5 @@
 import { webcrypto } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import type { PostPair } from '../src/posts.js';
@@ -10,6 +10,7 @@ import { normalizeGalleryFences } from '../src/body-content.js';
 import { readCaptionOverride, readCaptionsVisible } from '../../site/src/lib/gallery-layout.js';
 import { REGIONS } from '../src/db.js';
 import type { AltAudit } from '../src/alt-audit.js';
+import { publication } from './publication-client-fixture.js';
 
 // editor.html's inline script is plain top-level browser code. Run it in a vm
 // context whose `document.getElementById` answers from the REAL markup's ids —
@@ -38,6 +39,7 @@ type Fetch = (url: string, options?: RequestInit) => Promise<Response>;
 
 interface EditorOptions {
   language?: { primary: 'de' | 'en'; locales: ('de' | 'en')[] };
+  clock?: boolean;
   fetch?: Fetch;
   auth?: () => Promise<Response>;
   rawPostResponses?: boolean;
@@ -204,17 +206,20 @@ async function loadEditor(options: EditorOptions = {}) {
         if (body && typeof body === 'object' && 'de' in body && 'en' in body) {
           const sent = init.body ? JSON.parse(String(init.body)) : null;
           return response({ ownerUserId: EDITOR_OWNER, lastSaveId: null, updatedAt: '2026-10-01T00:00:00.000Z',
+            publication: publication('status' in body && body.status === 'published' ? 'published' : 'draft'),
             ...body, ...(sent ? { saveId: sent.saveId } : {}),
             ...(init.method === 'POST' ? { translationKey: sent.translationKey } : {}) }, reply.status);
         }
       }
       return reply;
     },
-    setTimeout: () => 0,
-    clearTimeout() {},
-    setInterval: () => 0,
-    clearInterval() {},
+    setTimeout: options.clock ? setTimeout : () => 0,
+    clearTimeout: options.clock ? clearTimeout : () => {},
+    setInterval: options.clock ? setInterval : () => 0,
+    clearInterval: options.clock ? clearInterval : () => {},
     addEventListener: dom.document.addEventListener,
+    removeEventListener: dom.document.removeEventListener,
+    Date,
     URLSearchParams,
     URL,
     AbortController,
@@ -277,6 +282,8 @@ async function loadEditor(options: EditorOptions = {}) {
   ctx.languageFixture = { primary: 'de', locales: ['de', 'en'], ...options.language, lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' };
   vm.createContext(ctx);
   vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), ctx);
+  vm.runInContext(readFileSync('public/publication-state.js', 'utf8'), ctx);
+  vm.runInContext(readFileSync('public/publication-refresh.js', 'utf8'), ctx);
   vm.runInContext(readFileSync('public/auth.js', 'utf8'), ctx, { filename: 'auth.js' });
   vm.runInContext(readFileSync('public/language.js', 'utf8'), ctx, { filename: 'language.js' });
   vm.runInContext('SiteLanguage.accept(languageFixture)', ctx);
@@ -304,6 +311,7 @@ async function loadEditor(options: EditorOptions = {}) {
   const api = vm.runInContext('({ populateForm, buildPayload, loadPost, doSaveDraft, renderAltAudit })', ctx) as EditorApi;
   return {
     api, el, editors, created: dom.created, document: dom.document, requests, local, galleryPickers,
+    ctx,
     flushDialogEvents: dom.flushDialogEvents,
     logout: () => {
       const auth = ctx.Auth;
@@ -617,7 +625,7 @@ describe('authenticated editor write recovery', () => {
     expect(h.api.buildPayload().de.title).toBe('Newer unsent title');
     expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
     expect(h.requests.filter(({ options }) => options.method === 'PUT')).toHaveLength(1);
-    expect(h.requests.filter(({ url }) => url === '/posts/tk1')).toHaveLength(3);
+    expect(h.requests.filter(({ url }) => url === '/posts/tk1')).toHaveLength(5);
     const drafts = Array.from({ length: h.local.length }, (_, index) => JSON.parse(h.local.getItem(h.local.key(index)!)!));
     expect(drafts.some((draft) => draft.ownerUserId === EDITOR_OWNER && draft.payload.de.title === 'Newer unsent title')).toBe(true);
   });
@@ -712,6 +720,7 @@ describe('acknowledged publication survives failed rebuilds', () => {
     pair.en.publishedAt = null;
     pair.de.publishedAt = null;
     pair.status = 'draft';
+    let observedPublication = publication('draft');
     const build = { ok: false, attemptId: '1793000000000-1-0001', code: 'build_failed', error: 'SECRET /data/path', liveRelease: null };
     const h = await loadEditor({
       isAdmin: true, search: '?tk=tk1', confirm: true,
@@ -721,14 +730,17 @@ describe('acknowledged publication survives failed rebuilds', () => {
           if (payload.updatedAt !== token) return response({ code: 'conflict' }, 409);
           writes++;
           token = `2026-10-24T09:0${writes}:00.000Z`;
-          return response({ ...pair, updatedAt: token });
+          return response({ ...pair, publication: observedPublication, updatedAt: token });
         }
         if (url === '/posts/tk1/publish' || url === '/posts/tk1/unpublish') {
           const previousUpdatedAt = token;
           token = url.endsWith('/unpublish') ? '2026-10-24T10:00:00.000Z' : '2026-10-24T09:30:00.000Z';
-          return response({ [url.endsWith('/unpublish') ? 'unpublished' : 'published']: true, previousUpdatedAt, updatedAt: token, build, altAudit: { images: [] } });
+          observedPublication = { ...publication(url.endsWith('/unpublish') ? 'draft' : 'published'),
+            requestedLocales: ['de'], committedLocales: url.endsWith('/unpublish') ? [] : ['de'],
+            live: { de: 'not-live', en: 'not-live' } };
+          return response({ [url.endsWith('/unpublish') ? 'unpublished' : 'published']: true, publication: observedPublication, previousUpdatedAt, updatedAt: token, build, altAudit: { images: [] } });
         }
-        if (url === '/posts/tk1') return response({ ...pair, updatedAt: token });
+        if (url === '/posts/tk1') return response({ ...pair, publication: observedPublication, updatedAt: token });
         if (url.endsWith('/revisions')) throw new Error('optional refresh unavailable');
         if (url.endsWith('/alt-audit')) return response({ images: [] });
         throw new Error('Unexpected request ' + url);
@@ -2315,7 +2327,7 @@ describe('manuscript-first editor refinements', () => {
       expect(recovery.hidden).toBe(false);
       expect(recovery.querySelector('button')!.disabled).toBe(false);
       expect(h.requests.filter((request) => request.options.method === 'PUT')).toHaveLength(1);
-      expect(h.requests.filter((request) => request.url === '/posts/tk1' && !request.options.method)).toHaveLength(2);
+      expect(h.requests.filter((request) => request.url === '/posts/tk1' && !request.options.method)).toHaveLength(4);
     }
   });
 
@@ -2436,4 +2448,146 @@ describe('inline upload snapshot adoption', () => {
     expect(h.api.buildPayload().de.titleImage).toMatchObject({ src: landed.src, alt: 'Newer alt', focus: { x: 35, y: 50 } });
     expect(h.dirtyCalls()).toBeGreaterThan(0);
   });
+});
+
+describe('publication projection refresh in the real editor DOM', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const flush = async () => { for (let i = 0; i < 8; i++) await settle(); };
+  const clock = () => vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+
+  it('observes an external rebuild on the visible timer without adopting content, token, or cleaning unsent edits', async () => {
+    clock();
+    const owned = '2026-10-29T10:00:00.000Z';
+    let observed = { ...publication(), live: { de: 'not-live', en: 'not-live' } };
+    let foreign = false;
+    const h = await loadEditor({ clock: true, search: '?tk=tk1', fetch: async (url) => {
+      if (url === '/posts/tk1') return response({ ...fullPair(), publication: observed,
+        updatedAt: foreign ? '2026-10-29T11:00:00.000Z' : owned,
+        de: { ...fullPair().de, title: foreign ? 'Foreign title' : 'Loaded title' } });
+      return response([]);
+    } });
+    await flush();
+    expect(h.el('publicationState').textContent).toContain('Published, not yet live');
+    h.el('deTitle').value = 'Unsent title';
+    h.el('deTitle').fire('input');
+    foreign = true;
+    observed = publication();
+    await vi.advanceTimersByTimeAsync(30000);
+    await flush();
+    expect(h.el('publicationState').textContent).toBe('Live');
+    expect(h.el('deTitle').value).toBe('Unsent title');
+    expect(h.api.buildPayload().updatedAt).toBe(owned);
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    expect(h.requests.every(({ options }) => !options.method || options.method === 'GET')).toBe(true);
+    expect(h.requests.some(({ url }) => url === '/rebuild/status' || url === '/publication/summary')).toBe(false);
+    vm.runInContext('publicationRefresh.stop()', h.ctx);
+  });
+
+  it('pauses hidden reads, updates on visibility/focus, and replaces stale Live on a ten-second timeout', async () => {
+    clock();
+    let pending = false;
+    let current = publication();
+    const hung = Promise.withResolvers<Response>();
+    const h = await loadEditor({ clock: true, search: '?tk=tk1', fetch: async (url) => {
+      if (url === '/posts/tk1') return pending ? hung.promise : response({ ...fullPair(), publication: current });
+      return response([]);
+    } });
+    await flush();
+    h.el('deTitle').value = 'Keep local work';
+    h.el('deTitle').fire('input');
+    const before = h.requests.filter(({ url }) => url === '/posts/tk1').length;
+    h.document.hidden = true;
+    h.document.dispatchEvent(new EditorEvent('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(90000);
+    expect(h.requests.filter(({ url }) => url === '/posts/tk1')).toHaveLength(before);
+    current = { ...publication('draft'), live: { de: 'live', en: 'unknown' } };
+    h.document.hidden = false;
+    h.document.dispatchEvent(new EditorEvent('visibilitychange'));
+    h.document.dispatchEvent(new EditorEvent('focus'));
+    await flush();
+    expect(h.requests.filter(({ url }) => url === '/posts/tk1')).toHaveLength(before + 1);
+    expect(h.el('publicationState').textContent).toContain('Draft in the CMS — still on the live site');
+    pending = true;
+    await vi.advanceTimersByTimeAsync(30000);
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(h.el('publicationState').textContent).toBe(ui.en['editor.chrome.publicationUnavailable']);
+    expect(h.el('publishBtn').disabled).toBe(true);
+    hung.resolve(response({ ...fullPair(), publication: publication() }));
+    await flush();
+    expect(h.el('publicationState').textContent).toBe(ui.en['editor.chrome.publicationUnavailable']);
+    expect(h.el('deTitle').value).toBe('Keep local work');
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    vm.runInContext('publicationRefresh.stop()', h.ctx);
+  });
+
+  it('uses the post-action projection rather than published acknowledgement and preserves the action-owned token', async () => {
+    clock();
+    const owned = '2026-10-29T10:00:00.000Z', committed = '2026-10-29T10:02:00.000Z';
+    let current = publication('draft');
+    let afterPublish = false;
+    const h = await loadEditor({ clock: true, isAdmin: true, search: '?tk=tk1', confirm: true,
+      fetch: async (url, init) => {
+        if (url === '/posts/tk1/publish') {
+          afterPublish = true;
+          current = { ...publication('draft'), live: { de: 'live', en: 'live' } };
+          return response({ published: true, updatedAt: committed, publication: current, build: { ok: true }, altAudit: { images: [] } });
+        }
+        if (url === '/posts/tk1') return response({ ...fullPair(), publication: current,
+          updatedAt: afterPublish ? '2026-10-29T10:03:00.000Z' : init?.method === 'PUT' ? '2026-10-29T10:01:00.000Z' : owned });
+        if (url === '/rebuild/status') return response({ running: null, last: null, record: 'missing' });
+        return response([]);
+      },
+    });
+    await flush();
+    h.el('publishBtn').click();
+    await flush();
+    expect(h.el('publicationState').textContent).toBe('Draft in the CMS — still on the live site');
+    expect(h.el('unpublishBtn').hidden).toBe(true);
+    expect(h.api.buildPayload().updatedAt).toBe(committed);
+    expect(h.el('actionStatus').textContent).toContain('Publish saved in the CMS');
+    vm.runInContext('publicationRefresh.stop()', h.ctx);
+  });
+
+  it.each([404, 401])('preserves unsent work after a confirmed deletion/session failure (%s)', async (status) => {
+    clock();
+    let failure = false;
+    const h = await loadEditor({ clock: true, search: '?tk=tk1', fetch: async (url) =>
+      url === '/posts/tk1' ? failure ? response({}, status) : response({ ...fullPair(), publication: publication() }) : response([]),
+    });
+    await flush();
+    h.el('deTitle').value = 'Keep this deleted story draft';
+    h.el('deTitle').fire('input');
+    const token = h.api.buildPayload().updatedAt;
+    failure = true;
+    await vi.advanceTimersByTimeAsync(30000);
+    await flush();
+    expect(h.el('publicationState').textContent).toBe(ui.en[status === 404 ? 'editor.chrome.publicationMissing' : 'editor.chrome.publicationUnavailable']);
+    expect(h.el('deTitle').value).toBe('Keep this deleted story draft');
+    expect(h.api.buildPayload().updatedAt).toBe(token);
+    expect(h.redirects()).toBe(status === 401 ? 1 : 0);
+    vm.runInContext('publicationRefresh.stop()', h.ctx);
+  });
+});
+
+it('keeps a fresh editor publication observation when optional admin build history reaches its deadline', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+  try {
+    let signal: AbortSignal | null = null;
+    const history = Promise.withResolvers<Response>();
+    const h = await loadEditor({ clock: true, isAdmin: true, search: '?tk=tk1', fetch: async (url, init) => {
+      if (url === '/posts/tk1') return response({ ...fullPair(), publication: publication() });
+      if (url === '/rebuild/status') { signal = init?.signal ?? null; return history.promise; }
+      return response([]);
+    } });
+    for (let i = 0; i < 8; i++) await settle();
+    expect(h.el('publicationState').textContent).toBe('Live');
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(h.el('publicationState').textContent).toBe('Live');
+    expect(h.el('publicationQualifier').textContent).toBe('');
+    expect((signal as AbortSignal | null)?.aborted).toBe(true);
+    history.resolve(response({ running: { owner: 'unverified' }, record: 'ok' }));
+    for (let i = 0; i < 8; i++) await settle();
+    expect(h.el('publicationState').textContent).toBe('Live');
+    vm.runInContext('publicationRefresh.stop()', h.ctx);
+  } finally { vi.useRealTimers(); }
 });
