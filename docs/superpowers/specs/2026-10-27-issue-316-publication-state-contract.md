@@ -876,3 +876,35 @@ or runtime qualification were executed by the source-writing agents. The parent 
 the complete §16 gates, including PostgreSQL, real build/promotion and browser failure/
 refresh protocols, before treating the implementation as qualified. No deployment,
 owner-content mutation, migration or automatic build is authorized by this handoff.
+
+## 21. #317 isolated qualification (2026-10-29)
+
+The parent subsequently qualified the actual `uploader/src/main.ts`, PostgreSQL,
+Astro builds/promotions and browser consumers at product commit
+`4d31f48caefb45b6dc5392df29f0846917bc848a`. The retained execution ledger contains
+138 observations, including 98 recorded API requests, served HTML, release manifests
+and ten inspected desktop/320px screenshots. This supersedes the unexecuted
+source-handoff status in §20, not its deployment restrictions.
+
+Observed behavior covered all four language configurations and the publication
+lattice, including no-op saves, newer drafts, omitted locales, failed publish,
+unpublish and delete after commit, missing/unreadable manifests, unavailable and
+partially available observations, author redaction, and DE/EN draft-preview labels.
+An actual failed build left public HTTP200 HTML byte-identical; the changed committed
+title appeared only after a successful rebuild. Dirty two-tab text and concurrency
+bases survived refresh, and a held older response could not replace newer state.
+Twenty-four simultaneous refresh triggers produced one post read and one build-status
+read, with no mutations. PR #271's merged prerequisite was independently confirmed.
+
+The complete integrated verification subsequently passed uploader types, the full
+PostgreSQL-backed uploader suite, Astro checking, the site suite and a real site build
+(`wave1793305473532_29724`). Later prerequisite documentation merges did not change
+the publication implementation. Final-head CI and independent actual-PR review remain
+separate gates recorded in the PR and execution ledger.
+
+Fixture corrections remain disclosed: the configured image host does not serve blog
+HTML, so final public-byte assertions used the separate loopback public hostname;
+early wrong-host 404 probes are not qualification. A coalesced-refresh experiment
+was replaced by the recorded real-mutation generation experiment. All owned processes
+and tabs were closed, faulted permissions restored exactly, and fixture data retained.
+No owner content, deployment, or physical accessibility audit was involved.
