@@ -1,0 +1,25 @@
+---
+import { getCollection } from 'astro:content';
+import HomePage from '../components/pages/HomePage.astro';
+import AboutPage from '../components/pages/AboutPage.astro';
+import MapPage from '../components/pages/MapPage.astro';
+import RegionPage from '../components/pages/RegionPage.astro';
+import StoryPage from '../components/pages/StoryPage.astro';
+import { publicRoutes, type PublicRoute } from '../lib/public-routes';
+
+export async function getStaticPaths() {
+  return publicRoutes(await getCollection('trips')).map((route) => ({
+    params: { path: route.path.slice(1, -1) || undefined },
+    props: { route },
+  }));
+}
+interface Props { route: PublicRoute }
+const { route } = Astro.props;
+---
+
+{route.kind === 'home' && <HomePage locale={route.locale} />}
+{route.kind === 'about' && <AboutPage locale={route.locale} />}
+{route.kind === 'map' && <MapPage locale={route.locale} />}
+{route.kind === 'regions' && <RegionPage locale={route.locale} />}
+{route.kind === 'region' && <RegionPage locale={route.locale} region={route.region} />}
+{route.kind === 'story' && <StoryPage trip={route.trip} />}

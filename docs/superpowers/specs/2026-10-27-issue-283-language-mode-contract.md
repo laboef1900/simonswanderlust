@@ -1024,3 +1024,36 @@ Reports and synthetic fixtures remain in the gitignored execution ledger. Final 
 downstream combined-source qualification are separate gates. Public routing belongs to #285,
 canonical origins to #276, and the page registry/navigation to #288/#289; this record does not
 claim those dependent stacks are merge-ready or authorize production changes.
+
+## 22. #285 public-output qualification (2026-10-29)
+
+The actual-build matrix compares a pre-change DE-primary bilingual baseline with all
+four approved modes using synthetic published stories and retained inactive-locale
+content. Five built-route contract cases pass, covering HTML/RSS inventories, locale
+links, SEO, comments configuration and absence of inactive content. The RSS endpoint
+uses Astro's URL-derived `currentLocale`: actual prerendering reused primary-locale
+endpoint props for the secondary feed, which the real-build assertion caught.
+
+Managed-browser qualification of those outputs passed 138 desktop/mobile page cases,
+48 reciprocal switcher round trips and 62 HTTP cases; 208 image instances decoded
+without horizontal overflow or unexpected network failures. Eight map fallback links
+were exercised. Evidence is retained under
+`.local/backlog-execution-2026-10-27/issue-285-runtime/` (`results.json`,
+`browser-results.json` and screenshots). The fixture serves real build output with
+production PostgreSQL comment stores and the production redirect resolver; it is not
+a full `buildServer`/authentication/deployment proof, and intentionally absent basemap
+assets do not establish rendered-basemap qualification.
+
+Existing singular-count copy (“1 COMMENTS” / “1 KOMMENTARE”) was also observed on the
+baseline and is not a routing regression. #284's independent authoring/publishing
+qualification, final PR review and required CI remain separate gates.
+
+### Unit-test configuration boundary (#285, 2026-10-29)
+
+CI exposed a unit test importing the now database-backed `astro.config.mjs`.
+Astro and the standalone Markdown renderer now consume the same `MARKDOWN_OPTIONS`
+object instead of comparing two copies. The obsolete configuration-value assertions
+are removed; rendered gallery markers, highlighted classes and sanitization regressions
+remain. A database-free focused run passed all eight Markdown cases; full site tests,
+Astro check and the real build passed in wave `1793274723357_17653`. Build language still
+requires PostgreSQL; no fallback, skip or production guard was added.
