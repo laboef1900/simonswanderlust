@@ -1,8 +1,8 @@
 # #298 — Upgrade and rollback guidance limited to evidenced, secure release pairs
 
 Date: 2026-10-27. Risk: **High-area documentation — upgrades and destructive recovery.**
-Status: **OWNER APPROVED, 2026-10-28 — runbook/checklist documentation implemented; disposable upgrade/roll-forward evidence pending.** Policy is immediately-previous security-supported, rehearsed pair only; the historical downgrade criterion was amended as recorded below. No eligible rollback pair or successful upgrade rehearsal is established by approval or documentation. No production operation is authorized.
-Baseline: `11e16d1b8e43141d296b801ee663a351ae3fe415`. Native dependency: **#295, independent and pending**. Coordinate #296 inventory/settings decision, #398 offline restore, and the already-approved **#347 roll-forward-only codec fix**.
+Status: **OWNER APPROVED, 2026-10-28 — runbook/checklist implemented; the unpublished, exact DHI candidate pair completed bounded upgrade/roll-forward qualification on 2026-10-29 after the initial storage blocker.** Policy is immediately-previous security-supported, rehearsed pair only; the historical downgrade criterion was amended as recorded below. This candidate evidence establishes neither a published support pair nor an eligible downgrade. No production operation is authorized.
+Baseline: `11e16d1b8e43141d296b801ee663a351ae3fe415`. Native dependency: **#295, supplied and integrated for the bounded candidate attempt below**. Coordinate #296 inventory/settings decision, #398 offline restore, and the already-approved **#347 roll-forward-only codec fix**.
 
 ## Facts, not a tested support matrix
 
@@ -91,13 +91,129 @@ Containment is to preserve existing data/recovery sets and repair forward on a s
   The deployment instructions require the actual target release's matching proxy-trust runtime
   and Compose changes; the older checkout's hop-count/Compose setup is not proof of #369.
 
-Still required from the integrator's authorized disposable exercise: exact source/target tags,
-digests and platforms; dump writer/reader metadata and pre/post counts; freeze/drain and coherent
-generation evidence; manifest-paired private-route integrity and image-chain recovery/rescan;
-byte-identical restored settings reported without contents and matching synthetic key recovery;
-accepted regions, explicit rebuild/promotion outcome and rendered story/gallery/comments;
-and actual host-TLS-proxy Secure-cookie, client-IP isolation, forwarded-spoof rejection and GPX
-Origin checks for that target topology. #295's restore foundation is a prerequisite, not proof
-of this release-pair upgrade. Its runtime dependency correction and resulting evidence must be
-supplied before any success claim. No eligible backward pair exists; that direction remains
-unsupported, not a passed rehearsal or permission to run the historical downgrade.
+The authorized disposable exercise below supplies candidate-specific runtime evidence, not a
+release support matrix. Remaining release/deployment gates are the published immutable pair,
+current security-floor decision including the deferred tooling paths, fresh release packaging,
+and the actual target VPS proxy topology. No eligible backward pair exists; that direction
+remains unsupported, not permission to run the historical downgrade.
+
+### Initial bounded candidate attempt — blocked before application runtime
+
+The parent integrated final #295 and #369 before freezing the following unpublished pair:
+
+| Role | Exact source | Local qualification image tag |
+| --- | --- | --- |
+| Source | `8afd0c8e6917e2f1cc668fc7ff35c11e7e9744ae` (#369) | `swl-issue298-source:1793275472` |
+| Target | `945c08d36a7d9fdbeab481bdd14bcbe26463acd1` (#298 with both prerequisites) | `swl-issue298-target:1793275472` |
+
+Both native `linux/arm64` builds completed dependency-install and source-copy stages, then
+failed during image unpack with Docker Desktop containerd reporting a **read-only file
+system** while writing `map-assets/basemap.pmtiles`. Emitted build manifests are not evidence
+of successfully loaded images or running codec versions. The retained qualification recipe
+uses copied, previously retained synthetic map assets; it does not qualify fresh map packaging.
+
+Read-only comparison found byte-identical schema, settings implementation, Compose and proxy
+trust code. Both source contracts write dump v10 and admit versions 1–10. The runtime delta
+is the #295 backup/restore corrections and two i18n strings, not a schema/settings migration.
+Both locks select sharp 0.35.5, the arm64 libvips package 1.3.4, Fastify 5.12.7,
+`@fastify/static` 10.1.8 and Astro 7.4.2. These are source facts, not exercised upgrades.
+
+The lock-only audit returned zero uploader production findings. The full site audit returned
+one high and two moderate findings on #369's explicitly deferred paths: test-only happy-dom
+20.11.1 (GHSA-834v-8h66-3h79, plus GHSA-c8p4-j97h-3vg8 and GHSA-5fpq-26gf-qwcr), and
+typography 0.5.20 → postcss-selector-parser 6.0.10 (GHSA-rj75-hqrm-r3gf; repository-owned
+selectors). Site devDependencies ship in the runtime image; this is not a blanket
+security-supported-release claim. No audit fix or dependency change was applied.
+
+The fresh isolated database container `swl2981793275472-db-1` started, but **no application,
+seed, backup, restore, TLS proxy or browser exercise ran**. Its stop request subsequently
+timed out after 15 seconds; it may remain running. `docker info` timed out after 30 seconds,
+and host free capacity measured 116,854,784 bytes. No restart, prune, image/volume deletion
+or owner-stack operation was attempted. All synthetic preparation, private generated
+credentials, database files, build contexts and logs remain under this issue's
+`.issue-runtime/rehearsal-1793275472/`; no active #295 data was reused.
+
+Canonical non-secret evidence is retained in
+`.local/backlog-execution-2026-10-27/issue-298-runtime/` in the main checkout:
+`proof.json`, `build-inputs.json`, `build-results.json`, both image-build logs,
+`dependency-audit.json`, `infrastructure-blocker.json` and `integration-proposal.json`.
+The proposal records the prerequisite integration request; the exact pair above records its
+subsequent completion. The initial blocker required separately authorized recovery of host
+capacity and Docker daemon responsiveness **without discarding retained data**. The resumed
+exercise below supersedes that runtime blocker; this paragraph preserves the failed attempt's
+provenance rather than presenting it as a successful drill.
+
+### Resumed exact DHI candidate qualification — 2026-10-29
+
+Both retained DHI builds resumed successfully with their original resolved base digests:
+`dhi.io/node:26-dev@sha256:fed7352d6abaed0e0b9172bef3dbb2437c135de1f68fef70b2a8a818b2568fa5`
+and `dhi.io/node:26@sha256:57a27f9e03b0bef98d39da2860fb0bd6b785a72a58f756f88ef2634ac7526343`.
+Their dependency-install and source-copy stages were cached; image unpack completed.
+No frozen product source was changed. Capacity was checked before each heavy stage and
+remained above the 10 GiB stop threshold. No daemon restart, prune, image/volume deletion,
+owner-stack change or operation against the parent's independent Postgres was performed.
+
+| Role | Frozen source | Observed local image identity (`linux/arm64`) |
+| --- | --- | --- |
+| Source | `8afd0c8e6917e2f1cc668fc7ff35c11e7e9744ae` | `sha256:f3fe6fea3468982cdd86b527b6832e549e99fde0b643257c2232494e33686ba9` |
+| Target | `945c08d36a7d9fdbeab481bdd14bcbe26463acd1` | `sha256:db41a7c0bc1c8927e9403f03b8542a33f8bdc8c94ca7260445368f78f01b81b6` |
+
+The first resumed command mistakenly supplied plain `node:26-slim` overrides. Those images
+and their results are retained as **diagnostic-only** in `plain-node-supplemental-proof.json`;
+they do not satisfy the DHI gate. The exact DHI pair was subsequently exercised end to end
+against the retained owned synthetic fixture, without reseeding or touching owner data.
+`dhi-proof.json` and `dhi-restore.log` are the authoritative resumed runtime evidence.
+
+Observed DHI results:
+
+- The old DHI app captured a complete v10 recovery set under an isolated operator write
+  freeze (loopback ingress, worker-controlled synthetic credentials, scheduled backups off).
+  Settings, bootstrap/key association and recovery archives were retained together in
+  `dhi-source-generation/`. The route archive's byte count and SHA-256 matched its manifest.
+- The target boot preserved schema, settings bytes, media files and counts: **2 users,
+  2 locale posts, 2 locale pages, 2 media rows, 2 media folders, 4 comments, 1 private route
+  and 1 encrypted secret**. The synthetic credential decrypted with its matching retained key.
+  Both applications accept the `asia` region; both locale region pages rendered the story.
+- A target-era pending comment increased the count to five. After stopping the app and
+  observing zero remaining database sessions, the one-shot target CLI restored
+  `db-20261029-130756.json.gz`. It first verified undo set
+  `db-20261029-130826.json.gz`, then restored the four-comment source generation. This
+  demonstrates the explicitly scoped loss of that one post-backup synthetic write; it is
+  not a reverse schema migration. The undo set was validated, not itself replayed.
+- The full retained image chain (two archives) was extracted oldest-first into a fresh
+  directory, preserving earlier trees. All **14 originals/variants** matched source hashes.
+  Restored settings were byte-identical; source and restored schema hashes and counts
+  matched. Private GPX download bytes matched the source digest. Rescan found two photos,
+  with no missing, demoted or requeued rows.
+- Explicit target rebuild returned HTTP 200 with release `1793279320609-1-0000` and
+  changed the current release symlink. Managed-browser evidence covers the German desktop
+  story, English mobile story, both loaded gallery photos, next/close lightbox interaction,
+  approved reader comment/author reply, hidden pending comments and a new browser submission
+  saved as pending with its translated confirmation. Screenshots are retained as
+  `dhi-de-desktop-story.png`, `dhi-en-mobile-gallery.png`,
+  `dhi-en-mobile-lightbox.png` and `dhi-de-comment-pending.png`.
+- TLS login emitted a Secure cookie. A client exhausted its ten-attempt IP budget, while
+  a distinct fixed-IP client still logged in successfully. Direct untrusted forwarding
+  headers did not create a Secure cookie or evade that client's limiter. Same-origin GPX
+  mutation passed the Origin check and reached payload validation (400); foreign/spoofed
+  Origin attempts returned 403. Anonymous private GPX returned 401; both image originals
+  returned 404 on the configured image host while AVIF/WebP variants returned 200.
+- Loaded target versions were Node **26.13.0**, sharp **0.35.5**, libvips **8.18.7**.
+  The existing audit qualification remains unchanged: uploader production **0** findings;
+  site full audit **1 high, 2 moderate** on the named deferred paths above. No blanket
+  security-support claim is made.
+
+**Topology and packaging limits:** Docker Desktop used a VM-host-network TLS proxy connecting
+to the app's bridge IP, with raw TCP adapters exposing it to the managed browser. Fixed,
+distinct bridge client addresses made limiter isolation observable. This is not the target
+VPS host-proxy → published-loopback topology; that topology still needs its own pre-cutover
+proof. An initial short-lived-client attempt reused an address and is explicitly invalid
+isolation evidence. Shared-browser captures stalled; a dedicated managed profile resolved
+capture and lazy-image proof. Map paint/fresh basemap packaging was not qualified: the
+retained map fixture remains inherited. These local images are not published releases.
+Backward recovery remains **unsupported/pending**; no historical vulnerable image ran.
+The integrated source then passed uploader TypeScript, the complete uploader suite against
+a separate isolated integration database, site tests, Astro check and a real Astro build
+(`wave-two-results-1793280743462_58384.json` in the private execution ledger). These local
+checks do not extend the candidate/image/topology scope above. Fresh actual-PR review,
+exact-head required CI and eventual stack retarget/requalification remain separate gates.
