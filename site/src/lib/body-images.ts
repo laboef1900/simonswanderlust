@@ -4,6 +4,7 @@ import rehypeStringify from 'rehype-stringify';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import { visit, SKIP } from 'unist-util-visit';
 import { h } from 'hastscript';
+import type { Root } from 'hast';
 import { srcset, fallbackSrc, largestVariant, sourceFormats, type RemoteHeroImage } from './images.js';
 import {
   BREAKOUT_WIDTH,
@@ -35,6 +36,13 @@ export interface ImageDims { width: number; height: number; alt?: string; captio
 
 /** Current localized library descriptions, keyed by the photo's full base URL. */
 export type GalleryMetadata = ReadonlyMap<string, { alt: string; caption: string }>;
+
+export interface GalleryUse {
+  src: string;
+  alt: string;
+  caption: string | null;
+  captionFollowsLibrary: boolean;
+}
 const SIZES = '(min-width: 768px) 720px, 100vw';
 
 /**
@@ -96,6 +104,12 @@ const BODY_SCHEMA = {
     '*': [...(baseAttrs['*'] ?? []), 'id', 'className'],
   },
 };
+
+/** One sanitizer for rendering, classification and the publish gate. */
+function sanitizedBody(html: string) {
+  const parser = unified().use(rehypeParse, { fragment: true }).use(rehypeSanitize, BODY_SCHEMA);
+  return parser.runSync(parser.parse(html));
+}
 
 /** `<source>` nodes for exactly the formats recorded on this image. */
 function sourceNodes(image: RemoteHeroImage, sizes: string) {
@@ -181,7 +195,7 @@ function textOf(node: unknown): string {
  * three guards — do not move item construction above them, and do not relax
  * them for a layout mode.
  */
-type GalleryPhoto = { image: RemoteHeroImage; caption: string };
+type GalleryPhoto = { image: RemoteHeroImage; caption: string; captionFollowsLibrary: boolean };
 
 /**
  * Photos a fence resolves to, in order, after the three guards above.
@@ -194,9 +208,11 @@ type GalleryPhoto = { image: RemoteHeroImage; caption: string };
 function galleryPhotos(
   fenceText: string,
   images: Record<string, ImageDims>,
-  allowedOrigin: string,
+  imageOrigin: string,
   metadata?: GalleryMetadata,
 ): GalleryPhoto[] {
+  let allowedOrigin: string;
+  try { allowedOrigin = new URL(imageOrigin).origin; } catch { return []; }
   const captionsVisible = readCaptionsVisible(fenceText);
   const photos: GalleryPhoto[] = [];
   for (const line of fenceText.split('\n')) {
@@ -219,15 +235,20 @@ function galleryPhotos(
     // retain the snapshot's descriptions; ordinary inline images never consult it.
     const description = metadata?.get(raw) ?? d;
     const alt = String(description.alt ?? '');
-    const caption = captionsVisible
-      ? String(readCaptionOverride(line) ?? description.caption ?? '')
-      : '';
+    const override = readCaptionOverride(line);
+    const captionFollowsLibrary = captionsVisible && override === undefined;
+    const caption = captionsVisible ? String(override ?? description.caption ?? '') : '';
     photos.push({
       image: { src: raw, alt, width: w, height: hgt, ...(d.format === 'jpeg' ? { format: d.format } : {}) },
       caption,
+      captionFollowsLibrary,
     });
   }
   return photos;
+}
+
+function galleryUse({ image, caption, captionFollowsLibrary }: GalleryPhoto): GalleryUse {
+  return { src: image.src, alt: image.alt, caption: captionFollowsLibrary ? caption : null, captionFollowsLibrary };
 }
 
 /** One `<figure>` — the same item markup in every layout mode. */
@@ -315,15 +336,11 @@ function galleryNode(
   images: Record<string, ImageDims>,
   imageOrigin: string,
   metadata?: GalleryMetadata,
+  uses?: GalleryUse[],
 ): ReturnType<typeof h> | null {
-  let allowedOrigin: string;
-  try {
-    allowedOrigin = new URL(imageOrigin).origin;
-  } catch {
-    return null; // no usable origin ⇒ allow nothing
-  }
-  const photos = galleryPhotos(fenceText, images, allowedOrigin, metadata);
+  const photos = galleryPhotos(fenceText, images, imageOrigin, metadata);
   if (photos.length === 0) return null;
+  if (uses) for (const photo of photos) uses.push(galleryUse(photo));
   const mode = readLayoutMode(fenceText);
   const children = mode === 'slider' ? sliderNode(photos) : justifiedRows(photos, mode);
   // `not-prose` opts the gallery out of @tailwindcss/typography, which would
@@ -346,19 +363,39 @@ export function transformBodyImages(
   imageOrigin: string,
   galleryMetadata?: GalleryMetadata,
 ): string {
+  return transformBody(html, images, imageOrigin, galleryMetadata);
+}
+
+/** Capture occurrences from the very photo reader that produces this render. */
+export function transformBodyImagesWithUses(
+  html: string,
+  images: Record<string, ImageDims>,
+  imageOrigin: string,
+  galleryMetadata?: GalleryMetadata,
+): { html: string; gallery: GalleryUse[] } {
+  const gallery: GalleryUse[] = [];
+  return { html: transformBody(html, images, imageOrigin, galleryMetadata, gallery), gallery };
+}
+
+function transformBody(
+  html: string,
+  images: Record<string, ImageDims>,
+  imageOrigin: string,
+  galleryMetadata?: GalleryMetadata,
+  galleryUses?: GalleryUse[],
+): string {
   // @ai-warning: post body HTML is rendered from DB-stored Markdown authored
   // through the admin editor (untrusted-ish). Sanitize it FIRST — stripping
   // <script>, inline event handlers, and javascript: URLs — then inject our own
   // trusted <picture> nodes, so the injected nodes keep their srcset/loading
   // attributes while the body itself can't carry stored XSS to the public site.
-  const parser = unified().use(rehypeParse, { fragment: true }).use(rehypeSanitize, BODY_SCHEMA);
-  const tree = parser.runSync(parser.parse(html));
+  const tree = sanitizedBody(html);
   visit(tree, 'element', (node, index, parent) => {
     if (index === null || index === undefined || !parent) return;
     if (node.tagName === 'pre') {
       const code = galleryCode(node);
       if (!code) return;
-      const gallery = galleryNode(textOf(code), images, imageOrigin, galleryMetadata);
+      const gallery = galleryNode(textOf(code), images, imageOrigin, galleryMetadata, galleryUses);
       // No resolvable photo ⇒ keep the sanitized <pre> so the URLs stay
       // visible rather than the block vanishing without a trace.
       if (!gallery) return SKIP;
@@ -399,6 +436,26 @@ export function transformBodyImages(
   return unified().use(rehypeStringify, { allowDangerousHtml: true }).stringify(tree);
 }
 
+/** Accepted gallery occurrences and sanitized inline sources, before variants are emitted. */
+export function bodyImageUses(
+  html: string,
+  images: Record<string, ImageDims>,
+  imageOrigin: string,
+  galleryMetadata?: GalleryMetadata,
+): { gallery: GalleryUse[]; inline: string[] } {
+  const tree = sanitizedBody(html);
+  const gallery: GalleryUse[] = [];
+  visit(tree, 'element', (node) => {
+    const code = galleryCode(node);
+    if (!code) return;
+    for (const photo of galleryPhotos(textOf(code), images, imageOrigin, galleryMetadata)) {
+      gallery.push(galleryUse(photo));
+    }
+    return SKIP;
+  });
+  return { gallery, inline: imageSources(tree).sources };
+}
+
 /** Candidate URLs of a `srcset` (hast gives a comma-list as an array or a string). */
 function srcsetUrls(value: unknown): string[] {
   const parts = Array.isArray(value) ? value.map(String) : typeof value === 'string' ? value.split(',') : [];
@@ -420,8 +477,10 @@ function srcsetUrls(value: unknown): string[] {
  * `id`/whitespace) and a Markdown text scanner did worse.
  */
 export function bodyImageSources(html: string): { sources: string[]; galleryLines: string[] } {
-  const parser = unified().use(rehypeParse, { fragment: true }).use(rehypeSanitize, BODY_SCHEMA);
-  const tree = parser.runSync(parser.parse(html));
+  return imageSources(sanitizedBody(html));
+}
+
+function imageSources(tree: Root): { sources: string[]; galleryLines: string[] } {
   const sources: string[] = [];
   const galleryLines: string[] = [];
   visit(tree, 'element', (node) => {

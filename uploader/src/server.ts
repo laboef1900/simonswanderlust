@@ -44,6 +44,8 @@ import { PAGE_KINDS, isPageKind } from '../../site/src/lib/page-kinds.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
 import { projectBuildReport } from './build-state.js';
+import { createReleaseManifestReader } from './release-manifest.js';
+import { createPublicationProjection } from './publication.js';
 import { prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type PreparedImport } from './wp-import.js';
 import { WxrParseError } from './wxr-parse.js';
 import { createImportRunner, memoryImportJobStore, ImportBusyError, type ImportRunner, type ImportJob } from './import-jobs.js';
@@ -1350,6 +1352,11 @@ export function buildServer(cfg: ServerConfig): AppServer {
   });
 
   const { posts } = cfg;
+  const releaseManifests = createReleaseManifestReader(cfg.siteDir);
+  const publication = createPublicationProjection({
+    posts, readRelease: () => releaseManifests.read(), media: cfg.media, imageBase,
+    onUnavailable: () => app.log.warn('Publication projection unavailable'),
+  });
   const geocode = createGeocoder({ endpoint: () => cfg.settings.get().geocodingSearchUrl });
   app.post('/geocode', { preHandler: requireAuth, bodyLimit: 2048 }, async (req, reply) => {
     reply.header('Cache-Control', 'no-store');
@@ -1512,13 +1519,20 @@ export function buildServer(cfg: ServerConfig): AppServer {
     if (notReady.length) throw new PublicationImageError([], notReady);
   }
 
-  app.get('/posts', { preHandler: requireAuth }, async () => posts.list());
+  app.get('/posts', { preHandler: requireAuth }, async (_req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const observation = await publication.read();
+    const rows = await posts.list();
+    return rows.map((row) => ({ ...row, publication: publication.from(observation, row.translationKey) }));
+  });
 
   app.get('/posts/:tk', { preHandler: requireAuth }, async (req, reply) => {
     reply.header('Cache-Control', 'no-store');
+    const observation = await publication.read();
     const read = await posts.getForSave((req.params as { tk: string }).tk, req.authUser!.id);
     if (!read) return reply.code(404).send({ error: 'post not found' });
-    return reply.send({ ...read.content, ownerUserId: req.authUser!.id, lastSaveId: read.lastSaveId });
+    return reply.send({ ...read.content, publication: publication.from(observation, read.content.translationKey),
+      ownerUserId: req.authUser!.id, lastSaveId: read.lastSaveId });
   });
 
   /**
@@ -1635,7 +1649,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
         }
       }
       const saved = await posts.upsertDraft(pair, baseUpdatedAt ?? existing?.updatedAt, { createOnly, receipt, baseLanguageUpdatedAt: mode.updatedAt });
-      return reply.send({ ...saved, ownerUserId: receipt.ownerUserId, saveId: receipt.saveId });
+      return reply.send({ ...saved, publication: await publication.one(saved.translationKey),
+        ownerUserId: receipt.ownerUserId, saveId: receipt.saveId });
     } catch (e) {
       if (e instanceof PostError) {
         if (e.code === 'storage_read_only') return readOnly(reply);
@@ -1691,6 +1706,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // @ai-warning: publishing pushes content to the PUBLIC static site, so it is
   // admin-only. Authors may create/edit drafts (requireAuth) but not publish.
   app.post<{ Params: { tk: string } }>('/posts/:tk/publish', { preHandler: requireAdmin, bodyLimit: 4096 }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
     const body = req.body;
     if (!body || typeof body !== 'object' || Array.isArray(body)
       || Object.keys(body).length !== 3
@@ -1748,6 +1764,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       published: true,
       build,
       updatedAt: committed.updatedAt,
+      publication: await publication.one(tk),
       altAudit: { count: audit.count, images: audit.images },
     });
   });
@@ -1782,6 +1799,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   type BulkAction = (typeof BULK_ACTIONS)[number];
 
   app.post('/posts/bulk', { preHandler: requireAdmin }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
     const b = (req.body ?? {}) as { action?: unknown; keys?: unknown; baseLanguageUpdatedAt?: unknown };
     const action = String(b.action ?? '') as BulkAction;
     if (!BULK_ACTIONS.includes(action)) {
@@ -1799,7 +1817,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const keys = [...new Set(b.keys.map((k) => String(k)))].filter((k) => k !== '');
     if (keys.length === 0) return reply.code(400).send({ error: 'keys must not be empty' });
 
-    const results: { key: string; ok: boolean; error?: string; code?: string; counts?: GpxError['counts'] }[] = [];
+    const results: { key: string; ok: boolean; updatedAt?: Date; previousUpdatedAt?: Date; error?: string; code?: string; counts?: GpxError['counts'] }[] = [];
     // Whether anything that was actually LIVE changed — a bulk delete of drafts
     // only needs no rebuild, mirroring DELETE /posts/:tk's `wasPublished` rule.
     let liveChanged = false;
@@ -1809,8 +1827,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
         const state = action === 'publish' ? await posts.getPublishState(tk) : null;
         const pair = action === 'publish' ? state?.pair : await posts.get(tk);
         if (!pair) throw new PostError('post not found');
+        let committed: { updatedAt: Date; previousUpdatedAt?: Date } | undefined;
         if (action === 'publish') {
-          await posts.publish(tk, { baseUpdatedAt: pair.updatedAt, baseRouteVersion: state!.routeVersion,
+          committed = await posts.publish(tk, { baseUpdatedAt: pair.updatedAt, baseRouteVersion: state!.routeVersion,
             baseLanguageUpdatedAt: new Date(String(b.baseLanguageUpdatedAt)) }, validatePublication);
           liveChanged = true;
           await posts.getPublishedTrack(tk)
@@ -1818,14 +1837,14 @@ export function buildServer(cfg: ServerConfig): AppServer {
             .catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
         } else if (action === 'unpublish') {
           if (pair.status !== 'published') throw new PostError('post is not published');
-          await posts.unpublish(tk);
+          committed = await posts.unpublish(tk);
           liveChanged = true;
         } else {
           if (pair.status === 'published') liveChanged = true;
           await posts.remove(tk);
           cleanupPending = await cleanupDeletedRoutes() || cleanupPending;
         }
-        results.push({ key: tk, ok: true });
+        results.push({ key: tk, ok: true, ...committed });
       } catch (e) {
         // Never leak an internal error to the client (global-handler contract):
         // PostError messages are ours and safe; anything else is logged and
@@ -1842,12 +1861,15 @@ export function buildServer(cfg: ServerConfig): AppServer {
     }
     const succeeded = results.filter((r) => r.ok).length;
     const build = liveChanged ? projectBuildReport(await cfg.builder.build('bulk')) : undefined;
-    return reply.send({ action, succeeded, failed: results.length - succeeded, results, ...(build ? { build } : {}), ...(cleanupPending ? { cleanupPending: true } : {}) });
+    const observation = await publication.read();
+    const projectedResults = results.map((result) => ({ ...result, publication: publication.from(observation, result.key) }));
+    return reply.send({ action, succeeded, failed: results.length - succeeded, results: projectedResults, ...(build ? { build } : {}), ...(cleanupPending ? { cleanupPending: true } : {}) });
   });
 
   // @ai-warning: the emergency brake — flips a published pair back to draft and
   // rebuilds so the live site drops it. Same trust boundary as publish: admin-only.
   app.post('/posts/:tk/unpublish', { preHandler: requireAdmin }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
     const tk = (req.params as { tk: string }).tk;
     const pair = await posts.get(tk);
     if (!pair) return reply.code(404).send({ error: 'post not found' });
@@ -1867,6 +1889,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     return reply.send({
       unpublished: true, build,
       previousUpdatedAt: committed.previousUpdatedAt, updatedAt: committed.updatedAt,
+      publication: await publication.one(tk),
     });
   });
 
@@ -1879,6 +1902,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // successful build. The unpublish response surfaces that failure to the
   // admin; build queueing (issue #36) is the proper fix.
   app.delete('/posts/:tk', { preHandler: requireAdmin }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
     const tk = (req.params as { tk: string }).tk;
     const pair = await posts.get(tk);
     if (!pair) return reply.code(404).send({ error: 'post not found' });
@@ -1892,9 +1916,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const cleanupPending = await cleanupDeletedRoutes();
     if (wasPublished) {
       const build = projectBuildReport(await cfg.builder.build('delete'));
-      return reply.send({ deleted: true, build, ...(cleanupPending ? { cleanupPending: true } : {}) });
+      return reply.send({ deleted: true, build, publication: await publication.one(tk), ...(cleanupPending ? { cleanupPending: true } : {}) });
     }
-    return reply.send({ deleted: true, ...(cleanupPending ? { cleanupPending: true } : {}) });
+    return reply.send({ deleted: true, publication: await publication.one(tk), ...(cleanupPending ? { cleanupPending: true } : {}) });
   });
 
   // Liveness + DB probe: the compose healthcheck polls this every 10s, so no
@@ -2019,6 +2043,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
     reply.header('Cache-Control', 'no-store');
     return reply.send(await cfg.builder.status());
   });
+
+  app.get('/publication/summary', { preHandler: requireAdmin }, async (_req, reply) =>
+    reply.header('Cache-Control', 'no-store').send(await publication.summary()));
 
   interface PageRoute { Params: { key: string } }
   interface PagePreviewRoute extends PageRoute { Querystring: { locale?: string } }
