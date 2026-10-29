@@ -1006,3 +1006,25 @@ that those checks ran: the integration owner must run the full affected suites w
 `TEST_DATABASE_URL`, type checking, a real main-process build/publication smoke, and
 keyboard/browser qualification after merging the source slices. The approved security
 floors, human implementation-PR approval and rollback/recovery limits in §§13/16 remain.
+
+### Observed #309 qualification
+
+The subsequent isolated run at `0c87708` used actual `main.ts`, PostgreSQL18.6, Astro
+builds and native browser controls. Its81 retained observations cover author creation,
+keyboard ordering/reload, authorization refusals, two-tab409 without token adoption,
+permanent slug history, omitted/disabled locales, committed-snapshot isolation, and
+all-reference story cleanup with compact retained ordering. Confirmed journey deletion
+preserved member story identities/URLs; the terminal editor emitted no further mutation.
+
+A genuine navigation-save postcommit release-write failure retained the saved token and
+old live release; restoring exact permissions and choosing Rebuild promoted the saved
+navigation without a second PUT. Native-owned offline N14 dump/read/restore matched
+journey and language state. An immutable pre-journey318 writer emitted a genuine unedited
+N13 dump; restoring it into a separate fresh EN-only journey target with explicit
+cross-mode consent cleared all journey tables and restored matching DE-primary language.
+Immediate N14 dump/read/restore also succeeded. Undo sets and hashes are retained.
+
+Desktop/320/390px controls and keyboard outcomes were inspected. All owned apps/tabs
+were closed and permissions restored; no owner content was used. The actual-target
+collision report, landing format allocation, human implementation approval and applicable
+physical/screen-reader checks remain separate gates, not established by these fixtures.

@@ -1210,3 +1210,17 @@ acceptance/finalization signals, retaining the 105-receipt continuation assertio
 the normal test deadline. No recovery behavior or guard was relaxed. All twelve focused
 upload-service cases passed after this repair; subsequent full-suite and final-head CI
 results are recorded separately in the PR and execution ledger.
+
+Independent PR review then found that preserving newer Media inputs also discarded the
+acknowledged comparison base. The next Save could falsely clean a reversion to the original
+value, or conflict with the author's own acknowledged write. The repair advances only the
+submitted, acknowledged leaves while keeping newer input and unrelated expectations intact;
+a settled comparison is cleared. Both subsequent-save regressions failed before the fix.
+
+Actual `a63f937` main/PostgreSQL/browser qualification held genuine committed200 responses
+at the response stage, then exercised A→B→A, A→B→C, nested DE alt/caption reversion, independent
+untouched EN updates, and real409 → Use mine → newer typing → ordinary Save. Subsequent
+requests used the acknowledged leaf bases and stored the intended values without replay,
+false-clean or unrelated-field overwrite. Desktop/320px dirty/saved state and keyboard focus
+were inspected. Fresh synthetic fixtures and raw evidence remain private and retained;
+the owned session, interception, app and tabs were closed.
