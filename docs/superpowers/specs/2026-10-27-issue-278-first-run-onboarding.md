@@ -338,6 +338,17 @@ features' required singleton seeds, not `ensureSchema` alone:
   or add placeholder language/navigation tables. Every subsequently installed required
   singleton must join that boundary and the prepared-target backup acceptance test.
 
+The #279 + #284 integration catalog includes `posts.omitted` and `site_language`.
+Admission retains exact installed column/default/nullability/key/CHECK semantics,
+including the unpublished-only omission invariant. A missing language table or seed,
+or a genuinely absent additive `omitted` column, can be initialized through the same
+boundary. Missing or altered constraints on existing columns still refuse preparation.
+Only the feature-owned default language configuration with no publication lock is
+bootstrap state; configured modes and invalid timestamps are not. The prepared-target
+regression captures this real singleton in the native dump and exercises both absent
+metadata recovery and no-mutation refusal. A surviving language-only schema also counts
+as prior schema for conservative first-run exclusion.
+
 The shared initializer runs **no HTTP listener, release build/bootstrap, background workers,
 import/media/route recovery, housekeeping, settings writes or model migration**. It inserts
 only incumbent bootstrap defaults, never demo stories or owner content, and does not overwrite

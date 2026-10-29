@@ -125,7 +125,7 @@
         if (!post) {
           const empty = el('div', 'desk-empty');
           const p = el('p');
-          p.textContent = 'No draft pairs are saved. A new trip starts as a German and English pair.';
+          p.textContent = copy.deskNoDrafts;
           const cta = el('a', 'btn-new');
           cta.href = '/admin/editor.html';
           cta.textContent = 'New trip';

@@ -6,11 +6,12 @@ import { identityFromRow, seedSiteIdentity, type IdentityRow } from './site-iden
 import { neutralIdentity } from '../../site/src/lib/site-identity.js';
 import { readOnboardingState, type RetiredReason } from './onboarding.js';
 import { readRestoreFence } from './onboarding-fence.js';
+import { DEFAULT_LANGUAGE, languageFromRow, type LanguageRow } from './language.js';
 
 export interface OnboardingPaths { storageDir: string; settingsPath: string; backupDir: string; siteDir: string }
 export interface BootEvidence { priorSchema: boolean; accounts: boolean; content: boolean }
 const CONTENT_TABLES = ['posts', 'post_revisions', 'post_routes', 'route_cleanup', 'media', 'media_folders', 'comments', 'import_jobs', 'app_secrets', 'page_revisions', 'site_identity_assets'] as const;
-const CORE_TABLES = ['users', 'sessions', ...CONTENT_TABLES, 'pages', 'site_identity'] as const;
+const CORE_TABLES = ['users', 'sessions', ...CONTENT_TABLES, 'pages', 'site_identity', 'site_language'] as const;
 type Query = Pick<DbClient, 'query'>;
 
 async function tableInventory(db: Query): Promise<Map<string, string>> {
@@ -158,7 +159,7 @@ export async function initializeOnboarding(pool: DbPool, paths: OnboardingPaths,
 const BOOTSTRAP_COLUMNS: Record<string, Record<string, string>> = {
   users: { id: 'uuid', username: 'text', password_hash: 'text', is_admin: 'boolean', created_at: 'timestamp with time zone' },
   sessions: { id: 'text', user_id: 'uuid', created_at: 'timestamp with time zone', expires_at: 'timestamp with time zone' },
-  posts: { id: 'uuid', translation_key: 'text', locale: 'text', slug: 'text', title: 'text', date: 'date', country: 'text', country_code: 'text', region: 'text', excerpt: 'text', hero_image: 'jsonb', coordinates: 'jsonb', title_image: 'jsonb', stops: 'jsonb', route: 'text', key_facts: 'jsonb', body_markdown: 'text', images: 'jsonb', status: 'text', featured: 'boolean', comments_enabled: 'boolean', created_at: 'timestamp with time zone', updated_at: 'timestamp with time zone', published_snapshot: 'jsonb', published_at: 'timestamp with time zone', categories: 'text[]', tags: 'text[]', scheduled_at: 'timestamp with time zone' },
+  posts: { id: 'uuid', translation_key: 'text', locale: 'text', slug: 'text', title: 'text', date: 'date', country: 'text', country_code: 'text', region: 'text', excerpt: 'text', hero_image: 'jsonb', coordinates: 'jsonb', title_image: 'jsonb', stops: 'jsonb', route: 'text', key_facts: 'jsonb', body_markdown: 'text', images: 'jsonb', status: 'text', featured: 'boolean', comments_enabled: 'boolean', created_at: 'timestamp with time zone', updated_at: 'timestamp with time zone', published_snapshot: 'jsonb', published_at: 'timestamp with time zone', categories: 'text[]', tags: 'text[]', scheduled_at: 'timestamp with time zone', omitted: 'boolean' },
   post_revisions: { id: 'uuid', translation_key: 'text', snapshot: 'jsonb', saved_at: 'timestamp with time zone' },
   post_routes: { translation_key: 'text', version: 'uuid', geometry: 'jsonb', source_id: 'uuid', source_sha256: 'text', source_bytes: 'integer', updated_at: 'timestamp with time zone' },
   route_cleanup: { source_id: 'uuid', pair_hash: 'text', requested_at: 'timestamp with time zone' },
@@ -170,25 +171,27 @@ const BOOTSTRAP_COLUMNS: Record<string, Record<string, string>> = {
   app_secrets: { key: 'text', ciphertext: 'text', iv: 'text', tag: 'text', updated_at: 'timestamp with time zone' },
   site_identity: { id: 'boolean', revision: 'integer', seed_source: 'text', saved_at: 'timestamp with time zone', updated_at: 'timestamp with time zone', site_name: 'text', author_name: 'text', canonical_origin: 'text', localized: 'jsonb', social_links: 'jsonb' },
   site_identity_assets: { role: 'text', sha256: 'text', width: 'integer', height: 'integer', bytes: 'bytea', created_at: 'timestamp with time zone' },
+  site_language: { id: 'boolean', primary_locale: 'text', enabled_locales: 'text[]', locked_at: 'timestamp with time zone', updated_at: 'timestamp with time zone' },
   comments: { id: 'uuid', translation_key: 'text', locale: 'text', name: 'text', email: 'text', body: 'text', status: 'text', is_author: 'boolean', sender_hash: 'text', created_at: 'timestamp with time zone' },
   onboarding_state: { singleton: 'boolean', schema_version: 'smallint', state: 'text', reason: 'text', evaluated_at: 'timestamp with time zone', dismissed_at: 'timestamp with time zone', retired_at: 'timestamp with time zone' },
 };
-const ADDITIVE_COLUMNS: Record<string, readonly string[]> = { posts: ['published_snapshot','published_at','categories','tags','scheduled_at','title_image','featured','comments_enabled'], media: ['format','encoding'], comments: ['is_author'] };
+const ADDITIVE_COLUMNS: Record<string, readonly string[]> = { posts: ['published_snapshot','published_at','categories','tags','scheduled_at','title_image','featured','comments_enabled','omitted'], media: ['format','encoding'], comments: ['is_author'] };
 const NULLABLE_COLUMNS: Record<string, readonly string[]> = {
   posts: ['title_image','stops','route','key_facts','published_snapshot','published_at','scheduled_at'],
   post_routes: ['geometry'], media: ['error','taken_at','camera','lens','lat','lng','format','encoding','uploaded_by'],
   import_jobs: ['finished_at','summary','error'], site_identity: ['saved_at','canonical_origin'],
   comments: ['email','sender_hash'], onboarding_state: ['dismissed_at','retired_at'],
+  site_language: ['locked_at'],
 };
 const PRIMARY_KEYS: Record<string, readonly string[]> = {
   users: ['id'], sessions: ['id'], posts: ['id'], post_revisions: ['id'], post_routes: ['translation_key'],
   route_cleanup: ['source_id'], pages: ['key','locale'], page_revisions: ['id'], media: ['key'], media_folders: ['path'],
-  import_jobs: ['id'], app_secrets: ['key'], site_identity: ['id'], site_identity_assets: ['role'],
+  import_jobs: ['id'], app_secrets: ['key'], site_identity: ['id'], site_identity_assets: ['role'], site_language: ['id'],
   comments: ['id'], onboarding_state: ['singleton'],
 };
 const BOOTSTRAP_DEFAULTS: Record<string, Record<string, string>> = {
   users: { is_admin: 'false', created_at: 'now()' }, sessions: { created_at: 'now()' },
-  posts: { images: "'{}'::jsonb", status: "'draft'::text", featured: 'false', comments_enabled: 'true', created_at: 'now()', updated_at: 'now()', categories: "'{}'::text[]", tags: "'{}'::text[]" },
+  posts: { images: "'{}'::jsonb", status: "'draft'::text", featured: 'false', comments_enabled: 'true', created_at: 'now()', updated_at: 'now()', categories: "'{}'::text[]", tags: "'{}'::text[]", omitted: 'false' },
   post_revisions: { saved_at: 'now()' }, route_cleanup: { requested_at: 'now()' },
   pages: { title: "''::text", body_markdown: "''::text", images: "'{}'::jsonb", updated_at: 'now()' },
   page_revisions: { saved_at: 'now()' },
@@ -197,6 +200,7 @@ const BOOTSTRAP_DEFAULTS: Record<string, Record<string, string>> = {
   app_secrets: { updated_at: 'now()' },
   site_identity: { id: 'true', revision: '1', updated_at: 'now()', site_name: "''::text", author_name: "''::text", localized: "'{}'::jsonb", social_links: "'[]'::jsonb" },
   site_identity_assets: { created_at: 'now()' }, comments: { status: "'pending'::text", is_author: 'false', created_at: 'now()' },
+  site_language: { id: 'true', updated_at: 'now()' },
   onboarding_state: { singleton: 'true', schema_version: '1' },
 };
 
@@ -209,6 +213,7 @@ const BOOTSTRAP_CHECKS: Record<string, { columns: readonly string[]; expression:
     { columns: ['country_code'], expression: '(char_length(country_code) = 2)' },
     { columns: ['region'], expression: `(region = ANY (ARRAY[${REGIONS.map((region) => `'${region}'::text`).join(', ')}]))` },
     { columns: ['status'], expression: "(status = ANY (ARRAY['draft'::text, 'published'::text]))" },
+    { columns: ['omitted', 'status', 'published_snapshot', 'published_at'], expression: "((NOT omitted) OR ((status = 'draft'::text) AND (published_snapshot IS NULL) AND (published_at IS NULL)))" },
   ],
   post_routes: [
     { columns: ['source_sha256'], expression: "(source_sha256 ~ '^[0-9a-f]{64}$'::text)" },
@@ -236,6 +241,12 @@ const BOOTSTRAP_CHECKS: Record<string, { columns: readonly string[]; expression:
     { columns: ['width'], expression: '((width >= 1) AND (width <= 1024))' },
     { columns: ['height'], expression: '((height >= 1) AND (height <= 1024))' },
     { columns: ['bytes'], expression: '(octet_length(bytes) <= 262144)' },
+  ],
+  site_language: [
+    { columns: ['id'], expression: 'id' },
+    { columns: ['primary_locale'], expression: "(primary_locale = ANY (ARRAY['de'::text, 'en'::text]))" },
+    { columns: ['enabled_locales'], expression: "(((cardinality(enabled_locales) >= 1) AND (cardinality(enabled_locales) <= 2)) AND (enabled_locales <@ ARRAY['de'::text, 'en'::text]) AND ((cardinality(enabled_locales) = 1) OR (enabled_locales[1] <> enabled_locales[2])) AND (array_position(enabled_locales, NULL::text) IS NULL))" },
+    { columns: ['primary_locale', 'enabled_locales'], expression: '(primary_locale = ANY (enabled_locales))' },
   ],
   comments: [
     { columns: ['locale'], expression: "(locale = ANY (ARRAY['de'::text, 'en'::text]))" },
@@ -388,7 +399,7 @@ export async function assertBootstrapOnlyTarget(pool: DbPool, assertOwner: () =>
       if (policies.rows.length) throw new Error('Preparation refuses row policies or rewrite rules.');
       const triggers = await client.query('SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass($1) AND NOT tgisinternal LIMIT 1', [table]);
       if (triggers.rows.length) throw new Error('Preparation refuses application triggers.');
-      if (table !== 'pages' && table !== 'site_identity' && table !== 'onboarding_state'
+      if (table !== 'pages' && table !== 'site_identity' && table !== 'site_language' && table !== 'onboarding_state'
         && (await client.query(`SELECT EXISTS(SELECT 1 FROM ${table}) AS found`)).rows[0].found) throw new Error('Preparation requires an empty bootstrap-only target.');
     }
     const evidence = await inspectEvidence(client, tables);
@@ -397,6 +408,17 @@ export async function assertBootstrapOnlyTarget(pool: DbPool, assertOwner: () =>
       const rows = await client.query<IdentityRow>('SELECT * FROM site_identity');
       for (const row of rows.rows) {
         if (row.revision !== 1 || row.seed_source !== 'neutral' || row.saved_at !== null || !isDeepStrictEqual(identityFromRow(row), neutralIdentity())) throw new Error('Preparation refuses non-default identity.');
+      }
+    }
+    if (tables.has('site_language')) {
+      const rows = await client.query<LanguageRow>('SELECT primary_locale, enabled_locales, locked_at, updated_at FROM site_language');
+      for (const row of rows.rows) {
+        // Missing seeds are recoverable; configured modes or publication history
+        // are owner state, not a preparation shortcut. Validate stored dates too.
+        const language = languageFromRow(row);
+        if (language.lockedAt !== null || !isDeepStrictEqual({ primary: row.primary_locale, locales: row.enabled_locales }, DEFAULT_LANGUAGE)) {
+          throw new Error('Preparation refuses non-default language.');
+        }
       }
     }
     if (tables.has('onboarding_state')) {

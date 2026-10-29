@@ -904,6 +904,17 @@ after an uncertain action acknowledgement reload state instead of replaying the 
 The checklist uses the existing responsive control vocabulary, wrapping at 320px rather than
 creating a second shell. Authentication-context failures are unavailable, not automatic logout.
 
+**Ordinary empty states (#280).** These remain independent of checklist eligibility,
+dismissal and retirement. Desk offers a private draft without assuming two active
+languages; Posts keeps its existing New post action. Media distinguishes an empty
+library from a narrowed view, offers the existing photo picker to authors and admins,
+and lets a narrowed view return to all photos without creating content. Its explanatory
+status and actions sit outside the photo listbox; a populated grid is unchanged.
+Comments retains its announced Pending/Approved empty result and moderation explanation:
+having no comments needs no setup action. Users cannot legitimately have an empty
+authenticated list (first-admin setup precedes access), while Import's idle state is
+the existing export-file chooser, not a second onboarding workflow.
+
 Admin tokens live on `:root` in `uploader/public/admin.css`, so the shell, the login page
 and the `<dialog>`s appended to `<body>` share one set:
 

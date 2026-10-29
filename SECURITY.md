@@ -992,8 +992,14 @@ deliberate trade-off, not an oversight:
   Fresh-target recovery uses offline `prepare-native-restore [--yes]`, not HTTP boot to
   create schema; keep ingress closed and auto-start disabled throughout the zero-user window.
   Only recognized bootstrap-only schema/default singleton values are admitted, never saved
-  identity/content or unknown shapes. The shared schema/identity seed runs after permanent
+  identity/content or unknown shapes. The shared schema/identity/language seed runs after permanent
   fencing, without listeners/builds/workers. Preparation does not itself verify an undo set.
+  The language singleton may be absent or contain only the installed unlocked DE-primary,
+  DE+EN default; changed modes, publication history and invalid timestamps refuse admission.
+  Its exact column defaults, nullability, primary key and CHECK expressions, together with
+  `posts.omitted` and its unpublished-only CHECK, remain load-bearing. A genuinely absent
+  additive column/table/seed may be initialized; a missing CHECK on existing columns or an
+  altered constraint is not absence and is refused before any fence or schema mutation.
   Catalog admission includes all installed indexes, not only table constraints: changed
   uniqueness, expressions, predicates, methods or invalid enforcement refuse preparation before
   any fence/schema mutation. Missing standalone indexes may be created by normal initialization
