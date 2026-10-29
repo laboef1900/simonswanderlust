@@ -25,6 +25,8 @@ const packages = [
   'gcc=4:14.2.0-1', 'libc6-dev=2.41-12+deb13u4', 'binutils=2.44-3',
   'gcc-14-base=14.2.0-19', 'libgcc-s1=14.2.0-19', 'libstdc++6=14.2.0-19',
   'libatomic1=14.2.0-19', 'libc6=2.41-12+deb13u4', 'libcrypt1=1:4.4.38-1',
+  // tar extracts the pinned Node header archive through gzip in this build stage.
+  'gzip=1.13-1+deb13u1',
 ];
 execFileSync('apt-get', [...options, 'install', '-y', '--no-install-recommends', '--no-remove', '--allow-downgrades', ...packages], { stdio: 'inherit', env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' } });
 writeFileSync('/proof/inputs/toolchain-packages.txt', execFileSync('dpkg-query', ['-W', '-f=${Package}\t${Version}\t${Architecture}\n']), { flag: 'wx' });
