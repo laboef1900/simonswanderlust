@@ -1035,3 +1035,20 @@ The managed headless browser did not emit native window-focus events on foregrou
 switching; that listener was exercised with an explicitly disclosed synthetic focus event
 and genuine reads, not represented as native window-focus proof. Apps, tabs, sessions and
 interception were cleaned up; private evidence records harness limitations.
+
+### Integrated pending-recovery qualification
+
+Actual `cb517fe` qualification combined the inherited Media recovery controls with the
+impact observer in the real main process. Two native tabs and a genuinely published
+referencing story produced409, then a committed200 held at the response boundary. An
+older genuine Check stored response released after acknowledgement did not reopen the
+comparison, replace Mine, or alter the acknowledged description effects and story impact.
+The next EN-caption Save sent one PATCH containing only that leaf and its empty expectation.
+Holding its real acknowledgement for32.004seconds produced zero observer requests or
+automatic writes and retained identical dirty input nodes.
+
+After acknowledgement, native Refresh Enter made one item GET at each desktop/320px width
+with zero writes, preserving visible focus, bounds and scroll. HTTP and independent
+`title`/`caption_de`/`caption_en` SQL reads agreed. The evidence distinguishes an expired
+preliminary old-GET hold from the successful ordering run and the separate32-second pause
+proof. Sessions, tabs, cookies, app and interception were closed; synthetic fixtures remain.
