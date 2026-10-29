@@ -596,6 +596,24 @@ The story card used to carry two more — a bordered navy plate around its date
 line and a solid `brand-red` cover-story kicker, both stacked above the
 heading. Both are gone; see Story card below, and do not reintroduce either.
 
+### Journeys
+
+The journey is a reading surface, not a second homepage. Its opening pairs a bounded
+photograph with a paper title and plain-text introduction; below desktop they stack.
+The ordered stories remain primary: existing photographic StoryCards, with an explicit
+“Story n of m” register outside each card. The count and order include only public
+stories in the reader's locale. A flat photographic index exists only in live locales.
+
+The overview follows the list, with numbered 44px keyboard-link pins and independently
+drawn public GPS runs on the existing self-hosted chart. A visible discontinuity note,
+every member link and per-run public summaries remain outside the JavaScript surface.
+No inferred connecting lines, journey-wide distance, stops or new color language.
+
+A member story gains one quiet, dashed-rule journey strip after its reading/gallery
+surface and before comments. Its landmark names the journey distinctly; its text links
+step through visible members only. There are no thumbnails and no changes to the
+chronological StoryPagination below. Non-member pages gain no strip or navigation.
+
 ### Cards / Containers
 
 - **Story card** — a whole-tile link with navy body and `12px` corners.

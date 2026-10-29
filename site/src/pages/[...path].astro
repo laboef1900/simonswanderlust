@@ -6,9 +6,11 @@ import MapPage from '../components/pages/MapPage.astro';
 import RegionPage from '../components/pages/RegionPage.astro';
 import StoryPage from '../components/pages/StoryPage.astro';
 import { publicRoutes, type PublicRoute } from '../lib/public-routes';
+import JourneyPage from '../components/pages/JourneyPage.astro';
+import JourneysPage from '../components/pages/JourneysPage.astro';
 
 export async function getStaticPaths() {
-  return publicRoutes(await getCollection('trips')).map((route) => ({
+  return publicRoutes(await getCollection('trips'), undefined, await getCollection('journeys')).map((route) => ({
     params: { path: route.path.slice(1, -1) || undefined },
     props: { route },
   }));
@@ -22,4 +24,6 @@ const { route } = Astro.props;
 {route.kind === 'map' && <MapPage locale={route.locale} />}
 {route.kind === 'regions' && <RegionPage locale={route.locale} />}
 {route.kind === 'region' && <RegionPage locale={route.locale} region={route.region} />}
-{route.kind === 'story' && <StoryPage trip={route.trip} />}
+{route.kind === 'story' && <StoryPage trip={route.trip} journeyPosition={route.journeyPosition} />}
+{route.kind === 'journey' && <JourneyPage journey={route.journey} />}
+{route.kind === 'journeys' && <JourneysPage locale={route.locale} journeys={route.journeys} />}

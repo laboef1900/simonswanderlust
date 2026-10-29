@@ -936,3 +936,28 @@ shared-build-snapshot contracts, landing dump-version allocation, implementation
 and all archived #309/#310 acceptance checks remain required. This record does not label any
 journey feature implemented or authorize merge, deployment, publication, an existing story URL
 rename, or an owner-data/content operation.
+
+## #310 implementation and qualification boundary
+
+The public implementation uses `journeys-loader.ts`, the shared `journey-snapshot.ts`
+validator supplied by #309, and `liveJourneys` for route/index/strip/alternate decisions.
+The route inventory supplies the optional strip to StoryPage without changing its
+chronological pager or making non-member pages read working journey content. The
+overview emits separate LineString features for the published runs and keyboard-link
+numbered pins; the list, localized discontinuity note and run summaries survive without JS.
+
+Added automated coverage includes actual Astro component consumers, shared-epoch
+Postgres integration, loader failure/release paths, four-mode paths/reservations,
+canonical hero retarget/rendering and an actual-release contract suite at
+`site/test/built/journeys.test.ts`. That suite deliberately requires real release
+artifacts; its fixture protocol is in the test header. Component rendering is not
+represented as a full Astro build or screen-reader verification.
+
+At this source handoff no tests, builds, browser checks or collision queries have
+been run by the implementation worker. The integrating parent must first merge #309,
+then run affected suites/type checks, build the required fixture releases and exercise
+the real app at 320/390px. An actual assistive-technology/screen-reader pass remains
+required; an accessibility-tree assertion is not that evidence. The actual deployment/
+content target's public-prefix reverse-collision query and matching boot report remain
+separate pre-merge gates. No synthetic Postgres result qualifies the owner-data target,
+and no permission to inspect or change that target is inferred here.

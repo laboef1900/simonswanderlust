@@ -11,6 +11,7 @@ function siteReservations(locale: 'de' | 'en', primary: 'de' | 'en'): Reservatio
     { segment: words.map, owner: 'site' },
     { segment: words.regions, owner: 'site' },
     { segment: words.about, owner: 'site', pageKind: 'about' },
+    { segment: words.journeys, owner: 'site' },
   ];
 }
 const de = siteReservations('de', 'de');

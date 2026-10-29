@@ -4,6 +4,7 @@ import { postgresTripsLoader } from './lib/postgres-loader';
 import { postgresPagesLoader } from './lib/pages-loader';
 import { regions } from './lib/paths';
 import { publicTrackSchema } from './lib/public-track';
+import { postgresJourneysLoader } from './lib/journeys-loader';
 
 const storyImage = z.object({
   src: z.url(),
@@ -48,4 +49,15 @@ const pages = defineCollection({
   schema: () => z.object({ title: z.string() }),
 });
 
-export const collections = { trips, pages };
+const journeys = defineCollection({
+  loader: postgresJourneysLoader(),
+  schema: () => z.object({
+    journeyId: z.uuid(),
+    title: z.string().min(1).max(200),
+    intro: z.string().max(2000).refine((value) => value.trim().length > 0),
+    heroImage: storyImage.strict(),
+    members: z.array(z.string().min(1)).max(50).refine((keys) => new Set(keys).size === keys.length),
+  }).strict(),
+});
+
+export const collections = { trips, pages, journeys };
