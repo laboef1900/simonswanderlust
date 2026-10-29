@@ -960,19 +960,30 @@ to the existing page branch and the optional strip adjacent to its preceding clo
 tag, without adding template whitespace nodes. The strict built-release comparison
 continues to normalize asset hashes only; whitespace differences are not waived.
 
-The public integration merges #309 checkpoint `08677a2`, including the actual #289
-page/navigation implementation. `publicRoutes(trips, language, { pages, journeys }, warn)`
+The public integration includes #309 and the actual #289 page/navigation implementation.
+`publicRoutes(trips, language, { pages, journeys }, warn)`
 requires both collections explicitly; dispatch, alternates and navigation share that
 collision-checked emitted inventory. Journey owners include their stable journey identity.
 The public reader continues to reuse #309's strict snapshot validator and shared build epoch.
 
-No tests, builds, browser checks or collision queries were run by the integration worker.
-The integrating parent must run affected suites/type checks, build the required fixture
-releases and exercise the real app at 320/390px. An actual assistive-technology/screen-reader
-pass remains required; an accessibility-tree assertion is not that evidence. The actual deployment/
-content target's public-prefix reverse-collision query and matching boot report remain
-separate pre-merge gates. No synthetic Postgres result qualifies the owner-data target,
-and no permission to inspect or change that target is inferred here.
+The subsequent isolated qualification at `603586d` produced12 actual before/live/dormant
+Astro releases across all four language modes, using an exact `309@0c87708` private baseline.
+The parent ran all eight strict built-release cases successfully: old non-member HTML/XML
+matched after asset-hash normalization only, member pagers/N° stayed unchanged, and dormant
+pages/index/sitemap/strips and private sentinel bytes were absent. Hero suffix/focus, escaped
+intro, shared published membership and exact disconnected track runs were checked.
+
+Actual `main.ts` routing separated public pages from authenticated journey-admin endpoints.
+Settled desktop/320/390px DE/EN pages, no-JS links and keyboard navigation were inspected.
+The genuine self-hosted Protomaps20261029 worldz0–8 basemap rendered through local range
+requests; numbered44px pins and native keyboard zoom worked without third-party requests in
+the observed windows. Original failing releases and repaired releases are both retained.
+Owned apps/tabs were closed; no owner content was accessed or changed.
+
+An actual assistive-technology/screen-reader pass remains required; DOM/accessibility-tree
+checks are not that evidence. The actual target's public-prefix reverse-collision query,
+matching boot report and landing dump-version allocation remain separate pre-merge gates.
+Synthetic fixtures do not qualify that target or imply permission to inspect or change it.
 
 ## 21. #309 implementation and qualification boundary (2026-10-29)
 
