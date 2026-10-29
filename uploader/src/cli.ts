@@ -4,15 +4,17 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { SESSION_COOKIE } from './authn.js';
 import { normalizeProcessOptions, processImage, type ProcessOptions } from './pipeline.js';
 import { contentHashKey, storeVariants, type StorageOptions, type StoredImage } from './storage.js';
-import { BACKUP_FILE_RE, BackupError, dumpDatabase, dumpLanguage, readDump, resolveBackupDir, restoreDatabase, validateIdentityAssets, IDENTITY_DUMP_VERSION, type Dump } from './backup.js';
+import { BACKUP_FILE_RE, BackupError, dumpDatabase, dumpLanguage, readDump, resolveBackupDir, validateIdentityAssets, IDENTITY_DUMP_VERSION, type Dump } from './backup.js';
 import { passwordPolicyViolation, type UserStore } from './users.js';
 import type { SessionStore } from './sessions.js';
 import { createSettingsStore, defaultSettings } from './settings.js';
 import { acquireStorageOwner, StorageReadOnlyError, type StorageOwner } from './storage-owner.js';
 import { createGpxFiles } from './gpx-files.js';
 import { verifyRouteArchive, routeRecoverySummary } from './gpx-backup.js';
-import type { DbPool } from './db.js';
+import { createPool, type DbPool } from './db.js';
 import { readLanguage, type LanguageConfig } from './language.js';
+import { prepareNativeRestore, restoreWithOnboarding } from './onboarding-restore.js';
+import { publishRestoreFence } from './onboarding-fence.js';
 
 /** Reusable: process an in-memory image and store its variants.
  * Keys are content-hash versioned like POST /upload, so a re-upload mints a
@@ -89,7 +91,8 @@ async function restoreMain(args: string[]): Promise<void> {
   const { yes, acceptLanguageChange, file } = parseRestoreArgs(args);
   if (!file) {
     console.error(
-      'usage: stop app, then docker compose run --rm --no-deps app node --import tsx src/cli.ts restore [--yes] [--accept-language-change] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
+      'usage: docker compose stop app\n' +
+      '       docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore [--yes] [--accept-language-change] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
       '       (bare dev: stop the app, then node --import tsx src/cli.ts restore [--yes] [--accept-language-change] <file>)\n' +
       '       --yes skips confirmation, never exclusive ownership, language-change acceptance or the verified pre-restore backup.',
     );
@@ -168,6 +171,7 @@ async function restoreMain(args: string[]): Promise<void> {
     console.log(`Private routes: ${dumpCounts.post_routes}; originals: ${recovery.status} ` +
       `(present ${recovery.present}, missing ${recovery.missing}, corrupt ${recovery.corrupt}, unreadable ${recovery.unreadable}, oversized ${recovery.oversized}).`);
     console.log('Private recovery sets retain original locations and timestamps. Keep the app stopped until this command finishes.');
+    console.log('Onboarding will be permanently retired for this data root, even if the admitted restore later fails or is undone.');
     if (!yes) {
       const answer = await promptLine("type 'yes' to continue (or pass --yes): ");
       if (answer.trim() !== 'yes') {
@@ -194,7 +198,9 @@ async function restoreMain(args: string[]): Promise<void> {
       return;
     }
     console.log(`pre-restore recovery set verified: ${preDump}`);
-    const counts = await restoreDatabase(pool, file, { routeFiles, assertOwner });
+    const counts = await restoreWithOnboarding(pool, file, {
+      storageDir: process.env.STORAGE_DIR ?? '/data/images', routeFiles, assertOwner,
+    });
     console.log(`restored ${counts.users} users, ${counts.posts} posts, ${counts.pages} pages, ${counts.media} media rows, ${counts.comments} comments, and ${counts.routes} private routes (all sessions invalidated).`);
     console.log(counts.appSecrets === null ? 'app_secrets preserved.' : `restored ${counts.appSecrets} encrypted app_secrets rows.`);
     console.log(dump.version < IDENTITY_DUMP_VERSION
@@ -210,6 +216,41 @@ async function restoreMain(args: string[]): Promise<void> {
     process.exitCode = 1;
   } finally {
     try { await pool?.end(); } finally { await owner?.close(); }
+  }
+}
+
+async function onboardingRecoveryMain(command: 'onboarding-retire' | 'prepare-native-restore', args: string[]): Promise<void> {
+  if (args.some((arg) => arg !== '--yes') || args.length > 1) throw new Error(`usage: ${command} [--yes]`);
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error('DATABASE_URL is required for offline recovery.');
+  const storageDir = process.env.STORAGE_DIR ?? '/data/images';
+  const owner = await acquireStorageOwner(databaseUrl, { role: 'restore' });
+  let pool: DbPool | undefined;
+  try {
+    const assertOwner = async () => {
+      owner.assertWritable();
+      await owner.assertNoAppSessions();
+      owner.assertWritable();
+    };
+    await assertOwner();
+    console.log(`target database: ${describeDatabase(databaseUrl)}`);
+    console.log(`target data root: ${dirname(resolve(storageDir))}`);
+    console.log('Onboarding retirement is permanent. Keep app and maintenance writers stopped, with automatic restart disabled, through the entire recovery.');
+    if (command === 'onboarding-retire') {
+      await publishRestoreFence(storageDir, assertOwner);
+      console.log('Retirement fence verified. No application schema or content was changed. This lease ends on exit; it does not guard subsequent SQL or filesystem recovery.');
+    } else {
+      pool = createPool(databaseUrl, owner.applicationName);
+      const prepared = await prepareNativeRestore(pool, {
+        storageDir, assertOwner,
+        confirm: async () => args.includes('--yes') || (await promptLine("type 'yes' to permanently retire onboarding and prepare bootstrap defaults: ")).trim() === 'yes',
+      });
+      if (!prepared) { console.error('aborted; no retirement or initialization performed.'); process.exitCode = 1; return; }
+      console.log('Offline initialization completed; onboarding is permanently retired. No undo set has been created or verified. Keep services stopped and run the ordinary native restore to capture and validate the actual target recovery set.');
+    }
+    await assertOwner();
+  } finally {
+    try { await pool?.end(); } finally { await owner.close(); }
   }
 }
 
@@ -416,6 +457,9 @@ async function rebuildMain(): Promise<void> {
 async function main(): Promise<void> {
   if (process.argv[2] === 'audit-exif') return auditExifMain();
   if (process.argv[2] === 'restore') return restoreMain(process.argv.slice(3));
+  if (process.argv[2] === 'onboarding-retire' || process.argv[2] === 'prepare-native-restore') {
+    return onboardingRecoveryMain(process.argv[2], process.argv.slice(3));
+  }
   if (process.argv[2] === 'set-password') return setPasswordMain(process.argv[3], process.argv[4]);
   if (process.argv[2] === 'rebuild') return rebuildMain();
   const [, , file, key, alt = ''] = process.argv;
@@ -423,11 +467,15 @@ async function main(): Promise<void> {
     // @ai-warning: the DHI runtime image has no shell, so `docker compose exec`
     // must invoke node directly — `tsx src/cli.ts ...` cannot run there.
     const exec = 'docker compose exec app node --import tsx src/cli.ts';
+    const offline = 'docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts';
     console.error(
       'usage:\n' +
       '  npm run upload -- <imageFile> <key> [alt]\n' +
       `  ${exec} rebuild\n` +
-      `  ${exec} restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n` +
+      '  docker compose stop app\n' +
+      `  (stop app and all writers first) ${offline} restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n` +
+      `  (offline) ${offline} prepare-native-restore [--yes]\n` +
+      `  (offline) ${offline} onboarding-retire\n` +
       `  ${exec} set-password <username> [newPassword]\n` +
       `  ${exec} audit-exif`,
     );

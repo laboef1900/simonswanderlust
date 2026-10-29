@@ -5,7 +5,7 @@ export type DbPool = pg.Pool;
 /** A checked-out connection (`pool.connect()`), for multi-statement transactions. */
 export type DbClient = pg.PoolClient;
 
-const ABOUT_SEED = {
+export const ABOUT_SEED = {
   de: {
     title: 'Über mich',
     body: 'Hier teile ich meine Leidenschaft fürs Reisen — Geschichten und Erinnerungen von den belebten Straßen Europas bis zu den geheimnisvollen Pfaden Südamerikas. Der vollständige Über-mich-Text wird in Phase 2 von der bestehenden Seite migriert.',
@@ -71,6 +71,24 @@ export const POST_SNAPSHOT_SQL = `jsonb_build_object(
   'categories', categories, 'tags', tags, 'scheduled_at', scheduled_at,
   'featured', featured
 )`;
+
+/** Narrow operational migration, also safe before an offline content restore. */
+export async function ensureOnboardingSchema(db: Pick<DbClient, 'query'>): Promise<void> {
+  await db.query(`CREATE TABLE IF NOT EXISTS onboarding_state (
+    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    schema_version smallint NOT NULL DEFAULT 1 CHECK (schema_version = 1),
+    state text NOT NULL CHECK (state IN ('eligible', 'retired')),
+    reason text NOT NULL,
+    evaluated_at timestamptz NOT NULL,
+    dismissed_at timestamptz,
+    retired_at timestamptz,
+    CHECK (
+      (state = 'eligible' AND reason = 'fresh' AND retired_at IS NULL)
+      OR (state = 'retired' AND reason IN ('existing-schema','existing-accounts','existing-content',
+        'existing-data','restored-content','finished') AND retired_at IS NOT NULL AND dismissed_at IS NULL)
+    )
+  )`);
+}
 
 export async function ensureSchema(pool: DbPool): Promise<void> {
   await pool.query(`
@@ -537,4 +555,5 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
         CHECK (NOT omitted OR (status='draft' AND published_snapshot IS NULL AND published_at IS NULL));
     END IF;
   END $$`);
+  await ensureOnboardingSchema(pool);
 }

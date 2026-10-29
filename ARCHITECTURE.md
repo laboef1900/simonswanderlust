@@ -435,6 +435,13 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
   social links. Only an explicit admin save marks it configured.
 - **`site_identity_assets`** — reserved logo/favicon role rows, SHA-256, dimensions, PNG bytes
   (≤256 KiB each) and creation time. Included in dumps now; upload/rendering is #275.
+- **`onboarding_state`** — install-wide operational singleton (`singleton = true`,
+  `schema_version = 1`, `state`, `reason`, `evaluated_at`, `dismissed_at`, `retired_at`).
+  Only guarded boot can insert `eligible/fresh`; actions can dismiss/resume eligibility or
+  permanently retire it. Retired reasons are `existing-schema`, `existing-accounts`,
+  `existing-content`, `existing-data`, `restored-content` and `finished`. No user FK,
+  per-step completion flags or content payloads. Excluded from native JSON dumps/restores,
+  MDX and public builds; full SQL/physical backups can contain it. No dump-version bump.
 - **`posts`** — one row per (`translation_key`, `locale`); `slug`, `title`, `date`, `country`, `country_code`, `region`, `excerpt`, `hero_image` (jsonb), `coordinates` (jsonb), optional `stops`/`route`/`key_facts`, `body_markdown`, `images` (jsonb), `status` (`draft`/`published`), `featured` (boolean, "use as homepage cover" — a SHARED value written to both locale rows, deliberately not unique: the homepage takes the newest flagged story and falls back to the newest story), `comments_enabled` (boolean, SHARED, default `true` — the per-post switch; the site-wide `settings.commentsEnabled`, default `false`, is the real gate). Unique on (`locale`, `slug`) **where `slug <> ''`** — an empty slug means "not set yet" (a DE-first draft without an EN title), so any number of such drafts may coexist; `validateForPublish` requires a real slug per locale (#119).
   Optional **`title_image`** (nullable jsonb) holds an independent per-locale story banner.
   It uses the hero's image shape, including format and focal point. The story header and
@@ -488,6 +495,52 @@ Schema evolution is additive and idempotent — no migration framework, no `sche
 `ALTER TABLE … ADD COLUMN IF NOT EXISTS` appended to the marked column-migrations section at the
 end of `ensureSchema` (existing deployments pick it up at the next boot). `NOT NULL` columns must
 carry a `DEFAULT`, or the `ALTER` fails on populated tables.
+
+### First-run classification and Desk state (#279)
+
+Under the app's existing storage owner, `main.ts` captures prior core-schema/accounts/content
+evidence **before** migrations can sweep revisions, import jobs or route-cleanup history.
+`initializeApplicationSchema` then runs `ensureSchema` plus the installed required
+`seedSiteIdentity` singleton initializer. Both normal boot and offline preparation use that
+same boundary; it currently seeds identity/About, not future language/navigation features.
+Every subsequently installed backup-required singleton must join this shared boundary.
+Onboarding is initialized/reconciled before AI migration, import recovery, HTTP listen,
+release bootstrap, housekeeping or media/route reconciliation.
+
+A valid restore fence wins over any copied eligible row. Otherwise a valid existing row
+survives restart unchanged; new owner activity does not disqualify an already-eligible install.
+For an absent row, the first disqualifier wins: accounts; content (including revisions,
+private routes/cleanup, media/folders, comments, jobs, secrets, identity assets, changed/non-About
+pages or explicitly saved identity); configured data; then prior core schema. Exact About
+seeds and unsaved seeded identity are not owner content. Data evidence includes the resolved
+settings file or `.pre-ai-registry` backup, any image/backup/site entry (including partial
+releases), and private-route entries other than known empty structural directories.
+Only a pristine DB and empty configured data with no fence become eligible. Zero users
+alone never prove freshness. Unknown row versions, malformed/unreadable metadata, evidence
+read failure, migration/ownership failure or uncertain initial commit abort before serving.
+
+The Desk uses shared read-only `GET /auth/me` (`requireAuth`, `no-store` on every response),
+returning exactly `{ authenticated: true, userId, username, isAdmin, needsSetup: false }`.
+Only 401 redirects to login; other failures stay unavailable with read-only retry.
+`/setup`, `/login`, `/auth/status`, session issuance, setup locking and auth rate limits
+are unchanged. Client roles only gate presentation; `GET`/`POST /onboarding` require admin.
+Both onboarding routes are `no-store`. GET returns `{ status: 'retired' }` or
+`{ status: 'open' | 'dismissed', complete, steps: [{ id, state, required, href }] }`;
+internal reasons, timestamps and content counts are not exposed. Progress is derived in one
+read-only REPEATABLE READ snapshot. POST accepts only `{ action: 'dismiss' | 'resume' | 'finish' }`
+(1 KiB limit); invalid actions return 400, retired/incomplete actions 409 and owner loss
+503 `storage_read_only`. Finish locks/rechecks the singleton and required predicates in one
+transaction; it never trusts the browser. Metadata actions do not create content or publish.
+
+The permanent restore fence is `join(dirname(resolve(STORAGE_DIR)), 'onboarding.restore-retired')`,
+normally `/data/onboarding.restore-retired`, with exact payload
+`swl-onboarding-restore-retired-v1\n`. It is not a progress file, maintenance lock or completion
+receipt. Publication uses a private 0600 temporary, file flush, atomic no-clobber publication
+and directory flush; the final entry must be a regular non-symlink single-link file with the
+exact payload. Unsafe roots, malformed entries and uncertain durability fail closed.
+Never delete it after restore, undo, failure or code rollback. There is no onboarding reset,
+environment switch or supported metadata-deletion shortcut. See the recovery procedures below
+and the [approved contract](docs/superpowers/specs/2026-10-27-issue-278-first-run-onboarding.md).
 
 ## Backups & disaster recovery
 
@@ -605,9 +658,20 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   `GET /backups/:name` is `no-store`, accepts only strict dump/archive basenames and opens
   regular, single-link files without following symlinks.
 - **Restore is CLI-only** (destructive, so no web button):
-  Stop the app and wait for its work and database sessions to drain; keep Postgres running.
-  Then run the same configured image/volumes without starting the app service:
-  `docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore [--yes] /data/backup/db/<file>`.
+  Confirm the intended image, database and `/data` bind path privately (do not publish secrets
+  from Compose configuration). Retain the input dump and its manifest-paired private archive.
+  Stop **every** app instance and maintenance writer sharing that database/storage; disable
+  automatic restart/activation throughout recovery, and wait for process exit and database
+  sessions to drain. This includes writers using the storage through another database/cluster.
+  Keep Postgres running. With the actual dump basename substituted, use the same configured
+  image/volumes without service ports:
+
+  ```sh
+  docker compose stop app
+  docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore /data/backup/db/db-YYYYMMDD-HHmmss.json.gz
+  ```
+
+  Do not add `--service-ports`; keep ingress closed for a fresh or unsafe recovery target.
   A running app holds the ownership lease, so `docker compose exec app … restore` is refused.
   Outside Docker, stop the configured app process and run `node --import tsx src/cli.ts restore <file>`
   with the same database/storage settings. Do not run other maintenance writers concurrently.
@@ -616,16 +680,30 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   an unsupported dump `version`; prints the target database (`host:port/dbname`, never the
   credentials), the dump's `createdAt` and per-table counts, and the **live** per-table counts
   about to be replaced; then asks for the literal line `yes` — `--yes` skips the prompt for
-  scripted use, and EOF/anything else aborts with nothing changed. It then writes a
-  **pre-restore recovery set** of the current state into `BACKUP_DIR/db/`, verifies that
-  set, and aborts if it cannot be safely restored. A v10 input is fully validated against its
-  paired archive before database replacement. Originals stage under fresh identities, then
-  database replacement commits in one transaction. Missing/corrupt/degraded originals are
-  reported rather than silently reconstructed. Lost COMMIT acknowledgement retains both
-  source sets; do not manually delete them while the outcome is unresolved.
-  Deleting users invalidates every login. Start the app again only after the CLI exits;
-  then sign in and explicitly rebuild the site. The prior static release remains unchanged
-  until that rebuild. The CLI prints the verified undo dump path.
+  scripted use, and EOF/anything else aborts with nothing changed. `--yes` bypasses neither
+  exclusive ownership nor source validation nor the verified undo backup. Never kill database
+  sessions or disable fencing to force admission. The CLI then writes a
+  **pre-restore recovery set** of the actual current state into `BACKUP_DIR/db/`, reads that
+  exact dump through `readDump`, validates identity assets and verifies its paired private-route
+  archive. Failure aborts before retirement/replacement; schema existence alone is not a
+  verified undo set. Source validation likewise covers the installed dump codec, identity
+  assets and any required paired archive before admission.
+  After confirmation and undo verification, the CLI durably publishes/verifies the retirement
+  fence, separately commits the onboarding retirement, then reasserts ownership/drain **before
+  any GPX staging or content replacement**. This includes legacy, empty and self-restores.
+  A valid already-retired row retains its reason. Uncertain fence durability or retirement
+  COMMIT stops replacement; the fence remains. Later failure, rollback or undo cannot restore
+  checklist eligibility/dismissal (native dumps intentionally exclude that operational state).
+  Originals stage under fresh identities, then database replacement commits in one transaction.
+  Missing/corrupt/degraded originals are reported rather than silently reconstructed.
+  Lost content COMMIT acknowledgement retains both source sets; do not manually delete them
+  while the outcome is unresolved.
+  Deleting users invalidates every login. Only after successful CLI exit and inspection of
+  the result, run `docker compose up -d app`; reconcile settings.json and the matching master
+  key before remote AI use, then sign in and explicitly rebuild the site through Settings.
+  The prior static release remains unchanged until that rebuild. The CLI prints the verified
+  undo dump path. On failure or ambiguous completion leave the app stopped, retain input,
+  undo and staged recovery sets, and investigate; do not blindly retry or erase recovery files.
 - **Storage lease loss:** `/health` returns 503 with `storageWritable: false`; mutations
   return `storage_read_only`. Static pages/images remain available. Confirm Postgres is
   healthy and no restore is running, then restart the same app configuration
@@ -644,6 +722,94 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   fallback: `docker compose exec db psql -U images -d images -c 'DELETE FROM users;'` re-opens
   `/setup` (zero-users check) on the next visit to `/login`. That deletes **only** accounts and
   their cascaded sessions — `posts`, `pages`, and images carry no user FK and are untouched.
+  Account-only recovery does not reset onboarding or clear the restore fence; it is not a
+  content restore. The zero-user setup gate remains unchanged.
+
+### Offline preparation for a fresh native-restore target
+
+Do **not** start the HTTP app just to create tables. After confirming the destination image,
+database, storage/settings/backup paths and retaining recovery material, stop all writers,
+disable automatic activation and keep ingress closed. With only destination Postgres running:
+
+```sh
+docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts prepare-native-restore
+```
+
+The syntax is `prepare-native-restore [--yes]`; outside Docker use
+`node --import tsx src/cli.ts prepare-native-restore [--yes]` from `uploader/` with the same
+configuration. It checks the existing restore lease and drained app sessions, validates the
+data root/fence and admits only an empty or recognized partial/complete bootstrap-only schema.
+Accounts/content/operational tables must be empty; About rows must match the exact defaults,
+identity must be missing or neutral/unsaved with no assets, and any onboarding row must be
+retired. Unknown tables/shapes, saved/non-default values or uncertain inspection refuse
+**before migrations/seeding**. Populated targets use ordinary guarded restore; an incomplete
+populated schema needs separately backed-up operator recovery, not deletion or this shortcut.
+
+After literal `yes` (or `--yes`), it publishes/verifies the fence **first**, runs the shared
+schema/required-singleton initialization, retires onboarding and exits. It runs no listener,
+release build, background workers, import/media/route recovery, housekeeping, settings writes
+or model migration. Failure after fencing leaves permanent retirement; retry is offline and
+idempotent, never overwriting saved values to make admission pass.
+
+Success means initialization completed, **not** that an undo set was created or verified.
+Keep services stopped between commands: the preparation lease ends on exit. Run the ordinary
+`restore [--yes] <file>` procedure next; it captures and validates the actual prepared target,
+including the required identity singleton and applicable paired archives/assets, before
+replacement. Cancelling that later restore intentionally does not reverse preparation's fence.
+
+### SQL, filesystem, host and clone recovery
+
+Every supported restore permanently retires onboarding, including empty/schema-only SQL,
+table-selective SQL excluding users, self/legacy restores, filesystem-only restores and undo.
+Native JSON exclusion does not protect against a SQL/physical backup carrying an eligible row.
+
+1. Retain and verify source/undo material and the original database/data root; confirm the
+   destination configuration. Stop all app and maintenance writers and wait for drained
+   sessions; disable automatic restart/activation for the **entire** recovery interval.
+   This includes processes sharing storage via another cluster. Postgres alone may run.
+2. Before destination replacement, run the fence-only command against that destination:
+
+   ```sh
+   docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts onboarding-retire
+   ```
+
+   Bare Node: `node --import tsx src/cli.ts onboarding-retire` from `uploader/` with the same
+   destination settings. It acts immediately (no confirmation prompt), needs reachable
+   Postgres for its restore ownership/drain guard, but needs no application tables. It
+   validates/publishes **only the fence**, never broad schema initialization. Nonzero exit
+   stops recovery: never proceed with SQL/copying after a failed or uncertain fence write.
+3. Import SQL with `psql -v ON_ERROR_STOP=1`; retain the fence while SQL replaces rows/tables.
+   Do not run `prepare-native-restore` before a full SQL import: the import's CREATE statements
+   expect an uninitialized SQL destination. Keep writers stopped across commands and on failure.
+4. For an in-place filesystem/host copy, exclude and preserve the destination fence. For a
+   new/replaced root, stage it offline; establish retirement on the destination before
+   replacement and exclude its fence from copying too. After copying, rerun `onboarding-retire`
+   with that root's final configuration to verify/re-establish the durable fence **before
+   activation**, even if copied SQL contains eligible metadata. Preserve the old fenced root
+   until successful cutover. A raw volume-image restore that cannot preserve a marker must
+   use an isolated staging destination with auto-start disabled; fence/verify the recovered
+   root before selecting it as live. The staging-to-live switch is the activation boundary.
+5. Verify the final selected root's fence, confirm recovery is complete or explicitly contained,
+   and wait for all recovery writers to exit before starting the same configured app. Boot
+   retires any copied eligible row before listen. Partial/failed SQL may prevent boot entirely:
+   retirement is not proof of successful content recovery. Reconcile settings/key escrow,
+   explicitly rebuild after recovery and verify content before reopening ingress.
+
+A cold clone, new-host recovery or whole-machine rollback follows the same offline activation
+protocol, even with zero users/content. Keep recovery evidence outside the replaced tree.
+An old whole-machine snapshot auto-started **before** re-fencing is outside this supported
+procedure; no timestamp or file can automatically detect an unannounced rollback of both stores.
+
+**Guard limits and rollback:** the advisory lease is database-scoped; `swl-app:` session checks
+do not detect arbitrary SQL or another cluster's writers. `onboarding-retire` releases its
+lease on exit and does not guard the subsequent `psql`, copy or physical restore. Restarting
+Postgres also ends that lease. Stopped writers/disabled activation are mandatory, not replaced
+by the permanent fence. On any failure retain source, undo, staged data and fence; investigate
+content outcome before retry/undo. Corrupt/unreadable metadata fails boot/recovery closed:
+preserve evidence and repair only to retired under stopped writers, never reset to fresh.
+Code rollback preserves the additive table and fence. Older binaries do not enforce them;
+retain the current retirement CLI/procedure for any older-code recovery, and verify the
+selected root before rolling forward. Dependency-owned dump compatibility limits still apply.
 
 ### Image originals & incremental archives
 
@@ -670,9 +836,20 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   `/data/images` written or published since the previous filesystem boundary are tarred into
   `/data/backup/db/images-<YYYYMMDD-HHmmss>.tar` (mtime/ctime-incremental; when nothing qualifies,
   no file is written). Archives are **never pruned** — each can hold a unique slice of the library.
-  Metadata changes and conservative full recovery can repeat files and increase backup space; the offsite host-level backup
-  above remains the real DR protection. To rebuild the images dir from archives, untar them
-  **oldest-first** into an empty `images/` (later duplicates simply overwrite earlier ones).
+  They contain public variants **and private full-resolution originals**, which may retain
+  EXIF/GPS and other source metadata. Treat image archives as sensitive recovery material,
+  like database dumps; downloads remain admin-only. Deleting a photo from the media library
+  does **not** purge earlier archives or their offsite copies. The read-only
+  [`audit-exif` command](SECURITY.md#published-image-metadata-allow-list) audits public variants,
+  not private originals or historical archives: a clean result does not certify those copies
+  GPS-free and does not erase anything. Private GPX originals are stored in separate companion
+  route archives referenced by v10 dump manifests, not part of these image tars.
+  Metadata changes and conservative full recovery can repeat files and increase backup space;
+  the offsite host-level backup above remains the real DR protection. Image-only recovery is
+  still a restore: follow the [offline fence/activation procedure](#sql-filesystem-host-and-clone-recovery)
+  before replacing files. Preserve the existing images root; untar archives **oldest-first**
+  into an empty staged `images/` (later duplicates overwrite earlier ones), then verify and
+  activate the fenced destination without deleting the prior recovery material.
 
 ### Upgrading a Postgres major (e.g. 17 → 18)
 
@@ -681,36 +858,61 @@ moved the volume mount from `/var/lib/postgresql/data` to `/var/lib/postgresql` 
 versioned subdirectory). **Deployments with a pre-18 `pgdata` volume must migrate via
 dump-and-restore — do NOT just pull the new image**: with the old volume mounted at the new path,
 the entrypoint finds its versioned PGDATA empty and silently `initdb`s a fresh, empty cluster
-(the old data sits unreferenced at the volume root, and the app happily re-seeds — the blog
-comes up blank without an error). The same dump → drop volume → bump tag → restore sequence
-applies to every future major (18 → 19, …). Procedure:
+(the old data sits unreferenced at the volume root, and a boot could seed a blank application).
+Preserve the old cluster and prepare an **isolated new volume/database** for the new major;
+never use `docker volume rm` as a migration step. Removing any legacy volume requires separate
+explicit owner approval, verified recovery material and a successful, verified cutover.
 
-```bash
-# 1. still on the OLD version/compose: dump
-docker exec blog-db-1 pg_dump -U images -d images --no-owner > pg-upgrade-dump.sql
-# 2. stop, drop the old-format volume (the dump is your data now)
-docker compose down && docker volume rm blog_pgdata
-# 3. deploy the new compose (new image + mount), start the db, restore
-docker compose up -d db
-docker exec -i blog-db-1 psql -U images -d images < pg-upgrade-dump.sql
-docker compose up -d
-```
+1. On the old version, take and verify a full `pg_dump --no-owner` plus matching image/private
+   files, settings and separate key escrow. Stop all app/maintenance writers for the final
+   consistent capture; keep them stopped and automatic activation disabled.
+2. Start only the new destination Postgres, with the correctly configured new-major mount.
+   Keep the old cluster/data untouched and ingress closed. Point the recovery CLI at the new
+   database and selected data root, not the source.
+3. Follow [SQL, filesystem, host and clone recovery](#sql-filesystem-host-and-clone-recovery):
+   run `onboarding-retire` successfully **before** replacement, then import into the empty
+   destination with `psql -v ON_ERROR_STOP=1`. Do not start the app or initialize its schema
+   before that import. Preserve/re-fence copied data roots before activation.
+4. After verified SQL/file recovery and exited recovery writers, start the configured app;
+   boot reconciles retirement before listen. Reconcile settings/key escrow, sign in and
+   explicitly rebuild; verify restored content before reopening ingress. Failure leaves
+   writers stopped and both old and new recovery material intact for diagnosis/rollback.
 
-**App-native alternative** (JSON backup instead of `pg_dump`/`psql`): while **still on the OLD
-version**, take a fresh dump first (admin Settings → **Back up now**, or `POST /backups` —
-`backupSchedule` defaults to `off`, so don't assume one exists) and confirm the file is present
-under `/data/backup/db` **before** running `docker compose down` / `docker volume rm`. After
-`docker compose up -d` on the new major, the app's boot-time `ensureSchema` recreates all tables
-on the fresh cluster, so that `/data/backup/db/db-*.json.gz` dump (see
-[Database backups](#database-backups)) can be restored with the shell-less exec-form CLI:
-`docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`.
-Note the database has **zero users** until the restore completes, which re-opens first-run
-`POST /setup` to anyone who can reach port 3000 — run the restore immediately after the app is
-healthy, or keep the port unreachable (reverse proxy off / firewall) during the window.
-The restore covers `users`, `posts`, and `pages` only — sessions are disposable and app settings
-live on disk under `/data`, but every login is invalidated, so log in again and trigger a rebuild
-(`/admin/settings.html` → **Rebuild site now**, or `POST /rebuild`). Prefer the `pg_dump`/`psql`
-path above as primary — it captures the whole database with full fidelity.
+**App-native alternative** (JSON backup instead of `pg_dump`/`psql`):
+
+1. While **still on the OLD version**, take and verify a fresh dump (admin Settings →
+   **Back up now**, or `POST /backups`; `backupSchedule` defaults to `off`). Retain its paired
+   private route archive, image recovery material, settings.json and separate master-key escrow.
+   Confirm the target app supports the dump version. A file merely existing is not verification.
+   Preserve the old cluster while preparing an isolated new target; this alternative does not
+   authorize deletion of the old volume or an in-place major upgrade.
+2. Keep **all ingress blocked** on the new target throughout recovery: an empty database
+   still satisfies the unchanged zero-user setup gate. Do not boot HTTP to create schema.
+   With only the new Postgres running, follow [offline preparation](#offline-preparation-for-a-fresh-native-restore-target):
+   `docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts prepare-native-restore`.
+   Confirm permanent retirement and inspect its result; preparation does not verify an undo set.
+3. Keep the app and all writers stopped between commands (the preparation lease has ended).
+   Follow the [offline restore procedure](#database-dumps), using the actual dump basename:
+
+   ```sh
+   docker compose stop app
+   docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore /data/backup/db/db-YYYYMMDD-HHmmss.json.gz
+   ```
+
+   Inspect the credential-free target and row counts before typing literal `yes`. The same
+   exclusive-owner, source validation and verified pre-restore backup safeguards apply.
+4. Only after confirmed success, run `docker compose up -d app`, reconcile settings/key escrow,
+   sign in again and explicitly rebuild (**Settings → Rebuild site now**, or `POST /rebuild`).
+   Verify restored content before reopening ingress. On failure keep the app stopped and
+   preserve recovery evidence.
+
+Current v11 dumps cover `users`, `posts`, `pages`, `media`, `media_folders`, `app_secrets`,
+`comments`, `post_routes`, `site_identity` and `site_identity_assets`, plus manifest-paired private
+originals. See [Database dumps](#database-dumps) for version-specific absent-field behavior:
+old dumps are not equivalent to v11. `settings.json` and the permanent restore fence are
+external; sessions are never restored and every login is invalidated. Prefer the
+`pg_dump`/`psql` path above as primary for full database fidelity; neither database format
+replaces image/private-file recovery, fencing or settings/key escrow.
 
 ## Packaging & release pipeline
 
