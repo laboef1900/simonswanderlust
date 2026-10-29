@@ -47,6 +47,40 @@ describe('read-only publication observation bounds', () => {
     expect(read).toHaveBeenCalledTimes(4);
     s.refresh.stop();
   });
+  it.each([false, true])('resumes fresh observations after cached navigation, discarding pre-navigation reads (settled=%s)', async (settled) => {
+    vi.useFakeTimers();
+    const old = Promise.withResolvers<unknown>();
+    const read = vi.fn().mockImplementationOnce(() => old.promise).mockResolvedValue('after return');
+    const s = surface(read);
+    s.refresh.start();
+    await vi.advanceTimersByTimeAsync(0);
+    s.window.dispatchEvent(Object.assign(new Event('pagehide'), { persisted: true }));
+    if (settled) await vi.advanceTimersByTimeAsync(90000);
+    expect(read).toHaveBeenCalledTimes(1);
+    s.window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.apply).toHaveBeenLastCalledWith('after return');
+    expect(read).toHaveBeenCalledTimes(2);
+    old.resolve('before navigation');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.apply.mock.calls.map(([value]) => value)).toEqual(['after return']);
+    await s.refresh.refresh();
+    expect(read).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(read).toHaveBeenCalledTimes(4);
+    s.refresh.stop();
+  });
+  it('does not revive an explicitly stopped controller on cached-page restoration', async () => {
+    vi.useFakeTimers();
+    const read = vi.fn(async () => 'live');
+    const s = surface(read);
+    s.refresh.start(false);
+    s.window.dispatchEvent(Object.assign(new Event('pagehide'), { persisted: true }));
+    s.refresh.stop();
+    s.window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(read).not.toHaveBeenCalled();
+  });
   it('bounds a hung read to ten seconds, discards its late Live, and has no catch-up queue', async () => {
     vi.useFakeTimers();
     const pending = Promise.withResolvers<unknown>();

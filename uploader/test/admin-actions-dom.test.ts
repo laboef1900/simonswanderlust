@@ -121,9 +121,10 @@ const EDITOR_COPY = Object.fromEntries(Object.entries(ui.en)
 
 type Listener = (event?: Record<string, unknown>) => Promise<void> | void;
 
-function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: string[] = []): {
+interface PageSurface {
   ctx: Record<string, unknown>; el: (id: string) => Element; windowListeners: Record<string, Listener[]>;
-} {
+}
+function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: string[] = []): PageSurface {
   const html = readFileSync(file, 'utf8');
   const scriptStart = html.lastIndexOf('<script>');
   const script = html.slice(scriptStart + '<script>'.length, html.lastIndexOf('</script>'));
@@ -215,8 +216,9 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
   return { ctx, el, windowListeners };
 }
 
-function loadPosts(extraGlobals: Record<string, unknown> = {}) {
-  const page = loadPage('public/posts.html', {
+function loadPosts(extraGlobals: Record<string, unknown> = {}, languageRead?: () => Promise<Response>) {
+  const request = extraGlobals.fetch as ((url: string, init?: RequestInit) => unknown) | undefined;
+  const page: PageSurface = loadPage('public/posts.html', {
     PostsFilter: {
       apply: (posts: unknown[]) => posts,
       REGIONS: [],
@@ -227,6 +229,9 @@ function loadPosts(extraGlobals: Record<string, unknown> = {}) {
       toSearch: () => '',
     },
     ...extraGlobals,
+    fetch: (url: string, init?: RequestInit) => url === '/language'
+      ? languageRead?.() ?? Promise.resolve(Response.json(vm.runInContext('SiteLanguage.config()', page.ctx)))
+      : request ? request(url, init) : Promise.reject(NETWORK_DOWN),
   });
   vm.runInContext('listStale = false', page.ctx);
   return page;
@@ -2168,6 +2173,52 @@ describe('publication refresh in list, Desk and Settings consumers', () => {
       await promise;
     }
   };
+
+  it('refreshes language controls and uses the observed language token for the next bulk publish', async () => {
+    startClock();
+    let language = { primary: 'de', locales: ['de', 'en'], updatedAt: '2026-10-27T00:00:00.000Z' };
+    let submitted: unknown;
+    const page = loadPosts({ ...clockGlobals(), fetch: async (url: string, init?: RequestInit) => {
+      if (url === '/posts/bulk') { submitted = JSON.parse(String(init?.body)); return Response.json({ succeeded: 1, failed: 0 }); }
+      return Response.json(url === '/posts' ? [post] : { record: 'missing' });
+    } }, async () => Response.json(language));
+    vm.runInContext('me = { isAdmin: true }', page.ctx);
+    await (vm.runInContext('load', page.ctx) as () => Promise<void>)();
+    language = { primary: 'en', locales: ['en'], updatedAt: '2026-10-28T00:00:00.000Z' };
+    await vi.advanceTimersByTimeAsync(30000); await flush();
+    expect(page.el('missingSecondaryOption').disabled).toBe(true);
+    expect(vm.runInContext('SiteLanguage.config().primary', page.ctx)).toBe('en');
+    vm.runInContext("selected.add('tk1')", page.ctx);
+    await (vm.runInContext('runBulk', page.ctx) as (action: string) => Promise<void>)('publish');
+    expect(submitted).toMatchObject({ action: 'publish', keys: ['tk1'], baseLanguageUpdatedAt: language.updatedAt });
+    vm.runInContext('publicationRefresh.stop()', page.ctx);
+  });
+
+  it.each(['network', 'invalid'])('recovers initial %s language failure through visible Retry', async (kind) => {
+    startClock();
+    let failing = true;
+    const language = { primary: 'en', locales: ['en'], updatedAt: '2026-10-28T00:00:00.000Z' };
+    const page = loadPosts({ ...clockGlobals(),
+      Auth: { ensureAuthed: async () => ({ isAdmin: true }), renderHeader() {} },
+      fetch: async (url: string) => Response.json(url === '/posts' ? [post] : { record: 'missing' }),
+    }, async () => {
+      if (failing && kind === 'network') throw NETWORK_DOWN;
+      return Response.json(failing ? { ...language, locales: ['invalid'] } : language);
+    });
+    // Initial navigation has no cached language. Exercise the real client, not
+    // the preloaded configuration used by unrelated action fixtures.
+    vm.runInContext(readFileSync('public/language.js', 'utf8'), page.ctx);
+    await flush();
+    expect(page.el('loadMsg').attrs.role).toBe('alert');
+    expect(page.el('retryLoad').hidden).toBe(false);
+    expect(page.el('bulkPublish').disabled).toBe(true);
+    failing = false;
+    await page.el('retryLoad').click(); await flush();
+    expect(page.el('loadMsg').hidden).toBe(true);
+    expect(page.el('postsTable').hidden).toBe(false);
+    expect(vm.runInContext('SiteLanguage.config().primary', page.ctx)).toBe('en');
+    vm.runInContext('publicationRefresh.stop()', page.ctx);
+  });
 
   it('refreshes list facts while preserving search/selection and disabling stale mutation controls after a failure', async () => {
     startClock();

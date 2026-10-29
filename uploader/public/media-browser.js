@@ -415,7 +415,10 @@
     rootOpt.value = '';
     rootOpt.textContent = '(root)';
     folderSelect.appendChild(rootOpt);
-    state.folders.forEach(function (f) {
+    var folders = state.folders;
+    // An acknowledged/current item can name a folder created since this list loaded.
+    if (item.folder && folders.indexOf(item.folder) === -1) folders = folders.concat(item.folder);
+    folders.forEach(function (f) {
       var opt = document.createElement('option');
       opt.value = f;
       opt.textContent = f;
@@ -858,15 +861,24 @@
         return;
       }
       var saved = await api.savePatch(client, key, patch, api.expectations(patch, current || state.detailItem));
-      if ($('detail').dataset.key === key) {
-        state.detailChanged = saved.changedDescriptions || null;
-        renderImpact();
-      }
-      if ($('detail').dataset.key !== key || state.detailGeneration !== generation) {
+      state.items = state.items.map(function (item) { return item.key === key ? saved : item; });
+      if ($('detail').dataset.key !== key) return;
+      state.detailChanged = saved.changedDescriptions || null;
+      renderImpact();
+      if (state.detailGeneration !== generation) {
+        // Advance only acknowledged leaves. Newer inputs stay untouched, and
+        // unrelated values in the response must not become unintended edits.
+        var acknowledged = api.expectations(patch, saved);
+        state.detailItem = Object.assign({}, state.detailItem);
+        Object.keys(acknowledged).forEach(function (field) {
+          state.detailItem[field] = field === 'alt' || field === 'caption'
+            ? Object.assign({}, state.detailItem[field], acknowledged[field]) : acknowledged[field];
+        });
+        state.detailRecovery = null;
+        $('dCompare').innerHTML = '';
         say(copy.mediaConditionalNewer);
         return;
       }
-      state.items = state.items.map(function (item) { return item.key === key ? saved : item; });
       state.detailDirty = false;
       renderDetail();
       say(copy.mediaConditionalSaved);
@@ -1126,7 +1138,12 @@
       $('renameFolder').hidden = true;
       $('deleteFolder').hidden = true;
     }
-    if (initialized) { await reload(); return; }
+    if (initialized) {
+      detailRefresh.start(false);
+      await reload();
+      await detailRefresh.refresh();
+      return;
+    }
     initialized = true;
     $('emptyChoosePhotos').textContent = copy.mediaChoosePhotos;
     $('emptyChoosePhotos').addEventListener('click', function () {

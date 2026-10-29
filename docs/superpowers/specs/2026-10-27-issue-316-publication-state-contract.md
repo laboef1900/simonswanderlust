@@ -886,7 +886,39 @@ the complete §16 gates, including PostgreSQL, real build/promotion and browser 
 refresh protocols, before treating the implementation as qualified. No deployment,
 owner-content mutation, migration or automatic build is authorized by this handoff.
 
-## 21. #318 implementation handoff (2026-10-29)
+## 21. #317 isolated qualification (2026-10-29)
+
+The parent subsequently qualified the actual `uploader/src/main.ts`, PostgreSQL,
+Astro builds/promotions and browser consumers at product commit
+`4d31f48caefb45b6dc5392df29f0846917bc848a`. The retained execution ledger contains
+138 observations, including 98 recorded API requests, served HTML, release manifests
+and ten inspected desktop/320px screenshots. This supersedes the unexecuted
+source-handoff status in §20, not its deployment restrictions.
+
+Observed behavior covered all four language configurations and the publication
+lattice, including no-op saves, newer drafts, omitted locales, failed publish,
+unpublish and delete after commit, missing/unreadable manifests, unavailable and
+partially available observations, author redaction, and DE/EN draft-preview labels.
+An actual failed build left public HTTP200 HTML byte-identical; the changed committed
+title appeared only after a successful rebuild. Dirty two-tab text and concurrency
+bases survived refresh, and a held older response could not replace newer state.
+Twenty-four simultaneous refresh triggers produced one post read and one build-status
+read, with no mutations. PR #271's merged prerequisite was independently confirmed.
+
+The complete integrated verification subsequently passed uploader types, the full
+PostgreSQL-backed uploader suite, Astro checking, the site suite and a real site build
+(`wave1793305473532_29724`). Later prerequisite documentation merges did not change
+the publication implementation. Final-head CI and independent actual-PR review remain
+separate gates recorded in the PR and execution ledger.
+
+Fixture corrections remain disclosed: the configured image host does not serve blog
+HTML, so final public-byte assertions used the separate loopback public hostname;
+early wrong-host 404 probes are not qualification. A coalesced-refresh experiment
+was replaced by the recorded real-mutation generation experiment. All owned processes
+and tabs were closed, faulted permissions restored exactly, and fixture data retained.
+No owner content, deployment, or physical accessibility audit was involved.
+
+## 22. #318 implementation handoff (2026-10-29)
 
 The Media detail GET/PATCH source adds the exact §8 impact union and admin-only nullable
 `livePending`, reusing `classifyRow`, `galleryPending` and the existing admin summary.
@@ -916,3 +948,43 @@ failure, dirty detail refresh, stale responses, and author-only request/control 
 evidence. Parent qualification must run the full PostgreSQL-enabled suites, Astro checks/build,
 real browser and served-gallery protocol, actual-PR review and final-head CI before delivery.
 No schema/dump change, rendering-policy change, deployment or owner-data mutation is authorized.
+
+## 23. #318 isolated qualification (2026-10-29)
+
+The parent exercised actual main/PostgreSQL/Astro/Chromium at product `73bb0f0`;
+the retained runtime evidence contains 71 observations, including 43 recorded API
+results, served HTML and real release manifests. These are bounded evidence counts,
+not total-run request counts. Complete uploader/PostgreSQL/site checking and a real
+build passed at that product (`wave1793301326468_22276`); integrated final-head checks,
+CI and independent PR review are recorded separately in the execution ledger.
+
+A DE caption change measured two distinct published gallery stories and one draft,
+without counting repeated occurrences twice or changing EN. Hero, inline and About
+descriptions remained local and their served HTML byte-identical. A real successful
+build included the DE caption and cleared pending counts; an edit made while the
+actual Astro child was paused after snapshot capture remained pending after that
+build. A genuine release-write failure preserved the current release and pending
+counts, and keyboard-operated recovery cleared only included changes.
+
+The amended AC4 was exercised against exact author GET/PATCH shapes: the impact
+projection exposes only approved fields, `livePending` is absent, GPS/uploader
+values are null, and existing camera/lens/capture metadata remains visible.
+Admin summary/build status refused authors. Dirty detail input and conditional
+expectations survived refresh and delayed older responses. Twenty-four refreshes
+coalesced to one item read; an ordinary Save performed one PATCH and no item-read
+echo. A real cancelled usage query after a committed PATCH returned acknowledged
+saved details with unavailable optional impact, rather than pretending the save failed.
+
+Desktop and 320px captures, keyboard focus and recovery were inspected. Single/bulk
+AI inference was not exercised in this supplement: no worker-owned provider was
+available, and an owner's model was not contacted. #306's separately recorded AI
+interruption evidence is not relabeled as #318 inference coverage.
+
+The workstation's Node installation was externally replaced during this run:
+the old process's deleted executable path caused a genuine `build_unavailable`.
+Restarting only the owned app under Node26.13.0 (unchanged ABI147/NAPI10) restored
+actual publish/rebuild; no fallback or product change was introduced. Earlier
+unsuccessful fixture probes and this interruption remain disclosed. All owned
+processes/tabs stopped, paused child resumed, query lock rolled back and exact
+filesystem permissions restored; synthetic fixtures remain retained. No owner-data,
+deployment or physical accessibility qualification is claimed.
