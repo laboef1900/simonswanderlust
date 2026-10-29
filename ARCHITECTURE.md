@@ -443,10 +443,14 @@ carry a `DEFAULT`, or the `ALTER` fails on populated tables.
 
 ## Backups & disaster recovery
 
-Full recovery needs **two things**: the Postgres content (`users`/`posts`/`pages`) and the
-**`/data` volume** (image originals + variants, private GPX originals, site releases, MDX exports
-and the in-app backup files themselves). Everything the app writes, including database dumps,
-image archives and private route archives under `/data/backup/db/`, lives on the **same server disk** (`/data`
+Full recovery needs the **Postgres content** (`users`, `posts`, `pages`, `media`,
+`media_folders`, `app_secrets`, `comments`, `post_routes` in current v10 dumps), the
+**`/data` files** (image originals + variants, private GPX originals, settings, site releases,
+MDX exports and backups), and **separately escrowed configuration/key material**. A logical
+dump is not a copy of `/data`: retain its manifest-paired private route archive, the complete
+image archive chain, matching settings.json and original encryption key. Everything the app
+writes, including database dumps, image archives and private route archives under
+`/data/backup/db/`, lives on the **same server disk** (`/data`
 is bind-mounted from `./uploader/data`; `pgdata`, the live database, is a named volume on the
 same host). The in-app backups therefore protect against application-level mistakes (bad edit,
 botched restore, accidental delete), **not** against disk failure or host loss.
@@ -456,6 +460,12 @@ botched restore, accidental delete), **not** against disk failure or host loss.
 > archives, private GPX originals/archives, image originals, and settings.json. Encrypted AI credentials additionally require
 > **separate offsite master-key escrow**; `/data` and a DB dump cannot recover a lost master key.
 > The manual download buttons on the settings page are an escape hatch, not a strategy.
+
+The [isolated restore rehearsal runbook and dated evidence](docs/2026-10-29-restore-rehearsal.md)
+cover a disposable fresh target, not a production restore or upgrade qualification. A different
+Compose project alone is insufficient: the default `./uploader/data` bind and port 3000 remain
+shared. Before answering the restore CLI's `yes`, independently confirm both the resolved
+disposable `/data` host path and the credential-free database target printed by the CLI.
 
 ### Database dumps
 
@@ -576,8 +586,12 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   reported rather than silently reconstructed. Lost COMMIT acknowledgement retains both
   source sets; do not manually delete them while the outcome is unresolved.
   Deleting users invalidates every login. Only after successful CLI exit and inspection of
-  the result, run `docker compose up -d app`; reconcile settings.json and the matching master
-  key before remote AI use, then sign in and explicitly rebuild the site through Settings.
+  the result, complete any required file recovery and reconcile settings.json and the matching
+  master key before `docker compose up -d app`. For a fresh target, restore the image chain
+  oldest-first into its empty `images/`; never empty an existing installation as a shortcut.
+  Boot reconciliation would otherwise mark restored media missing.
+  Sign in and explicitly rebuild the site through Settings, then run admin `POST /media/rescan`
+  and verify counts, comments, galleries and private originals as described in the rehearsal runbook.
   The prior static release remains unchanged until that rebuild. The CLI prints the verified
   undo dump path. On failure or ambiguous completion leave the app stopped, retain input,
   undo and staged recovery sets, and investigate; do not blindly retry or erase recovery files.
@@ -681,10 +695,11 @@ docker compose up -d
 
    Inspect the credential-free target and row counts before typing literal `yes`. The same
    exclusive-owner, source validation and verified pre-restore backup safeguards apply.
-4. Only after confirmed success, run `docker compose up -d app`, reconcile settings/key escrow,
-   sign in again and explicitly rebuild (**Settings → Rebuild site now**, or `POST /rebuild`).
-   Verify restored content before reopening ingress. On failure keep the app stopped and
-   preserve recovery evidence.
+4. Only after confirmed success, recover the image files and matching settings/key material
+   before restarting the app (see the [isolated rehearsal](docs/2026-10-29-restore-rehearsal.md)).
+   Run `docker compose up -d app`, sign in again and explicitly rebuild
+   (**Settings → Rebuild site now**, or `POST /rebuild`), then rescan and verify restored content
+   before reopening ingress. On failure keep the app stopped and preserve recovery evidence.
 
 Current v10 dumps cover `users`, `posts`, `pages`, `media`, `media_folders`, `app_secrets`,
 `comments` and `post_routes`, plus manifest-paired private originals. See
@@ -722,6 +737,15 @@ warns about.
 On the server: pull the GHCR image directly (no `dhi.io` login needed there — that's CI-only), set
 `IMAGE_TAG` in `.env`, then `docker compose pull && docker compose up -d`. Cutting a release = bump
 the `IMAGE_TAG` defaults (`docker-compose.yml`, `uploader/.env.example`), commit, tag, push the tag.
+
+**Native codec updates (#347):** record the current image digest before an owner-controlled
+upgrade, then release and deploy a newly built image; changing `package-lock.json` or running
+Rebuild site does not replace loaded codecs. The verified sharp 0.35.5 candidate uses libheif
+1.23.5, librsvg 2.63.2 and libvips 8.18.7 in both trees on both supported Linux architectures.
+The previous digest is diagnostic/recovery evidence, **not** authorization to restore vulnerable
+codecs: #347 recovery is roll-forward only. No schema/data migration or re-encoding is required;
+the existing originals, variants and static releases remain intact. Release/deployment is a
+separate owner action, not part of the dependency PR.
 
 ## Configuration (environment)
 

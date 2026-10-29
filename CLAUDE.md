@@ -1019,6 +1019,13 @@ blog/
   `posts_region_check`; a region page is built and linked only once its locale has a published
   story (`liveRegions` in `site/src/lib/trips.ts`). See
   `docs/superpowers/specs/2026-10-19-new-regions-design.md`.
+- **Implemented, release pending:** #347 native image decoder hardening (2026-10-27,
+  owner-approved). Both locks resolve sharp 0.35.5 / libvips package 1.3.4; uploader's
+  install-script permission follows sharp 0.35.5. DHI ARM64 and emulated AMD64 candidates
+  loaded the patched heif/rsvg/vips versions and passed JPEG/AVIF/SVG upload, served-variant,
+  private-original, EXIF-free preview and rescan checks. Formats and EXIF privacy stay unchanged.
+  Recovery is roll-forward only; a new image release/deployment is still required.
+  See `docs/superpowers/specs/2026-10-27-issue-347-sharp-codec-upgrade.md`.
 - **In progress:** Reader comments (epic #202, spec #203) — design spec landed 2026-09-14
   (`docs/superpowers/specs/2026-09-14-comments-design.md`, incl. an ASVS L1 exception record).
   #205 admin moderation queue landed: `uploader/public/comments.html` (served at
