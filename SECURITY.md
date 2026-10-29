@@ -83,6 +83,10 @@ Implementation approval and merge authorization remain separate from design appr
   a verified undo set and stages fresh source IDs before replacing database state.
   Unknown commit outcomes retain both source sets until reference-checked reconciliation.
   Restore is offline; do not force-terminate another process to bypass its admission check.
+  Release pruning rechecks writability immediately before each removal. Once lease loss is
+  observed, it admits no further cleanup mutation; an already-issued filesystem operation
+  cannot be recalled. A release promoted before lease loss remains a successful promotion,
+  not permission to write a recovery record or resume cleanup without ownership (#397).
 
 The specification defines transaction/file ordering, paired restore, misuse cases and
 rollback. Reverting code is not erasure, and removing future published geometry requires
@@ -910,6 +914,17 @@ deliberate trade-off, not an oversight:
   returned to the authenticated caller so the admin learns which post failed the schema; it is
   build diagnostics (entry ids, schema paths, library file paths), never `DATABASE_URL` — the
   child reads that from the environment and neither astro nor pg echoes it on a query error.
+- **Promotion commit point (#397):** a successful atomic `current` rename is final for the
+  build outcome. Post-promotion cleanup failures cannot reverse that success or change CMS
+  content. Unreadable release/current state or a current target different from the promoted
+  directory skips pruning; the current/promoted release and staging entries are protected.
+  Ordinary deletion errors are isolated per existing retention candidate, but ownership loss
+  stops new mutations. Warnings contain only a fixed message, generated promotion stamp,
+  fixed stage and allow-listed errno (otherwise `unknown`); neither arbitrary names, raw
+  exceptions nor build stderr enter these diagnostics. A logging failure also cannot reverse
+  promotion. The exclusive work lock, pre-promotion failures, retention selection, admin
+  authorization and storage-owner fencing remain unchanged. See the
+  [approved contract and containment plan](docs/superpowers/specs/2026-10-27-issue-397-promoted-release-pruning.md).
 - **`/health` reports `release`** (whether a built site exists) beside free space, and like free
   space it is **information, never a verdict**: a fresh volume legitimately has no release for
   the first minutes, a persistent build failure is healed by a publish rather than a container

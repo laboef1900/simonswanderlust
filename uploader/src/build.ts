@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { cp, mkdir, rm, rename, symlink, readdir, readlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createWorkLock, type WorkLock } from './work-lock.js';
 import { assertWorkWritable, cancellableSleep, createWorkCancellation, isWorkWritable, type WorkCancellationOptions } from './work-cancellation.js';
 import type pg from 'pg';
@@ -173,6 +173,53 @@ async function sweepLeftovers(siteAppDir: string, releases: string, opts: WorkCa
   }
 }
 
+type PruneStage = 'enumerate' | 'current' | 'remove' | 'ownership';
+const PRUNE_ERRNOS: Readonly<Record<string, true>> = {
+  EACCES: true, EPERM: true, EBUSY: true, ENOENT: true, ENOTDIR: true,
+  ENOTEMPTY: true, EIO: true, EMFILE: true, ENFILE: true, ENOSPC: true,
+  EROFS: true, ELOOP: true, EINVAL: true,
+};
+
+/** Cleanup diagnostics must neither disclose filesystem paths nor reject a
+ * promotion that has already committed, even if the log sink itself fails. */
+function warnPrune(stamp: string, stage: PruneStage, error?: unknown): void {
+  try {
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+    const errno = typeof code === 'string' && Object.hasOwn(PRUNE_ERRNOS, code) ? code : 'unknown';
+    console.warn(`release promoted; old-release cleanup incomplete release=${stamp} stage=${stage} errno=${errno}`);
+  } catch { /* A diagnostic cannot undo promotion. */ }
+}
+
+/** Keep the existing retention selection, but fail closed when its inputs or
+ * storage ownership are uncertain. This phase never changes promotion success. */
+async function prunePromotedRelease(releases: string, stamp: string, opts: WorkCancellationOptions & { releasesRoot: string; keep: number }): Promise<void> {
+  let stage: PruneStage = 'enumerate';
+  try {
+    const all = (await readdir(releases)).filter((name) => !name.startsWith('.')).sort();
+    stage = 'current';
+    const live = resolve(opts.releasesRoot, await readlink(join(opts.releasesRoot, 'current')));
+    if (live !== resolve(releases, stamp)) {
+      warnPrune(stamp, stage);
+      return;
+    }
+    for (const old of all.slice(0, -opts.keep)) {
+      if (old === stamp || resolve(releases, old) === live) continue;
+      stage = 'ownership';
+      assertWorkWritable(opts);
+      try {
+        await rm(join(releases, old), { recursive: true, force: true });
+      } catch (error) {
+        // A failed removal may coincide with lease loss: do not admit a
+        // further mutation merely because the filesystem error was ordinary.
+        assertWorkWritable(opts);
+        warnPrune(stamp, 'remove', error);
+      }
+    }
+  } catch (error) {
+    warnPrune(stamp, stage, error);
+  }
+}
+
 // Monotonic stamp suffix: a queued run can start within the same millisecond
 // the previous one finished, so Date.now() alone could collide. Zero-padded so
 // the lexicographic sort used by release pruning orders same-millisecond
@@ -219,14 +266,9 @@ async function buildAndDeploy(opts: Pick<SiteBuilderOptions, 'siteAppDir' | 'rel
   await symlink(dest, tmpLink);
   assertWorkWritable(opts);
   await rename(tmpLink, join(opts.releasesRoot, 'current'));
-  const all = (await readdir(releases)).filter((name) => !name.startsWith('.')).sort();
-  let live = '';
-  try { live = (await readlink(join(opts.releasesRoot, 'current'))).split('/').pop() ?? ''; } catch { /* no current yet */ }
-  for (const old of all.slice(0, -opts.keep)) {
-    if (old === live) continue;
-    assertWorkWritable(opts);
-    await rm(join(releases, old), { recursive: true, force: true });
-  }
+  // @ai-note The current-link rename is the commit point (#397). Housekeeping
+  // cannot report a failed build after readers already see this release.
+  await prunePromotedRelease(releases, stamp, opts);
   return stamp;
 }
 
