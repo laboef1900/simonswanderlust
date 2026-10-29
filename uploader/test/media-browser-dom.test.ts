@@ -896,10 +896,10 @@ describe('media conditional save recovery in real consumers', () => {
   const response = (status: number, body: unknown) => Promise.resolve({
     status, ok: status >= 200 && status < 300, json: async () => body,
   });
-  async function open(page: Page, row = item('a')): Promise<void> {
-    page.rows.set(row.key, row);
+  async function open(page: Page, row = item('a'), siblings: Item[] = []): Promise<void> {
+    for (const entry of [row, ...siblings]) page.rows.set(entry.key, entry);
     await page.flush();
-    page.listRequests.shift()!.resolve({ items: [row], total: 1 });
+    page.listRequests.shift()!.resolve({ items: [row, ...siblings], total: 1 + siblings.length });
     await page.flush();
     page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
     await page.flush();
@@ -1100,6 +1100,63 @@ describe('media conditional save recovery in real consumers', () => {
       expect(reads).toBe(0);
       if (!marker) expect(page.el('dCompare').textContent).toContain('Compatible software is required');
     }
+  });
+
+  it.each([false, true])('keeps a reopened panel aligned without reverting acknowledged title (new edit: %s)', async (edited) => {
+    const pending = Promise.withResolvers<unknown>();
+    let writes = 0;
+    const page = loadPage({ request: (_url, init) => {
+      if (init?.method === 'PATCH' && ++writes === 1) return pending.promise;
+    } });
+    await open(page, item('a'), [item('b')]);
+    const choose = (key: string) => page.el('grid').querySelectorAll('.media-cell')
+      .find(cell => cell.dataset.key === key)!.dispatch('click');
+    change(page, 'dTitle', 'Submitted');
+    page.el('dSave').click(); await page.flush();
+    page.confirmAnswer.value = true;
+    choose('b'); choose('a');
+    const pendingDisabled = page.el('dSave').disabled;
+    if (edited) change(page, 'dCapDe', 'Reopened caption');
+    const acknowledged = { ...item('a'), title: 'Submitted', conditionalVersion: 1 };
+    page.rows.set('a', acknowledged);
+    pending.resolve(await response(200, acknowledged)); await page.flush();
+    expect(page.el('dTitle').value).toBe(edited ? 'a' : 'Submitted');
+    expect(page.el('dCapDe').value).toBe(edited ? 'Reopened caption' : '');
+    expect(page.el('dUnsaved').hidden).toBe(!edited);
+    expect(pendingDisabled).toBe(true);
+    change(page, 'dCapDe', 'Next caption');
+    page.el('dSave').click(); await page.flush();
+    expect(page.patches).toEqual([{ url: '/media/items/a', body: { conditional: { version: 1,
+      patch: { caption: { de: 'Next caption' } }, expect: { caption: { de: '' } } } } }]);
+    expect(page.rows.get('a')?.title).toBe('Submitted');
+    expect(page.rows.get('a')?.caption.de).toBe('Next caption');
+  });
+
+  it('does not attach a discarded request conflict to a reopened dirty panel', async () => {
+    const pending = Promise.withResolvers<unknown>();
+    let writes = 0;
+    const page = loadPage({ request: (_url, init) => {
+      if (init?.method === 'PATCH' && ++writes === 1) return pending.promise;
+    } });
+    await open(page, item('a'), [item('b')]);
+    const choose = (key: string) => page.el('grid').querySelectorAll('.media-cell')
+      .find(cell => cell.dataset.key === key)!.dispatch('click');
+    change(page, 'dTitle', 'Discarded submission');
+    page.el('dSave').click(); await page.flush();
+    page.confirmAnswer.value = true;
+    choose('b'); choose('a');
+    change(page, 'dCapDe', 'Reopened caption');
+    const current = { ...item('a'), title: 'Stored elsewhere' };
+    page.rows.set('a', current);
+    pending.resolve(await response(409, { error: 'media_changed', current })); await page.flush();
+    expect(page.el('dCapDe').value).toBe('Reopened caption');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dCompare').textContent).toBe('');
+    page.el('dSave').click(); await page.flush();
+    expect(page.patches).toEqual([{ url: '/media/items/a', body: { conditional: { version: 1,
+      patch: { caption: { de: 'Reopened caption' } }, expect: { caption: { de: '' } } } } }]);
+    expect(page.rows.get('a')?.title).toBe('Stored elsewhere');
+    expect(page.rows.get('a')?.caption.de).toBe('Reopened caption');
   });
 
   it.each(['a', 'Newer'])('saves newer title %s against acknowledged leaves without echoing untouched fields', async (nextTitle) => {

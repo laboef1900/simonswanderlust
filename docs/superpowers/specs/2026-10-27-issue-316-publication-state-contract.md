@@ -943,6 +943,28 @@ It stayed visible for31.546seconds with zero requests or writes. Fresh fixture d
 owned sessions, apps, tabs and fault injection were cleaned up. This is not physical or
 screen-reader qualification.
 
+A later review found that background row replacement discarded focused controls and
+expanded More actions panels. Rows now restore the surviving story/control identity and
+open disclosure, without stealing outside focus. Discarded disclosures are closed before
+replacement so queued native toggle events cannot close the new panel. Missing actions
+fall back to the matching title, and missing rows to Search; replacement targets use native
+focus scrolling so they are visible, while equivalent controls retain workspace scroll.
+Both consumer regressions failed before repair; all129 admin-action DOM cases passed.
+
+Actual `6c400b9` qualification covered14 native30-second cycles:42 GETs and zero automatic
+mutations, including separate posts and delayed genuine history-response phases. Selection,
+focused control, open menu, Escape and outside-focus behavior survived. It also exposed a
+compact menu extending beyond the320px workspace and an offscreen Search fallback. The
+compact left-alignment override was removed and fallback focus scrolling corrected.
+
+At `4723148`, native menus and their focus-outline envelopes fit320/390/1400px workspaces
+with equal client/scroll widths304/374/1176. The320px menu spanned96.063–272.063 inside8–312.
+Six further real timer windows made18 GETs and zero automatic writes. Confirmed mutations
+in the other owned tab removed Unpublish and then the row; the subsequent title and Search
+fallbacks were focused and visible, while equivalent-control refreshes retained scroll.
+Six screenshots were inspected. Apps, sessions, cookies and tabs were cleaned up; synthetic
+fixtures and both negative and repaired evidence remain retained.
+
 ## 22. #318 implementation handoff (2026-10-29)
 
 The Media detail GET/PATCH source adds the exact §8 impact union and admin-only nullable
