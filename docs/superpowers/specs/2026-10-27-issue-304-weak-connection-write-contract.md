@@ -2,10 +2,12 @@
 
 Date: 2026-10-27. Risk: **High** (post/page write contracts, sessions and draft storage on shared
 devices, additive schema, filesystem ownership/recovery, and `PATCH /media/items/*`).
-**Status: OWNER-APPROVED CONTRACT — native-lock qualification outstanding.** On 2026-10-29,
-the owner approved D1–D3 and D5–D7 and selected **always keep local drafts** for D4.
-The independent read-only authenticated-context prerequisite is also approved. These decisions
-do not waive §5.3's native-lock implementation/packaging proof or authorize merges/deployments.
+**Status: OWNER-APPROVED CONTRACT — development/CI native-lock qualification passed;
+actual deployment-mount qualification remains a pre-deployment/pre-enablement gate.**
+On 2026-10-29, the owner approved D1–D3 and D5–D7, selected **always keep local drafts**
+for D4, and approved the recorded sequencing amendment. The independent read-only
+authenticated-context prerequisite is also approved. These decisions preserve §5.3's
+native-lock implementation/packaging requirements and authorize no merges or deployments.
 
 Parent epic: #303. Blocks: #305 (reconcile lost responses), #306 (user-scoped stashes, offline
 signals, stale-tab conflicts). Independent narrow fixes that this contract must stay compatible
