@@ -909,6 +909,51 @@ describe('media conditional save recovery in real consumers', () => {
     page.el('detail').dispatch('input');
   }
 
+  it.each([false, true])('reconciles filtered membership and selection after detail adoption (Use stored: %s)', async (useStored) => {
+    const original = { ...item('a'), folder: 'A' };
+    const current = { ...original, title: 'Moved', folder: 'B' };
+    const page = loadPage({ request: (url, init) => {
+      if (url === '/media/folders') return response(200, ['A', 'B']);
+      if (useStored && init?.method === 'PATCH') return response(409, { error: 'media_changed', current });
+    } });
+    await open(page, original);
+    page.el('folderTree').querySelectorAll('.folder-btn').find(node => node.textContent === 'A')!.click();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [original], total: 1 }); await page.flush();
+    change(page, 'dTitle', 'Moved');
+    change(page, 'dFolder', 'B');
+    page.el('dSave').click(); await page.flush();
+    if (useStored) { page.el('dUseStored').click(); await page.flush(); }
+    page.listRequests.shift()?.resolve({ items: [], total: 0 }); await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell')).toEqual([]);
+    expect(page.el('selCount').textContent).toBe('');
+    expect(page.el('bulkTools').hidden).toBe(true);
+    expect(page.el('detail').dataset.key).toBeUndefined();
+    expect(page.el('out').textContent).toBe('0 photo(s)');
+  });
+
+  it('refreshes saved titles and ordering without replacing edits made during the listing read', async () => {
+    const page = loadPage();
+    await open(page, item('a'), [item('b')]);
+    change(page, 'dTitle', 'Zulu');
+    page.el('dSave').click(); await page.flush();
+    const caption = page.el('dCapEn');
+    change(page, 'dCapEn', 'Newer unsaved caption'); caption.focus();
+    page.listRequests.shift()?.resolve({ items: [item('b'), page.rows.get('a')!], total: 2 });
+    await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell').map(node => node.dataset.key)).toEqual(['b', 'a']);
+    expect(page.el('grid').querySelectorAll('.media-cell__title').map(node => node.textContent)).toEqual(['b', 'Zulu']);
+    expect(page.el('dCapEn')).toBe(caption);
+    expect(caption.value).toBe('Newer unsaved caption');
+    expect(page.activeElement()).toBe(caption);
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    page.el('dSave').click(); await page.flush();
+    expect(page.patches.map(entry => entry.body)).toEqual([
+      { conditional: { version: 1, patch: { title: 'Zulu' }, expect: { title: 'a' } } },
+      { conditional: { version: 1, patch: { caption: { en: 'Newer unsaved caption' } }, expect: { caption: { en: '' } } } },
+    ]);
+  });
+
   it('keeps a stale form and explicitly resends the whole patch against compared stored values', async () => {
     const writes: unknown[] = [];
     const current = { ...item('a'), title: 'Someone else', tags: ['elsewhere'] };

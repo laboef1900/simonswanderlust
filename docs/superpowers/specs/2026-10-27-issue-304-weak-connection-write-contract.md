@@ -1256,3 +1256,23 @@ The scoped record contains 14 intentional UI PATCHes (10 successful, four confli
 including disclosed preliminary/capture repetitions, and zero spurious PATCHes. Desktop and
 320px keyboard states were inspected. Interceptions and observers were removed, owned
 sessions revoked, tabs closed and the app stopped; synthetic data and evidence are retained.
+
+A fourth review separated panel lifetime from edit generation: navigating away and back
+while a title write was pending creates a new form, not newer typing in the original form.
+The write now captures that form's title input identity. A clean reopened form adopts the
+canonical acknowledgement; a dirty reopened form retains its inputs and original comparison
+base. A discarded form's late conflict cannot attach to the new form. Newly rendered Save
+buttons inherit the pending gate. Three consumer regressions failed before repair; all
+53 Media DOM cases passed afterward.
+
+Actual `003357d` qualification used two uploaded synthetic photos, native Discard/navigation,
+two browser tabs and held genuine PostgreSQL-backed 200/409 responses. Clean and dirty reopen
+paths both produced caption-only subsequent PATCHes, preserving the acknowledged title.
+An old409 did not create a comparison on the reopened dirty form, while a new stale title
+edit genuinely returned409 against its original base. Each mandatory observation window had
+two explicit PATCHes and no automatic/replay write; HTTP readbacks and final SQL agreed.
+Desktop/320px focus and pending controls were inspected. This focused supplement does not
+qualify image rendering: fixture thumbnail URLs used the wrong loopback origin; an optional
+final recovery also left a stale grid label although detail/SQL were correct. The retained
+record names those limits. Owned sessions/cookies were cleared, interceptions detached,
+both tabs closed and the app stopped.

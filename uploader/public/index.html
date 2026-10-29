@@ -212,6 +212,11 @@
       }
 
       function renderObservedPosts() {
+        const focused = document.activeElement;
+        const roots = [$('deskNext'), $('deskUnpub'), ...(isAdmin ? [$('deskAttention')] : [])];
+        const focusRoot = roots.find((root) => root.contains(focused));
+        const identity = focusRoot && focused.tagName === 'A'
+          ? { href: focused.href, className: focused.className } : null;
         const unavailable = observedPosts.some((post) => PublicationState.publicationState(post.publication) === 'unavailable');
         const next = Desk.nextDraft(observedPosts);
         const newer = Desk.unpublished(observedPosts);
@@ -225,6 +230,14 @@
           else renderUnpub(attention, $('deskAttention'), true);
         }
         $('publicationNotice').textContent = unavailable ? PublicationState.text('unavailable') : '';
+        if (identity) {
+          const links = [focusRoot, ...roots.filter((root) => root !== focusRoot)]
+            .flatMap((root) => Array.from(root.querySelectorAll('a')));
+          const nextFocus = links.find((link) => link.href === identity.href && link.className === identity.className)
+            || links.find((link) => link.href === identity.href);
+          // Keep an unchanged section steady; reveal cross-section or missing-link fallbacks.
+          (nextFocus || $('publicationRefresh')).focus({ preventScroll: !!nextFocus && focusRoot.contains(nextFocus) });
+        }
       }
 
       function renderQueue(count) {
