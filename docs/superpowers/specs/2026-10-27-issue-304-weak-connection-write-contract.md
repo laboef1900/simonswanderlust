@@ -2,10 +2,10 @@
 
 Date: 2026-10-27. Risk: **High** (post/page write contracts, sessions and draft storage on shared
 devices, additive schema, filesystem ownership/recovery, and `PATCH /media/items/*`).
-**Status: PROPOSED — owner approval pending.** No #304 decision in this document is approved.
-#305 and #306 MUST NOT start implementation until the Approval section records an explicit owner
-decision on every item in [Owner decisions](#owner-decisions-to-batch). Separately approved
-dependencies do not approve D1–D7. Review corrections below are dated 2026-10-28.
+**Status: OWNER-APPROVED CONTRACT — native-lock qualification outstanding.** On 2026-10-29,
+the owner approved D1–D3 and D5–D7 and selected **always keep local drafts** for D4.
+The independent read-only authenticated-context prerequisite is also approved. These decisions
+do not waive §5.3's native-lock implementation/packaging proof or authorize merges/deployments.
 
 Parent epic: #303. Blocks: #305 (reconcile lost responses), #306 (user-scoped stashes, offline
 signals, stale-tab conflicts). Independent narrow fixes that this contract must stay compatible
@@ -528,8 +528,9 @@ needed for the open-page preservation guarantee; the tab-loss limitation remains
 `Auth.ensureAuthed()` uses it **instead of** its existing `/auth/status` request, handling 401
 through the existing safe `?next` redirect. No extra round trip. Login/setup keep `/auth/status`
 byte-for-byte unchanged, satisfying #279 without an amendment. `users.id` is the stable,
-non-secret owner key; usernames are reusable. #305 delivers the endpoint/helper **before**
-its batch owner checks; #306 and #278/#279 reuse it. A 5xx is not treated as logout.
+non-secret owner key. The independently approved #279 prerequisite may deliver this shared
+endpoint/helper first; #305 reuses it before its owner checks, and #306 reuses the same context.
+A 5xx is not treated as logout.
 
 **Key grammar (fixed isolation contract).**
 
@@ -576,11 +577,10 @@ its batch owner checks; #306 and #278/#279 reuse it. A 5xx is not treated as log
 - Conflict Reload first stashes and preserves the local record, then loads the server into a
   fresh context; it must not call markClean on the preserved record. Keep editing and compare
   leave it dirty. About and existing-post recovery receive the same two-tab guarantees as new posts.
-- Logout (D4): when the signing-out user has scoped stashes on this browser, `Auth.logout()` asks
-  first: "*N* unsaved local drafts for *username* are on this device." — **Keep and log out**
-  (default) or **Delete local drafts and log out** (danger; names the count). A 401 or a session
-  ended elsewhere deletes nothing. Alternatives: always keep (status quo; leaves text on shared
-  devices), always delete (an accidental logout destroys work).
+- Logout (D4, owner decision): **always keep local drafts**. `Auth.logout()` neither deletes
+  drafts nor offers a deletion choice. A 401 or a session ended elsewhere also deletes nothing.
+  Per-account isolation still applies after signing in again; retention is not permission for
+  another account to read the records. Browser-profile access remains a shared-device risk.
 
 **Legacy unscoped entries (D5).** No ownership evidence exists: payloads carry no user, and no
 server record ties a browser key to an account.
@@ -621,7 +621,8 @@ The local draft stash and the upload queue are best-effort. They cannot promise:
   backed up, not synced to other devices.
 - **Shared devices.** Per-account keys stop the app from *offering* one account's draft to
   another; they do not stop someone with access to the same browser profile from reading storage
-  directly. Log out with **Delete local drafts** on a shared device.
+  directly. Logout keeps drafts. Use separate trusted browser profiles; any manual storage
+  disposal must follow backup/export and identification of the exact records.
 - **Unfinished file transfers.** Selected photos live only in the open page. Closing, reloading
   or a crash of the tab, or the phone discarding a background tab, loses the files that had not
   finished; they must be selected again. Photos that finished are on the server.
@@ -664,8 +665,8 @@ racing each other; proxy/browser replays of a request.
   correlation IDs/generations may accompany form text; they never authorize or trigger a write.
 - **I10** DraftGuard only exposes the signed-in owner's scoped records and never writes unscoped
   keys. Unknown-owner legacy records are not exposed to admins or other accounts.
-- **I11** Cleanup targets the exact saved/adopted record, never a newer record or another context;
-  explicit logout disposal targets only that owner's confirmed records.
+- **I11** Cleanup targets the exact saved/adopted record, never a newer record or another context.
+  Explicit logout and session expiry never delete local drafts.
 - **I12** `navigator.onLine` never decides an outcome or triggers a write.
 - **I13** Receipt columns/table are operational, excluded from content dumps/exports/revisions.
   Offline restore explicitly invalidates them, including preserved pages; missing then means Unknown.
@@ -732,7 +733,8 @@ UI: admin pages only, Editorial desk styling. **All new copy is added in both lo
 
 ## 11. Dependency contracts
 
-- **#305** implements §5.1–5.4, §5.6, `/auth/me`/protected-page helper from §5.7 and outcome rules.
+- **#305** implements §5.1–5.4, §5.6 and outcome rules, reusing the shared `/auth/me`/protected-page
+  helper from §5.7 if the independently approved #279 prerequisite has already delivered it.
   It retains unresolved attempt generations in memory and offers preserve/compare before #306.
   It must not persist this bookkeeping under unscoped legacy keys while awaiting #306's envelope.
   Lands before #306 and #317.
@@ -861,23 +863,24 @@ No verification is run while editing this unapproved specification.
   source identity. Their own subsequent edits and cleanup cannot erase a newer source record;
   create-only/OCC still serialize server mutations.
 
-## Owner decisions to batch
+## Owner decisions
 
-These questions request policy approval, not permission to retain known defects:
+Explicit owner answers recorded 2026-10-29:
 
-| ID | Exact remaining owner question | Recommended |
+| ID | Approved decision | Remaining constraint |
 |---|---|---|
-| D1 | Approve create-only client identities, captured-owner-fenced saves/acknowledgements, writer-only receipts and their additive operational schema as the write contract? | Yes; required IDs/owner, consistent reads, unresolved-attempt generations and fail-closed compatibility are inseparable safeguards. |
-| D2 | Approve account-lifetime minimal upload identity retention and exclusive bounded crash recovery, including the native-lock implementation/packaging prerequisite, rather than a seven-day dedup promise? | Yes, conditional on proving the native/mount prerequisite before implementation proceeds; no PG-lock substitution, time-based takeover or expiry-as-failure. If native cost is declined, explicitly amend to operator-established offline exclusion rather than claiming automatic recovery. Account deletion/offline restore invalidate explicitly. |
-| D3 | Approve pause-in-place with second-tab login and explicit same-owner resume/known-unsent transfer? | Yes; no persisted File queue; tab-loss limitation remains visible. |
-| D4 | On explicit logout, offer Keep (default) / Delete this user's local drafts, or always keep? | Offer the two choices with exact scope/count. Session expiry never deletes. |
-| D5 | Approve strict legacy quarantine with private manual profile recovery/disposal and no admin disclosure? | Yes; unknown ownership cannot satisfy an in-app recovery permission check. |
-| D6 | Use field-conditional media edits, or deliberately retain last-writer-wins? | Field preconditions, required for every public PATCH consumer, with canonical comparison and fail-closed envelope. |
-| D7 | Approve the explicit #306 scope amendment allowing non-secret recovery metadata alongside form text/images? | Yes; no credentials, executable queue or automatic replay. |
+| Auth context | Approve read-only context independently for #279. | Authenticated, no-store `GET /auth/me`; migrate the existing protected-page helper. Login/setup/`/auth/status` unchanged; network/5xx are not logout. |
+| D1 | Approve the write contract. | Required create-only identities, captured-owner fences, writer-only receipts, consistent reads and fail-closed compatibility remain inseparable. |
+| D2 | Approve qualified native locking. | Account-lifetime minimal upload identity retention; prove native API, packaging and real mount/process-lifetime exclusion before dependent implementation. No PG-only substitute, age-based takeover or expiry-as-failure. |
+| D3 | Approve explicit resume. | Pause in place, second-tab login, explicit same-owner resume; another owner may take only known-unsent/definitely-refused files with new IDs. No persisted File queue. |
+| D4 | **Always keep drafts.** | No logout deletion choice; logout and expiry delete nothing. Private browser-profile access remains a disclosed risk. |
+| D5 | Approve private quarantine. | Unknown-owner legacy bytes stay unchanged and inaccessible to every account, including admins; recovery/disposal is private manual profile work. |
+| D6 | Use field preconditions. | Canonical expected-value comparison and the fail-closed envelope apply to all Media PATCH consumers, including AI. |
+| D7 | Approve recovery metadata. | Explicit #306 amendment permits non-secret owner/base/attempt/context/generation metadata and snapshots alongside form text/images; no credentials, executable queue or automatic replay. |
 
-Fixed requirements are not extra questions: unchanged `/auth/status`, shared `/auth/me` before
-#305's owner checks, all inline uploads/Media AI callers, no offline queue/automatic replay,
-no credential persistence, no unapproved implementation and no weakening of #305/#306 AC.
+These approvals do not weaken #305/#306 acceptance criteria, authorize automatic writes, or
+waive the implementation security changes in §9 and containment requirements in §10.
+
 
 ## Evidence sources
 
@@ -909,8 +912,12 @@ owner gates are satisfied.
 
 ## Approval
 
-Not approved. No owner decision is recorded for D1–D7. Implementation of #305 and #306 is
-blocked until this section records the owner's explicit approval (date, wording and the decisions
-it covers), together with confirmation of the `SECURITY.md` changes in §9 and containment in §10.
-The native filesystem-lock selection, packaging and mount/lifetime evidence in §5.3 is a separate
-implementation prerequisite; dependent approvals and this static repair do not satisfy it.
+Owner approval was given in this execution session on **2026-10-29** through the eight explicit
+answers recorded above. The selected D4 policy supersedes the earlier Keep/Delete recommendation
+throughout this contract. The narrow authenticated-context approval permits #279 to reuse the
+shared endpoint/helper before the broader write work.
+
+The native filesystem-lock selection, packaging and real mount/lifetime evidence in §5.3 remain
+a separate implementation prerequisite; policy approval and static review do not satisfy it.
+Implementation must update `SECURITY.md` as specified in §9 and preserve §10's containment.
+No merge, deployment, production restore or owner-data mutation is authorized by this approval.
