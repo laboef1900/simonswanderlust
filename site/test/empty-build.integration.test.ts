@@ -65,11 +65,16 @@ describe.skipIf(!databaseUrl)('real zero-content Astro builds', () => {
   it.each(modes)('builds $name without fabricated content, maps or region links', async ({ name, primary, locales }) => {
     await pool.query('UPDATE site_language SET primary_locale=$1, enabled_locales=$2', [primary, [...locales]]);
     const outDir = join(directory, name);
-    const config = { root: siteRoot, outDir, cacheDir: join(directory, name + '-cache') };
+    const cacheDir = join(directory, name + '-cache');
+    const config = { root: siteRoot, outDir, cacheDir, vite: { envDir: join(cacheDir, 'empty-env') } };
+    const env: NodeJS.ProcessEnv = { ...process.env, DATABASE_URL: isolatedUrl, ASTRO_TELEMETRY_DISABLED: '1' };
+    delete env.SITE_LANGUAGE_JSON;
+    delete env.SITE_IDENTITY_JSON;
+    delete env.SITE_DATABASE_SNAPSHOT;
     await run(process.execPath, ['--input-type=module', '--eval',
       `import { build } from 'astro'; await build(${JSON.stringify(config)});`], {
       cwd: siteRoot,
-      env: { ...process.env, DATABASE_URL: isolatedUrl, SITE_LANGUAGE_JSON: '', ASTRO_TELEMETRY_DISABLED: '1' },
+      env,
       timeout: 120_000, killSignal: 'SIGKILL', maxBuffer: 4 * 1024 * 1024,
     });
     const window = new Window();
