@@ -7,7 +7,7 @@ import MapPage from './pages/MapPage.astro';
 import RegionPage from './pages/RegionPage.astro';
 import StoryPage from './pages/StoryPage.astro';
 import NotFound from '../pages/404.astro';
-import { GET as feed, getStaticPaths as feedPaths } from '../pages/[...locale]/rss.xml';
+import { GET as feed } from '../pages/[...locale]/rss.xml';
 import { homePath, aboutPath, mapPath, regionPath, rssPath } from '../lib/paths';
 import { pathOf, type Trip } from '../lib/trips';
 import type { SiteLanguage } from '../lib/site-language';
@@ -93,13 +93,12 @@ describe('configured public language rendering', () => {
           expect(jsonLd.inLanguage).toBe(locale);
         }
       }
-      const response = await feed({ site: new URL('https://simonswanderlust.com'), props: { locale } });
+      const response = await feed({ site: new URL('https://simonswanderlust.com'), currentLocale: locale });
       const xml = documentOf(await response.text(), true);
       expect(xml.querySelector('channel > language')?.textContent).toBe(locale);
       expect(xml.querySelectorAll('item')).toHaveLength(1);
       expect(new URL(xml.querySelector('item > link')!.textContent!).pathname).toBe(pathOf(current));
     }
-    expect(feedPaths().map(({ props }) => props.locale)).toEqual(language.locales);
     const notFound = documentOf(await container.renderToString(NotFound, { request: new Request('https://simonswanderlust.com/404.html') }));
     expect(notFound.documentElement.lang).toBe(language.primary);
     expect([...notFound.querySelectorAll('main a')].map((link) => link.getAttribute('href'))).toEqual(language.locales.map((locale) => homePath(locale)));

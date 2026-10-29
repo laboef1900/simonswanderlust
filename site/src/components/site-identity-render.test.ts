@@ -68,7 +68,7 @@ describe('configured identity rendered at public escaping boundaries', () => {
     expect(social?.getAttribute('href')).toBe(legacy.socialLinks[0]!.url);
     expect(social?.getAttribute('rel')).toBe('noopener noreferrer');
     expect(blogPostingJsonLd(story).author).toEqual({ '@type': 'Person', name: 'Simon' });
-    const response = await feed({ site: new URL('https://example.com'), props: { locale } });
+    const response = await feed({ site: new URL('https://example.com'), currentLocale: locale });
     const xml = feedDocument(await response.text());
     expect(xml.querySelector('channel > title')?.textContent).toBe("Simon's Wanderlust");
     expect(xml.querySelector('channel > description')?.textContent).toBe(legacy.tagline[locale]);
@@ -100,7 +100,7 @@ describe('configured identity rendered at public escaping boundaries', () => {
     const links = [...document.querySelectorAll('footer a[target="_blank"]')];
     expect(links.map((link) => link.textContent)).toEqual([hostile + ' ↗', 'Second ↗']);
     expect(links.every((link) => link.getAttribute('rel') === 'noopener noreferrer')).toBe(true);
-    const rss = await feed({ site: new URL('https://example.com'), props: { locale: 'en' } });
+    const rss = await feed({ site: new URL('https://example.com'), currentLocale: 'en' });
     const xml = await rss.text();
     expect(xml).not.toContain('<img');
     expect(xml).not.toContain('</script>');
