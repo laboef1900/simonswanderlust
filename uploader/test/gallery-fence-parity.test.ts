@@ -165,7 +165,7 @@ describe('invalid metadata obeys the same authoritative gallery definition', () 
       const edit = await G.replaceFenceAt(body, body.indexOf(URL), '```gallery\nhttps://i/b\n```');
       expect(edit.blocked).toBeTruthy();
       expect(body.slice(0, edit.start) + edit.text + body.slice(edit.end)).toBe(body);
-      const rendered = await transformBodyImages(await renderMarkdown(body), images, 'https://i');
+      const rendered = await transformBodyImages(await renderMarkdown(body), images, 'https://i', { locale: 'en' });
       expect(rendered).toContain('alt="Original"');
       expect(rendered.includes('Original caption')).toBe(!body.includes('#captions: hidden'));
       expect(rendered).not.toContain('must not apply');

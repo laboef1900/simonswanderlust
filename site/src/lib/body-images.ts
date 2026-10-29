@@ -194,7 +194,8 @@ function galleryPhotos(
 function itemNode(
   { image, caption }: GalleryPhoto,
   sizes: string,
-  positionLabel: string,
+  positionTemplate: string,
+  position: number,
   style?: string,
 ): ReturnType<typeof h> {
   return h('figure', { class: 'jgal__item', ...(style ? { style } : {}) }, [
@@ -202,7 +203,9 @@ function itemNode(
       href: largestVariant(image),
       // The picture supplies a nonblank alt natively. Captions are siblings,
       // so otherwise name the link explicitly without changing decorative alt.
-      ...(image.alt.trim() ? {} : { 'aria-label': caption.trim() || positionLabel }),
+      ...(image.alt.trim() ? {} : {
+        'aria-label': caption.trim() || positionTemplate.replace('{current}', String(position)),
+      }),
     }, [
       h('picture', [
         ...sourceNodes(image, sizes),
@@ -223,7 +226,7 @@ function itemNode(
 /** `breakout` / `column`: photos partitioned into justified rows that stack to a square, at render time. */
 async function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 'slider'>, options: BodyRenderOptions) {
   const width = containerWidthFor(mode);
-  const t = useTranslations(options.locale);
+  const positionTemplate = useTranslations(options.locale)('gallery.open').replace('{total}', String(photos.length));
   const rows = await partitionRowsAsync(photos.map((p) => p.image.width / p.image.height), width, options);
   // @ai-note Photos are re-associated with their ratios BY POSITION, which is
   // only sound because partitionRows cannot drop one here: galleryPhotos has
@@ -251,7 +254,7 @@ async function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 
         // CSS, not here: flex-grow values summing below 1 leave part of the row
         // unfilled (a lone portrait rendered 808px instead of 1112px).
         return itemNode(photo, rowSizes(ratio * height, width),
-          t('gallery.open').replace('{current}', String(first + i + 1)).replace('{total}', String(photos.length)),
+          positionTemplate, first + i + 1,
           `--r:${ratio.toFixed(4)}`);
       }),
     );
@@ -273,10 +276,10 @@ async function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 
  * positioned: neither state may move the layout, or CLS comes back.
  */
 function sliderNode(photos: GalleryPhoto[], locale: Locale) {
-  const t = useTranslations(locale);
+  const positionTemplate = useTranslations(locale)('gallery.open').replace('{total}', String(photos.length));
   return [
     h('div', { class: 'jgal__track', tabindex: '0' }, photos.map((p, i) =>
-      itemNode(p, SLIDER_SIZES, t('gallery.open').replace('{current}', String(i + 1)).replace('{total}', String(photos.length))))),
+      itemNode(p, SLIDER_SIZES, positionTemplate, i + 1))),
     h('button', { type: 'button', class: 'jgal__nav jgal__nav--prev', hidden: true, 'data-jgal-nav': 'prev' }, '‹'),
     h('button', { type: 'button', class: 'jgal__nav jgal__nav--next', hidden: true, 'data-jgal-nav': 'next' }, '›'),
   ];

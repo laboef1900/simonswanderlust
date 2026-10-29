@@ -161,13 +161,13 @@ describe('gallery-local caption controls', () => {
       'alt = "invalid" | caption-override=""',
     ]) {
       const body = ['~~~gallery extra', `${src} | ${suffix}`, '~~~'].join('\n');
-      const out = await transformBodyImages(await renderMarkdown(body), stored, ORIGIN, library);
+      const out = await transformBodyImages(await renderMarkdown(body), stored, ORIGIN, { locale: 'en' }, library);
       expect(captions(out)).toEqual(['Library caption']);
       expect(out).toContain('alt="Library alt"');
       expect(out).not.toContain('Partial');
     }
     const repaired = ['~~~gallery', `${src} | caption-override="quote &quot; and pipe &#124;"`, '~~~'].join('\n');
-    const out = await transformBodyImages(await renderMarkdown(repaired), stored, ORIGIN, library);
+    const out = await transformBodyImages(await renderMarkdown(repaired), stored, ORIGIN, { locale: 'en' }, library);
     expect(captions(out)).toEqual(['quote " and pipe |']);
   });
 
