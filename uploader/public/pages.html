@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title></title><link rel="stylesheet" href="/admin/admin.css"></head><body>
+<header class="cms-page-meta"><h1 data-pages-copy="Title"></h1></header>
+<main><p id="pagesNotice" class="muted" role="status" data-pages-copy="Loading"></p>
+<p id="pagesError" class="err" role="alert" hidden></p>
+<a id="languageSettingsLink" href="/admin/settings.html#language" data-language-copy="Back" hidden></a>
+<div id="pagesList"></div></main>
+<script src="/admin/editor-image-copy.js"></script><script src="/admin/auth.js"></script>
+<script src="/admin/language.js"></script><script src="/admin/admin-confirm.js"></script><script src="/admin/pages-ui.js"></script>
+<script>
+'use strict';
+PagesUI.localize(document); SiteLanguage.localize(document); document.title = PagesUI.text('Title');
+const prepareLocale = new URLSearchParams(location.search).get('prepareLocale');
+const errorEl = document.getElementById('pagesError');
+function showError(error) { errorEl.hidden = false; errorEl.textContent = error.message; }
+async function loadPages() {
+  const { pages, language } = await PagesUI.request('');
+  if (prepareLocale && (!['de', 'en'].includes(prepareLocale) || language.locales.includes(prepareLocale))) throw new Error(SiteLanguage.text('PrepInvalid'));
+  const notice = document.getElementById('pagesNotice');
+  notice.textContent = prepareLocale ? SiteLanguage.text('PrepNotice', { language: SiteLanguage.names[prepareLocale] }) : '';
+  document.getElementById('languageSettingsLink').hidden = !prepareLocale;
+  const list = document.getElementById('pagesList'); list.replaceChildren();
+  for (const page of pages) {
+    if (prepareLocale && !page.known) continue;
+    const section = document.createElement('section'); section.className = 'card';
+    const title = document.createElement('h2'); title.className = 'card-heading'; title.textContent = PagesUI.kind(page.key);
+    const state = document.createElement('p'); state.className = 'muted';
+    state.textContent = !page.known ? PagesUI.text('Unknown') : !page.exists ? PagesUI.text('Missing') : PagesUI.text(page.status === 'published' ? 'Published' : 'Draft');
+    const titles = document.createElement('p');
+    titles.textContent = (prepareLocale ? [prepareLocale] : language.locales).map((locale) => locale.toUpperCase() + ': ' + (page.locales[locale].title || PagesUI.text('None'))).join(' · ');
+    const actions = document.createElement('div'); actions.className = 'form-actions';
+    if (page.known) {
+      const edit = document.createElement('a'); edit.className = 'btn-secondary';
+      edit.href = '/admin/about.html?key=' + encodeURIComponent(page.key) + (prepareLocale ? '&prepareLocale=' + prepareLocale : '');
+      edit.textContent = PagesUI.text(page.exists ? 'Edit' : 'Create'); actions.append(edit);
+    }
+    if (page.exists && page.deletable && !prepareLocale) {
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'btn-remove'; remove.textContent = PagesUI.text('Delete');
+      remove.addEventListener('click', async () => {
+        remove.disabled = true; errorEl.hidden = true;
+        try { if (await PagesUI.remove(page.key)) await loadPages(); }
+        catch (error) { showError(error); if (error.body?.persisted) await loadPages(); }
+        finally { remove.disabled = false; }
+      }); actions.append(remove);
+    }
+    if (!page.deletable) { const fixed = document.createElement('p'); fixed.className = 'muted'; fixed.textContent = PagesUI.text('Fixed'); actions.append(fixed); }
+    section.append(title, state, titles, actions); list.append(section);
+  }
+}
+(async () => {
+  const session = await Auth.ensureAuthed({ admin: true }); if (!session) return;
+  Auth.renderHeader(session);
+  try { await loadPages(); } catch (error) { showError(error); document.getElementById('pagesNotice').textContent = ''; }
+})();
+</script></body></html>

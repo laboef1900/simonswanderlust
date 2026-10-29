@@ -217,6 +217,45 @@ The present fixed DE/EN projection is extended by #283's language contract, not 
 Remaining branding exceptions are recorded in [the scoped allow-list](docs/site-identity-branding-allowlist.md).
 
 
+### Editable page pairs (#288)
+
+`site/src/lib/page-kinds.ts` is the closed, Astro-free registry shared by both trees:
+`about`, `contact`, `privacy`, `legal`. The existing `pages` table/store and
+`/admin/about.html?key=…` editor own all four; `/admin/pages.html` is the admin catalogue.
+About keeps its fixed localized paths and empty stored slugs, is always published,
+and cannot be unpublished or deleted. Other kinds start as drafts; title/body/slug
+are required only for enabled locales at publication. `published_at` is per locale
+and never cleared by unpublish, so a formerly public slug cannot be renamed.
+
+Draft saves do not build. Publish, live save/revision restore, unpublish and deletion
+of a published pair commit first, then invoke one ordinary rebuild. A failed build
+returns `502 page_build_failed` with `persisted: true` and the committed `saved`
+value; the previous release remains served. Rebuild is recovery, not resubmitting
+an obsolete editor token. Inactive locales are retained and ordinarily hidden;
+the explicit Prepare translations flow can save them in stages before activation.
+Activation validates published pairs and stamps newly public locales in the same
+language-first transaction.
+
+All content writers share language → content → namespace advisory-lock ordering.
+Working and retained published story slugs reserve page names, even after unpublish.
+New/changed story slugs also check page claims. Unchanged stored story slugs keep
+the approved grandfathering, including WXR re-import; new reserved WXR groups are
+rejected before fetching. Boot logs collisions/unknown legacy page kinds without
+renaming, deleting or rendering them.
+
+Deletion removes the pair, its revisions and exact `kind: page` navigation
+references atomically. Its confirmation reports localized paths/titles, revision
+count, inbound navigation and best-effort body references. Images and arbitrary
+body links are not removed or rewritten. Unknown legacy page keys remain readable
+for recovery and deletable, but cannot be authored as new kinds.
+
+`site/src/lib/navigation.ts` defines the version-1 typed navigation document,
+validation, defaults and exact page-reference removal. `site_nav` is introduced
+for backup/deletion integrity now. Configurable navigation editing, public generic
+page rendering, emitted-path resolution and build collision guards belong to #289;
+this change does not add a second renderer or pretend those surfaces are present.
+The precise #289/#309 hand-off is in the approved #287 spec's implementation appendix.
+
 ## Image pipeline
 
 By default, the app optimizes each photo into AVIF + WebP at fixed widths (640/1280/1920 plus
@@ -442,6 +481,14 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
   Working copies and published snapshots keep separate selections. The additive column
   migration runs before snapshot SQL references it and never backfills an existing snapshot
   from an unpublished working copy.
+- **`pages`** — one row per (`key`, `locale`): title, Markdown, images, localized `slug`,
+  pair-wide `status`, per-locale sticky `published_at`, and optimistic `updated_at`.
+  The partial unique index covers nonempty `(locale, slug)`; cross-table claims are
+  additionally enforced by stores under the shared namespace lock.
+- **`page_revisions`** — bounded pre-save locale snapshots; deletion and boot/restore
+  orphan sweeps prevent a revision outliving its page. Not included in logical dumps.
+- **`site_nav`** — singleton `id = 1`, typed JSON `config`, optimistic `updated_at`;
+  idempotently seeded to the approved header/footer defaults, never overwritten on boot.
 - **`post_routes`** — one private row per `translation_key`: route version, nullable trimmed
   geometry and latest-original identity/digest/size. No FK to the non-unique locale pair key.
   Post deletion removes this row and records source cleanup in the same transaction.
@@ -510,7 +557,7 @@ botched restore, accidental delete), **not** against disk failure or host loss.
 `uploader/src/backup.ts` provides app-native logical dumps (no `pg_dump`, no sidecar container):
 
 - **Dump format** — one file per run, `/data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`, containing
-  `{ "version": 11, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […], "comments": […], "post_routes": […], "site_identity": […], "site_identity_assets": […] } }`
+  `{ "version": 13, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […], "comments": […], "post_routes": […], "site_identity": […], "site_identity_assets": […], "site_language": […], "site_nav": […] } }`
   with full column fidelity — an integration test diffs the dumped `posts` keys against
   `information_schema.columns`, so a column added in `db.ts` without touching `backup.ts` fails
   the suite instead of silently vanishing from every backup. The table reads run on one
@@ -522,7 +569,7 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   the directory, so the finished temp file is published with `link(2)` (fails with `EEXIST`
   where `rename` would clobber) and a taken name advances to the next free second while
   `createdAt` keeps the real time (#114).
-  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 11), so
+  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 13), so
   every bump must widen it or newly written dumps become unrestorable. v1 predates `pages`, v2
   predates the media tables, v3 predates `posts.categories`/`tags`/`scheduled_at`, v4 predates
   `posts.featured` (the homepage-cover flag); all still restore and leave what they never
@@ -559,6 +606,18 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   to Settings → Site identity. The undo set includes the live identity/assets. Older images
   reject v11 dumps; rolling back code leaves the additive tables intact and returns to that
   image's compiled-in brand. Restart after restore, then rebuild to change the public release.
+  v12 preserves language mode/lock and omission-aware publication history.
+  v13 (`PAGES_NAV_DUMP_VERSION = 13`) adds page slug/status/first-public history and
+  the complete navigation singleton. Missing/malformed new-format metadata refuses
+  before destructive work; it is never interpreted as an empty legacy field.
+  Pre-v13 pages normalize to empty slugs, About published and other kinds draft;
+  a v1 dump with no pages preserves live pages. Pre-v13 dumps preserve live navigation.
+  The CLI reports unresolved navigation against the rows that will actually survive
+  and warns about page/story/static namespace collisions before confirmation.
+  Page revisions remain outside dumps; orphan histories are swept inside restore.
+  The boot migration captures a compatible pre-migration recovery set before adding
+  the new columns/table and keeps inherited identity/language recovery safeguards.
+  MDX export remains posts-only: the logical DB dump is the backup of record for pages/nav.
   The CLI names replacement versus preservation and its pre-restore undo dump includes
   current encrypted secrets. Pause AI/settings edits during restore and reconcile the
   providers in settings.json before resuming: that file is not part of a logical DB dump.

@@ -14,6 +14,8 @@ import { defaultSettings, validate } from '../src/settings.js';
 import { createGpxFiles } from '../src/gpx-files.js';
 import type { GpxService } from '../src/gpx-service.js';
 import type { LanguageConfig } from '../src/language.js';
+import { LEGACY_REDIRECTS } from '../src/redirects.js';
+import { isSafeSlug } from '../src/posts.js';
 
 const modes: LanguageConfig[] = [
   { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
@@ -21,6 +23,17 @@ const modes: LanguageConfig[] = [
 ];
 
 describe('reserved public namespaces', () => {
+  it('reserves exactly the legacy source namespaces and excludes format-only asset routes', () => {
+    for (const namespace of ['root', 'de', 'en'] as const) {
+      const segments = new Set(LEGACY_REDIRECTS.flatMap(([path]) => {
+        const parts = path.split('/').filter(Boolean);
+        const prefix = parts[0] === 'en' || parts[0] === 'de' ? parts.shift() : 'root';
+        return prefix === namespace ? [parts[0]!] : [];
+      }));
+      expect([...segments].sort()).toEqual(RESERVED[namespace].filter((entry) => entry.owner === 'legacy').map((entry) => entry.segment).sort());
+    }
+    for (const asset of ['_astro', 'rss.xml', 'robots.txt', 'favicon.svg', 'sitemap-index.xml', 'sitemap-0.xml', '404.html']) expect(isSafeSlug(asset)).toBe(false);
+  });
   it('reserves exactly the actual registered Fastify top-level app segments', async () => {
     const root = await mkdtemp(join(tmpdir(), 'reserved-routes-'));
     const posts = memoryPostStore();

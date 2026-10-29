@@ -1,263 +1,315 @@
 import { randomUUID } from 'node:crypto';
-import type { DbPool } from './db.js';
+import type { DbPool, DbClient } from './db.js';
 import { imagesMapError, normalizeGalleryFences, type ImageMeta } from './body-content.js';
-import { REVISION_CAP } from './posts.js';
-import { memoryLanguageStore, readLanguage, type LanguageStore, type LanguageState, type LanguageLocale } from './language.js';
+import { REVISION_CAP, isSafeSlug } from './posts.js';
+import { memoryLanguageStore, readLanguage, LanguageError, type LanguageStore, type LanguageState, type LanguageConfig, type LanguageLocale, type LanguageBlocker } from './language.js';
+import { isPageKind, PAGE_KINDS } from '../../site/src/lib/page-kinds.js';
+import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js';
+import { DEFAULT_NAVIGATION, validateNavigation, pageNavReferences, withoutPageNavigation, type Navigation, type PageNavReference } from '../../site/src/lib/navigation.js';
+import { lockContentNamespaces, registerMemoryClaims, memorySlugOwner, memoryStoryBodies } from './content-namespace.js';
+import { analyzeBodyImages } from './publish-gate.js';
+import { publicPath } from './public-paths.js';
 
 export type Locale = 'de' | 'en';
-/** See `body-content.ts` — the single source of truth for this shape. */
 export type ImageDims = ImageMeta;
-export interface PageContent { locale: Locale; title: string; bodyMarkdown: string; images: Record<string, ImageDims> }
+export interface PageContent { locale: Locale; title: string; bodyMarkdown: string; images: Record<string, ImageDims>; slug?: string; publishedAt?: Date | null }
 export interface PagePair { key: string; de: PageContent; en: PageContent }
-/**
- * A pair as read back from a store: `updatedAt` is the newer of the two locale
- * rows (null for a key never saved) and is echoed by the About editor on save
- * for optimistic concurrency (issue #141) — the same contract posts have.
- */
-export interface StoredPagePair extends PagePair { updatedAt: Date | null }
-/** Pre-save snapshot in the PUT-payload shape, so a restore round-trips through the editor. */
+export interface StoredPagePair extends PagePair { status: 'draft' | 'published'; updatedAt: Date | null }
 export type PageRevisionSnapshot = Pick<PagePair, 'de' | 'en'>;
 export interface PageRevisionSummary { id: string; savedAt: Date; title: string }
 export interface PageRevision extends PageRevisionSummary { snapshot: PageRevisionSnapshot }
-
-type PageErrorCode = 'conflict' | 'invalid_page' | 'images_not_ready';
-
+export type PageErrorCode = 'conflict' | 'invalid_page' | 'images_not_ready' | 'foreign_images' | 'unknown_page_kind' | 'reserved_slug' | 'page_slug_locked' | 'page_fixed' | 'not_found';
 export class PageError extends Error {
-  code?: PageErrorCode;
-  constructor(message: string, code?: PageErrorCode) { super(message); this.code = code; }
+  constructor(message: string, public readonly code: PageErrorCode = 'invalid_page',
+    public readonly owner?: { type: string; name: string }, public readonly locale?: Locale, public readonly foreignImages?: string[]) { super(message); }
 }
-
+const LOCALES = ['de', 'en'] as const;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Optimistic-concurrency check shared by both stores. Compared in JS, not in
- * SQL, so the memory store and the pg store agree to the millisecond.
- */
-function assertPageNotStale(storedUpdatedAt: Date | null, baseUpdatedAt: Date | undefined): void {
-  if (storedUpdatedAt && baseUpdatedAt && storedUpdatedAt.getTime() > baseUpdatedAt.getTime()) {
-    throw new PageError('page was modified since you opened it', 'conflict');
-  }
+export function isSafePageKey(key: string): boolean { return /^[a-z0-9][a-z0-9-]*$/.test(key); }
+function emptyContent(locale: Locale): PageContent { return { locale, title: '', bodyMarkdown: '', images: {}, slug: '', publishedAt: null }; }
+function emptyPair(key: string): StoredPagePair { return { key, de: emptyContent('de'), en: emptyContent('en'), status: key === 'about' ? 'published' : 'draft', updatedAt: null }; }
+function assertPageNotStale(stored: Date | null, base?: Date): void {
+  if (stored && base && stored.getTime() !== base.getTime()) throw new PageError('page was modified since you opened it', 'conflict');
 }
-
-const KEY_RE = /^[a-z0-9][a-z0-9-]*$/;
-export function isSafePageKey(key: string): boolean { return KEY_RE.test(key); }
-
-function emptyContent(locale: Locale): PageContent {
-  return { locale, title: '', bodyMarkdown: '', images: {} };
-}
-
 export function validatePagePair(pair: PagePair): void {
-  if (!isSafePageKey(pair.key)) throw new PageError(`invalid page key "${pair.key}" (lowercase a-z, 0-9, hyphen)`);
-  for (const locale of ['de', 'en'] as Locale[]) {
-    if (pair[locale].locale !== locale) throw new PageError(`locale field mismatch for ${locale}`);
-    // Same control as posts: `images` is author-supplied jsonb that reaches
-    // the render boundary — see body-content.ts `imagesMapError`.
-    const err = imagesMapError(pair[locale].images);
-    if (err) throw new PageError(`${locale}: ${err}`);
+  if (!isSafePageKey(pair.key)) throw new PageError('Invalid page key.');
+  if (!isPageKind(pair.key)) throw new PageError('Unknown page kind.', 'unknown_page_kind');
+  for (const locale of LOCALES) {
+    const row = pair[locale];
+    if (!row || row.locale !== locale || typeof row.title !== 'string' || typeof row.bodyMarkdown !== 'string'
+      || (row.slug !== undefined && typeof row.slug !== 'string')) throw new PageError(`Invalid ${locale} page fields.`);
+    const error = imagesMapError(row.images);
+    if (error) throw new PageError(`${locale}: ${error}`);
+    const slug = row.slug ?? '';
+    if (pair.key === 'about' && slug) throw new PageError('About uses its fixed URL.', 'page_slug_locked');
+    if (slug && !isSafeSlug(slug)) throw new PageError(`${locale}: invalid slug.`);
   }
 }
-
-/**
- * Save-time normalization, mirroring `draftWithDefaults` for posts: lift
- * ```gallery per-line metadata into the `images` map so a page body stores the
- * canonical bare-URL fence. Runs inside `save()` in BOTH stores (after
- * `validatePagePair`), so it is the single chokepoint for page writes.
- */
-function pageWithDefaults(pair: PagePair): PagePair {
-  const fill = (c: PageContent): PageContent => {
-    const images = c.images ?? {};
-    if (typeof c.bodyMarkdown !== 'string') return { ...c, images };
-    const n = normalizeGalleryFences(c.bodyMarkdown, images);
-    return { ...c, bodyMarkdown: n.bodyMarkdown, images: n.images };
-  };
-  return { ...pair, de: fill(pair.de), en: fill(pair.en) };
-}
-
 export type PageUpdate = Pick<PagePair, 'key'> & Partial<Pick<PagePair, 'de' | 'en'>>;
 export interface PageSaveOptions {
   prepareLocale?: LanguageLocale;
-  validate?: (pair: PagePair, language: LanguageState) => Promise<void>;
+  validate?: (pair: StoredPagePair, language: LanguageConfig) => Promise<void>;
 }
-function mergePageUpdate(update: PageUpdate, existing: StoredPagePair, language: LanguageState, options: PageSaveOptions): PagePair {
+export interface PageRemoval {
+  key: string; titles: Record<Locale, string>; paths: string[]; revisions: number;
+  navigation: PageNavReference[]; bodyReferences: number; updatedAt: Date | null; published: boolean;
+}
+export interface PageStore {
+  configureImageOrigin(origin: string): void;
+  get(key: string): Promise<StoredPagePair>;
+  save(pair: PageUpdate, baseUpdatedAt?: Date, options?: PageSaveOptions): Promise<StoredPagePair>;
+  publish(key: string, baseUpdatedAt?: Date, options?: PageSaveOptions): Promise<StoredPagePair>;
+  unpublish(key: string, baseUpdatedAt?: Date): Promise<StoredPagePair>;
+  removalInfo(key: string): Promise<PageRemoval>;
+  remove(key: string, baseUpdatedAt?: Date): Promise<PageRemoval>;
+  keys(): Promise<string[]>;
+  listRevisions(key: string): Promise<PageRevisionSummary[]>;
+  getRevision(key: string, id: string): Promise<PageRevision | null>;
+  /** Called within LanguageStore.update's language-first transaction, never opens a second transaction. */
+  prepareActivation(candidate: LanguageConfig, client?: DbClient, validate?: PageSaveOptions['validate']): Promise<void | (() => void)>;
+}
+export function pagePaths(pair: StoredPagePair, mode: LanguageConfig): string[] {
+  if (pair.status !== 'published' || !isPageKind(pair.key)) return [];
+  return mode.locales.flatMap((locale) => pair.key === 'about' ? [publicPath(mode, locale, 'about')]
+    : pair[locale].slug ? [publicPath(mode, locale, 'story', pair[locale].slug)] : []);
+}
+function mergePageUpdate(update: PageUpdate, existing: StoredPagePair, mode: LanguageConfig, options: PageSaveOptions): StoredPagePair {
   const preparing = options.prepareLocale;
-  if (preparing && (language.locales.includes(preparing) || update[language.primary] !== undefined)) {
-    throw new PageError('Preparation edits only the inactive language.', 'invalid_page');
-  }
-  const pair = { key: update.key, de: existing.de, en: existing.en };
-  for (const locale of ['de', 'en'] as const) {
-    if (update[locale] !== undefined && (locale === preparing || (!preparing && language.locales.includes(locale)))) pair[locale] = update[locale]!;
+  if (preparing && (mode.locales.includes(preparing) || update[mode.primary] !== undefined)) throw new PageError('Preparation edits only the inactive language.');
+  const pair = structuredClone(existing);
+  for (const locale of LOCALES) {
+    if (update[locale] !== undefined && (locale === preparing || (!preparing && mode.locales.includes(locale)))) {
+      pair[locale] = { ...update[locale]!, slug: update[locale]!.slug ?? existing[locale].slug ?? '', publishedAt: existing[locale].publishedAt ?? null };
+    }
   }
   validatePagePair(pair);
-  return pageWithDefaults(pair);
+  for (const locale of LOCALES) {
+    const row = pair[locale];
+    if (existing[locale].publishedAt && row.slug !== existing[locale].slug) throw new PageError(`${locale}: a previously published page URL cannot change.`, 'page_slug_locked');
+    const normalized = normalizeGalleryFences(row.bodyMarkdown, row.images);
+    pair[locale] = { ...row, ...normalized };
+  }
+  return pair;
 }
-
-export interface PageStore {
-  get(key: string): Promise<StoredPagePair>;
-  /**
-   * Create or overwrite a page. When `baseUpdatedAt` is given (the `updatedAt`
-   * the editor loaded), the save is rejected with PageError code 'conflict'
-   * if the stored pair was modified since — optimistic concurrency (#141).
-   * Every overwrite of an existing page first snapshots the pre-save pair
-   * into the revisions (newest REVISION_CAP kept).
-   */
-  save(pair: PageUpdate, baseUpdatedAt?: Date, options?: PageSaveOptions): Promise<StoredPagePair>;
-  /** All page keys that have ever been saved (either locale), sorted. */
-  keys(): Promise<string[]>;
-  /** Revision summaries for a page, newest first (at most REVISION_CAP). */
-  listRevisions(key: string): Promise<PageRevisionSummary[]>;
-  /** One full revision snapshot, or null for an unknown (or malformed) id. */
-  getRevision(key: string, id: string): Promise<PageRevision | null>;
+/** Completeness exception applies only to About; image analysis is never exempt. */
+export async function validatePublishedPage(pair: StoredPagePair, mode: LanguageConfig, imageOrigin: string): Promise<void> {
+  validatePagePair(pair);
+  for (const locale of mode.locales) {
+    const row = pair[locale];
+    if (pair.key !== 'about' && (!row.title.trim() || !row.bodyMarkdown.trim() || !row.slug)) throw new PageError(`${locale}: title, body and slug are required to publish.`, 'invalid_page', undefined, locale);
+    const analyzed = await analyzeBodyImages(row.bodyMarkdown, row.images, imageOrigin);
+    if (analyzed.foreign.length) throw new PageError('Replace foreign body images with hosted photos before publishing.', 'foreign_images', undefined, locale, analyzed.foreign);
+  }
 }
-
-export function memoryPageStore(language: LanguageStore = memoryLanguageStore()): PageStore {
-  const byKeyLocale = new Map<string, PageContent>();
-  const updatedAtByKey = new Map<string, Date>();
-  // Oldest first (append order) — mirrors the pg store's page_revisions table.
-  const revisionsByKey = new Map<string, PageRevision[]>();
-  return {
-    async get(key) {
-      return {
-        key,
-        de: structuredClone(byKeyLocale.get(`${key}:de`) ?? emptyContent('de')),
-        en: structuredClone(byKeyLocale.get(`${key}:en`) ?? emptyContent('en')),
-        updatedAt: updatedAtByKey.get(key) ?? null,
-      };
-    },
-    async save(pair, baseUpdatedAt, options = {}) {
-      return language.runExclusive(async (mode) => {
-      const existing = await this.get(pair.key);
-      if (options.prepareLocale && existing.updatedAt && !baseUpdatedAt) throw new PageError('Reload the page before preparing a translation.', 'conflict');
-      assertPageNotStale(existing.updatedAt, baseUpdatedAt);
-      const normalized = mergePageUpdate(pair, existing, mode, options);
-      await options.validate?.(normalized, mode);
+function staticClaims(pair: StoredPagePair, mode: LanguageConfig): void {
+  for (const locale of LOCALES) {
+    const slug = pair[locale].slug ?? '';
+    const owner = slug ? reservation(namespaceOf(locale, mode), slug, mode) : null;
+    if (owner) throw new PageError(`${locale}: slug is reserved by ${owner.pageKind ?? owner.segment}.`, 'reserved_slug', { type: owner.pageKind ? 'page' : owner.owner, name: owner.pageKind ?? owner.segment }, locale);
+  }
+}
+function stamp(pair: StoredPagePair, mode: LanguageConfig): void {
+  if (pair.status === 'published') for (const locale of mode.locales) pair[locale].publishedAt ??= new Date();
+  pair.updatedAt = new Date(Math.max(Date.now(), (pair.updatedAt?.getTime() ?? 0) + 1));
+}
+function removal(pair: StoredPagePair, mode: LanguageConfig, config: Navigation, revisions: number, bodies: readonly string[]): PageRemoval {
+  const paths = pagePaths(pair, mode);
+  return { key: pair.key, titles: { de: pair.de.title, en: pair.en.title }, paths, revisions,
+    navigation: pageNavReferences(config, pair.key), bodyReferences: bodies.filter((body) => paths.some((path) => body.includes(path))).length,
+    updatedAt: pair.updatedAt, published: pair.status === 'published' };
+}
+function fixed(key: string): void { if (key === 'about') throw new PageError('About cannot be deleted or unpublished.', 'page_fixed'); }
+function requireExisting(pair: StoredPagePair): void { if (!pair.updatedAt) throw new PageError('Page not found.', 'not_found'); }
+function blocker(key: string, error: unknown, mode: LanguageConfig): LanguageBlocker[] {
+  if (!(error instanceof PageError)) throw error;
+  return [{ key, locale: error.locale ?? mode.primary, field: error.code === 'foreign_images' || error.code === 'images_not_ready' ? 'images' : 'content', reason: error.message }];
+}
+export interface MemoryPageOptions { imageOrigin?: string; navigation?: { config: Navigation; updatedAt: Date }; storyBodies?: () => Promise<string[]> }
+export function memoryPageStore(language: LanguageStore = memoryLanguageStore(), options: MemoryPageOptions = {}): PageStore {
+  const pairs = new Map<string, StoredPagePair>();
+  const revisions = new Map<string, PageRevision[]>();
+  const nav = options.navigation ?? { config: structuredClone(DEFAULT_NAVIGATION), updatedAt: new Date(0) };
+  let origin = options.imageOrigin ?? 'https://unconfigured.invalid';
+  registerMemoryClaims(language, function* () { for (const pair of pairs.values()) for (const locale of LOCALES) yield { type: 'page' as const, name: pair.key, locale, slug: pair[locale].slug ?? '' }; });
+  async function validate(pair: StoredPagePair, mode: LanguageConfig, extra?: PageSaveOptions['validate']): Promise<void> {
+    staticClaims(pair, mode);
+    for (const locale of LOCALES) {
+      const claim = memorySlugOwner(language, locale, pair[locale].slug ?? '', 'page', pair.key)
+        ?? memorySlugOwner(language, locale, pair[locale].slug ?? '', 'story');
+      if (claim) throw new PageError(`${locale}: slug belongs to ${claim.type} ${claim.name}.`, 'reserved_slug', { type: claim.type, name: claim.name });
+    }
+    if (pair.status === 'published') { await validatePublishedPage(pair, mode, origin); await extra?.(pair, mode); }
+  }
+  async function mutate(key: string, base: Date | undefined, action: 'save' | 'publish' | 'unpublish', update?: PageUpdate, opts: PageSaveOptions = {}): Promise<StoredPagePair> {
+    return language.runExclusive(async (mode) => {
+      const existing = await store.get(key);
+      if (base && !existing.updatedAt) throw new PageError('Page not found.', 'not_found');
+      if (action !== 'save') requireExisting(existing);
+      if (action === 'unpublish') fixed(key);
+      if (opts.prepareLocale && existing.updatedAt && !base) throw new PageError('Reload before preparing a translation.', 'conflict');
+      assertPageNotStale(existing.updatedAt, base);
+      const pair = mergePageUpdate(update ?? { key }, existing, mode, opts);
+      if (action !== 'save') pair.status = action === 'publish' ? 'published' : 'draft';
+      // Unpublish is containment for a recovered collision or invalid live body.
+      if (action !== 'unpublish') await validate(pair, mode, opts.validate);
       if (existing.updatedAt) {
-        const revs = revisionsByKey.get(pair.key) ?? [];
-        revs.push({ id: randomUUID(), savedAt: new Date(), title: existing[mode.primary].title, snapshot: { de: existing.de, en: existing.en } });
-        if (revs.length > REVISION_CAP) revs.splice(0, revs.length - REVISION_CAP);
-        revisionsByKey.set(pair.key, revs);
+        const list = revisions.get(key) ?? [];
+        list.push({ id: randomUUID(), savedAt: new Date(), title: existing[mode.primary].title, snapshot: { de: existing.de, en: existing.en } });
+        revisions.set(key, list.slice(-REVISION_CAP));
       }
-      for (const locale of ['de', 'en'] as Locale[]) {
-        byKeyLocale.set(`${pair.key}:${locale}`, structuredClone({ ...normalized[locale], locale }));
-      }
-      // Strictly later than any echo that passed the check, even within one
-      // tick — the pg store gets the same guarantee from now() in a later
-      // transaction.
-      const prev = existing.updatedAt?.getTime() ?? 0;
-      updatedAtByKey.set(pair.key, new Date(Math.max(Date.now(), prev + 1)));
-      return this.get(pair.key);
+      stamp(pair, mode); pairs.set(key, structuredClone(pair)); return structuredClone(pair);
+    });
+  }
+  const store: PageStore = {
+    configureImageOrigin(value) { origin = new URL(value).origin; },
+    async get(key) { return structuredClone(pairs.get(key) ?? emptyPair(key)); },
+    save: (pair, base, opts) => mutate(pair.key, base, 'save', pair, opts),
+    publish: (key, base, opts) => mutate(key, base, 'publish', undefined, opts),
+    unpublish: (key, base) => mutate(key, base, 'unpublish'),
+    async keys() { return [...pairs.keys()].sort(); },
+    async removalInfo(key) {
+      const pair = await store.get(key); requireExisting(pair);
+      return removal(pair, await language.get(), nav.config, revisions.get(key)?.length ?? 0,
+        [...pairs.values()].filter((p) => p.key !== key).flatMap((p) => [p.de.bodyMarkdown, p.en.bodyMarkdown]).concat(await options.storyBodies?.() ?? memoryStoryBodies(language)));
+    },
+    async remove(key, base) {
+      return language.runExclusive(async () => {
+        fixed(key); const info = await store.removalInfo(key); assertPageNotStale(info.updatedAt, base);
+        pairs.delete(key); revisions.delete(key); nav.config = withoutPageNavigation(nav.config, key); nav.updatedAt = new Date(Math.max(Date.now(), nav.updatedAt.getTime() + 1)); return info;
       });
     },
-    async keys() {
-      // Stored keys are `${key}:${locale}` and page keys cannot contain ':'.
-      const all = [...byKeyLocale.keys()].map((k) => k.split(':', 1)[0] ?? k);
-      return [...new Set(all)].sort();
-    },
     async listRevisions(key) {
+      if (!pairs.has(key)) return [];
       const mode = await language.get();
-      return (revisionsByKey.get(key) ?? [])
-        .map(({ id, savedAt, snapshot }) => ({ id, savedAt, title: snapshot[mode.primary].title }))
-        .reverse(); // newest first
+      return (revisions.get(key) ?? []).map(({ id, savedAt, snapshot }) => ({ id, savedAt, title: snapshot[mode.primary].title })).reverse();
     },
     async getRevision(key, id) {
-      const rev = (revisionsByKey.get(key) ?? []).find((r) => r.id === id);
-      const mode = await language.get();
+      if (!pairs.has(key)) return null;
+      const rev = revisions.get(key)?.find((r) => r.id === id); const mode = await language.get();
       return rev ? structuredClone({ ...rev, title: rev.snapshot[mode.primary].title }) : null;
     },
-  };
-}
-
-interface PageRow { key: string; locale: Locale; title: string; body_markdown: string; images: Record<string, ImageDims> | null; updated_at: Date }
-function rowToContent(r: PageRow): PageContent {
-  return { locale: r.locale, title: r.title, bodyMarkdown: r.body_markdown, images: r.images ?? {} };
-}
-
-export function pgPageStore(pool: DbPool): PageStore {
-  return {
-    async get(key) {
-      const { rows } = await pool.query<PageRow>(
-        `SELECT key, locale, title, body_markdown, images, updated_at FROM pages WHERE key = $1`, [key],
-      );
-      const de = rows.find((r) => r.locale === 'de');
-      const en = rows.find((r) => r.locale === 'en');
-      const updatedAt = rows.length ? new Date(Math.max(...rows.map((r) => r.updated_at.getTime()))) : null;
-      return { key, de: de ? rowToContent(de) : emptyContent('de'), en: en ? rowToContent(en) : emptyContent('en'), updatedAt };
-    },
-    async save(pair, baseUpdatedAt, options = {}) {
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        const mode = await readLanguage(client, true);
-        const { rows } = await client.query<PageRow>('SELECT key,locale,title,body_markdown,images,updated_at FROM pages WHERE key=$1 FOR UPDATE', [pair.key]);
-        const existing: StoredPagePair = {
-          key: pair.key,
-          de: rows.find((row) => row.locale === 'de') ? rowToContent(rows.find((row) => row.locale === 'de')!) : emptyContent('de'),
-          en: rows.find((row) => row.locale === 'en') ? rowToContent(rows.find((row) => row.locale === 'en')!) : emptyContent('en'),
-          updatedAt: rows.length ? new Date(Math.max(...rows.map((row) => row.updated_at.getTime()))) : null,
-        };
-        if (options.prepareLocale && existing.updatedAt && !baseUpdatedAt) throw new PageError('Reload the page before preparing a translation.', 'conflict');
-        assertPageNotStale(existing.updatedAt, baseUpdatedAt);
-        const normalized = mergePageUpdate(pair, existing, mode, options);
-        await options.validate?.(normalized, mode);
-        if (existing.updatedAt) {
-          await client.query(
-            `INSERT INTO page_revisions (id, key, snapshot, saved_at) VALUES ($1, $2, $3, clock_timestamp())`,
-            [randomUUID(), pair.key, JSON.stringify({ de: existing.de, en: existing.en })],
-          );
-          await client.query(
-            `DELETE FROM page_revisions
-              WHERE key = $1 AND id NOT IN (
-                SELECT id FROM page_revisions WHERE key = $1
-                 ORDER BY saved_at DESC, id DESC LIMIT $2)`,
-            [pair.key, REVISION_CAP],
-          );
-        }
-        const timestamp = await client.query<{ updated_at: Date }>(
-          `SELECT GREATEST(date_trunc('milliseconds',clock_timestamp()),$1::timestamptz+interval '1 millisecond') AS updated_at`,
-          [existing.updatedAt],
-        );
-        for (const locale of ['de', 'en'] as Locale[]) {
-          const c = normalized[locale];
-          await client.query(
-            `INSERT INTO pages (key, locale, title, body_markdown, images, updated_at)
-             VALUES ($1,$2,$3,$4,$5::jsonb,$6)
-             ON CONFLICT (key, locale) DO UPDATE SET
-               title=EXCLUDED.title, body_markdown=EXCLUDED.body_markdown, images=EXCLUDED.images, updated_at=EXCLUDED.updated_at`,
-            [pair.key, locale, c.title, c.bodyMarkdown, JSON.stringify(c.images ?? {}), timestamp.rows[0]!.updated_at],
-          );
-        }
-        await client.query('COMMIT');
-      } catch (e) {
-        await client.query('ROLLBACK');
-        throw e;
-      } finally {
-        client.release();
+    async prepareActivation(mode, _client, extra) {
+      const blockers: LanguageBlocker[] = []; const candidates: StoredPagePair[] = [];
+      for (const pair of pairs.values()) if (isPageKind(pair.key) && pair.status === 'published') {
+        try { await validate(pair, mode, extra); candidates.push(structuredClone(pair)); }
+        catch (error) { blockers.push(...blocker(pair.key, error, mode)); }
       }
-      return this.get(pair.key);
+      if (blockers.length) throw new LanguageError('Prepare page translations before activating this language.', 'language_pages_incomplete', blockers);
+      // LanguageStore invokes this only after every transition handler has accepted.
+      return () => { for (const pair of candidates) { stamp(pair, mode); pairs.set(pair.key, pair); } };
     },
-    async keys() {
-      const { rows } = await pool.query<{ key: string }>(`SELECT DISTINCT key FROM pages ORDER BY key`);
-      return rows.map((r) => r.key);
+  };
+  return store;
+}
+export interface PageRow { key: string; locale: Locale; title: string; body_markdown: string; images: Record<string, ImageDims> | null; slug: string; status: 'draft' | 'published'; published_at: Date | null; updated_at: Date }
+export function pagePairFromRows(key: string, rows: PageRow[]): StoredPagePair {
+  const pair = emptyPair(key);
+  for (const row of rows) pair[row.locale] = { locale: row.locale, title: row.title, bodyMarkdown: row.body_markdown, images: row.images ?? {}, slug: row.slug, publishedAt: row.published_at };
+  if (rows.length) { pair.updatedAt = new Date(Math.max(...rows.map((r) => r.updated_at.getTime()))); pair.status = rows[0]!.status; }
+  return pair;
+}
+async function readPage(client: DbPool | DbClient, key: string, lock = false): Promise<StoredPagePair> {
+  const { rows } = await client.query<PageRow>(`SELECT * FROM pages WHERE key=$1 ORDER BY locale${lock ? ' FOR UPDATE' : ''}`, [key]);
+  return pagePairFromRows(key, rows);
+}
+async function pgClaims(client: DbClient, pair: StoredPagePair, mode: LanguageConfig): Promise<void> {
+  staticClaims(pair, mode);
+  for (const locale of LOCALES) {
+    const slug = pair[locale].slug;
+    if (!slug) continue;
+    const { rows } = await client.query<{ type: string; name: string }>(
+      `SELECT 'story' AS type, translation_key AS name FROM posts WHERE locale=$1 AND (slug=$2 OR published_snapshot->>'slug'=$2)
+       UNION ALL SELECT 'page', key FROM pages WHERE locale=$1 AND slug=$2 AND key<>$3 LIMIT 1`, [locale, slug, pair.key]);
+    if (rows[0]) throw new PageError(`${locale}: slug belongs to ${rows[0].type} ${rows[0].name}.`, 'reserved_slug', rows[0], locale);
+  }
+}
+export function pgPageStore(pool: DbPool, options: { imageOrigin?: string } = {}): PageStore {
+  let origin = options.imageOrigin ?? 'https://unconfigured.invalid';
+  async function transaction<T>(fn: (client: DbClient, mode: LanguageState) => Promise<T>): Promise<T> {
+    const client = await pool.connect();
+    try { await client.query('BEGIN'); const mode = await readLanguage(client, true); const result = await fn(client, mode); await client.query('COMMIT'); return result; }
+    catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
+  }
+  async function mutate(key: string, base: Date | undefined, action: 'save' | 'publish' | 'unpublish', update?: PageUpdate, opts: PageSaveOptions = {}): Promise<StoredPagePair> {
+    return transaction(async (client, mode) => {
+      const existing = await readPage(client, key, true);
+      if (base && !existing.updatedAt) throw new PageError('Page not found.', 'not_found');
+      await lockContentNamespaces(client);
+      if (action !== 'save') requireExisting(existing);
+      if (action === 'unpublish') fixed(key);
+      if (opts.prepareLocale && existing.updatedAt && !base) throw new PageError('Reload before preparing a translation.', 'conflict');
+      assertPageNotStale(existing.updatedAt, base);
+      const pair = mergePageUpdate(update ?? { key }, existing, mode, opts);
+      if (action !== 'save') pair.status = action === 'publish' ? 'published' : 'draft';
+      if (action !== 'unpublish') await pgClaims(client, pair, mode);
+      if (pair.status === 'published') { await validatePublishedPage(pair, mode, origin); await opts.validate?.(pair, mode); }
+      if (existing.updatedAt) {
+        await client.query('INSERT INTO page_revisions(id,key,snapshot,saved_at) VALUES($1,$2,$3,clock_timestamp())', [randomUUID(), key, JSON.stringify({ de: existing.de, en: existing.en })]);
+        await client.query('DELETE FROM page_revisions WHERE key=$1 AND id NOT IN (SELECT id FROM page_revisions WHERE key=$1 ORDER BY saved_at DESC,id DESC LIMIT $2)', [key, REVISION_CAP]);
+      }
+      stamp(pair, mode);
+      for (const locale of LOCALES) {
+        const row = pair[locale];
+        await client.query(`INSERT INTO pages(key,locale,title,body_markdown,images,slug,status,published_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          ON CONFLICT(key,locale) DO UPDATE SET title=EXCLUDED.title,body_markdown=EXCLUDED.body_markdown,images=EXCLUDED.images,
+          slug=EXCLUDED.slug,status=EXCLUDED.status,published_at=EXCLUDED.published_at,updated_at=EXCLUDED.updated_at`,
+        [key, locale, row.title, row.bodyMarkdown, JSON.stringify(row.images), row.slug ?? '', pair.status, row.publishedAt, pair.updatedAt]);
+      }
+      return pair;
+    });
+  }
+  async function info(client: DbPool | DbClient, key: string, mode: LanguageConfig): Promise<PageRemoval> {
+    const pair = await readPage(client, key); requireExisting(pair);
+    const nav = await client.query<{ config: Navigation }>('SELECT config FROM site_nav WHERE id=1');
+    const revs = await client.query<{ count: string }>('SELECT count(*) FROM page_revisions WHERE key=$1', [key]);
+    const bodies = await client.query<{ body: string }>(`SELECT body_markdown AS body FROM posts UNION ALL SELECT published_snapshot->>'body_markdown' FROM posts WHERE published_snapshot IS NOT NULL UNION ALL SELECT body_markdown FROM pages WHERE key<>$1`, [key]);
+    return removal(pair, mode, validateNavigation(nav.rows[0]?.config), Number(revs.rows[0]!.count), bodies.rows.map((r) => r.body ?? ''));
+  }
+  const store: PageStore = {
+    configureImageOrigin(value) { origin = new URL(value).origin; },
+    get: (key) => readPage(pool, key),
+    save: (pair, base, opts) => mutate(pair.key, base, 'save', pair, opts),
+    publish: (key, base, opts) => mutate(key, base, 'publish', undefined, opts),
+    unpublish: (key, base) => mutate(key, base, 'unpublish'),
+    async keys() { return (await pool.query<{ key: string }>('SELECT DISTINCT key FROM pages ORDER BY key')).rows.map((r) => r.key); },
+    async removalInfo(key) { return transaction((client, mode) => info(client, key, mode)); },
+    async remove(key, base) {
+      return transaction(async (client, mode) => {
+        fixed(key); await readPage(client, key, true); await lockContentNamespaces(client);
+        const result = await info(client, key, mode); assertPageNotStale(result.updatedAt, base);
+        const nav = await client.query<{ config: Navigation }>('SELECT config FROM site_nav WHERE id=1 FOR UPDATE');
+        await client.query('DELETE FROM pages WHERE key=$1', [key]);
+        await client.query('DELETE FROM page_revisions WHERE key=$1', [key]);
+        await client.query("UPDATE site_nav SET config=$1,updated_at=GREATEST(clock_timestamp(),updated_at+interval '1 millisecond') WHERE id=1", [JSON.stringify(withoutPageNavigation(validateNavigation(nav.rows[0]?.config), key))]);
+        return result;
+      });
     },
     async listRevisions(key) {
-      // Summary fields only — bodies can be large.
-      const { rows } = await pool.query<{ id: string; saved_at: Date; title: string | null }>(
-        `SELECT r.id, r.saved_at, r.snapshot->l.primary_locale->>'title' AS title
-           FROM page_revisions r CROSS JOIN site_language l WHERE r.key = $1 AND l.id=true ORDER BY r.saved_at DESC, r.id DESC`,
-        [key],
-      );
+      const { rows } = await pool.query<{ id: string; saved_at: Date; title: string }>(`SELECT r.id,r.saved_at,r.snapshot->l.primary_locale->>'title' AS title FROM page_revisions r CROSS JOIN site_language l
+        WHERE r.key=$1 AND l.id=true AND EXISTS(SELECT 1 FROM pages WHERE key=r.key) ORDER BY r.saved_at DESC,r.id DESC`, [key]);
       return rows.map((r) => ({ id: r.id, savedAt: r.saved_at, title: r.title ?? '' }));
     },
     async getRevision(key, id) {
-      // A malformed uuid parameter would raise 22P02 (a logged 500) instead of
-      // the 404 the route wants.
       if (!UUID_RE.test(id)) return null;
-      const { rows } = await pool.query<{ id: string; saved_at: Date; snapshot: PageRevisionSnapshot }>(
-        `SELECT id, saved_at, snapshot FROM page_revisions WHERE key = $1 AND id = $2`,
-        [key, id],
-      );
-      const r = rows[0];
-      const mode = await readLanguage(pool);
-      return r ? { id: r.id, savedAt: r.saved_at, title: r.snapshot[mode.primary]?.title ?? '', snapshot: r.snapshot } : null;
+      const { rows } = await pool.query<{ id: string; saved_at: Date; snapshot: PageRevisionSnapshot; title: string }>(`SELECT r.id,r.saved_at,r.snapshot,r.snapshot->l.primary_locale->>'title' AS title FROM page_revisions r CROSS JOIN site_language l
+        WHERE r.key=$1 AND r.id=$2 AND l.id=true AND EXISTS(SELECT 1 FROM pages WHERE key=r.key)`, [key, id]);
+      const row = rows[0]; return row ? { id: row.id, savedAt: row.saved_at, snapshot: row.snapshot, title: row.title ?? '' } : null;
+    },
+    async prepareActivation(mode, client, extra) {
+      if (!client) throw new Error('Page activation requires the language transaction.');
+      const rows = (await client.query<PageRow>("SELECT * FROM pages WHERE status='published' ORDER BY key,locale FOR UPDATE")).rows;
+      await lockContentNamespaces(client);
+      const blockers: LanguageBlocker[] = [];
+      for (const key of new Set(rows.map((row) => row.key))) if (isPageKind(key)) {
+        const pair = pagePairFromRows(key, rows.filter((r) => r.key === key));
+        try { await pgClaims(client, pair, mode); await validatePublishedPage(pair, mode, origin); await extra?.(pair, mode); }
+        catch (error) { blockers.push(...blocker(key, error, mode)); }
+      }
+      if (blockers.length) throw new LanguageError('Prepare page translations before activating this language.', 'language_pages_incomplete', blockers);
+      await client.query(`UPDATE pages SET published_at=COALESCE(published_at,clock_timestamp()),
+        updated_at=GREATEST(clock_timestamp(),updated_at+interval '1 millisecond') WHERE status='published' AND key=ANY($1::text[]) AND locale=ANY($2::text[]) AND published_at IS NULL`, [Object.keys(PAGE_KINDS), mode.locales]);
     },
   };
+  return store;
 }

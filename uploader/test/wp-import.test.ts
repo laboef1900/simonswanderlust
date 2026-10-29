@@ -10,6 +10,7 @@ import { memoryPostStore, PostError, type PostStore } from '../src/posts.js';
 import { createRehostResume, rehostImage, type RehostResult } from '../src/wp-images.js';
 import { FetchError, type LookupFn } from '../src/safe-fetch.js';
 import { memoryLanguageStore, type LanguageConfig } from '../src/language.js';
+import { memoryPageStore } from '../src/pages.js';
 
 const xml = readFileSync(join(process.cwd(), 'test/fixtures/wxr-sample.xml'), 'utf8');
 const stubRehost = async (_url: string, _key: string, _alt: string) => ({ src: 'https://img/x', width: 100, height: 80 });
@@ -113,6 +114,18 @@ describe('WXR language modes', () => {
     { primary: 'de', locales: ['de'] }, { primary: 'en', locales: ['en'] },
   ];
 
+  it.each(modes)('rejects a page-owned WXR slug before fetching in %j', async (mode) => {
+    const language = memoryLanguageStore(mode); const store = memoryPostStore({ language });
+    const pages = memoryPageStore(language);
+    await pages.save({ key: 'contact', [mode.primary]: { slug: 'contact-owned' } });
+    let fetched = 0;
+    const body = pairOf('page-owner', mode.primary === 'de' ? 'contact-owned' : 'free-de',
+      mode.primary === 'en' ? 'contact-owned' : 'free-en', imgs('https://wp.example/photo.jpg'));
+    const result = await importWxr(body, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img',
+      rehost: async () => { fetched++; return stubRehost('', '', ''); }, delayMs: 0, retries: 0 });
+    expect(result.rejected).toBe(1); expect(result.imported).toBe(0); expect(fetched).toBe(0);
+    expect(result.warnings.join(' ')).toContain('page:contact'); expect(await store.list()).toEqual([]);
+  });
   it.each(modes)('rejects new reserved slugs before image planning or fetching in %j', async (language) => {
     const store = memoryPostStore({ language: memoryLanguageStore(language) });
     const primaryWords = ['posts', 'map', 'language', 'de', 'en',

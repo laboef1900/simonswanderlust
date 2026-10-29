@@ -50,6 +50,7 @@ describe('page gallery normalization', () => {
 
   it('lifts per-line gallery metadata into the images map on save', async () => {
     const s = memoryPageStore();
+    s.configureImageOrigin('https://img');
     const p = pair();
     p.de.bodyMarkdown = `\`\`\`gallery\n${a} | 3000x2000 | alt="Blick" | caption="Tag 1"\n\`\`\``;
     await s.save(p);
@@ -65,8 +66,9 @@ describe('memoryPageStore', () => {
     const p = await s.get('about');
     expect(p).toEqual({
       key: 'about',
-      de: { locale: 'de', title: '', bodyMarkdown: '', images: {} },
-      en: { locale: 'en', title: '', bodyMarkdown: '', images: {} },
+      status: 'published',
+      de: { locale: 'de', title: '', bodyMarkdown: '', images: {}, slug: '', publishedAt: null },
+      en: { locale: 'en', title: '', bodyMarkdown: '', images: {}, slug: '', publishedAt: null },
       updatedAt: null,
     });
   });
@@ -80,10 +82,10 @@ describe('memoryPageStore', () => {
   it('keys() lists saved page keys once each, sorted', async () => {
     const s = memoryPageStore();
     expect(await s.keys()).toEqual([]);
-    await s.save(pair('imprint'));
+    await s.save(pair('legal'));
     await s.save(pair('about'));
     await s.save(pair('about'));
-    expect(await s.keys()).toEqual(['about', 'imprint']);
+    expect(await s.keys()).toEqual(['about', 'legal']);
   });
 
   it('refuses a save whose updatedAt echo predates the stored pair (conflict), and advances updatedAt on every save (#141)', async () => {
@@ -114,7 +116,8 @@ describe('memoryPageStore', () => {
     expect(revs[0]!.title).toBe(`v${REVISION_CAP + 1}`);
     expect(revs[REVISION_CAP - 1]!.title).toBe('v2');
     const full = await s.getRevision('about', revs[0]!.id);
-    expect(full!.snapshot).toEqual({ de: { ...pair().de, title: `v${REVISION_CAP + 1}`, bodyMarkdown: `body ${REVISION_CAP + 1}` }, en: pair().en });
+    expect(full!.snapshot).toMatchObject({ de: { ...pair().de, title: `v${REVISION_CAP + 1}`, bodyMarkdown: `body ${REVISION_CAP + 1}` }, en: pair().en });
+    expect(full!.snapshot.de.publishedAt).toBeInstanceOf(Date);
     expect(await s.getRevision('about', 'nope')).toBeNull();
     expect(await s.getRevision('other', revs[0]!.id)).toBeNull();
   });

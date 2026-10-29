@@ -52,7 +52,7 @@ window.Auth = (function () {
     { group: 'Journal', label: 'Desk', href: '/admin/', icon: ICON.desk },
     { group: 'Journal', label: 'Posts', href: '/admin/posts.html', icon: ICON.posts },
     { group: 'Journal', label: 'Media', href: '/admin/media.html', icon: ICON.media },
-    { group: 'Journal', label: 'About', href: '/admin/about.html', admin: true, icon: ICON.about },
+    { group: 'Journal', get label() { return EditorCopy.en.pagesTitle; }, href: '/admin/pages.html', admin: true, icon: ICON.about },
     { group: 'Journal', label: 'Comments', href: '/admin/comments.html', admin: true, icon: ICON.comments },
     { group: 'Site', label: 'Import', href: '/admin/import.html', admin: true, icon: ICON.import },
     { group: 'Site', label: 'Settings', href: '/admin/settings.html', admin: true, icon: ICON.settings },
@@ -75,6 +75,7 @@ window.Auth = (function () {
     const p = location.pathname;
     if (p === '/admin' || p === '/admin/index.html') return '/admin/';
     if (p === '/admin/editor.html') return '/admin/posts.html';
+    if (p === '/admin/about.html') return '/admin/pages.html';
     return p;
   }
 

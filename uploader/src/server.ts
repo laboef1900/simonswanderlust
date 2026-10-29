@@ -35,9 +35,10 @@ import { validateDraft, validateForPublish, PostError, type PostStore, type Post
 import { GpxError } from './gpx-errors.js';
 import { analyzeBodyImages, bodyImageKey } from './publish-gate.js';
 import { auditAltText } from './alt-audit.js';
-import { renderPreviewHtml, previewCsp } from './preview.js';
+import { renderPreviewHtml, renderPagePreviewHtml, previewCsp } from './preview.js';
 import { loadGalleryMetadata } from './gallery-metadata.js';
-import { type PageStore, type PagePair, type PageUpdate, type PageContent, type ImageDims, PageError } from './pages.js';
+import { type PageStore, type PagePair, type PageUpdate, type ImageDims, type StoredPagePair, PageError, isSafePageKey, pagePaths } from './pages.js';
+import { PAGE_KINDS, isPageKind } from '../../site/src/lib/page-kinds.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
 import { prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type PreparedImport } from './wp-import.js';
@@ -60,7 +61,7 @@ import { ROUTE_ARCHIVE_RE } from './gpx-backup.js';
 import { StorageReadOnlyError } from './storage-owner.js';
 import { IdentityConflictError, type SiteIdentityStore } from './site-identity.js';
 import { IdentityError, neutralIdentity } from '../../site/src/lib/site-identity.js';
-import { LanguageError, validateLanguage, type LanguageConfig, type LanguageStore, type LanguageLocale, type LanguageBlocker } from './language.js';
+import { LanguageError, validateLanguage, type LanguageConfig, type LanguageStore, type LanguageLocale } from './language.js';
 import { publicPath } from './public-paths.js';
 
 export interface ServerConfig {
@@ -401,6 +402,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
 
   // Declared before the upload route, which builds `src` from it.
   const imageBase = cfg.baseUrl.replace(/\/+$/, '');
+  cfg.pages.configureImageOrigin(imageBase);
   // Built once: an unparseable base URL should fail here, at boot, not 500 a
   // preview request later.
   const previewPolicy = previewCsp(imageBase);
@@ -943,21 +945,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       let changed = false;
       const saved = await language.update(next, async (candidate, client) => {
         changed = true;
-        // About is the only current page. #288 extends this same locked preflight
-        // to its published registry, rather than querying a separate connection.
-        const about = client
-          ? (await client.query<{ locale: LanguageLocale; body_markdown: string; images: Record<string, ImageDims> }>(
-            `SELECT locale,body_markdown,images FROM pages WHERE key='about' FOR UPDATE`)).rows
-          : (await cfg.pages.keys()).includes('about')
-            ? await cfg.pages.get('about').then((pair) => (['de', 'en'] as const).map((locale) => ({ locale, body_markdown: pair[locale].bodyMarkdown, images: pair[locale].images })))
-            : [];
-        const blockers: LanguageBlocker[] = [];
-        for (const row of about) {
-          if (!candidate.locales.includes(row.locale)) continue;
-          const reason = await pageImageFailure(row.body_markdown, row.images, candidate, row.locale);
-          if (reason) blockers.push({ key: 'about', locale: row.locale, field: 'images', reason });
-        }
-        if (blockers.length) throw new LanguageError('Prepare the page images before activating this language.', 'language_pages_incomplete', blockers);
+        return cfg.pages.prepareActivation(candidate, client, validatePageImages);
       });
       if (!changed) return reply.send(saved);
       let built = false;
@@ -1537,6 +1525,14 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const notReady = await cfg.media.notReadyKeys(keys);
     return notReady.size ? `${notReady.size} photo(s) are not ready to publish.` : null;
   }
+  async function validatePageImages(pair: StoredPagePair, mode: LanguageConfig): Promise<void> {
+    // Retain the existing About readiness check; #288 adds no new readiness policy.
+    if (pair.key !== 'about') return;
+    for (const locale of mode.locales) {
+      const reason = await pageImageFailure(pair[locale].bodyMarkdown, pair[locale].images, mode, locale);
+      if (reason) throw new PageError(reason, 'images_not_ready', undefined, locale);
+    }
+  }
   class PublicationImageError extends PostError {
     constructor(readonly foreign: string[], readonly notReady: string[]) {
       super(foreign.length ? foreignImagesMessage(foreign.length)
@@ -2018,70 +2014,111 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // Replaces the old secret-gated POST /build on the builder container.
   app.post('/rebuild', { preHandler: requireAdmin }, async () => cfg.builder.build());
 
-  app.get('/pages/:key', { preHandler: requireAuth }, async (req, reply) => {
-    const key = (req.params as { key: string }).key;
-    return reply.send(await cfg.pages.get(key));
-  });
-
-  // Admin-only: writing a page rebuilds the public site (like publishing a post).
-  app.put('/pages/:key', { preHandler: requireAdmin }, async (req, reply) => {
-    const key = (req.params as { key: string }).key;
-    const b = (req.body ?? {}) as Partial<Record<'de' | 'en', Partial<PageContent>>> & { updatedAt?: unknown; prepareLocale?: unknown };
-    const mkLocale = (loc: 'de' | 'en'): PageContent => {
-      const src = b[loc] ?? {};
-      return {
-        locale: loc,
-        title: String(src.title ?? ''),
-        bodyMarkdown: String(src.bodyMarkdown ?? ''),
-        // @ai-warning: this cast is the reason `validatePagePair` runs
-        // `imagesMapError` — the map is whatever JSON the client sent, and it
-        // ends up at the render boundary in site/src/lib/body-images.ts.
-        // Never "simplify" the validation away on the strength of this type.
-        images: (src.images ?? {}) as Record<string, ImageDims>,
-      };
-    };
-    const pair: PageUpdate = { key, ...(b.de !== undefined ? { de: mkLocale('de') } : {}), ...(b.en !== undefined ? { en: mkLocale('en') } : {}) };
-    if (b.prepareLocale !== undefined && b.prepareLocale !== 'de' && b.prepareLocale !== 'en') return reply.code(400).send({ error: 'invalid preparation locale' });
-    if (b.prepareLocale !== undefined && !Object.hasOwn(b, 'updatedAt')) return reply.code(400).send({ error: 'Preparation requires the loaded updatedAt token.' });
-    // `updatedAt` is the optimistic-concurrency echo (issue #141), same
-    // contract as posts: optional, and only ever able to make a save fail.
-    let baseUpdatedAt: Date | undefined;
-    if (b.updatedAt !== undefined && b.updatedAt !== null) {
-      baseUpdatedAt = new Date(String(b.updatedAt));
-      if (Number.isNaN(baseUpdatedAt.getTime())) return reply.code(400).send({ error: 'invalid updatedAt' });
-    }
+  interface PageRoute { Params: { key: string } }
+  interface PagePreviewRoute extends PageRoute { Querystring: { locale?: string } }
+  interface PageRevisionRoute { Params: { key: string; id: string } }
+  function pageFailure(error: unknown, reply: FastifyReply) {
+    if (!(error instanceof PageError)) throw error;
+    const status = error.code === 'not_found' ? 404 : error.code === 'unknown_page_kind' || error.code === 'invalid_page' ? 400 : 409;
+    return reply.code(status).send({ error: error.message, code: error.code,
+      ...(error.owner ? { owner: error.owner } : {}), ...(error.locale ? { locale: error.locale } : {}),
+      ...(error.foreignImages ? { foreignImageCount: error.foreignImages.length, foreignImages: error.foreignImages.slice(0, 5) } : {}) });
+  }
+  function pageToken(value: unknown): Date | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== 'string' || !Number.isFinite(new Date(value).getTime())) throw new PageError('Invalid updatedAt.');
+    return new Date(value);
+  }
+  function pageMutationToken(body: unknown): Date | undefined {
+    if (body === undefined || body === null) return undefined;
+    if (typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => key !== 'updatedAt')) throw new PageError('Invalid page action payload.');
+    return pageToken('updatedAt' in body ? body.updatedAt : undefined);
+  }
+  async function pageRebuild(reply: FastifyReply, saved: unknown, rebuild: boolean) {
+    if (!rebuild) return reply.send({ saved, build: null });
     try {
-      const saved = await cfg.pages.save(pair, baseUpdatedAt, {
-        prepareLocale: b.prepareLocale,
-        validate: async (candidate, mode) => {
-          for (const locale of mode.locales) {
-            const reason = await pageImageFailure(candidate[locale].bodyMarkdown, candidate[locale].images, mode, locale);
-            if (reason) throw new PageError(reason, 'images_not_ready');
-          }
-        },
-      });
       const build = await cfg.builder.build();
-      return reply.send({ saved, build });
-    } catch (e) {
-      if (e instanceof PageError) {
-        // A stale-tab 409 carries `code` so the page can offer a reload; a
-        // conflict rebuilds nothing.
-        return reply.code(e.code === 'conflict' ? 409 : 400).send({ error: e.message, ...(e.code ? { code: e.code } : {}) });
-      }
-      throw e;
-    }
+      if (build.ok) return reply.send({ saved, build });
+    } catch (error) { console.error('Page saved; rebuild failed:', error); }
+    return reply.code(502).send({ code: 'page_build_failed', error: 'Saved, but the rebuild failed. The previous release is still serving. Retry Rebuild site now.', persisted: true, saved });
+  }
+  app.get('/pages', { preHandler: requireAuth }, async (_req, reply) => {
+    const mode = await language.get();
+    const keys = [...new Set([...Object.keys(PAGE_KINDS), ...await cfg.pages.keys()])];
+    const pages = await Promise.all(keys.map(async (key) => {
+      const pair = await cfg.pages.get(key);
+      return { key, known: isPageKind(key), exists: pair.updatedAt !== null, status: pair.status, updatedAt: pair.updatedAt,
+        deletable: key !== 'about', defaults: isPageKind(key) ? PAGE_KINDS[key].slugs : null,
+        paths: pagePaths(pair, mode), locales: Object.fromEntries((['de', 'en'] as const).map((locale) =>
+          [locale, { title: pair[locale].title, slug: pair[locale].slug ?? '', publishedAt: pair[locale].publishedAt ?? null }])) };
+    }));
+    return reply.header('cache-control', 'no-store').send({ pages, language: mode });
   });
-
-  // Revision history — read-only for any authed user (same trust boundary as
-  // GET /pages/:key); restoring goes through the normal PUT save, so validation
-  // applies and the clobbered state is itself snapshotted.
-  app.get('/pages/:key/revisions', { preHandler: requireAuth }, async (req, reply) => {
-    const key = (req.params as { key: string }).key;
+  app.get<PageRoute>('/pages/:key', { preHandler: requireAuth }, async (req, reply) => {
+    const key = req.params.key;
+    if (!isSafePageKey(key)) return reply.code(400).send({ error: 'Invalid page key.' });
+    return reply.header('cache-control', 'no-store').send(await cfg.pages.get(key));
+  });
+  app.put<PageRoute>('/pages/:key', { preHandler: requireAdmin }, async (req, reply) => {
+    try {
+      const key = req.params.key;
+      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) throw new PageError('Invalid page payload.');
+      const body = req.body as Record<string, unknown>;
+      if (Object.keys(body).some((key) => !['de', 'en', 'updatedAt', 'prepareLocale'].includes(key))) throw new PageError('Invalid page fields.');
+      const pair: PageUpdate = { key };
+      for (const locale of ['de', 'en'] as const) if (body[locale] !== undefined) {
+        const value = body[locale];
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new PageError(`Invalid ${locale} fields.`);
+        const row = value as Record<string, unknown>;
+        if (typeof row.title !== 'string' || typeof row.bodyMarkdown !== 'string' || (row.slug !== undefined && typeof row.slug !== 'string')) throw new PageError(`Invalid ${locale} content.`);
+        pair[locale] = { locale, title: row.title, bodyMarkdown: row.bodyMarkdown,
+          ...(row.slug !== undefined ? { slug: row.slug as string } : {}), images: (row.images ?? {}) as Record<string, ImageDims> };
+      }
+      if (body.prepareLocale !== undefined && body.prepareLocale !== 'de' && body.prepareLocale !== 'en') throw new PageError('Invalid preparation locale.');
+      if (body.prepareLocale !== undefined && !Object.hasOwn(body, 'updatedAt')) throw new PageError('Preparation requires the loaded updatedAt token.');
+      const saved = await cfg.pages.save(pair, pageToken(body.updatedAt), { prepareLocale: body.prepareLocale, validate: validatePageImages });
+      return pageRebuild(reply, saved, saved.status === 'published');
+    } catch (error) { return pageFailure(error, reply); }
+  });
+  for (const action of ['publish', 'unpublish'] as const) {
+    app.post<PageRoute>(`/pages/:key/${action}`, { preHandler: requireAdmin }, async (req, reply) => {
+      try {
+        const key = req.params.key;
+        const token = pageMutationToken(req.body);
+        const saved = action === 'publish'
+          ? await cfg.pages.publish(key, token, { validate: validatePageImages })
+          : await cfg.pages.unpublish(key, token);
+        return pageRebuild(reply, saved, true);
+      } catch (error) { return pageFailure(error, reply); }
+    });
+  }
+  app.get<PageRoute>('/pages/:key/deletion', { preHandler: requireAdmin }, async (req, reply) => {
+    try { return reply.send(await cfg.pages.removalInfo(req.params.key)); }
+    catch (error) { return pageFailure(error, reply); }
+  });
+  app.delete<PageRoute>('/pages/:key', { preHandler: requireAdmin }, async (req, reply) => {
+    try {
+      const removed = await cfg.pages.remove(req.params.key, pageMutationToken(req.body));
+      return pageRebuild(reply, removed, removed.published);
+    } catch (error) { return pageFailure(error, reply); }
+  });
+  app.get<PagePreviewRoute>('/pages/:key/preview', { preHandler: requireAuth }, async (req, reply) => {
+    const key = req.params.key;
+    const locale = req.query.locale;
+    if (locale !== 'de' && locale !== 'en') return reply.code(400).send({ error: 'Choose a preview locale.' });
+    const pair = await cfg.pages.get(key);
+    if (!pair.updatedAt || !isPageKind(key)) return reply.code(404).send({ error: 'Page not found.' });
+    const metadata = await loadGalleryMetadata(pair, cfg.media, imageBase);
+    return reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', previewPolicy)
+      .send(await renderPagePreviewHtml(pair, locale, imageBase, metadata[locale]));
+  });
+  app.get<PageRoute>('/pages/:key/revisions', { preHandler: requireAuth }, async (req, reply) => {
+    const key = req.params.key;
+    if (!(await cfg.pages.get(key)).updatedAt) return reply.code(404).send({ error: 'Page not found.' });
     return reply.send(await cfg.pages.listRevisions(key));
   });
-
-  app.get('/pages/:key/revisions/:id', { preHandler: requireAuth }, async (req, reply) => {
-    const { key, id } = req.params as { key: string; id: string };
+  app.get<PageRevisionRoute>('/pages/:key/revisions/:id', { preHandler: requireAuth }, async (req, reply) => {
+    const { key, id } = req.params;
     const rev = await cfg.pages.getRevision(key, id);
     if (!rev) return reply.code(404).send({ error: 'revision not found' });
     return reply.send(rev);

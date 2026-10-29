@@ -883,3 +883,125 @@ No new root segment is registered, so the app reservation set is unchanged by th
 | Approver / date | Repository owner, interactive implementation session, 2026-10-27 |
 | Independent review F7/F9 | Correctness clarifications incorporated; not a claim that the earlier review was clean |
 | Q12 / review F8 | Approved **“Prepare translations before activation”** after PR #407 head `93619a0ccb665c27152dff67fce496b779a3b38d` and PR #406 head `8542d78fa1f9168c0313d2cffdef3d17830eba6d`; option A only |
+
+## #288 implementation interface — verification pending
+
+This appendix records the implemented storage/CMS boundary for downstream #289 and
+#309. It does not change the approved scope or claim that public generic routes,
+navigation settings, tests or a production migration have been exercised.
+
+### Shared modules and stored representation
+
+- `site/src/lib/page-kinds.ts`: `PAGE_KINDS`, `PageKind`, `isPageKind`. Each registry
+  entry supplies `slugs.{de,en}`, `deletable`, `unpublishable`, and default `slots`.
+  About's registry paths are fixed; its stored slug is always `''`. New-page
+  defaults are suggestions in the editor, not silently assigned route claims.
+- `site/src/lib/navigation.ts`: `Navigation` (`version: 1`, `header/footer/legal`),
+  the discriminated `NavItem` union, `NavLocaleText`, `NAV_SLOTS`, `DEFAULT_NAVIGATION`,
+  `validateNavigation`, `PageNavReference`, `pageNavReferences`,
+  `withoutPageNavigation`. The validator is pure and Astro-free. It validates
+  structure/URL safety/limits, not emitted-path eligibility: #289 must resolve
+  against actual emitted paths in the captured build mode and validate active
+  locale labels/destinations at its save boundary.
+- `pages`: existing `(key, locale)` primary key, new `slug text NOT NULL DEFAULT ''`,
+  `status text NOT NULL DEFAULT 'draft' CHECK ('draft','published')`, nullable
+  `published_at timestamptz`; existing `updated_at` is the optimistic pair token
+  (maximum row timestamp). The nonempty partial `(locale,slug)` index supplements
+  transactional cross-table checks. The pair shares status, not first-public time.
+- `site_nav`: singleton integer `id=1`, `config jsonb`, `updated_at timestamptz`.
+  Bootstrap seeds the shared default only when absent. #289 should update this
+  row in place with its stale-write guard, not introduce settings.json navigation.
+  Page deletion locks this row after language/content/namespace locks.
+
+### Store and API contract
+
+`uploader/src/pages.ts` remains the sole page store. `StoredPagePair` carries
+`key`, `status`, `updatedAt`, and `de/en` content with `slug` and `publishedAt`.
+`PageUpdate` is a partial locale update; `PageSaveOptions.prepareLocale` names an
+inactive locale explicitly. Omitted and ordinary inactive content is retained.
+`configureImageOrigin` binds the real server image origin before mutation; stores
+default fail-closed rather than infer an origin from untrusted content.
+
+`PageStore` exposes `get`, `keys`, `save`, `publish`, `unpublish`, `removalInfo`,
+`remove`, `listRevisions`, `getRevision`, and `prepareActivation`.
+`validatePublishedPage` is the shared uploader eligibility/image gate;
+`pagePairFromRows`/`PageRow` decode current database rows. #289's loader must
+select published registry kinds only and revalidate its own untrusted DB/build
+boundary; it must preserve About's existing fixed-route fallback and sanitization.
+
+| Route | Permission / result |
+|---|---|
+| `GET /pages` | Session; `{pages, language}` with registry defaults, existence/status/token, paths and locale title/slug/history; no bodies |
+| `GET /pages/:key` | Session; saved pair, or unsaved empty pair with `updatedAt: null` |
+| `PUT /pages/:key` | Admin; `{de?,en?,updatedAt?,prepareLocale?}`; locale fields `title/bodyMarkdown/images/slug`; caller history/status never changes lifecycle |
+| `POST /pages/:key/publish`, `/unpublish` | Admin; optional `{updatedAt}`; pair lifecycle operation |
+| `GET /pages/:key/preview?locale=de\|en` | Session; saved selected locale including inactive, real sanitized HTML, preview CSP, `no-store` |
+| `GET /pages/:key/revisions[/:id]` | Session; bounded history; 404 when page is absent |
+| `GET /pages/:key/deletion` | Admin; `{key,titles,paths,revisions,navigation,bodyReferences,updatedAt,published}` |
+| `DELETE /pages/:key` | Admin; optional `{updatedAt}`; same deletion impact as committed result |
+
+Successful mutations return `{saved,build}`, where `build:null` means no rebuild
+(draft save/deletion). A post-commit build failure returns HTTP 502,
+`code:"page_build_failed"`, `persisted:true`, `saved`; clients must adopt that token
+and report the prior release remains served. Validation/stale failures commit no
+revision. Reserved claims return HTTP 409 `reserved_slug` with `{owner:{type,name}}`;
+unknown kinds return 400 `unknown_page_kind`; fixed About operations and sticky
+slug edits return 409. A stale token for a deleted page returns 404, not recreation.
+Explicit inactive preparation requires the loaded token and rejects active-locale
+edits in the same payload. The existing editor URL defaults to About, with
+`?key=contact|privacy|legal` selecting others and `&prepareLocale=…` entering preparation.
+
+### Concurrency and downstream activation
+
+`content-namespace.ts` provides `lockContentNamespaces(client)` after the
+language singleton and content locks. Postgres holds namespace keys in a stable
+order. Memory stores share a `LanguageStore` instance plus registered working and
+retained snapshot claims; fixtures must inject that same language store into both.
+New/changed story claims call `PostStore.pageSlugOwner`; WXR uses the same boundary
+before fetch. Grandfathering remains based only on the same existing story row.
+
+`PageStore.prepareActivation(candidate, client?, validate?)` is called from the
+existing language-update preflight. Postgres requires that transaction's client,
+locks all published page rows and stamps newly enabled rows before the mode commit.
+Memory returns a commit closure, which the language store invokes only after every
+transition handler accepts; a later refusal cannot partially stamp a locale.
+The optional validation callback preserves About's incumbent media-readiness gate.
+`LanguageError("language_pages_incomplete")` carries page/locale blockers. Ordinary
+inactive saves do not claim public eligibility; activation rechecks under lock.
+#309 should reuse these blocks/actions, not add an independent activation protocol.
+
+### Migration and recovery
+
+`ensureSchema` adds columns/index/nav idempotently, keeps About text/URLs, marks
+About published once, and sweeps orphan page revisions. Unknown old keys are
+retained inert and reported by `reportNamespaceCollisions`; admins can delete them.
+The boot pre-migration capture extends the inherited recovery prerequisite to
+missing `site_nav`. It never manufactures a lower-version dump from new page data.
+Dump format 13 independently records page/nav introduction after language v12 and
+identity v11. New metadata is mandatory and validated before replacement, including
+sticky first-public timestamps for enabled published registry rows.
+
+Restore replaces new page/nav data together, preserves first-public history, and
+retains inherited identity/language/GPX handling. Pre-v13 page rows explicitly
+normalize to empty slugs, About published, others draft; absent v1 pages survive.
+Live navigation survives pre-v13 restores. `pageRecoverySummary` takes retained
+live context for those versions, reporting unresolved items and page/story/static
+collisions without deleting anything. Revision orphans are swept; surviving
+histories are not represented as recoverable dump content. Page mutation tokens
+are refreshed during restore so an open pre-restore editor cannot overwrite it.
+Containment is unpublish/delete (not About), or repair/rebuild; preserve the last
+successful release and the approved compatible recovery image/set.
+
+### Acceptance evidence to run at integration
+
+Regression coverage is added for memory/Postgres lifecycle parity, namespace races
+and retained snapshots, explicit preparation/activation, transactional deletion
+failure, API permissions/sanitized preview/foreign-image gates/rebuild failure,
+real editor DOM confirmation/stale state/preparation, WXR no-fetch refusal,
+legacy/app reservation equality, and v13/legacy recovery validation. None was run
+by the implementation worker. Parent must run the affected full suites, TypeScript
+and Astro checks against a disposable database, then real admin/browser scenarios
+for both primary-language modes and a failed-build/rebuild recovery. #289 must
+add public output/build collision/nav resolution evidence before deployment;
+successful #288 CMS publication alone does not establish those public routes.
+

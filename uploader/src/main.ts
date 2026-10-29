@@ -7,6 +7,7 @@ import { pgUserStore } from './users.js';
 import { pgSessionStore } from './sessions.js';
 import { pgPostStore } from './posts.js';
 import { pgPageStore } from './pages.js';
+import { reportNamespaceCollisions } from './namespace-report.js';
 import { bootstrapRelease, createSiteBuilder } from './build.js';
 import { createDbBackup, createRouteManifestPinReader, isBackupDue, resolveBackupDir, dumpDatabase } from './backup.js';
 import { createImportRunner, pgImportJobStore } from './import-jobs.js';
@@ -49,21 +50,23 @@ const pool = createPool(databaseUrl, owner.applicationName);
 pool.on('error', () => console.error('Application database connection unavailable.'));
 // A logical pre-migration recovery set precedes the first language schema write.
 // Fresh databases have no content to back up; partial boot migrations stay recoverable.
-const languageMigration = await pool.query<{ posts: string | null; language: string | null; omitted: boolean; constraint_present: boolean }>(`
+const languageMigration = await pool.query<{ posts: string | null; language: string | null; omitted: boolean; constraint_present: boolean; navigation: string | null }>(`
   SELECT to_regclass('posts')::text AS posts, to_regclass('site_language')::text AS language,
     EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='posts' AND column_name='omitted') AS omitted,
-    EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('posts') AND conname='posts_omitted_unpublished') AS constraint_present
+    EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('posts') AND conname='posts_omitted_unpublished') AS constraint_present,
+    to_regclass('site_nav')::text AS navigation
 `);
 const migration = languageMigration.rows[0]!;
-if (migration.posts && (!migration.language || !migration.omitted || !migration.constraint_present)) {
+if (migration.posts && (!migration.language || !migration.omitted || !migration.constraint_present || !migration.navigation)) {
   const migrationFiles = createGpxFiles({ storageDir, isWritable: owner.isWritable });
   await dumpDatabase(pool, join(resolveBackupDir(), 'db'), new Date(), {
-    routeFiles: migrationFiles, isWritable: owner.isWritable, preLanguageMigration: true,
+    routeFiles: migrationFiles, isWritable: owner.isWritable, preLanguageMigration: true, prePagesMigration: true,
   });
   owner.assertWritable();
 }
 await ensureSchema(pool);
 owner.assertWritable();
+await reportNamespaceCollisions(pool, (message) => console.warn(message));
 await seedSiteIdentity(pool);
 const identityStore = await pgSiteIdentityStore(pool);
 const secrets = pgSecretsStore(pool, encryptionKey);

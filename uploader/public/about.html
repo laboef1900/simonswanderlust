@@ -3,20 +3,27 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>About Page</title>
+    <title></title>
     <link rel="stylesheet" href="/admin/admin.css" />
     <link rel="stylesheet" href="/admin/vendor/easymde.min.css" />
   </head>
   <body>
     <header class="cms-page-meta">
-      <h1>About page</h1>
+      <h1 id="pageHeading"></h1>
       <div class="cms-page-actions">
         <p id="actionStatus" class="muted" role="status"></p>
         <p id="actionError" class="err" role="alert" hidden></p>
-        <button id="saveBtn" type="button" class="btn-primary-publish">Publish</button>
+        <button id="saveBtn" type="button" class="btn-primary-publish" data-pages-copy="Save"></button>
+        <button id="publishBtn" type="button" class="btn-primary-publish" data-pages-copy="Publish" hidden></button>
+        <button id="previewBtn" type="button" class="btn-secondary" data-pages-copy="Preview" disabled></button>
+        <button id="unpublishBtn" type="button" class="btn-secondary" data-pages-copy="Unpublish" hidden></button>
+        <button id="deleteBtn" type="button" class="btn-remove" data-pages-copy="Delete" hidden></button>
       </div>
     </header>
     <main>
+      <a id="pagesBack" href="/admin/pages.html" data-pages-copy="Back"></a>
+      <p id="pageState" class="muted" role="status"></p>
+      <p id="legalNote" class="muted" data-pages-copy="LegalNote" hidden></p>
       <p id="preparationNotice" class="muted" role="status" hidden></p>
       <a id="languageSettingsLink" href="/admin/settings.html#language" data-language-copy="Back" hidden></a>
       <div class="lang-switch-bar about-tabs" role="tablist" aria-label="Page language">
@@ -26,7 +33,10 @@
 
       <section id="tab-de" class="card locale-tab" role="tabpanel" aria-labelledby="tabbtn-de">
         <label for="deTitle">Heading</label>
-        <input id="deTitle" type="text" placeholder="Über mich" />
+        <input id="deTitle" type="text" />
+        <div id="deSlugFields" hidden><label for="deSlug" data-pages-copy="Slug"></label>
+          <input id="deSlug" type="text" pattern="[a-z0-9][a-z0-9-]*" aria-describedby="deSlugHelp">
+          <p id="deSlugHelp" class="muted" data-pages-copy="SlugHelp"></p></div>
         <label for="deBody">Body (Markdown)</label>
         <textarea id="deBody"></textarea>
         <div class="body-img-row">
@@ -41,7 +51,10 @@
 
       <section id="tab-en" class="card locale-tab" role="tabpanel" aria-labelledby="tabbtn-en" hidden>
         <label for="enTitle">Heading</label>
-        <input id="enTitle" type="text" placeholder="About me" />
+        <input id="enTitle" type="text" />
+        <div id="enSlugFields" hidden><label for="enSlug" data-pages-copy="Slug"></label>
+          <input id="enSlug" type="text" pattern="[a-z0-9][a-z0-9-]*" aria-describedby="enSlugHelp">
+          <p id="enSlugHelp" class="muted" data-pages-copy="SlugHelp"></p></div>
         <label for="enBody">Body (Markdown)</label>
         <textarea id="enBody"></textarea>
         <div class="body-img-row">
@@ -70,10 +83,16 @@
     <script src="/admin/vendor/easymde.min.js"></script>
     <script src="/admin/tabs.js"></script>
     <script src="/admin/image-markdown.js"></script>
+    <script src="/admin/pages-ui.js"></script>
     <script>
       'use strict';
       const $ = (id) => document.getElementById(id);
-      const KEY = 'about';
+      const KEY = new URLSearchParams(location.search).get('key') || 'about';
+      PagesUI.localize(document);
+      $('pageHeading').textContent = PagesUI.text('Heading', { kind: PagesUI.kind(KEY) });
+      document.title = $('pageHeading').textContent;
+      let storedPage = null;
+      let pageDefaults = null;
       SiteLanguage.localize(document);
       const deImages = {}, enImages = {};
       // updatedAt of the page as loaded/last saved in THIS tab. Echoed back on
@@ -96,7 +115,7 @@
 
       // ---- draft guard: dirty tracking, beforeunload warning, local autosave ----
       const guard = DraftGuard.createDraftGuard({
-        storageKey: 'swl:draft:about' + (prepareLocale ? ':' + prepareLocale : ''),
+        storageKey: (KEY === 'about' ? 'swl:draft:about' : 'swl:draft:page:' + KEY) + (prepareLocale ? ':' + prepareLocale : ''),
         collect: () => ({ de: localeObj('de'), en: localeObj('en') }),
       });
       const mainEl = document.querySelector('main');
@@ -119,7 +138,7 @@
         const imgSlug = file.name.replace(/\.[^.]+$/, '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
         statusEl.textContent = 'Uploading…';
         const fd = new FormData();
-        fd.append('key', 'pages/about/' + imgSlug);
+        fd.append('key', 'pages/' + KEY + '/' + imgSlug);
         fd.append('alt', altInput.value);
         fd.append('file', file);
         try {
@@ -144,23 +163,21 @@
       $('enBodyImgUpload').addEventListener('click', () => uploadBodyImg('en'));
 
       function localeObj(loc) {
-        return { locale: loc, title: $(loc + 'Title').value.trim(),
+        return { locale: loc, title: $(loc + 'Title').value.trim(), slug: KEY === 'about' ? '' : $(loc + 'Slug').value.trim(),
           bodyMarkdown: (loc === 'de' ? deMDE : enMDE).value(), images: { ...(loc === 'de' ? deImages : enImages) } };
       }
 
       $('saveBtn').addEventListener('click', async () => {
         if (!language) return;
-        const ok = await AdminConfirm.ask({
-          title: prepareLocale ? SiteLanguage.text('PrepTitle') : 'Publish the About page?',
-          body: prepareLocale
-            ? SiteLanguage.text('PrepConfirm', { language: SiteLanguage.names[prepareLocale] })
-            : 'The About page is saved, then the public journal rebuilds. This can take several minutes. Live pages stay unchanged until the rebuild finishes.',
-          confirmLabel: prepareLocale ? SiteLanguage.text('PrepSave') : 'Publish',
-        });
-        if (!ok) return;
-        showErr(''); setStatus('Publishing…');
+        const live = storedPage?.status === 'published';
+        if (live && !await AdminConfirm.ask({
+          title: prepareLocale ? SiteLanguage.text('PrepTitle') : PagesUI.text('SaveConfirm'),
+          body: prepareLocale ? SiteLanguage.text('PrepConfirm', { language: SiteLanguage.names[prepareLocale] }) : PagesUI.text('SaveScope'),
+          confirmLabel: prepareLocale ? SiteLanguage.text('PrepSave') : PagesUI.text('SaveLive'),
+        })) return;
+        showErr(''); setStatus(PagesUI.text('Busy'));
         const snap = guard.snapshot();
-        const payload = { updatedAt: loadedUpdatedAt || undefined,
+        const payload = { updatedAt: loadedUpdatedAt,
           ...Object.fromEntries(editableLocales.map((locale) => [locale, localeObj(locale)])),
           ...(prepareLocale ? { prepareLocale } : {}) };
         const btn = $('saveBtn');
@@ -168,34 +185,78 @@
         try {
           const res = await fetch('/pages/' + KEY, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
           if (res.status === 401) { guard.redirectToLogin(); return; }
-          if (res.status === 403) { showErr('Only admins can save the About page.'); setStatus(''); return; }
           const body = await res.json().catch(() => ({}));
+          if (res.status === 403) { showErr(body.error || PagesUI.text('Failed')); setStatus(''); return; }
           if (res.status === 409 && body.code === 'conflict') {
             setStatus('');
-            showErr(body.error || 'The About page was modified since you opened it — nothing was saved.');
+            showErr(body.error || PagesUI.text('Conflict'));
             const reload = await AdminConfirm.ask({
-              title: 'Reload the latest About page?',
-              body: 'The About page was changed elsewhere (another tab or user) since you opened it, so saving would overwrite those changes. Nothing was saved and the site was not rebuilt.\n\nConfirm — reload the latest version (your edits in this tab are lost).\nCancel — keep your edits on screen so you can copy them out first.',
+              title: PagesUI.text('Reload'),
+              body: PagesUI.text('Conflict'),
               confirmLabel: 'Reload',
               danger: true,
             });
             if (reload) { await loadPage(); guard.markClean(guard.snapshot()); showErr(''); }
             return;
           }
-          if (!res.ok) { showErr(body.error || ('Save failed: ' + res.status)); setStatus(''); return; }
-          if (body.build && !body.build.ok) { showErr('Build error: ' + (body.build.error || 'unknown')); setStatus(''); return; }
-          const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
+          if (!res.ok && !body.persisted) { showErr(body.error || ('Save failed: ' + res.status)); setStatus(''); return; }
           guard.markClean(snap);
-          if (body.saved && body.saved.updatedAt) loadedUpdatedAt = body.saved.updatedAt;
+          if (body.saved) acceptSaved(body.saved);
           loadRevisions().catch(() => {});
-          setStatus(prepareLocale ? SiteLanguage.text('PrepSaved')
-            : 'Saved & rebuilt. Live: ' + language.locales.map((locale) => location.origin + SiteLanguage.publicPath(language, locale, 'about')).join(' · ') + release);
+          if (body.persisted) { showErr(body.error); setStatus(''); return; }
+          setStatus(prepareLocale ? SiteLanguage.text('PrepSaved') : storedPage.status === 'draft' ? PagesUI.text('Saved')
+            : PagesUI.text('LiveSaved', { paths: PagesUI.paths(storedPage, language).join(' · ') }));
         } catch (e) {
           showErr('Save failed: ' + e);
           setStatus('');
         } finally {
           btn.disabled = false;
         }
+      });
+
+      function acceptSaved(pair) {
+        storedPage = pair; loadedUpdatedAt = pair.updatedAt || null;
+        const live = pair.status === 'published';
+        $('pageState').textContent = PagesUI.text(live ? 'Published' : 'Draft');
+        $('saveBtn').textContent = prepareLocale ? SiteLanguage.text('PrepSave') : PagesUI.text(live ? 'SaveLive' : 'Save');
+        $('saveBtn').className = live && !prepareLocale ? 'btn-primary-publish' : '';
+        $('publishBtn').hidden = !!prepareLocale || live || !pair.updatedAt;
+        $('unpublishBtn').hidden = !!prepareLocale || !live || KEY === 'about';
+        $('deleteBtn').hidden = !!prepareLocale || !pair.updatedAt || KEY === 'about';
+        $('previewBtn').disabled = !pair.updatedAt;
+        for (const locale of ['de', 'en']) {
+          $(locale + 'SlugFields').hidden = KEY === 'about';
+          $(locale + 'Slug').readOnly = !!pair[locale].publishedAt;
+        }
+      }
+      function hasUnsaved() { return !storedPage || guard.isDirty(); }
+      $('previewBtn').addEventListener('click', () => {
+        if (hasUnsaved()) { showErr(PagesUI.text('SaveFirst')); return; }
+        const locale = document.querySelector('[role="tab"][aria-selected="true"]').dataset.tab;
+        window.open('/pages/' + KEY + '/preview?locale=' + locale, '_blank', 'noopener');
+      });
+      for (const action of ['publish', 'unpublish']) $(action + 'Btn').addEventListener('click', async () => {
+        if (hasUnsaved()) { showErr(PagesUI.text('SaveFirst')); return; }
+        const name = action === 'publish' ? 'Publish' : 'Unpublish';
+        if (!await AdminConfirm.ask({ title: PagesUI.text(name), body: PagesUI.text(name + 'Scope', { paths: PagesUI.paths(storedPage, language).join(' · ') }),
+          confirmLabel: PagesUI.text(name), danger: action === 'unpublish' })) return;
+        const button = $(action + 'Btn'); button.disabled = true; showErr('');
+        try {
+          const result = await PagesUI.request('/' + KEY + '/' + action, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ updatedAt: loadedUpdatedAt }) });
+          acceptSaved(result.saved); guard.markClean(guard.snapshot());
+          setStatus(PagesUI.text('LiveSaved', { paths: result.saved.status === 'published' ? PagesUI.paths(result.saved, language).join(' · ') : PagesUI.text('None') }));
+        } catch (error) { if (error.body?.persisted) acceptSaved(error.body.saved); showErr(error.message); }
+        finally { button.disabled = false; }
+      });
+      $('deleteBtn').addEventListener('click', async () => {
+        if (hasUnsaved()) { showErr(PagesUI.text('SaveFirst')); return; }
+        $('deleteBtn').disabled = true; showErr('');
+        try {
+          if (await PagesUI.remove(KEY)) { guard.markClean(guard.snapshot()); location.href = '/admin/pages.html'; }
+        } catch (error) {
+          if (error.body?.persisted) { guard.markClean(guard.snapshot()); $('saveBtn').disabled = true; $('deleteBtn').hidden = true; $('publishBtn').hidden = true; $('unpublishBtn').hidden = true; }
+          showErr(error.message);
+        } finally { $('deleteBtn').disabled = false; }
       });
 
       // ---- revisions (#141): same shape as the post editor's card ----
@@ -247,7 +308,7 @@
         if (!res.ok) { setStatus('Could not load: ' + res.status); return; }
         const p = await res.json();
         fill('de', p.de); fill('en', p.en);
-        loadedUpdatedAt = p.updatedAt || null;
+        acceptSaved(p);
         enMDE.codemirror.refresh();
         setStatus('Loaded.');
         loadRevisions().catch(() => {});
@@ -256,17 +317,25 @@
       function fill(loc, data) {
         if (!data) return;
         $(loc + 'Title').value = data.title || '';
+        $(loc + 'Slug').value = data.slug || (!storedPage?.updatedAt && pageDefaults ? pageDefaults[loc] : '') || '';
         (loc === 'de' ? deMDE : enMDE).value(data.bodyMarkdown || '');
-        if (data.images) Object.assign(loc === 'de' ? deImages : enImages, data.images);
+        const images = loc === 'de' ? deImages : enImages;
+        for (const key of Object.keys(images)) delete images[key];
+        if (data.images) Object.assign(images, data.images);
       }
 
       (async () => {
-        const s = await Auth.ensureAuthed();
+        const s = await Auth.ensureAuthed({ admin: true });
         if (!s) return;
         Auth.renderHeader(s);
-        if (!s.isAdmin) { showErr('You are signed in as an author; only admins can edit the About page.'); $('saveBtn').disabled = true; }
         try {
           language = await SiteLanguage.get();
+          const catalogue = await PagesUI.request('');
+          const entry = catalogue.pages.find((page) => page.key === KEY && page.known);
+          if (!entry) throw new Error(PagesUI.text('Unknown'));
+          pageDefaults = entry.defaults;
+          $('legalNote').hidden = KEY !== 'privacy' && KEY !== 'legal';
+          if (prepareLocale) $('pagesBack').href += '?prepareLocale=' + prepareLocale;
           if (prepareLocale && (!['de', 'en'].includes(prepareLocale) || language.locales.includes(prepareLocale))) {
             throw new Error(SiteLanguage.text('PrepInvalid'));
           }
@@ -290,7 +359,7 @@
         const stash = guard.tryRestore();
         if (stash && !guard.wasDismissed(stash)) {
           const restore = await AdminConfirm.ask({
-            title: 'Restore unsaved About-page changes?',
+            title: PagesUI.text('Restore'),
             body: 'Found unsaved changes from ' + new Date(stash.savedAt).toLocaleString() + '.',
             confirmLabel: 'Restore',
           });

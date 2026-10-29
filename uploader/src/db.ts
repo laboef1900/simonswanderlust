@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
 
 const { Pool } = pg;
 export type DbPool = pg.Pool;
@@ -194,15 +195,26 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       title         text NOT NULL DEFAULT '',
       body_markdown text NOT NULL DEFAULT '',
       images        jsonb NOT NULL DEFAULT '{}',
+      slug          text NOT NULL DEFAULT '',
+      status        text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
+      published_at  timestamptz,
       updated_at    timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (key, locale)
     )
   `);
+  await pool.query(`ALTER TABLE pages ADD COLUMN IF NOT EXISTS slug text NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE pages ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published'))`);
+  await pool.query(`ALTER TABLE pages ADD COLUMN IF NOT EXISTS published_at timestamptz`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS pages_locale_slug_idx ON pages(locale,slug) WHERE slug <> ''`);
+  await pool.query(`UPDATE pages SET status='published', published_at=COALESCE(published_at,updated_at) WHERE key='about' AND status='draft'`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS site_nav (
+    id smallint PRIMARY KEY CHECK(id=1), config jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())`);
+  await pool.query(`INSERT INTO site_nav(id,config) VALUES(1,$1) ON CONFLICT DO NOTHING`, [JSON.stringify(DEFAULT_NAVIGATION)]);
   // Seed the About page with the previous hardcoded placeholder so the page
   // never goes blank; the author then edits it in /admin/about.html.
   await pool.query(
-    `INSERT INTO pages (key, locale, title, body_markdown) VALUES
-       ('about','de',$1,$2), ('about','en',$3,$4)
+    `INSERT INTO pages (key, locale, title, body_markdown, status, published_at) VALUES
+       ('about','de',$1,$2,'published',now()), ('about','en',$3,$4,'published',now())
      ON CONFLICT (key, locale) DO NOTHING`,
     [ABOUT_SEED.de.title, ABOUT_SEED.de.body, ABOUT_SEED.en.title, ABOUT_SEED.en.body],
   );
@@ -210,8 +222,7 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   // whole-pair {de, en} snapshots taken just before a save overwrites the
   // stored page, capped at REVISION_CAP per key by pgPageStore.save, and
   // likewise excluded from the scheduled dumps (backup.ts keeps its fixed table
-  // list). Pages are never deleted, so no orphan sweep is needed. Additive,
-  // idempotent migration.
+  // list). Deletion and restore remove orphan histories; boot repairs older orphans.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS page_revisions (
       id       uuid PRIMARY KEY,
@@ -221,6 +232,7 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS page_revisions_key_saved_idx ON page_revisions (key, saved_at DESC)`);
+  await pool.query(`DELETE FROM page_revisions r WHERE NOT EXISTS(SELECT 1 FROM pages p WHERE p.key=r.key)`);
 
   // @ai-note The media library (issue #64). A `media` row is metadata ABOUT a
   // file under STORAGE_DIR — the filesystem stays the source of truth for a

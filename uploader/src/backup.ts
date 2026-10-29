@@ -24,6 +24,12 @@ import { LEGACY_IDENTITY } from './site-identity-legacy.js';
 import { IDENTITY_ASSET_ROLES, validateIdentityAsset, validateIdentityAssetMetadata, type StoredIdentityAsset } from './site-identity-assets.js';
 import { DEFAULT_LANGUAGE, type LanguageConfig } from './language.js';
 import { validatePublicTrack } from '../public/gpx-public-track.js';
+import { validateNavigation, type Navigation } from '../../site/src/lib/navigation.js';
+import { isPageKind } from '../../site/src/lib/page-kinds.js';
+import { isSafePageKey } from './pages.js';
+import { imagesMapError } from './body-content.js';
+import { isSafeSlug } from './posts.js';
+import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js';
 
 /**
  * v8 (issue #204) added reader `comments` (no email — the spec stores none;
@@ -44,12 +50,13 @@ import { validatePublicTrack } from '../public/gpx-public-track.js';
  * v3 added `media` + `media_folders`; v2 added `pages`.
  * @ai-warning Bumping this ALSO requires widening the allow-list guard below.
  */
-export const DUMP_VERSION = 12;
+export const DUMP_VERSION = 13;
+export const PAGES_NAV_DUMP_VERSION = 13;
 export const LANGUAGE_DUMP_VERSION = 12;
 /** Introduction boundary, independent of later language/content format additions. */
 export const IDENTITY_DUMP_VERSION = 11;
 /** Every version `readDump` accepts — an allow-list, not a minimum. */
-export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
 export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 /**
@@ -155,6 +162,7 @@ export interface DumpOptions {
   isWritable?: () => boolean;
   /** Boot-only pre-schema recovery capture; never downgrade an active language mode. */
   preLanguageMigration?: boolean;
+  prePagesMigration?: boolean;
 }
 
 /** Dump durable content, accounts, media metadata, and encrypted credentials
@@ -182,6 +190,7 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
   let siteIdentity: Record<string, unknown>[] | undefined;
   let identityAssets: Record<string, unknown>[] | undefined;
   let siteLanguage: Record<string, unknown>[] | undefined;
+  let siteNav: Record<string, unknown>[] | undefined;
   let version = DUMP_VERSION;
   let routeRows: RouteDumpRow[] = [];
   let routeArchive: RouteArchiveManifest | undefined;
@@ -231,7 +240,19 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
       `SELECT id, translation_key, locale, name, body, status, is_author, sender_hash, created_at
          FROM comments ORDER BY created_at, id`,
     )).rows;
-    pages = (await client.query('SELECT key, locale, title, body_markdown, images FROM pages ORDER BY key, locale')).rows;
+    const hasPagesNav = (await client.query("SELECT to_regclass('site_nav') IS NOT NULL AS present")).rows[0]?.present === true;
+    if (hasPagesNav) {
+      if (version < PAGES_NAV_DUMP_VERSION) throw new BackupError('Cannot capture page/navigation content without the complete language schema.');
+      pages = (await client.query('SELECT key,locale,title,body_markdown,images,slug,status,published_at,updated_at FROM pages ORDER BY key,locale')).rows;
+      siteNav = (await client.query('SELECT id,config,updated_at FROM site_nav ORDER BY id')).rows;
+    } else {
+      if (!options.prePagesMigration && !options.preLanguageMigration) throw new BackupError('Page/navigation schema is missing.');
+      const unsafe = await client.query(`SELECT 1 FROM pages WHERE COALESCE(to_jsonb(pages)->>'slug','')<>''
+        OR (key<>'about' AND to_jsonb(pages)->>'status'='published') LIMIT 1`);
+      if (unsafe.rows.length) throw new BackupError('Cannot capture new page content as a legacy recovery set.');
+      version = Math.min(version, LANGUAGE_DUMP_VERSION);
+      pages = (await client.query('SELECT key,locale,title,body_markdown,images FROM pages ORDER BY key,locale')).rows;
+    }
     // The media library's metadata. The FILES are captured by the incremental
     // images archive, not here — without these rows a restore would bring the
     // photos back but lose every folder, caption and tag, which is the worst
@@ -291,7 +312,7 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
     const payload = gzipSync(JSON.stringify({
       version, createdAt: now.toISOString(),
       tables: { users, posts, pages, media, media_folders: mediaFolders, app_secrets: appSecrets, comments,
-        post_routes: routeRows, site_identity: siteIdentity, site_identity_assets: identityAssets, site_language: siteLanguage },
+        post_routes: routeRows, site_identity: siteIdentity, site_identity_assets: identityAssets, site_language: siteLanguage, site_nav: siteNav },
       routeArchive,
     }));
     // Claim the final name atomically: a same-second backup or pre-restore
@@ -801,7 +822,64 @@ export interface Dump {
     site_identity?: Record<string, unknown>[];
     site_identity_assets?: Record<string, unknown>[];
     site_language?: Record<string, unknown>[];
+    site_nav?: Record<string, unknown>[];
   };
+}
+
+/** New format metadata is mandatory; legacy formats are normalized only during restore. */
+function validateDumpPages(dump: Dump): void {
+  if (dump.version < PAGES_NAV_DUMP_VERSION) return;
+  const nav = dump.tables.site_nav;
+  if (!Array.isArray(nav) || nav.length !== 1 || nav[0]!.id !== 1 || !isIdentityTimestamp(nav[0]!.updated_at)
+    || !Array.isArray(dump.tables.pages)) throw new BackupError('Missing page/navigation metadata in backup.');
+  try { validateNavigation(nav[0]!.config); } catch { throw new BackupError('Invalid navigation in backup.'); }
+  const identities = new Set<string>(); const slugs = new Set<string>();
+  const mode = dumpLanguage(dump);
+  const byKey = new Map<string, Record<string, unknown>[]>();
+  for (const page of dump.tables.pages) {
+    if (!page || typeof page.key !== 'string' || !isSafePageKey(page.key) || (page.locale !== 'de' && page.locale !== 'en')
+      || typeof page.slug !== 'string' || (page.slug !== '' && !isSafeSlug(page.slug))
+      || (page.status !== 'draft' && page.status !== 'published') || typeof page.title !== 'string' || typeof page.body_markdown !== 'string'
+      || imagesMapError(page.images) || !isIdentityTimestamp(page.updated_at)
+      || (page.published_at !== null && !isIdentityTimestamp(page.published_at))
+      || (page.key === 'about' && (page.slug !== '' || page.status !== 'published'))
+      || (isPageKind(page.key) && page.status === 'published' && mode.locales.includes(page.locale) && page.published_at === null)) throw new BackupError('Invalid page metadata in backup.');
+    const identity = `${page.key}:${page.locale}`; const slug = `${page.locale}:${page.slug}`;
+    if (identities.has(identity) || (page.slug && slugs.has(slug))) throw new BackupError('Duplicate page identity or slug in backup.');
+    identities.add(identity); if (page.slug) slugs.add(slug);
+    const rows = byKey.get(page.key) ?? []; rows.push(page); byKey.set(page.key, rows);
+  }
+  for (const [key, rows] of byKey) if (isPageKind(key) && (rows.length !== 2 || rows[0]!.status !== rows[1]!.status)) {
+    throw new BackupError('Incomplete or inconsistent page pair in backup.');
+  }
+}
+
+export interface PageRecoverySummary { unresolvedNavigation: number; collisions: string[] }
+export interface PageRecoveryContext { navigation: Navigation; pages: Record<string, unknown>[] }
+/** Informational preflight, including live state that a legacy restore deliberately preserves. */
+export function pageRecoverySummary(dump: Dump, retained?: PageRecoveryContext): PageRecoverySummary {
+  const pages: Record<string, unknown>[] = dump.tables.pages
+    ? dump.version >= PAGES_NAV_DUMP_VERSION ? dump.tables.pages : dump.tables.pages.map((page) => ({ ...page, slug: '', status: page.key === 'about' ? 'published' : 'draft' }))
+    : retained?.pages ?? [];
+  const mode = dumpLanguage(dump);
+  const nav = dump.version >= PAGES_NAV_DUMP_VERSION ? validateNavigation(dump.tables.site_nav?.[0]?.config) : retained?.navigation;
+  const unresolvedNavigation = nav ? (['header', 'footer', 'legal'] as const).reduce((count, slot) => count + nav[slot].filter((item) => {
+    if (item.kind === 'page') return item.target !== 'about' && mode.locales.some((locale) => !pages.some((page) =>
+      page.key === item.target && page.locale === locale && page.status === 'published' && typeof page.slug === 'string' && !!page.slug
+      && typeof page.title === 'string' && !!page.title.trim() && typeof page.body_markdown === 'string' && !!page.body_markdown.trim()));
+    return (item.kind === 'path' || item.kind === 'external') && mode.locales.some((locale) => !item.href[locale] || !item.label[locale]);
+  }).length, 0) : 0;
+  const collisions: string[] = [];
+  for (const page of pages) {
+    if (typeof page.slug !== 'string' || !page.slug || (page.locale !== 'de' && page.locale !== 'en')) continue;
+    const owner = reservation(namespaceOf(page.locale, mode), page.slug, mode);
+    if (owner) collisions.push(`${page.locale}/${page.slug} (page ${String(page.key)} and ${owner.owner}:${owner.segment})`);
+    if (dump.tables.posts.some((post) => {
+      const snapshot = post.published_snapshot;
+      return post.locale === page.locale && (post.slug === page.slug || (!!snapshot && typeof snapshot === 'object' && 'slug' in snapshot && snapshot.slug === page.slug));
+    })) collisions.push(`${page.locale}/${page.slug} (page ${String(page.key)} and story)`);
+  }
+  return { unresolvedNavigation, collisions };
 }
 
 function identityFailure(field: string): never { throw new BackupError(`Invalid identity field in backup: ${field}.`); }
@@ -956,6 +1034,7 @@ export function readDump(filePath: string): Dump {
     throw new BackupError('Private routes require a version 10 recovery set.');
   }
   validateDumpIdentity(dump);
+  validateDumpPages(dump);
   return dump;
 }
 
@@ -1139,12 +1218,21 @@ async function restoreDatabaseContents(pool: DbPool, filePath: string, options: 
       await client.query('DELETE FROM pages');
       for (const pg of dump.tables.pages) {
         await client.query(
-          `INSERT INTO pages (key, locale, title, body_markdown, images, updated_at)
-           VALUES ($1,$2,$3,$4,$5::jsonb, now())`,
-          [pg.key, pg.locale, pg.title, pg.body_markdown, asJsonb(pg.images)],
+          `INSERT INTO pages (key, locale, title, body_markdown, images, slug, status, published_at, updated_at)
+           VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,now())`,
+          [pg.key, pg.locale, pg.title, pg.body_markdown, asJsonb(pg.images),
+            dump.version >= PAGES_NAV_DUMP_VERSION ? pg.slug : '',
+            dump.version >= PAGES_NAV_DUMP_VERSION ? pg.status : pg.key === 'about' ? 'published' : 'draft',
+            dump.version >= PAGES_NAV_DUMP_VERSION ? pg.published_at : pg.key === 'about' ? dump.createdAt ?? '1970-01-01T00:00:00.000Z' : null],
         );
       }
     }
+    if (dump.version >= PAGES_NAV_DUMP_VERSION) {
+      const row = dump.tables.site_nav![0]!;
+      await client.query('DELETE FROM site_nav');
+      await client.query('INSERT INTO site_nav(id,config,updated_at) VALUES(1,$1,$2)', [asJsonb(row.config), row.updated_at]);
+    }
+    await client.query('DELETE FROM page_revisions r WHERE NOT EXISTS(SELECT 1 FROM pages p WHERE p.key=r.key)');
     // v1/v2 dumps predate the media library and carry no media tables — leave
     // existing rows alone rather than wiping metadata the dump never captured.
     // (The DELETEs above already ran; re-inserting nothing is the correct

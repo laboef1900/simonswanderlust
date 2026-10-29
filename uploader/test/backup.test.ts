@@ -10,6 +10,7 @@ import {
   BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, resolveBackupDir, type Connectable,
 } from '../src/backup.js';
 import { identityDumpRow } from './site-identity-fixture.js';
+import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'backup-')); });
@@ -27,6 +28,7 @@ const fakeDb = (
   const query = async (sql: string) => ({
     rows: sql.includes('to_regclass') ? [{ present: true }]
       : sql.includes('FROM site_language') ? [language]
+      : sql.includes('FROM site_nav') ? [{ id: 1, config: DEFAULT_NAVIGATION, updated_at: language.updated_at }]
       : sql.includes("to_jsonb(posts)->>'omitted'") ? posts.filter(post => post.omitted === true)
       : sql.includes('FROM users') ? users
       : sql.includes('FROM pages') ? pages
@@ -62,7 +64,7 @@ describe('dumpDatabase', () => {
       fakeDb(
         [{ id: 'u1', username: 'simon' }],
         ['de', 'en'].map(locale => ({ id: `p-${locale}`, translation_key: 'p1', locale, slug: 's', status: 'draft', omitted: false, published_snapshot: null, published_at: null })),
-        [{ key: 'about', locale: 'de', title: 'X', body_markdown: 'B', images: {} }],
+        ['de', 'en'].map(locale => ({ key: 'about', locale, title: 'X', body_markdown: 'B', images: {}, slug: '', status: 'published', published_at: now.toISOString(), updated_at: now.toISOString() })),
         [{ key: 'library/2025/a', folder: 'Island', tags: ['sunrise'] }],
         [{ path: 'Island' }],
         [{ id: 'c1', translation_key: 'p1', locale: 'de', name: 'R', body: 'hi', status: 'pending', is_author: false }],
@@ -75,12 +77,13 @@ describe('dumpDatabase', () => {
     const dump = JSON.parse(gunzipSync(await readFile(join(dir, name))).toString('utf8'));
     expect(dump.tables.comments).toEqual([{ id: 'c1', translation_key: 'p1', locale: 'de', name: 'R', body: 'hi', status: 'pending', is_author: false }]);
     expect(dump.tables.users).toEqual([{ id: 'u1', username: 'simon' }]);
-    expect(dump.version).toBe(12);
+    expect(dump.version).toBe(13);
     expect(dump.tables.site_language[0]).toMatchObject({ primary_locale: 'de', enabled_locales: ['de', 'en'] });
     expect(dump.tables.posts).toEqual(['de', 'en'].map(locale => ({
       id: `p-${locale}`, translation_key: 'p1', locale, slug: 's', status: 'draft', omitted: false, published_snapshot: null, published_at: null,
     })));
-    expect(dump.tables.pages).toEqual([{ key: 'about', locale: 'de', title: 'X', body_markdown: 'B', images: {} }]);
+    expect(dump.tables.pages).toEqual(['de', 'en'].map(locale => ({ key: 'about', locale, title: 'X', body_markdown: 'B', images: {}, slug: '', status: 'published', published_at: now.toISOString(), updated_at: now.toISOString() })));
+    expect(dump.tables.site_nav[0].config).toEqual(DEFAULT_NAVIGATION);
     // Without these a restore would bring the photos back but lose every
     // folder, caption and tag — the worst kind of partial recovery.
     expect(dump.tables.media).toEqual([{ key: 'library/2025/a', folder: 'Island', tags: ['sunrise'] }]);
@@ -160,6 +163,7 @@ describe('dumpDatabase', () => {
       return { release: client.release, async query(sql, params) {
         if (sql.includes("to_regclass('site_identity')")) return { rows: [{ absent: preIdentity }] };
         if (sql.includes("to_regclass('site_language')")) return { rows: [{ present: false }] };
+        if (sql.includes("to_regclass('site_nav')")) return { rows: [{ present: false }] };
         if (sql.includes('FROM posts ORDER')) expect(sql).not.toContain('omitted');
         return client.query(sql, params);
       } };
@@ -212,7 +216,7 @@ describe('dumpDatabase', () => {
     };
     const file = join(dir, await dumpDatabase(db, dir, new Date(), { preLanguageMigration: true }));
     const dump = readDump(file);
-    expect(dump.version).toBe(12);
+    expect(dump.version).toBe(13);
     expect(dump.tables.site_language?.[0]).toMatchObject({
       primary_locale: 'en', enabled_locales: ['en'], locked_at: '2026-10-27T12:00:00.000Z',
     });
