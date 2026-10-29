@@ -26,6 +26,7 @@ window.Tabs = (function () {
     var tabs = Array.prototype.slice.call(list.querySelectorAll('[role="tab"]'));
 
     function select(tab, focus) {
+      if (tab.disabled || tab.hidden) return;
       tabs.forEach(function (t) {
         var on = t === tab;
         t.classList.toggle('active', on);
@@ -37,22 +38,26 @@ window.Tabs = (function () {
       if (focus) tab.focus();
     }
 
-    tabs.forEach(function (tab, i) {
+    tabs.forEach(function (tab) {
       tab.addEventListener('click', function () {
+        if (tab.disabled || tab.hidden) return;
         select(tab, false);
         if (o.onChange) o.onChange(tab.dataset.tab);
       });
       tab.addEventListener('keydown', function (ev) {
         var vertical = list.getAttribute('aria-orientation') === 'vertical';
+        var available = Array.prototype.slice.call(list.querySelectorAll('[role="tab"]')).filter(function (t) { return !t.disabled && !t.hidden; });
+        var i = available.indexOf(tab);
+        if (i < 0) return;
         var next = null;
-        if (ev.key === (vertical ? 'ArrowDown' : 'ArrowRight')) next = (i + 1) % tabs.length;
-        else if (ev.key === (vertical ? 'ArrowUp' : 'ArrowLeft')) next = (i - 1 + tabs.length) % tabs.length;
+        if (ev.key === (vertical ? 'ArrowDown' : 'ArrowRight')) next = (i + 1) % available.length;
+        else if (ev.key === (vertical ? 'ArrowUp' : 'ArrowLeft')) next = (i - 1 + available.length) % available.length;
         else if (ev.key === 'Home') next = 0;
-        else if (ev.key === 'End') next = tabs.length - 1;
+        else if (ev.key === 'End') next = available.length - 1;
         if (next === null) return;
         ev.preventDefault();
-        select(tabs[next], true);
-        if (o.onChange) o.onChange(tabs[next].dataset.tab);
+        select(available[next], true);
+        if (o.onChange) o.onChange(available[next].dataset.tab);
       });
     });
 

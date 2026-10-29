@@ -21,6 +21,8 @@ import { IdentityError, IDENTITY_LOCALIZED_FIELDS, normalizeIdentity } from '../
 import { identityFromRow, type IdentityRow } from './site-identity.js';
 import { LEGACY_IDENTITY } from './site-identity-legacy.js';
 import { IDENTITY_ASSET_ROLES, validateIdentityAsset, validateIdentityAssetMetadata, type StoredIdentityAsset } from './site-identity-assets.js';
+import { DEFAULT_LANGUAGE, type LanguageConfig } from './language.js';
+import { validatePublicTrack } from '../public/gpx-public-track.js';
 
 /**
  * v8 (issue #204) added reader `comments` (no email — the spec stores none;
@@ -33,6 +35,7 @@ import { IDENTITY_ASSET_ROLES, validateIdentityAsset, validateIdentityAssetMetad
  * These recovery sets deliberately contain private coordinates and timestamps.
  * v11 adds the singleton site identity and bounded PNG identity assets.
  * Pre-identity restores recover the legacy brand while retaining a live canonical origin.
+ * v12 adds language configuration and explicit per-row omission.
  * v7 added media `format` + `encoding`, preserving JPEG-only sets and their
  * snapped retry/recovery profile across restore.
  * v6 added encrypted `app_secrets` (never the encryption master key);
@@ -40,11 +43,12 @@ import { IDENTITY_ASSET_ROLES, validateIdentityAsset, validateIdentityAssetMetad
  * v3 added `media` + `media_folders`; v2 added `pages`.
  * @ai-warning Bumping this ALSO requires widening the allow-list guard below.
  */
-export const DUMP_VERSION = 11;
+export const DUMP_VERSION = 12;
+export const LANGUAGE_DUMP_VERSION = 12;
 /** Introduction boundary, independent of later language/content format additions. */
 export const IDENTITY_DUMP_VERSION = 11;
 /** Every version `readDump` accepts — an allow-list, not a minimum. */
-export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
 export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 /**
@@ -56,32 +60,49 @@ const TEMP_FILE_RE = /^(?:db-\d{8}-\d{6}\.json\.gz|images-\d{8}-\d{6}\.tar|route
 
 export class BackupError extends Error {}
 
-/** Private dumps retain private routes, but their published projections stay public-only. */
-function validatePublishedTracks(posts: readonly Record<string, unknown>[]): void {
-  const trackedKeys = new Set<string>();
-  for (const post of posts) {
-    const snapshot = post?.published_snapshot;
-    if (snapshot !== null && typeof snapshot === 'object' && Object.hasOwn(snapshot, 'track')) {
-      if (typeof post.translation_key !== 'string' || !post.translation_key) {
-        throw new BackupError('Invalid public route snapshots in backup.');
-      }
-      trackedKeys.add(post.translation_key);
-    }
-  }
-  if (!trackedKeys.size) return;
+/** New formats validate all rows; old GPX artifacts retain their two-snapshot rule. */
+function validatePublishedTracks(posts: readonly Record<string, unknown>[], language: LanguageConfig, legacy: boolean): void {
   const pairs = new Map<string, PublishedTrackRow[]>();
-  for (const post of posts) {
-    const key = post?.translation_key;
-    if (typeof key !== 'string' || !trackedKeys.has(key)) continue;
-    let rows = pairs.get(key);
-    if (!rows) { rows = []; pairs.set(key, rows); }
-    rows.push({ locale: post.locale, published_snapshot: post.published_snapshot });
-  }
   try {
-    for (const rows of pairs.values()) publishedTrackOf(rows);
+    for (const post of posts) {
+      if (!post || typeof post.translation_key !== 'string' || !post.translation_key) throw new Error();
+      const rows = pairs.get(post.translation_key) ?? [];
+      rows.push({ locale: post.locale, status: post.status, omitted: post.omitted,
+        published_at: post.published_at, published_snapshot: post.published_snapshot });
+      pairs.set(post.translation_key, rows);
+    }
+    for (const rows of pairs.values()) {
+      if (!legacy) { publishedTrackOf(rows, language); continue; }
+      const tracked = rows.filter(row => row.published_snapshot !== null && typeof row.published_snapshot === 'object'
+        && Object.hasOwn(row.published_snapshot, 'track'));
+      if (!tracked.length) continue;
+      if (rows.length !== 2 || tracked.length !== 2 || !rows.some(row => row.locale === 'de') || !rows.some(row => row.locale === 'en')) throw new Error();
+      const tracks = tracked.map(row => {
+        const snapshot = row.published_snapshot;
+        if (!snapshot || typeof snapshot !== 'object' || !('track' in snapshot)) throw new Error();
+        return validatePublicTrack(snapshot.track);
+      });
+      if (JSON.stringify(tracks[0]!.coordinates) !== JSON.stringify(tracks[1]!.coordinates)) throw new Error();
+    }
   } catch {
     throw new BackupError('Invalid public route snapshots in backup.');
   }
+}
+
+/** Version determines recovery semantics, never the accidental presence of fields. */
+export function dumpLanguage(dump: Dump): LanguageConfig {
+  if (dump.version < LANGUAGE_DUMP_VERSION) return DEFAULT_LANGUAGE;
+  const rows = dump.tables.site_language;
+  if (!Array.isArray(rows) || rows.length !== 1) throw new BackupError('Invalid language configuration in backup.');
+  const row = rows[0]!;
+  if (!row || row.id !== true || (row.primary_locale !== 'de' && row.primary_locale !== 'en')
+    || !Array.isArray(row.enabled_locales) || row.enabled_locales.length < 1 || row.enabled_locales.length > 2
+    || row.enabled_locales.some(locale => locale !== 'de' && locale !== 'en')
+    || new Set(row.enabled_locales).size !== row.enabled_locales.length
+    || !row.enabled_locales.includes(row.primary_locale)
+    || (row.locked_at !== null && !isIdentityTimestamp(row.locked_at))
+    || !isIdentityTimestamp(row.updated_at)) throw new BackupError('Invalid language configuration in backup.');
+  return { primary: row.primary_locale, locales: row.enabled_locales as ('de' | 'en')[] };
 }
 
 /**
@@ -131,6 +152,8 @@ function fileStamp(now: Date): string {
 export interface DumpOptions {
   routeFiles?: GpxFiles;
   isWritable?: () => boolean;
+  /** Boot-only pre-schema recovery capture; never downgrade an active language mode. */
+  preLanguageMigration?: boolean;
 }
 
 /** Dump durable content, accounts, media metadata, and encrypted credentials
@@ -155,12 +178,39 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
   let mediaFolders: Record<string, unknown>[];
   let appSecrets: Record<string, unknown>[];
   let comments: Record<string, unknown>[];
-  let siteIdentity: Record<string, unknown>[];
-  let identityAssets: Record<string, unknown>[];
+  let siteIdentity: Record<string, unknown>[] | undefined;
+  let identityAssets: Record<string, unknown>[] | undefined;
+  let siteLanguage: Record<string, unknown>[] | undefined;
+  let version = DUMP_VERSION;
   let routeRows: RouteDumpRow[] = [];
   let routeArchive: RouteArchiveManifest | undefined;
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    const languageTableExists = (await client.query("SELECT to_regclass('site_language') IS NOT NULL AS present")).rows[0]?.present === true;
+    const omissionColumnExists = !options.preLanguageMigration || (await client.query(
+      "SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='posts'::regclass AND attname='omitted' AND NOT attisdropped) AS present",
+    )).rows[0]?.present === true;
+    const hasLanguage = languageTableExists && omissionColumnExists;
+    if (languageTableExists && !hasLanguage) {
+      const rows = (await client.query('SELECT * FROM site_language ORDER BY id')).rows;
+      if (rows.length && (rows.length !== 1 || rows[0]!.primary_locale !== 'de'
+        || !Array.isArray(rows[0]!.enabled_locales) || rows[0]!.enabled_locales.length !== 2
+        || !rows[0]!.enabled_locales.includes('de') || !rows[0]!.enabled_locales.includes('en')
+        || rows[0]!.locked_at !== null)) {
+        throw new BackupError('Cannot capture an active language mode as a legacy recovery set.');
+      }
+    }
+    if (!hasLanguage && options.preLanguageMigration) {
+      const omitted = (await client.query("SELECT 1 FROM posts WHERE to_jsonb(posts)->>'omitted' = 'true' LIMIT 1")).rows;
+      if (omitted.length) throw new BackupError('Cannot capture omitted stories as a legacy recovery set.');
+    }
+    if (hasLanguage) {
+      siteLanguage = (await client.query('SELECT * FROM site_language ORDER BY id')).rows.map(row => ({
+        ...row,
+        locked_at: row.locked_at instanceof Date ? row.locked_at.toISOString() : row.locked_at,
+        updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+      }));
+    } else version = IDENTITY_DUMP_VERSION; // Pre-migration recovery set.
     users = (await client.query('SELECT * FROM users ORDER BY created_at')).rows;
     // @ai-warning: node-postgres parses `date` (a DATE column) as a LOCAL-midnight
     // JS Date; JSON.stringify then serializes it in UTC, shifting the calendar day
@@ -171,10 +221,11 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
       `SELECT id, translation_key, locale, slug, title, to_char(date, 'YYYY-MM-DD') AS date, country,
          country_code, region, excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown,
          images, status, created_at, updated_at, published_snapshot, published_at,
-         categories, tags, scheduled_at, featured, comments_enabled, title_image
+         categories, tags, scheduled_at, featured, comments_enabled, title_image${hasLanguage ? ', omitted' : ''}
        FROM posts ORDER BY created_at`,
     )).rows;
-    validatePublishedTracks(posts);
+    validatePublishedTracks(posts, dumpLanguage({ version, createdAt: now.toISOString(),
+      tables: { users, posts, site_language: siteLanguage } }), version < LANGUAGE_DUMP_VERSION);
     comments = (await client.query(
       `SELECT id, translation_key, locale, name, body, status, is_author, sender_hash, created_at
          FROM comments ORDER BY created_at, id`,
@@ -191,21 +242,28 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
     } catch {
       throw new BackupError('Encrypted credentials could not be backed up.');
     }
-    siteIdentity = (await client.query('SELECT * FROM site_identity ORDER BY id')).rows.map((row) => ({
-      ...row,
-      saved_at: row.saved_at instanceof Date ? row.saved_at.toISOString() : row.saved_at,
-      updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
-    }));
-    identityAssets = (await client.query(
-      "SELECT role, sha256, width, height, encode(bytes, 'base64') AS bytes, created_at FROM site_identity_assets ORDER BY role",
-    )).rows.map((row) => ({
-      ...row,
-      // PostgreSQL's base64 encoder wraps at 76 columns; dumps use canonical base64.
-      bytes: typeof row.bytes === 'string' ? row.bytes.replace(/\n/g, '') : row.bytes,
-      created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
-    }));
-    await validateIdentityAssets({ version: DUMP_VERSION, createdAt: now.toISOString(),
-      tables: { users, posts, site_identity: siteIdentity, site_identity_assets: identityAssets } });
+    const preIdentity = options.preLanguageMigration
+      && (await client.query("SELECT to_regclass('site_identity') IS NULL AS absent")).rows[0]?.absent === true;
+    if (preIdentity) {
+      if (hasLanguage) throw new BackupError('Cannot capture an active language mode without its identity recovery metadata.');
+      version = IDENTITY_DUMP_VERSION - 1;
+    } else {
+      siteIdentity = (await client.query('SELECT * FROM site_identity ORDER BY id')).rows.map((row) => ({
+        ...row,
+        saved_at: row.saved_at instanceof Date ? row.saved_at.toISOString() : row.saved_at,
+        updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+      }));
+      identityAssets = (await client.query(
+        "SELECT role, sha256, width, height, encode(bytes, 'base64') AS bytes, created_at FROM site_identity_assets ORDER BY role",
+      )).rows.map((row) => ({
+        ...row,
+        // PostgreSQL's base64 encoder wraps at 76 columns; dumps use canonical base64.
+        bytes: typeof row.bytes === 'string' ? row.bytes.replace(/\n/g, '') : row.bytes,
+        created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+      }));
+      await validateIdentityAssets({ version, createdAt: now.toISOString(),
+        tables: { users, posts, site_identity: siteIdentity, site_identity_assets: identityAssets } });
+    }
     const rawRoutes = (await client.query(
       'SELECT translation_key, version, geometry, source_id, source_sha256, source_bytes, updated_at FROM post_routes ORDER BY translation_key',
     )).rows.map((row) => ({
@@ -230,9 +288,9 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
     writable();
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const payload = gzipSync(JSON.stringify({
-      version: DUMP_VERSION, createdAt: now.toISOString(),
+      version, createdAt: now.toISOString(),
       tables: { users, posts, pages, media, media_folders: mediaFolders, app_secrets: appSecrets, comments,
-        post_routes: routeRows, site_identity: siteIdentity, site_identity_assets: identityAssets },
+        post_routes: routeRows, site_identity: siteIdentity, site_identity_assets: identityAssets, site_language: siteLanguage },
       routeArchive,
     }));
     // Claim the final name atomically: a same-second backup or pre-restore
@@ -720,6 +778,7 @@ export interface Dump {
     post_routes?: RouteDumpRow[];
     site_identity?: Record<string, unknown>[];
     site_identity_assets?: Record<string, unknown>[];
+    site_language?: Record<string, unknown>[];
   };
 }
 
@@ -820,7 +879,17 @@ export function readDump(filePath: string): Dump {
   if (!dump.tables || !Array.isArray(dump.tables.users) || !Array.isArray(dump.tables.posts)) {
     throw new BackupError('Invalid backup tables.');
   }
-  validatePublishedTracks(dump.tables.posts);
+  const language = dumpLanguage(dump);
+  validatePublishedTracks(dump.tables.posts, language, dump.version < LANGUAGE_DUMP_VERSION);
+  if (dump.version < LANGUAGE_DUMP_VERSION) {
+    // Explicitly discard any undeclared language/omission metadata. History is
+    // finalized after route-free legacy backfill inside the restore transaction.
+    for (const post of dump.tables.posts) post.omitted = false;
+    dump.tables.site_language = [{ id: true, primary_locale: 'de', enabled_locales: ['de', 'en'],
+      // Historical dumps did not require createdAt. Recovery creates language
+      // metadata for them; never let an absent/invalid date become SQL NULL.
+      locked_at: null, updated_at: isIdentityTimestamp(dump.createdAt) ? dump.createdAt : new Date().toISOString() }];
+  }
   if (dump.tables.media !== undefined) {
     if (!Array.isArray(dump.tables.media)) throw new BackupError('Invalid media in backup.');
     for (const row of dump.tables.media) {
@@ -916,6 +985,7 @@ async function restoreDatabaseContents(pool: DbPool, filePath: string, options: 
     client = await pool.connect();
     await options.assertOwner?.();
     await client.query('BEGIN');
+    await client.query('SELECT id FROM site_language WHERE id = true FOR UPDATE');
     // Read before replacing anything. Legacy recovery keeps the destination's
     // configured domain, but never its text or assets.
     const liveOrigin = dump.version < IDENTITY_DUMP_VERSION
@@ -983,16 +1053,16 @@ async function restoreDatabaseContents(pool: DbPool, filePath: string, options: 
       await client.query(
         `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
            excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status, created_at, updated_at,
-           published_snapshot, published_at, categories, tags, scheduled_at, featured, comments_enabled, title_image)
+           published_snapshot, published_at, categories, tags, scheduled_at, featured, comments_enabled, title_image, omitted)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15::jsonb,$16,$17::jsonb,$18,$19,$20,$21::jsonb,$22,
-           $23::text[],$24::text[],$25,$26,$27,$28::jsonb)`,
+           $23::text[],$24::text[],$25,$26,$27,$28::jsonb,$29)`,
         [p.id, p.translation_key, p.locale, p.slug, p.title, p.date, p.country, p.country_code, p.region,
          p.excerpt, asJsonb(p.hero_image), asJsonb(p.coordinates), asJsonb(p.stops), p.route,
          asJsonb(p.key_facts), p.body_markdown, asJsonb(p.images), p.status, p.created_at, p.updated_at,
          asJsonb(p.published_snapshot), p.published_at ?? null,
          asTextArray(p.categories), asTextArray(p.tags), p.scheduled_at ?? null, p.featured === true,
          // absent from v<=7 dumps → true (the column default); only an explicit false disables
-         p.comments_enabled !== false, asJsonb(p.title_image)],
+         p.comments_enabled !== false, asJsonb(p.title_image), p.omitted],
       );
     }
     for (const route of staged?.rows ?? []) {
@@ -1025,10 +1095,21 @@ async function restoreDatabaseContents(pool: DbPool, filePath: string, options: 
     // Promote the restored working copy of already-published rows
     // into the snapshot. The NULL guard keeps new-format dumps intact — their
     // restored snapshots (and any unpublished draft edits) survive unchanged.
+    if (dump.version < LANGUAGE_DUMP_VERSION) {
+      await client.query(
+        `UPDATE posts SET published_snapshot = ${POST_SNAPSHOT_SQL},
+                          published_at = COALESCE(published_at, updated_at)
+          WHERE status = 'published' AND published_snapshot IS NULL`,
+      );
+      await client.query(`UPDATE posts SET published_at = updated_at
+        WHERE published_snapshot IS NOT NULL AND published_at IS NULL`);
+    }
+    await client.query('DELETE FROM site_language');
+    const languageRow = dump.tables.site_language![0]!;
     await client.query(
-      `UPDATE posts SET published_snapshot = ${POST_SNAPSHOT_SQL},
-                        published_at = COALESCE(published_at, updated_at)
-        WHERE status = 'published' AND published_snapshot IS NULL`,
+      `INSERT INTO site_language (id, primary_locale, enabled_locales, locked_at, updated_at)
+       VALUES (true,$1,$2::text[],${dump.version < LANGUAGE_DUMP_VERSION ? 'COALESCE((SELECT min(published_at) FROM posts),$3::timestamptz)' : '$3::timestamptz'},$4)`,
+      [languageRow.primary_locale, languageRow.enabled_locales, languageRow.locked_at, languageRow.updated_at],
     );
     // A v1 dump carries no `pages` key at all — leave existing pages untouched
     // so restoring an old backup can't silently wipe content it never captured.

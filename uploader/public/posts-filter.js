@@ -19,7 +19,7 @@ window.PostsFilter = (function () {
 
   /** Standard variant widths, mirroring uploader/src/variants.ts WIDTHS. */
   var SMALLEST_WIDTH = 640;
-  var STATUSES = ['draft', 'published', 'unpublished', 'missing-en'];
+  var STATUSES = ['draft', 'published', 'unpublished', 'missing-secondary'];
   var SORTS = ['updated', 'date', 'title'];
   var ORDERS = ['desc', 'asc'];
   var MAX_QUERY_LENGTH = 200;
@@ -67,7 +67,7 @@ window.PostsFilter = (function () {
     if (!needle) return true;
     var cats = Array.isArray(post.categories) ? post.categories.join(' ') : '';
     var tags = Array.isArray(post.tags) ? post.tags.join(' ') : '';
-    var haystack = [post.titleDe, post.slugDe, post.slugEn, post.country, cats, tags]
+    var haystack = [post.title, post.slugs && post.slugs.de, post.slugs && post.slugs.en, post.country, cats, tags]
       .map(text).join(' ').toLowerCase();
     return haystack.indexOf(needle) !== -1;
   }
@@ -75,14 +75,14 @@ window.PostsFilter = (function () {
   var SORTERS = {
     updated: function (a, b) { return new Date(a.updatedAt || 0) - new Date(b.updatedAt || 0); },
     date: function (a, b) { return text(a.date).localeCompare(text(b.date)); },
-    title: function (a, b) { return text(a.titleDe).localeCompare(text(b.titleDe)); },
+    title: function (a, b) { return text(a.title).localeCompare(text(b.title)); },
   };
 
   /**
    * opts: { q, status, region, country, sort, order }. Every field is optional;
    * unknown `sort` falls back to 'updated' and unknown `order` to 'desc', so a
    * stale bookmark or a hand-edited control can never produce a broken list.
-   * `unpublished` and `missing-en` are readiness states derived from the
+   * `unpublished` and `missing-secondary` are readiness states derived from the
    * summary fields; draft/published retain their existing meaning.
    */
   function apply(posts, opts) {
@@ -93,8 +93,8 @@ window.PostsFilter = (function () {
     var country = text(o.country);
     var filtered = (posts || []).filter(function (p) {
       if (status === 'unpublished' && p.hasUnpublishedChanges !== true) return false;
-      if (status === 'missing-en' && p.hasEnBody !== false) return false;
-      if (status && status !== 'unpublished' && status !== 'missing-en' && p.status !== status) return false;
+      if (status === 'missing-secondary' && p.secondaryStatus !== 'empty') return false;
+      if (status && status !== 'unpublished' && status !== 'missing-secondary' && p.status !== status) return false;
       if (region && p.region !== region) return false;
       if (country && p.country !== country) return false;
       return matchesQuery(p, needle);

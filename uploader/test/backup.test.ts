@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { list as listTar } from 'tar';
 import {
-  dumpDatabase, listBackups, listImageArchives, pruneBackups, readState, writeState, isBackupDue,
+  dumpDatabase, readDump, listBackups, listImageArchives, pruneBackups, readState, writeState, isBackupDue,
   createDbBackup, archiveImages, sweepTempFiles, ArchiveSpaceError,
   BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, resolveBackupDir, type Connectable,
 } from '../src/backup.js';
@@ -22,9 +22,13 @@ const fakeDb = (
   mediaFolders: Record<string, unknown>[] = [],
   comments: Record<string, unknown>[] = [],
 ): Connectable => {
+  const language = { id: true, primary_locale: 'de', enabled_locales: ['de', 'en'], locked_at: null, updated_at: '2026-10-27T12:00:00.000Z' };
   // Order matters: 'FROM media_folders' also contains 'FROM media'.
   const query = async (sql: string) => ({
-    rows: sql.includes('FROM users') ? users
+    rows: sql.includes('to_regclass') ? [{ present: true }]
+      : sql.includes('FROM site_language') ? [language]
+      : sql.includes("to_jsonb(posts)->>'omitted'") ? posts.filter(post => post.omitted === true)
+      : sql.includes('FROM users') ? users
       : sql.includes('FROM pages') ? pages
       : sql.includes('FROM media_folders') ? mediaFolders
       : sql.includes('FROM media') ? media
@@ -57,7 +61,7 @@ describe('dumpDatabase', () => {
     const name = await dumpDatabase(
       fakeDb(
         [{ id: 'u1', username: 'simon' }],
-        [{ id: 'p1', slug: 's' }],
+        ['de', 'en'].map(locale => ({ id: `p-${locale}`, translation_key: 'p1', locale, slug: 's', status: 'draft', omitted: false, published_snapshot: null, published_at: null })),
         [{ key: 'about', locale: 'de', title: 'X', body_markdown: 'B', images: {} }],
         [{ key: 'library/2025/a', folder: 'Island', tags: ['sunrise'] }],
         [{ path: 'Island' }],
@@ -71,7 +75,11 @@ describe('dumpDatabase', () => {
     const dump = JSON.parse(gunzipSync(await readFile(join(dir, name))).toString('utf8'));
     expect(dump.tables.comments).toEqual([{ id: 'c1', translation_key: 'p1', locale: 'de', name: 'R', body: 'hi', status: 'pending', is_author: false }]);
     expect(dump.tables.users).toEqual([{ id: 'u1', username: 'simon' }]);
-    expect(dump.tables.posts).toEqual([{ id: 'p1', slug: 's' }]);
+    expect(dump.version).toBe(12);
+    expect(dump.tables.site_language[0]).toMatchObject({ primary_locale: 'de', enabled_locales: ['de', 'en'] });
+    expect(dump.tables.posts).toEqual(['de', 'en'].map(locale => ({
+      id: `p-${locale}`, translation_key: 'p1', locale, slug: 's', status: 'draft', omitted: false, published_snapshot: null, published_at: null,
+    })));
     expect(dump.tables.pages).toEqual([{ key: 'about', locale: 'de', title: 'X', body_markdown: 'B', images: {} }]);
     // Without these a restore would bring the photos back but lose every
     // folder, caption and tag — the worst kind of partial recovery.
@@ -142,6 +150,72 @@ describe('dumpDatabase', () => {
     };
     await expect(dumpDatabase(db, dir)).rejects.toThrow('Encrypted credentials could not be backed up.');
     expect(await readdir(dir)).toEqual([]);
+  });
+
+  it.each([false, true])('captures a pre-language recovery set without inventing identity metadata (pre-identity=%s)', async preIdentity => {
+    const db = fakeDb([{ id: 'u1', username: 'retained' }]);
+    const connect = db.connect;
+    db.connect = async () => {
+      const client = await connect();
+      return { release: client.release, async query(sql, params) {
+        if (sql.includes("to_regclass('site_identity')")) return { rows: [{ absent: preIdentity }] };
+        if (sql.includes("to_regclass('site_language')")) return { rows: [{ present: false }] };
+        if (sql.includes('FROM posts ORDER')) expect(sql).not.toContain('omitted');
+        return client.query(sql, params);
+      } };
+    };
+    const file = join(dir, await dumpDatabase(db, dir, new Date(), { preLanguageMigration: true }));
+    const raw = JSON.parse(gunzipSync(await readFile(file)).toString('utf8'));
+    expect(raw.version).toBe(preIdentity ? 10 : 11);
+    expect(raw.tables.site_language).toBeUndefined();
+    expect(raw.tables.users).toEqual([{ id: 'u1', username: 'retained' }]);
+    expect(raw.tables.site_identity).toEqual(preIdentity ? undefined : [identityDumpRow()]);
+    expect(readDump(file).tables.site_language?.[0]).toMatchObject({ primary_locale: 'de', enabled_locales: ['de', 'en'] });
+  });
+
+  it.each(['primary', 'single', 'omitted', 'lock'])('refuses pre-migration downgrade of active %s language metadata', async kind => {
+    const db = fakeDb();
+    const connect = db.connect;
+    db.connect = async () => {
+      const client = await connect();
+      return { release: client.release, async query(sql, params) {
+        if (sql.includes('FROM pg_attribute')) return { rows: [{ present: false }] };
+        if (kind === 'omitted' && sql.includes("to_jsonb(posts)->>'omitted'")) return { rows: [{ present: 1 }] };
+        const result = await client.query(sql, params);
+        if (sql.includes('FROM site_language')) {
+          if (kind === 'primary') result.rows[0]!.primary_locale = 'en';
+          if (kind === 'single') result.rows[0]!.enabled_locales = ['de'];
+          if (kind === 'lock') result.rows[0]!.locked_at = '2026-10-27T12:00:00.000Z';
+        }
+        return result;
+      } };
+    };
+    await expect(dumpDatabase(db, dir, new Date(), { preLanguageMigration: true })).rejects.toThrow(/legacy recovery set/);
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  it('preserves an active mode and persistent lock when only the omission CHECK needs migration', async () => {
+    const db = fakeDb();
+    const connect = db.connect;
+    db.connect = async () => {
+      const client = await connect();
+      return { release: client.release, async query(sql, params) {
+        if (sql.includes('FROM pg_attribute')) return { rows: [{ present: true }] };
+        const result = await client.query(sql, params);
+        if (sql.includes('FROM site_language')) {
+          result.rows[0]!.primary_locale = 'en';
+          result.rows[0]!.enabled_locales = ['en'];
+          result.rows[0]!.locked_at = '2026-10-27T12:00:00.000Z';
+        }
+        return result;
+      } };
+    };
+    const file = join(dir, await dumpDatabase(db, dir, new Date(), { preLanguageMigration: true }));
+    const dump = readDump(file);
+    expect(dump.version).toBe(12);
+    expect(dump.tables.site_language?.[0]).toMatchObject({
+      primary_locale: 'en', enabled_locales: ['en'], locked_at: '2026-10-27T12:00:00.000Z',
+    });
   });
 });
 

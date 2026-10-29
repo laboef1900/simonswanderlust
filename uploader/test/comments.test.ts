@@ -9,6 +9,7 @@ import {
 import { memoryPostStore } from '../src/posts.js';
 import { DUMP_VERSION, SUPPORTED_DUMP_VERSIONS, readDump } from '../src/backup.js';
 import { identityDumpRow } from './site-identity-fixture.js';
+import { memoryLanguageStore } from '../src/language.js';
 
 const base = { translationKey: 'tk-1', locale: 'de' as const, name: 'Reader', body: 'Hello there' };
 
@@ -100,6 +101,15 @@ describe('comment store (#204, memory)', () => {
     await expect(s.replyAsAuthor({ translationKey: 'tk-1', body: '' }, 'Ada')).rejects.toThrow(CommentError);
   });
 
+  it('defaults author replies to the current primary while preserving an explicit locale', async () => {
+    const language = memoryLanguageStore({ primary: 'en', locales: ['en', 'de'] });
+    const store = memoryCommentStore(language);
+    expect((await store.replyAsAuthor({ translationKey: 'tk', body: 'English' }, 'Author')).locale).toBe('en');
+    expect((await store.replyAsAuthor({ translationKey: 'tk', body: 'Deutsch', postedLocale: 'de' }, 'Author')).locale).toBe('de');
+    await language.update({ primary: 'de', locales: ['de', 'en'] });
+    expect((await store.replyAsAuthor({ translationKey: 'tk', body: 'Deutsch' }, 'Author')).locale).toBe('de');
+  });
+
   it('remove and removeByTranslationKey', async () => {
     const s = memoryCommentStore();
     const a = await s.create(base);
@@ -153,7 +163,12 @@ describe('dump version allow-list', () => {
     const dir = await mkdtemp(join(tmpdir(), 'dumpv-'));
     const file = async (version: number) => {
       const f = join(dir, `db-2026010${version}-000000.json.gz`);
-      await writeFile(f, gzipSync(JSON.stringify({ version, createdAt: new Date().toISOString(), tables: { users: [], posts: [], ...(version >= 10 ? { post_routes: [] } : {}), ...(version >= 11 ? { site_identity: [identityDumpRow()], site_identity_assets: [] } : {}) } })));
+      await writeFile(f, gzipSync(JSON.stringify({ version, createdAt: new Date().toISOString(), tables: {
+        users: [], posts: [], ...(version >= 10 ? { post_routes: [] } : {}),
+        ...(version >= 11 ? { site_identity: [identityDumpRow()], site_identity_assets: [] } : {}),
+        ...(version >= 12 ? { site_language: [{ id: true, primary_locale: 'de', enabled_locales: ['de', 'en'],
+          locked_at: null, updated_at: new Date().toISOString() }] } : {}),
+      } })));
       return f;
     };
     for (const v of SUPPORTED_DUMP_VERSIONS) expect(readDump(await file(v)).version).toBe(v);

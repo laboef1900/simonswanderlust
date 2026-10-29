@@ -98,7 +98,7 @@ maybe('private GPX post deletion and durable cleanup', () => {
 
   async function seed() {
     const slug = randomUUID();
-    const locale = (locale: 'de' | 'en'): PostLocale => ({ locale, slug: `${locale}-${slug}`, title: 'Synthetic story', excerpt: '', country: 'Test', heroImage: { src: '', width: 1, height: 1, alt: '' }, bodyMarkdown: 'Synthetic text', images: {} });
+    const locale = (locale: 'de' | 'en'): PostLocale => ({ locale, slug: `${locale}-${slug}`, title: 'Synthetic story', excerpt: 'Synthetic excerpt', country: 'Test', heroImage: { src: 'https://images.test/hero', width: 100, height: 100, alt: 'Landscape' }, bodyMarkdown: 'Synthetic text', images: {} });
     const pair = await posts.upsertDraft({ translationKey: '', status: 'draft', shared: { date: '2026-01-01', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 2 } }, de: locale('de'), en: locale('en') });
     const tk = pair.translationKey;
     const preview = await service.importBytes(authorId, xml);

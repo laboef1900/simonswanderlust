@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { ui } from '../../site/src/i18n/ui.js';
 
 const src = readFileSync('public/desk.js', 'utf8');
 interface Post {
@@ -20,16 +21,22 @@ interface Api {
   encodeCount(stats: { pending?: number; running?: number } | null): number | null;
   releaseState(health: unknown): boolean | null;
   releaseFromResponse(response: { status: number; ok: boolean; json(): Promise<unknown> }): Promise<boolean>;
-  englishBodyLabel(hasEnBody: boolean): string;
+  secondaryBodyLabel(status: string, lang: { primary: 'de' | 'en'; locales: string[] }): string;
   formatUpdatedAt(value: unknown, locales?: string | string[]): string;
   resilientLoader<T>(load: () => Promise<T>, view: SectionView<T>): () => Promise<void>;
 }
 
 function load(): Api {
-  const windowStub: { Desk?: Api } = {};
-  vm.runInNewContext(src, { window: windowStub });
-  if (!windowStub.Desk) throw new Error('desk.js did not assign window.Desk');
-  return windowStub.Desk;
+  const ctx: Record<string, unknown> = {
+    EditorCopy: { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])) },
+  };
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(readFileSync('public/language.js', 'utf8'), ctx);
+  vm.runInContext(src, ctx);
+  // VM exports lose their static browser type.
+  const api = ctx.Desk as Api;
+  return api;
 }
 
 const post = (o: Partial<Post>): Post => ({
@@ -92,9 +99,14 @@ describe('Desk status interpretation', () => {
     })).rejects.toThrow();
   });
 
-  it('describes only the English body hint, not pair completeness or readiness', () => {
-    expect(api.englishBodyLabel(true)).toBe('English body started');
-    expect(api.englishBodyLabel(false)).toBe('English body not started');
+  it('names the secondary language without treating omitted or disabled content as missing', () => {
+    const de = { primary: 'de' as const, locales: ['de', 'en'] };
+    const en = { primary: 'en' as const, locales: ['en', 'de'] };
+    expect(api.secondaryBodyLabel('started', de)).toBe('English body started');
+    expect(api.secondaryBodyLabel('empty', de)).toBe('English body not started');
+    expect(api.secondaryBodyLabel('empty', en)).toBe('German body not started');
+    expect(api.secondaryBodyLabel('omitted', en)).toBe('');
+    expect(api.secondaryBodyLabel('none', { primary: 'en', locales: ['en'] })).toBe('');
   });
 
   it('formats a valid last-edit time and omits an invalid one', () => {
