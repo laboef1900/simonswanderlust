@@ -13,3 +13,5 @@ docs
 **/.env
 **/.env.*
 !**/.env.example
+# Never import a host-built native addon into a different architecture image.
+uploader/native

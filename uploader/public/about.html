@@ -68,6 +68,9 @@
     <script src="/admin/language.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/draft-guard.js"></script>
+    <script src="/admin/write-recovery.js"></script>
+    <script src="/admin/media-api.js"></script>
+    <script src="/admin/upload-recovery.js"></script>
     <script src="/admin/vendor/easymde.min.js"></script>
     <script src="/admin/tabs.js"></script>
     <script src="/admin/image-markdown.js"></script>
@@ -83,6 +86,8 @@
       let language = null;
       const prepareLocale = new URLSearchParams(location.search).get('prepareLocale');
       let editableLocales = [];
+      let writeRecovery = null;
+      let loadBlocked = true;
 
       // EasyMDE's built-in autosave stays disabled — DraftGuard below stashes the
       // full form (both locales) instead.
@@ -97,8 +102,29 @@
 
       // ---- draft guard: dirty tracking, beforeunload warning, local autosave ----
       const guard = DraftGuard.createDraftGuard({
-        storageKey: 'swl:draft:about' + (prepareLocale ? ':' + prepareLocale : ''),
+        resource: 'page:' + KEY,
+        recovery: () => writeRecovery?.exportState(),
         collect: () => ({ de: localeObj('de'), en: localeObj('en') }),
+      });
+      writeRecovery = WriteRecovery.create({
+        kind: 'pages', guard, copy: EditorCopy.en, anchor: $('actionError'),
+        resourceId: () => KEY, base: () => loadedUpdatedAt,
+        collect: () => ({ de: localeObj('de'), en: localeObj('en') }),
+        restoreBase: (value) => { loadedUpdatedAt = value; },
+        error: (body, status) => { showErr(body?.error || (EditorCopy.en.writeRefused + ' ' + status)); setStatus(''); },
+        adopt: async (saved, attempt, acknowledgement) => {
+          loadedUpdatedAt = saved.updatedAt;
+          loadRevisions().catch(() => {});
+          if (prepareLocale) setStatus(SiteLanguage.text('PrepSaved'));
+          else if (acknowledgement) BuildReporting.renderOutcome($('actionStatus'), 'page', acknowledgement);
+          else setStatus(BuildReporting.text('unknown'));
+        },
+        useStored: async (saved) => {
+          fill('de', saved.de); fill('en', saved.en);
+          loadedUpdatedAt = saved.updatedAt;
+          loadBlocked = false;
+          guard.markClean();
+        },
       });
       const mainEl = document.querySelector('main');
       mainEl.addEventListener('input', () => guard.markDirty());
@@ -119,24 +145,25 @@
         if (!file) { statusEl.textContent = 'Pick a file first.'; return; }
         const imgSlug = file.name.replace(/\.[^.]+$/, '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
         statusEl.textContent = 'Uploading…';
-        const fd = new FormData();
-        fd.append('key', 'pages/about/' + imgSlug);
-        fd.append('alt', altInput.value);
-        fd.append('file', file);
+        const ownerId = writeRecovery.ownerId();
+        const alt = altInput.value;
         try {
-          const res = await fetch('/upload', { method: 'POST', body: fd });
-          if (res.status === 401) { guard.redirectToLogin(); return; }
-          const body = await res.json().catch(() => ({}));
-          if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
+          const body = await UploadRecovery.run({
+            file, fields: { key: 'pages/about/' + imgSlug, alt }, ownerId, recovery: writeRecovery,
+            status: statusEl, button: $(locale + 'BodyImgUpload'), copy: EditorCopy.en,
+            onUnauthed: () => guard.redirectToLogin(),
+          });
+          if (!body || !writeRecovery.canAdopt(ownerId)) return;
           (locale === 'de' ? deImages : enImages)[body.src] = {
             width: body.width,
             height: body.height,
             ...(body.format === 'jpeg' ? { format: body.format } : {}),
           };
           // replaceSelection fires a CodeMirror change → marks the guard dirty
-          (locale === 'de' ? deMDE : enMDE).codemirror.replaceSelection(ImageMarkdown.image(altInput.value, body.src));
+          (locale === 'de' ? deMDE : enMDE).codemirror.replaceSelection(ImageMarkdown.image(alt, body.src));
           statusEl.textContent = 'Inserted: ' + body.src;
-          fileInput.value = ''; altInput.value = '';
+          if (fileInput.files[0] === file) fileInput.value = '';
+          if (altInput.value === alt) altInput.value = '';
         } catch (e) {
           statusEl.textContent = 'Upload failed: ' + e;
         }
@@ -150,7 +177,7 @@
       }
 
       $('saveBtn').addEventListener('click', async () => {
-        if (!language) return;
+        if (!language || loadBlocked || $('saveBtn').disabled) return;
         const ok = await AdminConfirm.ask({
           title: prepareLocale ? SiteLanguage.text('PrepTitle') : 'Publish the About page?',
           body: prepareLocale
@@ -161,38 +188,13 @@
         if (!ok) return;
         showErr(''); setStatus('Publishing…');
         const snap = guard.snapshot();
-        const payload = { updatedAt: loadedUpdatedAt || undefined,
+        const payload = { updatedAt: loadedUpdatedAt,
           ...Object.fromEntries(editableLocales.map((locale) => [locale, localeObj(locale)])),
           ...(prepareLocale ? { prepareLocale } : {}) };
         const btn = $('saveBtn');
         btn.disabled = true;
         try {
-          const res = await fetch('/pages/' + KEY, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
-          if (res.status === 401) { guard.redirectToLogin(); return; }
-          if (res.status === 403) { showErr('Only admins can save the About page.'); setStatus(''); return; }
-          const body = await res.json().catch(() => ({}));
-          if (res.status === 409 && body.code === 'conflict') {
-            setStatus('');
-            showErr(body.error || 'The About page was modified since you opened it — nothing was saved.');
-            const reload = await AdminConfirm.ask({
-              title: 'Reload the latest About page?',
-              body: 'The About page was changed elsewhere (another tab or user) since you opened it, so saving would overwrite those changes. Nothing was saved and the site was not rebuilt.\n\nConfirm — reload the latest version (your edits in this tab are lost).\nCancel — keep your edits on screen so you can copy them out first.',
-              confirmLabel: 'Reload',
-              danger: true,
-            });
-            if (reload) { await loadPage(); guard.markClean(guard.snapshot()); showErr(''); }
-            return;
-          }
-          if (!res.ok) { showErr(res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status)); setStatus(''); return; }
-          if (!body.saved?.updatedAt) { showErr(BuildReporting.text('unknown')); setStatus(''); return; }
-          guard.markClean(snap);
-          if (body.saved && body.saved.updatedAt) loadedUpdatedAt = body.saved.updatedAt;
-          loadRevisions().catch(() => {});
-          if (prepareLocale) setStatus(SiteLanguage.text('PrepSaved'));
-          else BuildReporting.renderOutcome($('actionStatus'), 'page', body);
-        } catch (e) {
-          showErr(BuildReporting.text('unknown'));
-          setStatus('');
+          await writeRecovery.save(payload, snap);
         } finally {
           btn.disabled = false;
         }
@@ -246,8 +248,13 @@
         if (res.status === 401) { guard.redirectToLogin(); return; }
         if (!res.ok) { setStatus('Could not load: ' + res.status); return; }
         const p = await res.json();
+        if (!writeRecovery.canAdopt(p.ownerUserId)) {
+          writeRecovery.observeOwner(p.ownerUserId);
+          throw new Error(EditorCopy.en.writeOwnerChanged);
+        }
         fill('de', p.de); fill('en', p.en);
         loadedUpdatedAt = p.updatedAt || null;
+        loadBlocked = false;
         enMDE.codemirror.refresh();
         setStatus('Loaded.');
         loadRevisions().catch(() => {});
@@ -257,12 +264,15 @@
         if (!data) return;
         $(loc + 'Title').value = data.title || '';
         (loc === 'de' ? deMDE : enMDE).value(data.bodyMarkdown || '');
-        if (data.images) Object.assign(loc === 'de' ? deImages : enImages, data.images);
+        const images = loc === 'de' ? deImages : enImages;
+        for (const key of Object.keys(images)) delete images[key];
+        if (data.images) Object.assign(images, data.images);
       }
 
       (async () => {
         const s = await Auth.ensureAuthed();
         if (!s) return;
+        if (!writeRecovery.initialize(s.userId)) return;
         Auth.renderHeader(s);
         if (!s.isAdmin) { showErr('You are signed in as an author; only admins can edit the About page.'); $('saveBtn').disabled = true; }
         try {
@@ -295,10 +305,15 @@
             confirmLabel: 'Restore',
           });
           if (restore) {
-            for (const locale of editableLocales) fill(locale, stash.payload[locale]);
+            if (!guard.adopt(stash)) return;
+            fill('de', stash.payload.de); fill('en', stash.payload.en);
             enMDE.codemirror.refresh();
-            guard.markDirty();
-            setStatus('Restored unsaved changes — remember to Save.');
+            guard.restoreGeneration(stash.generation);
+            if (!writeRecovery.restore(stash.recovery)) {
+              loadBlocked = true;
+              showErr(EditorCopy.en.writeUnsafeBase);
+            } else await writeRecovery.probe();
+            setStatus(EditorCopy.en.writeRestored);
           } else {
             guard.dismissRestore(stash);
           }

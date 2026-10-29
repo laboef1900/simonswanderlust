@@ -84,6 +84,8 @@ export interface EncodeQueueOptions extends WorkCancellationOptions {
   lock: WorkLock;
   concurrency?: number;
   maxBacklog?: number;
+  /** Pending receipt originals must be validated by their receipt recovery owner. */
+  canRecover?: (key: string) => Promise<boolean>;
   /** Injected for tests; production passes the row's persisted encoding snapshot. */
   encodeOne?: (key: string, profile: Pick<MediaItem, 'format' | 'encoding'>) => Promise<{ bytes: number }>;
   log?: (msg: string) => void;
@@ -273,6 +275,7 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
         let n = 0;
         for (const item of items) {
           await withAdmission(item.key, async () => {
+            if (opts.canRecover && !await opts.canRecover(item.key)) return;
             // The list may predate an upload rollback that we waited for.
             // Never admit its now-failed row from that stale snapshot.
             if ((await opts.store.get(item.key))?.status !== 'processing') return;

@@ -691,6 +691,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
       });
     },
     async upsertDraft(pair, baseUpdatedAt, options = {}) {
+      const receipt = options.receipt ? { ...options.receipt } : undefined;
       const key = pair.translationKey || randomUUID();
       return language.runExclusive((mode) => withPair(key, () => {
         const existing = byKey.get(key);
@@ -729,7 +730,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
           hasUnpublishedChanges: status === 'published',
         };
         byKey.set(key, stored);
-        if (options.receipt) receipts.set(key, { ...options.receipt });
+        if (receipt) receipts.set(key, receipt);
         else receipts.delete(key);
         return publicPair(stored);
       }));
@@ -770,8 +771,8 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
     async remove(tk) {
       return language.runExclusive(() => withPair(tk, async () => {
         if (!byKey.has(tk)) throw new PostError('post not found');
-        receipts.delete(tk);
         await opts.comments?.removeByTranslationKey(tk);
+        receipts.delete(tk);
         byKey.delete(tk);
         revisionsByKey.delete(tk);
       }));
@@ -1093,6 +1094,7 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
       }));
     },
     async upsertDraft(pair, baseUpdatedAt, options = {}) {
+      const receipt = options.receipt ? { ...options.receipt } : undefined;
       const tk = pair.translationKey || randomUUID();
       writable();
       const client = await pool.connect();
@@ -1145,9 +1147,9 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
           await insertLocale(client, tk, status, pair.shared, { ...pair.en, locale: 'en' });
         }
         await touchPostPair(client, tk);
-        if (options.receipt) {
+        if (receipt) {
           await client.query('UPDATE posts SET last_save_id=$2, last_save_by=$3 WHERE translation_key=$1',
-            [tk, options.receipt.saveId, options.receipt.ownerUserId]);
+            [tk, receipt.saveId, receipt.ownerUserId]);
         }
         // Return this save's token, not a later writer's post-COMMIT read.
         const saved = await readPostPair(client, tk, language);

@@ -77,6 +77,8 @@ export type PageUpdate = Pick<PagePair, 'key'> & Partial<Pick<PagePair, 'de' | '
 export interface PageSaveOptions {
   prepareLocale?: LanguageLocale;
   receipt?: SaveReceipt;
+  /** Explicit null base from a never-saved page; cannot overwrite a later create. */
+  expectAbsent?: boolean;
   validate?: (pair: PagePair, language: LanguageState, client?: DbClient) => Promise<void>;
 }
 function mergePageUpdate(update: PageUpdate, existing: StoredPagePair, language: LanguageState, options: PageSaveOptions): PagePair {
@@ -133,9 +135,11 @@ export function memoryPageStore(language: LanguageStore = memoryLanguageStore())
       return { content: await content, ownerUserId, lastSaveId: receipt?.ownerUserId === ownerUserId ? receipt.saveId : null };
     },
     async save(pair, baseUpdatedAt, options = {}) {
+      const receipt = options.receipt ? { ...options.receipt } : undefined;
       return language.runExclusive(async (mode) => {
       const existing = await this.get(pair.key);
       if (options.prepareLocale && existing.updatedAt && !baseUpdatedAt) throw new PageError('Reload the page before preparing a translation.', 'conflict');
+      if (options.expectAbsent && existing.updatedAt) throw new PageError('The page was created since it was loaded.', 'conflict');
       assertPageNotStale(existing.updatedAt, baseUpdatedAt);
       const normalized = mergePageUpdate(pair, existing, mode, options);
       await options.validate?.(normalized, mode);
@@ -153,7 +157,7 @@ export function memoryPageStore(language: LanguageStore = memoryLanguageStore())
       // transaction.
       const prev = existing.updatedAt?.getTime() ?? 0;
       updatedAtByKey.set(pair.key, new Date(Math.max(Date.now(), prev + 1)));
-      if (options.receipt) receipts.set(pair.key, { ...options.receipt });
+      if (receipt) receipts.set(pair.key, receipt);
       else receipts.delete(pair.key);
       return this.get(pair.key);
       });
@@ -207,6 +211,7 @@ export function pgPageStore(pool: DbPool): PageStore {
       return { content: { key, de: de ? rowToContent(de) : emptyContent('de'), en: en ? rowToContent(en) : emptyContent('en'), updatedAt }, ownerUserId, lastSaveId };
     },
     async save(pair, baseUpdatedAt, options = {}) {
+      const receipt = options.receipt ? { ...options.receipt } : undefined;
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
@@ -219,6 +224,7 @@ export function pgPageStore(pool: DbPool): PageStore {
           updatedAt: rows.length ? new Date(Math.max(...rows.map((row) => row.updated_at.getTime()))) : null,
         };
         if (options.prepareLocale && existing.updatedAt && !baseUpdatedAt) throw new PageError('Reload the page before preparing a translation.', 'conflict');
+        if (options.expectAbsent && existing.updatedAt) throw new PageError('The page was created since it was loaded.', 'conflict');
         assertPageNotStale(existing.updatedAt, baseUpdatedAt);
         const normalized = mergePageUpdate(pair, existing, mode, options);
         await options.validate?.(normalized, mode, client);
@@ -248,7 +254,7 @@ export function pgPageStore(pool: DbPool): PageStore {
                title=EXCLUDED.title, body_markdown=EXCLUDED.body_markdown, images=EXCLUDED.images, updated_at=EXCLUDED.updated_at,
                last_save_id=EXCLUDED.last_save_id, last_save_by=EXCLUDED.last_save_by`,
             [pair.key, locale, c.title, c.bodyMarkdown, JSON.stringify(c.images ?? {}), timestamp.rows[0]!.updated_at,
-              options.receipt?.saveId ?? null, options.receipt?.ownerUserId ?? null],
+              receipt?.saveId ?? null, receipt?.ownerUserId ?? null],
           );
         }
         await client.query('COMMIT');

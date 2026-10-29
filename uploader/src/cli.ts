@@ -8,7 +8,8 @@ import { BACKUP_FILE_RE, BackupError, dumpDatabase, dumpLanguage, readDump, reso
 import { passwordPolicyViolation, type UserStore } from './users.js';
 import type { SessionStore } from './sessions.js';
 import { createSettingsStore, defaultSettings } from './settings.js';
-import { acquireStorageOwner, StorageReadOnlyError, type StorageOwner } from './storage-owner.js';
+import { StorageReadOnlyError, type StorageOwner } from './storage-owner.js';
+import { acquireDataOwner } from './data-owner.js';
 import { createGpxFiles } from './gpx-files.js';
 import { verifyRouteArchive, routeRecoverySummary } from './gpx-backup.js';
 import { createPool, type DbPool } from './db.js';
@@ -133,7 +134,7 @@ async function restoreMain(args: string[]): Promise<void> {
   let pool: DbPool | undefined;
   let admitted = false;
   try {
-    const lease = owner = await acquireStorageOwner(databaseUrl, { role: 'restore' });
+    const lease = owner = await acquireDataOwner(databaseUrl, { role: 'restore', storageDir: process.env.STORAGE_DIR ?? '/data/images' });
     const assertOwner = async () => {
       lease.assertWritable();
       await lease.assertNoAppSessions();
@@ -225,7 +226,7 @@ async function onboardingRecoveryMain(command: 'onboarding-retire' | 'prepare-na
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error('DATABASE_URL is required for offline recovery.');
   const storageDir = process.env.STORAGE_DIR ?? '/data/images';
-  const owner = await acquireStorageOwner(databaseUrl, { role: 'restore' });
+  const owner = await acquireDataOwner(databaseUrl, { role: 'restore', storageDir });
   let pool: DbPool | undefined;
   try {
     const assertOwner = async () => {
@@ -492,14 +493,24 @@ async function main(): Promise<void> {
     storageDir: process.env.STORAGE_DIR ?? './data/images',
     baseUrl: process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com',
   };
-  const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(opts.storageDir), 'settings.json');
-  const current = createSettingsStore({ path: settingsPath, defaults: defaultSettings() }).get();
-  const stored = await uploadFile(await readFile(file), key, alt, opts, {
-    convertJpeg: current.convertJpeg,
-    webpQuality: current.webpQuality,
-    avifQuality: current.avifQuality,
-  });
-  console.log(stored.snippet);
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error('DATABASE_URL is required for offline upload.');
+  const owner = await acquireDataOwner(databaseUrl, { role: 'restore', storageDir: opts.storageDir });
+  try {
+    await owner.assertNoAppSessions();
+    const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(opts.storageDir), 'settings.json');
+    const current = createSettingsStore({ path: settingsPath, defaults: defaultSettings() }).get();
+    const stored = await uploadFile(await readFile(file), key, alt, {
+      ...opts, signal: owner.signal, isWritable: owner.isWritable,
+    }, {
+      convertJpeg: current.convertJpeg,
+      webpQuality: current.webpQuality,
+      avifQuality: current.avifQuality,
+    });
+    console.log(stored.snippet);
+  } finally {
+    await owner.close();
+  }
 }
 
 // Run main only when invoked directly (not when imported by tests).

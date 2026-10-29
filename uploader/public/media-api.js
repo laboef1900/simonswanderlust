@@ -153,6 +153,9 @@ window.MediaApi = (function () {
     var XHR = (opts && opts.XMLHttpRequest) || window.XMLHttpRequest;
 
     async function request(method, url, body, bounded) {
+      if (method !== 'GET' && url !== '/media/lookup' && opts && opts.canWrite && !opts.canWrite()) {
+        throw Object.assign(new Error('session_ended'), { status: 401 });
+      }
       var controller = bounded ? new AbortController() : null;
       var timer;
       var init = { method: method, cache: 'no-store' };
@@ -390,6 +393,7 @@ window.MediaApi = (function () {
         var me;
         try { me = await client.me(); } catch (_) { pause(); return false; }
         currentOwner = me.userId;
+        if (!owner && items.length === 0) owner = currentOwner;
         if (!owner || currentOwner !== owner) { pause(); return false; }
         paused = false;
         items.forEach(function (i) {
@@ -397,7 +401,7 @@ window.MediaApi = (function () {
           if (s === 'queued' || s === 'needs-auth') i.waiting = true;
         });
         pump();
-        return true;
+        return me;
       },
       add: function (files, fields) {
         if (!owner) return;

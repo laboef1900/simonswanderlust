@@ -25,6 +25,7 @@ export interface UploadReceiptStore {
   replace(previous: UploadReceipt, next: UploadReceipt): Promise<boolean>;
   pending(after: ReceiptCursor | null, limit: number): Promise<UploadReceipt[]>;
   counts(): Promise<{ pending: number; blocked: number }>;
+  hasPendingMedia(key: string): Promise<boolean>;
   /** Patch duplicate metadata and stamp its accepted response in one transaction. */
   accept(previous: UploadReceipt, result: (client?: DbClient) => Promise<UploadResult>): Promise<boolean>;
   /** Called under key admission, never while acquiring a receipt mutex. */
@@ -37,6 +38,7 @@ const id = (r: ReceiptCursor) => `${r.userId}:${r.uploadId}`;
 export function memoryUploadReceiptStore(): UploadReceiptStore {
   const rows = new Map<string, UploadReceipt>();
   return {
+    async hasPendingMedia(key) { return [...rows.values()].some((r) => r.mediaKey === key && r.state === 'pending'); },
     async get(userId, uploadId) { return structuredClone(rows.get(id({ userId, uploadId })) ?? null); },
     async insert(receipt) {
       const key = id(receipt);
@@ -99,6 +101,10 @@ export function pgUploadReceiptStore(pool: DbPool): UploadReceiptStore {
   }
   return {
     get,
+    async hasPendingMedia(key) {
+      const { rows } = await pool.query<{ present: boolean }>("SELECT EXISTS (SELECT 1 FROM upload_receipts WHERE media_key=$1 AND state='pending') AS present", [key]);
+      return rows[0]?.present !== false;
+    },
     async insert(r) {
       await pool.query(`INSERT INTO upload_receipts
         (user_id,upload_id,media_key,sha256,identity,frozen,state,incarnation,claim,generation,reason,original_retained,result)

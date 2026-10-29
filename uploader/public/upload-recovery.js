@@ -63,7 +63,8 @@
       }
     }
     async function observe() {
-      try { recovery.observeOwner((await client.me()).userId); } catch (_) { recovery.observeOwner(null); }
+      try { recovery.observeOwner((await client.me()).userId); }
+      catch (error) { if (error.status === 401) recovery.observeOwner(null); }
     }
     root.addEventListener('focus', observe);
     check.addEventListener('click', async () => {
