@@ -102,10 +102,15 @@ exception merely to make a check pass. Record accepted exceptions in the relevan
    `site/src/lib/` and `site/src/i18n/` is covered by Vitest; `uploader/` logic by its own Vitest
    suites in `uploader/test/`. Run `npm test` and `npx astro check` before claiming done.
    Non-behavioral changes (docs, formatting) require proportionate evidence instead.
-2. **SEO Slug Contract (Critical)** — Live WordPress slugs MUST be preserved exactly: DE at root,
-   EN under `/en/`. Encoded and tested in `site/src/lib/paths.ts` and `trips.ts`, and mirrored by
-   MDX filenames. **Never rename a slug or route** without explicit authorization — it breaks live
-   URLs and SEO.
+2. **SEO Slug Contract (Critical)** — Published slugs and routes MUST be preserved exactly.
+   simonswanderlust.com, and every install whose primary language is German, keep the live
+   WordPress layout: DE at root, EN under `/en/`. An install whose primary language is English
+   (EN-only, or DE+EN EN-primary; owner-authorized 2026-10-27, see
+   `docs/superpowers/specs/2026-10-27-issue-283-language-mode-contract.md`) serves EN at root and
+   DE under `/de/`. The primary language is locked at the first publish
+   (`language_primary_locked`); no language-mode change moves a published URL. Encoded and tested
+   in `site/src/lib/paths.ts` and `trips.ts`, and mirrored by MDX filenames. **Never rename a slug
+   or route** without explicit authorization — it breaks live URLs and SEO.
 3. **Data Safety (Critical)** — Postgres is the content source of truth (`posts`, `pages`,
    `users`), and `/data` (bind-mounted from `uploader/data`) holds image originals/variants, site
    releases, and backups. NEVER wipe persistent data without explicit user authorization: no
