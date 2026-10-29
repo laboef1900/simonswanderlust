@@ -9,7 +9,7 @@
 // including showModal/close and focus, which is what makes this testable at all.
 import { beforeEach, describe, expect, it } from 'vitest';
 import { initGalleries, type GalleryLabels } from './gallery-lightbox.js';
-import { transformBodyImages } from '../lib/body-images.js';
+import { STORY_BODY_SIZES, transformBodyImages } from '../lib/body-images.js';
 
 const labels: GalleryLabels = {
   slider: 'Photo gallery, scrolls horizontally',
@@ -79,10 +79,7 @@ beforeEach(() => {
 describe('initGalleries — degradation and inertness', () => {
   it.each(['column', 'breakout', 'slider'])('preserves built empty-alt link names and positional navigation in %s', async (mode) => {
     const src = 'https://img.test/photo';
-    document.body.innerHTML = await transformBodyImages(
-      `<pre><code class="language-gallery">#layout: ${mode}\n${src}\n${src} | caption-override="Visible caption"\n${src}</code></pre>`,
-      { [src]: { width: 3000, height: 2000, alt: '' } }, 'https://img.test', { locale: 'de' },
-    );
+    document.body.innerHTML = await transformBodyImages(`<pre><code class="language-gallery">#layout: ${mode}\n${src}\n${src} | caption-override="Visible caption"\n${src}</code></pre>`, { [src]: { width: 3000, height: 2000, alt: '' } }, 'https://img.test', { locale: 'de', inlineSizes: STORY_BODY_SIZES }, );
     const expected = ['Foto 1 von 3 öffnen', 'Visible caption', 'Foto 3 von 3 öffnen'];
     expect(photos().map((link) => link.getAttribute('aria-label'))).toEqual(expected);
     initGalleries(document, labels);
