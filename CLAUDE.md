@@ -234,9 +234,14 @@ the `/data` volume and only changes via Publish, **Rebuild site now**, or `POST 
 
 | Service | Port | Exposure |
 | --- | --- | --- |
-| `app` (Fastify: blog + admin + images) | `3000` | **Loopback** (`127.0.0.1:3000`) — the only published port; the host's reverse proxy is the sole ingress (#108) |
+| `app` (Fastify: blog + admin + images) | `3000` | **Loopback** (`127.0.0.1:3000`) — the only published port; one host TLS proxy, with immediate-peer address validation (#108, #369) |
 | `db` (Postgres 18) | `5432` | **Internal** — compose network only; never published to the host |
 | Astro dev server | `4321` | **Loopback** — local development only |
+
+Compose sets `TRUSTED_PROXY: docker-gateway` literally, not through `.env`. It trusts loopback
+and the discovered default gateway at hop zero only; missing/ambiguous discovery refuses boot.
+Changing bridge/proxy topology or adding a CDN requires a new spec. Docker Desktop TCP evidence
+does not replace the target-VPS peer/header/two-external-network checks before DNS cutover.
 
 ## Accessibility and High-Impact Actions
 

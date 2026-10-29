@@ -922,6 +922,7 @@ separate owner action, not part of the dependency PR.
 | :-- | :-- | :-- |
 | `DATABASE_URL` | app | Postgres connection (content + auth) |
 | `ENCRYPTION_KEY` | app | Optional 64-hex master key for encrypted AI credentials; unset permits local workflows, malformed values refuse boot; escrow separately |
+| `TRUSTED_PROXY` | app / compose literal | Unset or `loopback`: loopback peers only. Compose sets `docker-gateway`: also trust the single discovered IPv4 default gateway, at hop zero only. Empty/unknown values or failed gateway discovery refuse boot. Not an `.env` setting; changing bridge/proxy topology requires a new trust spec. |
 | `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.simonswanderlust.com`) |
 | `IMG_HOST` | app | Hostname routed to the image-variant static handler (defaults to the host of `PUBLIC_BASE_URL`) |
 | `SITE_APP_DIR` | app | Path to the Astro project the builder spawns (`/app/site`) |
@@ -941,6 +942,13 @@ separate owner action, not part of the dependency PR.
 - **Public, authenticated:** the admin app (`/admin/`) and its API — session-cookie gated, with
   admin-only operations (publishing, user management, rebuild, backups).
 - **Internal only:** Postgres is not exposed to the internet (no published port).
+- **Immediate proxy peer:** the shipped bridge topology permits one host TLS proxy. The app
+  validates the socket address before accepting forwarded IP/protocol and stops at hop zero;
+  it never trusts the whole bridge network. The host must preserve `Host`, overwrite the
+  forwarded scheme, and put its accepted client at the rightmost XFF position. See
+  [Transport, headers & proxy](SECURITY.md#transport-headers--proxy) for the accepted
+  host-process residual, measured Docker Desktop TCP evidence and the remaining target-VPS
+  loopback/real-client verification gate.
 
 Both public and admin traffic now terminate in the **same process**, which is a deliberate,
 accepted trade-off for the WordPress-style topology (see [Security posture — accepted
