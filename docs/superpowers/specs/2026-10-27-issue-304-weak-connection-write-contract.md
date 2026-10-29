@@ -1224,3 +1224,17 @@ requests used the acknowledged leaf bases and stored the intended values without
 false-clean or unrelated-field overwrite. Desktop/320px dirty/saved state and keyboard focus
 were inspected. Fresh synthetic fixtures and raw evidence remain private and retained;
 the owned session, interception, app and tabs were closed.
+
+A second independent review found a native-select boundary: an acknowledged item can
+name a folder created after the page loaded. Omitting that option made the native select
+empty, so the next unrelated Save could move the photo to root. The detail renderer now
+includes the current item's folder without adopting unrelated dirty inputs or refreshing
+the full folder list. Both acknowledgement and Use stored regressions failed before repair.
+
+Actual `e09184f` qualification used two real browser tabs, new folders and genuine conditional
+200/409 responses. Subsequent unrelated Saves omitted folder from both patch and expectations;
+native selected options, HTTP readback and PostgreSQL agreed on the remote folder. A held
+committed200 plus newer title/DE-caption edits retained acknowledged leaf expectations and
+an independent EN-caption update. Six qualifying UI PATCHes were200/200/409/200/200/200,
+without automatic replay. Settled desktop/320px controls were inspected. Synthetic sessions
+were revoked, both tabs closed and the app stopped; retained evidence records harness limits.

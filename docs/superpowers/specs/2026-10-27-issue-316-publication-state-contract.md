@@ -918,6 +918,31 @@ was replaced by the recorded real-mutation generation experiment. All owned proc
 and tabs were closed, faulted permissions restored exactly, and fixture data retained.
 No owner content, deployment, or physical accessibility audit was involved.
 
+### Independent-review refresh and layout repairs
+
+PR review found three lifecycle defects: BFCache restoration did not restart observation,
+Posts retained stale language/token facts, and an initial language-read failure escaped the
+recoverable unavailable state. Regressions failed before repair. Required posts/language
+reads now settle together; accepted language facts precede rendering and mutation tokens.
+Trusted persisted restoration restarts a previously running observer, but never an explicitly
+stopped or unauthorized one.
+
+Actual browser qualification verified native BFCache document restoration, held-old-response
+rejection, a second-tab language change followed by real bulk Publish using the fresh token,
+network/malformed-language Retry, and bounded reads with zero automatic writes. Visual checks
+then exposed a long status badge crossing desktop cells and a zero-width Languages column
+clipping its chip on phones. Wrapping the badge and reserving the language column corrected
+both; no text or unavailable state was hidden.
+
+At `f5f7bbb`, settled1400/768/390/320px screenshots and geometry showed complete, contained
+labels/chips without overlap or inner horizontal overflow. The320px workspace measured304px
+client and304px scroll width. Native keyboard Enter recovered genuine data from unavailable
+state with zero writes. Expiring only the synthetic server session produced actual401s and
+login navigation; native Back restored the same document with trusted persisted events.
+It stayed visible for31.546seconds with zero requests or writes. Fresh fixture data is retained;
+owned sessions, apps, tabs and fault injection were cleaned up. This is not physical or
+screen-reader qualification.
+
 ## 22. #318 implementation handoff (2026-10-29)
 
 The Media detail GET/PATCH source adds the exact §8 impact union and admin-only nullable
@@ -988,3 +1013,25 @@ unsuccessful fixture probes and this interruption remain disclosed. All owned
 processes/tabs stopped, paused child resumed, query lock rolled back and exact
 filesystem permissions restored; synthetic fixtures remain retained. No owner-data,
 deployment or physical accessibility qualification is claimed.
+
+### Independent-review reauthentication and focus repairs
+
+Independent PR review found that an initialized Media page did not restart its stopped
+detail observer after same-owner reauthentication, and that replacing the impact subtree
+discarded keyboard focus. Both consumer regressions failed before repair. Reactivation
+now restarts read-only observation without adopting dirty fields; repaint restores the
+equivalent focused control, falls back to Refresh when its link disappears, and never
+takes focus from outside the impact section.
+
+Actual qualification at `552f76e` expired only a fresh synthetic session, observed the real
+item401, then signed in and resumed. Resume made one auth, list, folders and selected-item
+read with zero mutations; both dirty input nodes/text survived. The next explicit Save
+made exactly one PATCH200 with original conditional expectations and no item-read echo.
+Native Enter retained Refresh focus, bounds and scroll at desktop and320px. Automatic
+observation retained a focused story link, fell back after a real usage-removal PUT, and
+left an outside input focused. Native visible focus outlines were inspected.
+
+The managed headless browser did not emit native window-focus events on foreground
+switching; that listener was exercised with an explicitly disclosed synthetic focus event
+and genuine reads, not represented as native window-focus proof. Apps, tabs, sessions and
+interception were cleaned up; private evidence records harness limitations.
