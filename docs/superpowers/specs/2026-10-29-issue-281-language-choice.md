@@ -1,6 +1,6 @@
 # First-run language choice: truthful state without inferred consent (#281)
 
-Date: 2026-10-29. Status: OWNER APPROVED — option A; implementation and qualification pending.
+Date: 2026-10-29. Status: OWNER APPROVED — option A; implemented in source, qualification pending.
 Risk: high inherited language-write boundary; approved option A adds no schema or content policy.
 Base: integrated #279/#280/#284/#285 on `feature/issue-280-empty-states` at `c23c2da`.
 
@@ -120,3 +120,31 @@ This approves the optional current-configuration section and the explicit amendm
 #278 §9: no completion badge, no persisted acknowledgement, unchanged Finish requirements.
 Option B is not selected. Implementation and its automated/runtime verification remain
 required; this decision authorizes no merge, deployment or owner-content operation.
+
+## Source implementation; not qualification evidence
+
+The eligible `/onboarding` projection now carries `language: { primary, locales, lockedAt,
+updatedAt }` beside (not inside) its five progress steps. `readOnboardingProgress` reads the
+existing language/history helper using the same checked-out repeatable-read transaction client;
+the response explicitly serializes only these four fields. Retired reads still return only
+`{ status: 'retired' }`. No persisted onboarding column, action or Finish predicate changes.
+
+The Desk consumer validates that projection before rendering. Its optional native radio form sits
+between Account and Identity and uses the existing mode-aware URL mirror and localized dictionary.
+Save confirms the selected scope and sends only `{ primary, locales }` to the existing
+`PUT /language`; publication locking and activation preflight remain owned by that boundary.
+Publication-locked onboarding is read-only, with Settings retaining secondary activation.
+
+After a language write attempt the consumer rereads onboarding rather than replaying the write.
+Failed/ambiguous writes retain the candidate; a malformed/unavailable reread presents Retry rather
+than assuming DE or exposing stale configuration controls. An acknowledged persisted 502 adopts
+the stored mode, preserves its build-failure message and points to Settings' existing Rebuild.
+Same-mode acknowledgement belongs only to the current request, never to progress or a later visit.
+
+Source regression cases cover DOM interactions/reconciliation, same-snapshot PostgreSQL reads,
+all four modes through the real shared API, publication winning a read/Save race, same-mode
+idempotency, failed-build recovery and role-safe requests. These additions have **not** been run
+by the implementing worker. The parent must perform §Verification and containment, qualify the
+actual browser at desktop/320px in both copy locales, and only then update current-state security
+and first-run operating guidance with exact-source evidence. Review, CI, merge and deployment
+remain separate gates.

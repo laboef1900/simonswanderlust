@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { ensureSchema, type DbPool } from '../src/db.js';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildServer } from '../src/server.js';
@@ -18,6 +18,8 @@ import { createEncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock } from '../src/work-lock.js';
 import type { BuildOutcome } from '../src/build.js';
 import { publishBody } from './publish-tokens.js';
+import { pgOnboardingStore, type OnboardingStore } from '../src/onboarding.js';
+import { captureBootEvidence, initializeApplicationSchema, initializeOnboarding } from '../src/onboarding-bootstrap.js';
 
 const modes: [LanguageConfig, LanguageConfig, LanguageConfig, LanguageConfig] = [
   { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
@@ -26,7 +28,7 @@ const modes: [LanguageConfig, LanguageConfig, LanguageConfig, LanguageConfig] = 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
-async function fixture(initial: LanguageConfig = modes[0]!, pool?: DbPool) {
+async function fixture(initial: LanguageConfig = modes[0]!, pool?: DbPool, onboarding?: OnboardingStore) {
   const dir = await mkdtemp(join(tmpdir(), 'language-api-'));
   const language = pool ? pgLanguageStore(pool) : memoryLanguageStore(initial);
   if (pool) await language.update(initial);
@@ -47,6 +49,7 @@ async function fixture(initial: LanguageConfig = modes[0]!, pool?: DbPool) {
   const app = buildServer({
     storageDir: dir, baseUrl: 'https://images.test', imgHost: 'images.test', siteDir: join(dir, 'site'),
     posts, pages, media, users, sessions, secrets: memorySecretsStore(),
+    onboarding,
     // Deliberately omit cfg.language: the server must use posts.language.
     settings: { get: () => ({ ...settings }), update: (patch) => (settings = validate({ ...settings, ...patch })) },
     builder: { build, hasRelease: () => true, quiesce: async () => {} },
@@ -71,7 +74,7 @@ async function fixture(initial: LanguageConfig = modes[0]!, pool?: DbPool) {
       shared: { date: '2026-10-27', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 2 } },
       de: locale('de'), en: locale('en') });
   }
-  return { app, language, posts, pages, media, cookies, login, put, story, build,
+  return { app, language, posts, pages, media, cookies, login, put, story, build, dir,
     failBuild: () => { outcome = { ok: false, error: 'Synthetic build failure' }; },
     recoverBuild: () => { outcome = { ok: true, release: 'recovered-release' }; } };
 }
@@ -520,5 +523,118 @@ for (const backend of ['memory', 'postgres'] as const) {
       resume.resolve();
       await Promise.allSettled([request, ...waiters]);
     }
+  });
+});
+
+(databaseUrl ? describe : describe.skip)('eligible onboarding using the shared language API', () => {
+  async function fresh(mode: LanguageConfig = modes[0]) {
+    const schema = `onboarding_language_${randomUUID().replaceAll('-', '')}`;
+    const owner = new pg.Pool({ connectionString: databaseUrl });
+    await owner.query(`CREATE SCHEMA ${schema}`);
+    // A one-connection pool makes a second read connection a deterministic failure,
+    // rather than concealing a snapshot split behind plentiful idle connections.
+    const pool = new pg.Pool({ connectionString: databaseUrl, max: 1, connectionTimeoutMillis: 1500,
+      options: `-c search_path=${schema}` });
+    cleanups.push(async () => { await pool.end(); await owner.query(`DROP SCHEMA ${schema} CASCADE`); await owner.end(); });
+    const writable = async () => {};
+    const evidence = await captureBootEvidence(pool, writable);
+    await initializeApplicationSchema(pool, writable);
+    const onboarding = pgOnboardingStore(pool, () => true);
+    const f = await fixture(mode, pool, onboarding);
+    const dataRoot = await realpath(f.dir);
+    await initializeOnboarding(pool, {
+      storageDir: join(dataRoot, 'images'), settingsPath: join(dataRoot, 'settings.json'),
+      siteDir: join(dataRoot, 'site'), backupDir: join(dataRoot, 'backup'),
+    }, evidence, writable);
+    const read = () => f.app.inject({ method: 'GET', url: '/onboarding', cookies: f.cookies });
+    return { ...f, pool, onboarding, read };
+  }
+
+  it.each(modes)('persists %j through PUT and exposes only current configuration, without progress or acknowledgement changes', async (mode) => {
+    const f = await fresh(mode.primary === 'de' ? modes[3] : modes[2]);
+    const before = (await f.read()).json();
+    const metadata = (await f.pool.query('SELECT * FROM onboarding_state')).rows;
+    const saved = await f.put(mode);
+    expect(saved.statusCode).toBe(200);
+    const read = await f.read();
+    expect(read.statusCode).toBe(200);
+    expect(read.headers['cache-control']).toBe('no-store');
+    const projection = read.json();
+    expect(Object.keys(projection).sort()).toEqual(['complete', 'language', 'status', 'steps']);
+    expect(projection.language).toEqual(saved.json());
+    expect(Object.keys(projection.language).sort()).toEqual(['locales', 'lockedAt', 'primary', 'updatedAt']);
+    expect(projection.steps).toEqual(before.steps);
+    expect(projection.complete).toBe(false);
+    expect(projection.steps.filter((step: { required: boolean }) => step.required)).toHaveLength(3);
+    expect((await f.pool.query('SELECT * FROM onboarding_state')).rows).toEqual(metadata);
+    f.build.mockClear();
+    expect((await f.put(mode)).json()).toEqual(saved.json());
+    expect((await f.read()).json()).toEqual(projection);
+    expect(f.build).not.toHaveBeenCalled();
+    expect((await f.pool.query('SELECT * FROM onboarding_state')).rows).toEqual(metadata);
+  });
+
+  it('keeps a committed build failure visible to onboarding and recovers through Rebuild, not a second configuration write', async () => {
+    const f = await fresh();
+    f.failBuild();
+    const saved = await f.put(modes[3]);
+    expect(saved.statusCode).toBe(502);
+    expect(saved.json()).toMatchObject({ persisted: true, code: 'language_build_failed' });
+    expect((await f.read()).json().language).toEqual(saved.json().language);
+    expect((await pgOnboardingStore(f.pool, () => true).read())).toMatchObject({ language: modes[3], complete: false });
+    f.recoverBuild();
+    const recovered = await f.app.inject({ method: 'POST', url: '/rebuild', cookies: f.cookies });
+    expect(recovered.statusCode).toBe(200);
+    expect((await f.read()).json().language).toEqual(saved.json().language);
+    expect(f.build).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses a now-forbidden mode after publication wins between the checklist read and Save', async () => {
+    const f = await fresh();
+    const pair = await f.story();
+    const before = (await f.read()).json();
+    expect(before.language.lockedAt).toBeNull();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const update = f.posts.language.update.bind(f.posts.language);
+    vi.spyOn(f.posts.language, 'update').mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return update(...args);
+    });
+    const saving = f.put(modes[1]).then((response) => response);
+    await entered.promise;
+    try {
+      const published = await f.app.inject({ method: 'POST', url: `/posts/${pair.translationKey}/publish`,
+        cookies: f.cookies, payload: await publishBody(f.posts, pair.translationKey) });
+      expect(published.statusCode).toBe(200);
+    } finally { release.resolve(); }
+    const refused = await saving;
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().code).toBe('language_primary_locked');
+    const after = (await f.read()).json();
+    expect(after.language).toMatchObject({ ...modes[0], lockedAt: expect.any(String) });
+    expect(await f.posts.getPublishedLocales(pair.translationKey)).toEqual(['de', 'en']);
+    expect(after.steps.find((step: { id: string }) => step.id === 'publish').state).toBe('done');
+    expect(after.complete).toBe(true);
+    expect(f.build).toHaveBeenCalledTimes(1);
+    const finished = await f.app.inject({ method: 'POST', url: '/onboarding', cookies: f.cookies, payload: { action: 'finish' } });
+    expect(finished.json()).toEqual({ status: 'retired' });
+    expect((await f.read()).json()).toEqual({ status: 'retired' });
+  });
+
+  it('protects the shared onboarding read and language write from authors and anonymous callers', async () => {
+    const f = await fresh();
+    const author = await f.login(false);
+    const before = (await f.read()).json();
+    for (const [cookies, status] of [[undefined, 401], [author, 403]] as const) {
+      const read = await f.app.inject({ method: 'GET', url: '/onboarding', cookies });
+      const write = await f.app.inject({ method: 'PUT', url: '/language', cookies, payload: modes[3] });
+      expect(read.statusCode).toBe(status);
+      expect(write.statusCode).toBe(status);
+      expect(read.headers['cache-control']).toBe('no-store');
+    }
+    expect((await f.read()).json()).toEqual(before);
+    expect(f.build).not.toHaveBeenCalled();
   });
 });
