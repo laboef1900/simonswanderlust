@@ -884,6 +884,7 @@ describe('media conditional save recovery in real consumers', () => {
     page.listRequests.shift()!.resolve({ items: [row], total: 1 });
     await page.flush();
     page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    await page.flush();
   }
   function change(page: Page, id: string, value: string): void {
     page.el(id).value = value;
@@ -947,6 +948,8 @@ describe('media conditional save recovery in real consumers', () => {
       }
     } });
     await open(page);
+    expect(reads).toBe(1); // Initial impact observation, before the save/recovery phase.
+    reads = 0;
     change(page, 'dTitle', 'Mine');
     change(page, 'dAltDe', 'Local alt');
     change(page, 'dTags', 'local');
@@ -964,6 +967,10 @@ describe('media conditional save recovery in real consumers', () => {
     await page.flush();
     expect(writes).toBe(1);
     expect(reads).toBe(1);
+    page.el('dCheckStored').click();
+    await page.flush();
+    expect(reads).toBe(2); // Explicit comparison reuses its own read for impact too.
+    expect(writes).toBe(1);
   });
 
   it('does not call an all-achieved probe a confirmed save or clean later edits', async () => {
@@ -971,16 +978,17 @@ describe('media conditional save recovery in real consumers', () => {
     let reads = 0;
     const page = loadPage({ request: (url, init) => {
       if (init?.method === 'PATCH') return Promise.reject(new Error('lost'));
-      if (url === '/media/items/a') { reads++; return pending.promise; }
+      if (url === '/media/items/a') { reads++; return reads === 1 ? response(200, item('a')) : pending.promise; }
     } });
     await open(page);
+    expect(reads).toBe(1); // Initial impact observation must not serve as post-write recovery.
     change(page, 'dTitle', 'Submitted');
     page.el('dSave').click();
     await page.flush();
     change(page, 'dTitle', 'Newer');
     pending.resolve(await response(200, { ...item('a'), title: 'Submitted' }));
     await page.flush();
-    expect(reads).toBe(1);
+    expect(reads).toBe(2); // One initial impact read plus exactly one recovery read.
     expect(page.el('dTitle').value).toBe('Newer');
     expect(page.el('dUnsaved').hidden).toBe(false);
     expect(page.el('dCompare').textContent).toContain('Intended value stored');
@@ -995,6 +1003,8 @@ describe('media conditional save recovery in real consumers', () => {
         if (url === '/media/items/a') { reads++; return response(200, item('a')); }
       } });
       await open(page);
+      expect(reads).toBe(1); // Isolate save-time reads from initial impact observation.
+      reads = 0;
       change(page, 'dTitle', 'Submitted');
       page.el('dSave').click();
       await page.flush();
@@ -1039,6 +1049,8 @@ describe('media conditional save recovery in real consumers', () => {
       }
     } });
     await open(page);
+    expect(reads).toBe(1); // Initial impact observation, separate from AI preflight/recovery.
+    reads = 0;
     page.el('aiSelected').click();
     await page.flush();
     page.el('aiStart').click();
@@ -1083,11 +1095,13 @@ describe('single-photo AI conditional expectations', () => {
 
 describe('conditional media response validation', () => {
   const response = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
-  async function clearTitle(page: Page): Promise<void> {
+  async function clearTitle(page: Page, afterInitialRead: () => void): Promise<void> {
     await page.flush();
     page.listRequests.shift()!.resolve({ items: [item('a')], total: 1 });
     await page.flush();
     page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+    await page.flush();
+    afterInitialRead();
     page.el('dTitle').value = '';
     page.el('detail').dispatch('input');
     page.el('dSave').click();
@@ -1108,7 +1122,10 @@ describe('conditional media response validation', () => {
       if (init?.method === 'PATCH') { writes++; return Promise.reject(new Error('lost')); }
       if (url === '/media/items/a') { reads++; return response(current); }
     } });
-    await clearTitle(page);
+    await clearTitle(page, () => {
+      expect(reads).toBe(1); // Initial impact read; recovery gets its own one-read budget.
+      reads = 0;
+    });
     expect(reads).toBe(1);
     expect(writes).toBe(1);
     expect(page.el('dTitle').value).toBe('');
@@ -1134,7 +1151,10 @@ describe('conditional media response validation', () => {
       if (init?.method === 'PATCH') { writes++; return response(acknowledgement); }
       if (url === '/media/items/a') { reads++; return response({}); }
     } });
-    await clearTitle(page);
+    await clearTitle(page, () => {
+      expect(reads).toBe(1); // Initial impact read; recovery gets its own one-read budget.
+      reads = 0;
+    });
     expect(writes).toBe(1);
     expect(reads).toBe(1);
     expect(page.el('dTitle').value).toBe('');
@@ -1265,6 +1285,39 @@ describe('Media publication impact and bounded refresh', () => {
       editorCopy.en, () => {});
     expect(page.el('dImpact').textContent).toContain('No eligible story');
     expect(page.el('dImpact').querySelectorAll('a')).toEqual([]);
+  });
+
+  it.each([false, true])('reuses the item response for impact without another GET (unknown outcome: %s)', async (unknown) => {
+    let reads = 0;
+    let writes = 0;
+    const fresh: Item = { ...item('a', 'saved alt'),
+      impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] },
+      livePending: { de: { alt: true, caption: false }, en: { alt: false, caption: false } } };
+    const response = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
+    const page = loadPage({ request: (url, init) => {
+      if (url !== '/media/items/a') return;
+      if (init?.method === 'PATCH') {
+        writes++;
+        return unknown ? Promise.reject(new Error('lost acknowledgement')) : response({
+          ...fresh, conditionalVersion: 1,
+          changedDescriptions: { de: { alt: true, caption: false }, en: { alt: false, caption: false } },
+        });
+      }
+      reads++;
+      return response(writes ? fresh : { ...item('a'), impact });
+    } });
+    await open(page);
+    expect(reads).toBe(1);
+    expect(page.el('dImpact').textContent).toContain('2 stories with uses');
+    page.el('dAltDe').value = 'saved alt'; page.el('detail').dispatch('input');
+    page.el('dSave').click(); await page.flush();
+    expect(reads).toBe(unknown ? 2 : 1);
+    expect(writes).toBe(1);
+    expect(page.el('dImpact').textContent).toContain('No eligible story');
+    expect(page.el('dImpact').textContent).toContain('DE: pending against the live release — alt text: yes, caption: no.');
+    expect(page.el('dUnsaved').hidden).toBe(!unknown);
+    if (unknown) expect(page.el('dCompare').textContent).toContain('Save outcome unknown');
+    else expect(page.el('out').textContent).toContain('Photo details saved.');
   });
 
   it('refreshes only projections while dirty, preserving base expectations and last save result', async () => {

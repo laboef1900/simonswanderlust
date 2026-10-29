@@ -84,9 +84,31 @@
     },
     unauthorized: function () { uploads.pause(); say(copy.uploadNeedsAuth); },
   });
-  // Bulk writes and explicit detail/reconciliation reads invalidate older observations.
+  // Reuse item responses for observation only, never for form values or write
+  // acknowledgement. savePatch alone owns validation and the one recovery GET.
+  ['get', 'patch'].forEach(function (method) {
+    var request = client[method];
+    client[method] = async function (key) {
+      var version = detailRefresh.beginAction();
+      function observe(item) {
+        if (key !== state.detailKey) return;
+        try { api.assertItem(item, key); }
+        catch (_) { item = { impact: { availability: 'unavailable' }, livePending: null }; }
+        detailRefresh.accept(item, version);
+      }
+      try {
+        var item = await request.apply(client, arguments);
+        observe(item);
+        return item;
+      } catch (error) {
+        observe(error.current);
+        throw error;
+      } finally { detailRefresh.endAction(false); }
+    };
+  });
+  // Other mutations have no item projection, so observe after they settle.
   // Background projection reads use PublicationRefresh.json, never this wrapped client.
-  ['get', 'patch', 'remove', 'move', 'retry', 'rescan', 'renameFolder', 'deleteFolder', 'createFolder'].forEach(function (method) {
+  ['remove', 'move', 'retry', 'rescan', 'renameFolder', 'deleteFolder', 'createFolder'].forEach(function (method) {
     var mutate = client[method];
     client[method] = async function () {
       detailRefresh.beginAction();
@@ -823,7 +845,7 @@
       var saved = await api.savePatch(client, key, patch, api.expectations(patch, current || state.detailItem));
       if ($('detail').dataset.key === key) {
         state.detailChanged = saved.changedDescriptions || null;
-        detailRefresh.accept(saved);
+        renderImpact();
       }
       if ($('detail').dataset.key !== key || state.detailGeneration !== generation) {
         say(copy.mediaConditionalNewer);
@@ -847,7 +869,7 @@
     } finally {
       state.detailSaving = false;
       if ($('dSave')) $('dSave').disabled = false;
-      detailRefresh.endAction();
+      detailRefresh.endAction(false);
     }
   }
 

@@ -8,7 +8,7 @@ window.PublicationRefresh = (function () {
   }
   function create(options) {
     let generation = 0, active = null, timer = null, started = false, actions = 0;
-    let lastTrigger = -Infinity, settledRefresh = false;
+    let lastTrigger = -Infinity, settledRefresh = false, actionRefresh = false;
     const resource = () => options.resource ? options.resource() : '';
     function invalidate() { generation += 1; active?.controller.abort(); }
     function schedule() {
@@ -70,13 +70,22 @@ window.PublicationRefresh = (function () {
       document.removeEventListener('visibilitychange', visibility);
       window.removeEventListener('pagehide', stop);
     }
-    function beginAction() { actions += 1; invalidate(); }
-    function accept(value) { invalidate(); options.apply(value); }
-    function endAction() {
+    function beginAction() {
+      if (!actions) actionRefresh = false;
+      actions += 1; invalidate(); return generation;
+    }
+    function accept(value, version = generation) {
+      if (version !== generation) return;
+      invalidate(); options.apply(value);
+    }
+    // Item acknowledgements/recovery reads already carry a fresh projection. Their
+    // callers can settle without a duplicate GET; scheduled/manual reads stay enabled.
+    function endAction(refreshAfter = true) {
       invalidate(); actions = Math.max(0, actions - 1);
+      actionRefresh = actionRefresh || refreshAfter;
       if (!actions) {
-        if (active) settledRefresh = true;
-        else refresh();
+        settledRefresh = actionRefresh && !!active;
+        if (actionRefresh && !active) refresh();
       }
     }
     return { start, stop, refresh, invalidate, beginAction, endAction, accept };

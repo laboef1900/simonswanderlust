@@ -828,7 +828,8 @@ describe('media library', () => {
         expect(Object.keys(story.locales).sort()).toEqual(['de', 'en']);
         for (const locale of ['de', 'en'] as const) {
           expect(Object.keys(story.locales[locale]).sort()).toEqual(['gallery', 'galleryCaptionFollowsLibrary', 'heroTitle', 'inline']);
-          expect(story.locales[locale]).toEqual({ gallery: 1, galleryCaptionFollowsLibrary: 1, heroTitle: true, inline: 0 });
+          // draftUsing references this photo as DE hero, but a different EN hero.
+          expect(story.locales[locale]).toEqual({ gallery: 1, galleryCaptionFollowsLibrary: 1, heroTitle: locale === 'de', inline: 0 });
         }
       }
     }

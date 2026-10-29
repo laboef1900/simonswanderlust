@@ -607,6 +607,15 @@ new reconciliation gate, foreign token adoption or offline queue is added here.
   returned content/token into a dirty form. Lists/Desk read `/posts`; Media refreshes only the
   selected detail's impact and (admin) livePending, preserving dirty metadata fields. Desk/Settings
   admins refresh summary and #297 status under the same schedule; authors never request them.
+- Media reuses the selected item's PATCH acknowledgement, conflict observation, AI preflight
+  GET or the conditional protocol's one bounded recovery GET for the projection. These settle
+  through the shared lifecycle without a trailing projection GET; an invalid/failed observation
+  is unavailable, not permission to probe again. Only the conditional protocol can establish a
+  saved outcome or offer comparison choices. Initial detail observation is a separate read;
+  valid acknowledgements and unsupported old-server successes add no recovery reads. Manual,
+  focus and 30-second refresh remain enabled, and a nested selection/non-item action still
+  requests its required post-action observation. Shared generation fencing rejects older item
+  responses as well as older background responses without adopting fields into the form.
 - Use a local request generation per active resource. Invalidate it on a local action start,
   completion, navigation or detail selection change. Discard late/out-of-order responses and do
   not launch projection refresh during a local mutation; refresh once it settles. No token is
