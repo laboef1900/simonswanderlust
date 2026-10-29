@@ -1,0 +1,20 @@
+// Build-stage only. No toolchain or package manager is copied to runtime.
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
+assert.equal(process.platform, 'linux');
+assert.equal(process.getuid(), 0);
+for (const name of ['NODE_BUILD', 'NODE_RUNTIME']) assert(/^dhi\.io\/node:[^@]+@sha256:[0-9a-f]{64}$/.test(process.env[name] ?? ''), 'Supply immutable reviewed DHI node references');
+assert(/^\d{8}T\d{6}Z$/.test(process.env.DEBIAN_SNAPSHOT ?? ''), 'Supply one immutable Debian snapshot timestamp');
+const os = readFileSync('/etc/os-release', 'utf8');
+assert(/^ID=debian$/m.test(os), 'Recipe intentionally supports Debian/glibc DHI, not musl');
+const suite = /^VERSION_CODENAME=([a-z]+)$/m.exec(os)?.[1];
+assert(suite, 'Cannot identify Debian suite');
+assert.equal(suite, 'trixie', 'The reviewed snapshot is qualified for Debian trixie only');
+const sources = '/proof/inputs/proof.sources.list';
+writeFileSync(sources, `deb https://snapshot.debian.org/archive/debian/${process.env.DEBIAN_SNAPSHOT}/ ${suite} main\n`, { flag: 'wx' });
+const options = ['-o', `Dir::Etc::sourcelist=${sources}`, '-o', 'Dir::Etc::sourceparts=-', '-o', 'Acquire::Retries=0'];
+execFileSync('apt-get', [...options, 'update'], { stdio: 'inherit' });
+execFileSync('apt-get', [...options, 'install', '-y', '--no-install-recommends', 'gcc', 'libc6-dev', 'binutils'], { stdio: 'inherit', env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' } });
+writeFileSync('/proof/inputs/toolchain-packages.txt', execFileSync('dpkg-query', ['-W', '-f=${Package}\t${Version}\t${Architecture}\n']), { flag: 'wx' });
+writeFileSync('/proof/inputs/build-os-release.txt', os, { flag: 'wx' });

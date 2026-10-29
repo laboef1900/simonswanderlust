@@ -1,0 +1,27 @@
+# Parent supplies reviewed digest-pinned DHI node:26-dev and minimal node:26
+# references from the SAME Debian/libc family, plus immutable Debian snapshot.
+# Each build targets one architecture; never copy a host-built .node artifact.
+ARG NODE_BUILD
+ARG NODE_RUNTIME
+FROM ${NODE_BUILD} AS native-build
+ARG NODE_BUILD
+ARG NODE_RUNTIME
+ARG DEBIAN_SNAPSHOT
+ENV NODE_BUILD=${NODE_BUILD} NODE_RUNTIME=${NODE_RUNTIME} DEBIAN_SNAPSHOT=${DEBIAN_SNAPSHOT}
+USER 0
+WORKDIR /proof
+COPY inputs/ ./inputs/
+COPY owned-flock.c build-native.mjs container-toolchain.mjs ./
+RUN ["node", "container-toolchain.mjs"]
+RUN ["node", "build-native.mjs"]
+WORKDIR /proof/inputs
+RUN ["npm", "ci", "--ignore-scripts", "--omit=optional", "--no-audit", "--no-fund"]
+FROM ${NODE_RUNTIME}
+WORKDIR /proof
+COPY --from=native-build --chown=1000:1000 /proof/build ./build/
+COPY --from=native-build --chown=1000:1000 /proof/inputs ./inputs/
+COPY --chown=1000:1000 proof-common.mjs proof-worker.mjs probe.mjs mount-peer.mjs init-volume.mjs configure-db.mjs ./
+USER 1000
+ENV PROOF_FIXTURE_ROOT=/proof-fixtures
+ENTRYPOINT ["node"]
+CMD ["probe.mjs", "--filesystem-only"]
