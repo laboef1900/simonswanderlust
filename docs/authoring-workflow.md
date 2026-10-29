@@ -109,8 +109,10 @@ the stored version, compare the local form, attempted snapshots and stored conte
 open the latest version/revisions in another tab, keep editing locally, load the stored
 version, or explicitly use your copy against that stored base and then save. Loading or
 rebasing preserves a separate complete recovery record first; if browser storage cannot
-preserve it, replacement is refused. A restored copy keeps its original base, not the token
-of the newly loaded page. A missing or corrupt base requires explicit comparison/rebase.
+preserve it, replacement is refused with a browser-storage warning. The latest inputs remain
+in the open tab but have not gained a new recovery copy; free storage or copy the text before
+leaving. A restored copy keeps its original base, not the token of the newly loaded page.
+A missing or corrupt base requires explicit comparison/rebase.
 Missing or unavailable receipt evidence stays Unknown; it does not prove the request failed.
 
 **A different account in another tab:** the form keeps its original owner and pauses.
