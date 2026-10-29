@@ -30,6 +30,4 @@ const { route } = Astro.props;
 {route.kind === 'regions' && <RegionPage locale={route.locale} />}
 {route.kind === 'region' && <RegionPage locale={route.locale} region={route.region} />}
 {route.kind === 'story' && <StoryPage trip={route.trip} journeyPosition={route.journeyPosition} />}
-{route.kind === 'journey' && <JourneyPage journey={route.journey} />}
-{route.kind === 'journeys' && <JourneysPage locale={route.locale} journeys={route.journeys} />}
-{route.kind === 'page' && <BasicPage locale={route.locale} pageId={route.page.id} />}
+{route.kind === 'page' && <BasicPage locale={route.locale} pageId={route.page.id} />}{route.kind === 'journey' && <JourneyPage journey={route.journey} />}{route.kind === 'journeys' && <JourneysPage locale={route.locale} journeys={route.journeys} />}

@@ -117,8 +117,7 @@ const jsonLd = serializeJsonLd(
           not reach here. */}
       {rest !== '' && <article class:list={[PROSE, 'story-rest mx-auto lg:max-w-story-wide']} set:html={rest} />}
       <GalleryIsland locale={locale} />
-    </div>
-    {journeyPosition && <JourneyStrip position={journeyPosition} />}
+    </div>{journeyPosition && <JourneyStrip position={journeyPosition} />}
 
     {/* Reader comments (#208): after the story and its mini-map, before the
         divider and prev/next nav, outside the prose articles. Trip reports only. */}

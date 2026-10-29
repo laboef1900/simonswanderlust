@@ -953,6 +953,13 @@ canonical hero retarget/rendering and an actual-release contract suite at
 artifacts; its fixture protocol is in the test header. Component rendering is not
 represented as a full Astro build or screen-reader verification.
 
+The real four-mode release qualification found that separate lines for false journey
+branches emitted literal whitespace under `compressHTML: 'true'`, changing every old
+page and adding a space before non-member comments. Keep journey dispatch adjacent
+to the existing page branch and the optional strip adjacent to its preceding closing
+tag, without adding template whitespace nodes. The strict built-release comparison
+continues to normalize asset hashes only; whitespace differences are not waived.
+
 The public integration merges #309 checkpoint `08677a2`, including the actual #289
 page/navigation implementation. `publicRoutes(trips, language, { pages, journeys }, warn)`
 requires both collections explicitly; dispatch, alternates and navigation share that
