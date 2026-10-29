@@ -10,7 +10,7 @@ const buildCopy = Object.fromEntries(['de', 'en'].map(locale => [locale, Object.
 const owner = '11111111-1111-4111-8111-111111111111';
 type UnloadEvent = { defaultPrevented: boolean; returnValue?: string; preventDefault(): void };
 async function settle() { for (let i = 0; i < 40; i++) await Promise.resolve(); }
-async function editor(key = 'contact', status = 'draft', prepare = false, options: { storage?: Map<string, string>; userId?: string } = {}) {
+async function editor(key = 'contact', status = 'draft', prepare = false, options: { storage?: Map<string, string>; userId?: string; singleLocale?: boolean } = {}) {
   const html = readFileSync('public/about.html', 'utf8'); const dom = editorDocument(html);
   const el = (id: string) => { const node = dom.document.getElementById(id); if (!node) throw new Error(id); return node; };
   const locale = (locale: 'de' | 'en') => ({ locale, title: locale + ' title', bodyMarkdown: locale + ' body', images: {}, slug: key === 'about' ? '' : locale + '-contact', publishedAt: status === 'published' && !(prepare && locale === 'en') ? stamp : null });
@@ -48,7 +48,7 @@ async function editor(key = 'contact', status = 'draft', prepare = false, option
       requests.push({ url, init });
       if (init.method === 'POST' && lifecycleWait) await lifecycleWait;
       if (init.method && failure) return response(failure.body, failure.status);
-      if (url === '/language') return response({ primary: 'de', locales: prepare ? ['de'] : ['de', 'en'], updatedAt: stamp, lockedAt: null });
+      if (url === '/language') return response({ primary: 'de', locales: prepare || options.singleLocale ? ['de'] : ['de', 'en'], updatedAt: stamp, lockedAt: null });
       if (url === '/pages') return response({ pages: [{ key, known: true, defaults: { de: 'kontakt', en: 'contact' } }] });
       if (url.endsWith('/revisions')) return response([]);
       if (url.endsWith('/deletion')) return response({ key, titles: { de: page.de.title, en: page.en.title }, paths: ['/de-contact/', '/en/en-contact/'], revisions: 3,
@@ -227,6 +227,30 @@ describe('generalized page editor', () => {
     expect(payload.de).toBeUndefined(); expect(payload.prepareLocale).toBe('en'); expect(payload.en.slug).toBe('prepared-contact');
     expect(h.el('preparationNotice').textContent).toContain('not public');
     expect(h.el('actionStatus').textContent).toContain('Saved in the CMS');
+  });
+  it('keeps ordinary and inactive-language recovery records separate across saves', async () => {
+    const storage = new Map<string, string>();
+    const options = { storage, singleLocale: true };
+    const preparation = await editor('contact', 'published', true, options);
+    preparation.el('enTitle').value = 'Unsent English preparation';
+    preparation.el('enTitle').fire('input'); preparation.flushStash();
+    const retainedPreparation = [...storage.entries()];
+
+    const ordinary = await editor('contact', 'published', false, options);
+    expect(ordinary.el('enTitle').value).toBe('en title');
+    expect([...storage.entries()]).toEqual(retainedPreparation);
+    ordinary.el('deTitle').value = 'Unsent German edit';
+    ordinary.el('deTitle').fire('input'); ordinary.flushStash();
+    const retainedOrdinary = [...storage.entries()].find(([, raw]) => JSON.parse(raw).payload.de.title === 'Unsent German edit')!;
+
+    const restoredPreparation = await editor('contact', 'published', true, options);
+    expect(restoredPreparation.el('enTitle').value).toBe('Unsent English preparation');
+    expect(restoredPreparation.el('deTitle').value).toBe('de title');
+    restoredPreparation.el('saveBtn').click(); await settle();
+    expect(storage.get(retainedOrdinary[0])).toBe(retainedOrdinary[1]);
+
+    const restoredOrdinary = await editor('contact', 'published', false, options);
+    expect(restoredOrdinary.el('deTitle').value).toBe('Unsent German edit');
   });
 });
 

@@ -193,7 +193,7 @@ describe('scoped draft recovery', () => {
     await Promise.resolve();
     expect(f.guard.isDirty()).toBe(true);
     expect([...local.map.entries()]).toEqual(retained);
-    expect(f.dom.document.querySelector('.write-recovery > p')!.textContent).toBe('writeStorageUnavailable');
+    expect(f.dom.document.querySelector('.write-recovery')!.querySelector('p')!.textContent).toBe('writeStorageUnavailable');
     expect(f.dom.document.querySelector('pre')!.textContent).toContain('Latest unsaved');
     expect(f.dom.document.querySelector('details')!.hidden).toBe(false);
     expect(f.calls).toHaveLength(1); // The comparison GET; replacement never sends or re-reads.

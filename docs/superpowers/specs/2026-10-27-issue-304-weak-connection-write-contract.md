@@ -1040,13 +1040,17 @@ npm run build
 ```
 
 `build:native` uses `.github/native-owner/` and pinned Node 26.12.1 headers; CI builds
-the binding before uploader tests. The qualified `owned-flock.c`, `build-native.mjs`
-and `container-toolchain.mjs` were moved byte-for-byte from the temporary #304 packet.
-Their SHA-256 identities are respectively:
+the binding before uploader tests. `owned-flock.c` and `build-native.mjs` remain byte-for-byte
+copies of the qualified temporary #304 packet, with SHA-256 identities:
 
-- `ac6ee84b387ff60b2d28f6dc8260f358f338eade17eaec207f27c05805d1ab47`
-- `ee5a282642f000e07d02f2848c3a73fde07902ef7b9c13876f95399f88f5014c`
-- `ecff9a333a190a33c2e06c2b72d8e7f7d40360eafde20d5a1b4876c976b9a77b`
+- `owned-flock.c`: `ac6ee84b387ff60b2d28f6dc8260f358f338eade17eaec207f27c05805d1ab47`
+- `build-native.mjs`: `ee5a282642f000e07d02f2848c3a73fde07902ef7b9c13876f95399f88f5014c`
+
+The copied `container-toolchain.mjs` initially had hash
+`ecff9a333a190a33c2e06c2b72d8e7f7d40360eafde20d5a1b4876c976b9a77b`.
+An actual DHI build then exposed missing `gzip` while extracting the pinned Node headers.
+The build-stage-only dependency is now pinned to `gzip=1.13-1+deb13u1`; the current driver
+hash is `ac0297367ee91dab539c485b39847f2637a62e93bd02732edaef10d567eb79f9`.
 
 Their historical qualification comments and `/proof` scratch path remain intentionally
 unchanged. The production Dockerfile retains the qualified DHI index digests and Debian
@@ -1069,7 +1073,7 @@ use the current checkout, standard public native Ubuntu runners and their own di
 Postgres service. They retain the public/same-repository guard, require no DHI credentials,
 and upload no fixtures/logs/artifacts. Existing required uploader/site job names remain
 unchanged. Host-runner results cannot qualify the packaged DHI runtime or a deployment
-mount; production-image integration below remains a separate parent-owned gate.
+mount; the actual-package jobs below exercise that separate image boundary.
 
 The combined parent wave must additionally exercise:
 
@@ -1101,6 +1105,40 @@ source changes, tests being present, or a green combined CI run. Containment and
 documented in `SECURITY.md` and `ARCHITECTURE.md`: stop writers first, keep backups and receipt
 evidence, never delete the stable lock inode, and do not roll back only one side of this
 fail-closed client/server protocol.
+
+### Observed integration and repeatable package qualification
+
+The parent exercised the actual native-arm64 DHI image from source `e7a5e78`, not a host
+test substitute: 22 main/offline-CLI steps passed on Linux arm64/ext4, Node 26.12.1,
+ABI 147 and glibc 2.41. Evidence records source and binary hashes, authenticated
+save/upload/backup, live/SIGSTOP exclusion, filesystem-before-PG admission, same-process
+descriptor cleanup after PG refusal, ordinary-child noninheritance, PG-loss mutation
+fencing while retaining the filesystem lock, death/close reacquisition, and real offline
+bootstrap/restores with undo backups. Synthetic fixtures and earlier failed attempts are
+retained in the private execution ledger; no owner data was used.
+
+Browser qualification exposed missing Media listing/folder refresh after a recovered write.
+The recovered observations now update those views without retransmitting or replacing dirty
+detail fields. Operation panels explicitly retain **last-check** observations rather than
+claiming current state indefinitely. A second keyboard finding was repaired at `949d06d`:
+when Check again disappears, focus follows the same named upload row through checking and
+completion, while an author who moved to another field keeps that focus. Real desktop and
+320px checks observed a visible focus indicator and preserved unsaved detail text. The full
+uploader/PG suite, types, Astro check, site suite and real build passed at that source.
+
+`.github/native-owner/package-qualify.py` is the exercised actual-package harness, retained
+outside runtime output. `packaged owner · native amd64/arm64` in `ci.yml` builds the actual
+Dockerfile and runs it on native public Ubuntu runners. It checks exact source/image/native
+architecture and provenance, rejects build/proof/header tooling in the runtime, and exports
+only bounded sanitized evidence. Private credentials, dumps, Docker auth and image layers
+are never artifacts. Automatic secret-bearing runs are limited to the owned #305 PR;
+future operator-requested runs use the explicit `qualify_native_package` workflow-dispatch
+input. The original required CI jobs and credential-free native host tests remain separate.
+Each run's artifact identifies its exact source SHA and measured outcome; adding the job is
+not itself a passing amd64 or arm64 qualification.
+
+Named-volume and development evidence still do **not** qualify the actual deployment mount.
+The approved pre-deployment/pre-enablement gate above remains mandatory and operational.
 
 ## #306 source implementation handoff
 
