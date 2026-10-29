@@ -65,6 +65,7 @@ describe('reserved public namespaces', () => {
         sweepTempFiles: () => [], list: () => [], listImageArchives: () => [], listRouteArchives: () => [], quiesce: async () => {},
       },
       encodeQueue: {
+        withAdmission: unexpectedServiceCall, availableCapacity: () => 0, onCapacity: () => () => {},
         enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {},
         quiesce: async () => {}, idle: async () => {}, stats: () => ({ pending: 0, running: 0 }),
       },

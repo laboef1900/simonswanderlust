@@ -34,7 +34,7 @@ function setup(options: { base?: string; rows?: Row[]; respond?: (url: string) =
     const row = rows.find((candidate) => url === '/media/items/' + candidate.key);
     return Promise.resolve(row ? response(row) : response({ error: 'image not found' }, 404));
   };
-  const ctx: Record<string, unknown> = { fetch, URL };
+  const ctx: Record<string, unknown> = { fetch, URL, AbortController, setTimeout, clearTimeout };
   ctx.window = ctx;
   vm.createContext(ctx);
   scripts.forEach((script) => vm.runInContext(script, ctx));

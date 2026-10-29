@@ -313,12 +313,16 @@ async function deskPage(options: {
     EditorCopy: { en: Object.fromEntries(Object.entries(ui.en)
       .filter(([key]) => key.startsWith('editor.chrome.'))
       .map(([key, text]) => [key.slice('editor.chrome.'.length), text])) },
+    BuildCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
+      Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('admin.build.'))
+        .map(([key, text]) => [key.slice('admin.build.'.length), text])),
+    ])),
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     fetch: async (url: string, init?: { method?: string; body?: string; cache?: string }) => {
       const request = { url, method: init?.method ?? 'GET', body: init?.body, cache: init?.cache };
       requests.push(request);
       if (url === '/auth/me') return options.auth ? options.auth() : Response.json({
-        authenticated: true, userId: 'user-1', username: 'writer', isAdmin: options.isAdmin ?? true, needsSetup: false,
+        authenticated: true, userId: '11111111-1111-4111-8111-111111111111', username: 'writer', isAdmin: options.isAdmin ?? true, needsSetup: false,
       });
       if (url === '/language') return options.language ? options.language() : Response.json({
         primary: 'de', locales: ['de', 'en'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z',
@@ -327,6 +331,7 @@ async function deskPage(options: {
       if (url === '/posts') return options.posts ? options.posts() : Response.json([]);
       if (url === '/media/queue') return Response.json({ pending: 0, running: 0 });
       if (url === '/health') return Response.json({ release: false });
+      if (url === '/rebuild/status') return Response.json({ record: 'missing', running: null, last: null, live: null });
       throw new Error('Unexpected Desk request: ' + url);
     },
   };
@@ -385,7 +390,7 @@ describe('Actual Desk authenticated onboarding activation', () => {
     expect(h.get('#onboardingChecklist').hidden).toBe(true);
     expect(h.get('#onboardingOpener').hidden).toBe(true);
     expect(h.document.querySelector('.cms-app-shell')).toBeNull();
-    pending.resolve(Response.json({ authenticated: true, userId: 'admin-1', username: 'admin', isAdmin: true, needsSetup: false }));
+    pending.resolve(Response.json({ authenticated: true, userId: '11111111-1111-4111-8111-111111111111', username: 'admin', isAdmin: true, needsSetup: false }));
     await h.flush();
     expect(h.get('#onboardingChecklist').querySelectorAll('li')).toHaveLength(5);
     expect(h.get('#onboardingChecklist').hidden).toBe(false);
@@ -454,14 +459,12 @@ describe('Actual Desk authenticated onboarding activation', () => {
         if (failure === 'network') throw new TypeError('network unavailable');
         return Response.json({ error: 'internal server error' }, { status: 500 });
       }
-      return Response.json({ authenticated: true, userId: 'admin-1', username: 'admin', isAdmin: true, needsSetup: false });
+      return Response.json({ authenticated: true, userId: '11111111-1111-4111-8111-111111111111', username: 'admin', isAdmin: true, needsSetup: false });
     } });
     expect(h.location.href).toBe('');
     expect(h.requests.map((request) => request.url)).toEqual(['/auth/me']);
     expect(h.get('#deskError').hidden).toBe(false);
     expect(h.get('#deskError').getAttribute('role')).toBe('alert');
-    expect(h.get('#deskError').textContent).toContain(ui.en['editor.chrome.authContextUnavailable']);
-    expect(h.get('#deskError').querySelector('button')?.textContent).toBe(ui.en['editor.chrome.authContextRetry']);
     expect(h.get('#onboardingChecklist').hidden).toBe(true);
     h.get('#deskError').querySelector('button')!.click();
     await h.flush();

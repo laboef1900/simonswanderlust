@@ -263,7 +263,8 @@ export function createUploadService(opts: Options): UploadService {
           r = await replace(r, { state: 'pending', incarnation, claim: randomUUID(), reason: null });
         } else {
           if (input.retryGeneration !== 0) return { statusCode: 409, body: { code: 'upload_generation_changed' } };
-          const encoding = normalizeProcessOptions(opts.settings.get());
+          const { avifQuality, webpQuality, convertJpeg } = opts.settings.get();
+          const encoding = normalizeProcessOptions({ avifQuality, webpQuality, convertJpeg });
           const baseKey = identity.key || libraryKey(identity.filename, new Date());
           const mediaKey = contentHashKey(baseKey, input.bytes, encoding);
           try {

@@ -4,6 +4,9 @@
 **/.astro
 **/.build-tmp
 uploader/data
+# Private qualification fixtures, credentials and browser profiles are not image inputs.
+**/.local
+**/.issue-runtime
 map-assets
 docs
 *.md

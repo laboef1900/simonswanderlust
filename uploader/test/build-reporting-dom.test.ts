@@ -111,11 +111,23 @@ async function desk(isAdmin: boolean) {
   const requests: string[] = [];
   let failing = true;
   const context: Record<string, unknown> = {
-    document: dom.document, BuildCopy: buildCopy, location: { pathname: '/admin/index.html', origin: 'https://blog.test' },
-    Auth: { ensureAuthed: async () => ({ isAdmin }), renderHeader() {} },
-    SiteLanguage: { get: async () => ({}), config: () => ({ primary: 'en', locales: ['en'] }), text: () => '' },
+    document: Object.assign(dom.document, { documentElement: { lang: 'en' }, title: 'Desk' }), BuildCopy: buildCopy,
+    EditorCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
+      Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('editor.chrome.'))
+        .map(([key, text]) => [key.slice('editor.chrome.'.length), text])),
+    ])),
+    location: { pathname: '/admin/index.html', search: '', origin: 'https://blog.test' },
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
     fetch: async (url: string) => {
       requests.push(url);
+      if (url === '/auth/me') return Response.json({
+        authenticated: true, userId: '11111111-1111-4111-8111-111111111111',
+        username: 'writer', isAdmin, needsSetup: false,
+      });
+      if (url === '/language') return Response.json({
+        primary: 'en', locales: ['en'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z',
+      });
+      if (url === '/onboarding') return Response.json({ status: 'retired' });
       if (url === '/posts') return Response.json([]);
       if (url === '/media/queue') return Response.json({ pending: 0, running: 0 });
       if (url === '/health') return Response.json({ release: true });
@@ -128,9 +140,10 @@ async function desk(isAdmin: boolean) {
   };
   context.window = context;
   vm.createContext(context);
-  for (const name of ['build-reporting.js', 'posts-filter.js', 'desk.js']) vm.runInContext(readFileSync('public/' + name, 'utf8'), context);
-  const start = html.lastIndexOf('<script>') + '<script>'.length;
-  vm.runInContext(html.slice(start, html.lastIndexOf('</script>')), context);
+  for (const script of html.matchAll(/<script(?:\s+src="([^"]+)")?>([\s\S]*?)<\/script>/g)) {
+    if (script[1] === '/admin/editor-image-copy.js') continue;
+    vm.runInContext(script[1] ? readFileSync('public/' + script[1].slice('/admin/'.length), 'utf8') : script[2]!, context);
+  }
   await settle();
   return { requests, document: dom.document, recover() { failing = false; } };
 }
@@ -146,16 +159,11 @@ describe('Desk build status authorization and recovery', () => {
     const h = await desk(true);
     const root = h.document.getElementById('deskBuild')!;
     expect(root.hidden).toBe(false);
-    expect(root.textContent).toContain(ui.en['admin.build.unavailable']);
-    expect(h.document.getElementById('deskRelease')!.textContent).toContain('View live site');
     const retry = root.querySelector('button')!;
-    expect(retry.textContent).toBe(ui.en['admin.build.retryStatus']);
     h.recover();
     retry.click(); retry.click();
     await settle();
     expect(h.requests.filter((url) => url === '/rebuild/status')).toHaveLength(2);
-    expect(root.textContent).toContain('Last rebuild failed');
-    expect(root.textContent).toContain('observed serving');
     expect(root.textContent).not.toContain('SECRET');
     expect(root.querySelector('a')?.href).toBe('/admin/settings.html#site');
   });

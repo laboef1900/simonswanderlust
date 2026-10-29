@@ -6,7 +6,7 @@ import { editorDocument, EditorEvent } from './editor-dom-harness.js';
 
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 function fixture(fields: Record<string, string>) {
-  const owner = randomUUID(); let signedIn = owner; let paused = false;
+  const owner = randomUUID(); let signedIn: string = owner; let paused = false;
   const dom = editorDocument('<main><p id="status"></p><button id="send">Upload</button></main>');
   const status = dom.document.getElementById('status')!, button = dom.document.getElementById('send')!;
   const sends: Record<string, unknown>[] = []; const reads: string[] = [];

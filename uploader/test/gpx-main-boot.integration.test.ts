@@ -121,12 +121,14 @@ maybe('private GPX production composition and lease-loss containment', () => {
       if (app.child.exitCode !== null || app.child.signalCode !== null) throw new Error(`Production boot exited: ${app.log()}`);
       if (!app.log().includes(`app listening on :${port}`)) return false;
       const response = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2_000) });
+      await response.arrayBuffer();
       return response.status === 200;
     }, app.log);
     const login = await fetch(`${base}/login`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ username: 'gpx-author', password }) });
     expect(login.status).toBe(200);
     cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
     expect(cookie).toMatch(/^sid=.+/);
+    await login.arrayBuffer();
   }, 30_000);
 
   afterAll(async () => {
@@ -175,6 +177,7 @@ maybe('private GPX production composition and lease-loss containment', () => {
     for (const suffix of ['', '/original']) {
       const anonymous = await fetch(`${base}/posts/${tk}/route${suffix}`);
       expect(anonymous.status).toBe(401); expect(anonymous.headers.get('cache-control')).toBe('no-store');
+      expect(await anonymous.text()).not.toContain('PRIVATE_BOOT_SOURCE');
     }
     const record = (await pgGpxStore(pool).get(tk))!;
     const privateFile = `originals/${safePairHash(tk)}/${record.source.sourceId}.gpx`;
@@ -229,8 +232,9 @@ maybe('private GPX production composition and lease-loss containment', () => {
       expect(killed.rows).toEqual([{ terminated: true }]);
       await until(async () => {
         const response = await fetch(`${base}/health`);
+        const health: unknown = await response.json();
         if (response.status !== 503) return false;
-        expect(await response.json()).toMatchObject({ storageWritable: false, release: true });
+        expect(health).toMatchObject({ storageWritable: false, release: true });
         return true;
       }, app.log);
       const restoreWhileDraining = launch('cli.ts', ['restore', '--yes', restoreInput]);
@@ -272,6 +276,9 @@ maybe('private GPX production composition and lease-loss containment', () => {
       expect(blog.status).toBe(200); expect(await blog.text()).toContain('STATIC_BOOT_RELEASE');
       const admin = await fetch(`${base}/admin/editor.html`, { headers });
       expect(admin.status).toBe(200); expect(admin.headers.get('content-type')).toContain('text/html');
+      // Finish the static stream we opened before asking Fastify to drain HTTP.
+      // fetch() resolving proves headers arrived, not that the response finished.
+      await admin.arrayBuffer();
     }
     expect(app.child.exitCode).toBeNull(); expect(app.child.signalCode).toBeNull();
     expect(app.log()).not.toContain('PRIVATE_BOOT_SOURCE');
