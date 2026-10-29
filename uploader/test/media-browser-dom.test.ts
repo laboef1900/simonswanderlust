@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { webcrypto } from 'node:crypto';
 import { setImmediate } from 'node:timers/promises';
 import { ui } from '../../site/src/i18n/ui.js';
 
@@ -25,7 +26,9 @@ type Listener = (ev: Record<string, unknown>) => void;
 class FakeNode {
   id = '';
   className = '';
-  textContent = '';
+  private text = '';
+  get textContent(): string { return this.text + this.children.map(child => child.textContent).join(''); }
+  set textContent(value: string) { this.text = value; this.children = []; }
   value = '';
   hidden = false;
   disabled = false;
@@ -44,6 +47,9 @@ class FakeNode {
   set innerHTML(v: string) { if (v === '') this.children = []; }
   get firstElementChild(): FakeNode | null { return this.children[0] ?? null; }
   appendChild(c: FakeNode): FakeNode { this.children.push(c); return c; }
+  append(...nodes: FakeNode[]): void { nodes.forEach(node => this.appendChild(node)); }
+  adjacent: FakeNode[] = [];
+  insertAdjacentElement(_position: string, node: FakeNode): FakeNode { this.adjacent.push(node); return node; }
   remove(): void {}
   focused = false;
   focus(): void { this.focused = true; }
@@ -115,7 +121,8 @@ interface Page {
   flush(): Promise<void>;
 }
 
-function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en' } = {}): Page {
+function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en'; prompt?: string;
+  request?: (url: string, init?: { method?: string; body?: string }) => Promise<unknown> | undefined } = {}): Page {
   const roots = new Map<string, FakeNode>();
   for (const id of pageIds) {
     const n = new FakeNode('div');
@@ -141,6 +148,9 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   const confirmAnswer = { value: false };
   const ok = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
   const fetch = (url: string, init?: { method?: string; body?: string }): Promise<unknown> => {
+    const override = opts.request?.(url, init);
+    if (override) return override;
+    if (url === '/auth/me') return ok({ authenticated: true, userId: '11111111-1111-4111-8111-111111111111', username: 'simon', isAdmin: opts.isAdmin ?? true });
     if (url.startsWith('/media/folders')) return ok([]);
     if (init?.method === 'PATCH') {
       patches.push({ url, body: JSON.parse(init.body ?? '{}') as Record<string, unknown> });
@@ -166,10 +176,11 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
     location: { href: '', origin: 'https://app.example', protocol: 'https:' },
     fetch,
     URL, AbortController, AbortSignal,
+    crypto: webcrypto, addEventListener() {},
     setTimeout: (fn: () => void) => { timers.push({ fn, cleared: false }); return timers.length; },
     clearTimeout: (id: number) => { const t = timers[id - 1]; if (t) t.cleared = true; },
     confirm: (msg: string) => { confirms.push(msg); return confirmAnswer.value; },
-    prompt: () => null,
+    prompt: () => opts.prompt ?? null,
     console,
     FormData: class { append() {} },
     XMLHttpRequest: class {},
@@ -689,5 +700,71 @@ describe('media-browser search', () => {
     await page.flush();
     expect(page.el('out').textContent).toBe('1 photo(s)');
     expect(page.el('grid').querySelectorAll('.media-cell')).toHaveLength(1);
+  });
+});
+
+describe('folder and move ambiguous outcomes', () => {
+  const reply = (body: unknown, status = 200) => Promise.resolve({ status, ok: status >= 200 && status < 300, json: async () => body });
+  it('checks the folder tree once after a lost create response and only repeats the write explicitly', async () => {
+    let creates = 0; let reads = 0;
+    const page = loadPage({ prompt: 'Iceland', request: (url, init) => {
+      if (url !== '/media/folders') return;
+      if (init?.method === 'POST') { creates++; return Promise.reject(new Error('Response lost')); }
+      reads++; return reply([]);
+    } });
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    const initialReads = reads;
+    page.el('newFolder').click(); await page.flush();
+    const panel = page.el('out').adjacent[0]!;
+    expect(creates).toBe(1); expect(reads).toBe(initialReads + 1);
+    expect(panel.textContent).toContain(ui.en['editor.chrome.folderAbsent']);
+    const [check, again] = panel.children.filter(child => child.tagName === 'button');
+    expect(again!.hidden).toBe(false);
+    check!.click(); await page.flush();
+    expect(creates).toBe(1); expect(reads).toBe(initialReads + 2);
+    again!.click(); await page.flush();
+    expect(creates).toBe(2);
+  });
+  it('uses a single selected-key lookup, not a filtered page, and retains Unknown for incomplete evidence', async () => {
+    let moves = 0; const lookups: unknown[] = []; let complete = false;
+    const page = loadPage({ request: (url, init) => {
+      if (url === '/media/move') { moves++; return reply({ error: 'upstream timeout' }, 503); }
+      if (url === '/media/lookup') {
+        lookups.push(JSON.parse(init?.body ?? '{}'));
+        return reply({ items: complete ? [{ key: 'selected', folder: 'Another folder' }] : [] });
+      }
+    } });
+    page.rows.set('selected', item('selected'));
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [item('selected')], total: 201 }); await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+    page.el('moveTarget').value = 'Target';
+    page.el('moveSelected').click(); await page.flush();
+    const panel = page.el('out').adjacent[0]!;
+    const [check, again] = panel.children.filter(child => child.tagName === 'button');
+    expect(lookups).toEqual([{ keys: ['selected'] }]);
+    expect(page.listRequests).toHaveLength(0);
+    expect(panel.textContent).toContain(ui.en['editor.chrome.writeUnknown']);
+    expect(again!.hidden).toBe(true);
+    complete = true; check!.click(); await page.flush();
+    expect(moves).toBe(1);
+    expect(panel.textContent).toContain('selected: Another folder');
+    expect(again!.hidden).toBe(false);
+    // Changing a visible-page filter cannot remove this operation's evidence.
+    page.el('fStatus').value = 'failed'; page.el('fStatus').dispatch('change'); await page.flush();
+    page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    expect(panel.textContent).toContain('selected: Another folder');
+    again!.click(); await page.flush(); expect(moves).toBe(2);
+  });
+  it('does not treat an empty 2xx move body as acknowledgement', async () => {
+    let probes = 0;
+    const page = loadPage({ request: (url) => {
+      if (url === '/media/move') return reply({});
+      if (url === '/media/lookup') { probes++; return reply({ items: [{ key: 'selected', missing: true }] }); }
+    } });
+    page.rows.set('selected', item('selected'));
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [item('selected')], total: 1 }); await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click(); page.el('moveSelected').click(); await page.flush();
+    expect(probes).toBe(1);
+    expect(page.el('out').adjacent[0]!.textContent).toContain(ui.en['editor.chrome.moveDeleted']);
   });
 });

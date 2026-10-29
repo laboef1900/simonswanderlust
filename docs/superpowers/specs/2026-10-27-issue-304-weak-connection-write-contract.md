@@ -976,3 +976,91 @@ platform-specific evidence and withheld deployment authorization, alongside the 
 runtime ownership safeguards. Before deployment qualification, the owner must provide an
 authorized disposable target directory on the actual deployment filesystem; no existing
 production content is a qualification fixture.
+
+## #305 implementation integration and qualification handoff
+
+Implementation notes, **not a passed qualification record**. The implementing worker did not
+run builds, tests, typechecks, formatters, containers or browser sessions. The parent owns the
+single combined qualification wave and subsequent independent review. The inherited #304
+platform evidence above remains binding; it is not evidence that this integration or the
+actual deployment mount passed.
+
+### Source boundaries and acceptance map
+
+| Acceptance | Implementation boundary | Added/updated regression evidence to execute |
+|---|---|---|
+| Create-only UUID post identity; empty slugs do not merge independent attempts | `server.ts` validates canonical create identity; `PostSaveOptions.createOnly` checks inside memory/PG serialization before slug collision checks | `write-receipts.test.ts`, raw protocol cases in `server.test.ts` |
+| Required captured owner/save ID, writer-only latest receipt, atomic read projection | `posts.ts` repeatable-read projection and `pages.ts` single-query projection; owner fence before content/revision/build writes; no-store responses | `write-receipts.test.ts`, `server.test.ts`, `write-recovery.test.ts` |
+| Every competing writer invalidates evidence | `touchPostPair`, receipt-less importer saves, publish/unpublish/language transitions, page saves; offline restore clears preserved v1 pages too | `write-receipts.test.ts`, real-main GPX receipt invalidation in `gpx-main-boot.integration.test.ts`, `backup.integration.test.ts` |
+| One bounded probe, no automatic write replay, late own-save recognition | `write-recovery.js` retains unresolved attempts and exact snapshots; unavailable probes allow only manual Check again; ordinary acknowledgements use the same owner/generation gate | `write-recovery.test.ts`, `editor-dom.test.ts`, `language-admin-dom.test.ts`, `editor-gpx.test.ts` |
+| Preserve-and-compare without cleaning newer edits | Shared controller compares current form, attempts and stored text; stored-version adoption creates a separate recovery context first and refuses if preservation fails | `write-recovery.test.ts` includes newer edits, older late attempt, A→B late acknowledgement retention, quota failure and private legacy bytes |
+| All upload entry points use immutable account-scoped identities | `media-api.js` plus `upload-recovery.js`; Media, editor hero/body, About body and title-image consumers; newer hero selection/title alt/framing are preserved | `media-api.test.ts`, `upload-recovery.test.ts`, inline adoption cases in `editor-dom.test.ts`; real-browser all-caller gate below |
+| Durable upload state, frozen hash/profile, account-lifetime identity, terminal deletion | `upload-receipts.ts`, `upload-service.ts`, user FK cascade, receipt/media deletion transaction and #348 same-key admission | `upload-receipts.integration.test.ts`, `upload-service.test.ts`, existing #348 server/queue regressions |
+| Deferred recovery and crash boundaries | One startup page, coalesced capacity wakeups, keyset continuation, explicit Rescan after uncertainty; GET never enqueues; accepted and retryable counts are distinct | `upload-service.test.ts`: queue-full retained original, delayed finalization, positive absence, failed original write, corrupt original, ready-without-original and >100 receipts |
+| Native lifetime ownership, filesystem-before-PG admission, no lease fallback | `data-owner.ts` wraps the qualified owned N-API binding; main and offline storage-writing CLI paths hold its descriptor until explicit quiescence/exit | `data-owner.integration.test.ts`, strengthened real-main PG-loss/restore test in `gpx-main-boot.integration.test.ts`; native production-image matrix below |
+| Folder/move reconciliation independent of visible pagination | Bounded reads; one no-store, authenticated `/media/lookup` query for 1–100 keys; explicit missing entries; per-operation panels survive list refresh | `server.test.ts`, `media-browser-dom.test.ts` (lost create, incomplete lookup, malformed 2xx, later filter change) |
+| Paused Media batch, explicit same-owner resume and no persisted Files | Queue pause is distinct from in-flight evidence; focus/login never replay; Unknown cannot transfer; page-exit warning remains active | `media-api.test.ts`, `upload-recovery.test.ts`, parent second-tab/browser scenarios |
+| Strict bootstrap/restore compatibility | `onboarding-bootstrap.ts` extends the merged #280 language catalog with exact receipt types, defaults, nullability, CHECKs, indexes and FK semantics | `onboarding.integration.test.ts`, `backup.integration.test.ts`; exact PG18.6 receipt catalog was supplied by parent from a disposable empty database |
+
+The local stack integrates the actual #348 queue-recovery branch and actual #280
+empty-state/language-catalog branch (including #285 public-output work), rather than copying
+their patches. #284's consent race fence is retained as
+`PostSaveOptions.baseLanguageUpdatedAt`; there is no Date/options compatibility overload.
+The #288 generic-page branch is **not** copied into this branch. Its later integration must
+use the same key-agnostic page receipt/options contract and migrate its actual callers.
+#306 retains ownership of conditional media PATCH/offline/full conflict-dialog work; it is
+not a deferral of the preserve-and-compare behavior implemented here.
+
+### Parent qualification commands and scenarios
+
+Use Node 26 and the parent's isolated PostgreSQL 18 fixture, never a content database.
+Keep the parent's already-qualified `pg_dump` wrapper on `PATH`. With the appropriate
+`TEST_DATABASE_URL`/`DATABASE_URL` already exported:
+
+```sh
+# Working directory: uploader/
+npm run build:native
+npm run typecheck
+npm test
+
+# Working directory: site/
+npm test
+npx astro check
+npm run build
+```
+
+`build:native` uses the owned qualified C/recipe and pinned Node 26.12.1 headers; CI builds
+the binding before uploader tests. The production Dockerfile builds it in a separate DHI
+stage and copies only the artifact/provenance/license into the runtime. Qualification
+workers/helpers are not shipped as runtime lock owners. Preserve the native proof source
+and canonical qualification artifacts when evaluating the cutover.
+
+The combined parent wave must additionally exercise:
+
+1. Lost post-create, post-update and About responses; older late commits after a missing
+   read; malformed/failed reconciliation; normal acknowledgements arriving after newer text;
+   another writer's save; explicit compare/Use stored and recovery-storage failure.
+2. A→B in a second tab before sending and while a response is in flight; exact owner/receipt
+   envelopes, preserved A-scoped copies and late A acknowledgement evidence; logout/expiry,
+   two same-owner tabs, private legacy records and explicit same-owner resume.
+3. Real multipart Media, hero, body, About and title-image uploads: lost response, 120-second
+   no-progress/response watchdog, one receipt read, manual checks, retry generation, immutable
+   profile/year identity, queue-full drain, account deletion and media deletion. Keep an Unknown
+   file while switching accounts; no request may transfer it or persist its `File`.
+4. Receipt/media transaction failures and process kills before/after original rename, enqueue
+   and receipt commit; >100 pending receipts, blocked keyset continuation, coalesced wakeups,
+   shutdown during issued I/O, missing/corrupt originals and a complete ready image without its
+   original. GET must remain inert in every state.
+5. Folder ensure and bulk move lost responses while changing folder/search/status/page;
+   target/other/deleted/incomplete lookup outcomes and explicit-only retries.
+6. Build the **actual production image** on each already-qualified native DHI architecture;
+   rerun descriptor/inode/CLOEXEC/ordinary-child/SIGKILL/PG-loss/app-versus-offline-restore
+   exclusion using the packaged binding and real main/CLI entry points. Do not replace this
+   with a helper lease or infer deployment support from a successful local lock.
+
+The actual deployment mount is still unqualified until its separately authorized disposable
+directory passes that matrix. No release/deployment/enablement permission follows from these
+source changes, tests being present, or a green combined CI run. Containment and rollback are
+documented in `SECURITY.md` and `ARCHITECTURE.md`: stop writers first, keep backups and receipt
+evidence, never delete the stable lock inode, and do not roll back only one side of this
+fail-closed client/server protocol.

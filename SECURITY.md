@@ -128,9 +128,11 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   The Desk consumes this same helper before its admin-only checklist; client roles are
   presentation gates, while the onboarding routes still require admin authorization.
   Login, setup, `/auth/status`, session issuance and expiry are unchanged.
-  The non-secret account ID does not authorize owner fencing, write receipts, draft stashes
-  or native locking (#304/#305/#306). Rollback removes the endpoint/helper cutover and Desk
-  activation together without clearing onboarding retirement state or restore fences.
+  The non-secret account ID is correlation context, never authorization. Separately approved
+  #305 uses it for captured-owner comparisons, writer-only receipt reads and scoped local
+  recovery; authenticated route roles remain authoritative (see **Ambiguous writes and local
+  recovery** below). Rolling back the helper now also requires rolling back those dependent
+  clients together, without clearing onboarding retirement state or restore fences.
 - **First-admin setup** (`/setup`) is only available while no users exist, and is **serialized**
   with a per-process lock so two concurrent requests cannot both create an admin (TOCTOU closed).
 - **First-run checklist** (#279, approved #278 Q1–Q5/P1–P2) is install-wide admin-only

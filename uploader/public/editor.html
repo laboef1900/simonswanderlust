@@ -1047,6 +1047,8 @@
         statusEl.textContent = 'Uploading…';
         const ownerId = writeRecovery.ownerId();
         const alt = altInput.value;
+        const previousSrc = $(locale + 'HeroSrc').value;
+        const previousFocus = HeroFocus.read(locale);
 
         try {
           const body = await UploadRecovery.run({
@@ -1055,6 +1057,10 @@
             onUnauthed: () => guard.redirectToLogin(),
           });
           if (!body || !writeRecovery.canAdopt(ownerId)) return;
+          if ($(locale + 'HeroSrc').value !== previousSrc) {
+            statusEl.textContent = editorCopy.uploadNotApplied + ' ' + body.src;
+            return;
+          }
 
           storyReview?.invalidate();
           $(locale + 'HeroSrc').value = body.src;
@@ -1062,9 +1068,9 @@
           $(locale + 'HeroHeight').value = body.height;
           $(locale + 'HeroFormat').value = body.format || '';
           // Hidden inputs are set programmatically — no input event fires.
-          // A new photo invalidates the old focal point, so recentre before
-          // showing the control for the new frame.
-          HeroFocus.set(locale, 50, 50);
+          // Reset only unchanged framing; do not overwrite edits made while sending.
+          const currentFocus = HeroFocus.read(locale);
+          if (currentFocus.x === previousFocus.x && currentFocus.y === previousFocus.y) HeroFocus.set(locale, 50, 50);
           HeroFocus.sync(locale);
           guard.markDirty();
           // Encoding is asynchronous now (see server.ts POST /upload): the URL

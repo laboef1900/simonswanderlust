@@ -12,9 +12,10 @@ import { createEncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock } from '../src/work-lock.js';
 import { defaultSettings, validate, type SettingsStore } from '../src/settings.js';
 import { formatsFor, variantWidths } from '../src/variants.js';
+import * as storage from '../src/storage.js';
 
 const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => { for (const clean of cleanups.splice(0).reverse()) await clean(); });
+afterEach(async () => { vi.restoreAllMocks(); for (const clean of cleanups.splice(0).reverse()) await clean(); });
 function deferred() { const { promise, resolve } = Promise.withResolvers<void>(); return { promise, release: resolve }; }
 async function fixture(options: { blocked?: boolean; receipts?: UploadReceiptStore; maxBacklog?: number } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'receipt-upload-'));
@@ -96,6 +97,7 @@ describe('durable upload receipts', () => {
     const receipts = memoryUploadReceiptStore(); const finalize = receipts.accept.bind(receipts); const gate = deferred();
     receipts.accept = async (...args) => { await gate.promise; return finalize(...args); };
     const f = await fixture({ receipts }); const input = f.input(); const pending = f.service.upload(input);
+    cleanups.push(async () => { gate.release(); await pending.catch(() => {}); });
     await until(async () => await receipts.get(input.userId, input.uploadId) !== null);
     expect((await f.service.get(input.userId, input.uploadId))?.state).toBe('pending');
     const recovery = await f.service.recover(); expect(recovery.accepted).toBe(0);
@@ -125,6 +127,35 @@ describe('durable upload receipts', () => {
     expect((await f.service.upload({ ...input, retryGeneration: 1 })).body.state).toBe('accepted');
     expect((await f.service.upload(input)).body).toMatchObject({ code: 'upload_generation_changed' });
   });
+  it('settles a failed original write as retryable only after proving no complete original or job exists', async () => {
+    const f = await fixture(); const input = f.input();
+    vi.spyOn(storage, 'storeOriginal').mockRejectedValueOnce(Object.assign(new Error('Disk full'), { code: 'ENOSPC' }));
+    const outcome = await f.service.upload(input);
+    expect(outcome.body).toMatchObject({ state: 'retryable', retryGeneration: 1 });
+    expect(f.queue.stats()).toEqual({ running: 0, pending: 0 });
+    expect((await f.service.upload(input)).body).toMatchObject({ code: 'upload_generation_changed' });
+  });
+  it('keeps a corrupt retained original pending, never authorizing blind retransmission', async () => {
+    const f = await fixture({ blocked: true }); await f.service.upload(f.input('trips/test/first'));
+    await f.service.upload(f.input('trips/test/second'));
+    const input = f.input('trips/test/corrupt'); await f.service.upload(input);
+    const receipt = (await f.receipts.get(input.userId, input.uploadId))!;
+    await writeFile(join(f.dir, `${receipt.mediaKey}-orig.${receipt.frozen.ext}`), 'incomplete');
+    await f.service.recover();
+    expect(await f.service.get(input.userId, input.uploadId)).toMatchObject({ state: 'pending', reason: 'recovery_required' });
+    expect((await f.service.upload(input)).statusCode).toBe(202);
+    expect(f.queue.stats()).toEqual({ running: 1, pending: 1 });
+  });
+  it('recognizes a matching complete ready image without requiring its removed original', async () => {
+    const f = await fixture(); const input = f.input(); await f.service.upload(input); await f.queue.idle();
+    const receipt = (await f.receipts.get(input.userId, input.uploadId))!;
+    await rm(join(f.dir, `${receipt.mediaKey}-orig.${receipt.frozen.ext}`));
+    const pending = { ...receipt, uploadId: randomUUID(), state: 'pending' as const, result: null, claim: randomUUID() };
+    await f.receipts.insert(pending);
+    expect(await f.service.recover()).toMatchObject({ accepted: 1, retryable: 0 });
+    expect((await f.service.get(pending.userId, pending.uploadId))?.state).toBe('accepted');
+    expect(f.encoded).toEqual([receipt.mediaKey]);
+  });
   it('continues beyond a bounded startup page instead of stranding the 101st retained receipt', async () => {
     const f = await fixture({ maxBacklog: 200 }); const input = f.input(); const result = await f.service.upload(input); await f.queue.idle();
     const receipt = (await f.receipts.get(input.userId, input.uploadId))!;
@@ -134,5 +165,19 @@ describe('durable upload receipts', () => {
     await until(async () => (await f.receipts.counts()).pending === 0);
     expect(get.mock.calls.every(([, limit]) => limit === 100)).toBe(true);
     expect(f.encoded).toEqual([String(result.body.key)]);
+  });
+  it('advances explicit Rescan past a blocked receipt instead of starving later identities', async () => {
+    const f = await fixture(); const input = f.input(); await f.service.upload(input); await f.queue.idle();
+    const receipt = (await f.receipts.get(input.userId, input.uploadId))!;
+    const blocked = { ...receipt, uploadId: '00000000-0000-4000-8000-000000000001', state: 'pending' as const,
+      result: null, claim: randomUUID(), frozen: { ...receipt.frozen, width: receipt.frozen.width + 1 } };
+    const later = { ...receipt, uploadId: '00000000-0000-4000-8000-000000000002', state: 'pending' as const, result: null, claim: randomUUID() };
+    await f.receipts.insert(blocked); await f.receipts.insert(later);
+    expect(await f.service.start()).toMatchObject({ examined: 1, accepted: 0, blocked: 1, continuationAvailable: true });
+    expect((await f.service.get(later.userId, later.uploadId))?.state).toBe('pending');
+    expect(await f.service.recover()).toMatchObject({ accepted: 1 });
+    expect((await f.service.get(later.userId, later.uploadId))?.state).toBe('accepted');
+    expect(await f.service.get(blocked.userId, blocked.uploadId)).toMatchObject({ state: 'pending', reason: 'recovery_required' });
+    expect(f.encoded).toEqual([receipt.mediaKey]);
   });
 });

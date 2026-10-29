@@ -300,6 +300,20 @@ describe.skipIf(!url)('onboarding PostgreSQL boot and snapshot boundary', () => 
     await pool.query('DELETE FROM site_identity');
     expect(await prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).toBe(true);
   });
+  it.each(['table', 'save-columns'] as const)('repairs only absent upload/save receipt bootstrap metadata: %s', async missing => {
+    await ensureSchema(pool);
+    await assertBootstrapOnlyTarget(pool, guard);
+    if (missing === 'table') await pool.query('DROP TABLE upload_receipts');
+    else {
+      await pool.query('ALTER TABLE posts DROP COLUMN last_save_id, DROP COLUMN last_save_by');
+      await pool.query('ALTER TABLE pages DROP COLUMN last_save_id, DROP COLUMN last_save_by');
+    }
+    await assertBootstrapOnlyTarget(pool, guard);
+    expect(await prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).toBe(true);
+    await assertBootstrapOnlyTarget(pool, guard);
+    expect((await pool.query('SELECT * FROM upload_receipts')).rows).toEqual([]);
+    expect((await pool.query('SELECT last_save_id, last_save_by FROM pages')).rows.every(row => row.last_save_id === null && row.last_save_by === null)).toBe(true);
+  });
   it.each(['table', 'seed', 'omitted-column'] as const)('repairs only genuinely absent language bootstrap metadata: %s', async (missing) => {
     await ensureSchema(pool);
     await assertBootstrapOnlyTarget(pool, guard);
@@ -486,6 +500,10 @@ describe.skipIf(!url)('onboarding PostgreSQL boot and snapshot boundary', () => 
     expect((await pool.query('SELECT * FROM onboarding_state')).rows).toEqual([]);
   });
   it.each([
+    'ALTER TABLE upload_receipts DROP CONSTRAINT upload_receipts_state_check',
+    "ALTER TABLE upload_receipts DROP CONSTRAINT upload_receipts_generation_check; ALTER TABLE upload_receipts ADD CHECK (generation >= -1)",
+    'ALTER TABLE upload_receipts DROP CONSTRAINT upload_receipts_user_id_fkey',
+    'ALTER TABLE upload_receipts DROP CONSTRAINT upload_receipts_user_id_fkey; ALTER TABLE upload_receipts ADD FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT',
     'ALTER TABLE pages DROP CONSTRAINT pages_locale_check',
     "ALTER TABLE pages DROP CONSTRAINT pages_locale_check; ALTER TABLE pages ADD CONSTRAINT pages_locale_check CHECK (locale IN ('de','en','fr'))",
     "ALTER TABLE pages ADD CONSTRAINT owner_title CHECK (title <> 'Owner')",

@@ -103,7 +103,7 @@ window.DraftGuard = (function () {
       else own = previous;
     }
     function freshContext() {
-      stashNow(); // Preserve the complete local copy before an explicit stored-version load.
+      if (!stashNow()) throw new Error('draft_recovery_unavailable');
       context = crypto.randomUUID(); own = null; adopted = null;
       generation = 0; dirty = false; cancelTimer();
     }

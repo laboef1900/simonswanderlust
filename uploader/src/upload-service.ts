@@ -16,7 +16,7 @@ import { UPLOAD_UUID_RE, type ReceiptCursor, type UploadIdentity, type UploadRec
 export interface UploadInput extends UploadIdentity {
   userId: string; uploadId: string; retryGeneration: number; bytes: Buffer;
 }
-export interface UploadRecoveryReport { pending: number; blocked: number; examined: number; accepted: number; continuationAvailable: boolean }
+export interface UploadRecoveryReport { pending: number; blocked: number; examined: number; accepted: number; retryable: number; continuationAvailable: boolean }
 export interface UploadService {
   upload(input: UploadInput): Promise<{ statusCode: number; body: Record<string, unknown> }>;
   get(userId: string, uploadId: string): Promise<Record<string, unknown> | null>;
@@ -86,6 +86,7 @@ export function createUploadService(opts: Options): UploadService {
     finally { await file.close(); }
   }
   async function ready(r: UploadReceipt, item: MediaItem): Promise<boolean> {
+    assertSafeKey(r.mediaKey);
     if (!rowMatches(r, item) || item.status !== 'ready') return false;
     try {
       for (const width of variantWidths(item.width)) for (const format of formatsFor(item.format)) {
@@ -170,26 +171,26 @@ export function createUploadService(opts: Options): UploadService {
       await enqueue(r, item, existing);
     });
   }
-  async function recoverOne(candidate: UploadReceipt): Promise<boolean> {
+  async function recoverOne(candidate: UploadReceipt): Promise<'accepted' | 'retryable' | null> {
     const key = token(candidate.userId, candidate.uploadId);
-    if (active.has(key)) return false;
-    return exclusive(key, () => opts.queue.withAdmission(candidate.mediaKey, async () => {
+    if (active.has(key)) return null;
+    return exclusive(key, () => opts.queue.withAdmission(candidate.mediaKey, async (): Promise<'accepted' | 'retryable' | null> => {
       let r = await opts.receipts.get(candidate.userId, candidate.uploadId);
-      if (!r || r.state !== 'pending') return false;
+      if (!r || r.state !== 'pending') return null;
       // The lifetime filesystem owner positively excludes previous incarnations.
       r = await replace(r, { incarnation, claim: randomUUID() });
       const item = await opts.media.get(r.mediaKey);
-      if (item && !rowMatches(r, item)) { await pending(r, false, 'recovery_required'); return false; }
-      if (item && await ready(r, item)) { await accept(r, item, false); return true; }
+      if (item && !rowMatches(r, item)) { await pending(r, false, 'recovery_required'); return null; }
+      if (item && await ready(r, item)) { await accept(r, item, false); return 'accepted'; }
       const evidence = await original(r);
       if (evidence === 'absent' && !opts.queue.isActive(r.mediaKey)) {
         await opts.media.setStatusIfProcessing(r.mediaKey, 'failed', 'write_failed');
         await replace(r, { state: 'retryable', generation: r.generation + 1, originalRetained: false });
-        return true;
+        return 'retryable';
       }
-      if (evidence !== 'matching' || !item) { await pending(r, evidence === 'matching', 'recovery_required'); return false; }
-      if (opts.queue.isActive(r.mediaKey)) { await accept(r, { ...item, status: 'processing' }, false); return true; }
-      return enqueue(r, item, item);
+      if (evidence !== 'matching' || !item) { await pending(r, evidence === 'matching', 'recovery_required'); return null; }
+      if (opts.queue.isActive(r.mediaKey)) { await accept(r, { ...item, status: 'processing' }, false); return 'accepted'; }
+      return await enqueue(r, item, item) ? 'accepted' : null;
     }));
   }
   async function page(): Promise<UploadRecoveryReport> {
@@ -197,19 +198,22 @@ export function createUploadService(opts: Options): UploadService {
     blockedPass = false;
     const rows = await opts.receipts.pending(cursor, 100);
     let accepted = 0;
+    let retryable = 0;
     let examined = 0;
     for (const r of rows) {
       cursor = { userId: r.userId, uploadId: r.uploadId };
       examined++;
       try {
-        if (await recoverOne(r)) accepted++;
+        const outcome = await recoverOne(r);
+        if (outcome === 'accepted') accepted++;
+        else if (outcome === 'retryable') retryable++;
         else if ((await opts.receipts.get(r.userId, r.uploadId))?.reason === 'recovery_required') { blockedPass = true; break; }
       } catch { blockedPass = true; break; } // Explicit Rescan owns unavailable DB/disk/finalization recovery.
       if (opts.queue.availableCapacity() === 0) break;
     }
     if (rows.length === 0 || examined === rows.length && rows.length < 100) cursor = null;
     const counts = await opts.receipts.counts();
-    return { ...counts, examined, accepted, continuationAvailable: counts.pending > 0 };
+    return { ...counts, examined, accepted, retryable, continuationAvailable: counts.pending > 0 };
   }
   function trigger(): void {
     if (stopped || !opts.isWritable()) return;
@@ -222,7 +226,7 @@ export function createUploadService(opts: Options): UploadService {
     running = pass;
     void pass.then(async (report) => {
       running = undefined;
-      const next = !blockedPass && (wakeup || report.continuationAvailable && (report.accepted > 0 || cursor !== null));
+      const next = !blockedPass && (wakeup || report.continuationAvailable && (report.accepted + report.retryable > 0 || cursor !== null));
       wakeup = false;
       if (next && !stopped && opts.isWritable() && opts.queue.availableCapacity() > 0) { await yieldTurn(); trigger(); }
     }, () => { running = undefined; wakeup = false; });
@@ -290,7 +294,7 @@ export function createUploadService(opts: Options): UploadService {
       try { report = await first; return report; }
       finally {
         running = undefined;
-        const next = !blockedPass && (wakeup || report?.continuationAvailable && (report.accepted > 0 || cursor !== null));
+        const next = !blockedPass && (wakeup || report?.continuationAvailable && (report.accepted + report.retryable > 0 || cursor !== null));
         wakeup = false;
         if (next && opts.queue.availableCapacity() > 0) { await yieldTurn(); trigger(); }
       }

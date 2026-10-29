@@ -65,6 +65,34 @@ describe('write outcome reconciliation', () => {
     expect(f.local.map.size).toBeGreaterThan(0);
     expect(JSON.stringify([...f.local.map.values()])).toContain('Newer');
   });
+  it('does not clean edits typed before a normal acknowledgement arrives', async () => {
+    const f = fixture(); f.edit('Sent');
+    f.handle(async (_url, init) => {
+      const sent = JSON.parse(String(init?.body));
+      f.edit('Newer before acknowledgement');
+      return response({ ...sent, ownerUserId: f.owner, updatedAt: '2026-10-02T00:00:00.000Z' });
+    });
+    expect(await f.save()).toBe(true);
+    expect(f.calls).toHaveLength(1);
+    expect(f.guard.isDirty()).toBe(true);
+    expect(JSON.stringify([...f.local.map.values()])).toContain('Newer before acknowledgement');
+  });
+  it('permits only manual Check again after unavailable reconciliation, not another write', async () => {
+    const f = fixture(); f.edit('Local');
+    f.handle(async (_url, init) => {
+      if (init?.method === 'POST') throw new Error('Lost response');
+      return response({ error: 'unavailable' }, 503);
+    });
+    expect(await f.save()).toBe(false); expect(f.calls).toHaveLength(2);
+    f.edit('Newer local'); expect(await f.save()).toBe(false);
+    expect(f.calls).toHaveLength(2);
+    f.handle(async (_url, init) => init?.method === 'POST'
+      ? response({ ...JSON.parse(String(init.body)), ownerUserId: f.owner, updatedAt: '2026-10-02T00:00:00.000Z' })
+      : response({}, 404));
+    expect(await f.recovery.probe()).toBe(false);
+    expect(await f.save()).toBe(true);
+    expect(f.calls.map(call => call.init?.method ?? 'GET')).toEqual(['POST', 'GET', 'GET', 'POST']);
+  });
   it('retains an earlier attempt after a 404 and recognizes its late commit during a later 409 probe', async () => {
     const f = fixture(); f.edit('First');
     let original: Record<string, unknown> = {}; let writes = 0; let reads = 0;
@@ -107,6 +135,10 @@ describe('write outcome reconciliation', () => {
     });
     expect(await f.save()).toBe(false); expect(f.adoptions).toEqual([]); expect(f.guard.isDirty()).toBe(true);
     expect(f.calls).toHaveLength(1);
+    expect(f.recovery.exportState().attempts[0]).toMatchObject({
+      acknowledgement: { ownerUserId: f.owner, saved: { updatedAt: '2026-10-02T00:00:00.000Z' } },
+    });
+    expect([...f.local.map.values()].some(raw => raw.includes('acknowledgement'))).toBe(true);
   });
   it('keeps both local text and foreign stored content visible without assigning its token', async () => {
     const f = fixture({ resource: randomUUID() }); f.edit('Local unsaved');
@@ -146,6 +178,18 @@ describe('scoped draft recovery', () => {
     expect([...local.map.values()].some(raw => raw.includes('A newer'))).toBe(true);
     const c = fixture({ storage: local, owner }); c.edit('C'); c.guard.markClean();
     expect([...local.map.values()].some(raw => raw.includes('A newer'))).toBe(true);
+  });
+  it('refuses stored-version replacement when the current local copy cannot be preserved', () => {
+    const local = storage(); const f = fixture({ storage: local });
+    f.edit('Earlier'); f.guard.stashNow();
+    const retained = [...local.map.entries()];
+    f.edit('Latest unsaved');
+    local.setItem = () => { throw new Error('Quota exceeded'); };
+    expect(() => f.guard.freshContext()).toThrow('draft_recovery_unavailable');
+    expect(f.guard.isDirty()).toBe(true);
+    expect(f.guard.snapshot()).toBe(2);
+    expect([...local.map.entries()]).toEqual(retained);
+    expect(f.calls).toEqual([]);
   });
   it('restores a new-post create identity and unresolved snapshots without performing a request', async () => {
     const local = storage(); const owner = randomUUID(); const a = fixture({ storage: local, owner });

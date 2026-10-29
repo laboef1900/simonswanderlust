@@ -68,6 +68,13 @@ maybe('backup round-trip (Postgres)', () => {
       ON CONFLICT (key,locale) DO UPDATE SET title=EXCLUDED.title, body_markdown=EXCLUDED.body_markdown`);
     await pool.query(`UPDATE posts SET last_save_id='11111111-1111-4111-8111-111111111111', last_save_by=$1`, [u.id]);
     await pool.query(`UPDATE pages SET last_save_id='11111111-1111-4111-8111-111111111111', last_save_by=$1`, [u.id]);
+    const addReceipt = () => pool.query(`INSERT INTO upload_receipts
+      (user_id,upload_id,media_key,sha256,identity,frozen,state,incarnation,claim)
+      VALUES ($1,'33333333-3333-4333-8333-333333333333','library/photo-12345678',$2,
+        '{"key":"","filename":"photo.jpg","title":"","alt":"","folder":""}',
+        '{"baseKey":"library/photo","encoding":{},"ext":"jpg","width":8,"height":6,"bytes":100}',
+        'pending','44444444-4444-4444-8444-444444444444','55555555-5555-4555-8555-555555555555')`, [u.id, 'a'.repeat(64)]);
+    await addReceipt();
 
     const file = join(dir, await dumpDatabase(pool, dir));
     const exported = await readDump(file);
@@ -81,6 +88,9 @@ maybe('backup round-trip (Postgres)', () => {
     expect((await pool.query(`SELECT count(*) AS n FROM pages`)).rows[0].n).toBe('0');
 
     const counts = await restoreDatabase(pool, file);
+    await addReceipt(); // A live, unresolved attempt must also disappear on restore without a manual wipe.
+    await restoreDatabase(pool, file);
+    expect((await pool.query('SELECT count(*) AS n FROM upload_receipts')).rows[0].n).toBe('0');
     expect(counts.users).toBe(1);
     expect(counts.posts).toBe(2); // one row per locale (de + en) for the single translation pair
     // ensureSchema seeds About for both locales; we overwrote about/de to 'T' and
@@ -385,12 +395,14 @@ maybe('backup round-trip (Postgres)', () => {
     }
   });
 
-  it('dumps every column of posts, so the next added column cannot be silently dropped', async () => {
+  it('dumps every content column of posts and excludes exactly its operational receipt columns', async () => {
     // @ai-warning: dumpDatabase uses an explicit column list for posts (to_char
     // on `date`), so a column added in db.ts without touching backup.ts is
     // silently absent from every dump and reset on restore — exactly how
     // categories/tags/scheduled_at were lost (issue #107). This diff is the
     // only thing that catches the next one.
+    // #305's two operational receipts are intentionally invalidated by restore,
+    // never content. Keep this exclusion exact so future content columns remain guarded.
     const posts = pgPostStore(pool);
     await pool.query('DELETE FROM posts');
     await posts.upsertDraft({
@@ -404,10 +416,11 @@ maybe('backup round-trip (Postgres)', () => {
       tables: { posts: Record<string, unknown>[] };
     };
     const schemaCols = (await pool.query(
-      `SELECT column_name FROM information_schema.columns WHERE table_name = 'posts'`,
+      `SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name = 'posts'`,
     )).rows.map((r) => r.column_name as string).sort();
     expect(dump.tables.posts).toHaveLength(2);
-    expect(Object.keys(dump.tables.posts[0] ?? {}).sort()).toEqual(schemaCols);
+    expect(schemaCols).toEqual(expect.arrayContaining(['last_save_id', 'last_save_by']));
+    expect(Object.keys(dump.tables.posts[0] ?? {}).sort()).toEqual(schemaCols.filter(name => name !== 'last_save_id' && name !== 'last_save_by'));
   });
 
   // Reader comments (#204): schema migration, store, delete-with-post, dump v8.

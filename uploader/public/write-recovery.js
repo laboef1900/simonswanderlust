@@ -7,6 +7,7 @@ window.WriteRecovery = (function () {
     let owner = null;
     let paused = false;
     let busy = false;
+    let needsProbe = false;
     let createKey = crypto.randomUUID();
     let attempts = [];
     let comparison = null;
@@ -83,6 +84,7 @@ window.WriteRecovery = (function () {
         accepted.push(structuredClone(attempt));
       }
       createKey = state.createKey; attempts = accepted;
+      needsProbe = attempts.length > 0;
       // The caller restores the actual base, never the latest load's token.
       options.restoreBase(state.baseUpdatedAt);
       render();
@@ -97,16 +99,24 @@ window.WriteRecovery = (function () {
     }
     async function adopt(body, attempt, acknowledged) {
       if (!uuid.test(body?.ownerUserId)) return false;
-      if (!canAdopt(body.ownerUserId) || attempt.expectedOwnerId !== owner) {
+      if (body.ownerUserId !== owner || attempt.expectedOwnerId !== owner) {
         observeOwner(body.ownerUserId); return false;
       }
       const saved = content(body);
       if (!validContent(saved)) return false;
+      if (!canAdopt(body.ownerUserId)) {
+        if (acknowledged) {
+          attempt.acknowledgement = { ownerUserId: owner, saveId: attempt.saveId, saved: structuredClone(saved) };
+          options.guard.stashNow();
+        }
+        return false;
+      }
       await options.adopt(saved, attempt, acknowledged ? body : null);
       if (!canAdopt(body.ownerUserId)) return false;
       options.guard.markClean(attempt.generation);
       attempts = attempts.filter(item => item.saveId !== attempt.saveId);
       comparison = null;
+      needsProbe = false;
       status = options.guard.isDirty() ? copy.saveNewer : copy.writeSaved;
       if (options.guard.isDirty() || attempts.length) options.guard.stashNow();
       render();
@@ -114,20 +124,22 @@ window.WriteRecovery = (function () {
     }
     async function probe() {
       if (!owner || paused) return false;
+      needsProbe = true;
       status = copy.writeChecking; render();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 15000);
       try {
         const response = await fetch('/' + options.kind + '/' + encodeURIComponent(resource()), { cache: 'no-store', signal: controller.signal });
         if (response.status === 401) { paused = true; options.guard.stashNow(); render(); return false; }
-        if (response.status === 404) { status = copy.writeNotVisible; render(); return false; }
+        if (response.status === 404) { needsProbe = false; status = copy.writeNotVisible; render(); return false; }
         if (!response.ok) throw new Error('unavailable');
         const body = await response.json();
         if (!uuid.test(body?.ownerUserId)) throw new Error('unsupported');
         if (!canAdopt(body.ownerUserId)) { observeOwner(body.ownerUserId); return false; }
         if (!validContent(body) || !(body.lastSaveId === null || typeof body.lastSaveId === 'string')) throw new Error('unsupported');
         const matched = attempts.find(attempt => attempt.saveId === body.lastSaveId && attempt.resource === resource());
-        if (matched) return adopt(body, matched, false);
+        if (matched) return await adopt(body, matched, false);
+        needsProbe = false;
         const base = options.base();
         if (body.updatedAt === base) status = copy.writeNotVisible;
         else {
@@ -139,7 +151,7 @@ window.WriteRecovery = (function () {
       finally { clearTimeout(timer); }
     }
     async function save(payload, generation) {
-      if (busy || !owner || paused || comparison) { render(); return false; }
+      if (busy || !owner || paused || comparison || needsProbe) { render(); return false; }
       if (options.resourceId() && !validDate(options.base()) && !(options.kind === 'pages' && options.base() === null)) {
         status = copy.writeUnsafeBase; render(); return false;
       }
@@ -190,13 +202,14 @@ window.WriteRecovery = (function () {
     useStored.addEventListener('click', async () => {
       if (!comparison || paused || busy) return;
       busy = true;
-      options.guard.freshContext();
       const saved = comparison;
       try {
+        options.guard.freshContext();
         await options.useStored(saved);
         if (!canAdopt(saved.ownerUserId)) return;
-        attempts = []; comparison = null; status = '';
+        attempts = []; comparison = null; needsProbe = false; status = '';
       } catch (_) {
+        options.guard.markDirty();
         status = copy.writeUnknown;
         options.guard.stashNow();
       } finally { busy = false; render(); }

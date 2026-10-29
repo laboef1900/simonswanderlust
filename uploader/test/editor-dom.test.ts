@@ -48,6 +48,7 @@ interface EditorOptions {
   stash?: { key: string; payload: unknown };
   pickImage?: { src: string; width: number; height: number; alt: { de: string; en: string }; format?: 'jpeg' };
   caption?: (options: { url: string; lang: string; signal: AbortSignal }) => Promise<string>;
+  upload?: (options: { ownerId: string; fields: Record<string, string>; file: File }) => Promise<{ src: string; key: string; width: number; height: number; status: string }>;
 }
 /** What editor.html passes to MediaPicker.open for a gallery, as far as these tests read it. */
 interface GalleryPicker {
@@ -216,6 +217,7 @@ function loadEditor(options: EditorOptions = {}) {
     alert() {},
     confirm: () => false,
     navigator: {},
+    UploadRecovery: { run: options.upload ?? (() => Promise.reject(new Error('Unexpected upload in fixture'))) },
     matchMedia: () => media,
     EasyMDE: class extends EasyMDE {
       constructor(settings: { element: Element }) {
@@ -271,7 +273,7 @@ function loadEditor(options: EditorOptions = {}) {
   vm.runInContext(readFileSync('public/draft-guard.js', 'utf8'), ctx, { filename: 'draft-guard.js' });
   vm.runInContext(readFileSync('public/write-recovery.js', 'utf8'), ctx, { filename: 'write-recovery.js' });
   const safety = ctx.DraftGuard as {
-    createDraftGuard(options: { storageKey: string; collect: () => unknown; onChange?: (dirty: boolean) => void }): {
+    createDraftGuard(options: { resource: string; collect: () => unknown; onChange?: (dirty: boolean) => void }): {
       markDirty(): void; redirectToLogin(): void;
     };
   };
@@ -2198,5 +2200,37 @@ describe('editor region select', () => {
     const select = /<select id="fmRegion">([\s\S]*?)<\/select>/.exec(markup)?.[1] ?? '';
     const values = [...select.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1]);
     expect(values).toEqual(['', ...REGIONS]);
+  });
+});
+
+describe('inline upload snapshot adoption', () => {
+  const landed = { src: 'https://img/uploaded', key: 'trips/photo-12345678', width: 800, height: 600, status: 'processing' };
+  it('keeps a newer hero selection when the earlier upload finally lands', async () => {
+    const pending = Promise.withResolvers<typeof landed>();
+    const requests: { ownerId: string; fields: Record<string, string> }[] = [];
+    const h = loadEditor({ upload: options => { requests.push(options); return pending.promise; } });
+    h.api.populateForm(fullPair());
+    Reflect.set(h.el('deHeroFile'), 'files', [new File(['photo'], 'photo.jpg')]);
+    h.el('deHeroUpload').click();
+    h.el('deHeroSrc').value = 'https://img/newer-library-choice';
+    pending.resolve(landed); await settle();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ ownerId: EDITOR_OWNER, fields: { key: 'trips/bukarest/hero' } });
+    expect(h.api.buildPayload().de.heroImage.src).toBe('https://img/newer-library-choice');
+    expect(h.el('deHeroStatus').textContent).toContain(landed.src);
+  });
+  it('preserves alt and framing edits made while a title-image upload is unresolved', async () => {
+    const pending = Promise.withResolvers<typeof landed>();
+    const h = loadEditor({ upload: () => pending.promise });
+    const pair = fullPair();
+    pair.de.titleImage = { src: 'https://img/old-title', width: 800, height: 600, alt: 'Old alt' };
+    h.api.populateForm(pair);
+    Reflect.set(h.el('deTitleImageFile'), 'files', [new File(['photo'], 'photo.jpg')]);
+    h.el('deTitleImageUpload').click();
+    h.el('deTitleImageAlt').value = 'Newer alt';
+    h.el('deTitleImageX').value = '35'; h.el('deTitleImageX').dispatchEvent(new EditorEvent('input'));
+    pending.resolve(landed); await settle();
+    expect(h.api.buildPayload().de.titleImage).toMatchObject({ src: landed.src, alt: 'Newer alt', focus: { x: 35, y: 50 } });
+    expect(h.dirtyCalls()).toBeGreaterThan(0);
   });
 });

@@ -126,6 +126,17 @@ export class EditorElement {
       else { const text = new EditorElement('#TEXT', this.state); text.textContent = child; this.appendChild(text); }
     }
   }
+  after(...children: EditorElement[]) {
+    const parent = this.parentElement;
+    if (!parent) return;
+    let anchor: EditorElement = this;
+    for (const child of children) {
+      if (child === anchor) continue;
+      child.remove(); child.parentElement = parent;
+      parent.childNodes.splice(parent.childNodes.indexOf(anchor) + 1, 0, child);
+      anchor = child;
+    }
+  }
   replaceChildren(...children: EditorElement[]) {
     for (const child of this.childNodes) child.parentElement = null;
     this.childNodes.length = 0;
