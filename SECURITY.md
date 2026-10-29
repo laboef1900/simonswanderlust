@@ -134,9 +134,14 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   require `requireAdmin` (anonymous 401, author 403), with `no-store` on success and errors.
   The strict 1 KiB action object permits only dismiss/resume/finish. Progress uses one
   REPEATABLE READ snapshot; Finish locks/rechecks required photo/story/publication predicates
-  before permanent retirement. Identity is optional. Responses contain only fixed step/state
-  identifiers, required flags and server-built destinations (translation keys URL-encoded);
-  no content titles, counts, retirement reasons, timestamps or photo metadata are disclosed.
+  before permanent retirement. Identity is optional. Eligible responses contain fixed step/state
+  identifiers, required flags, server-built destinations (translation keys URL-encoded) and the
+  explicit language projection `{ primary, locales, lockedAt, updatedAt }` from that same snapshot.
+  No content titles/counts, internal retirement reasons/timestamps or photo metadata are disclosed.
+  Retired responses remain exactly `{ status: 'retired' }`. Language configuration has no completion
+  record and cannot affect Finish. Its explicit Save uses the existing admin-only `PUT /language`;
+  transactionally rechecked publication history remains authoritative, including races. Ambiguous
+  acknowledgements cause read-only reconciliation, never automatic write replay.
   No account/session/content/build writes or cookies are performed by these handlers.
   Missing/invalid state and DB errors fail through the sanitized error path, never anonymous
   or a fabricated fresh checklist. Boot classifies before cleanup/listen and aborts on

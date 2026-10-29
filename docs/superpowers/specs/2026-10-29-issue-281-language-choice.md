@@ -1,6 +1,6 @@
 # First-run language choice: truthful state without inferred consent (#281)
 
-Date: 2026-10-29. Status: OWNER APPROVED — option A; implemented in source, qualification pending.
+Date: 2026-10-29. Status: OWNER APPROVED — option A; source/runtime qualified below, implementation review and exact-head CI remain separate.
 Risk: high inherited language-write boundary; approved option A adds no schema or content policy.
 Base: integrated #279/#280/#284/#285 on `feature/issue-280-empty-states` at `c23c2da`.
 
@@ -141,10 +141,41 @@ than assuming DE or exposing stale configuration controls. An acknowledged persi
 the stored mode, preserves its build-failure message and points to Settings' existing Rebuild.
 Same-mode acknowledgement belongs only to the current request, never to progress or a later visit.
 
-Source regression cases cover DOM interactions/reconciliation, same-snapshot PostgreSQL reads,
+Source regressions cover DOM interactions/reconciliation, same-snapshot PostgreSQL reads,
 all four modes through the real shared API, publication winning a read/Save race, same-mode
-idempotency, failed-build recovery and role-safe requests. These additions have **not** been run
-by the implementing worker. The parent must perform §Verification and containment, qualify the
-actual browser at desktop/320px in both copy locales, and only then update current-state security
-and first-run operating guidance with exact-source evidence. Review, CI, merge and deployment
-remain separate gates.
+idempotency, failed-build recovery and role-safe requests. The implementing worker did not run
+checks; the parent and separate runtime worker subsequently performed the qualification below.
+
+## Observed implementation qualification (2026-10-29)
+
+Qualified product source: `966ccdfe7f01153e18ca2ab985cd219cf82936e6`.
+The parent completed uploader type checking and the full PostgreSQL-enabled suite, fixture
+initialization, Astro check, the full site suite and a real Astro build
+(`wave-two-results-1793288958212_91027.json` in the ignored execution ledger).
+The runtime worker used independent fresh synthetic databases, not those automated fixtures.
+
+Actual `main.ts` setup and managed-browser interaction exercised all four modes, explicit
+Save/confirmation and Escape/Cancel focus, radio-key navigation without writes, desktop/320px,
+restart persistence, same-mode acknowledgement without a timestamp or release change, and all
+three unchanged Finish predicates. Generated/served enabled paths returned 200 in the correct
+language; disabled prefixes were absent from the release inventory and returned 404.
+
+A real Publish committed while a language request was delayed: the latter returned 409
+`language_primary_locked`, onboarding became read-only, and Settings still activated secondary
+language. Lost/failed acknowledgements, malformed/unavailable reads and authorization failures
+retained the selection without replay or a guessed default. A real persisted 502 retained the
+previous release, survived restart and recovered through explicit Settings Rebuild.
+
+Existing-schema, existing-content, native-restored and finished fixtures returned exactly
+`{ status: 'retired' }`; finished state survived restart. Authors made no onboarding request and
+received 403 on direct calls; anonymous reads returned 401. Nine screenshots were inspected;
+mobile viewport and scroll width were both 320. The served admin is English. German component
+copy was exercised through the real document-language selector before initialization, not through
+a nonexistent user-facing locale switch or text replacement.
+
+Canonical evidence: `issue-281-runtime-966ccdf.json` in the ignored execution ledger. All owned
+services/browsers stopped; private fixtures and recovery evidence remain retained. No owner
+content or data changed. Current-state architecture/security/design/operator guidance records
+the approved projection and configuration semantics. Independent implementation-PR review,
+exact-final-head CI, prerequisite-stack integration and human merge/deployment gates remain
+separate; this record authorizes none of those external actions.
