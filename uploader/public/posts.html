@@ -109,6 +109,7 @@
     </main>
 
     <script src="/admin/editor-image-copy.js"></script>
+    <script src="/admin/build-reporting.js"></script>
     <script src="/admin/gpx-copy.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/language.js"></script>
@@ -170,9 +171,8 @@
         }
       }
 
-      function describeBuild(build) {
-        if (!build) return '';
-        return build.ok ? ' Site rebuilt.' : ' Rebuild failed: ' + build.error;
+      function describeOutcome(action, body, values) {
+        return BuildReporting.describeOutcome(action, body, values);
       }
 
       // Draft slugs may still be empty — only render "(de / en)" when set.
@@ -255,12 +255,14 @@
           const res = await fetch('/posts/' + encodeURIComponent(p.translationKey) + '/unpublish', { method: 'POST' });
           if (res.status === 401) { location.href = '/login'; return; }
           const body = await res.json().catch(() => ({}));
-          if (!res.ok) { $('out').textContent = 'Unpublish failed: ' + (body.error || res.status); return; }
-          const msg = 'Unpublished "' + title + '".' + describeBuild(body.build);
+          if (!res.ok) { $('out').textContent = res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status); return; }
+          if (body.unpublished !== true) { $('out').textContent = BuildReporting.text('unknown'); return; }
+          const msg = describeOutcome('unpublish', body, { title });
           $('out').textContent = msg;
           await load(msg);
+          if (body.build?.ok === false) BuildReporting.recovery($('out'), body.build.code);
         } catch (e) {
-          $('out').textContent = 'Unpublish failed: ' + e;
+          $('out').textContent = BuildReporting.text('unknown');
         } finally {
           btn.disabled = false;
         }
@@ -284,14 +286,16 @@
           const res = await fetch('/posts/' + encodeURIComponent(p.translationKey), { method: 'DELETE' });
           if (res.status === 401) { location.href = '/login'; return; }
           const body = await res.json().catch(() => ({}));
-          if (!res.ok) { $('out').textContent = 'Delete failed: ' + (body.error || res.status); return; }
-          const msg = 'Deleted "' + title + '".' + describeBuild(body.build) + (body.cleanupPending ? ' ' + GpxCopy.en.cleanupPending : '');
+          if (!res.ok) { $('out').textContent = res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status); return; }
+          if (body.deleted !== true) { $('out').textContent = BuildReporting.text('unknown'); return; }
+          const msg = describeOutcome('delete', body, { title }) + (body.cleanupPending ? ' ' + GpxCopy.en.cleanupPending : '');
           $('out').textContent = msg;
           // Pass the outcome so load() does not clobber it with "N post(s) loaded."
           // — a failed rebuild (body.build.ok === false) must stay visible to the admin.
           await load(msg);
+          if (body.build?.ok === false) BuildReporting.recovery($('out'), body.build.code);
         } catch (e) {
-          $('out').textContent = 'Delete failed: ' + e;
+          $('out').textContent = BuildReporting.text('unknown');
         } finally {
           btn.disabled = false;
         }
@@ -365,7 +369,7 @@
       };
       function summarizeBulk(action, body) {
         const failures = (body.results || []).filter((r) => !r.ok);
-        let msg = action + ': ' + body.succeeded + ' succeeded, ' + body.failed + ' failed.' + describeBuild(body.build);
+        let msg = describeOutcome('bulk', body, { action: BuildReporting.text('action.' + action), n: body.succeeded, m: body.failed });
         for (const f of failures) {
           const p = allPosts.find((x) => x.translationKey === f.key);
           const errorKey = Object.hasOwn(gpxPublishErrors, f.code) ? gpxPublishErrors[f.code]
@@ -393,7 +397,8 @@
           });
           if (res.status === 401) { location.href = '/login'; return; }
           const body = await res.json().catch(() => ({}));
-          if (!res.ok) { $('out').textContent = 'Bulk ' + action + ' failed: ' + (body.error || res.status); return; }
+          if (!res.ok) { $('out').textContent = res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status); return; }
+          if (!Number.isInteger(body.succeeded) || !Number.isInteger(body.failed)) { $('out').textContent = BuildReporting.text('unknown'); return; }
           const msg = summarizeBulk(action, body) + (body.cleanupPending ? ' ' + GpxCopy.en.cleanupPending : '');
           // Keep failed stories selected so the visible failure report is also
           // immediately actionable: the author can fix them and retry without
@@ -408,8 +413,9 @@
           // load() re-renders and hides the bar; pass the summary so it survives
           // the reload (partial failures must stay on screen).
           await load(msg);
+          if (body.build?.ok === false) BuildReporting.recovery($('out'), body.build.code);
         } catch (e) {
-          $('out').textContent = 'Bulk ' + action + ' failed: ' + e;
+          $('out').textContent = BuildReporting.text('unknown');
         } finally {
           buttons.forEach((b) => { b.disabled = false; });
         }

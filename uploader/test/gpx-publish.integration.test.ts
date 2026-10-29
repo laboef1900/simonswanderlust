@@ -1,3 +1,4 @@
+import { idleBuildState } from './build-fixture.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -240,12 +241,13 @@ maybe('GPX publish HTTP bulk and failed-build boundary (real PostgreSQL)', () =>
       dbBackup: createDbBackup({ db: pool, dir: join(root, 'backup'), retention: () => 10 }),
       dbCheck: async () => { await pool.query('SELECT 1'); },
       builder: {
+        ...idleBuildState,
         hasRelease: () => true, quiesce: async () => {},
         build: async () => {
           buildCount++;
-          if (failBuild) return { ok: false, error: 'synthetic build failure' };
+          if (failBuild) return { ok: false, attemptId: 'synthetic', code: 'internal', error: 'The rebuild failed unexpectedly. The server log has the details.' };
           builtTracks.push(...await Promise.all(keys.map(async (tk) => (await posts.getPublishedTrack(tk)).track)));
-          return { ok: true, release: 'synthetic' };
+          return { ok: true, attemptId: 'synthetic', release: 'synthetic' };
         },
       },
     });

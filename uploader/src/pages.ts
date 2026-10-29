@@ -226,13 +226,15 @@ export function pgPageStore(pool: DbPool): PageStore {
           );
         }
         await client.query('COMMIT');
+        // The acknowledgement belongs to this commit, not a later writer's read.
+        // A post-commit lookup failure must not turn a saved page into a 500.
+        return { ...normalized, updatedAt: timestamp.rows[0]!.updated_at };
       } catch (e) {
         await client.query('ROLLBACK');
         throw e;
       } finally {
         client.release();
       }
-      return this.get(pair.key);
     },
     async keys() {
       const { rows } = await pool.query<{ key: string }>(`SELECT DISTINCT key FROM pages ORDER BY key`);

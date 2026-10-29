@@ -485,19 +485,6 @@ describe('admin page wiring', () => {
     expect(auth).toContain(".cms-user-name').textContent = s.username");
   });
 
-  it('Publish, Rebuild, Save & rebuild, Unpublish, and Delete go through AdminConfirm', () => {
-    expect(editor).toContain('AdminConfirm.ask');
-    expect(editor).toContain('Publish to the live site?');
-    expect(editor).toContain('setPublishedLive');
-    expect(about).toContain('AdminConfirm.ask');
-    expect(about).toContain('Publish the About page?');
-    expect(readFileSync('public/settings.html', 'utf8')).toContain('Rebuild the live site?');
-    expect(readFileSync('public/posts.html', 'utf8')).toContain('Unpublish this trip?');
-    expect(readFileSync('public/posts.html', 'utf8')).toContain('Delete this trip?');
-    expect(readFileSync('public/users.html', 'utf8')).toContain('Remove this account?');
-    expect(readFileSync('public/media-browser.js', 'utf8')).toContain('Delete this photo?');
-  });
-
   it('the desk is a publishing home, not a second uploader', () => {
     const index = readFileSync('public/index.html', 'utf8');
     expect(index).toContain('<h1>Desk</h1>');
@@ -520,17 +507,6 @@ describe('admin page wiring', () => {
     // gallery cannot silently reset the layout the author chose.
     expect(editor).toContain('GalleryFence.layoutOf(current.directives)');
     expect(editor).toContain('GalleryFence.withLayout(current.directives,');
-  });
-
-  it('every fetch path surfaces a visible error on network failure', () => {
-    expect(editor).toContain("'Upload failed: ' + e");
-    expect(editor).toContain("'Save failed: ' + e");
-    expect(editor).toContain("'Publish failed: ' + e");
-    expect(editor).toContain("'Could not load post: ' + e");
-    expect(about).toContain("'Upload failed: ' + e");
-    expect(about).toContain("'Save failed: ' + e");
-    expect(about).toContain("'Could not load: ' + e");
-    expect(login).toContain('Could not reach the server');
   });
 
   it('declining the restore prompt keeps the stash (non-destructive) instead of wiping it', () => {

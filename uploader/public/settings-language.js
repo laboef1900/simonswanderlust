@@ -69,8 +69,7 @@ window.SettingsLanguage = (function () {
         if (response.status === 401) { location.href = '/login'; return; }
         const body = await response.json();
         if (!response.ok) {
-          if (body.persisted && body.language) paint(body.language);
-          status(SiteLanguage.error(body) || SiteLanguage.text('SaveFailed'));
+          status(response.status >= 500 ? BuildReporting.text('unknown') : (SiteLanguage.error(body) || SiteLanguage.text('SaveFailed')));
           for (const blocker of body.blockers || []) {
             const li = document.createElement('li');
             li.textContent = (SiteLanguage.names[blocker.locale] || blocker.locale) + ' / ' + blocker.key + ' / ' + blocker.field + ': ' + blocker.reason;
@@ -80,9 +79,10 @@ window.SettingsLanguage = (function () {
           return;
         }
         paint(body);
-        status(SiteLanguage.text('Saved'));
+        BuildReporting.renderOutcome($('languageStatus'), 'language', body);
+        await BuildReporting.loadStatus($('buildStatus'));
       } catch (error) {
-        status(SiteLanguage.text('ChangeUnknown') + ' ' + error.message);
+        status(BuildReporting.text('unknown'));
       } finally {
         busy = false;
         $('languageFields').disabled = false;
