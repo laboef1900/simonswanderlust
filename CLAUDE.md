@@ -849,12 +849,20 @@ blog/
   every later publish, rebuild and encode until a manual restart while `/health` stayed green.
   `build.ts` now SIGKILLs the child after `BUILD_TIMEOUT_MS` (15 min) and reports a distinct
   `BuildTimeoutError`; both Content Layer loaders read through `site/src/lib/loader-pool.ts` with
-  connection/query timeouts so the hung-DB case fails in about a minute; the child's stderr is
-  tee'd and its last 4 KiB rides on the build error so the admin sees which post failed the
-  schema; the release copy stages into `releases/.<stamp>.partial` and renames into place (a
+  connection/query timeouts so the hung-DB case fails in about a minute. The child's stderr
+  stays in server logs; since #297 callers receive a fixed failure code and safe copy.
+  The release copy stages into `releases/.<stamp>.partial` and renames into place (a
   release dir is complete or absent), with leftovers swept at the next run; the boot-time build
   retries with backoff (`bootstrapRelease`) and `/health` reports `release` as information, never
   a verdict. See `docs/superpowers/specs/2026-09-05-build-timeout-and-recovery-design.md`.
+- **Implemented, unmerged: #297 build reporting (2026-10-29)** — build attempts persist in
+  unserved `site/build-state.json`; restart marks a previous running attempt interrupted.
+  Admin-only/no-store `GET /rebuild/status`, Desk and Settings report the attempt separately
+  from the observed live release. Editor/About preserve acknowledged save tokens after
+  rebuild failure; CLI output is classified and points to server logs. Neither metadata
+  failure nor post-promotion pruning changes a successful promotion. See
+  `docs/superpowers/specs/2026-10-27-issue-297-publish-recovery-design.md` for qualification
+  evidence and remaining PR/stack gates.
 - **Done:** #113 images archive safety (2026-09-06) — the incremental `images-*.tar` no longer
   leaks its multi-GB `.tmp` on a failed or interrupted run (unlinked in `catch` and from a
   synchronous `process.on('exit')` hook, so `docker stop`'s SIGTERM is covered; a SIGKILL

@@ -26,6 +26,7 @@ Shared state, all under the **`/data`** volume (bind-mounted from `./uploader/da
   (`{key}-orig.<ext>`) (`STORAGE_DIR`).
 - `routes/` — private GPX originals and expiring import staging; never a static root.
 - `site/releases/<stamp>` + `site/current` (symlink) — built static output (`SITE_DIR`).
+- `site/build-state.json` — bounded latest-build-attempt metadata; never served as a public file.
 - `backup/` — MDX export backups; `backup/db/` — gzipped Postgres dumps, incremental
   image archives and manifest-matched private GPX original archives.
 - `settings.json` — admin-configurable settings, including backup scheduling, image conversion/quality, and the AI provider registry (no secrets).
@@ -164,13 +165,37 @@ RSS, region statistics or the global story map. No MDX export, preview or revisi
    and any `releases/.*` leftover from a killed predecessor. The app serves `current` directly via
    `@fastify/static` — no separate web server.
 
+   The successful `current` rename is the build's commit point (#397). After that, a
+   pruning failure cannot turn the promoted release into a failed build response.
+   Retention remains best-effort under the same exclusive lock: enumeration or current-link
+   inspection failure (including an unexpected current target) skips the pass; an ordinary
+   old-release removal failure skips only that candidate. Every removal checks storage
+   ownership first, and observed lease loss stops further mutations without undoing promotion.
+   Current, the promoted release and staging entries are never pruning candidates.
+   Cleanup warnings use the fixed `release promoted; old-release cleanup incomplete` message,
+   the promotion stamp, stage and bounded errno only; no paths or raw exception messages.
+   Success means promotion completed, not that retention completed; the response shape is unchanged.
+
 The child is bounded (#110): it is SIGKILLed after `BUILD_TIMEOUT_MS` (15 min) and the build
 reports `timed out`, releasing the shared build/encode lock instead of holding every later
-publish, rebuild and encode until a manual restart. Its stderr is streamed to the container log
-**and** its last 4 KiB is appended to the build error the admin sees, so a schema failure names
-the post. The loaders' pool (`site/src/lib/loader-pool.ts`) carries connection and query
-timeouts, so a silently hung Postgres fails the build within about a minute rather than running
-into the deadline.
+publish, rebuild and encode until a manual restart. Its stderr remains in the container log;
+browser/CLI failures use a fixed classified code and safe copy, with an operator log hint.
+The loaders' pool (`site/src/lib/loader-pool.ts`) carries connection and query timeouts, so a
+silently hung Postgres fails the build within about a minute rather than running into the
+deadline. The exported-snapshot deadline is classified as `build_timeout` as well.
+
+**Build reporting (#297):** the builder durably records the latest running/completed attempt
+in `site/build-state.json`, outside the public `current` tree. Restart turns a previous
+running attempt into `interrupted`; missing, unreadable and unpersisted records remain
+distinct. Admin-only/no-store `GET /rebuild/status` pairs this record with an independent
+observation of the live release. Desk and Settings show both facts and link to explicit
+Rebuild recovery. Best-effort record writes cannot reverse a successful promotion.
+
+Mutation responses separately acknowledge what the CMS committed and whether the build
+succeeded. Editor and About adopt their own acknowledged timestamp even when generation
+fails, so the next save uses the correct concurrency token. Publish/unpublish/delete/bulk
+messages never infer per-story liveness from a generic build failure. Fix the reported
+cause, then explicitly rebuild; do not resubmit an already acknowledged mutation.
 
 The Astro entry `id`s (`de/<slug>` / `en/<slug>`) and the Zod schema are unchanged from the original
 MDX era, so the SEO slug contract (`site/src/lib/paths.ts`, `trips.ts`) holds: **DE at root, EN under
@@ -228,7 +253,68 @@ The present fixed DE/EN projection is extended by #283's language contract, not 
 Remaining branding exceptions are recorded in [the scoped allow-list](docs/site-identity-branding-allowlist.md).
 
 
-### Editable page pairs (#288)
+## Write reconciliation and storage ownership (#305)
+
+The [approved #304 contract](docs/superpowers/specs/2026-10-27-issue-304-weak-connection-write-contract.md)
+separates acknowledged writes, definite refusals and unknown outcomes. Unknown does not
+mean failed and never triggers automatic client retransmission.
+
+| Write | Identity / reconciliation |
+| :-- | :-- |
+| Create post | Required UUID translation key, create-only under the existing language/pair lock; an existing identity returns `already_exists` before slug checks. |
+| Save post or generic page | Required UUID `saveId` and captured `expectedOwnerId`; owner fence before mutation, existing OCC plus atomic writer-only receipt/content/token read. Page preparation preserves explicit `updatedAt: null` for absence. |
+| Upload (all callers) | Required account/UUID upload identity and server-issued retry generation; byte hash and frozen profile/key; receipt and media-key serialization, durable original before accepted enqueue. |
+| Create folder / move selection | One bounded authoritative folder-tree/selected-key read after Unknown, not the filtered or paginated Media listing. Explicit retry only. |
+| Publish / unpublish / delete / rebuild | Existing #297 operation-owned acknowledgement/build reporting remains separate; optional refresh cannot replace the acknowledged action token. |
+| GPX | Existing GPX reconciliation remains authoritative; its pair-token changes clear save receipts. |
+
+`posts` and `pages` each have nullable `last_save_id`/`last_save_by` UUID columns.
+`upload_receipts` is operational state keyed `(user_id, upload_id)`, with a cascading
+account foreign key, hash/canonical identity, frozen processing options/key/dimensions,
+claim/incarnation/generation, state and response evidence. These fields never enter
+content exports, revision snapshots or backup dumps. Native offline restore invalidates
+all receipts in the content transaction, including preserved legacy pages; rollback of
+that transaction rolls back invalidation too. Missing evidence after restore is Unknown.
+
+`upload-service.ts` owns execution beyond the HTTP connection lifetime. Recovery starts
+before listen, examines at most 100 receipts per pass using a fair keyset cursor, coalesces
+capacity-release signals, and is callable through admin Rescan. It validates retained
+original hash/profile or ready variants before acceptance and never reapplies initial
+metadata. General #348 queue recovery defers pending-receipt keys to this owner. Queue-full
+new originals remain `failed/queue_full`; prior states are restored under the same key
+admission boundary. Receipt reads never enqueue. Media deletion and terminal `gone`
+invalidation share a transaction and key admission.
+
+All app and offline storage writers acquire `data-owner.ts`: native nonblocking exclusive
+flock on the stable `.storage-owner.lock` in the canonical parent of `STORAGE_DIR`, then
+the existing dedicated PG owner, then admission. Native ownership survives PG loss and
+already-issued filesystem operations; release follows quiescence and PG close. Do not
+unlink the lock file or substitute receipt age, a helper lease, or PG availability.
+`npm run build:native` in `uploader/` builds the owned Node-API addon using pinned Node
+26.12.1 public headers and records compiler/source/binary provenance. The Docker native
+stage uses the qualified DHI digests/toolchain and copies only its artifact/provenance
+into the runtime; host-produced binaries are excluded from the build context.
+
+Inherited qualification is macOS arm64/APFS and native DHI/glibc amd64+arm64 ext4
+bind/named volumes. Integrated-product verification remains separately reportable.
+**Actual deployment storage is not qualified by those results or by acquiring the lock.**
+Before any deployment/enablement, qualify an authorized disposable directory on that
+mount with the selected binary. No NFS/SMB/FUSE, musl or Docker Desktop sharing approval.
+
+Browser `WriteRecovery` retains immutable attempts and snapshots; one bounded probe,
+manual **Check again**, owner fencing and generation-aware adoption preserve newer text.
+DraftGuard records are owner/resource/context scoped; exact-record cleanup cannot erase
+another tab's newer bytes. Unknown-owner legacy records stay quarantined and logout never
+deletes drafts. Media queues retain Files only in memory, pause on session loss and require
+explicit same-owner resume. #306 retains conditional Media PATCH/offline/full-conflict UI
+ownership; #305 already provides preservation and comparison without automatic replay.
+
+Rollback is an offline maintenance cutover, not an online downgrade: stop/drain writers,
+retire sessions/open clients, preserve local records and operational schema, then deploy
+compatible client/server code and reauthenticate. Prefer compatible roll-forward to
+reconcile unresolved attempts. No destructive schema rollback or stale-ID replay.
+
+## Editable page pairs (#288)
 
 `site/src/lib/page-kinds.ts` is the closed, Astro-free registry shared by both trees:
 `about`, `contact`, `privacy`, `legal`. The existing `pages` table/store and
@@ -240,9 +326,10 @@ and never cleared by unpublish, so a formerly public slug cannot be renamed.
 
 Draft saves do not build. Publish, live save/revision restore, unpublish and deletion
 of a published pair commit first, then invoke one ordinary rebuild. A failed build
-returns `502 page_build_failed` with `persisted: true` and the committed `saved`
-value; the previous release remains served. Rebuild is recovery, not resubmitting
-an obsolete editor token. Inactive locales are retained and ordinarily hidden;
+returns HTTP 200 with the committed `saved` value and the projected #297 `build`
+outcome (`ok: false`); the previous release remains served. PUT also acknowledges
+the captured owner and save ID. Rebuild is recovery, not resubmitting an obsolete
+editor token. Inactive locales are retained and ordinarily hidden;
 the explicit Prepare translations flow can save them in stages before activation.
 Activation validates published pairs and stamps newly public locales in the same
 language-first transaction.
@@ -818,6 +905,11 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   healthy and no restore is running, then restart the same app configuration
   (`docker compose restart app`, or restart the bare Node process). Writes never resume
   automatically in a process that lost its lease.
+- **Promoted release with incomplete cleanup (#397):** inspect the fixed cleanup warning
+  and filesystem permissions/capacity. Do not republish merely because old releases remain.
+  An ordinary later authorized build retries retention; no retry worker is added. After lease
+  loss, follow the storage-lease recovery above. Never delete current, wipe `/data`, blindly
+  change ownership or bypass fencing to clear a warning.
 - **Admin password recovery** — a forgotten password is reset from the host via the CLI (the
   runtime image has no shell, so use the exec form):
   `docker compose exec app node --import tsx src/cli.ts set-password <username>` — prompts for

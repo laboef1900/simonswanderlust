@@ -1,3 +1,4 @@
+import { idleBuildState } from './build-fixture.js';
 import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
@@ -21,6 +22,8 @@ import { memoryLanguageStore, type LanguageConfig } from '../src/language.js';
 
 /** This suite only exercises host routing, so the queue never needs to run. */
 const noopQueue = (): EncodeQueue => ({
+  withAdmission: (_key, operation) => operation(),
+  availableCapacity: () => 100, onCapacity: () => () => {},
   enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {}, idle: async () => {},
   quiesce: async () => {},
   stats: () => ({ pending: 0, running: 0 }),
@@ -77,7 +80,7 @@ function stubBackup(backupDir: string): DbBackup {
 
 function build(extra: Partial<ServerConfig> = {}) {
   const hasRelease = () => existsSync(join(siteDir, 'current'));
-  const builder: SiteBuilder = { build: async () => ({ ok: true, release: 'r' }), hasRelease, quiesce: async () => {} };
+  const builder: SiteBuilder = { ...idleBuildState, build: async () => ({ ok: true, attemptId: 'r', release: 'r' }), hasRelease, quiesce: async () => {} };
   const backupDir = join(dir, 'backup');
   return buildServer({
     trustProxy: TEST_TRUST,

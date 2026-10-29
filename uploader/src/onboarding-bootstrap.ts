@@ -11,7 +11,7 @@ import { DEFAULT_NAVIGATION, validateNavigation } from '../../site/src/lib/navig
 
 export interface OnboardingPaths { storageDir: string; settingsPath: string; backupDir: string; siteDir: string }
 export interface BootEvidence { priorSchema: boolean; accounts: boolean; content: boolean }
-const CONTENT_TABLES = ['posts', 'post_revisions', 'post_routes', 'route_cleanup', 'media', 'media_folders', 'comments', 'import_jobs', 'app_secrets', 'page_revisions', 'site_identity_assets', 'journeys', 'journey_locales', 'journey_members'] as const;
+const CONTENT_TABLES = ['posts', 'post_revisions', 'post_routes', 'route_cleanup', 'media', 'media_folders', 'comments', 'import_jobs', 'app_secrets', 'page_revisions', 'site_identity_assets', 'journeys', 'journey_locales', 'journey_members', 'upload_receipts'] as const;
 const CORE_TABLES = ['users', 'sessions', ...CONTENT_TABLES, 'pages', 'site_identity', 'site_language', 'site_nav'] as const;
 type Query = Pick<DbClient, 'query'>;
 
@@ -38,11 +38,12 @@ async function inspectEvidence(db: Query, tables: Map<string, string>): Promise<
     });
   }
   if (tables.has('site_nav')) {
-    const navigation = await db.query('SELECT id,config FROM site_nav');
+    const navigation = await db.query('SELECT id, config FROM site_nav');
     if (navigation.rows.length > 1) throw new Error('Invalid navigation singleton.');
     for (const row of navigation.rows) {
       if (row.id !== 1) throw new Error('Invalid navigation singleton.');
-      evidence.content ||= !isDeepStrictEqual(validateNavigation(row.config), DEFAULT_NAVIGATION);
+      validateNavigation(row.config);
+      evidence.content ||= !isDeepStrictEqual(row.config, DEFAULT_NAVIGATION);
     }
   }
   if (tables.has('site_identity')) {
@@ -170,11 +171,11 @@ export async function initializeOnboarding(pool: DbPool, paths: OnboardingPaths,
 const BOOTSTRAP_COLUMNS: Record<string, Record<string, string>> = {
   users: { id: 'uuid', username: 'text', password_hash: 'text', is_admin: 'boolean', created_at: 'timestamp with time zone' },
   sessions: { id: 'text', user_id: 'uuid', created_at: 'timestamp with time zone', expires_at: 'timestamp with time zone' },
-  posts: { id: 'uuid', translation_key: 'text', locale: 'text', slug: 'text', title: 'text', date: 'date', country: 'text', country_code: 'text', region: 'text', excerpt: 'text', hero_image: 'jsonb', coordinates: 'jsonb', title_image: 'jsonb', stops: 'jsonb', route: 'text', key_facts: 'jsonb', body_markdown: 'text', images: 'jsonb', status: 'text', featured: 'boolean', comments_enabled: 'boolean', created_at: 'timestamp with time zone', updated_at: 'timestamp with time zone', published_snapshot: 'jsonb', published_at: 'timestamp with time zone', categories: 'text[]', tags: 'text[]', scheduled_at: 'timestamp with time zone', omitted: 'boolean' },
+  posts: { id: 'uuid', translation_key: 'text', locale: 'text', slug: 'text', title: 'text', date: 'date', country: 'text', country_code: 'text', region: 'text', excerpt: 'text', hero_image: 'jsonb', coordinates: 'jsonb', title_image: 'jsonb', stops: 'jsonb', route: 'text', key_facts: 'jsonb', body_markdown: 'text', images: 'jsonb', status: 'text', featured: 'boolean', comments_enabled: 'boolean', created_at: 'timestamp with time zone', updated_at: 'timestamp with time zone', published_snapshot: 'jsonb', published_at: 'timestamp with time zone', categories: 'text[]', tags: 'text[]', scheduled_at: 'timestamp with time zone', omitted: 'boolean', last_save_id: 'uuid', last_save_by: 'uuid' },
   post_revisions: { id: 'uuid', translation_key: 'text', snapshot: 'jsonb', saved_at: 'timestamp with time zone' },
   post_routes: { translation_key: 'text', version: 'uuid', geometry: 'jsonb', source_id: 'uuid', source_sha256: 'text', source_bytes: 'integer', updated_at: 'timestamp with time zone' },
   route_cleanup: { source_id: 'uuid', pair_hash: 'text', requested_at: 'timestamp with time zone' },
-  pages: { key: 'text', locale: 'text', title: 'text', body_markdown: 'text', images: 'jsonb', slug: 'text', status: 'text', published_at: 'timestamp with time zone', updated_at: 'timestamp with time zone' },
+  pages: { key: 'text', locale: 'text', title: 'text', body_markdown: 'text', images: 'jsonb', updated_at: 'timestamp with time zone', slug: 'text', status: 'text', published_at: 'timestamp with time zone', last_save_id: 'uuid', last_save_by: 'uuid' },
   site_nav: { id: 'smallint', config: 'jsonb', updated_at: 'timestamp with time zone' },
   journeys: { id: 'uuid', status: 'text', published_snapshot: 'jsonb', published_at: 'timestamp with time zone', created_at: 'timestamp with time zone', updated_at: 'timestamp with time zone' },
   journey_locales: { journey_id: 'uuid', locale: 'text', slug: 'text', title: 'text', intro: 'text', hero_image: 'jsonb', omitted: 'boolean', published_at: 'timestamp with time zone' },
@@ -189,15 +190,17 @@ const BOOTSTRAP_COLUMNS: Record<string, Record<string, string>> = {
   site_language: { id: 'boolean', primary_locale: 'text', enabled_locales: 'text[]', locked_at: 'timestamp with time zone', updated_at: 'timestamp with time zone' },
   comments: { id: 'uuid', translation_key: 'text', locale: 'text', name: 'text', email: 'text', body: 'text', status: 'text', is_author: 'boolean', sender_hash: 'text', created_at: 'timestamp with time zone' },
   onboarding_state: { singleton: 'boolean', schema_version: 'smallint', state: 'text', reason: 'text', evaluated_at: 'timestamp with time zone', dismissed_at: 'timestamp with time zone', retired_at: 'timestamp with time zone' },
+  upload_receipts: { user_id: 'uuid', upload_id: 'uuid', media_key: 'text', sha256: 'text', identity: 'jsonb', frozen: 'jsonb', state: 'text', incarnation: 'uuid', claim: 'uuid', generation: 'integer', reason: 'text', original_retained: 'boolean', result: 'jsonb' },
 };
-const ADDITIVE_COLUMNS: Record<string, readonly string[]> = { posts: ['published_snapshot','published_at','categories','tags','scheduled_at','title_image','featured','comments_enabled','omitted'], pages: ['slug','status','published_at'], media: ['format','encoding'], comments: ['is_author'] };
+const ADDITIVE_COLUMNS: Record<string, readonly string[]> = { posts: ['published_snapshot','published_at','categories','tags','scheduled_at','title_image','featured','comments_enabled','omitted','last_save_id','last_save_by'], pages: ['slug','status','published_at','last_save_id','last_save_by'], media: ['format','encoding'], comments: ['is_author'] };
 const NULLABLE_COLUMNS: Record<string, readonly string[]> = {
-  posts: ['title_image','stops','route','key_facts','published_snapshot','published_at','scheduled_at'],
+  posts: ['title_image','stops','route','key_facts','published_snapshot','published_at','scheduled_at','last_save_id','last_save_by'],
+  pages: ['published_at','last_save_id','last_save_by'], upload_receipts: ['reason','result'],
   post_routes: ['geometry'], media: ['error','taken_at','camera','lens','lat','lng','format','encoding','uploaded_by'],
   import_jobs: ['finished_at','summary','error'], site_identity: ['saved_at','canonical_origin'],
   comments: ['email','sender_hash'], onboarding_state: ['dismissed_at','retired_at'],
   site_language: ['locked_at'],
-  pages: ['published_at'], journeys: ['published_snapshot', 'published_at'], journey_locales: ['hero_image', 'published_at'],
+  journeys: ['published_snapshot', 'published_at'], journey_locales: ['hero_image', 'published_at'],
 };
 const PRIMARY_KEYS: Record<string, readonly string[]> = {
   users: ['id'], sessions: ['id'], posts: ['id'], post_revisions: ['id'], post_routes: ['translation_key'],
@@ -205,6 +208,7 @@ const PRIMARY_KEYS: Record<string, readonly string[]> = {
   import_jobs: ['id'], app_secrets: ['key'], site_identity: ['id'], site_identity_assets: ['role'], site_language: ['id'],
   comments: ['id'], onboarding_state: ['singleton'],
   site_nav: ['id'], journeys: ['id'], journey_locales: ['journey_id', 'locale'], journey_members: ['journey_id', 'translation_key'],
+  upload_receipts: ['user_id','upload_id'],
 };
 const BOOTSTRAP_DEFAULTS: Record<string, Record<string, string>> = {
   users: { is_admin: 'false', created_at: 'now()' }, sessions: { created_at: 'now()' },
@@ -222,12 +226,19 @@ const BOOTSTRAP_DEFAULTS: Record<string, Record<string, string>> = {
   site_identity_assets: { created_at: 'now()' }, comments: { status: "'pending'::text", is_author: 'false', created_at: 'now()' },
   site_language: { id: 'true', updated_at: 'now()' },
   onboarding_state: { singleton: 'true', schema_version: '1' },
+  upload_receipts: { generation: '0', original_retained: 'false' },
 };
 
 // PostgreSQL's deparsed expressions for ensureSchema's current CHECKs. Keep
 // exact expressions: accepting merely the constraint name would admit changed
 // semantics. Column dependencies allow only recognized partial bootstrap shapes.
 const BOOTSTRAP_CHECKS: Record<string, { columns: readonly string[]; expression: string }[]> = {
+  upload_receipts: [
+    { columns: ['sha256'], expression: "(sha256 ~ '^[0-9a-f]{64}$'::text)" },
+    { columns: ['state'], expression: "(state = ANY (ARRAY['pending'::text, 'accepted'::text, 'retryable'::text, 'gone'::text]))" },
+    { columns: ['generation'], expression: '(generation >= 0)' },
+    { columns: ['reason'], expression: "(reason = ANY (ARRAY['queue_full'::text, 'recovery_required'::text]))" },
+  ],
   posts: [
     { columns: ['locale'], expression: "(locale = ANY (ARRAY['de'::text, 'en'::text]))" },
     { columns: ['country_code'], expression: '(char_length(country_code) = 2)' },
@@ -325,7 +336,7 @@ async function assertBootstrapConstraints(db: Query, table: string, columns: Set
   let foreign = false;
   let unique = false;
   const expectedUnique = table === 'journey_members' ? ['journey_id', 'position'] : null;
-  const expectedForeign = table === 'sessions' ? ['user_id', 'c', 'users']
+  const expectedForeign = table === 'sessions' || table === 'upload_receipts' ? ['user_id', 'c', 'users']
     : table === 'media' ? ['uploaded_by', 'n', 'users']
     : table === 'journey_locales' || table === 'journey_members' ? ['journey_id', 'c', 'journeys'] : null;
   for (const constraint of result.rows) {
@@ -361,6 +372,10 @@ async function assertBootstrapConstraints(db: Query, table: string, columns: Set
 // same-name altered index untouched. Missing standalone indexes are safe for
 // ensureSchema to create; unknown or changed existing indexes are not.
 const BOOTSTRAP_INDEXES: Record<string, Record<string, { unique: boolean; definition: string }>> = {
+  upload_receipts: {
+    upload_receipts_pending_idx: { unique: false, definition: "btree (user_id, upload_id) WHERE (state = 'pending'::text)" },
+    upload_receipts_media_idx: { unique: false, definition: 'btree (media_key)' },
+  },
   users: { users_username_lower_idx: { unique: true, definition: 'btree (lower(username))' } },
   sessions: { sessions_user_id_idx: { unique: false, definition: 'btree (user_id)' } },
   posts: {
@@ -371,6 +386,7 @@ const BOOTSTRAP_INDEXES: Record<string, Record<string, { unique: boolean; defini
     posts_tk_locale_idx: { unique: true, definition: 'btree (translation_key, locale)' },
   },
   post_revisions: { post_revisions_tk_saved_idx: { unique: false, definition: 'btree (translation_key, saved_at DESC)' } },
+  pages: { pages_locale_slug_idx: { unique: true, definition: "btree (locale, slug) WHERE (slug <> ''::text)" } },
   page_revisions: { page_revisions_key_saved_idx: { unique: false, definition: 'btree (key, saved_at DESC)' } },
   pages: { pages_locale_slug_idx: { unique: true, definition: "btree (locale, slug) WHERE (slug <> ''::text)" } },
   journey_locales: { journey_locales_slug_idx: { unique: true, definition: "btree (locale, slug) WHERE (slug <> ''::text)" } },

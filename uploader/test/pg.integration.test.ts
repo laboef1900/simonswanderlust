@@ -375,9 +375,15 @@ maybe('pgPostStore (integration)', () => {
     };
     const created = await store.upsertDraft(base);
     expect((await store.list()).find((p) => p.translationKey === created.translationKey)?.secondaryStatus).toBe('started');
-    await store.publish(created.translationKey, await publishTokens(store, created.translationKey));
-    await store.unpublish(created.translationKey);
-    expect((await store.get(created.translationKey))?.status).toBe('draft');
+    const published = await store.publish(created.translationKey, await publishTokens(store, created.translationKey));
+    const unpublished = await store.unpublish(created.translationKey);
+    expect(unpublished.previousUpdatedAt).toEqual(published.updatedAt);
+    expect(unpublished.updatedAt.getTime()).toBeGreaterThan(published.updatedAt.getTime());
+    expect(await store.get(created.translationKey)).toMatchObject({ status: 'draft', updatedAt: unpublished.updatedAt });
+    const saved = await store.upsertDraft({ ...created, de: { ...created.de, title: 'After unpublish' } }, unpublished.updatedAt);
+    expect(saved.de.title).toBe('After unpublish');
+    expect(saved.updatedAt.getTime()).toBeGreaterThan(unpublished.updatedAt.getTime());
+    await expect(store.upsertDraft(created, unpublished.updatedAt)).rejects.toMatchObject({ code: 'conflict' });
     await expect(store.upsertDraft({ ...created, de: { ...created.de, slug: 'renamed-after-unpublish' } }))
       .rejects.toMatchObject({ code: 'slug_locked' });
     await store.remove(created.translationKey);

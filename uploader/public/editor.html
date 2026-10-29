@@ -496,14 +496,17 @@
     <script src="/admin/gpx-map.js"></script>
     <script src="/admin/editor-gpx.js"></script>
     <script src="/admin/editor-image-copy.js"></script>
+    <script src="/admin/build-reporting.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/language.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/draft-guard.js"></script>
+    <script src="/admin/write-recovery.js"></script>
     <script src="/admin/vendor/easymde.min.js"></script>
     <script src="/admin/llm.js"></script>
     <script src="/admin/alt-suggest.js"></script>
     <script src="/admin/media-api.js"></script>
+    <script src="/admin/upload-recovery.js"></script>
     <script src="/admin/picker-selection.js"></script>
     <script src="/admin/media-picker.js"></script>
     <script src="/admin/gallery-fence.js"></script>
@@ -541,6 +544,8 @@
       let excerptAssist = null;
       let reviewIsAdmin = false;
       let pendingSaves = 0;
+      let confirmingSave = false;
+      let writeRecovery = null;
       let populatingBody = false;
       const deImages = {};        // src → {width, height}
       const enImages = {};
@@ -548,6 +553,7 @@
       let language = null;
       const omitted = { de: false, en: false };
       const publishedLocales = { de: false, en: false };
+      let savedRequestedLocales = [];
       function requestedLocales() {
         return language ? language.locales.filter((locale) => !omitted[locale]) : [];
       }
@@ -610,14 +616,48 @@
       // ---- draft guard: dirty tracking, beforeunload warning, local autosave ----
       const initialTk = editorParams.get('tk');
       const guard = DraftGuard.createDraftGuard({
-        // A new post stashes under a per-tab key; otherwise two new-post tabs
-        // share one and the first save deletes the other's work (#138).
-        storageKey: initialTk ? 'swl:draft:' + initialTk : DraftGuard.tabScopedKey('swl:draft:new'),
-        ...(initialTk ? {} : { orphanPrefix: 'swl:draft:new' }),
+        resource: initialTk ? 'post:' + initialTk : 'new',
+        recovery: () => writeRecovery?.exportState(),
         collect: () => recoveryDraft || buildPayload(),
         onChange: (dirty) => {
           if (dirty && !pendingSaves) setStatus('');
           renderDraftState();
+        },
+      });
+      writeRecovery = WriteRecovery.create({
+        kind: 'posts', guard, copy: editorCopy, anchor: $('actionError'),
+        resourceId: () => currentTk || initialTk, base: () => loadedUpdatedAt,
+        collect: () => recoveryDraft || buildPayload(),
+        restoreBase: (value) => { loadedUpdatedAt = value; },
+        error: (body, status) => showErr(SiteLanguage.error(body) || (editorCopy.writeRefused + ' ' + status)),
+        adopt: async (body) => {
+          if (!currentTk) {
+            storyReview?.invalidate();
+            currentTk = body.translationKey;
+            gpxEditor.noteCreated(currentTk);
+            guard.setResource('post:' + currentTk);
+            const url = new URL(location.href);
+            url.searchParams.set('tk', currentTk);
+            history.replaceState(null, '', url.toString());
+            $('pageTitle').textContent = 'Edit post';
+          }
+          loadedUpdatedAt = body.updatedAt;
+          loadedSlugs.de = body.de?.slug || '';
+          loadedSlugs.en = body.en?.slug || '';
+          savedRequestedLocales = language.locales.filter((locale) => body[locale] && !body[locale].omitted);
+          loadRevisions().catch(() => {});
+          refreshAltAudit().catch(() => {});
+          setStatus('');
+        },
+        useStored: async (body) => {
+          await loadPost(body.translationKey, body);
+          if (loadBlocked || !writeRecovery.canAdopt(body.ownerUserId)) throw new Error(editorCopy.reloadFailed);
+          guard.setResource('post:' + currentTk);
+          gpxEditor.noteCreated(currentTk);
+          const url = new URL(location.href);
+          url.searchParams.set('tk', currentTk);
+          history.replaceState(null, '', url.toString());
+          guard.markClean();
         },
       });
       function renderDraftState() {
@@ -1007,16 +1047,22 @@
         if (!file) { statusEl.textContent = 'Pick a file first.'; return; }
 
         statusEl.textContent = 'Uploading…';
-        const fd = new FormData();
-        fd.append('key', 'trips/' + slug + '/hero');
-        fd.append('alt', altInput.value);
-        fd.append('file', file);
+        const ownerId = writeRecovery.ownerId();
+        const alt = altInput.value;
+        const previousSrc = $(locale + 'HeroSrc').value;
+        const previousFocus = HeroFocus.read(locale);
 
         try {
-          const res = await fetch('/upload', { method: 'POST', body: fd });
-          if (res.status === 401) { guard.redirectToLogin(); return; }
-          const body = await res.json().catch(() => ({}));
-          if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
+          const body = await UploadRecovery.run({
+            file, fields: { key: 'trips/' + slug + '/hero', alt }, ownerId, recovery: writeRecovery,
+            status: statusEl, button: $(locale + 'HeroUpload'), copy: editorCopy,
+            onUnauthed: () => guard.redirectToLogin(),
+          });
+          if (!body || !writeRecovery.canAdopt(ownerId)) return;
+          if ($(locale + 'HeroSrc').value !== previousSrc) {
+            statusEl.textContent = editorCopy.uploadNotApplied + ' ' + body.src;
+            return;
+          }
 
           storyReview?.invalidate();
           $(locale + 'HeroSrc').value = body.src;
@@ -1024,9 +1070,9 @@
           $(locale + 'HeroHeight').value = body.height;
           $(locale + 'HeroFormat').value = body.format || '';
           // Hidden inputs are set programmatically — no input event fires.
-          // A new photo invalidates the old focal point, so recentre before
-          // showing the control for the new frame.
-          HeroFocus.set(locale, 50, 50);
+          // Reset only unchanged framing; do not overwrite edits made while sending.
+          const currentFocus = HeroFocus.read(locale);
+          if (currentFocus.x === previousFocus.x && currentFocus.y === previousFocus.y) HeroFocus.set(locale, 50, 50);
           HeroFocus.sync(locale);
           guard.markDirty();
           // Encoding is asynchronous now (see server.ts POST /upload): the URL
@@ -1157,6 +1203,7 @@
           getSlug: () => $(locale === 'de' ? 'slugFieldDe' : 'slugFieldEn').value.trim(),
           onChange: () => { guard.markDirty(); storyReview?.invalidate(); },
           onUnauthed: () => guard.redirectToLogin(),
+          recovery: writeRecovery,
         }),
       ]));
 
@@ -1362,16 +1409,16 @@
         const imgSlug = file.name.replace(/\.[^.]+$/, '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
         statusEl.textContent = 'Uploading…';
 
-        const fd = new FormData();
-        fd.append('key', 'trips/' + slug + '/' + imgSlug);
-        fd.append('alt', altInput.value);
-        fd.append('file', file);
+        const ownerId = writeRecovery.ownerId();
+        const alt = altInput.value;
 
         try {
-          const res = await fetch('/upload', { method: 'POST', body: fd });
-          if (res.status === 401) { guard.redirectToLogin(); return; }
-          const body = await res.json().catch(() => ({}));
-          if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
+          const body = await UploadRecovery.run({
+            file, fields: { key: 'trips/' + slug + '/' + imgSlug, alt }, ownerId, recovery: writeRecovery,
+            status: statusEl, button: $(locale + 'BodyImgUpload'), copy: editorCopy,
+            onUnauthed: () => guard.redirectToLogin(),
+          });
+          if (!body || !writeRecovery.canAdopt(ownerId)) return;
 
           // Record dims into the locale-specific images map
           const imagesMap = locale === 'de' ? deImages : enImages;
@@ -1388,7 +1435,7 @@
           // ignores. Then it goes after the block instead, on its own line.
           // (Both edits fire a CodeMirror change → marks the guard dirty.)
           const cm = (locale === 'de' ? deMDE : enMDE).codemirror;
-          const md = ImageMarkdown.image(altInput.value, body.src);
+          const md = ImageMarkdown.image(alt, body.src);
           const spot = GalleryFence.insertBlockAt(cm.getValue(), cm.indexFromPos(cm.getCursor()), md);
           if (spot.blocked === 'unterminated') {
             statusEl.textContent = 'Uploaded ' + body.src + ' but not inserted: the block around the cursor has no closing ``` — close it, then paste: ' + md;
@@ -1403,8 +1450,8 @@
             statusEl.textContent = (spot.relocated ? 'Inserted after the ``` block: ' : 'Inserted: ') + body.src
               + (body.status === 'processing' ? ' — still processing (Publish waits for it)' : '');
           }
-          fileInput.value = '';
-          altInput.value = '';
+          if (fileInput.files[0] === file) fileInput.value = '';
+          if (altInput.value === alt) altInput.value = '';
         } catch (e) {
           statusEl.textContent = 'Upload failed: ' + e;
         }
@@ -1610,28 +1657,6 @@
         if (unpub) unpub.hidden = !isPublished;
       }
 
-      function setPublishedLive(slugs, release) {
-        const el = $('actionStatus');
-        el.textContent = '';
-        const urls = AdminConfirm.liveUrls(slugs);
-        el.appendChild(document.createTextNode(
-          'Published' + (release ? ' (release ' + release + ')' : '') + '. Live: '
-        ));
-        const links = language.locales.filter((locale) => urls[locale]).map((locale) => ({ href: urls[locale], label: locale.toUpperCase() }));
-        if (!links.length) {
-          el.appendChild(document.createTextNode('open the site from View site.'));
-          return;
-        }
-        links.forEach((u, i) => {
-          if (i) el.appendChild(document.createTextNode(' · '));
-          const a = document.createElement('a');
-          a.href = u.href;
-          a.textContent = u.label;
-          a.target = '_blank';
-          a.rel = 'noopener';
-          el.appendChild(a);
-        });
-      }
 
       // ---- alt-text audit (advisory; server: src/alt-audit.ts) ----
       // A photo whose alt is empty, only repeats the post title (which the site
@@ -1749,6 +1774,7 @@
       // Persists the current on-screen form. Returns true on success so Publish
       // can save first and validate exactly what's on screen.
       async function doSaveDraft({ gpxAttach = false } = {}) {
+        if (pendingSaves || confirmingSave) return false;
         if (loadBlocked) {
           showErr(editorCopy.reloadFailed);
           return false;
@@ -1758,8 +1784,6 @@
         setStatus('');
         const snap = guard.snapshot(); // edits typed after this point must survive markClean
         const payload = buildPayload();
-        const url = currentTk ? '/posts/' + encodeURIComponent(currentTk) : '/posts';
-        const method = currentTk ? 'PUT' : 'POST';
         // A slug change on an existing draft is deliberate or it does not happen
         // (#122): name the locale and both slugs, and only send the consent flag
         // the server requires (409 slug_change_unconfirmed otherwise) after OK.
@@ -1768,12 +1792,16 @@
           const lines = renamed.map((l) => SiteLanguage.names[l] + ': '
             + SiteLanguage.publicPath(language, l, 'story', loadedSlugs[l]) + ' → '
             + SiteLanguage.publicPath(language, l, 'story', payload[l].slug));
-          const ok = await AdminConfirm.ask({
-            title: 'Change this post’s URL?',
-            body: 'This save changes the post\'s URL:\n\n' + lines.join('\n') + '\n\nIf the old slug is a live WordPress URL, links and search rankings break.',
-            confirmLabel: 'Change URL',
-            danger: true,
-          });
+          confirmingSave = true;
+          let ok;
+          try {
+            ok = await AdminConfirm.ask({
+              title: 'Change this post’s URL?',
+              body: 'This save changes the post\'s URL:\n\n' + lines.join('\n') + '\n\nIf the old slug is a live WordPress URL, links and search rankings break.',
+              confirmLabel: 'Change URL',
+              danger: true,
+            });
+          } finally { confirmingSave = false; }
           if (!ok) {
             setStatus('');
             showErr('Not saved — the slug change was cancelled. Set the slug back to keep the URL.');
@@ -1781,66 +1809,14 @@
           }
           payload.confirmSlugChange = true;
         }
-        let res;
-        let body;
         pendingSaves += 1;
         renderDraftState();
         try {
-          res = await fetch(url, {
-            method,
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-          if (res.status !== 401) body = await res.json().catch(() => ({}));
-        } catch (e) {
-          showErr('Save failed: ' + e);
-          setStatus('');
-          return false;
+          return await writeRecovery.save(payload, snap);
         } finally {
           pendingSaves -= 1;
           renderDraftState();
         }
-        if (res.status === 401) { guard.redirectToLogin(); return false; }
-        if (!res.ok) {
-          setStatus('');
-          if (res.status === 409 && body.code === 'conflict') {
-            showErr(body.error || 'This post was modified since you opened it — nothing was saved.');
-            const reload = await AdminConfirm.ask({
-              title: 'Reload the latest version?',
-              body: 'This post was changed elsewhere (another tab or user) since you opened it, so saving would overwrite those changes. Nothing was saved.\n\nConfirm — reload the latest version (your edits in this tab are lost).\nCancel — keep your edits on screen so you can copy them out first.',
-              confirmLabel: 'Reload',
-              danger: true,
-            });
-            if (reload) await loadPost(currentTk);
-            return false;
-          }
-          showErr(SiteLanguage.error(body) || ('Save failed: ' + res.status));
-          return false;
-        }
-        if (!currentTk && body.translationKey) {
-          storyReview?.invalidate();
-          currentTk = body.translationKey;
-          gpxEditor.noteCreated(currentTk);
-          guard.setKey('swl:draft:' + currentTk);
-          const url2 = new URL(location.href);
-          url2.searchParams.set('tk', currentTk);
-          history.replaceState(null, '', url2.toString());
-          $('pageTitle').textContent = 'Edit post';
-        }
-        guard.markClean(snap);
-        if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
-        loadedSlugs.de = (body.de && body.de.slug) || '';
-        loadedSlugs.en = (body.en && body.en.slug) || '';
-        loadRevisions().catch(() => {});
-        // What was just stored is what the audit judges — refresh from the
-        // server rather than re-deriving the rule in the browser.
-        refreshAltAudit().catch(() => {});
-        const skipped = partialStopCount();
-        const savedMsg = guard.isDirty() ? editorCopy.saveNewer : isPublished ? editorCopy.saveLiveUnchanged : '';
-        setStatus(skipped
-          ? savedMsg + ' Note: ' + skipped + ' incomplete stop row(s) were skipped (each needs a name, latitude and longitude).'
-          : savedMsg);
-        return true;
       }
       $('saveDraft').addEventListener('click', () => { doSaveDraft(); });
 
@@ -1875,6 +1851,7 @@
         const saved = await doSaveDraft();
         if (!saved) return;
         const btn = $('publishBtn');
+        const publishingLocales = [...savedRequestedLocales];
         btn.disabled = true;
         const started = Date.now();
         setStatus('Building…');
@@ -1890,31 +1867,29 @@
           if (res.status === 401) { guard.redirectToLogin(); return; }
           const body = await res.json().catch(() => ({}));
           if (!res.ok) {
+            if (res.status >= 500) { showErr(BuildReporting.text('unknown')); setStatus(''); return; }
             const examples = Array.isArray(body.foreignImages) && body.foreignImages.length
               ? ' Examples: ' + body.foreignImages.join(', ') : '';
             showErr(gpxEditor.publishError(body.code || body.error) || (SiteLanguage.error(body) || ('Publish failed: ' + res.status)) + examples);
             setStatus('');
             return;
           }
-          if (body.build && !body.build.ok) {
-            showErr('Build error: ' + (body.build.error || 'unknown'));
-            setStatus('');
-            return;
+          if (body.published !== true || !body.updatedAt) {
+            showErr(BuildReporting.text('unknown')); setStatus(''); return;
           }
-          const release = (body.build && body.build.release) ? body.build.release : '';
-          setPublishedLive(slugs, release);
           isPublished = true;
           if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
-          for (const locale of requestedLocales()) {
+          for (const locale of publishingLocales) {
             publishedLocales[locale] = true;
             slugFieldFor(locale).disabled = true;
           }
           syncCoverage();
-          // The publish reply carries the audit of what actually went live.
+          // The audit describes the acknowledged publication, not current story liveness.
           renderAltAudit(body.altAudit, true);
           updateLocaleChip();
+          BuildReporting.renderOutcome($('actionStatus'), 'publish', body);
         } catch (e) {
-          showErr('Publish failed: ' + e);
+          showErr(BuildReporting.text('unknown'));
           setStatus('');
         } finally {
           clearInterval(tick);
@@ -1939,13 +1914,19 @@
           const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/unpublish', { method: 'POST' });
           if (res.status === 401) { guard.redirectToLogin(); return; }
           const body = await res.json().catch(() => ({}));
-          if (!res.ok) { showErr('Unpublish failed: ' + (body.error || res.status)); setStatus(''); return; }
+          if (!res.ok) { showErr(res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status)); setStatus(''); return; }
+          if (body.unpublished !== true || !body.updatedAt) { showErr(BuildReporting.text('unknown')); setStatus(''); return; }
+          // Unpublish is an emergency brake even from a stale tab. Advancing
+          // its save token is safe only if no unseen edit preceded the brake.
+          if (body.previousUpdatedAt === loadedUpdatedAt && body.updatedAt) {
+            loadedUpdatedAt = body.updatedAt;
+          }
           isPublished = false;
           for (const locale of ['de', 'en']) slugFieldFor(locale).disabled = publishedLocales[locale];
-          setStatus('Unpublished "' + title + '".');
+          BuildReporting.renderOutcome($('actionStatus'), 'unpublish', body, { title });
           updateLocaleChip();
         } catch (e) {
-          showErr('Unpublish failed: ' + e);
+          showErr(BuildReporting.text('unknown'));
           setStatus('');
         } finally {
           btn.disabled = false;
@@ -2070,19 +2051,27 @@
 
       // Returns false only when it redirected to /login (callers must stop);
       // true otherwise — even on a failed load, so a local stash can still be offered.
-      async function loadPost(tk) {
+      async function loadPost(tk, snapshot) {
         loadBlocked = true;
         setStatus('Loading…');
         let post;
         try {
-          const res = await fetch('/posts/' + encodeURIComponent(tk));
-          if (res.status === 401) { guard.redirectToLogin(); return false; }
-          if (!res.ok) {
-            showErr('Could not load post: ' + res.status);
-            setStatus('');
+          if (snapshot) post = snapshot;
+          else {
+            const res = await fetch('/posts/' + encodeURIComponent(tk));
+            if (res.status === 401) { guard.redirectToLogin(); return false; }
+            if (!res.ok) {
+              showErr('Could not load post: ' + res.status);
+              setStatus('');
+              return true;
+            }
+            post = await res.json();
+          }
+          if (!writeRecovery.canAdopt(post.ownerUserId)) {
+            writeRecovery.observeOwner(post.ownerUserId);
+            showErr(editorCopy.writeOwnerChanged);
             return true;
           }
-          post = await res.json();
           for (const locale of ['de', 'en']) publishedLocales[locale] = Boolean(post[locale]?.publishedAt);
         } catch (e) {
           showErr('Could not load post: ' + e);
@@ -2228,6 +2217,7 @@
       (async () => {
         const s = await Auth.ensureAuthed();
         if (!s) return;
+        if (!writeRecovery.initialize(s.userId)) return;
         reviewIsAdmin = s.isAdmin === true;
         Auth.renderHeader(s);
         try {
@@ -2269,12 +2259,17 @@
             confirmLabel: 'Restore',
           });
           if (restore) {
-            guard.adopt(stash);
+            if (!guard.adopt(stash)) return;
             storyReview?.invalidate();
-            currentTk = stash.payload.translationKey || currentTk;
             populateForm(stash.payload);
-            guard.markDirty();
-            setStatus('Restored unsaved draft — remember to Save draft.');
+            if (!writeRecovery.restore(stash.recovery)) {
+              loadBlocked = true;
+              showErr(editorCopy.writeUnsafeBase);
+            } else {
+              await writeRecovery.probe();
+            }
+            renderDraftState();
+            setStatus(editorCopy.writeRestored);
           } else {
             guard.dismissRestore(stash);
           }

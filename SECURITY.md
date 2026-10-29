@@ -83,6 +83,10 @@ Implementation approval and merge authorization remain separate from design appr
   a verified undo set and stages fresh source IDs before replacing database state.
   Unknown commit outcomes retain both source sets until reference-checked reconciliation.
   Restore is offline; do not force-terminate another process to bypass its admission check.
+  Release pruning rechecks writability immediately before each removal. Once lease loss is
+  observed, it admits no further cleanup mutation; an already-issued filesystem operation
+  cannot be recalled. A release promoted before lease loss remains a successful promotion,
+  not permission to write a recovery record or resume cleanup without ownership (#397).
 
 The specification defines transaction/file ordering, paired restore, misuse cases and
 rollback. Reverting code is not erasure, and removing future published geometry requires
@@ -124,9 +128,11 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   The Desk consumes this same helper before its admin-only checklist; client roles are
   presentation gates, while the onboarding routes still require admin authorization.
   Login, setup, `/auth/status`, session issuance and expiry are unchanged.
-  The non-secret account ID does not authorize owner fencing, write receipts, draft stashes
-  or native locking (#304/#305/#306). Rollback removes the endpoint/helper cutover and Desk
-  activation together without clearing onboarding retirement state or restore fences.
+  The non-secret account ID is correlation context, never authorization. Separately approved
+  #305 uses it for captured-owner comparisons, writer-only receipt reads and scoped local
+  recovery; authenticated route roles remain authoritative (see **Ambiguous writes and local
+  recovery** below). Rolling back the helper now also requires rolling back those dependent
+  clients together, without clearing onboarding retirement state or restore fences.
 - **First-admin setup** (`/setup`) is only available while no users exist, and is **serialized**
   with a per-process lock so two concurrent requests cannot both create an admin (TOCTOU closed).
 - **First-run checklist** (#279, approved #278 Q1–Q5/P1–P2) is install-wide admin-only
@@ -151,11 +157,70 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   (`docker compose exec app node --import tsx src/cli.ts set-password <username>`), which also
   invalidates all of that user's sessions — recovery procedure in `ARCHITECTURE.md`.
 
+## Ambiguous writes and local recovery (#305)
+
+The owner-approved [weak-connection contract](docs/superpowers/specs/2026-10-27-issue-304-weak-connection-write-contract.md)
+adds no anonymous surface and does not renew sessions. `POST /posts` requires a
+client-generated UUID and is create-only; post/page saves require a UUID `saveId` and
+the form's captured `expectedOwnerId`. The latter is compared with the authenticated
+session before mutation; it is correlation, never authorization. Store transactions
+stamp the requesting writer and return content/token/receipt from one snapshot.
+Reads expose a last-save ID only to that writer. Import, publication, unpublication,
+GPX/token-changing writes and offline restore invalidate this evidence.
+
+Every upload caller supplies a captured owner, UUID upload ID and retry generation.
+Receipts bind one account/ID to one byte hash, canonical request identity and frozen
+encoding profile/key for the account's lifetime; account deletion cascades them.
+They contain no photo bytes, EXIF/GPS, credentials or session tokens. A receipt hit
+does not repeat metadata changes. A pending receipt is not success, a missing receipt
+is not permission to resend, and age never grants takeover. `GET /upload/receipts/:uploadId`
+is authenticated, owner-scoped, no-store and read-only. The selected-key folder probe
+(`POST /media/lookup`, 1–100 unique validated keys) is also authenticated/no-store and
+returns only key plus folder or an explicit missing marker, independently of listing
+pagination; existing GPS/uploader redaction remains unchanged.
+
+`data-owner.ts` holds the owned Node-API filesystem lock **before** acquiring the
+existing PostgreSQL owner. The stable lock file is `.storage-owner.lock` in the
+canonical parent of `STORAGE_DIR`. It must be a private, singly linked regular file;
+symlinks, failed acquisition or ownership changes fail closed. Never remove or replace
+this inode. The descriptor has CLOEXEC and remains strongly owned after a PG disconnect
+and until admitted asynchronous work quiesces. App, offline upload and restore/maintenance
+entry points use the same order. Receipt recovery uses receipt ownership followed by
+the existing #348 media-key admission boundary, with bounded pages, capacity wakeups
+and explicit admin Rescan. Deletion atomically makes receipts terminal with DB removal.
+
+The Media batch pauses in place on session loss. Login opens another tab; resuming is
+explicit and restricted to the original account. No File queue is persisted. Post/About
+reconciliation performs at most one automatic bounded read after an unknown response or
+receipt-check conflict; **Check again** is manual and never replays a write. Acknowledgement
+adoption checks owner, attempt identity and exact form generation, preserving newer edits.
+Local records contain owner/resource/context, base/attempt metadata and form snapshots,
+not credentials. Logout and expiry preserve drafts. Legacy unknown-owner bytes are
+neither exposed nor deleted, including for admins; private browser-profile recovery is
+manual. Someone with access to the same browser profile can still inspect its storage.
+
+**Qualification and deployment restriction:** inherited native-binding evidence covers
+macOS arm64/APFS and native DHI Node 26.12.1/glibc amd64+arm64 on inspected ext4 bind mounts
+and Docker local named volumes (CI run 40866450527). This is not an execution claim for
+the integrated #305 product. The actual deployment mount remains unqualified and MUST
+pass the process/descriptor/PG-loss/restore matrix before deployment or enablement.
+NFS/SMB/FUSE, musl and Docker Desktop sharing are not approved. This gate is operational:
+successful lock acquisition does not identify or qualify a filesystem.
+
+**Containment/rollback:** there is no safe mixed-version online downgrade. Stop admission,
+drain or terminate all writers, retire open sessions/clients and deploy compatible
+client/server code together before authenticated reload. Keep local records and additive
+schema; reconcile by compatible roll-forward rather than treating ignored IDs as safety.
+Offline native restore clears post/page receipts and the upload table in its content
+transaction, including pages preserved by legacy v1 restore. Raw SQL/filesystem recovery
+must invalidate the same operational evidence offline before traffic resumes.
+
 ## Authorization
 
 - `requireAuth` gates all CMS/editor/upload endpoints.
 - `requireAdmin` gates **user management**, **settings** (`/settings` — backup schedule and
-  retention), **backups**, **rebuild**, **page edits**, the **WordPress import** (`POST /import`,
+  retention), **backups**, **rebuild and its status** (`POST /rebuild`, `GET /rebuild/status`),
+  **page edits**, the **WordPress import** (`POST /import`,
   since #97 — it creates/overwrites drafts, writes gigabytes under `/data`, and makes hundreds of
   outbound fetches to a host chosen by the export, governed by admin-only settings knobs), and,
   importantly, everything that
@@ -946,7 +1011,7 @@ preview even though the live site would load it.
 
 - `DATABASE_URL` is provided via environment (compose `.env`), never committed. `.env`,
   credentials, and binaries are git-ignored.
-- The rebuild trigger (`POST /rebuild`) and the DB backup routes (`GET`/`POST /backups`,
+- The rebuild trigger/status (`POST /rebuild`, `GET /rebuild/status`) and the DB backup routes (`GET`/`POST /backups`,
   `GET /backups/:name`) are gated by `requireAdmin` — no separate shared secret; the retired
   `BUILD_SECRET` / `x-build-secret` mechanism no longer exists.
 - **AI provider credentials (#214, registry 2026-10-19):** one `app_secrets` row per remote
@@ -1031,10 +1096,28 @@ deliberate trade-off, not an oversight:
   `site/src/lib/loader-pool.ts`, whose connection and query timeouts turn a silently hung
   Postgres into a build error within about a minute. The deadline is not request-controlled, and
   every route that starts a build is admin-only, so an author cannot hold the lock by crafting
-  content. The last 4 KiB of the child's **stderr** (ANSI-stripped) is appended to the build error
-  returned to the authenticated caller so the admin learns which post failed the schema; it is
-  build diagnostics (entry ids, schema paths, library file paths), never `DATABASE_URL` — the
-  child reads that from the environment and neither astro nor pg echoes it on a query error.
+  content. Child stderr remains in server logs, not browser/CLI response bodies. Responses
+  carry a fixed failure code and localized safe copy; the pool-backed snapshot deadline is
+  also classified as `build_timeout`. Operators use `docker compose logs app` for details.
+- **Build reporting (#297):** `GET /rebuild/status` is admin-only and `no-store`; authors'
+  Desk does not request it. `/data/site/build-state.json` is unserved operational metadata,
+  bounded and validated on read, containing no stderr, stack trace or content body. A prior
+  running record becomes `interrupted` after restart; missing/unreadable/unpersisted records
+  remain explicit. The independently observed `current` release is not inferred from the
+  attempt outcome. Status persistence is best-effort and cannot undo a CMS commit or demote
+  a promoted release; ownership loss stops further writes. `/health` carries no attempt
+  history. A failed rebuild acknowledgement does not mean the preceding CMS mutation failed.
+- **Promotion commit point (#397):** a successful atomic `current` rename is final for the
+  build outcome. Post-promotion cleanup failures cannot reverse that success or change CMS
+  content. Unreadable release/current state or a current target different from the promoted
+  directory skips pruning; the current/promoted release and staging entries are protected.
+  Ordinary deletion errors are isolated per existing retention candidate, but ownership loss
+  stops new mutations. Warnings contain only a fixed message, generated promotion stamp,
+  fixed stage and allow-listed errno (otherwise `unknown`); neither arbitrary names, raw
+  exceptions nor build stderr enter these diagnostics. A logging failure also cannot reverse
+  promotion. The exclusive work lock, pre-promotion failures, retention selection, admin
+  authorization and storage-owner fencing remain unchanged. See the
+  [approved contract and containment plan](docs/superpowers/specs/2026-10-27-issue-397-promoted-release-pruning.md).
 - **`/health` reports `release`** (whether a built site exists) beside free space, and like free
   space it is **information, never a verdict**: a fresh volume legitimately has no release for
   the first minutes, a persistent build failure is healed by a publish rather than a container

@@ -405,6 +405,8 @@
           <button id="backupNow" type="button" class="btn-secondary">Back up now</button>
           <button id="rebuild" type="button" class="btn-primary">Rebuild site now</button>
         </div>
+        <p id="buildStatusLabel" class="section-label"></p>
+        <p id="buildStatus" class="page-status" role="status"></p>
         <p class="section-label">Last backup</p>
         <p id="backupStatus" class="page-status" role="status"></p>
         <p class="section-label">Backup files</p>
@@ -432,6 +434,7 @@
     </main>
 
     <script src="/admin/editor-image-copy.js"></script>
+    <script src="/admin/build-reporting.js"></script>
     <script src="/admin/gpx-copy.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/admin-confirm.js"></script>
@@ -444,6 +447,7 @@
     <script>
       const $ = (id) => document.getElementById(id);
       const copy = EditorCopy.en;
+      $('buildStatusLabel').textContent = BuildReporting.text('label');
       const gpxCopy = GpxCopy.en;
       $('routeBackupHeading').textContent = gpxCopy.backupHeading;
       $('routeBackupPrivacy').textContent = gpxCopy.backupPrivacy;
@@ -1530,15 +1534,13 @@
           const res = await fetch('/rebuild', { method: 'POST' });
           if (res.status === 401) { location.href = '/login'; return; }
           const r = await res.json().catch(() => ({}));
-          if (r.ok) {
-            $('out').textContent = 'Rebuilt: release ' + r.release + '. Live: ' + location.origin + '/';
-          } else {
-            $('out').textContent = 'Rebuild failed: ' + (r.error || res.status);
-          }
+          if (res.ok && typeof r.ok === 'boolean') BuildReporting.renderOutcome($('out'), 'rebuild', r);
+          else $('out').textContent = BuildReporting.text('unknown');
         } catch (e) {
-          $('out').textContent = 'Rebuild failed: ' + e;
+          $('out').textContent = BuildReporting.text('unknown');
         } finally {
           btn.disabled = false;
+          await BuildReporting.loadStatus($('buildStatus'));
         }
       });
 
@@ -1551,6 +1553,7 @@
         SettingsIdentity.init();
         SettingsNavigation.init();
         SettingsLanguage.init();
+        await BuildReporting.loadStatus($('buildStatus'));
         await loadBackups();
         await init();
       })();

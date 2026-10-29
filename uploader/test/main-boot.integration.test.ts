@@ -58,6 +58,9 @@ maybe('production boot (src/main.ts, Postgres)', () => {
   const orphanJourneyId = randomUUID();
   let journeyId: string | undefined;
   let heroKey: string;
+  const previousRelease = '1760000000000-1-0000';
+  const interruptedAttempt = '1760000001000-1-0001';
+  const interruptedStartedAt = new Date(1760000001000).toISOString();
 
   beforeAll(async () => {
     pool = createPool(url!);
@@ -80,6 +83,14 @@ maybe('production boot (src/main.ts, Postgres)', () => {
 
     dir = await mkdtemp(join(await realpath(tmpdir()), 'main-boot-'));
     settingsPath = join(dir, 'settings.json');
+    // An existing release suppresses boot rebuilding; the newly acquired owner
+    // must still initialize the durable record before accepting HTTP requests.
+    await mkdir(join(dir, 'site', 'releases', previousRelease), { recursive: true });
+    await writeFile(join(dir, 'site', 'releases', previousRelease, 'index.html'), 'Previous release');
+    await symlink(join('releases', previousRelease), join(dir, 'site', 'current'));
+    await writeFile(join(dir, 'site', 'build-state.json'), JSON.stringify({
+      schema: 1, running: { attemptId: interruptedAttempt, startedAt: interruptedStartedAt, triggers: ['publish'] }, last: null,
+    }));
     // A pre-registry install: review on OpenRouter, captions local, and the one
     // shared key in the legacy slot. Boot must migrate both before listen().
     await pool.query("DELETE FROM app_secrets WHERE key IN ('ai_api_key', 'ai_provider_key:openrouter')");
@@ -291,6 +302,25 @@ maybe('production boot (src/main.ts, Postgres)', () => {
       });
       expect(restored.status).toBe(200);
     }
+  });
+
+  it('initializes interrupted history after storage ownership even when a live release already exists', async () => {
+    const login = await fetch(`${base}/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: base },
+      body: JSON.stringify({ username, password }),
+    });
+    expect(login.status).toBe(200);
+    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
+    const response = await fetch(`${base}/rebuild/status`, { headers: { cookie } });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toMatchObject({
+      live: { release: previousRelease }, running: null, record: 'ok',
+      last: { attemptId: interruptedAttempt, startedAt: interruptedStartedAt, result: 'interrupted',
+        finishedAt: null, release: null, failure: null, beforeBoot: true, triggers: ['publish'] },
+    });
+    // Boot observation is read-only; only a later build may supersede this record.
+    expect(JSON.parse(await readFile(join(dir, 'site', 'build-state.json'), 'utf8')).running.attemptId).toBe(interruptedAttempt);
   });
 
   it('migrated a legacy settings file and the shared key to the provider registry before listening', async () => {

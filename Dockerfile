@@ -8,14 +8,11 @@
 # matching the image CI publishes to GHCR:
 #   NODE_BUILD   dhi.io/node:26-dev   — SDK variant (npm + shell) for the installs
 #   NODE_RUNTIME dhi.io/node:26       — minimal, non-root uid 1000, no shell
-# To build without a DHI subscription, override both with the plain node base
-# (both apps declare engines.node >=26, so stay on a node:26 base):
-#   docker build --build-arg NODE_BUILD=node:26-slim --build-arg NODE_RUNTIME=node:26-slim .
-# @ai-warning: NODE_BUILD and NODE_RUNTIME must share an OS/libc family —
-# sharp's and Astro's native binaries are installed in build stages and copied
-# into the runtime.
-ARG NODE_BUILD=dhi.io/node:26-dev
-ARG NODE_RUNTIME=dhi.io/node:26
+# The native ownership binding is qualified for this Node 26 / Debian glibc
+# family on amd64 and arm64. Other images/libcs require fresh qualification;
+# a successful build or lock acquisition alone is not mount approval.
+ARG NODE_BUILD=dhi.io/node:26-dev@sha256:c8939885965365c675a024d062bcb761bda4b47e95ce0323aa998ac9bc312fd6
+ARG NODE_RUNTIME=dhi.io/node:26@sha256:7312902a19cc5724ca350fb631e397cdb1bd6235c1c3f6905246d92e25842a77
 
 # Self-hosted map basemap + glyph fonts are fetched at build time and baked into
 # the image, so the container serves /map/ with zero server-side provisioning.
@@ -37,6 +34,19 @@ ARG PMTILES_VERSION=1.30.3
 ARG PROTOMAPS_BUILD=auto
 ARG PROTOMAPS_MAX_AGE_DAYS=14
 ARG MAP_MAXZOOM=8
+
+# --- owned Node-API lifetime lock: compiler stays in this stage only ---
+FROM ${NODE_BUILD} AS native-build
+ARG NODE_BUILD
+ARG NODE_RUNTIME
+ENV NODE_BUILD=${NODE_BUILD} NODE_RUNTIME=${NODE_RUNTIME} DEBIAN_SNAPSHOT=20261029T000000Z
+USER 0
+WORKDIR /proof
+COPY .github/issue-304-native/owned-flock.c .github/issue-304-native/build-native.mjs .github/issue-304-native/container-toolchain.mjs ./
+RUN ["node", "-e", "require('node:fs').mkdirSync('/proof/inputs', { recursive: true })"]
+RUN ["node", "container-toolchain.mjs"]
+COPY uploader/scripts/build-native.mjs /app/uploader/scripts/build-native.mjs
+RUN ["node", "/app/uploader/scripts/build-native.mjs", "/proof"]
 
 # --- uploader deps + vendored admin assets ---
 FROM ${NODE_BUILD} AS uploader-build
@@ -112,6 +122,7 @@ ENV NODE_ENV=production \
 # uid 1000 = the DHI default user / `node` in node:26-slim. The site tree must
 # be writable: astro writes .build-tmp/ and .astro/ during runtime builds.
 COPY --from=uploader-build --chown=1000:1000 /app/uploader /app/uploader
+COPY --from=native-build --chown=1000:1000 /app/uploader/native /app/uploader/native
 COPY --from=site-build --chown=1000:1000 /app/site /app/site
 # Basemap + glyph fonts baked in; the app serves them at /map/ (MAP_DIR=/map-assets).
 COPY --from=mapfetch --chown=1000:1000 /map /map-assets

@@ -151,6 +151,7 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
       documentElement: { lang: 'en' },
       getElementById: (id: string): Element | null => (ids.has(id) ? el(id) : null),
       createElement: () => element(),
+      createTextNode: (text: string) => Object.assign(element(), { textContent: text }),
     }),
     location: {
       href: 'http://localhost/admin/posts.html',
@@ -177,12 +178,17 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
       },
     },
     EditorCopy: { en: EDITOR_COPY },
+    BuildCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale, Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('admin.build.'))
+        .map(([key, value]) => [key.slice('admin.build.'.length), value])),
+    ])),
     AdminConfirm: { ask: async () => true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     ...extraGlobals,
   };
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(renderGpxCopy(), ctx);
+  vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), ctx);
   vm.runInContext(readFileSync('public/language.js', 'utf8'), ctx);
   vm.runInContext(`SiteLanguage.accept({primary:'de',locales:['de','en'],lockedAt:null,updatedAt:'2026-10-27T00:00:00.000Z'});
     SiteLanguage.get = async () => SiteLanguage.config();`, ctx);
@@ -227,7 +233,7 @@ describe('posts.html actions survive a dropped connection', () => {
     const deletePost = vm.runInContext('deletePost', ctx) as (p: unknown, btn: Element) => Promise<void>;
     await deletePost(post, btn);
     expect(btn.disabled).toBe(false);
-    expect(el('out').textContent).toBe('Delete failed: TypeError: Failed to fetch');
+    expect(el('out').textContent).toBe(ui.en['admin.build.unknown']);
   });
 
   it('unpublishPost re-enables the row button and names the failure', async () => {
@@ -236,7 +242,7 @@ describe('posts.html actions survive a dropped connection', () => {
     const unpublishPost = vm.runInContext('unpublishPost', ctx) as (p: unknown, btn: Element) => Promise<void>;
     await unpublishPost(post, btn);
     expect(btn.disabled).toBe(false);
-    expect(el('out').textContent).toBe('Unpublish failed: TypeError: Failed to fetch');
+    expect(el('out').textContent).toBe(ui.en['admin.build.unknown']);
   });
 
   it('runBulk re-enables all three bulk buttons and names the failure', async () => {
@@ -245,7 +251,7 @@ describe('posts.html actions survive a dropped connection', () => {
     const runBulk = vm.runInContext('runBulk', ctx) as (action: string) => Promise<void>;
     await runBulk('delete');
     for (const id of ['bulkPublish', 'bulkUnpublish', 'bulkDelete']) expect(el(id).disabled).toBe(false);
-    expect(el('out').textContent).toBe('Bulk delete failed: TypeError: Failed to fetch');
+    expect(el('out').textContent).toBe(ui.en['admin.build.unknown']);
     // The selection is only cleared once the server confirmed the batch.
     expect(vm.runInContext('selected.size', ctx)).toBe(1);
   });
@@ -266,11 +272,54 @@ describe('posts.html actions survive a dropped connection', () => {
 
   it('a failed refresh keeps the action outcome the caller already reported', async () => {
     // Unpublish succeeded but its rebuild failed (200 with build.ok=false), then
-    // the list refresh dies: the admin must still see that the old release is live.
+    // the list refresh dies: acknowledged CMS facts must remain visible.
     const { ctx, el } = loadPosts();
     const load = vm.runInContext('load', ctx) as (statusMsg?: string) => Promise<void>;
     await load('Unpublished "Bukarest". Rebuild failed: astro exited 1');
     expect(el('out').textContent).toBe('Unpublished "Bukarest". Rebuild failed: astro exited 1\nCould not load posts: TypeError: Failed to fetch');
+  });
+});
+
+describe('posts action build reporting', () => {
+  it.each(['delete', 'unpublish'])('%s preserves the CMS acknowledgement when its rebuild fails', async (action) => {
+    const { ctx, el } = loadPosts({
+      fetch: async (_url: string, init?: RequestInit) => init?.method
+        ? Response.json({ [action === 'delete' ? 'deleted' : 'unpublished']: true, build: { ok: false, code: 'no_space', error: 'SECRET', liveRelease: null } })
+        : Response.json([]),
+    });
+    const fn = vm.runInContext(action === 'delete' ? 'deletePost' : 'unpublishPost', ctx) as (post: unknown, button: Element) => Promise<void>;
+    await fn(post, element());
+    expect(el('out').textContent).toContain('CMS');
+    expect(el('out').textContent).toContain('No live release yet');
+    expect(el('out').textContent).not.toContain('SECRET');
+    expect(el('out').children.some((node) => node.href === '/admin/settings.html#site')).toBe(true);
+  });
+
+  it.each([true, false])('bulk keeps explicitly successful/failed counts with build success=%s', async (ok) => {
+    const { ctx, el } = loadPosts({
+      fetch: async (_url: string, init?: RequestInit) => init?.method
+        ? Response.json({ succeeded: 1, failed: 1, results: [{ key: 'tk1', ok: true }, { key: 'tk2', ok: false, error: 'invalid_post' }],
+          build: { ok, release: ok ? '1793000000000-1-0001' : undefined, code: 'build_stopped', error: 'SECRET' } })
+        : Response.json([]),
+    });
+    vm.runInContext("selected.add('tk1'); selected.add('tk2'); allPosts = [" + JSON.stringify(post) + ']', ctx);
+    const runBulk = vm.runInContext('runBulk', ctx) as (action: string) => Promise<void>;
+    await runBulk('publish');
+    expect(el('out').textContent).toContain('1 saved in the CMS, 1 failed');
+    expect(el('out').textContent).toContain('Live release status is unavailable');
+    expect(el('out').textContent).not.toContain('SECRET');
+    if (!ok) expect(el('out').children.some((node) => node.textContent === ui.en['admin.build.stoppedRecovery'])).toBe(true);
+  });
+
+  it('draft deletion says no rebuild without guessing a live consequence', async () => {
+    const { ctx, el } = loadPosts({
+      fetch: async (_url: string, init?: RequestInit) => Response.json(init?.method ? { deleted: true } : []),
+    });
+    const remove = vm.runInContext('deletePost', ctx) as (post: unknown, button: Element) => Promise<void>;
+    await remove({ ...post, status: 'draft' }, element());
+    expect(el('out').textContent).toContain('Deleted draft');
+    expect(el('out').textContent).toContain('The site was not rebuilt');
+    expect(el('out').textContent).not.toContain('live');
   });
 });
 
@@ -931,7 +980,7 @@ describe('settings.html actions survive a dropped connection', () => {
     const { el } = loadSettingsPage();
     await el('rebuild').click();
     expect(el('rebuild').disabled).toBe(false);
-    expect(el('out').textContent).toBe('Rebuild failed: TypeError: Failed to fetch');
+    expect(el('out').textContent).toBe(ui.en['admin.build.unknown']);
   });
 
   it('Rebuild does not start when the confirm is declined', async () => {
@@ -939,6 +988,28 @@ describe('settings.html actions survive a dropped connection', () => {
     await el('rebuild').click();
     expect(el('rebuild').disabled).toBe(false);
     expect(el('out').textContent).not.toMatch(/Rebuilding|Rebuilt|failed/);
+  });
+});
+
+describe('Settings rebuild report and independent status', () => {
+  it.each([true, false])('shows promoted=%s separately from the latest attempt and live observation', async (ok) => {
+    const requests: string[] = [];
+    const { el } = loadSettingsPage({
+      fetch: async (url: string) => {
+        requests.push(url);
+        if (url === '/rebuild') return Response.json({ ok, release: ok ? '1793000000000-1-0001' : undefined, code: 'build_failed', error: 'SECRET', liveRelease: null });
+        if (url === '/rebuild/status') return Response.json({ record: 'unreadable', running: null, last: null, live: { release: '1793000000000-1-0001', stampedAt: '2026-10-26T00:00:00Z' } });
+        throw new Error('Unexpected ' + url);
+      },
+    });
+    await el('rebuild').click();
+    expect(requests).toEqual(['/rebuild', '/rebuild/status']);
+    expect(el('out').textContent).toContain(ok ? 'was promoted' : 'failed before a release was promoted');
+    expect(el('out').textContent).toContain('No live release yet');
+    expect(el('out').textContent).not.toContain('SECRET');
+    expect(el('buildStatus').textContent).toContain('record could not be read');
+    expect(el('buildStatus').textContent).toContain('observed serving');
+    expect(el('buildStatus').textContent).not.toContain('succeeded');
   });
 });
 
@@ -1690,7 +1761,11 @@ describe('settings.html against the real settings and provider routes', () => {
       storageDir: dir, baseUrl: 'https://images.example', imgHost: 'images.example', siteDir: join(dir, 'site'),
       users, sessions, secrets, settings, media, encodeQueue: queue,
       posts: memoryPostStore(), pages: memoryPageStore(),
-      builder: { build: unavailable, hasRelease: () => false, quiesce: async () => {} }, backupDir: join(dir, 'backup'),
+      builder: {
+        build: unavailable, hasRelease: () => false, quiesce: async () => {},
+        initialize: async () => {},
+        status: async () => ({ live: null, running: null, last: null, record: 'missing' }),
+      }, backupDir: join(dir, 'backup'),
       dbBackup: { dir, runNow: unavailable, running: () => false, sweepTempFiles: () => [], list: () => [], listImageArchives: () => [], listRouteArchives: () => [], state: () => ({}), quiesce: async () => {} },
       dbCheck: unavailable,
     });

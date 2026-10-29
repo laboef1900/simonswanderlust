@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { readdirSync, chownSync, chmodSync, writeFileSync, readFileSync } from 'node:fs';
+assert.equal(process.getuid(), 0);
+assert.equal(process.env.PROOF_FIXTURE_ROOT, '/proof-fixtures');
+assert(/^swl-native-lock-proof-[a-z0-9-]+$/.test(process.env.PROOF_VOLUME ?? ''));
+assert.equal(readdirSync('/proof-fixtures').length, 0, 'Only initialize a NEW EMPTY named proof-only volume');
+assert(readFileSync('/proc/self/mountinfo', 'utf8').split('\n').some(line => line.split(' ')[4] === '/proof-fixtures'), 'Requires an explicit proof mount');
+chownSync('/proof-fixtures', 1000, 1000);
+chmodSync('/proof-fixtures', 0o700);
+writeFileSync('/proof-fixtures/VOLUME-IDENTITY.json', JSON.stringify({ volume: process.env.PROOF_VOLUME, proofOnly: true }) + '\n', { flag: 'wx', mode: 0o600 });
+chownSync('/proof-fixtures/VOLUME-IDENTITY.json', 1000, 1000);
+console.log('Initialized only the explicitly mounted empty proof volume.');

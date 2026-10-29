@@ -19,12 +19,14 @@ import { makeDbCheck } from './health.js';
 import { createWorkLock } from './work-lock.js';
 import { pgMediaStore } from './media-store.js';
 import { createEncodeQueue } from './encode-queue.js';
+import { pgUploadReceiptStore } from './upload-receipts.js';
+import { createUploadService } from './upload-service.js';
 import { createMediaSync, createReconciler } from './media-sync.js';
 import { parseEncryptionKey, pgSecretsStore } from './secrets.js';
 import { LEGACY_AI_KEY_SLOT, slotFor } from './ai-providers.js';
 import { pgCommentStore } from './comments.js';
 import { pgCommentAdminStore } from './comments-admin.js';
-import { acquireStorageOwner } from './storage-owner.js';
+import { acquireDataOwner } from './data-owner.js';
 import { createGpxFiles } from './gpx-files.js';
 import { createGpxWorker } from './gpx-worker.js';
 import { createPublicTrackWorker } from './gpx-public-worker.js';
@@ -55,10 +57,10 @@ console.info(`trusted proxy peers: ${proxyPolicy.describe}`);
 const encryptionKey = parseEncryptionKey(process.env.ENCRYPTION_KEY);
 if (encryptionKey === undefined) console.info('ENCRYPTION_KEY not configured in .env; encrypted remote AI credentials are unavailable.');
 
-// A second app or offline restore must not share ownership of route files.
-const owner = await acquireStorageOwner(databaseUrl, { role: 'app' });
-const runtime = { signal: owner.signal, isWritable: owner.isWritable };
+// Every app/restore entry point acquires the stable filesystem lock before PG.
 const storageDir = process.env.STORAGE_DIR ?? '/data/images';
+const owner = await acquireDataOwner(databaseUrl, { role: 'app', storageDir });
+const runtime = { signal: owner.signal, isWritable: owner.isWritable };
 const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(storageDir), 'settings.json');
 const siteDir = resolve(process.env.SITE_DIR ?? '/data/site');
 const backupDir = resolveBackupDir();
@@ -84,11 +86,11 @@ if (migration.posts && (!migration.language || !migration.omitted || !migration.
   owner.assertWritable();
 }
 await initializeApplicationSchema(pool, owner.assertWritable);
+await initializeOnboarding(pool, { storageDir, settingsPath, backupDir, siteDir }, bootEvidence, owner.assertWritable);
 owner.assertWritable();
 await repairJourneyOrphans(pool, runtime);
 owner.assertWritable();
 await reportNamespaceCollisions(pool, (message) => console.warn(message));
-await initializeOnboarding(pool, { storageDir, settingsPath, backupDir, siteDir }, bootEvidence, owner.assertWritable);
 const identityStore = await pgSiteIdentityStore(pool);
 const secrets = pgSecretsStore(pool, encryptionKey);
 // AI provider registry migration (spec §5), before listen(): copy the legacy
@@ -140,9 +142,16 @@ const builder = createSiteBuilder({
   ...runtime,
   applicationName: owner.applicationName + ':build',
 });
+// Ownership is acquired above; only this owner may interpret a persisted run as interrupted.
+owner.assertWritable();
+await builder.initialize();
 const media = pgMediaStore(pool, { baseUrl });
 const journeys = pgJourneyStore(pool, media, baseUrl.replace(/\/$/, ''), runtime);
-const encodeQueue = createEncodeQueue({ store: media, storageDir, lock: workLock, ...runtime });
+const uploadReceipts = pgUploadReceiptStore(pool);
+const encodeQueue = createEncodeQueue({
+  store: media, storageDir, lock: workLock, ...runtime,
+  canRecover: async (key) => !await uploadReceipts.hasPendingMedia(key),
+});
 const reconciler = createReconciler({
   sync: createMediaSync({
     store: media,
@@ -155,6 +164,14 @@ const reconciler = createReconciler({
   }),
   queue: encodeQueue,
 });
+const uploads = createUploadService({
+  receipts: uploadReceipts, media, queue: encodeQueue, storageDir, baseUrl, settings, ...runtime,
+});
+// Establish bounded receipt recovery under exclusive native/PG ownership before
+// accepting new requests. A failed pass fails boot rather than guessing ownership.
+await reconciler.run();
+await uploads.start();
+owner.assertWritable();
 const gpx = createGpxService({
   pool, files: routeFiles, worker: createGpxWorker(), backupDir: join(backupDir, 'db'),
   isWritable: owner.isWritable, readManifestPins: createRouteManifestPinReader(join(backupDir, 'db')),
@@ -208,6 +225,7 @@ const app = buildServer({
   importJobs,
   media,
   encodeQueue,
+  uploads,
   workLock,
   reconciler,
   builder,
@@ -225,7 +243,7 @@ const endPool = () => poolEnding ??= pool.end();
 function quiesceWork(): Promise<void> {
   clearInterval(housekeepingTimer);
   return quiescing ??= Promise.allSettled([
-    app.quiesceMutations(), gpx.close(), publicTrackWorker.close(), builder.quiesce(), encodeQueue.quiesce(), importJobs.quiesce(), dbBackup.quiesce(),
+    app.quiesceMutations(), uploads.quiesce(), gpx.close(), publicTrackWorker.close(), builder.quiesce(), encodeQueue.quiesce(), importJobs.quiesce(), dbBackup.quiesce(),
   ]).then((results) => {
     if (results.some((result) => result.status === 'rejected')) console.error('Background storage work stopped with errors; restart recovery is required.');
   });
@@ -261,12 +279,7 @@ app
     // backoff (#110). Restarts against an existing release skip this.
     if (!builder.hasRelease()) void bootstrapRelease(builder, { log: (msg) => console.log(msg), ...runtime });
     housekeeping();
-    // Reconcile disk ↔ database, THEN resume anything left half-encoded. Runs
-    // AFTER listen() and never blocks boot; a failure is logged, not fatal.
-    // The sync/recover ordering lives in createReconciler — the same pass
-    // POST /media/rescan runs (#117).
     if (owner.isWritable()) {
-      void reconciler.run().catch(() => console.error('Media reconciliation failed.'));
       void gpx.reconcile().catch(() => console.error('Private route reconciliation requires attention.'));
     }
   })

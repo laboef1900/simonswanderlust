@@ -9,11 +9,13 @@ import { passwordPolicyViolation, type UserStore } from './users.js';
 import type { SessionStore } from './sessions.js';
 import { validateNavigation } from '../../site/src/lib/navigation.js';
 import { createSettingsStore, defaultSettings } from './settings.js';
-import { acquireStorageOwner, StorageReadOnlyError, type StorageOwner } from './storage-owner.js';
+import { StorageReadOnlyError, type StorageOwner } from './storage-owner.js';
+import { acquireDataOwner } from './data-owner.js';
 import { createGpxFiles } from './gpx-files.js';
 import { verifyRouteArchive, routeRecoverySummary } from './gpx-backup.js';
 import { createPool, type DbPool } from './db.js';
 import { readLanguage, type LanguageConfig } from './language.js';
+import { buildFailureMessage, type BuildFailureCode } from './build-state.js';
 import { prepareNativeRestore, restoreWithOnboarding } from './onboarding-restore.js';
 import { publishRestoreFence } from './onboarding-fence.js';
 
@@ -137,7 +139,7 @@ async function restoreMain(args: string[]): Promise<void> {
   let pool: DbPool | undefined;
   let admitted = false;
   try {
-    const lease = owner = await acquireStorageOwner(databaseUrl, { role: 'restore' });
+    const lease = owner = await acquireDataOwner(databaseUrl, { role: 'restore', storageDir: process.env.STORAGE_DIR ?? '/data/images' });
     const assertOwner = async () => {
       lease.assertWritable();
       await lease.assertNoAppSessions();
@@ -236,7 +238,7 @@ async function onboardingRecoveryMain(command: 'onboarding-retire' | 'prepare-na
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error('DATABASE_URL is required for offline recovery.');
   const storageDir = process.env.STORAGE_DIR ?? '/data/images';
-  const owner = await acquireStorageOwner(databaseUrl, { role: 'restore' });
+  const owner = await acquireDataOwner(databaseUrl, { role: 'restore', storageDir });
   let pool: DbPool | undefined;
   try {
     const assertOwner = async () => {
@@ -397,13 +399,19 @@ export async function triggerRebuild(
     // /rebuild answers 200 with `{ ok: false, error }` for a FAILED build — a
     // status check alone would report a schema error as success.
     if (status !== 200) throw new Error(`the app answered ${status}: ${body.slice(0, 300)}`);
-    let outcome: { ok?: boolean; release?: string; error?: string };
+    let outcome: { ok?: boolean; release?: string; code?: unknown };
     try {
       outcome = JSON.parse(body) as typeof outcome;
     } catch {
       throw new Error(`the app answered 200 with a non-JSON body: ${body.slice(0, 300)}`);
     }
-    if (!outcome.ok) throw new Error(outcome.error ?? 'the build failed without a message');
+    if (!outcome.ok) {
+      const code: BuildFailureCode = outcome.code === 'build_timeout' || outcome.code === 'build_failed'
+        || outcome.code === 'build_unavailable' || outcome.code === 'no_space'
+        || outcome.code === 'release_write_failed' || outcome.code === 'build_stopped'
+        ? outcome.code : 'internal';
+      throw new Error(`rebuild failed (${code}): ${buildFailureMessage(code)} — details: docker compose logs app`);
+    }
     return outcome.release ?? '(unnamed release)';
   } finally {
     await sessions.destroy(token);
@@ -458,7 +466,7 @@ async function rebuildMain(): Promise<void> {
         ? `nothing is listening on 127.0.0.1:${port}. A rebuild runs INSIDE the app process, which holds ` +
           'the build/encode lock, so the app has to be up. Start it (`docker compose up -d app`); if there ' +
           'is no release at all yet, boot builds one by itself.'
-        : `rebuild failed: ${msg}`,
+        : msg,
     );
     process.exitCode = 1;
   } finally {
@@ -497,14 +505,24 @@ async function main(): Promise<void> {
     storageDir: process.env.STORAGE_DIR ?? './data/images',
     baseUrl: process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com',
   };
-  const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(opts.storageDir), 'settings.json');
-  const current = createSettingsStore({ path: settingsPath, defaults: defaultSettings() }).get();
-  const stored = await uploadFile(await readFile(file), key, alt, opts, {
-    convertJpeg: current.convertJpeg,
-    webpQuality: current.webpQuality,
-    avifQuality: current.avifQuality,
-  });
-  console.log(stored.snippet);
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error('DATABASE_URL is required for offline upload.');
+  const owner = await acquireDataOwner(databaseUrl, { role: 'restore', storageDir: opts.storageDir });
+  try {
+    await owner.assertNoAppSessions();
+    const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(opts.storageDir), 'settings.json');
+    const current = createSettingsStore({ path: settingsPath, defaults: defaultSettings() }).get();
+    const stored = await uploadFile(await readFile(file), key, alt, {
+      ...opts, signal: owner.signal, isWritable: owner.isWritable,
+    }, {
+      convertJpeg: current.convertJpeg,
+      webpQuality: current.webpQuality,
+      avifQuality: current.avifQuality,
+    });
+    console.log(stored.snippet);
+  } finally {
+    await owner.close();
+  }
 }
 
 // Run main only when invoked directly (not when imported by tests).
