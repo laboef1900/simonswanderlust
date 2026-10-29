@@ -1008,3 +1008,13 @@ assets do not establish rendered-basemap qualification.
 Existing singular-count copy (“1 COMMENTS” / “1 KOMMENTARE”) was also observed on the
 baseline and is not a routing regression. #284's independent authoring/publishing
 qualification, final PR review and required CI remain separate gates.
+
+### Unit-test configuration boundary (#285, 2026-10-29)
+
+CI exposed a unit test importing the now database-backed `astro.config.mjs`.
+Astro and the standalone Markdown renderer now consume the same `MARKDOWN_OPTIONS`
+object instead of comparing two copies. The obsolete configuration-value assertions
+are removed; rendered gallery markers, highlighted classes and sanitization regressions
+remain. A database-free focused run passed all eight Markdown cases; full site tests,
+Astro check and the real build passed in wave `1793274723357_17653`. Build language still
+requires PostgreSQL; no fallback, skip or production guard was added.

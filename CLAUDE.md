@@ -170,7 +170,7 @@ Classify a change before implementing it:
 | **Content** | Postgres (loaded at build time by `site/src/lib/postgres-loader.ts`); authored in the in-admin editor — MDX files are export-only backups (the original stubs were imported once via `site/scripts/migrate-stub-posts.mjs`) |
 | **i18n** | Astro i18n routing — `defaultLocale: 'de'` (no prefix), `en` under `/en/` |
 | **Fonts** | Inter Variable (sans), IBM Plex Mono (expedition-log accents) |
-| **Markdown** | Shiki syntax highlighting (`syntaxHighlight: { type: 'shiki', excludeLangs: ['math', 'gallery'] }`) — keep `site/astro.config.mjs` and `MARKDOWN_OPTIONS` in `site/src/lib/render-markdown.ts` in lockstep; `render-markdown.test.ts` asserts they agree |
+| **Markdown** | Shiki syntax highlighting (`syntaxHighlight: { type: 'shiki', excludeLangs: ['math', 'gallery'] }`) — `site/astro.config.mjs` imports `MARKDOWN_OPTIONS` directly from `site/src/lib/render-markdown.ts`; `render-markdown.test.ts` exercises gallery markers and class-based highlighting without loading database-backed build configuration |
 | **Testing** | Vitest (both trees); `@astrojs/check` (`astro check`) for types |
 | **Infrastructure** | Self-hosted Docker: one `app` image (repo-root `Dockerfile`) runs `uploader/` Fastify, which builds `site/` in-process and serves it — plus `db` (Postgres), via root `docker-compose.yml` |
 
