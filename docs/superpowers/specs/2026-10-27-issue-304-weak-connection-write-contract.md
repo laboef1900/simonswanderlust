@@ -1126,6 +1126,14 @@ completion, while an author who moved to another field keeps that focus. Real de
 320px checks observed a visible focus indicator and preserved unsaved detail text. The full
 uploader/PG suite, types, Astro check, site suite and real build passed at that source.
 
+Independent review found a separate page-mode boundary: ordinary editing and inactive-locale
+preparation must not share a recovery resource, because a save sends only the mode's locales.
+The fix scopes preparation records by locale. The regression failed before the fix; actual
+`cffbe24` browser qualification then exercised all four page keys, both directions of exact
+record preservation, and genuine lost-response receipt recovery. Desktop and 320px keyboard
+restoration retained the intended title/body; stale bases still required explicit comparison.
+Private fixtures and exact records remain in the execution evidence, not in this repository.
+
 `.github/native-owner/package-qualify.py` is the exercised actual-package harness, retained
 outside runtime output. `packaged owner · native amd64/arm64` in `ci.yml` builds the actual
 Dockerfile and runs it on native public Ubuntu runners. It checks exact source/image/native
