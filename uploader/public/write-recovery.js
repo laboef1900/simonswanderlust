@@ -242,9 +242,9 @@ window.WriteRecovery = (function () {
         options.guard.markDirty();
         options.guard.stashNow();
         status = copy.writeRebased;
-      } catch (_) {
+      } catch (error) {
         options.guard.markDirty();
-        status = copy.writeUnknown;
+        status = error?.code === 'draft_recovery_unavailable' ? copy.writeStorageUnavailable : copy.writeUnknown;
         options.guard.stashNow();
       } finally { busy = false; render(); }
     });
@@ -257,9 +257,9 @@ window.WriteRecovery = (function () {
         await options.useStored(saved);
         if (!canAdopt(saved.ownerUserId)) return;
         attempts = []; comparison = null; needsProbe = false; unsafeRestore = false; status = '';
-      } catch (_) {
+      } catch (error) {
         options.guard.markDirty();
-        status = copy.writeUnknown;
+        status = error?.code === 'draft_recovery_unavailable' ? copy.writeStorageUnavailable : copy.writeUnknown;
         options.guard.stashNow();
       } finally { busy = false; render(); }
     });

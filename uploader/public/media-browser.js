@@ -277,6 +277,8 @@
   function renderQueue() {
     var box = $('uploadQueue');
     var snap = state.queue;
+    var focusId = box.contains(document.activeElement) ? document.activeElement.dataset.uploadId : undefined;
+    var focusTarget = null;
     box.innerHTML = '';
     if (!snap || !snap.total && !snap.paused) { box.hidden = true; return; }
     box.hidden = false;
@@ -304,15 +306,25 @@
     }
     snap.items.forEach(function (i) {
       var row = el('div', 'upload-row');
+      row.tabIndex = -1;
+      row.dataset.uploadId = String(i.id);
+      row.setAttribute('role', 'group');
+      row.setAttribute('aria-label', i.name);
+      if (focusId === row.dataset.uploadId) focusTarget = row;
       row.appendChild(el('span', 'upload-row__name', i.name));
       var label = i.state === 'unknown' ? copy.uploadUnknown : i.state === 'checking' ? copy.uploadChecking
         : i.state === 'needs-auth' ? copy.uploadNeedsAuth : i.state === 'retryable' ? copy.uploadRetryable
         : i.state === 'gone' ? copy.uploadGone : api.queueState(i);
-      row.appendChild(el('span', 'upload-row__state', label));
+      var status = el('span', 'upload-row__state', label);
+      status.id = 'upload-state-' + i.id;
+      row.appendChild(status);
+      row.setAttribute('aria-describedby', status.id);
       if (i.originalRetained) row.appendChild(el('span', 'muted', copy.uploadRetained));
       if (i.reason === 'queue_full' || i.reason === 'recovery_required') row.appendChild(el('span', 'muted', copy.uploadRecoveryRequired));
       if (i.state === 'unknown') {
         var check = el('button', 'btn-secondary', copy.uploadCheckAgain); check.type = 'button'; check.disabled = snap.paused;
+        check.dataset.uploadId = row.dataset.uploadId;
+        if (focusId === check.dataset.uploadId && !check.disabled) focusTarget = check;
         check.addEventListener('click', function () { uploads.check(i.id); });
         row.appendChild(check);
       }
@@ -331,6 +343,9 @@
       clear.addEventListener('click', function () { uploads.clearFinished(); reload(); });
       box.appendChild(clear);
     }
+    // A resolved check removes its button; keep keyboard focus on that photo,
+    // but never take it back after the author has moved to another control.
+    if (focusTarget) focusTarget.focus();
   }
 
   // The detail panel is the one place on this page the author types. Rebuilding
