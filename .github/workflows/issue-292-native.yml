@@ -1,0 +1,78 @@
+# TEMPORARY #292 qualification scaffold; remove from the final docs-only PR.
+# Public-repository standard fresh VMs only. No service containers, installers,
+# emulation, image builds, caches, deployment credentials or daemon cleanup.
+name: issue-292-native-rehearsal
+
+on:
+  pull_request:
+    branches: [dev]
+    types: [opened, reopened, synchronize]
+    paths:
+      - '.github/workflows/issue-292-native.yml'
+      - '.github/issue-292/**'
+
+permissions:
+  contents: read
+
+jobs:
+  rehearsal:
+    if: >-
+      github.repository == 'laboef1900/simonswanderlust' &&
+      github.event.repository.private == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feature/issue-292-clean-install-rehearsal'
+    name: released 0.17.1 · native ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - name: Check out the exact reviewed PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Rehearse on the existing fresh native Docker host
+        env:
+          SOURCE_ROOT: ${{ github.workspace }}
+          RUN_ROOT: ${{ runner.temp }}/issue-292-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-private
+          EVIDENCE_EXPORT: ${{ runner.temp }}/issue-292-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence
+          GENERATION: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+          RUNNER_LABEL: ${{ matrix.runner }}
+          CHECKOUT_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          sudo -n env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            timeout --signal=TERM --kill-after=180s 80m \
+            python3 "$SOURCE_ROOT/.github/issue-292/rehearse.py" \
+            --fresh-disposable-linux-host --resources-reviewed \
+            --expected-architecture "$EXPECTED_ARCH" --runner-label "$RUNNER_LABEL" \
+            --generation "$GENERATION" --checkout-sha "$CHECKOUT_SHA" \
+            --source-root "$SOURCE_ROOT" --run-root "$RUN_ROOT" \
+            --evidence-export "$EVIDENCE_EXPORT"
+
+      # Only these positively selected, screened JSON files are eligible. Never
+      # widen to the private root, env, TLS files, cookies, logs or a glob.
+      - name: Retain sanitized evidence only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-292-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/issue-292-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/steps.jsonl
+            ${{ runner.temp }}/issue-292-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/provenance.json
+            ${{ runner.temp }}/issue-292-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/released-manifest.json
+            ${{ runner.temp }}/issue-292-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/corpus.json
+            ${{ runner.temp }}/issue-292-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/idle-baseline-memory.json
+            ${{ runner.temp }}/issue-292-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/encode-memory.json
+            ${{ runner.temp }}/issue-292-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/publish-build-memory.json
