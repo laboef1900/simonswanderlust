@@ -168,6 +168,7 @@ describe('dump version allow-list', () => {
         ...(version >= 11 ? { site_identity: [identityDumpRow()], site_identity_assets: [] } : {}),
         ...(version >= 12 ? { site_language: [{ id: true, primary_locale: 'de', enabled_locales: ['de', 'en'],
           locked_at: null, updated_at: new Date().toISOString() }] } : {}),
+        ...(version >= 13 ? { pages: [], site_nav: [{ id: 1, config: { version: 1, header: [], footer: [], legal: [] }, updated_at: new Date().toISOString() }] } : {}),
       } })));
       return f;
     };

@@ -4,9 +4,10 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { SESSION_COOKIE } from './authn.js';
 import { normalizeProcessOptions, processImage, type ProcessOptions } from './pipeline.js';
 import { contentHashKey, storeVariants, type StorageOptions, type StoredImage } from './storage.js';
-import { BACKUP_FILE_RE, BackupError, dumpDatabase, dumpLanguage, readDump, resolveBackupDir, restoreDatabase, validateIdentityAssets, IDENTITY_DUMP_VERSION, type Dump } from './backup.js';
+import { BACKUP_FILE_RE, BackupError, dumpDatabase, dumpLanguage, readDump, resolveBackupDir, restoreDatabase, validateIdentityAssets, IDENTITY_DUMP_VERSION, PAGES_NAV_DUMP_VERSION, pageRecoverySummary, type Dump } from './backup.js';
 import { passwordPolicyViolation, type UserStore } from './users.js';
 import type { SessionStore } from './sessions.js';
+import { validateNavigation } from '../../site/src/lib/navigation.js';
 import { createSettingsStore, defaultSettings } from './settings.js';
 import { acquireStorageOwner, StorageReadOnlyError, type StorageOwner } from './storage-owner.js';
 import { createGpxFiles } from './gpx-files.js';
@@ -151,6 +152,13 @@ async function restoreMain(args: string[]): Promise<void> {
     console.log(`target database: ${describeDatabase(databaseUrl)}`);
     console.log(`dump:            ${file} (v${dump.version}, created ${dump.createdAt}) — ${formatCounts(dumpCounts)}`);
     console.log(`about to REPLACE the live rows: ${formatCounts(live)} — and invalidate every session.`);
+    const retainedPages = dump.version < PAGES_NAV_DUMP_VERSION ? {
+      navigation: validateNavigation((await pool.query('SELECT config FROM site_nav WHERE id=1')).rows[0]?.config),
+      pages: dump.tables.pages ? [] : (await pool.query('SELECT * FROM pages')).rows,
+    } : undefined;
+    const pageRecovery = pageRecoverySummary(dump, retainedPages);
+    console.log(`Unresolved navigation items after restore: ${pageRecovery.unresolvedNavigation}`);
+    console.log(`Page namespace collisions after restore: ${pageRecovery.collisions.length ? pageRecovery.collisions.join(', ') : 'none'}`);
     console.log(dump.tables.app_secrets === undefined
       ? 'app_secrets preserved: absent from dump.'
       : `app_secrets: replace ${Number((await pool.query('SELECT count(*) AS n FROM app_secrets')).rows[0].n)} live rows with ${dump.tables.app_secrets.length} encrypted rows from dump.`);

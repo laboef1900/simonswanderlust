@@ -922,8 +922,16 @@ and the `<dialog>`s appended to `<body>` share one set:
   disclosures (alt-text review, bulk selection, picker folders) use the same chevron in
   place of the UA triangle. A floating panel closes like a menu: Escape returns focus to
   its trigger, and a click outside it dismisses it.
-- **Locale tabs** are one segmented control in the editor and on About; About's Publish
-  rides in the page title row like the editor's command bar.
+- **Locale tabs** are one segmented control in the story and generalized page editor.
+  The **Pages** catalogue replaces About in the admin sidebar, using flat compact
+  rows and explicit Draft/Published text, not new card chrome. The incumbent About
+  editor hosts each page kind: title/status above, lifecycle controls in the title
+  row, and title/slug/body within the existing locale panel. About hides inapplicable
+  slug/delete/unpublish controls. A never-public locale's slug stays editable.
+  Ordinary views show enabled locales only; the explicit Prepare translations
+  entry shows one inactive locale with a notice and return to Language settings.
+  Deletion uses the existing scoped confirmation dialog, never a second modal
+  convention. Legal/Privacy explain author responsibility without seeded legal prose.
 - `[hidden]` is enforced globally with `!important`, because every control carries an
   author `display`.
 

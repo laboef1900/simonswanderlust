@@ -50,7 +50,7 @@ describe('Language Settings', () => {
     const secondary = primary === 'de' ? 'en' : 'de';
     const h = settings(state(primary, [primary], stamp));
     await h.init();
-    expect(h.el('prepareLanguage').href).toBe('/admin/about.html?prepareLocale=' + secondary);
+    expect(h.el('prepareLanguage').href).toBe('/admin/pages.html?prepareLocale=' + secondary);
     expect(h.el('prepareLanguage').hidden).toBe(false);
     for (const option of h.el('languageMode').querySelectorAll('option')) {
       const value = option.value;
@@ -148,9 +148,9 @@ async function about(primary: Locale, prepareLocale?: Locale, updatedAt: string 
     return element;
   };
   const page = {
-    updatedAt,
-    de: { locale: 'de', title: 'Aktiver Inhalt', bodyMarkdown: 'Deutscher Text', images: {} },
-    en: { locale: 'en', title: 'Existing heading', bodyMarkdown: 'English text', images: {} },
+    key: 'about', status: 'published', updatedAt,
+    de: { locale: 'de', title: 'Aktiver Inhalt', bodyMarkdown: 'Deutscher Text', images: {}, slug: '' },
+    en: { locale: 'en', title: 'Existing heading', bodyMarkdown: 'English text', images: {}, slug: '' },
   };
   const requests: { url: string; init: RequestInit }[] = [];
   class EasyMDE {
@@ -164,20 +164,21 @@ async function about(primary: Locale, prepareLocale?: Locale, updatedAt: string 
     Auth: { ensureAuthed: async () => ({ isAdmin: true }), renderHeader() {} },
     AdminConfirm: { ask: async () => true },
     DraftGuard: { createDraftGuard: () => ({
-      markDirty() {}, snapshot: () => ({}), markClean() {}, tryRestore: () => null,
+      markDirty() {}, snapshot: () => ({}), markClean() {}, tryRestore: () => null, isDirty: () => false,
     }) },
     fetch: async (url: string, init: RequestInit = {}) => {
       requests.push({ url, init });
       if (url === '/language') return response(state(primary, [primary]));
+      if (url === '/pages') return response({ pages: [{ key: 'about', known: true, defaults: { de: 'uber-mich', en: 'about-me' } }] });
       if (url.endsWith('/revisions')) return response([]);
-      if (init.method === 'PUT') return response({ saved: { updatedAt: '2026-10-28T00:00:00.000Z' }, build: { ok: true } });
+      if (init.method === 'PUT') return response({ saved: { ...page, updatedAt: '2026-10-28T00:00:00.000Z' }, build: { ok: true } });
       return response(page);
     },
   };
   context.window = context;
   context.EditorCopy = editorCopy;
   vm.createContext(context);
-  for (const file of ['language.js', 'tabs.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
+  for (const file of ['language.js', 'tabs.js', 'pages-ui.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
   const start = html.lastIndexOf('<script>') + '<script>'.length;
   vm.runInContext(html.slice(start, html.lastIndexOf('</script>')), context);
   await settle();
@@ -216,7 +217,7 @@ describe('About inactive translation preparation', () => {
     await settle();
     const payload = JSON.parse(String(h.requests.find(({ init }) => init.method === 'PUT')!.init.body));
     expect(payload).toEqual({ updatedAt: stamp, [primary]: h.page[primary] });
-    expect(h.el('actionStatus').textContent).toContain('https://journal.test/' + (primary === 'de' ? 'uber-mich/' : 'about-me/'));
+    expect(h.el('actionStatus').textContent).toContain('/' + (primary === 'de' ? 'uber-mich/' : 'about-me/'));
     expect(h.el('actionStatus').textContent).not.toContain('/' + secondary + '/');
   });
 

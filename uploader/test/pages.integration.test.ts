@@ -23,7 +23,7 @@ maybe('pgPageStore (Postgres)', () => {
   afterAll(async () => { await pool.end(); });
 
   it('saves and reads back both locales with images', async () => {
-    const store = pgPageStore(pool);
+    const store = pgPageStore(pool, { imageOrigin: 'https://img' });
     await store.save({
       key: 'about',
       de: { locale: 'de', title: 'DE', bodyMarkdown: '![a](https://img/x)\nDE body', images: { 'https://img/x': { width: 800, height: 600 } } },
@@ -44,15 +44,15 @@ maybe('pgPageStore (Postgres)', () => {
     // finally-cleanup is ordered before that suite reads the table).
     try {
       await store.save({
-        key: 'imprint',
+        key: 'legal',
         de: { locale: 'de', title: 'Impressum', bodyMarkdown: 'x', images: {} },
         en: { locale: 'en', title: 'Imprint', bodyMarkdown: 'x', images: {} },
       });
       const keys = await store.keys();
       expect(keys).toContain('about');
-      expect(keys.filter((k) => k === 'imprint')).toEqual(['imprint']);
+      expect(keys.filter((k) => k === 'legal')).toEqual(['legal']);
     } finally {
-      await pool.query(`DELETE FROM pages WHERE key = 'imprint'`);
+      await pool.query(`DELETE FROM pages WHERE key = 'legal'`);
     }
   });
 

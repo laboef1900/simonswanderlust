@@ -37,7 +37,7 @@ window.SettingsLanguage = (function () {
       const secondary = loaded.primary === 'de' ? 'en' : 'de';
       const prepare = $('prepareLanguage');
       prepare.hidden = loaded.locales.includes(secondary);
-      prepare.href = '/admin/about.html?prepareLocale=' + secondary;
+      prepare.href = '/admin/pages.html?prepareLocale=' + secondary;
       prepare.textContent = SiteLanguage.text('Prepare', { locale: secondary.toUpperCase() });
       $('languageScope').textContent = scope();
       $('languageFields').disabled = false;

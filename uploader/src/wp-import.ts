@@ -832,10 +832,15 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
       continue;
     }
     if (!prior) {
-      const reserved = members.find((member) => reservation(namespaceOf(member.locale, language), member.slug, language));
-      if (reserved) {
+      let owner: string | null = null;
+      for (const member of members) {
+        const fixed = reservation(namespaceOf(member.locale, language), member.slug, language);
+        owner = fixed ? `${fixed.owner}:${fixed.pageKind ?? fixed.segment}` : await deps.postStore.pageSlugOwner(member.locale, member.slug);
+        if (owner) break;
+      }
+      if (owner) {
         summary.rejected++;
-        warnings.push(`group ${group}: ${reserved.locale} slug "${reserved.slug}" is reserved — rejected, nothing fetched`);
+        warnings.push(`group ${group}: slug reserved by ${owner} — rejected, nothing fetched`);
         continue;
       }
     }

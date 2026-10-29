@@ -489,8 +489,6 @@ describe('admin page wiring', () => {
     expect(editor).toContain('AdminConfirm.ask');
     expect(editor).toContain('Publish to the live site?');
     expect(editor).toContain('setPublishedLive');
-    expect(about).toContain('AdminConfirm.ask');
-    expect(about).toContain('Publish the About page?');
     expect(readFileSync('public/settings.html', 'utf8')).toContain('Rebuild the live site?');
     expect(readFileSync('public/posts.html', 'utf8')).toContain('Unpublish this trip?');
     expect(readFileSync('public/posts.html', 'utf8')).toContain('Delete this trip?');

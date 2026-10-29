@@ -7,6 +7,7 @@ import { BackupError, DUMP_VERSION, LANGUAGE_DUMP_VERSION, SUPPORTED_DUMP_VERSIO
 import { DEFAULT_LANGUAGE, type LanguageConfig } from '../src/language.js';
 import { parseRestoreArgs, requiresLanguageAcceptance } from '../src/cli.js';
 import { identityDumpRow } from './site-identity-fixture.js';
+import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
 
 const stamp = '2026-10-27T12:00:00.000Z';
 const modes: LanguageConfig[] = [
@@ -20,6 +21,7 @@ const track = { version: 1, type: 'MultiLineString', coordinates: [[[1, 2], [3, 
 function fixture(language: LanguageConfig): Dump {
   return { version: DUMP_VERSION, createdAt: stamp, tables: {
     users: [], post_routes: [], site_identity: [identityDumpRow()], site_identity_assets: [],
+    pages: [], site_nav: [{ id: 1, config: DEFAULT_NAVIGATION, updated_at: stamp }],
     site_language: [{ id: true, primary_locale: language.primary, enabled_locales: language.locales, locked_at: stamp, updated_at: stamp }],
     posts: (['de', 'en'] as const).map(locale => ({ translation_key: 'story', locale,
       omitted: locale !== language.primary, status: locale === language.primary ? 'published' : 'draft',

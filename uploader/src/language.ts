@@ -12,7 +12,7 @@ export class LanguageError extends Error {
     public readonly owner?: { type: 'app' | 'site' | 'locale' | 'legacy' | 'page'; name: string }) { super(message); }
 }
 export interface LanguageBlocker { key: string; locale: LanguageLocale; field: string; reason: string }
-export type LanguagePreflight = (next: LanguageConfig, client?: DbClient) => Promise<void>;
+export type LanguagePreflight = (next: LanguageConfig, client?: DbClient) => Promise<void | (() => void)>;
 type ChangeHandler = (current: LanguageState, next: LanguageConfig) => void;
 export interface LanguageStore {
   get(): Promise<LanguageState>;
@@ -84,8 +84,9 @@ export function memoryLanguageStore(initial: LanguageConfig = DEFAULT_LANGUAGE):
       return store.runExclusive(async (current) => {
         assertLanguageTransition(current, next);
         if (sameLanguage(current, next)) return structuredClone(current);
-        await preflight?.(next);
+        const commit = await preflight?.(next);
         for (const handler of handlers) handler(current, next);
+        commit?.();
         state = { ...next, lockedAt: current.lockedAt, updatedAt: new Date(Math.max(Date.now(), current.updatedAt.getTime() + 1)) };
         return structuredClone(state);
       });
@@ -124,12 +125,14 @@ export function pgLanguageStore(pool: DbPool): LanguageStore {
         if (!sameLanguage(current, next)) {
           const claims = await client.query<{ locale: LanguageLocale; slug: string }>('SELECT locale,slug FROM posts');
           assertLanguageNamespace(current, next, claims.rows);
-          await preflight?.(next, client);
           const changed = await client.query<{ translation_key: string }>(`SELECT DISTINCT translation_key FROM posts
             WHERE (locale=$1 AND omitted) OR (NOT (locale=ANY($2::text[])) AND NOT omitted) ORDER BY translation_key`, [next.primary, next.locales]);
           for (const row of changed.rows) {
             await lockPostPair(client, row.translation_key);
             await client.query('SELECT locale FROM posts WHERE translation_key=$1 ORDER BY locale FOR UPDATE', [row.translation_key]);
+          }
+          await preflight?.(next, client);
+          for (const row of changed.rows) {
             await client.query(`UPDATE posts SET omitted = locale <> $2 WHERE translation_key=$1
               AND (locale=$2 OR NOT (locale=ANY($3::text[])))`, [row.translation_key, next.primary, next.locales]);
             await touchPostPair(client, row.translation_key);

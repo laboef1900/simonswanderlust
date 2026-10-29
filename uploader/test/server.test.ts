@@ -3382,7 +3382,15 @@ describe('pages routes', () => {
     expect(rev.statusCode).toBe(200);
     expect(rev.json().snapshot.de.bodyMarkdown).toBe('Hallo v1');
     expect((await b.app.inject({ method: 'GET', url: '/pages/about/revisions/not-a-uuid', cookies: author.cookie })).statusCode).toBe(404);
-    expect((await b.app.inject({ method: 'GET', url: '/pages/other/revisions', cookies: author.cookie })).json()).toEqual([]);
+    for (const key of ['contact', 'other']) {
+      expect((await b.app.inject({ method: 'GET', url: `/pages/${key}/revisions`, cookies: author.cookie })).statusCode).toBe(404);
+      expect((await b.app.inject({ method: 'GET', url: `/pages/${key}/revisions/${list.json()[1].id}`, cookies: author.cookie })).statusCode).toBe(404);
+    }
+    const restored = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: admin.cookie, payload: rev.json().snapshot });
+    expect(restored.statusCode).toBe(200);
+    expect((await b.pages.get('about')).de.bodyMarkdown).toBe('Hallo v1');
+    const afterRestore = await b.app.inject({ method: 'GET', url: '/pages/about/revisions', cookies: author.cookie });
+    expect(afterRestore.json().map((r: { title: string }) => r.title)).toEqual(['v3', 'v2', 'v1']);
   });
 });
 
