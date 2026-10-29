@@ -415,7 +415,10 @@
     rootOpt.value = '';
     rootOpt.textContent = '(root)';
     folderSelect.appendChild(rootOpt);
-    state.folders.forEach(function (f) {
+    var folders = state.folders;
+    // An acknowledged/current item can name a folder created since this list loaded.
+    if (item.folder && folders.indexOf(item.folder) === -1) folders = folders.concat(item.folder);
+    folders.forEach(function (f) {
       var opt = document.createElement('option');
       opt.value = f;
       opt.textContent = f;
