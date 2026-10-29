@@ -17,6 +17,7 @@ import socket
 import subprocess
 import sys
 import time
+from build_diagnostics import build_failure
 
 BASE = '57cd3cc517e1e5a964e85463b26529ae1a8aacc5'
 BUILD = 'dhi.io/node:26-dev@sha256:c8939885965365c675a024d062bcb761bda4b47e95ce0323aa998ac9bc312fd6'
@@ -26,7 +27,8 @@ PACKET = Path(__file__).resolve().parent
 FILES = ['.dockerignore', 'Dockerfile.proof', 'owned-flock.c', 'build-native.mjs',
          'container-toolchain.mjs', 'proof-common.mjs', 'proof-worker.mjs',
          'probe.mjs', 'mount-peer.mjs', 'init-volume.mjs', 'configure-db.mjs',
-         'prepare-inputs.mjs', 'dhi-image-inventory.json', 'qualify.py']
+         'prepare-inputs.mjs', 'dhi-image-inventory.json', 'qualify.py',
+         'build_diagnostics.py', 'test_build_diagnostics.py']
 os.umask(0o077)
 arch = os.environ['EXPECTED_ARCH']
 generation = os.environ['GENERATION']
@@ -69,8 +71,14 @@ def emit(name, value):
         handle.write(text)
 
 
-def run(args, *, data=None, ok=(0,), timeout=120):
+def run(args, *, data=None, ok=(0,), timeout=120, build_diagnostic=False):
     # No shell, argv dump, inherited application environment or raw output in CI.
+    if build_diagnostic:
+        # Opt-in for this construction command alone, before any fixture exists.
+        # No stdin, secret mounts, SSH forwarding or application environment.
+        assert stage == 'native-dhi-build' and args[:2] == ['docker', 'build']
+        assert data is None and not containers and args[-1] == str(PACKET)
+        assert not any(arg.startswith(('--secret', '--ssh')) for arg in args)
     env = {k: os.environ[k] for k in ('PATH', 'HOME', 'DOCKER_CONFIG') if k in os.environ}
     env['LC_ALL'] = 'C'
     result = subprocess.run(args, input=data, capture_output=True, text=True,
@@ -80,6 +88,12 @@ def run(args, *, data=None, ok=(0,), timeout=120):
     (private / f'command-{n}.stderr').write_text(result.stderr)
     steps.append({'stage': stage, 'command': Path(args[0]).name, 'exit': result.returncode})
     if result.returncode not in ok:
+        if build_diagnostic:
+            diagnostic = build_failure(result.stdout, result.stderr, password)
+            diagnostic.update({'stage': stage, 'step': n, 'exit': result.returncode,
+                               'head': provenance['head'], 'generation': generation})
+            emit('build-failure.json', diagnostic)
+            provenance['buildFailureDiagnostic'] = 'build-failure.json'
         raise RuntimeError('command-failed')
     return result
 
@@ -231,10 +245,11 @@ try:
     for ref in (BUILD, RUNTIME):
         docker('pull', '--platform', 'linux/' + arch, ref, timeout=600)
     provenance['baseImages'] = {'build': inspect_image(BUILD), 'runtime': inspect_image(RUNTIME)}
-    docker('build', '--platform', 'linux/' + arch, '--pull', '--no-cache',
+    docker('build', '--progress=plain', '--platform', 'linux/' + arch, '--pull', '--no-cache',
            '--build-arg', 'NODE_BUILD=' + BUILD, '--build-arg', 'NODE_RUNTIME=' + RUNTIME,
            '--build-arg', 'DEBIAN_SNAPSHOT=' + SNAPSHOT,
-           '-f', str(PACKET / 'Dockerfile.proof'), '-t', image, str(PACKET), timeout=1800)
+           '-f', str(PACKET / 'Dockerfile.proof'), '-t', image, str(PACKET),
+           timeout=1800, build_diagnostic=True)
     provenance['proofImage'] = inspect_image(image)
     assert provenance['proofImage']['user'] == '1000'
     stage = 'owned-postgres-fixture'

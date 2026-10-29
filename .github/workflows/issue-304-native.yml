@@ -83,6 +83,7 @@ jobs:
             ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/host.json
             ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/inputs.json
             ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/build.json
+            ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/build-failure.json
             ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/toolchain.json
             ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/bind-result.json
             ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/volume-result.json
