@@ -35,6 +35,9 @@
     detailKey: null,
     detailDirty: false,  // unsaved edits in the detail panel; render() leaves it alone while set
     detailItem: null,    // the row the panel was built from (diff base for saveDetail)
+    detailGeneration: 0,
+    detailSaving: false,
+    detailRecovery: null,
     suggest: null,       // in-flight AI suggestion for the panel's photo: { key, controller }
     offers: null,        // suggestions shown under fields that had text: { key, slots: [[inputId, value, what]] }
     queue: null,
@@ -288,6 +291,8 @@
     }
     panel.dataset.key = item.key;
     state.detailItem = item;
+    state.detailGeneration++;
+    state.detailRecovery = null;
     panel.appendChild(el('p', 'section-label', 'Photo'));
     panel.appendChild(el('p', 'media-key', item.key));
     renderSuggest(panel, item);
@@ -343,6 +348,10 @@
     unsaved.setAttribute('role', 'status');
     unsaved.hidden = true;
     panel.appendChild(unsaved);
+    var comparison = el('section');
+    comparison.id = 'dCompare';
+    comparison.setAttribute('aria-live', 'polite');
+    panel.appendChild(comparison);
 
     // EXIF is read-only. lat/lng are absent entirely for non-admins.
     panel.appendChild(el('p', 'section-label', 'Camera'));
@@ -438,6 +447,7 @@
   }
 
   function markDetailDirty() {
+    state.detailGeneration++;
     state.detailDirty = true;
     var hint = $('dUnsaved');
     if (hint) hint.hidden = false;
@@ -663,32 +673,117 @@
    * not the freshest row. alt and caption send only the locale that changed,
    * for the same reason: a bulk AI run may have filled the other one meanwhile.
    */
-  function detailPatch() {
-    var base = state.detailItem;
-    var patch = {};
-    var title = $('dTitle').value;
-    if (title !== (base.title || '')) patch.title = title;
-    var pair = function (field, deId, enId) {
-      var changed = {};
-      if ($(deId).value !== (base[field].de || '')) changed.de = $(deId).value;
-      if ($(enId).value !== (base[field].en || '')) changed.en = $(enId).value;
-      if (Object.keys(changed).length) patch[field] = changed;
+  function detailPatch(retained) {
+    var values = {
+      title: $('dTitle').value,
+      alt: { de: $('dAltDe').value, en: $('dAltEn').value },
+      caption: { de: $('dCapDe').value, en: $('dCapEn').value },
+      tags: $('dTags').value.split(','),
+      folder: $('dFolder').value,
     };
-    pair('alt', 'dAltDe', 'dAltEn');
-    pair('caption', 'dCapDe', 'dCapEn');
-    var tags = $('dTags').value.split(',').map(function (t) { return t.trim(); }).filter(Boolean);
-    if (tags.join('\n') !== (base.tags || []).join('\n')) patch.tags = tags;
-    var folder = $('dFolder').value;
-    if (folder !== (base.folder || '')) patch.folder = folder;
+    var patch = api.changedFields(values, state.detailItem);
+    // Explicit Use mine still writes an attempted leaf when the author has
+    // changed it back to the render value: the compared stored value may differ.
+    var attempted = api.expectations(retained || {}, values);
+    Object.keys(attempted).forEach(function (field) {
+      patch[field] = field === 'alt' || field === 'caption'
+        ? Object.assign({}, patch[field], attempted[field]) : attempted[field];
+    });
     return patch;
   }
 
-  async function saveDetail(key) {
-    try {
-      await client.patch(key, detailPatch());
+  function showDetailRecovery(key, error) {
+    state.detailRecovery = error;
+    var box = $('dCompare');
+    box.innerHTML = '';
+    box.appendChild(el('p', null, error.unsupported ? copy.mediaConditionalUnsupported
+      : error.unknown ? copy.mediaConditionalUnknown : copy.mediaConditionalConflict));
+    (error.fields || []).forEach(function (field) {
+      box.appendChild(el('p', null, field.field + ': ' + copy['mediaConditional' + {
+        achieved: 'Achieved', expected: 'Expected', other: 'Other',
+      }[field.outcome]] + ' — ' + copy.mediaConditionalMine + ': ' + JSON.stringify(field.intended)
+        + '; ' + copy.mediaConditionalStored + ': ' + JSON.stringify(field.stored)));
+    });
+    if (error.unsupported) return;
+    var check = el('button', 'btn-link', copy.mediaConditionalCheck);
+    check.type = 'button';
+    check.id = 'dCheckStored';
+    check.addEventListener('click', async function () {
+      check.disabled = true;
+      try {
+        var current = await client.get(key);
+        if ($('detail').dataset.key !== key) return;
+        var patch = detailPatch(error.patch);
+        showDetailRecovery(key, { unknown: error.unknown, current: current,
+          patch: patch, generation: state.detailGeneration,
+          fields: api.compareFields(patch, api.expectations(patch, state.detailItem), current, key) });
+      } catch (failure) { fail(failure); }
+      finally { check.disabled = false; }
+    });
+    box.appendChild(check);
+    if (!error.current) return;
+    var mine = el('button', null, copy.mediaConditionalUseMine);
+    mine.type = 'button';
+    mine.id = 'dUseMine';
+    mine.addEventListener('click', function () { saveDetail(key, error.current); });
+    box.appendChild(mine);
+    var generation = error.generation;
+    var stored = el('button', 'btn-link', copy.mediaConditionalUseStored);
+    stored.type = 'button';
+    stored.id = 'dUseStored';
+    stored.addEventListener('click', function () {
+      if (state.detailGeneration !== generation) {
+        say(copy.mediaConditionalNewer);
+        var patch = detailPatch(error.patch);
+        showDetailRecovery(key, { unknown: error.unknown, current: error.current,
+          patch: patch, generation: state.detailGeneration,
+          fields: api.compareFields(patch, api.expectations(patch, state.detailItem), error.current, key) });
+        return;
+      }
+      state.items = state.items.map(function (item) { return item.key === key ? error.current : item; });
       state.detailDirty = false;
-      await reload('Saved.');
-    } catch (e) { fail(e); }
+      renderDetail();
+    });
+    box.appendChild(stored);
+  }
+
+  async function saveDetail(key, current) {
+    if (state.detailSaving) return;
+    if (state.detailRecovery && !current) { say(copy.mediaConditionalReview); return; }
+    var generation = state.detailGeneration;
+    state.detailSaving = true;
+    $('dSave').disabled = true;
+    try {
+      var patch = detailPatch(current && state.detailRecovery ? state.detailRecovery.patch : null);
+      if (!Object.keys(patch).length) {
+        state.detailDirty = false;
+        renderDetail();
+        return;
+      }
+      var saved = await api.savePatch(client, key, patch, api.expectations(patch, current || state.detailItem));
+      if ($('detail').dataset.key !== key || state.detailGeneration !== generation) {
+        say(copy.mediaConditionalNewer);
+        return;
+      }
+      state.items = state.items.map(function (item) { return item.key === key ? saved : item; });
+      state.detailDirty = false;
+      renderDetail();
+      say(copy.mediaConditionalSaved);
+    } catch (error) {
+      if ($('detail').dataset.key !== key) return;
+      if (error.status === 401 || (error.probeError && error.probeError.status === 401)) {
+        fail(error.probeError || error);
+      }
+      if (error.unsupported || error.unknown || error.status === 409) {
+        error.patch = patch;
+        error.generation = generation;
+        showDetailRecovery(key, error);
+      }
+      else fail(error);
+    } finally {
+      state.detailSaving = false;
+      if ($('dSave')) $('dSave').disabled = false;
+    }
   }
 
   async function deleteOne(item) {
