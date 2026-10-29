@@ -1074,3 +1074,21 @@ with zero writes, preserving visible focus, bounds and scroll. HTTP and independ
 `title`/`caption_de`/`caption_en` SQL reads agreed. The evidence distinguishes an expired
 preliminary old-GET hold from the successful ordering run and the separate32-second pause
 proof. Sessions, tabs, cookies, app and interception were closed; synthetic fixtures remain.
+
+### Integrated panel-lifetime qualification
+
+Actual `4a1c305` qualification exercised the inherited panel-instance fence with the impact
+observer enabled, two native tabs, two uploaded photos and a published bilingual referencing
+story. Held genuine200 responses left new Save buttons disabled; clean reopened panels
+adopted canonical values, while dirty reopened panels kept their inputs and original bases.
+A discarded genuine409 did not attach its comparison to the replacement panel. Subsequent
+caption-only PATCHes omitted title and preserved the acknowledged or competing stored title.
+
+Native Refresh and two actual32-second observer windows made reads only, retained dirty
+inputs/bases and continued to show the published story's impact. Same-panel newer typing
+remained dirty and its next PATCH expected exactly the acknowledged caption. Final HTTP and
+PostgreSQL readbacks agreed. Settled desktop/320px captures showed visible keyboard focus,
+pending controls and no horizontal overflow. The retained evidence distinguishes genuine
+response holds and interrupted harness attempts; it does not claim a held GET in the run
+where none arrived. Native logout, zero remaining sessions/cookies, closed tabs, removed
+interceptions and a stopped app complete the isolated run; synthetic fixtures remain.
