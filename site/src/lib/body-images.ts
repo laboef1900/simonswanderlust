@@ -150,8 +150,8 @@ function onlyMeaningfulChild(node: Element): Element | null {
  *     and hastscript treats a node-shaped object in a children array AS A NODE
  *     — `{type:'raw', value:'<script>…'}` would emit a live script tag,
  *     because the stringifier runs with allowDangerousHtml. A gallery-local
- *     `caption-override` is fence TEXT the sanitizer never saw; it only ever
- *     becomes a hast text node, so HTML or fence syntax in it stays text.
+ *     `caption-override` is fence TEXT the sanitizer never saw; it only becomes
+ *     hast text or a serialized accessible-name property, never raw markup.
  *  3. Dimensions are checked before any arithmetic reaches markup.
  *
  * Nothing disappears silently: a URL with no `images` entry is skipped, and if

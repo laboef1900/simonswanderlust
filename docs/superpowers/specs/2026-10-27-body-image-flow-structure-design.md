@@ -1,12 +1,12 @@
 # #378 — Keep transformed images valid in their HTML context
 
-**Status: OWNER APPROVED 2026-10-28 — valid picture placement. Risk: High:** post-sanitize body HTML injection. Implementation and verification remain required; no owner Markdown rewrite or deployment is authorized.
+**Status: OWNER APPROVED 2026-10-28; implemented and locally qualified. Risk: High:** post-sanitize body HTML injection. Final-head review/CI and the unmerged dependency stack are PR gates; no owner Markdown rewrite or deployment is authorized.
 
-## Decision requested
+## Approved decision
 
-Approve **figures for standalone root-paragraph images; bare pictures in phrasing contexts**. For a standalone linked image, produce one `<figure><a …><picture>…</picture></a></figure>`. Do not split prose sentences, duplicate a link, add a new lightbox interaction, or rewrite owner Markdown.
+Use **figures for standalone root-paragraph images; bare pictures in phrasing contexts**. For a standalone linked image, produce one `<figure><a …><picture>…</picture></a></figure>`. Do not split prose sentences, duplicate a link, add a new lightbox interaction, or rewrite owner Markdown.
 
-The issue's supplied `transformBodyImages`/parse5 reproduction is the evidence; it was not rerun. Current `pictureNode` always returns a figure, while the paragraph special case only recognizes one unlinked image. General replacement therefore emits flow content inside paragraphs/anchors and relies on browser repair.
+The issue's supplied `transformBodyImages`/parse5 reproduction was accepted without rerunning it. Before this fix, `pictureNode` always returned a figure, while the paragraph special case recognized only one unlinked image. General replacement therefore emitted flow content inside paragraphs/anchors and relied on browser repair.
 
 ## Implementation contract
 
@@ -32,9 +32,36 @@ No new unnamed duplicate anchors are introduced. The fixtures' nonempty image al
 
 Direct implementation: `body-images.ts` and `body-images.test.ts`. Consumers requiring regression coverage: `postgres-loader.ts` and `pages-loader.ts` (story/About builds), `StoryPage.astro`/`story-opening.ts` (split still preserves content), `uploader/src/preview.ts`, and `publish-gate.ts` (sources/readiness remain identical). No consumer should independently reconstruct images.
 
-After implementation, test the three exact issue bodies through `renderMarkdown → transformBodyImages → HTML5 parse/serialize`; assert stable tree structure, no generated empty paragraphs/anchors, exactly one destination link for the linked-image case, preserved text order and accessible name. Add standalone whitespace, mixed text/link, adjacent images, emphasis, blockquote/list, existing figure/picture, unknown-image and JPEG-only fixtures. Assert all expected srcsets, alt, dimensions and loading properties survive, with existing sanitization/hostile-link/gallery tests unchanged. Verify static story and script-free preview in a browser with JS disabled, including text after an image staying in its paragraph; then run affected suites/typechecks. These are future checks, not observed results.
+Regression coverage exercises the three exact issue bodies through `renderMarkdown → transformBodyImages → HTML5 parse/serialize`: stable structure, no generated empty paragraphs/anchors, exactly one destination link for the linked-image case, preserved text order and native image alt. Additional cases cover standalone whitespace, mixed text/link, adjacent images, emphasis, headings, blockquote/list, authored figure/picture, unknown images and JPEG-only selection. Source sets, alt, dimensions and loading survive; existing sanitization, hostile-link and gallery regressions remain. Whitespace preservation is compared within the original sanitized paragraph, not against an incidental Markdown fragment-ending newline.
 
 Update the existing image/gallery rendering documentation and reconfirm `SECURITY.md` output-sanitization/post-sanitize sections. Coordinate shared renderer changes with #356/#358/#375/#379; #379 must target the new bare-picture construction as well as figures.
+
+## Local qualification
+
+- Production implementation `7bc196495221b36383840fb7382eae336e217f6d`; test corrections
+  complete at `5c62a724ca8813d08ff9f55c4933ab2a7a4140f6`. Uploader types and the full
+  Postgres-enabled suite passed in wave `1793235667881_5041`; Astro check, the full site
+  suite and build passed in `1793236120195_6576`. Intermediate test-helper type errors
+  and whole-fragment newline assumptions were corrected without weakening production guards.
+- Actual `main.ts` and authenticated authoring APIs published a synthetic DE/EN story
+  and saved/built About in isolated `swl_378_dev`. Two ready 3000×2000 photos exercise
+  genuine AVIF/WebP and JPEG-only pipeline variants.
+- DE/EN story, About and script-free preview at 1440/390px: 12 JS-disabled surfaces,
+  156 decoded picture instances and 60 named links inspected in Chrome's accessibility
+  tree. No empty paragraph/link, nested picture, figure inside a paragraph/anchor or
+  orphaned sentence text. Each linked-image fixture has exactly one named destination.
+  Authored source choices, JPEG-only selection and stripped hostile anchor attributes
+  remain correct. Preview CSP still denies scripts.
+- Native Tab/Shift-Tab preserves the original link order; Enter opens the genuine
+  3000×2000 WebP in both locales. Evidence under
+  `.local/backlog-execution-2026-10-27/issue-378-runtime/` includes six raw HTML responses,
+  source hashes, DOM/accessibility records, 26 qualified screenshots and final readback.
+  Fixture/setup corrections and four mistaken metadata-only preview crops are retained
+  separately, not counted as qualification.
+- Stored and published body text/image maps and About content remain unchanged after
+  browser exercise. Temporary account/sessions, browser application/profile/launcher
+  and runtime are removed; synthetic databases, photos and releases are retained.
+  No physical-device, screen-reader-speech or production-data claim.
 
 ## Recovery
 
