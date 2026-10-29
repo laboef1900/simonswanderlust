@@ -79,7 +79,8 @@ async function restoreMain(args: string[]): Promise<void> {
   const { yes, file } = parseRestoreArgs(args);
   if (!file) {
     console.error(
-      'usage: stop app, then docker compose run --rm --no-deps app node --import tsx src/cli.ts restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
+      'usage: docker compose stop app\n' +
+      '       docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
       '       (bare dev: stop the app, then node --import tsx src/cli.ts restore [--yes] <file>)\n' +
       '       --yes skips confirmation, never exclusive ownership or the verified pre-restore backup.',
     );
@@ -442,11 +443,12 @@ async function main(): Promise<void> {
     // @ai-warning: the DHI runtime image has no shell, so `docker compose exec`
     // must invoke node directly — `tsx src/cli.ts ...` cannot run there.
     const exec = 'docker compose exec app node --import tsx src/cli.ts';
-    const offline = 'docker compose run --rm --no-deps app node --import tsx src/cli.ts';
+    const offline = 'docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts';
     console.error(
       'usage:\n' +
       '  npm run upload -- <imageFile> <key> [alt]\n' +
       `  ${exec} rebuild\n` +
+      '  docker compose stop app\n' +
       `  (stop app and all writers first) ${offline} restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n` +
       `  (offline) ${offline} prepare-native-restore [--yes]\n` +
       `  (offline) ${offline} onboarding-retire\n` +
