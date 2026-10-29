@@ -45,6 +45,22 @@ function pair(overrides: Partial<PostPair> = {}): PostPair {
 }
 
 describe('renderPreviewHtml', () => {
+  it.each(['de', 'en'] as const)('names decorative gallery links in script-free %s preview output', async (locale) => {
+    const p = pair();
+    const src = `${ORIGIN}/trips/bukarest/decorative`;
+    p[locale].bodyMarkdown = ['column', 'breakout', 'slider'].map((mode) =>
+      `\`\`\`gallery\n#layout: ${mode}\n${src}\n${src} | caption-override="Visible caption"\n\`\`\``).join('\n\n');
+    p[locale].images = { [src]: { width: 1600, height: 1200, alt: 'Stale alt', caption: 'Stale caption' } };
+    const html = await renderPreviewHtml(p, locale, ORIGIN, new Map([[src, { alt: '', caption: '' }]]));
+    const name = locale === 'de' ? 'Foto 1 von 2 öffnen' : 'Open photo 1 of 2';
+    expect(html.match(new RegExp(`aria-label="${name}"`, 'g'))).toHaveLength(3);
+    expect(html.match(/aria-label="Visible caption"/g)).toHaveLength(3);
+    expect(html.match(new RegExp(`href="${src}-1600.webp"`, 'g'))).toHaveLength(6);
+    expect(html.match(/alt=""/g)?.length).toBeGreaterThanOrEqual(6);
+    expect(html).not.toContain('Stale');
+    expect(html).not.toContain('<script');
+  });
+
   it('renders the independent title image with its own alt, format and framing, then falls back when removed', async () => {
     const p = pair();
     p.de.titleImage = { src: ORIGIN + '/trips/bukarest/title', width: 2400, height: 800,

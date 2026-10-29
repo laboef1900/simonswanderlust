@@ -86,7 +86,7 @@ for (const [name, shape, recognized] of GALLERY_CORPUS) {
     if (block) expect(await G.fenceAt(typed, block.lines[0]?.start ?? block.start)).toMatchObject({ start: block.start, end: block.end });
     expect(saved.images.unrelated).toEqual(initial.unrelated);
     expect(await normalizeGalleryFences(saved.bodyMarkdown, saved.images)).toEqual(saved);
-    const output = await transformBodyImages(await renderMarkdown(saved.bodyMarkdown), saved.images, 'https://i');
+    const output = await transformBodyImages(await renderMarkdown(saved.bodyMarkdown), saved.images, 'https://i', { locale: 'en' });
     expect(output.includes('class="jgal ')).toBe(recognized);
     const exported = await galleryFencesToMdx(saved.bodyMarkdown, saved.images);
     const restored = await normalizeGalleryFences(exported, initial);
@@ -99,7 +99,7 @@ for (const [name, shape, recognized] of GALLERY_CORPUS) {
     const de = locale(shape(URL), { [URL]: { width: 10, height: 20 } });
     const audit = await auditAltText({ de, en: { ...locale('', {}), locale: 'en' } });
     expect(audit.images.some((photo) => photo.kind === 'gallery' && photo.src === URL)).toBe(recognized);
-    const publication = await analyzeBodyContent(shape(URL), initial, 'https://foreign.example');
+    const publication = await analyzeBodyContent(shape(URL), initial, 'https://foreign.example', 'en');
     expect(publication.foreign.includes(URL)).toBe(recognized);
   });
 }

@@ -44,7 +44,7 @@ export function postgresPagesLoader(): Loader {
           const input = rowToPageEntry(row, galleryOrigin);
           const data = await parseData({ id: input.id, data: input.data });
           const rendered = await renderMarkdown(input.body);
-          rendered.html = await transformBodyImages(rendered.html, input.images, galleryOrigin);
+          rendered.html = await transformBodyImages(rendered.html, input.images, galleryOrigin, { locale: row.locale });
           store.set({ id: input.id, data, body: input.body, rendered });
         }
         logger.info(`postgres-pages: loaded ${rows.length} entries`);

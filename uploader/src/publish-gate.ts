@@ -28,12 +28,14 @@
 import { setImmediate } from 'node:timers/promises';
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
 import { analyzeRenderedBody, transformBodyImages, type ImageDims } from '../../site/src/lib/body-images.js';
+import type { Locale } from '../../site/src/i18n/ui.js';
 
 /** Heading semantics and foreign references before resolution; image loads after it. */
 export async function analyzeBodyContent(
   body: string,
   images: Record<string, ImageDims>,
   imageOrigin: string,
+  locale: Locale,
 ): Promise<{ hasH1: boolean; foreign: string[]; sources: string[] }> {
   // server.ts validates cfg.baseUrl at boot (previewCsp), so this cannot throw there.
   const allowed = new URL(imageOrigin).origin;
@@ -57,7 +59,8 @@ export async function analyzeBodyContent(
   return {
     hasH1,
     foreign: [...found],
-    sources: analyzeRenderedBody(await transformBodyImages(html, images, allowed, undefined, {
+    sources: analyzeRenderedBody(await transformBodyImages(html, images, allowed, {
+      locale,
       schedule: () => setImmediate(),
     })).sources,
   };
