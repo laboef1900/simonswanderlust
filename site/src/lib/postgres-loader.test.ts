@@ -151,6 +151,31 @@ describe('postgresTripsLoader load()', () => {
     db.sql = [];
   });
 
+  it('builds localized decorative gallery names from each published story locale', async () => {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    vi.stubEnv('PUBLIC_BASE_URL', 'https://img');
+    const src = 'https://img/trips/names/photo';
+    db.rows = ['de', 'en'].map((locale) => ({
+      status: 'published',
+      published_snapshot: {
+        ...row, locale,
+        body_markdown: `\`\`\`gallery\n${src}\n${src}\n\`\`\``,
+        images: { [src]: { width: 1600, height: 1000, alt: 'Old description' } },
+      },
+    }));
+    db.media = [{ key: 'trips/names/photo', alt_de: '', alt_en: '', caption_de: '', caption_en: '' }];
+    const { entries, ctx } = fakeLoadContext();
+    await postgresTripsLoader().load(ctx);
+    for (const locale of ['de', 'en']) {
+      const html = entries.get(`${locale}/${row.slug}`)?.rendered?.html ?? '';
+      expect(html).toContain(`aria-label="${locale === 'de' ? 'Foto 1 von 2 öffnen' : 'Open photo 1 of 2'}"`);
+      expect(html).toContain(`aria-label="${locale === 'de' ? 'Foto 2 von 2 öffnen' : 'Open photo 2 of 2'}"`);
+      expect(html).toContain('alt=""');
+      expect(html).toContain(`href="${src}-1600.webp"`);
+      expect(html).not.toContain('Old description');
+    }
+  });
+
   // The load-bearing guarantee of issue #20: a draft save over a published
   // post must NEVER reach the store — only the published_snapshot content may.
   it('builds only from published snapshots; diverged working copies and snapshot-less rows stay dark', async () => {

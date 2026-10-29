@@ -14,7 +14,7 @@ for (const shape of ['mixed', 'panorama', 'thin'] as const) {
       const images = Object.fromEntries(ratios.map((ratio, i) => [`${origin}/trips/bench/p${i}`, { width: Math.round(ratio * 6000), height: 6000 }]));
       const html = `<pre><code class="language-gallery">#layout: ${width === COLUMN_WIDTH ? 'column' : 'breakout'}\n${Object.keys(images).join('\n')}</code></pre>`;
       partitionRows(ratios, width);
-      await transformBodyImages(html, images, origin);
+      await transformBodyImages(html, images, origin, { locale: 'en' });
       const partitionMs: number[] = [];
       const transformMs: number[] = [];
       for (let repeat = 0; repeat < repeats; repeat++) {
@@ -22,7 +22,7 @@ for (const shape of ['mixed', 'panorama', 'thin'] as const) {
         partitionRows(ratios, width);
         partitionMs.push(performance.now() - start);
         start = performance.now();
-        await transformBodyImages(html, images, origin);
+        await transformBodyImages(html, images, origin, { locale: 'en' });
         transformMs.push(performance.now() - start);
       }
       let operations = 0;

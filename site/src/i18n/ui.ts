@@ -226,9 +226,9 @@ const de = {
   'story.next': 'Nächste Geschichte',
   'story.pagination': 'Weitere Geschichten',
   'story.otherLang': 'Read this story in English',
-  // Gallery island (site/src/scripts/gallery-lightbox.ts). The strings reach the
-  // script through data attributes on GalleryIsland.astro — the gallery markup
-  // itself is injected by body-images.ts, which has no locale.
+  // Static link names are rendered by body-images.ts. Interactive gallery labels
+  // reach gallery-lightbox.ts through data attributes on GalleryIsland.astro.
+  'gallery.open': 'Foto {current} von {total} öffnen',
   'gallery.slider': 'Fotogalerie, horizontal scrollbar',
   'gallery.viewer': 'Fotoansicht',
   'gallery.close': 'Schließen',
@@ -604,6 +604,7 @@ const en: Record<UIKey, string> = {
   'story.next': 'Next story',
   'story.pagination': 'More stories',
   'story.otherLang': 'Diese Geschichte auf Deutsch lesen',
+  'gallery.open': 'Open photo {current} of {total}',
   'gallery.slider': 'Photo gallery, scrolls horizontally',
   'gallery.viewer': 'Photo viewer',
   'gallery.close': 'Close',

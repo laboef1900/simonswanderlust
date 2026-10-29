@@ -788,6 +788,12 @@ protections, so they carry their own:
   matters is that hastscript treats a node-shaped object in a children array **as a node**, so a
   caption of `{"type":"raw","value":"<script>…</script>"}` would emit a live script tag — the
   render boundary additionally coerces with `String()` as a backstop.
+- **Gallery link names are serialized text** (#358). A nonblank resolved image alt names the
+  link natively; otherwise the resolved visible caption becomes a hast `aria-label` property,
+  or an explicitly localized positional action names the accepted photo. Hidden and cleared
+  captions never supply a name, and decorative image alt stays unchanged. Property serialization,
+  not attribute interpolation, keeps hostile caption text inert. Origin equality, dimension and
+  format checks, variant-only links, metadata-only projection, preview CSP and EXIF privacy remain.
 - **Photo metadata is line-atomic** (#355, owner-approved preserve-and-warn). The shared
   `uploader/public/gallery-photo-line.js` codec validates every non-empty field before the
   stores, exporter, browser tools or caption-override renderer use any of that line's metadata.
@@ -801,11 +807,11 @@ protections, so they carry their own:
   photo line's `caption-override="…"` and the fence's `#captions: hidden` directive are read by
   `readCaptionOverride` in the shared photo-line codec and `readCaptionsVisible` in
   `site/src/lib/gallery-layout.ts` — the same readers used by the normalizer and MDX exporter.
-  The override is author-controlled text the sanitizer never sees, so it only becomes a hast **text node**
-  (`String()`-coerced, entity-escaped on output): HTML or fence syntax in it renders literally.
+  The override is author-controlled text the sanitizer never sees, so it becomes only
+  `String()`-coerced hast text or a serialized accessible-name property, never raw markup.
   On the line it is stored entity-encoded and capped at 1,000 characters, so it can neither
-  end the photo line, add a `|` field, nor fake a directive line. It changes only the caption:
-  the URL is still read from the line's first field and passes the same origin, dimension and
+  end the photo line, add a `|` field, nor fake a directive line. The photo URL still comes
+  from the line's first field and passes the same origin, dimension and
   format guards before any override is consulted, and alt stays library/`images`-map
   authoritative. It is never lifted into the URL-keyed `images` map, so it cannot leak into
   another gallery using the same photo, and it creates no Media write. Precedence: hidden

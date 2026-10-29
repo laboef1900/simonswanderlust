@@ -2,6 +2,7 @@ import { unified } from 'unified';
 import rehypeStringify from 'rehype-stringify';
 import { visit, SKIP } from 'unist-util-visit';
 import { h } from 'hastscript';
+import { useTranslations, type Locale } from '../i18n/ui.js';
 import { galleryCode, sanitizedBodyTree, textOf } from './gallery-identity.js';
 import { srcset, fallbackSrc, largestVariant, sourceFormats, type RemoteHeroImage } from './images.js';
 import {
@@ -35,6 +36,11 @@ export interface ImageDims { width: number; height: number; alt?: string; captio
 
 /** Current localized library descriptions, keyed by the photo's full base URL. */
 export type GalleryMetadata = ReadonlyMap<string, { alt: string; caption: string }>;
+
+/** Locale is required for names in static output; requests may also yield partition work. */
+export interface BodyRenderOptions extends PartitionOptions {
+  locale: Locale;
+}
 const SIZES = '(min-width: 768px) 720px, 100vw';
 
 /**
@@ -188,10 +194,19 @@ function galleryPhotos(
 function itemNode(
   { image, caption }: GalleryPhoto,
   sizes: string,
+  positionTemplate: string,
+  position: number,
   style?: string,
 ): ReturnType<typeof h> {
   return h('figure', { class: 'jgal__item', ...(style ? { style } : {}) }, [
-    h('a', { href: largestVariant(image) }, [
+    h('a', {
+      href: largestVariant(image),
+      // The picture supplies a nonblank alt natively. Captions are siblings,
+      // so otherwise name the link explicitly without changing decorative alt.
+      ...(image.alt.trim() ? {} : {
+        'aria-label': caption.trim() || positionTemplate.replace('{current}', String(position)),
+      }),
+    }, [
       h('picture', [
         ...sourceNodes(image, sizes),
         h('img', {
@@ -209,8 +224,9 @@ function itemNode(
 }
 
 /** `breakout` / `column`: photos partitioned into justified rows that stack to a square, at render time. */
-async function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 'slider'>, options: PartitionOptions) {
+async function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 'slider'>, options: BodyRenderOptions) {
   const width = containerWidthFor(mode);
+  const positionTemplate = useTranslations(options.locale)('gallery.open').replace('{total}', String(photos.length));
   const rows = await partitionRowsAsync(photos.map((p) => p.image.width / p.image.height), width, options);
   // @ai-note Photos are re-associated with their ratios BY POSITION, which is
   // only sound because partitionRows cannot drop one here: galleryPhotos has
@@ -221,6 +237,7 @@ async function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 
   let taken = 0;
   return rows.map((row) => {
     const slice = photos.slice(taken, taken + row.ratios.length);
+    const first = taken;
     taken += row.ratios.length;
     const rowWidth = (row.maxWidthFraction ?? 1) * width;
     const gaps = (row.ratios.length - 1) * ROW_GAP;
@@ -236,7 +253,9 @@ async function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 
         // `--r` drives `flex: calc(var(--r) * 100) 1 0`. The `* 100` is in the
         // CSS, not here: flex-grow values summing below 1 leave part of the row
         // unfilled (a lone portrait rendered 808px instead of 1112px).
-        return itemNode(photo, rowSizes(ratio * height, width), `--r:${ratio.toFixed(4)}`);
+        return itemNode(photo, rowSizes(ratio * height, width),
+          positionTemplate, first + i + 1,
+          `--r:${ratio.toFixed(4)}`);
       }),
     );
   });
@@ -256,9 +275,11 @@ async function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 
  * revealed — and named — by the island, which is also why they are absolutely
  * positioned: neither state may move the layout, or CLS comes back.
  */
-function sliderNode(photos: GalleryPhoto[]) {
+function sliderNode(photos: GalleryPhoto[], locale: Locale) {
+  const positionTemplate = useTranslations(locale)('gallery.open').replace('{total}', String(photos.length));
   return [
-    h('div', { class: 'jgal__track', tabindex: '0' }, photos.map((p) => itemNode(p, SLIDER_SIZES))),
+    h('div', { class: 'jgal__track', tabindex: '0' }, photos.map((p, i) =>
+      itemNode(p, SLIDER_SIZES, positionTemplate, i + 1))),
     h('button', { type: 'button', class: 'jgal__nav jgal__nav--prev', hidden: true, 'data-jgal-nav': 'prev' }, '‹'),
     h('button', { type: 'button', class: 'jgal__nav jgal__nav--next', hidden: true, 'data-jgal-nav': 'next' }, '›'),
   ];
@@ -269,7 +290,7 @@ async function galleryNode(
   images: Record<string, ImageDims>,
   imageOrigin: string,
   metadata: GalleryMetadata | undefined,
-  options: PartitionOptions,
+  options: BodyRenderOptions,
 ): Promise<ReturnType<typeof h> | null> {
   let allowedOrigin: string;
   try {
@@ -280,7 +301,7 @@ async function galleryNode(
   const photos = galleryPhotos(fenceText, images, allowedOrigin, metadata);
   if (photos.length === 0) return null;
   const mode = readLayoutMode(fenceText);
-  const children = mode === 'slider' ? sliderNode(photos) : await justifiedRows(photos, mode, options);
+  const children = mode === 'slider' ? sliderNode(photos, options.locale) : await justifiedRows(photos, mode, options);
   // `not-prose` opts the gallery out of @tailwindcss/typography, which would
   // otherwise apply its own figure/figcaption margins inside StoryPage's
   // `prose` article and fight the row arithmetic.
@@ -294,16 +315,17 @@ async function galleryNode(
  *   runs both under `astro build` (where `import.meta.env` exists) and under
  *   the uploader's tsx runtime via `preview.ts` (where it does not). Keep it
  *   pure and env-free.
+ * @param options explicit content locale; request callers may inject a real
+ *   event-loop scheduler. Builds drain the identical optimizer synchronously.
+ *   Completion must always be awaited.
  * @param galleryMetadata current library alt/caption; only galleries consult it.
- * @param options request callers inject a real event-loop scheduler; builds drain
- *   the identical optimizer synchronously. Completion must always be awaited.
  */
 export async function transformBodyImages(
   html: string,
   images: Record<string, ImageDims>,
   imageOrigin: string,
+  options: BodyRenderOptions,
   galleryMetadata?: GalleryMetadata,
-  options: PartitionOptions = {},
 ): Promise<string> {
   // @ai-warning: post body HTML is rendered from DB-stored Markdown authored
   // through the admin editor (untrusted-ish). Sanitize it FIRST — stripping

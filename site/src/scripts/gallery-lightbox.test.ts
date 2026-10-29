@@ -9,6 +9,7 @@
 // including showModal/close and focus, which is what makes this testable at all.
 import { beforeEach, describe, expect, it } from 'vitest';
 import { initGalleries, type GalleryLabels } from './gallery-lightbox.js';
+import { transformBodyImages } from '../lib/body-images.js';
 
 const labels: GalleryLabels = {
   slider: 'Photo gallery, scrolls horizontally',
@@ -76,6 +77,35 @@ beforeEach(() => {
 });
 
 describe('initGalleries — degradation and inertness', () => {
+  it.each(['column', 'breakout', 'slider'])('preserves built empty-alt link names and positional navigation in %s', async (mode) => {
+    const src = 'https://img.test/photo';
+    document.body.innerHTML = await transformBodyImages(
+      `<pre><code class="language-gallery">#layout: ${mode}\n${src}\n${src} | caption-override="Visible caption"\n${src}</code></pre>`,
+      { [src]: { width: 3000, height: 2000, alt: '' } }, 'https://img.test', { locale: 'de' },
+    );
+    const expected = ['Foto 1 von 3 öffnen', 'Visible caption', 'Foto 3 von 3 öffnen'];
+    expect(photos().map((link) => link.getAttribute('aria-label'))).toEqual(expected);
+    initGalleries(document, labels);
+    expect(photos().map((link) => link.getAttribute('aria-label'))).toEqual(expected);
+    for (const link of photos()) {
+      expect(link.querySelector('img')?.alt).toBe('');
+      expect(link.href).toBe(`${src}-3000.webp`);
+      for (const init of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) {
+        expect(click(link, init).defaultPrevented).toBe(false);
+      }
+    }
+    expect(dialog()).toBeNull();
+    expect(click(photos()[2]!).defaultPrevented).toBe(true);
+    expect(liveText()).toBe('Photo 3 of 3');
+    expect(shownSrc()).toBe(`${src}-1280.webp`);
+    expect(dialog()?.querySelector('img')?.getAttribute('alt')).toBe('');
+    press('ArrowLeft');
+    expect(liveText()).toBe('Photo 2 of 3');
+    expect(dialog()?.querySelector('.jgal__lb-cap')?.textContent).toBe('Visible caption');
+    click(lbButton('close')!);
+    expect(photos().map((link) => link.getAttribute('aria-label'))).toEqual(expected);
+  });
+
   it('does nothing at all on a page with no gallery', () => {
     document.body.innerHTML = '<article><p>Just prose.</p></article>';
     initGalleries(document, labels);

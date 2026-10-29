@@ -7,9 +7,9 @@
  * whole job is to be that script tag. Same pattern as `travel-map.ts`, and the
  * data-attribute handoff mirrors `data-readstory` in `MapPage.astro`.
  *
- * @ai-note The strings must come through here rather than from body-images.ts:
- * that transform runs once per post body with no locale in scope (and also runs
- * cross-tree in the uploader's draft preview, which has no `ui.ts` at all).
+ * @ai-note Only interactive labels travel through this island. Static photo
+ * link names are localized by body-images.ts at render time, including in the
+ * script-free uploader preview; initialization must preserve those names.
  *
  * @ai-context docs/superpowers/specs/2026-07-29-gallery-layout-modes-and-lightbox-design.md
  */
