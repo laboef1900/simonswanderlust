@@ -1,8 +1,9 @@
 # Phone authoring audit and mobile acceptance matrix (#300)
 
 Date: 2026-10-27. Risk: **Low** (investigation and documentation; no app change).
-Status: **APPROVAL PENDING.** Nothing in this note is owner-approved yet. Decisions D1–D5 below
-are proposals. The device audit has **not** been run, so this note records no device finding.
+Status: **MATRIX AND MANUAL HARNESS APPROVED, 2026-10-29; PHYSICAL AUDIT BLOCKED.**
+The owner approved D1/D3 and D2 below and explicitly kept D4 execution blocked. No physical
+audit or device finding is claimed, and no D5 exception has been granted.
 **Hard prerequisites for any gating result:** access to suitable physical iOS and Android devices
 (D1) and a trusted-TLS disposable test instance (D4). Access has not been supplied; no tier-A run
 has occurred. Ownership of both phones is not required.
@@ -11,9 +12,9 @@ Historical drafting baseline: `dev` at `11e16d1` (v0.17.1); the issues were plan
 `9e400f9`. Source/host observations below are the original drafting record, not a new audit or
 verification of the eventual test build. Record that build and recheck hypotheses when executing.
 
-This note becomes the durable in-repo record that #300 and #299 require. Once the owner approves
-it, it holds the support matrix, the harness decision and the findings summary. The detailed
-evidence (screenshots, recordings) stays attached to issue #300, because binaries do not go in
+This is the durable in-repo support-matrix and harness-decision record required by #300/#299.
+The findings summary remains pending physical execution. Detailed evidence (screenshots,
+recordings) stays attached to issue #300, because binaries do not go in
 git (Golden Rule 5).
 
 ## 1. What this note is, and what it is not
@@ -51,7 +52,7 @@ git (Golden Rule 5).
 Desktop Safari's Responsive Design Mode is WebKit on macOS, not iOS Safari. It counts as tier B
 quality, not tier C.
 
-## 3. D1: proposed support matrix (owner names the exact devices and versions)
+## 3. D1: approved support matrix (exact devices/builds recorded at execution)
 
 Historical vendor release references (not observed installed versions or a freshness guarantee):
 
@@ -68,17 +69,17 @@ Historical vendor release references (not observed installed versions or a fresh
 | A-And | Android phone on the owner-approved OS | Current stable Chrome, exact installed build recorded at execution | Accessible Android hardware; borrowed hardware is sufficient. | Yes |
 | B-320 / B-390 | Chromium emulation | Managed Chromium | 320×640 @2x and 390×844 @3x, touch, mobile UA | No (pre-check) |
 
-**Proposed version policy:** "supported" means the current stable major of each browser at the
-time of a matrix run, with exact installed OS/browser builds recorded. The owner approves this
-policy or names a different supported range. A previous-major-only defect is recorded separately;
+**Approved version policy:** "supported" means the current stable major of each browser at the
+time of a matrix run, with exact installed OS/browser builds recorded. This is an acceptance
+target, not an assertion that those browsers have passed. A previous-major-only defect is recorded separately;
 it requires a waiver only if it violates an agreed support requirement. The matrix is re-run when
 #301 or #302 lands, and when a later change touches the shell, editor, Media or `admin.css`
 responsive rules.
 
-**Proposed exclusions** (each recorded, none tested as gating): iPad, Firefox for Android, Samsung
+**Approved exclusions** (none tested as gating): iPad, Firefox for Android, Samsung
 Internet, in-app browsers (Mail, Messages, social apps), and home-screen web apps.
-**Landscape** is proposed as a non-gating spot check of the editor with the keyboard open (owner
-choice under D1), because the adapt guidance warns against forgetting it.
+**Landscape** is an approved non-gating spot check of the editor with the keyboard open,
+because the adapt guidance warns against forgetting it.
 
 **Optional tooling choice, not a production prohibition:** a cloud real-device service may
 provide some hardware access. It is not a required dependency and is not ruled out by the
@@ -338,11 +339,11 @@ their acceptance and every required cell is passed or explicitly accepted with a
 
 | Option | Pros | Cons |
 |---|---|---|
-| **A. Documented manual run (recommended)** | No new dependency. Real devices are required anyway for H1, H2, H4, H5, H6, H9 and H13, none of which emulation reproduces. The evidence fields above make runs repeatable. | Human time per run. No CI regression signal for layout. |
+| **A. Documented manual run (selected)** | No new dependency. Real devices are required anyway for H1, H2, H4, H5, H6, H9 and H13, none of which emulation reproduces. The evidence fields above make runs repeatable. | Human time per run. No CI regression signal for layout. |
 | B. Add `@playwright/test` as an uploader dev dependency (Chromium mobile emulation + Playwright's WebKit build in CI) | Catches layout overflow, target-size and focus-order regressions at 320/390 on every PR. | A large new dev dependency with browser binary downloads in CI (Dependency Integrity review: provenance, lockfile, CI time). Playwright's WebKit is not iOS Safari. It needs a Postgres-backed app in CI. It still cannot close any tier-A gate. |
 | C. Manual now, automation on a trigger | Defers cost until it is justified. | Needs a written trigger. |
 
-**Recommendation: A, with C's trigger:** revisit B if a phone-layout regression reaches `dev`
+**Owner-selected A, with C's trigger (2026-10-29):** revisit B if a phone-layout regression reaches `dev`
 after #301/#302 have passed the matrix, or if the matrix is run more than about quarterly. Tier B
 emulation smoke from a managed browser (no repo dependency) is an optional pre-check before each
 tier-A run.
@@ -375,40 +376,36 @@ device confirmation**. They cannot close H1, H2, H4, H5, H6, H9, H10, H12, H13 o
 ## 12. Compatibility and rollback
 
 Documentation only: no route, slug, schema, `/data`, dependency or runtime change. Rollback is
-reverting this file. After approval, a one-line pointer in `DESIGN.md` *Admin authoring* naming
-the supported phone browsers and linking here is proposed. It is **not** applied before
-approval. Behaviour documentation for #301/#302 fixes waits for their own device smoke.
+reverting this note and its `DESIGN.md` pointer. The pointer names the approved phone-browser
+targets and explicitly preserves the unqualified physical-execution gate. Behaviour documentation
+for #301/#302 fixes waits for their own device smoke.
 
-## 13. Owner decisions (APPROVAL PENDING)
+## 13. Recorded owner decisions (2026-10-29)
 
-- **D1 Support matrix (owner decision).** Approve current stable iOS Safari plus Android Chrome
-  with exact installed builds recorded per run, or name the supported range. Approve or change
-  the proposed exclusions (iPad, Firefox, Samsung Internet, in-app/home-screen browsers) and
-  non-gating landscape spot check. No vendor version above is asserted to be installed.
-- **D2 Harness (owner decision).** Choose documented manual evidence (recommended A with C's
-  revisit trigger), a reviewed automation dependency, or another named approach. Nothing here
-  authorizes installing a dependency. If cloud hardware is desired, separately authorize the
-  provider/account/cost/data handling and establish which real-device scenarios it supports.
-- **D3 Measurement within D1.** Approve the exact measured 320/390 × normal/200% contract in §4
-  and the proposed measurement method after device capabilities are established. Which effective
-  text-enlargement control will be used on each platform? A page-zoom result at a different width
-  is supplemental, not a pass. If documented attempts cannot establish a required combination,
-  supply suitable access/methods or explicitly accept that specific gap with §7's exception fields.
-  No unreachable combination is assumed, and no substitution is approved by this note.
-- **D4 Execution prerequisites (not a new product design).** Arrange physical iOS/Android access,
-  Bluetooth keyboard, human operator, remote inspection, disposable credentials/fixtures and a
-  trusted-TLS disposable instance via staging or a local TLS proxy (§8). Establish an effective
-  measured slow-save mechanism. A reachable test AI provider is needed only for configured AI
-  coverage. No device/service/operator access or runtime verification is claimed here.
-- **D5 Conditional exceptions only.** After a result demonstrates an unmet agreed requirement
-  (or documents a required unavailable cell), decide fix/provide access versus a scoped exception.
-  H10/H11/H12/H14 do not require pre-emptive approval or waivers. Preserve expected security
-  behavior, passing layout and optional unconfigured features without inventing defects.
+The owner answered **Approve proposed matrix**, **Documented manual audit**, and
+**Keep physical audit blocked** in the implementation conversation.
+
+- **D1 Support matrix — approved.** Current-stable iOS Safari and Android Chrome, exact installed
+  builds recorded per run; the §3 exclusions and non-gating landscape spot check are accepted.
+  No historical vendor version above is asserted to be installed.
+- **D2 Harness — approved.** Documented manual evidence, with §10's revisit trigger. Managed
+  browser emulation is supplemental. No automation dependency, cloud account, purchase or
+  third-party data transfer is authorized.
+- **D3 Measurement — approved.** Exact measured 320/390 × normal/200% requirements in §4.
+  The effective controls/method must still be established on actual devices. A page-zoom result
+  at a different width is supplemental, not a pass. Unavailable combinations stay open until
+  suitable access is supplied or a specific §7 exception is explicitly approved.
+- **D4 Execution — explicitly blocked.** Physical iOS/Android access, Bluetooth keyboard,
+  operator, remote inspection and a trusted-TLS disposable instance have not been supplied.
+  Slow-save and configured-AI probes also need their stated prerequisites. Continue independent
+  implementation and supplemental emulation, but do not mark #300–#302 complete from it.
+- **D5 Exceptions — none granted.** No pre-emptive device, measurement, accessibility or security
+  waiver follows from the approval. Later gaps require the scoped record in §7.
 
 ## 14. Mapping to #300's acceptance
 
 | #300 acceptance item | Where it is satisfied |
 |---|---|
 | Findings name device, browser, viewport, text size and repro | §9 record. Filled **only** by the tier-A run, which has not happened. |
-| Matrix written and approved; both decisions recorded in the issue and in-repo | §3/§4/§10 (written), §13 (pending). This file is the dated in-repo note. |
+| Matrix written and approved; both decisions recorded in the issue and in-repo | §3/§4/§10 (approved), §13 (exact 2026-10-29 owner answers). Physical execution remains blocked. |
 | Each finding assigned to #301, #302 or the resilience epic, or accepted | §6 proposed owners, §7 rules. "Accepted" means an owner exception record, never a default. |

@@ -880,6 +880,10 @@ New post accents. The public blog's expedition identity is unchanged. Self-hoste
 Inter/IBM Plex Mono remain; the shell and login identify the workspace as **Wanderlust
 Studio**, with **Simon's travel journal** as the descriptor.
 
+Phone acceptance targets current-stable iOS Safari and Android Chrome under the
+[approved measured matrix and manual audit](docs/superpowers/specs/2026-10-27-mobile-acceptance-matrix-design.md).
+Physical-device execution remains blocked; this records the target, not a passed qualification.
+
 Admin tokens live on `:root` in `uploader/public/admin.css`, so the shell, the login page
 and the `<dialog>`s appended to `<body>` share one set:
 
