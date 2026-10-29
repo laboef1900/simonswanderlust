@@ -790,3 +790,28 @@ still satisfy §12. Design approval or a successful browser journey alone is not
 These decisions authorize the documented design for implementation subject to those gates,
 not a merge, deployment, owner-data operation, login/session-policy change or revival of the
 withdrawn file-based progress design. Any material departure requires fresh explicit approval.
+
+## 15. #280 empty-state qualification (2026-10-29)
+
+Integrated source `c23c2da7887cafc6e24dfac3f1392c4893aa1c81` passed real
+`main.ts` empty-content builds in all four approved language modes. Managed-browser
+checks at 1280px and 320px covered every enabled-locale Home, Map and destinations
+page, empty RSS/sitemaps, inactive-route absence, and admin/author empty states.
+No sample stories, photos, map islands or region links were fabricated. Both roles'
+Media controls and narrowed-view recovery were keyboard exercised; admin-only
+pages/APIs and onboarding stayed unavailable to authors. Held/failed reads stayed
+distinct from genuine empty content. The fixture retained zero posts/media/comments,
+its original admin and a synthetic author; the original language mode was restored.
+
+The complete PostgreSQL-enabled uploader suite/typecheck and site suite/Astro
+check/build passed. Four-mode empty-build regression coverage removes internal
+snapshot handoffs from child environments rather than supplying malformed empty
+values. Bootstrap admission recognizes the exact approved `site_language` and
+`posts.omitted` catalog while continuing to reject altered or unknown schemas.
+
+Evidence lives in the worktree's ignored
+`.issue-runtime/evidence/final-c23c2da/` (acceptance/runtime/public reports and
+61 screenshots). This is not a populated-browser, screen-reader or deployment
+qualification. Parent review, exact-head CI and eventual stack integration remain
+separate gates; no owner content, production data or restore policy changed.
+
