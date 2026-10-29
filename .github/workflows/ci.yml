@@ -152,8 +152,8 @@ jobs:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       PACKAGE_ARCH: ${{ matrix.arch }}
       FIXTURE_PREFIX: swl_305_package_${{ matrix.arch }}_${{ github.run_id }}_${{ github.run_attempt }}
-      PRIVATE_ROOT: ${{ runner.temp }}/swl-305-package-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-      DOCKER_CONFIG: ${{ runner.temp }}/swl-305-docker-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+      PRIVATE_ROOT: ${{ github.workspace }}/.local/swl-305-package-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+      DOCKER_CONFIG: ${{ github.workspace }}/.local/swl-305-docker-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
       PACKAGE_IMAGE: swl-305-package:${{ github.event.pull_request.head.sha || github.sha }}-${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v4
@@ -172,6 +172,7 @@ jobs:
           test "$RUNNER_ARCH" = "$EXPECTED_RUNNER_ARCH"
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           umask 077
+          mkdir -p -m 700 "$GITHUB_WORKSPACE/.local"
           mkdir -m 700 "$PRIVATE_ROOT" "$DOCKER_CONFIG"
           python3 - <<'PY'
           import os, secrets
