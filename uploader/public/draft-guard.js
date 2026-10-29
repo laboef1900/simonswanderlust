@@ -108,7 +108,11 @@ window.DraftGuard = (function () {
       else own = previous;
     }
     function freshContext() {
-      if (!stashNow()) throw new Error('draft_recovery_unavailable');
+      if (!stashNow()) {
+        const error = new Error('draft_recovery_unavailable');
+        error.code = 'draft_recovery_unavailable';
+        throw error;
+      }
       context = crypto.randomUUID(); own = null; adopted = null;
       generation = 0; dirty = false; cancelTimer();
     }
