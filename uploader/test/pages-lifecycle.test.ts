@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { memoryLanguageStore } from '../src/language.js';
 import { memoryPostStore, type PostLocale, type PostPair } from '../src/posts.js';
-import { memoryPageStore, type PagePair } from '../src/pages.js';
+import { memoryPageStore, pagePaths, type PagePair } from '../src/pages.js';
 import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
 
 const content = (locale: 'de' | 'en', slug = `${locale}-contact`) => ({ locale, title: 'Contact', bodyMarkdown: 'Contact details.', images: {}, slug });
@@ -65,12 +65,33 @@ describe('closed page lifecycle', () => {
     expect(info.navigation).toEqual([{ slot: 'footer', index: 1, label: { en: 'Contact author' } }]);
     expect(info.revisions).toBe(2);
     expect(info.bodyReferences).toBe(1);
+    expect(info.paths).toEqual([]);
+    expect(info.published).toBe(false);
     await pages.remove('contact', draft.updatedAt!);
     expect(await pages.getRevision('contact', revision.id)).toBeNull();
     expect(await pages.listRevisions('contact')).toEqual([]);
     expect(navigation.config.footer).toEqual([{ kind: 'page', target: 'about' }]);
     await expect(pages.save(page(), draft.updatedAt!)).rejects.toMatchObject({ code: 'not_found' });
     expect((await posts.upsertDraft(story('de-contact'))).de.slug).toBe('de-contact');
+  });
+
+  it.each(['de', 'en'] as const)('counts assigned draft links in %s-primary namespaces without advertising public paths', async (primary) => {
+    const secondary = primary === 'de' ? 'en' : 'de';
+    const language = memoryLanguageStore({ primary, locales: [primary, secondary] });
+    const posts = memoryPostStore({ language });
+    const pages = memoryPageStore(language);
+    const draft = await pages.save(page());
+    const primaryPath = `/${primary}-contact/`;
+    const secondaryPath = `/${secondary}/${secondary}-contact/`;
+    const referring = story('reader');
+    referring[primary].bodyMarkdown = `[Contact](${primaryPath}) [Again](${primaryPath}) [Translation](${secondaryPath})`;
+    await posts.upsertDraft(referring);
+    await pages.save({ key: 'privacy', [primary]: { ...content(primary, `${primary}-privacy`), bodyMarkdown: `[Contact](${secondaryPath})` } });
+    expect(await pages.removalInfo('contact')).toMatchObject({ paths: [], published: false, bodyReferences: 2 });
+    expect(pagePaths(draft, await language.get())).toEqual([]);
+    const unset = await pages.save({ key: 'legal', [primary]: content(primary, '') });
+    expect(await pages.removalInfo('legal')).toMatchObject({ paths: [], bodyReferences: 0 });
+    expect(pagePaths(unset, await language.get())).toEqual([]);
   });
 
   it.each(['![x](https://foreign.test/a.jpg)', '```gallery\nhttps://foreign.test/a | 800x600 | alt="A"\n```'])('rejects foreign rendered images on publish and every live/revision save (%s)', async (bodyMarkdown) => {

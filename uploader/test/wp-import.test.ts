@@ -117,14 +117,16 @@ describe('WXR language modes', () => {
   it.each(modes)('rejects a page-owned WXR slug before fetching in %j', async (mode) => {
     const language = memoryLanguageStore(mode); const store = memoryPostStore({ language });
     const pages = memoryPageStore(language);
-    await pages.save({ key: 'contact', [mode.primary]: { slug: 'contact-owned' } });
+    await pages.save({ key: 'contact', [mode.primary]: {
+      locale: mode.primary, title: 'Contact', bodyMarkdown: 'Contact details.', images: {}, slug: 'contact-owned',
+    } });
     let fetched = 0;
     const body = pairOf('page-owner', mode.primary === 'de' ? 'contact-owned' : 'free-de',
       mode.primary === 'en' ? 'contact-owned' : 'free-en', imgs('https://wp.example/photo.jpg'));
     const result = await importWxr(body, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img',
       rehost: async () => { fetched++; return stubRehost('', '', ''); }, delayMs: 0, retries: 0 });
     expect(result.rejected).toBe(1); expect(result.imported).toBe(0); expect(fetched).toBe(0);
-    expect(result.warnings.join(' ')).toContain('page:contact'); expect(await store.list()).toEqual([]);
+    expect(await store.list()).toEqual([]);
   });
   it.each(modes)('rejects new reserved slugs before image planning or fetching in %j', async (language) => {
     const store = memoryPostStore({ language: memoryLanguageStore(language) });

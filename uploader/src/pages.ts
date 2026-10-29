@@ -68,10 +68,13 @@ export interface PageStore {
   /** Called within LanguageStore.update's language-first transaction, never opens a second transaction. */
   prepareActivation(candidate: LanguageConfig, client?: DbClient, validate?: PageSaveOptions['validate']): Promise<void | (() => void)>;
 }
-export function pagePaths(pair: StoredPagePair, mode: LanguageConfig): string[] {
-  if (pair.status !== 'published' || !isPageKind(pair.key)) return [];
+function assignedPagePaths(pair: StoredPagePair, mode: LanguageConfig): string[] {
+  if (!isPageKind(pair.key)) return [];
   return mode.locales.flatMap((locale) => pair.key === 'about' ? [publicPath(mode, locale, 'about')]
     : pair[locale].slug ? [publicPath(mode, locale, 'story', pair[locale].slug)] : []);
+}
+export function pagePaths(pair: StoredPagePair, mode: LanguageConfig): string[] {
+  return pair.status === 'published' ? assignedPagePaths(pair, mode) : [];
 }
 function mergePageUpdate(update: PageUpdate, existing: StoredPagePair, mode: LanguageConfig, options: PageSaveOptions): StoredPagePair {
   const preparing = options.prepareLocale;
@@ -114,8 +117,10 @@ function stamp(pair: StoredPagePair, mode: LanguageConfig): void {
 }
 function removal(pair: StoredPagePair, mode: LanguageConfig, config: Navigation, revisions: number, bodies: readonly string[]): PageRemoval {
   const paths = pagePaths(pair, mode);
+  // Unpublishing retains slug claims and inbound body links, but removes live paths.
+  const referencedPaths = pair.status === 'published' ? paths : assignedPagePaths(pair, mode);
   return { key: pair.key, titles: { de: pair.de.title, en: pair.en.title }, paths, revisions,
-    navigation: pageNavReferences(config, pair.key), bodyReferences: bodies.filter((body) => paths.some((path) => body.includes(path))).length,
+    navigation: pageNavReferences(config, pair.key), bodyReferences: bodies.filter((body) => referencedPaths.some((path) => body.includes(path))).length,
     updatedAt: pair.updatedAt, published: pair.status === 'published' };
 }
 function fixed(key: string): void { if (key === 'about') throw new PageError('About cannot be deleted or unpublished.', 'page_fixed'); }

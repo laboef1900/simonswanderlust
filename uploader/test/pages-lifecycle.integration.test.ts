@@ -9,7 +9,7 @@ import { ensureSchema, type DbPool } from '../src/db.js';
 import { pgPageStore, type PagePair } from '../src/pages.js';
 import { pgLanguageStore } from '../src/language.js';
 import { pgPostStore, type PostLocale, type PostPair } from '../src/posts.js';
-import { dumpDatabase, readDump, restoreDatabase, PAGES_NAV_DUMP_VERSION } from '../src/backup.js';
+import { dumpDatabase, readDump, restoreDatabase, PAGES_NAV_DUMP_VERSION, IDENTITY_DUMP_VERSION, LANGUAGE_DUMP_VERSION, type Dump } from '../src/backup.js';
 import { seedSiteIdentity } from '../src/site-identity.js';
 import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
 import { reportNamespaceCollisions } from '../src/namespace-report.js';
@@ -118,6 +118,22 @@ function story(slug = 'story'): PostPair {
     expect((await posts.get((await posts.list())[0]!.translationKey))!.de.bodyMarkdown).toContain('/de-contact/');
   });
 
+  it.each(['de', 'en'] as const)('retains deletion link warnings after unpublishing a %s-primary page', async (primary) => {
+    const secondary = primary === 'de' ? 'en' : 'de';
+    const language = pgLanguageStore(pool);
+    await language.update({ primary, locales: [primary, secondary] });
+    const pages = pgPageStore(pool); await pages.save(page());
+    const published = await pages.publish('contact');
+    const draft = await pages.unpublish('contact', published.updatedAt!);
+    const posts = pgPostStore(pool); const input = story();
+    input[primary].bodyMarkdown = `[Contact](/${primary}-contact/) [Again](/${primary}-contact/)`;
+    input[secondary].bodyMarkdown = `[Contact](/${secondary}/${secondary}-contact/)`;
+    await posts.upsertDraft(input);
+    const info = await pages.removalInfo('contact');
+    expect(info).toMatchObject({ paths: [], published: false, bodyReferences: 2 });
+    expect(await pages.remove('contact', draft.updatedAt!)).toEqual(info);
+  });
+
   it.each(['save', 'publish', 'unpublish', 'remove'] as const)('serializes activation against page %s without a partially stamped locale', async (action) => {
     const language = pgLanguageStore(pool); await language.update({ primary: 'de', locales: ['de'] });
     const pages = pgPageStore(pool); const draft = await pages.save(page());
@@ -168,14 +184,46 @@ function story(slug = 'story'): PostPair {
     await expect(restoreDatabase(pool, path)).rejects.toThrow(/page\/navigation metadata/);
   });
 
+  it.each([1, 10])('refuses a modern identity dump relabelled v%i without replacing pages or navigation', async (version) => {
+    const pages = pgPageStore(pool); const saved = await pages.save(page());
+    const file = join(dir, await dumpDatabase(pool, dir)); const dump = readDump(file);
+    dump.version = version;
+    // Reach the identity boundary rather than the earlier private-route version guard.
+    if (version < 10) { delete dump.tables.post_routes; delete dump.routeArchive; }
+    const mislabeled = join(dir, `mislabeled-${version}.json.gz`);
+    await writeFile(mislabeled, gzipSync(JSON.stringify(dump)));
+    const nav = (await pool.query('SELECT * FROM site_nav')).rows;
+    await expect(restoreDatabase(pool, mislabeled)).rejects.toThrow('Invalid identity field in backup: version.');
+    expect(await pages.get('contact')).toEqual(saved);
+    expect((await pool.query('SELECT * FROM site_nav')).rows).toEqual(nav);
+  });
+
   it.each([1, 10, 11, 12])('restores pre-navigation v%i with explicit version semantics and sweeps orphan revisions', async (version) => {
     const pages = pgPageStore(pool); await pages.save(page()); await pages.save(page());
-    const file = join(dir, await dumpDatabase(pool, dir)); const dump = readDump(file); dump.version = version;
-    delete dump.tables.site_nav;
-    if (version < 10) { delete dump.tables.post_routes; delete dump.routeArchive; }
-    if (version === 1) delete dump.tables.pages;
-    else dump.tables.pages = dump.tables.pages!.filter((row) => row.key === 'about').map(({ key, locale, title, body_markdown, images }) => ({ key, locale, title, body_markdown, images }));
-    const legacy = join(dir, `legacy-${version}.json.gz`); await writeFile(legacy, gzipSync(JSON.stringify(dump)));
+    const file = join(dir, await dumpDatabase(pool, dir)); const dump = readDump(file);
+    // Build the historical table set, not a modern payload with a lower version label.
+    // There are no story rows in this fixture that would need older column projections.
+    expect(dump.tables.posts).toEqual([]);
+    const legacyDump: Dump = {
+      version, createdAt: dump.createdAt,
+      ...(version >= 10 ? { routeArchive: dump.routeArchive } : {}),
+      tables: {
+        users: dump.tables.users, posts: dump.tables.posts,
+        ...(version >= 2 ? {
+          pages: dump.tables.pages!.filter((row) => row.key === 'about')
+            .map(({ key, locale, title, body_markdown, images }) => ({ key, locale, title, body_markdown, images })),
+        } : {}),
+        ...(version >= 3 ? { media: dump.tables.media, media_folders: dump.tables.media_folders } : {}),
+        ...(version >= 6 ? { app_secrets: dump.tables.app_secrets } : {}),
+        ...(version >= 8 ? { comments: dump.tables.comments } : {}),
+        ...(version >= 10 ? { post_routes: dump.tables.post_routes } : {}),
+        ...(version >= IDENTITY_DUMP_VERSION ? {
+          site_identity: dump.tables.site_identity, site_identity_assets: dump.tables.site_identity_assets,
+        } : {}),
+        ...(version >= LANGUAGE_DUMP_VERSION ? { site_language: dump.tables.site_language } : {}),
+      },
+    };
+    const legacy = join(dir, `legacy-${version}.json.gz`); await writeFile(legacy, gzipSync(JSON.stringify(legacyDump)));
     const nav = (await pool.query('SELECT * FROM site_nav')).rows;
     await restoreDatabase(pool, legacy);
     expect((await pool.query('SELECT * FROM site_nav')).rows).toEqual(nav);
