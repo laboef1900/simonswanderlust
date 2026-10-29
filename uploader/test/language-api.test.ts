@@ -1,3 +1,4 @@
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { injectAuthoring } from './authoring-request.js';
 import { idleBuildState } from './build-fixture.js';
 import { buildFailureMessage } from '../src/build-state.js';
@@ -48,6 +49,7 @@ async function fixture(initial: LanguageConfig = modes[0]!, pool?: DbPool) {
   const build = vi.fn(async () => lock.runExclusive(async () => ({ ...outcome })));
   const unavailable = async (): Promise<never> => { throw new Error('Not part of this fixture'); };
   const app = buildServer({
+    trustProxy: TEST_TRUST,
     storageDir: dir, baseUrl: 'https://images.test', imgHost: 'images.test', siteDir: join(dir, 'site'),
     posts, pages, media, users, sessions, secrets: memorySecretsStore(),
     // Deliberately omit cfg.language: the server must use posts.language.
@@ -364,6 +366,34 @@ describe('editable page API lifecycle', () => {
     de: { title: 'Kontakt', bodyMarkdown: 'Schreib mir.', images: {}, slug: 'kontakt' },
     en: { title: 'Contact', bodyMarkdown: 'Write to me.', images: {}, slug: 'contact' },
   });
+  it.each(['about', 'contact', 'privacy', 'legal'])('requires and privately reconciles the captured owner/save identity for %s', async key => {
+    const f = await fixture();
+    const before = await f.pages.get(key);
+    const beforeHistory = await f.pages.listRevisions(key);
+    const ownerUserId = (await f.app.inject({ method: 'GET', url: '/auth/me', cookies: f.cookies })).json().userId;
+    const body = Object.fromEntries((['de', 'en'] as const).map(locale => [locale, {
+      title: locale + ' title', bodyMarkdown: 'Complete page', images: {}, slug: key === 'about' ? '' : 'receipt-' + key + '-' + locale,
+    }]));
+    const missing = await f.app.inject({ method: 'PUT', url: '/pages/' + key, cookies: f.cookies, payload: body });
+    expect(missing.statusCode).toBe(400);
+    const wrong = await f.app.inject({ method: 'PUT', url: '/pages/' + key, cookies: f.cookies,
+      payload: { ...body, saveId: randomUUID(), expectedOwnerId: randomUUID() } });
+    expect(wrong.statusCode).toBe(403); expect(wrong.json().code).toBe('owner_changed');
+    expect(await f.pages.get(key)).toEqual(before);
+    expect(await f.pages.listRevisions(key)).toEqual(beforeHistory);
+    expect(f.build).not.toHaveBeenCalled();
+    const saveId = randomUUID();
+    const saved = await f.app.inject({ method: 'PUT', url: '/pages/' + key, cookies: f.cookies,
+      payload: { ...body, updatedAt: before.updatedAt, saveId, expectedOwnerId: ownerUserId } });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({ ownerUserId, saveId });
+    const read = await f.app.inject({ method: 'GET', url: '/pages/' + key, cookies: f.cookies });
+    expect(read.headers['cache-control']).toBe('no-store');
+    expect(read.json()).toEqual({ ...saved.json().saved, ownerUserId, lastSaveId: saveId });
+    const other = await f.app.inject({ method: 'GET', url: '/pages/' + key, cookies: await f.login(false) });
+    expect(other.json().lastSaveId).toBeNull();
+    expect(other.json().ownerUserId).not.toBe(ownerUserId);
+  });
   it('returns owner-naming 409s for page/story and static claims in either creation order', async () => {
     const f = await fixture(); const storedStory = await f.story();
     const reserved = await injectAuthoring(f.app, { method: 'PUT', url: '/pages/contact', cookies: f.cookies,
@@ -466,11 +496,13 @@ describe('editable page API lifecycle', () => {
     const prepared = await injectAuthoring(f.app, { method: 'PUT', url: '/pages/contact', cookies: f.cookies,
       payload: { prepareLocale: secondary, updatedAt: current.updatedAt?.toISOString(), [secondary]: payload()[secondary] } });
     expect(prepared.statusCode).toBe(200); expect(prepared.json().saved[secondary].publishedAt).toBeNull();
+    expect((await f.pages.getForSave('contact', prepared.json().ownerUserId)).lastSaveId).toBe(prepared.json().saveId);
     expect(await f.language.get()).toEqual(before);
     f.failBuild();
     const activation = await f.put({ primary, locales: [primary, secondary] });
     expect(activation.statusCode).toBe(200); expect(activation.json().build.ok).toBe(false);
     expect((await f.pages.get('contact'))[secondary].publishedAt).toBeInstanceOf(Date);
+    expect((await f.pages.getForSave('contact', prepared.json().ownerUserId)).lastSaveId).toBeNull();
     f.recoverBuild();
     expect((await injectAuthoring(f.app, { method: 'POST', url: '/rebuild', cookies: f.cookies })).json().ok).toBe(true);
   });

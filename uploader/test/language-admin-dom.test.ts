@@ -191,7 +191,7 @@ async function about(primary: Locale, prepareLocale?: Locale, route?: (url: stri
       if (result.ok && url === '/pages/about') {
         const body = await result.json() as Record<string, unknown>;
         const sent = init.body ? JSON.parse(String(init.body)) : null;
-        return response({ ownerUserId: owner, lastSaveId: null, key: 'about', ...body,
+        return response({ ...page, ownerUserId: owner, lastSaveId: null, ...body,
           ...(sent ? { saveId: sent.saveId, saved: { ...page, ...sent, ...(body.saved as object) } } : {}) }, result.status);
       }
       return result;

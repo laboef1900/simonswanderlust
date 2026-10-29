@@ -249,10 +249,9 @@
         if (!await AdminConfirm.ask({ title: PagesUI.text(name), body: PagesUI.text(name + 'Scope', { paths: PagesUI.paths(storedPage, language).join(' · ') }),
           confirmLabel: PagesUI.text(name), danger: action === 'unpublish' })) return;
         const button = $(action + 'Btn'); button.disabled = true; showErr('');
-        const snapshot = guard.snapshot();
         try {
           const result = await PagesUI.request('/' + KEY + '/' + action, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ updatedAt: loadedUpdatedAt }) });
-          acceptSaved(result.saved); guard.markClean(snapshot);
+          acceptSaved(result.saved);
           BuildReporting.renderOutcome($('actionStatus'), action, result, { title: PagesUI.kind(KEY) });
         } catch (error) { showErr(error.message); }
         finally { button.disabled = false; }

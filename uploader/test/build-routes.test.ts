@@ -1,3 +1,4 @@
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { injectAuthoring } from './authoring-request.js';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -53,6 +54,7 @@ async function fixture(options: { posts?: PostStore; pages?: PageStore; builder?
   await builder.initialize();
   const unavailable = async (): Promise<never> => { throw new Error('Not used by this test'); };
   const app = buildServer({
+    trustProxy: TEST_TRUST,
     storageDir: join(root, 'images'), siteDir: join(root, 'site'), backupDir: join(root, 'mdx'),
     baseUrl: origin, imgHost: 'images.test', posts, pages, media, users, sessions,
     isWritable: options.isWritable,

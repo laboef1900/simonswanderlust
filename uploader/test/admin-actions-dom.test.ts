@@ -1,3 +1,4 @@
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -1756,6 +1757,7 @@ describe('settings.html against the real settings and provider routes', () => {
     const queue = createEncodeQueue({ store: media, storageDir: dir, lock: createWorkLock() });
     const unavailable = async (): Promise<never> => { throw new Error('Not part of this settings test'); };
     const app = buildServer({
+      trustProxy: TEST_TRUST,
       storageDir: dir, baseUrl: 'https://images.example', imgHost: 'images.example', siteDir: join(dir, 'site'),
       users, sessions, secrets, settings, media, encodeQueue: queue,
       posts: memoryPostStore(), pages: memoryPageStore(),

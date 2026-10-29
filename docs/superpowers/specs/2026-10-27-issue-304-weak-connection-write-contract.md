@@ -1012,6 +1012,10 @@ unpublish, deletion and language activation invalidate receipts. Draft saves do 
 committed actions use #297 HTTP 200/projected build outcomes, while real 5xx remain Unknown.
 The merged generic-page lifecycle/DOM tests, `write-receipts.test.ts` and strict bootstrap
 tests cover those integration boundaries; no worker execution is claimed.
+The actual #369 dependency/proxy branch (including the #347 sharp security floor) is
+also integrated. Every server construction chooses its immediate-peer trust policy;
+native filesystem ownership is not a substitute for proxy/topology qualification.
+The owned addon build and production packaging remain in place alongside those locks.
 #306 retains ownership of conditional media PATCH/offline/full conflict-dialog work; it is
 not a deferral of the preserve-and-compare behavior implemented here.
 
@@ -1023,11 +1027,13 @@ Keep the parent's already-qualified `pg_dump` wrapper on `PATH`. With the approp
 
 ```sh
 # Working directory: uploader/
+npm ci
 npm run build:native
 npm run typecheck
 npm test
 
 # Working directory: site/
+npm ci
 npm test
 npx astro check
 npm run build
@@ -1041,8 +1047,9 @@ and canonical qualification artifacts when evaluating the cutover.
 
 The combined parent wave must additionally exercise:
 
-1. Lost post-create, post-update and About responses; older late commits after a missing
-   read; malformed/failed reconciliation; normal acknowledgements arriving after newer text;
+1. Lost post-create, post-update and every registered page-key response (About, Contact,
+   Privacy, Legal); older late commits after a missing read; malformed/failed reconciliation;
+   normal acknowledgements arriving after newer text;
    another writer's save; explicit compare/Use stored and recovery-storage failure.
 2. A→B in a second tab before sending and while a response is in flight; exact owner/receipt
    envelopes, preserved A-scoped copies and late A acknowledgement evidence; logout/expiry,
