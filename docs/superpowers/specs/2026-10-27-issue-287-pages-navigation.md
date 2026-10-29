@@ -1020,3 +1020,17 @@ non-About rendering/navigation. Those downstream public build/browser checks,
 independent actual-PR review, exact-head CI and stack integration remain distinct
 gates. Successful CMS publication alone does not establish the new public routes.
 
+
+Independent PR review subsequently found two additional UI defects: lifecycle
+responses could clear edits typed during rebuilding, and catalogue Delete
+cancellation lost focus. Both regressions failed before the repair and pass with
+the real DraftGuard/native confirmation implementations. Complete suites/type
+checks/Astro build passed at `c18f516` (wave `1793287726371_82151`).
+The actual-main/browser supplement `issue-288-runtime-c18f516-supplement.json`
+held genuine Publish and Unpublish acknowledgements after real builds: unsent
+titles, recovery stashes and native unload warnings survived both responses,
+while persisted titles stayed unchanged. Catalogue Escape and Cancel restored
+enabled-opener focus at 1440px and 320px without page/history mutations.
+Independent re-review found no remaining findings; both required CI jobs passed
+on `c18f516`. Final documentation CI and eventual stack qualification remain
+separate from this exact-source evidence.
