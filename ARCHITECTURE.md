@@ -785,9 +785,12 @@ separate owner action, not part of the dependency PR.
 
 Origin roles remain distinct: `PUBLIC_BASE_URL` supplies image URLs and the body/gallery
 allow-list; `IMG_HOST` controls actual image-host routing; the request scheme/forwarded
-`Host` describes the serving/admin origin. The stored canonical blog origin is reserved
-in #274. #276 will connect it to SEO, comments and outbound identification, with the
-topology validation in the approved spec. This table does not introduce an operator env knob.
+`Host` describes the serving/admin origin. The stored canonical blog origin drives SEO,
+feeds/sitemaps, comment-Origin equality and outbound identification, with the approved
+image-topology validation. Static output uses the exported build snapshot; comment checks
+use the current cached identity immediately after a successful save. Unconfigured static
+output is noindex/disallowed by robots and omits canonical metadata. Editing identity does
+not rebuild, rename paths or change image configuration. This introduces no operator env knob.
 
 ## Trust boundaries
 

@@ -200,10 +200,12 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
   (7) insert as **`pending`** → 201 `{ ok: true }` — the new id is not echoed, so a caller cannot
   probe moderation. JSON body capped at 4 KiB; unknown fields (`email`, `parentId`, `status`)
   are ignored, never stored.
-- **Blog-origin source (#319):** resolve one origin per request. A supplied
+- **Blog-origin source (#319/#276):** resolve one origin per request. A supplied
   `ServerConfig.commentsOrigin` override wins and invalid values fail closed. Otherwise the
-  temporary fallback is trusted `req.protocol` plus the **verbatim Host header**. It never
-  derives the expected origin from Origin, Referer or `X-Forwarded-Host`. The #369 immediate-peer
+  current cached canonical identity is validated against the image topology and used when
+  configured; invalid configured identity refuses the request rather than falling back.
+  Only an unconfigured identity uses trusted `req.protocol` plus the **verbatim Host header**.
+  Neither path derives the expected origin from Origin, Referer or `X-Forwarded-Host`. The #369 immediate-peer
   policy governs forwarded protocol and client IP; the proxy must preserve Host, overwrite
   forwarded protocol and reject unintended public hostnames. Missing/malformed authority
   fails closed. Both `PUBLIC_BASE_URL`'s image authority and actual `IMG_HOST` are excluded,
@@ -215,9 +217,10 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
   with matching image origin and serving authority.
   This is CSRF equality, not authorization or a deployment-domain allow-list: until configured,
   a non-image authority deliberately forwarded by the trusted proxy can accept its own
-  same-origin submissions. #276 will insert the current validated canonical identity between
-  the explicit override and fallback; #319 neither implements that API nor seeds identity from
-  a request. No CORS, session, persistence or ASVS-exception expansion is involved.
+  same-origin submissions. A successful identity save changes canonical comment-Origin
+  equality immediately, independently of the next static rebuild; the obsolete origin is
+  refused. Requests never seed identity. No CORS, session, persistence or ASVS-exception
+  expansion is involved.
 - **Hold-for-moderation.** Every accepted comment is `pending`; nothing is public until an admin
   approves it on `/admin/comments.html` (`requireAdmin`, see below). Deletion is erasure.
 - **Rate limit:** 5 `POST`s per address per 15 minutes plus a process-wide 200 per hour, keyed on
@@ -263,11 +266,14 @@ Identity lives in Postgres with content; operational settings remain in `setting
   pixel decode, and refuses embedded EXIF/XMP/IPTC/ICC. The CLI and direct restore perform
   decoding before mutation. Recovered bytes are never repaired or silently skipped.
 
-**Not implemented by #274:** logo/favicon upload routes and rendering (#275); canonical-origin
-editing, topology checks, comment-Origin switching, noindex/robots and outbound headers (#276).
-Canonical values currently receive serialized-origin shape validation only. The comment Origin
-source documented above is unchanged by #274; #319/#276 own replacing its image-origin fallback.
-Do not infer these future controls from the reserved columns/snapshot fields. Gallery image
+**Canonical origin (#276):** admin editing requires explicit domain-change confirmation.
+Strict shared origin validation, IDN serialization and image-topology separation apply at
+save/build/restore boundaries. Static canonical, alternate, social, structured-data, feed
+and sitemap URLs use the captured identity; an unset origin omits canonical output and
+emits noindex/disallow robots behavior. Runtime comment checks use the current cached
+identity, while outbound identification uses its configured origin without changing the
+remote-fetch guards. Neither a domain edit nor a rebuild renames story paths or image URLs.
+Logo/favicon upload and rendering remain #275's separate implementation. Gallery image
 allow-listing, existing upload limits and EXIF policy are unchanged.
 
 ### Media metadata redaction
