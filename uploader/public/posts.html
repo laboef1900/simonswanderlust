@@ -563,6 +563,20 @@
 
       function renderRows(posts) {
         const tbody = $('postsList');
+        const active = document.activeElement;
+        const focusedPost = tbody.contains(active) ? active.dataset.postKey : undefined;
+        const focusedControl = tbody.contains(active) ? active.dataset.postControl : undefined;
+        let expandedPost, nextFocus, matchingTitle;
+        for (const menu of tbody.querySelectorAll('.post-more')) {
+          if (menu.open) expandedPost = menu.dataset.postKey;
+          // A queued toggle on a discarded menu must not close its replacement.
+          menu.open = false;
+        }
+        function identify(control, key, role) {
+          control.dataset.postKey = key;
+          control.dataset.postControl = role;
+          if (key === focusedPost && role === focusedControl && !control.disabled) nextFocus = control;
+        }
         tbody.innerHTML = '';
         openMoreActions = null;
         if (!posts.length) {
@@ -577,6 +591,7 @@
             ? 'No posts match these filters.'
             : 'No posts yet.';
           td.appendChild(message);
+          let emptyAction;
           if (allPosts.length) {
             const clear = document.createElement('button');
             clear.id = 'clearEmptyFilters';
@@ -584,16 +599,21 @@
             clear.className = 'btn-link';
             clear.textContent = 'Clear filters';
             clear.addEventListener('click', resetFilters);
+            identify(clear, '', 'clear');
+            emptyAction = clear;
             td.appendChild(clear);
           } else {
             const create = document.createElement('a');
             create.href = editorHref();
             create.className = 'action-link';
             create.textContent = 'Create a new post';
+            identify(create, '', 'new');
+            emptyAction = create;
             td.appendChild(create);
           }
           tr.appendChild(td);
           tbody.appendChild(tr);
+          if (focusedControl) emptyAction.focus({ preventScroll: true });
           return;
         }
         for (const p of posts) {
@@ -613,6 +633,7 @@
             cb.checked = selected.has(p.translationKey);
             cb.disabled = controlsUnavailable;
             cb.setAttribute('aria-label', 'Select ' + (p.title || 'untitled post'));
+            identify(cb, p.translationKey, 'select');
             cb.addEventListener('change', () => {
               if (cb.checked) selected.add(p.translationKey); else selected.delete(p.translationKey);
               syncSelectAll();
@@ -634,6 +655,8 @@
           titleLink.className = 'post-title-link';
           titleLink.setAttribute('aria-label', 'Edit ' + (p.title || 'untitled post'));
           titleLink.textContent = p.title || '(untitled)';
+          identify(titleLink, p.translationKey, 'title');
+          if (p.translationKey === focusedPost) matchingTitle = titleLink;
           tdTitle.appendChild(titleLink);
           const meta = tripMeta(p);
           if (meta) tdTitle.appendChild(meta);
@@ -680,6 +703,7 @@
           editLink.textContent = 'Edit';
           editLink.className = 'action-link';
           editLink.setAttribute('aria-label', 'Edit ' + (p.title || 'untitled post'));
+          identify(editLink, p.translationKey, 'edit');
           actions.appendChild(editLink);
 
           // Unpublish and Delete are admin-only, so an author's row offers Edit
@@ -687,9 +711,11 @@
           if (me && me.isAdmin) {
             const more = document.createElement('details');
             more.className = 'post-more';
+            more.dataset.postKey = p.translationKey;
             const summary = document.createElement('summary');
             summary.textContent = 'More actions';
             summary.setAttribute('aria-label', 'More actions for ' + (p.title || 'untitled post'));
+            identify(summary, p.translationKey, 'more');
             more.appendChild(summary);
             const moreActions = document.createElement('div');
             moreActions.className = 'post-more-actions';
@@ -699,6 +725,7 @@
               unpubBtn.textContent = 'Unpublish';
               unpubBtn.className = 'btn-secondary';
               unpubBtn.disabled = controlsUnavailable;
+              identify(unpubBtn, p.translationKey, 'unpublish');
               unpubBtn.addEventListener('click', () => unpublishPost(p, unpubBtn));
               moreActions.appendChild(unpubBtn);
             }
@@ -707,10 +734,15 @@
             delBtn.textContent = 'Delete';
             delBtn.className = 'btn-remove';
             delBtn.disabled = controlsUnavailable;
+            identify(delBtn, p.translationKey, 'delete');
             delBtn.addEventListener('click', () => deletePost(p, delBtn));
             moreActions.appendChild(delBtn);
             more.appendChild(moreActions);
             wirePostDisclosure(more, summary);
+            if (expandedPost === p.translationKey) {
+              more.open = true;
+              openMoreActions = more;
+            }
             actions.appendChild(more);
           }
           tdActions.appendChild(actions);
@@ -718,6 +750,7 @@
 
           tbody.appendChild(tr);
         }
+        if (focusedControl) (nextFocus || matchingTitle || $('fSearch')).focus({ preventScroll: true });
       }
 
       function syncSelectAll() {
