@@ -3,6 +3,7 @@ import { JourneyError, validateJourneyDraft, type JourneyStore, type StoredJourn
 import type { PostStore } from './posts.js';
 import type { LanguageStore } from './language.js';
 import type { SiteBuilder } from './build.js';
+import { projectBuildReport, type BuildTrigger } from './build-state.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const conflicts: Record<string, true> = { conflict: true, duplicate_slug: true, slug_locked: true, slug_change_unconfirmed: true, story_in_other_journey: true, locale_published: true, journey_hero_not_ready: true };
@@ -55,14 +56,12 @@ export function registerJourneyAdmin(app: FastifyInstance, opts: Options): void 
     return { ...await summary(journey), de: journey.de, en: journey.en, members: journey.members,
       memberStories: journey.members.map(key => ({ translationKey: key, title: stories.get(key)?.title ?? key, status: stories.get(key)?.status ?? 'draft' })) };
   }
-  async function rebuilt(reply: FastifyReply, journey: StoredJourney, deleted = false) {
+  async function rebuilt(reply: FastifyReply, journey: StoredJourney, trigger: BuildTrigger) {
     // Store promise has committed and released its locks before the builder takes its work lock.
+    const deleted = trigger === 'delete';
     const saved = deleted ? { id: journey.id, updatedAt: journey.updatedAt } : working(journey);
-    let build;
-    try { const result = await opts.builder.build(); build = result.ok ? { ok: true, release: result.release } : { ok: false }; }
-    catch { build = { ok: false }; }
-    return reply.code(build.ok ? 200 : 502).send({ persisted: true, ...(deleted ? { deleted: true } : {}), saved, build,
-      ...(!build.ok ? { code: 'journey_build_failed', error: 'journey_build_failed' } : {}) });
+    const build = projectBuildReport(await opts.builder.build(trigger));
+    return reply.send({ ...(deleted ? { deleted: true } : {}), saved, build });
   }
   app.get<{ Querystring: { member?: string } }>('/journey-admin', read, async (request, reply) => {
     reply.header('cache-control', 'no-store');
@@ -93,12 +92,12 @@ export function registerJourneyAdmin(app: FastifyInstance, opts: Options): void 
   });
   app.post<{ Params: { id: string } }>('/journey-admin/:id/publish', admin, async (request, reply) => {
     if (!await find(request.params.id, reply)) return;
-    try { const body = object(request.body, ['baseUpdatedAt']); return await rebuilt(reply, await store.publish(request.params.id, token(body.baseUpdatedAt))); }
+    try { const body = object(request.body, ['baseUpdatedAt']); return await rebuilt(reply, await store.publish(request.params.id, token(body.baseUpdatedAt)), 'publish'); }
     catch (error) { return failure(error, reply); }
   });
   app.post<{ Params: { id: string } }>('/journey-admin/:id/unpublish', admin, async (request, reply) => {
     if (!await find(request.params.id, reply)) return;
-    try { if (request.body !== undefined) object(request.body, []); return await rebuilt(reply, await store.unpublish(request.params.id)); }
+    try { if (request.body !== undefined) object(request.body, []); return await rebuilt(reply, await store.unpublish(request.params.id), 'unpublish'); }
     catch (error) { return failure(error, reply); }
   });
   app.delete<{ Params: { id: string } }>('/journey-admin/:id', admin, async (request, reply) => {
@@ -106,7 +105,7 @@ export function registerJourneyAdmin(app: FastifyInstance, opts: Options): void 
     try {
       if (request.body !== undefined) object(request.body, []);
       const removed = await store.remove(request.params.id);
-      return removed.status === 'published' ? rebuilt(reply, removed, true) : reply.send({ persisted: true, deleted: true, saved: { id: removed.id, updatedAt: removed.updatedAt } });
+      return removed.status === 'published' ? rebuilt(reply, removed, 'delete') : reply.send({ deleted: true, saved: { id: removed.id, updatedAt: removed.updatedAt } });
     } catch (error) { return failure(error, reply); }
   });
 }

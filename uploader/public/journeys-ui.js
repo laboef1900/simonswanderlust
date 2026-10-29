@@ -4,19 +4,24 @@ window.JourneysUI = (function () {
   function el(tag, content, className) { const node = document.createElement(tag); if (content !== undefined) node.textContent = content; if (className) node.className = className; return node; }
   function localize(root) { root.querySelectorAll('[data-journey-copy]').forEach(node => { node.textContent = text(node.dataset.journeyCopy); }); }
   function error(body) {
-    if (body.code === 'journey_build_failed') return text('BuildFailed');
     if (body.code === 'conflict') return text('Conflict');
     if (body.code === 'story_in_other_journey') return text('Owner', { title: body.owner?.title || body.owner?.id || '' });
     return text('Invalid') + (body.locale ? ' (' + body.locale.toUpperCase() + ')' : '') + (body.code ? ' [' + body.code + ']' : '');
   }
   async function request(path, options = {}, guard) {
-    const response = await fetch('/journey-admin' + path, { cache: 'no-store', ...options, headers: { ...(options.body === undefined ? {} : { 'content-type': 'application/json' }), ...options.headers } });
+    const mutating = !!options.method && options.method !== 'GET' && options.method !== 'HEAD';
+    let response, body;
+    try {
+      response = await fetch('/journey-admin' + path, { cache: 'no-store', ...options, headers: { ...(options.body === undefined ? {} : { 'content-type': 'application/json' }), ...options.headers } });
+      if (response.status !== 401) body = await response.json();
+    } catch {
+      const failure = new Error(text('Failed')); failure.outcomeUnknown = mutating; throw failure;
+    }
     if (response.status === 401) {
       if (guard) guard.redirectToLogin(); else location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
       throw new Error(text('Failed'));
     }
-    const body = await response.json();
-    if (!response.ok) { const failure = new Error(error(body)); failure.body = body; throw failure; }
+    if (!response.ok) { const failure = new Error(error(body)); failure.body = body; failure.outcomeUnknown = mutating && response.status >= 500; throw failure; }
     return body;
   }
   function path(language, locale, slug) { return (locale === language.primary ? '' : '/' + locale) + '/' + (locale === 'de' ? 'rundreisen' : 'journeys') + '/' + slug + '/'; }

@@ -6,7 +6,7 @@
   let saved = null, language, session, stories = [], draft, busy = false;
   const automatic = { de: false, en: false };
   const controls = {};
-  const guard = DraftGuard.createDraftGuard({ storageKey: id ? 'swl:journey:' + id : DraftGuard.tabScopedKey('swl:journey:new'), orphanPrefix: id ? '' : 'swl:journey:new:',
+  const guard = DraftGuard.createDraftGuard({ resource: id ? 'journey:' + id : 'journey:new',
     collect: () => ({ ...collect(), baseUpdatedAt: saved?.updatedAt }), onChange: () => { if (guard.isDirty()) $('journeyStatus').textContent = text('Dirty'); } });
   function collect() {
     const value = structuredClone(draft);
@@ -21,7 +21,7 @@
     }
     return value;
   }
-  function showError(error) { $('journeyError').hidden = false; $('journeyError').textContent = error.message || text('Failed'); $('journeyError').focus(); }
+  function showError(error) { $('journeyError').hidden = false; $('journeyError').textContent = error.outcomeUnknown ? BuildReporting.text('unknown') : error.message || text('Failed'); $('journeyError').focus(); }
   function dirty() { guard.markDirty(); }
   function field(parent, locale, name, copy, kind = 'input') {
     const label = el('label', text(copy)); const input = el(kind); input.id = 'journey-' + locale + '-' + name; label.htmlFor = input.id; parent.append(label, input); return input;
@@ -98,6 +98,8 @@
     for (const locale of language.locales) { controls[locale].slug.readOnly = !!saved?.[locale].publishedAt; controls[locale].omitted.disabled = locale === language.primary || !!saved?.[locale].publishedAt; }
   }
   async function save() {
+    const base = id && typeof saved?.updatedAt === 'string' ? new Date(saved.updatedAt) : null;
+    if (id && (!base || !Number.isFinite(base.getTime()) || base.toISOString() !== saved.updatedAt)) throw new Error(text('RecoveryBaseMissing'));
     let confirmSlugChange = false; const payload = collect();
     const changed = language.locales.filter(locale => saved?.[locale].slug && saved[locale].slug !== payload[locale].slug);
     if (changed.length) {
@@ -106,7 +108,7 @@
     }
     const generation = guard.snapshot();
     const result = await request(id ? '/' + id : '', { method: id ? 'PUT' : 'POST', body: JSON.stringify({ ...payload, ...(id ? { baseUpdatedAt: saved.updatedAt, confirmSlugChange } : {}) }) }, guard);
-    saved = result; draft = payload; id = result.id; history.replaceState(null, '', '/admin/journey-editor.html?id=' + encodeURIComponent(id)); guard.setKey('swl:journey:' + id); guard.markClean(generation); syncActions(); $('journeyStatus').textContent = text('Saved');
+    saved = result; draft = payload; id = result.id; history.replaceState(null, '', '/admin/journey-editor.html?id=' + encodeURIComponent(id)); guard.setResource('journey:' + id); guard.markClean(generation); syncActions(); $('journeyStatus').textContent = text('Saved');
     for (const locale of ['de', 'en']) automatic[locale] = !saved[locale].slug;
   }
   async function lifecycle(action) {
@@ -114,17 +116,10 @@
     const title = saved[language.primary].title || text('New');
     if (!await AdminConfirm.ask({ title: text(action), body: text(action + 'Scope', { title, count: saved.members.length }), confirmLabel: text(action), danger: action !== 'Publish' })) return;
     const deleting = action === 'Delete';
-    let result;
-    try { result = await request('/' + id + (deleting ? '' : '/' + action.toLowerCase()), { method: deleting ? 'DELETE' : 'POST', ...(action === 'Publish' ? { body: JSON.stringify({ baseUpdatedAt: saved.updatedAt }) } : {}) }, guard); }
-    catch (error) {
-      if (error.body?.persisted) {
-        if (deleting) { $('journeyFields').disabled = true; id = null; }
-        else { saved = error.body.saved; syncActions(); }
-      }
-      throw error;
-    }
-    if (deleting) { location.href = '/admin/journeys.html'; return; }
-    saved = result.saved; syncActions(); $('journeyStatus').textContent = text('Built');
+    const result = await request('/' + id + (deleting ? '' : '/' + action.toLowerCase()), { method: deleting ? 'DELETE' : 'POST', ...(action === 'Publish' ? { body: JSON.stringify({ baseUpdatedAt: saved.updatedAt }) } : {}) }, guard);
+    if (deleting) id = null;
+    else { saved = result.saved; syncActions(); }
+    BuildReporting.renderOutcome($('journeyStatus'), action.toLowerCase(), result, { title });
   }
   async function operate(fn) {
     if (busy) return;
@@ -135,7 +130,8 @@
       busy = false; $('journeyFields').disabled = !draft || (!id && !!saved);
       if ($('journeyError').hidden) {
         if ($('journeyStatus').textContent === text('Busy')) $('journeyStatus').textContent = text(guard.isDirty() ? 'Dirty' : saved?.status === 'published' ? 'Published' : 'Draft');
-        opener?.focus();
+        if ((!id && saved) || !opener || opener.disabled) $('journeyStatus').focus();
+        else opener.focus();
       }
     }
   }
@@ -146,7 +142,7 @@
   (async () => {
     JourneysUI.localize(document); Auth.setPageTitle(text(id ? 'Edit' : 'New'));
     try {
-      session = await Auth.ensureAuthed(); if (!session) return; Auth.renderHeader(session); language = await SiteLanguage.get();
+      session = await Auth.ensureAuthed(); if (!session) return; guard.initialize(session.userId); Auth.renderHeader(session); language = await SiteLanguage.get();
       const response = await fetch('/posts', { cache: 'no-store' }); if (!response.ok) throw new Error(text('Failed')); stories = await response.json();
       if (id) saved = await request('/' + id, {}, guard);
       const empty = locale => ({ title: '', slug: '', intro: '', heroImage: null, omitted: !language.locales.includes(locale) });
@@ -159,7 +155,7 @@
       if (stash && !guard.wasDismissed(stash)) {
         if (await AdminConfirm.ask({ title: text('Restore'), body: text('RestoreScope'), confirmLabel: text('Restore') })) {
           const p = stash.payload;
-          if (p.de && p.en && Array.isArray(p.members)) { draft = { de: p.de, en: p.en, members: p.members }; if (saved && p.baseUpdatedAt) saved.updatedAt = p.baseUpdatedAt; guard.adopt(stash); renderLocales(); renderMembers(); syncActions(); dirty(); }
+          if (p.de && p.en && Array.isArray(p.members)) { draft = { de: p.de, en: p.en, members: p.members }; if (saved) saved.updatedAt = p.baseUpdatedAt; guard.adopt(stash); renderLocales(); renderMembers(); syncActions(); dirty(); }
         } else guard.dismissRestore(stash);
       }
     } catch (error) { $('journeyStatus').textContent = ''; showError(error); }

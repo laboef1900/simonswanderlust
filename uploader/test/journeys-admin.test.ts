@@ -12,6 +12,14 @@ import { memorySessionStore } from '../src/sessions.js';
 import { memorySecretsStore } from '../src/secrets.js';
 import { defaultSettings, validate } from '../src/settings.js';
 import { TEST_TRUST } from './trusted-proxy-fixture.js';
+import type { BuildOutcome } from '../src/build.js';
+import { buildFailureMessage } from '../src/build-state.js';
+import { idleBuildState } from './build-fixture.js';
+
+const release = '1793000000000-1-0001';
+const successfulBuild: BuildOutcome = { ok: true, attemptId: release, release, liveRelease: release };
+const failedBuild: BuildOutcome = { ok: false, attemptId: '1793000001000-1-0002', liveRelease: release,
+  code: 'build_failed', error: 'private database hostname', cause: new Error('private database hostname') };
 
 const imageBase = 'https://images.example';
 const disposers: (() => Promise<void>)[] = [];
@@ -25,12 +33,12 @@ async function fixture() {
   const admin = await users.create({ username: 'journey-admin', password: 'password123456', isAdmin: true });
   const cookies = { author: { sid: await sessions.create(author.id, 60_000) }, admin: { sid: await sessions.create(admin.id, 60_000) } };
   let settings = defaultSettings(), writable = true;
-  const build = vi.fn(async () => ({ ok: true }));
+  const build = vi.fn(async (): Promise<BuildOutcome> => successfulBuild);
   const config: ServerConfig = {
     trustProxy: TEST_TRUST, storageDir: root, siteDir: join(root, 'site'), backupDir: join(root, 'backup'), baseUrl: imageBase, imgHost: 'images.example',
     users, sessions, posts, pages: memoryPageStore(posts.language), media, journeys, secrets: memorySecretsStore(), isWritable: () => writable,
     settings: { get: () => settings, update: patch => { settings = validate({ ...settings, ...patch }); return settings; } },
-    builder: { build, hasRelease: () => true, quiesce: async () => {} }, dbCheck: async () => {},
+    builder: { ...idleBuildState, build, hasRelease: () => true, quiesce: async () => {} }, dbCheck: async () => {},
     dbBackup: { dir: root, runNow: async () => ({}), running: () => false, state: () => ({}), sweepTempFiles: () => [], list: () => [], listImageArchives: () => [], listRouteArchives: () => [], quiesce: async () => {} },
     encodeQueue: { enqueue() {}, isActive: () => false, recover: async () => 0, drain: async () => {}, idle: async () => {}, quiesce: async () => {}, stats: () => ({ pending: 0, running: 0 }) },
   };
@@ -77,14 +85,26 @@ describe('journey admin boundary and ownership', () => {
   });
   it('commits before awaiting one builder and returns the persisted token on failed builds without raw errors', async () => {
     const f = await fixture(); const row = await f.journeys.create(f.draft);
-    const barrier = Promise.withResolvers<{ ok: boolean }>();
+    const barrier = Promise.withResolvers<BuildOutcome>();
     f.build.mockImplementation(async () => { expect((await f.journeys.get(row.id))?.status).toBe('published'); return barrier.promise; });
     const publishing = f.app.inject({ method: 'POST', url: `/journey-admin/${row.id}/publish`, cookies: f.cookies.admin, payload: { baseUpdatedAt: row.updatedAt.toISOString() } });
-    await vi.waitFor(() => expect(f.build).toHaveBeenCalledOnce()); barrier.resolve({ ok: false });
-    const failed = await publishing; expect(failed.statusCode).toBe(502); expect(failed.json()).toMatchObject({ persisted: true, code: 'journey_build_failed', build: { ok: false }, saved: { status: 'published' } });
+    await vi.waitFor(() => expect(f.build).toHaveBeenCalledOnce()); barrier.resolve(failedBuild);
+    const failed = await publishing;
+    expect(failed.statusCode).toBe(200);
+    expect(Object.keys(failed.json()).sort()).toEqual(['build', 'saved']);
+    expect(failed.json().build).toEqual({ ok: false, attemptId: failedBuild.attemptId, liveRelease: release,
+      code: 'build_failed', error: buildFailureMessage('build_failed') });
+    expect(failed.body).not.toContain('private database');
+    expect(failed.json().saved.status).toBe('published');
     expect(failed.json().saved.updatedAt).toBe((await f.journeys.get(row.id))?.updatedAt.toISOString());
-    f.build.mockRejectedValueOnce(new Error('private database hostname'));
-    const unpublish = await f.app.inject({ method: 'POST', url: `/journey-admin/${row.id}/unpublish`, cookies: f.cookies.admin }); expect(unpublish.statusCode).toBe(502); expect(unpublish.body).not.toContain('private database'); expect(unpublish.json().saved.status).toBe('draft');
+    f.build.mockResolvedValueOnce({ ...failedBuild, code: 'build_timeout', liveRelease: null });
+    const unpublish = await f.app.inject({ method: 'POST', url: `/journey-admin/${row.id}/unpublish`, cookies: f.cookies.admin });
+    expect(unpublish.statusCode).toBe(200);
+    expect(unpublish.json().build).toEqual({ ok: false, attemptId: failedBuild.attemptId, liveRelease: null,
+      code: 'build_timeout', error: buildFailureMessage('build_timeout') });
+    expect(unpublish.body).not.toContain('private database');
+    expect(unpublish.json().saved.status).toBe('draft');
+    expect(unpublish.json().saved.updatedAt).toBe((await f.journeys.get(row.id))?.updatedAt.toISOString());
   });
   it('protects working and retained heroes and deletes a published journey without changing any story', async () => {
     const f = await fixture(); let row = await f.journeys.create(f.draft); row = await f.journeys.publish(row.id, row.updatedAt);
@@ -93,16 +113,37 @@ describe('journey admin boundary and ownership', () => {
     const usage = await f.app.inject({ method: 'GET', url: '/media/items/hero', cookies: f.cookies.author });
     expect(usage.json().usedIn).toContainEqual({ kind: 'journey', key: row.id, title: 'Journey', published: true, working: false });
     expect((await f.app.inject({ method: 'DELETE', url: '/media/items/hero', cookies: f.cookies.admin })).statusCode).toBe(409);
-    const deleted = await f.app.inject({ method: 'DELETE', url: '/journey-admin/' + row.id, cookies: f.cookies.admin }); expect(deleted.json()).toMatchObject({ deleted: true, persisted: true, build: { ok: true } }); expect(f.build).toHaveBeenCalledOnce();
+    const deleted = await f.app.inject({ method: 'DELETE', url: '/journey-admin/' + row.id, cookies: f.cookies.admin });
+    expect(deleted.statusCode).toBe(200); expect(deleted.json()).toMatchObject({ deleted: true, build: successfulBuild });
+    expect(deleted.json()).not.toHaveProperty('persisted'); expect(f.build).toHaveBeenCalledOnce();
     expect(await Promise.all(f.draft.members.map(key => f.posts.get(key)))).toEqual(before);
+  });
+  it.each([false, true])('acknowledges deletion without inventing a build (published=%s)', async (published) => {
+    const f = await fixture(); let row = await f.journeys.create(f.draft);
+    if (published) row = await f.journeys.publish(row.id, row.updatedAt);
+    f.build.mockResolvedValue(failedBuild);
+    const response = await f.app.inject({ method: 'DELETE', url: '/journey-admin/' + row.id, cookies: f.cookies.admin });
+    expect(response.statusCode).toBe(200); expect(response.json().deleted).toBe(true);
+    expect(response.body).not.toContain('private database');
+    expect(await f.journeys.get(row.id)).toBeNull();
+    if (published) {
+      expect(response.json().build).toEqual({ ok: false, attemptId: failedBuild.attemptId, liveRelease: release,
+        code: 'build_failed', error: buildFailureMessage('build_failed') });
+      expect(f.build).toHaveBeenCalledOnce();
+    } else {
+      expect(response.json()).not.toHaveProperty('build');
+      expect(f.build).not.toHaveBeenCalled();
+    }
+    expect((await f.app.inject({ method: 'DELETE', url: '/journey-admin/' + row.id, cookies: f.cookies.admin })).statusCode).toBe(404);
+    expect(f.build).toHaveBeenCalledTimes(published ? 1 : 0);
   });
   it('fences every mutating route and quiesces an admitted rebuild', async () => {
     const f = await fixture(); const row = await f.journeys.create(f.draft);
-    const barrier = Promise.withResolvers<{ ok: boolean }>(); f.build.mockImplementation(() => barrier.promise);
+    const barrier = Promise.withResolvers<BuildOutcome>(); f.build.mockImplementation(() => barrier.promise);
     const publishing = f.app.inject({ method: 'POST', url: `/journey-admin/${row.id}/publish`, cookies: f.cookies.admin, payload: { baseUpdatedAt: row.updatedAt.toISOString() } });
     await vi.waitFor(() => expect(f.build).toHaveBeenCalledOnce()); let drained = false; const quiescing = f.app.quiesceMutations().then(() => { drained = true; });
     expect(drained).toBe(false); f.fence();
     for (const [method, url] of [['POST', '/journey-admin'], ['PUT', '/journey-admin/' + row.id], ['POST', `/journey-admin/${row.id}/publish`], ['POST', `/journey-admin/${row.id}/unpublish`], ['DELETE', '/journey-admin/' + row.id]] as const) expect((await f.app.inject({ method, url, cookies: f.cookies.admin })).statusCode).toBe(503);
-    barrier.resolve({ ok: true }); await publishing; await quiescing; expect(drained).toBe(true);
+    barrier.resolve(successfulBuild); await publishing; await quiescing; expect(drained).toBe(true);
   });
 });

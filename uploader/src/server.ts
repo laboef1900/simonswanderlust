@@ -930,11 +930,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
       if (Object.keys(body).some((key) => key !== 'config' && key !== 'updatedAt')) throw new NavigationError('invalid_navigation');
       const saved = await cfg.navigation.save(body.config, body.updatedAt);
       // Locks are released. A failed build acknowledges the committed token, not a failed save.
-      try {
-        const build = await cfg.builder.build();
-        if (build.ok) return { saved, build };
-      } catch (error) { console.error('Navigation persisted; rebuild failed:', error); }
-      return reply.code(502).send({ code: 'navigation_build_failed', error: 'Navigation was saved, but the rebuild failed. Retry Rebuild site now.', persisted: true, saved });
+      const build = projectBuildReport(await cfg.builder.build('rebuild'));
+      return { saved, build };
     } catch (error) {
       if (error instanceof NavigationError) return reply.code(error.code === 'conflict' ? 409 : 400).send({ code: error.code, error: error.message });
       throw error;
