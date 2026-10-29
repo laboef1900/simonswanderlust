@@ -66,6 +66,8 @@ import { LanguageError, validateLanguage, type LanguageConfig, type LanguageStor
 import { publicPath } from './public-paths.js';
 import { OnboardingError, type OnboardingStore } from './onboarding.js';
 import type { TrustPolicy } from './trusted-proxy.js';
+import { memoryJourneyStore, type JourneyStore, type StoredJourney } from './journeys.js';
+import { registerJourneyAdmin } from './journeys-admin.js';
 
 export interface ServerConfig {
   trustProxy: TrustPolicy['trust'];
@@ -82,6 +84,7 @@ export interface ServerConfig {
   onboarding?: OnboardingStore;
   posts: PostStore;
   pages: PageStore;
+  journeys?: JourneyStore;
   imgHost: string;   // Host header that serves image variants (img subdomain)
   siteDir: string;   // release root; the blog is served from `${siteDir}/current`
   mapDir?: string;   // PMTiles/glyph assets; omit to disable /map/
@@ -199,6 +202,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   if (cfg.onRoute) app.addHook('onRoute', cfg.onRoute);
   const { users, sessions } = cfg;
   const language = cfg.language ?? cfg.posts.language;
+  const journeys = cfg.journeys ?? memoryJourneyStore(cfg.posts, cfg.posts.language, cfg.media, cfg.baseUrl.replace(/\/$/, ''));
   let mutationsClosed = false;
   const activeMutations = new Set<Promise<void>>();
   const isWritable = () => !mutationsClosed && cfg.isWritable?.() !== false;
@@ -338,6 +342,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   app.decorateRequest('authUser', null);
   const { optionalAuth, requireAuth, requireAdmin } = createAuthn(users, sessions);
   if (cfg.gpx) registerGpxRoutes(app, { gpx: cfg.gpx, requireAuth });
+  registerJourneyAdmin(app, { store: journeys, posts: cfg.posts, language, imageBase: cfg.baseUrl.replace(/\/$/, ''), builder: cfg.builder, requireAuth, requireAdmin });
   app.get('/admin/gpx-copy.js', async (_req, reply) =>
     reply.type('application/javascript; charset=utf-8').header('cache-control', 'no-store').send(renderGpxCopy()));
 
@@ -363,7 +368,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     constraints: { host: cfg.imgHost },
     // Public variants must be readable by the editor on a different origin.
     // Scope CORS to this file mount, never authenticated APIs or private originals.
-    setHeaders: (reply) => { reply.header('Access-Control-Allow-Origin', '*'); },
+    setHeaders: (reply) => { reply.setHeader('Access-Control-Allow-Origin', '*'); },
     // Only finished variants (`<key>-<width>.<avif|webp|jpeg>`) are web assets.
     // Untouched full-resolution originals (`<key>-orig.<ext>`) live in
     // storageDir so the incremental backup tar captures them, but they are a
@@ -594,10 +599,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // corpus is large enough to notice, usage belongs in SQL (an index over the
   // referenced URLs) rather than a full-corpus scan per request. The delete
   // routes need it whatever happens; the listing route is the one to move.
-  const usageCorpus = async (): Promise<{ posts: PostUsageRow[]; pages: PagePair[] }> => {
-    const [postRows, pageKeys] = await Promise.all([cfg.posts.usageRows(), cfg.pages.keys()]);
+  const usageCorpus = async (): Promise<{ posts: PostUsageRow[]; pages: PagePair[]; journeys: StoredJourney[] }> => {
+    const [postRows, pageKeys, journeyRows] = await Promise.all([cfg.posts.usageRows(), cfg.pages.keys(), journeys.list()]);
     const pagePairs = await Promise.all(pageKeys.map((k) => cfg.pages.get(k)));
-    return { posts: postRows, pages: pagePairs };
+    return { posts: postRows, pages: pagePairs, journeys: journeyRows };
   };
 
   /**
@@ -646,7 +651,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       total: result.total,
       items: result.items.map((m) => ({
         ...serializeMedia(m, isAdmin),
-        usedIn: imageUsage(m.src, corpus.posts, corpus.pages),
+        usedIn: imageUsage(m.src, corpus.posts, corpus.pages, corpus.journeys),
       })),
     });
   });
@@ -751,7 +756,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const corpus = await usageCorpus();
     return reply.send({
       ...serializeMedia(item, Boolean(req.authUser?.isAdmin)),
-      usedIn: imageUsage(item.src, corpus.posts, corpus.pages),
+      usedIn: imageUsage(item.src, corpus.posts, corpus.pages, corpus.journeys),
     });
   });
 
@@ -799,7 +804,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       return reply.code(400).send({ error: (e as Error).message });
     }
     const corpus = await usageCorpus();
-    const usedIn = imageUsage(`${imageBase}/${key}`, corpus.posts, corpus.pages);
+    const usedIn = imageUsage(`${imageBase}/${key}`, corpus.posts, corpus.pages, corpus.journeys);
     if (usedIn.length > 0) {
       const error = usedIn.some((u) => u.published && !u.working)
         ? 'image is still part of a published version — republish (or unpublish) that post first'

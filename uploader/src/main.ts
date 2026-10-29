@@ -32,6 +32,8 @@ import { pgSiteIdentityStore } from './site-identity.js';
 import { captureBootEvidence, initializeApplicationSchema, initializeOnboarding } from './onboarding-bootstrap.js';
 import { pgOnboardingStore } from './onboarding.js';
 import { LEGACY_REVIEW_PROMPT } from './site-identity-legacy.js';
+import { pgJourneyStore } from './journeys.js';
+import { repairJourneyOrphans } from './journey-cleanup.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -81,6 +83,8 @@ if (migration.posts && (!migration.language || !migration.omitted || !migration.
   owner.assertWritable();
 }
 await initializeApplicationSchema(pool, owner.assertWritable);
+owner.assertWritable();
+await repairJourneyOrphans(pool, runtime);
 owner.assertWritable();
 await reportNamespaceCollisions(pool, (message) => console.warn(message));
 await initializeOnboarding(pool, { storageDir, settingsPath, backupDir, siteDir }, bootEvidence, owner.assertWritable);
@@ -136,6 +140,7 @@ const builder = createSiteBuilder({
   applicationName: owner.applicationName + ':build',
 });
 const media = pgMediaStore(pool, { baseUrl });
+const journeys = pgJourneyStore(pool, media, baseUrl.replace(/\/$/, ''), runtime);
 const encodeQueue = createEncodeQueue({ store: media, storageDir, lock: workLock, ...runtime });
 const reconciler = createReconciler({
   sync: createMediaSync({
@@ -193,6 +198,7 @@ const app = buildServer({
   secrets,
   posts,
   pages,
+  journeys,
   // Optional in ServerConfig so tests can omit them; omitted here, every
   // public and moderation comment route answers 503 in production.
   comments: pgCommentStore(pool),

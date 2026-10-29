@@ -2,6 +2,7 @@ import type { DbClient, DbPool } from './db.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { lockPostPair, touchPostPair } from './post-pair-lock.js';
 import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js';
+import { updateJourneyCoverage } from './journey-cleanup.js';
 
 export type LanguageLocale = 'de' | 'en';
 export interface LanguageConfig { primary: LanguageLocale; locales: LanguageLocale[] }
@@ -62,7 +63,7 @@ export function languageFromRow(row: LanguageRow): LanguageState {
 }
 export async function readLanguage(client: DbPool | DbClient, lock = false): Promise<LanguageState> {
   const result = await client.query<LanguageRow>(`SELECT primary_locale, enabled_locales,
-    COALESCE(locked_at, (SELECT min(published_at) FROM posts)) AS locked_at, updated_at
+    COALESCE(locked_at, (SELECT min(published_at) FROM posts), (SELECT min(published_at) FROM journey_locales)) AS locked_at, updated_at
     FROM site_language WHERE id = true${lock ? ' FOR UPDATE' : ''}`);
   if (result.rows.length !== 1) throw new LanguageError('Site language configuration is missing.');
   return languageFromRow(result.rows[0]!);
@@ -131,6 +132,7 @@ export function pgLanguageStore(pool: DbPool): LanguageStore {
             await lockPostPair(client, row.translation_key);
             await client.query('SELECT locale FROM posts WHERE translation_key=$1 ORDER BY locale FOR UPDATE', [row.translation_key]);
           }
+          await updateJourneyCoverage(client, next);
           await preflight?.(next, client);
           for (const row of changed.rows) {
             await client.query(`UPDATE posts SET omitted = locale <> $2 WHERE translation_key=$1

@@ -620,6 +620,7 @@ maybe('backup round-trip (Postgres)', () => {
       if (version === 11) {
         const dump = readDump(dumpFile);
         dump.version = version;
+        delete dump.tables.journeys; delete dump.tables.journey_locales; delete dump.tables.journey_members;
         delete dump.tables.site_language;
         writeFileSync(dumpFile, gzipSync(JSON.stringify(dump)));
       }
@@ -682,6 +683,7 @@ maybe('backup round-trip (Postgres)', () => {
       const { dumpFile, backupDir, env } = await seed();
       const old = readDump(dumpFile);
       old.version = 10;
+      delete old.tables.journeys; delete old.tables.journey_locales; delete old.tables.journey_members;
       delete old.tables.site_identity; delete old.tables.site_identity_assets;
       writeFileSync(dumpFile, gzipSync(JSON.stringify(old)));
       await pool.query("UPDATE site_identity SET site_name='Undo journal', canonical_origin='https://restore.example'");

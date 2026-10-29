@@ -543,6 +543,41 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
     END $$;
   `);
 
+  // Journey CHECKs are write-once; later changes require named constraint migrations.
+  // No FK to posts: pair deletion and boot repair scrub every retained reference.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS journeys (
+      id uuid PRIMARY KEY,
+      status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
+      published_snapshot jsonb,
+      published_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT journeys_published_has_snapshot CHECK (status = 'draft' OR published_snapshot IS NOT NULL)
+    );
+    CREATE TABLE IF NOT EXISTS journey_locales (
+      journey_id uuid NOT NULL REFERENCES journeys(id) ON DELETE CASCADE,
+      locale text NOT NULL CHECK (locale IN ('de','en')),
+      slug text NOT NULL DEFAULT '' CHECK (char_length(slug) <= 100),
+      title text NOT NULL DEFAULT '' CHECK (char_length(title) <= 200),
+      intro text NOT NULL DEFAULT '' CHECK (char_length(intro) <= 2000),
+      hero_image jsonb,
+      omitted boolean NOT NULL DEFAULT false,
+      published_at timestamptz,
+      CONSTRAINT journey_locales_omitted_unpublished CHECK (NOT omitted OR published_at IS NULL),
+      PRIMARY KEY (journey_id, locale)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS journey_locales_slug_idx ON journey_locales (locale, slug) WHERE slug <> '';
+    CREATE TABLE IF NOT EXISTS journey_members (
+      journey_id uuid NOT NULL REFERENCES journeys(id) ON DELETE CASCADE,
+      translation_key text NOT NULL,
+      position integer NOT NULL CHECK (position >= 0),
+      PRIMARY KEY (journey_id, translation_key),
+      UNIQUE (journey_id, position)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS journey_members_tk_idx ON journey_members (translation_key);
+  `);
+
   // Language metadata is content identity: never replace this singleton on boot.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS site_language (

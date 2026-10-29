@@ -391,10 +391,12 @@ describe.skipIf(!url)('onboarding PostgreSQL boot and snapshot boundary', () => 
     const indexQuery = `SELECT idx.relname AS name, pg_get_indexdef(i.indexrelid) AS definition
       FROM pg_index i JOIN pg_class idx ON idx.oid=i.indexrelid
       JOIN pg_namespace n ON n.oid=idx.relnamespace
-      WHERE n.nspname=current_schema() AND NOT i.indisprimary ORDER BY idx.relname`;
+      WHERE n.nspname=current_schema()
+        AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid=i.indexrelid)
+      ORDER BY idx.relname`;
     const installed = (await pool.query<{ name: string; definition: string }>(indexQuery)).rows;
     expect(installed.length).toBeGreaterThan(0);
-    // Exercise the whole real initializer's inventory, not a fixture-only subset.
+    // Constraint-owned indexes cannot be dropped independently of their constraints.
     for (const index of installed) await pool.query(`DROP INDEX "${index.name.replaceAll('"', '""')}"`);
     await assertBootstrapOnlyTarget(pool, guard);
     expect(await prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).toBe(true);

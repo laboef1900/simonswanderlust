@@ -4,6 +4,7 @@ import { assertSafeKey } from './storage.js';
 import type { PostUsageRow } from './posts.js';
 import type { PagePair } from './pages.js';
 import { assertWorkWritable, type WorkCancellationOptions } from './work-cancellation.js';
+import type { StoredJourney } from './journeys.js';
 
 // The variant filename contract: `${key}-${width}.${format}` (see storage.ts /
 // variants.ts). Everything under storageDir that matches this is a variant of
@@ -20,7 +21,7 @@ export const VARIANT_FILE_RE = /-(\d+)\.(avif|webp|jpeg)$/;
 export const ORIGINAL_FILE_RE = /-orig\.[a-z0-9]+$/i;
 
 export interface UsageRef {
-  kind: 'post' | 'page';
+  kind: 'post' | 'page' | 'journey';
   key: string;
   title: string;
   /**
@@ -72,7 +73,7 @@ function localeUses(src: string, l: UsageLocale): boolean {
  * its images against deletion, and a published post's snapshot rows guard
  * what the live site still renders after a draft swapped the photo out (#115).
  */
-export function imageUsage(src: string, posts: PostUsageRow[], pages: PagePair[]): UsageRef[] {
+export function imageUsage(src: string, posts: PostUsageRow[], pages: PagePair[], journeys: StoredJourney[] = []): UsageRef[] {
   const refs: UsageRef[] = [];
   const byKey = new Map<string, PostUsageRow[]>();
   for (const r of posts) {
@@ -94,6 +95,14 @@ export function imageUsage(src: string, posts: PostUsageRow[], pages: PagePair[]
     if (localeUses(src, pg.de) || localeUses(src, pg.en)) {
       refs.push({ kind: 'page', key: pg.key, title: pg.de.title || pg.en.title || pg.key, published: true, working: true });
     }
+  }
+  for (const journey of journeys) {
+    const working = [journey.de, journey.en].some(locale => locale.heroImage?.src === src);
+    const retained = Object.values(journey.publishedSnapshot?.locales ?? {}).some(locale => locale.heroImage.src === src);
+    if (working || retained) refs.push({
+      kind: 'journey', key: journey.id, title: journey.de.title || journey.en.title || journey.id,
+      working, published: retained && journey.status === 'published',
+    });
   }
   return refs;
 }

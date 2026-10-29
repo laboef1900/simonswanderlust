@@ -1,3 +1,4 @@
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -50,6 +51,7 @@ describe('reserved public namespaces', () => {
     let settings = defaultSettings();
     await Promise.all(['images', 'map', 'site/current'].map(path => mkdir(join(root, path), { recursive: true })));
     const app = buildServer({
+      trustProxy: TEST_TRUST,
       storageDir: join(root, 'images'), siteDir: join(root, 'site'), mapDir: join(root, 'map'),
       baseUrl: 'https://images.example', imgHost: 'images.example', backupDir: join(root, 'backup'),
       users: memoryUserStore(), sessions: memorySessionStore(), posts, pages: memoryPageStore(posts.language),
@@ -77,6 +79,7 @@ describe('reserved public namespaces', () => {
       expect(seen.has('gpx')).toBe(true);
       expect(seen.has('map')).toBe(true);
       expect(seen.has('onboarding')).toBe(true);
+      expect(seen.has('journey-admin')).toBe(true);
     } finally {
       await app.close();
       await rm(root, { recursive: true, force: true });

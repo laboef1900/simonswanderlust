@@ -4,7 +4,7 @@
 **Issue:** #308, child of epic #307. It blocks #309 (storage, admin, backups) and #310 (public pages).
 **Risk:** HIGH. It adds new public routes (Golden Rule 2 territory), new tables in
 `uploader/src/db.ts`, a new `DUMP_VERSION`, and a restore allow-list change.
-**Status:** **OWNER APPROVED, 2026-10-28 — implementation contract, not implemented.** The owner
+**Status:** **OWNER APPROVED, 2026-10-28 — implementation qualification tracked in §21.** The owner
 approved D1–D10, selecting D3's permanent per-locale first-publication slug lock and D4's required
 non-empty plain-text intro (§20). No implementation PR, merge, deployment, publication, existing
 story URL rename or owner-data operation is approved by this record. #309 and #310 retain their
@@ -936,3 +936,25 @@ shared-build-snapshot contracts, landing dump-version allocation, implementation
 and all archived #309/#310 acceptance checks remain required. This record does not label any
 journey feature implemented or authorize merge, deployment, publication, an existing story URL
 rename, or an owner-data/content operation.
+
+## 21. #309 implementation and qualification boundary (2026-10-29)
+
+The authoring implementation uses `uploader/src/journeys.ts`, `journey-cleanup.ts` and
+`journeys-admin.ts`. Its three tables are separate from posts; the only post-store coupling
+is same-transaction reference removal. `site/src/lib/journey-snapshot.ts` is the strict,
+versioned snapshot boundary shared by storage, recovery and the public reader. Native
+recovery format **14** follows pages/navigation format 13; allocation must be rechecked
+against the integration branch before landing.
+
+The API owns **`/journey-admin`**, not `/journeys`. Static reservation and synthetic
+collision/route regression coverage do **not** establish the actual-target reverse gate.
+The owner/deployment target must supply the read-only report for `(root, journey-admin)`,
+covering story/page working and committed slug claims, before merge. No target-content
+read, rewrite, publication, deployment or collision clearance is claimed here.
+
+Source regression coverage accompanies the store, real PostgreSQL lock races, ownership
+loss, cleanup, recovery, authenticated routes and editor. Source completion is not evidence
+that those checks ran: the integration owner must run the full affected suites with
+`TEST_DATABASE_URL`, type checking, a real main-process build/publication smoke, and
+keyboard/browser qualification after merging the source slices. The approved security
+floors, human implementation-PR approval and rollback/recovery limits in §§13/16 remain.

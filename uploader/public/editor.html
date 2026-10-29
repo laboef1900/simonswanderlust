@@ -158,6 +158,7 @@
           </header>
 
           <div class="editor-inspector__content" id="inspectorContent">
+          <p id="journeyClaim" class="editor-inspector-group" hidden></p>
 
           <section class="editor-inspector-locale" data-inspector-locale="de" aria-labelledby="deStoryDetailsHeading">
             <div class="editor-inspector-group" id="deStoryDetails">
@@ -518,6 +519,7 @@
     <script src="/admin/tabs.js"></script>
     <script src="/admin/editor-inspector.js"></script>
     <script src="/admin/editor-title-image.js"></script>
+    <script src="/admin/journeys-ui.js"></script>
     <script src="/admin/waypoint-copy.js"></script>
     <script src="/admin/waypoint-lookup.js"></script>
     <script src="/admin/gallery-library.js"></script>
@@ -2110,6 +2112,7 @@
           return true;
         }
         currentTk = post.translationKey || tk;
+        void JourneysUI.claim(currentTk, $('journeyClaim'));
         loadedUpdatedAt = post.updatedAt || null;
         loadedSlugs.de = post.de?.slug || '';
         loadedSlugs.en = post.en?.slug || '';
