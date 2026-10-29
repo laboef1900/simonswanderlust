@@ -921,3 +921,54 @@ The native filesystem-lock selection, packaging and real mount/lifetime evidence
 a separate implementation prerequisite; policy approval and static review do not satisfy it.
 Implementation must update `SECURITY.md` as specified in §9 and preserve §10's containment.
 No merge, deployment, production restore or owner-data mutation is authorized by this approval.
+
+## Native-lock qualification status (2026-10-29)
+
+The earlier static-research limitations are supplemented, not silently waived, by retained
+runtime evidence. Native macOS arm64/APFS proof is recorded in the execution ledger.
+[Native CI run 40866450527](https://github.com/laboef1900/simonswanderlust/actions/runs/40866450527)
+passed on native amd64 and arm64 Linux hosts at harness head
+`df888364570079b87039eaa7823f7c1da9ba51ae`, using frozen product source
+`57cd3cc517e1e5a964e85463b26529ae1a8aacc5`. Both local bind mounts and Docker local named
+volumes had inspected ext4 backing. The pinned DHI Node 26.12.1/glibc 2.41 runtime ran
+non-root, without the build-stage compiler or downgraded build-stage shared libraries.
+
+Each mount/architecture report exercises live/stopped-owner contention, clean close,
+process death, ordinary-child noninheritance, deliberate descriptor inheritance, actual
+PostgreSQL backend termination without loss of filesystem exclusion, and app/restore
+admission/release order. Independent-container peers contend on the same inode.
+Independent review found no confirmed defect in those bounded results. Forced ENOLCK and
+a deliberately non-CLOEXEC rejection probe were not exercised; no NFS/SMB/FUSE, musl,
+Docker Desktop shared mount or uninspected deployment mount is qualified by these results.
+Artifacts remain in the gitignored ledger's `issue-304-native-ci-40866450527/`.
+
+**The current approval still requires actual deployment-mount qualification before #305
+implementation.** CI success alone does not remove that gate. No product integration,
+deployment, owner-data access or assumption of deployment equivalence follows from this record.
+
+### Proposed sequencing amendment — pending owner decision
+
+One option is to permit #305 implementation and review against the already exercised native
+binding, packaging and development/CI filesystem contract, while keeping actual target-mount
+qualification mandatory **before any deployment or enablement**. This changes only the
+timing of the existing target-mount gate, not its tests or required outcome. It authorizes
+no merge, release, deployment or enablement, and defines no deployable-but-disabled mode.
+The original before-implementation gate remains binding unless the owner explicitly
+approves this amendment.
+
+Under that option, PR documentation must name the exact tested platforms/filesystems and
+unqualified deployment target. The app/restore entry points must still hold the native lock
+before admission, preserve the PG/session fence and lock order, fail closed on acquisition
+or ownership failure, never unlink/replace a held lock inode, and never substitute receipt
+age or PG availability for exclusion. No automatic-recovery deployment may be described
+as supported until its actual mount passes the same process/descriptor/DB-loss/restore
+matrix with the selected binary.
+
+Risk: integration could otherwise be mistaken for production approval, or CI ext4 results
+could be overgeneralized to different storage. The postponed qualification gate is
+**operational, not mechanically enforced**: successful runtime lock acquisition does not
+detect or approve an unqualified mount. Containment is explicit deployment restrictions,
+platform-specific evidence and withheld deployment authorization, alongside the unchanged
+runtime ownership safeguards. The alternative is to keep #305 blocked until an owner
+provides an authorized disposable target directory on the actual deployment filesystem;
+no existing production content is a qualification fixture.
