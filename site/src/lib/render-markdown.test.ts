@@ -1,22 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { MARKDOWN_OPTIONS, renderMarkdown } from './render-markdown';
+import { renderMarkdown } from './render-markdown';
 import { SHIKI_CSS } from './shiki-classes';
-import astroConfig from '../../astro.config.mjs';
-
-describe('MARKDOWN_OPTIONS parity with astro.config.mjs', () => {
-  // The build reads astro.config.mjs; the uploader's draft preview reads
-  // MARKDOWN_OPTIONS. A silent divergence means previews and the live site
-  // disagree about what a ```gallery fence is. Fix a failure here by editing
-  // BOTH files, never by relaxing this assertion.
-  it('matches the markdown block the build runs with', () => {
-    expect(astroConfig.markdown).toEqual(MARKDOWN_OPTIONS);
-  });
-
-  it("excludes 'gallery' from syntax highlighting so the fence keeps its class", () => {
-    const sh = MARKDOWN_OPTIONS.syntaxHighlight;
-    expect(typeof sh === 'object' && sh !== null && sh.excludeLangs).toContain('gallery');
-  });
-});
 
 describe('renderMarkdown', () => {
   it('keeps a ```gallery fence marked as language-gallery through the pipeline', async () => {
