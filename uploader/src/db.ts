@@ -512,4 +512,29 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       ALTER TABLE posts ADD CONSTRAINT posts_region_check CHECK (region IN (${REGION_SQL_LIST}));
     END $$;
   `);
+
+  // Language metadata is content identity: never replace this singleton on boot.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS site_language (
+      id boolean PRIMARY KEY DEFAULT true CHECK (id),
+      primary_locale text NOT NULL CHECK (primary_locale IN ('de','en')),
+      enabled_locales text[] NOT NULL CHECK (
+        cardinality(enabled_locales) BETWEEN 1 AND 2
+        AND enabled_locales <@ ARRAY['de','en']::text[]
+        AND (cardinality(enabled_locales) = 1 OR enabled_locales[1] <> enabled_locales[2])
+        AND array_position(enabled_locales, NULL) IS NULL),
+      locked_at timestamptz,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      CHECK (primary_locale = ANY(enabled_locales))
+    )
+  `);
+  await pool.query(`INSERT INTO site_language (primary_locale, enabled_locales, locked_at)
+    VALUES ('de', ARRAY['de','en'], (SELECT min(published_at) FROM posts)) ON CONFLICT DO NOTHING`);
+  await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS omitted boolean NOT NULL DEFAULT false`);
+  await pool.query(`DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='posts'::regclass AND conname='posts_omitted_unpublished') THEN
+      ALTER TABLE posts ADD CONSTRAINT posts_omitted_unpublished
+        CHECK (NOT omitted OR (status='draft' AND published_snapshot IS NULL AND published_at IS NULL));
+    END IF;
+  END $$`);
 }

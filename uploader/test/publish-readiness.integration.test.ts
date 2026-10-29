@@ -59,7 +59,7 @@ maybe('renderer-based publication readiness (real PostgreSQL, #334)', () => {
       const tk = draft.translationKey;
       const publish = async () => mode === 'single'
         ? app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies, payload: await publishBody(posts, tk) })
-        : app.inject({ method: 'POST', url: '/posts/bulk', cookies, payload: { action: 'publish', keys: [tk] } });
+        : app.inject({ method: 'POST', url: '/posts/bulk', cookies, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await posts.language.get()).updatedAt.toISOString() } });
       const snapshots = async () => (await pool.query('SELECT locale,status,published_snapshot,published_at FROM posts WHERE translation_key=$1 ORDER BY locale', [tk])).rows;
       const refused = async () => {
         const response = await publish();

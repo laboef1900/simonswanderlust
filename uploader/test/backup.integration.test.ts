@@ -16,6 +16,7 @@ import { pgCommentStore } from '../src/comments.js';
 import { pgMediaStore } from '../src/media-store.js';
 import { runCli } from './run-cli.js';
 import { seedSiteIdentity } from '../src/site-identity.js';
+import { publishTokens } from './publish-tokens.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -60,7 +61,7 @@ maybe('backup round-trip (Postgres)', () => {
     // pair: with TZ=Europe/Berlin, rowShared's Date→string conversion shifts
     // the calendar date west, and re-saving it would poison the date column —
     // a pre-existing quirk this test deliberately keeps out of its scope.)
-    await posts.publish(createdPair.translationKey, { baseUpdatedAt: createdPair.updatedAt, baseRouteVersion: null });
+    await posts.publish(createdPair.translationKey, await publishTokens(posts, createdPair.translationKey));
     await posts.upsertDraft({ ...base, translationKey: createdPair.translationKey, de: { ...base.de, bodyMarkdown: 'Hallo v2',
       titleImage: { ...base.de.titleImage, src: 'https://img.example/title-draft' } } });
     await pool.query(`INSERT INTO pages (key,locale,title,body_markdown) VALUES ('about','de','T','Body')
@@ -183,7 +184,7 @@ maybe('backup round-trip (Postgres)', () => {
       en: { locale: 'en' as const, slug: 'cover-trip', title: 'Cover', excerpt: 'x', country: 'Iceland', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hello', images: {} },
     };
     const created = await posts.upsertDraft(base);
-    await posts.publish(created.translationKey, { baseUpdatedAt: created.updatedAt, baseRouteVersion: null });
+    await posts.publish(created.translationKey, await publishTokens(posts, created.translationKey));
 
     const file = join(dir, await dumpDatabase(pool, dir));
     expect(readDump(file).version).toBe(DUMP_VERSION);
@@ -233,6 +234,10 @@ maybe('backup round-trip (Postgres)', () => {
     await restoreDatabase(pool, v1);
     const kept = (await pool.query(`SELECT title FROM pages WHERE key='about' AND locale='en'`)).rows[0];
     expect(kept.title).toBe('keep');
+    const language = (await pool.query('SELECT * FROM site_language')).rows;
+    expect(language).toEqual([expect.objectContaining({
+      primary_locale: 'de', enabled_locales: ['de', 'en'], locked_at: null, updated_at: expect.any(Date),
+    })]);
   });
 
   it('backfills published_snapshot when restoring a pre-snapshot dump, in the same transaction', async () => {
@@ -255,6 +260,7 @@ maybe('backup round-trip (Postgres)', () => {
       oldPost('de', 'legacy-reise', 'published', 'Live DE'),
       oldPost('en', 'legacy-trip', 'published', 'Live EN'),
       { ...oldPost('de', 'entwurf', 'draft', 'Draft body'), translation_key: 'legacy-draft' },
+      { ...oldPost('en', 'draft-story', 'draft', 'Draft body EN'), translation_key: 'legacy-draft' },
     ];
     const pre = join(dir, 'db-20260601-000000.json.gz');
     writeFileSync(pre, gzipSync(JSON.stringify({ version: 2, tables: { users: [], posts } })));
@@ -270,6 +276,9 @@ maybe('backup round-trip (Postgres)', () => {
       ['legacy-trip', 'Live EN'],
     ]);
     for (const r of visible.rows) expect(r.published_at).toBeInstanceOf(Date);
+    const language = (await pool.query('SELECT * FROM site_language')).rows[0];
+    expect(language).toMatchObject({ primary_locale: 'de', enabled_locales: ['de', 'en'], updated_at: expect.any(Date) });
+    expect(language.locked_at).toEqual(new Date('2025-06-02T10:00:00.000Z'));
     // …while the draft row stays snapshot-less.
     const draft = (await pool.query(
       `SELECT published_snapshot, published_at FROM posts WHERE slug='entwurf'`,
@@ -600,6 +609,35 @@ maybe('backup round-trip (Postgres)', () => {
       expect(await usernames()).toEqual(['alice', 'bob']);
       expect(preDumps(backupDir)).toHaveLength(2);
       expect(usersIn(preDumpPath)).toEqual(['alice', 'bob']);
+    }, 60_000);
+
+    it.each([11, 12])('previews and confirms a locked cross-mode v%i restore, with the live mode in its undo dump', async version => {
+      await pool.query("UPDATE site_language SET primary_locale='de',enabled_locales=ARRAY['de','en'],locked_at=NULL");
+      const { dumpFile, backupDir, env } = await seed();
+      if (version === 11) {
+        const dump = readDump(dumpFile);
+        dump.version = version;
+        delete dump.tables.site_language;
+        writeFileSync(dumpFile, gzipSync(JSON.stringify(dump)));
+      }
+      await pool.query("UPDATE site_language SET primary_locale='en',enabled_locales=ARRAY['en'],locked_at=now()");
+      try {
+        const refused = await runCli(['restore', '--yes', dumpFile], env);
+        expect(refused.code).toBe(1);
+        expect(refused.stdout).toContain('live EN, EN primary (locked); dump DE+EN, DE primary');
+        expect(refused.stderr).toContain('--accept-language-change');
+        expect(await usernames()).toEqual(['alice', 'bob']);
+        expect(preDumps(backupDir)).toEqual([]);
+        const restored = await runCli(['restore', '--yes', '--accept-language-change', dumpFile], env);
+        expect(restored.code).toBe(0);
+        expect(await usernames()).toEqual(['alice']);
+        expect((await pool.query('SELECT primary_locale,enabled_locales FROM site_language')).rows[0])
+          .toEqual({ primary_locale: 'de', enabled_locales: ['de', 'en'] });
+        const undo = readDump(join(backupDir, 'db', preDumps(backupDir)[0]!));
+        expect(undo.tables.site_language?.[0]).toMatchObject({ primary_locale: 'en', enabled_locales: ['en'], locked_at: expect.any(String) });
+      } finally {
+        await pool.query("UPDATE site_language SET primary_locale='de',enabled_locales=ARRAY['de','en'],locked_at=NULL");
+      }
     }, 60_000);
 
     it('a "yes" line on stdin confirms; anything else aborts', async () => {

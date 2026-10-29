@@ -2,10 +2,11 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { constants, statSync } from 'node:fs';
 import { open, readFile, type FileHandle } from 'node:fs/promises';
-import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } from 'fastify';
+import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type RouteOptions } from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
+import type { DbClient } from './db.js';
 import { encodeVariant, normalizeProcessOptions, outputFormatForExtension, probeImage, type ImageProbe } from './pipeline.js';
 import { WIDTHS } from './variants.js';
 import { contentHashKey, storeOriginal, heroSnippet, assertSafeKey } from './storage.js';
@@ -37,7 +38,7 @@ import { analyzeBodyImages, bodyImageKey } from './publish-gate.js';
 import { auditAltText } from './alt-audit.js';
 import { renderPreviewHtml, previewCsp } from './preview.js';
 import { loadGalleryMetadata } from './gallery-metadata.js';
-import { type PageStore, type PagePair, type PageContent, type ImageDims, PageError } from './pages.js';
+import { type PageStore, type PagePair, type PageUpdate, type PageContent, type ImageDims, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
 import { prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type PreparedImport } from './wp-import.js';
@@ -50,7 +51,7 @@ import { registerPublicComments } from './comments-public.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
 import { compressionHook } from './compress.js';
-import { CommentError, isCommentStatus, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
+import { CommentError, isCommentStatus, withPublicLocaleMetadata, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { createGeocoder, GeocodingError } from './geocoding.js';
 import { registerGpxRoutes } from './gpx-routes.js';
@@ -60,6 +61,8 @@ import { ROUTE_ARCHIVE_RE } from './gpx-backup.js';
 import { StorageReadOnlyError } from './storage-owner.js';
 import { IdentityConflictError, type SiteIdentityStore } from './site-identity.js';
 import { IdentityError, neutralIdentity } from '../../site/src/lib/site-identity.js';
+import { LanguageError, validateLanguage, type LanguageConfig, type LanguageStore, type LanguageLocale, type LanguageBlocker } from './language.js';
+import { publicPath } from './public-paths.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -69,6 +72,9 @@ export interface ServerConfig {
   settings: SettingsStore;
   secrets: SecretsStore;
   identityStore?: SiteIdentityStore;
+  language?: LanguageStore;
+  /** Observe the real registered table for reserved-root namespace parity. */
+  onRoute?: (route: RouteOptions) => void;
   posts: PostStore;
   pages: PageStore;
   imgHost: string;   // Host header that serves image variants (img subdomain)
@@ -190,7 +196,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // out at this layer. 120s is generous for even a large multipart upload
   // over a slow connection while still bounding one that stalls outright.
   const app = Fastify({ logger: false, trustProxy: 1, requestTimeout: 120_000 });
+  if (cfg.onRoute) app.addHook('onRoute', cfg.onRoute);
   const { users, sessions } = cfg;
+  const language = cfg.language ?? cfg.posts.language;
   let mutationsClosed = false;
   const activeMutations = new Set<Promise<void>>();
   const isWritable = () => !mutationsClosed && cfg.isWritable?.() !== false;
@@ -248,7 +256,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
     const route = req.routeOptions.url;
-    if (route === '/settings' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
+    if (route === '/language' || route === '/settings' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
       || route === '/posts/:tk/publish' || route === '/posts/bulk') reply.header('Cache-Control', 'no-store');
     if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
@@ -927,9 +935,48 @@ export function buildServer(cfg: ServerConfig): AppServer {
   const KEY_PARTIAL = 'API key change saved, but settings were not saved. Reload settings before retrying.';
   const PROVIDER_NOT_FOUND = { error: 'AI provider not found.' };
 
+  app.get('/language', { preHandler: requireAuth }, async (_req, reply) => reply.send(await language.get()));
+  app.put('/language', { preHandler: requireAdmin }, async (req, reply) => {
+    try {
+      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)
+        || Object.keys(req.body).some((key) => key !== 'primary' && key !== 'locales')) throw new LanguageError('Choose a supported language mode.');
+      const next = validateLanguage(req.body);
+      let changed = false;
+      const saved = await language.update(next, async (candidate, client) => {
+        changed = true;
+        // About is the only current page. #288 extends this same locked preflight
+        // to its published registry, rather than querying a separate connection.
+        const about = client
+          ? (await client.query<{ locale: LanguageLocale; body_markdown: string; images: Record<string, ImageDims> }>(
+            `SELECT locale,body_markdown,images FROM pages WHERE key='about' FOR UPDATE`)).rows
+          : (await cfg.pages.keys()).includes('about')
+            ? await cfg.pages.get('about').then((pair) => (['de', 'en'] as const).map((locale) => ({ locale, body_markdown: pair[locale].bodyMarkdown, images: pair[locale].images })))
+            : [];
+        const blockers: LanguageBlocker[] = [];
+        for (const row of about) {
+          if (!candidate.locales.includes(row.locale)) continue;
+          const reason = await pageImageFailure(row.body_markdown, row.images, candidate, row.locale, client);
+          if (reason) blockers.push({ key: 'about', locale: row.locale, field: 'images', reason });
+        }
+        if (blockers.length) throw new LanguageError('Prepare the page images before activating this language.', 'language_pages_incomplete', blockers);
+      });
+      if (!changed) return reply.send(saved);
+      let built = false;
+      try { built = (await cfg.builder.build()).ok; }
+      catch (error) { console.error('Language settings persisted; rebuild failed:', error); }
+      if (!built) return reply.code(502).send({ code: 'language_build_failed', error: 'Language settings were saved, but the rebuild failed. Retry Rebuild site now.', language: saved, persisted: true });
+      return reply.send(saved);
+    } catch (error) {
+      if (error instanceof LanguageError) return reply.code(error.code === 'invalid_language' ? 400 : 409).send({
+        code: error.code, error: error.message, ...(error.blockers ? { blockers: error.blockers } : {}),
+        ...(error.owner ? { owner: error.owner } : {}),
+      });
+      throw error;
+    }
+  });
   app.get('/settings/identity', { preHandler: requireAdmin }, async (_req, reply) => {
     if (!cfg.identityStore) return reply.code(503).send({ error: 'Site identity unavailable.' });
-    return { ...cfg.identityStore.get(), locales: ['de', 'en'] };
+    return { ...cfg.identityStore.get(), locales: (await language.get()).locales };
   });
   app.put('/settings/identity', { preHandler: requireAdmin }, async (req, reply) => {
     if (!cfg.identityStore) return reply.code(503).send({ error: 'Site identity unavailable.' });
@@ -1427,14 +1474,14 @@ export function buildServer(cfg: ServerConfig): AppServer {
   }
 
   /** Render once per locale; metadata alone is never a publication reference. */
-  async function publicationImages(pair: StoredPostPair): Promise<{ foreign: string[]; keys: string[] }> {
+  async function publicationImages(pair: StoredPostPair, mode: LanguageConfig): Promise<{ foreign: string[]; keys: string[] }> {
     const foreign = new Set<string>();
     const keys = new Set<string>();
-    for (const locale of ['de', 'en'] as const) {
+    for (const locale of mode.locales.filter((locale) => !pair[locale].omitted)) {
       const l = pair[locale];
       const body = await analyzeBodyImages(l.bodyMarkdown, l.images, imageBase);
       for (const src of body.foreign) foreign.add(src);
-      const storyUrl = new URL(`${locale === 'en' ? '/en' : ''}/${l.slug}/`, imageBase).href;
+      const storyUrl = new URL(publicPath(mode, locale, 'story', l.slug), imageBase).href;
       for (const src of body.sources) {
         const key = bodyImageKey(src, imageBase, storyUrl);
         if (key !== null) keys.add(key);
@@ -1463,16 +1510,16 @@ export function buildServer(cfg: ServerConfig): AppServer {
    * URLs with NO media row do not block: WordPress-imported and legacy files
    * predate the library and exist on disk perfectly well.
    */
-  async function notReadyPhotos(pair: StoredPostPair, keys: string[]): Promise<string[]> {
+  async function notReadyPhotos(pair: StoredPostPair, keys: string[], mode: LanguageConfig, client?: DbClient): Promise<string[]> {
     if (keys.length === 0) return [];
-    const notReady = await cfg.media.notReadyKeys(keys);
+    const notReady = await cfg.media.notReadyKeys(keys, client);
     // Title images are new library selections, not pre-library legacy heroes.
     // Unknown keys must not slip through notReadyKeys' legacy exception.
-    for (const locale of ['de', 'en'] as const) {
+    for (const locale of mode.locales.filter((locale) => !pair[locale].omitted)) {
       const image = pair[locale].titleImage;
       if (!image) continue;
       const key = srcToKey(image.src, imageBase);
-      if (key !== null && !(await cfg.media.get(key))) notReady.add(key);
+      if (key !== null && !(await cfg.media.get(key, client))) notReady.add(key);
     }
     return [...notReady];
   }
@@ -1481,6 +1528,28 @@ export function buildServer(cfg: ServerConfig): AppServer {
   const FOREIGN_EXAMPLES = 5;
   function foreignImagesMessage(n: number): string {
     return `${n} image(s) in the body or title banner are not hosted here — replace them with library photos or re-host imported body images, then publish again`;
+  }
+
+  async function pageImageFailure(body: string, images: Record<string, ImageDims>, mode: LanguageConfig, locale: LanguageLocale, client?: DbClient): Promise<string | null> {
+    const analyzed = await analyzeBodyImages(body, images, imageBase);
+    if (analyzed.foreign.length) return foreignImagesMessage(analyzed.foreign.length);
+    const url = new URL(publicPath(mode, locale, 'about'), imageBase).href;
+    const keys = analyzed.sources.map((src) => bodyImageKey(src, imageBase, url)).filter((key): key is string => key !== null);
+    const notReady = await cfg.media.notReadyKeys(keys, client);
+    return notReady.size ? `${notReady.size} photo(s) are not ready to publish.` : null;
+  }
+  class PublicationImageError extends PostError {
+    constructor(readonly foreign: string[], readonly notReady: string[]) {
+      super(foreign.length ? foreignImagesMessage(foreign.length)
+        : `${notReady.length} photo(s) are still processing or failed to encode — wait for them to finish, then publish again`,
+      foreign.length ? 'foreign_images' : 'images_not_ready');
+    }
+  }
+  async function validatePublication(pair: StoredPostPair, mode: LanguageConfig, client?: DbClient): Promise<void> {
+    const { foreign, keys } = await publicationImages(pair, mode);
+    if (foreign.length) throw new PublicationImageError(foreign, []);
+    const notReady = await notReadyPhotos(pair, keys, mode, client);
+    if (notReady.length) throw new PublicationImageError([], notReady);
   }
 
   app.get('/posts', { preHandler: requireAuth }, async () => posts.list());
@@ -1502,7 +1571,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   app.get('/posts/:tk/alt-audit', { preHandler: requireAuth }, async (req, reply) => {
     const pair = await posts.get((req.params as { tk: string }).tk);
     if (!pair) return reply.code(404).send({ error: 'post not found' });
-    const audit = auditAltText(pair, await loadGalleryMetadata(pair, cfg.media, imageBase));
+    const audit = auditAltText(pair, await loadGalleryMetadata(pair, cfg.media, imageBase), (await language.get()).locales);
     return reply.send({ count: audit.count, images: audit.images });
   });
 
@@ -1515,8 +1584,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // build will; a media-store failure is a sanitized 500, never stale text.
   app.get('/posts/:tk/preview', { preHandler: requireAuth }, async (req, reply) => {
     const q = (req.query ?? {}) as { locale?: unknown };
-    const locale = q.locale === undefined ? 'de' : String(q.locale);
-    if (locale !== 'de' && locale !== 'en') {
+    const mode = await language.get();
+    const locale = q.locale === undefined ? mode.primary : String(q.locale);
+    if ((locale !== 'de' && locale !== 'en') || !mode.locales.includes(locale)) {
       return reply.code(400).send({ error: "locale must be 'de' or 'en'" });
     }
     const pair = await posts.get((req.params as { tk: string }).tk);
@@ -1535,7 +1605,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
       // non-string title etc. are 400s naming the field, never a TypeError or
       // a Postgres 22P02/23502 surfacing as a sanitized 500.
       const raw = req.body ?? {};
-      validateDraft(raw);
+      const mode = await language.get();
+      validateDraft(raw, mode);
       // `updatedAt` is the optimistic-concurrency echo (the value the editor
       // loaded), not part of the pair itself — strip it before storing. It is
       // optional: callers without it (new posts, WP importer) skip the check.
@@ -1561,8 +1632,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
       // never implicit: an existing non-empty slug only changes when the client
       // says it meant to. Filling an unset ('') slug needs no consent; published
       // posts are still refused outright by the store (slug_locked).
-      if (existing && existing.status !== 'published' && !confirmSlugChange) {
-        for (const locale of ['de', 'en'] as const) {
+      if (existing && !confirmSlugChange) {
+        for (const locale of mode.locales) {
+          if (existing[locale].publishedAt) continue;
           const from = existing[locale].slug;
           const to = pair[locale].slug ?? '';
           if (from !== '' && to !== from) {
@@ -1573,15 +1645,15 @@ export function buildServer(cfg: ServerConfig): AppServer {
           }
         }
       }
-      return reply.send(await posts.upsertDraft(pair, baseUpdatedAt ?? existing?.updatedAt));
+      return reply.send(await posts.upsertDraft(pair, baseUpdatedAt ?? existing?.updatedAt, mode.updatedAt));
     } catch (e) {
       if (e instanceof PostError) {
         if (e.code === 'storage_read_only') return readOnly(reply);
         // `code` lets the editor tell a stale-tab 409 ('conflict' → offer a
         // reload) apart from duplicate_slug/slug_locked 409s.
         const status = e.code === 'not_found' ? 404
-          : e.code === 'duplicate_slug' || e.code === 'slug_locked' || e.code === 'conflict' ? 409 : 400;
-        return reply.code(status).send({ error: e.message, ...(e.code ? { code: e.code } : {}) });
+          : ['duplicate_slug', 'slug_locked', 'conflict', 'locale_published', 'reserved_slug'].includes(e.code ?? '') ? 409 : 400;
+        return reply.code(status).send({ error: e.message, ...(e.code ? { code: e.code } : {}), ...(e.owner ? { owner: e.owner } : {}) });
       }
       throw e;
     }
@@ -1631,8 +1703,12 @@ export function buildServer(cfg: ServerConfig): AppServer {
   app.post<{ Params: { tk: string } }>('/posts/:tk/publish', { preHandler: requireAdmin, bodyLimit: 4096 }, async (req, reply) => {
     const body = req.body;
     if (!body || typeof body !== 'object' || Array.isArray(body)
-      || Object.keys(body).length !== 2
-      || !('baseUpdatedAt' in body) || !('baseRouteVersion' in body)
+      || Object.keys(body).length !== 3
+      || !('baseUpdatedAt' in body) || !('baseRouteVersion' in body) || !('baseLanguageUpdatedAt' in body)
+      || typeof body.baseLanguageUpdatedAt !== 'string'
+      || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(body.baseLanguageUpdatedAt)
+      || !Number.isFinite(Date.parse(body.baseLanguageUpdatedAt))
+      || new Date(body.baseLanguageUpdatedAt).toISOString() !== body.baseLanguageUpdatedAt
       || typeof body.baseUpdatedAt !== 'string'
       || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(body.baseUpdatedAt)
       || !Number.isFinite(Date.parse(body.baseUpdatedAt))
@@ -1641,37 +1717,26 @@ export function buildServer(cfg: ServerConfig): AppServer {
         && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.baseRouteVersion))) {
       return reply.code(400).send({ error: 'invalid publish tokens', code: 'invalid_publish_tokens' });
     }
-    const tokens: PublishTokens = { baseUpdatedAt: new Date(body.baseUpdatedAt), baseRouteVersion: body.baseRouteVersion };
+    const tokens: PublishTokens = { baseUpdatedAt: new Date(body.baseUpdatedAt), baseRouteVersion: body.baseRouteVersion, baseLanguageUpdatedAt: new Date(body.baseLanguageUpdatedAt) };
     const tk = req.params.tk;
     const state = await posts.getPublishState(tk);
     if (!state) return reply.code(404).send({ error: 'post not found' });
     const { pair } = state;
-    try { assertPublishTokens(state, tokens); validateForPublish(pair); } catch (e) {
+    try { assertPublishTokens(state, tokens); validateForPublish(pair, state.language); } catch (e) {
       if (e instanceof PostError) return reply.code(e.code === 'conflict' ? 409 : 400).send({ error: e.message, code: e.code });
       throw e;
-    }
-    const { foreign, keys: imageKeys } = await publicationImages(pair);
-    if (foreign.length > 0) {
-      return reply.code(409).send({
-        error: foreignImagesMessage(foreign.length),
-        foreignImages: foreign.slice(0, FOREIGN_EXAMPLES),
-        foreignImageCount: foreign.length,
-      });
-    }
-    const notReady = await notReadyPhotos(pair, imageKeys);
-    if (notReady.length > 0) {
-      return reply.code(409).send({
-        error: `${notReady.length} photo(s) are still processing or failed to encode — wait for them to finish, then publish again`,
-        notReady,
-      });
     }
     // Read BEFORE publishing: the audit below must judge the library text the
     // live page will show, and a failed read must refuse here rather than turn
     // an already-published post into a 500 (publishing changes no media row).
     const galleryMetadata = await loadGalleryMetadata(pair, cfg.media, imageBase);
     let committed: { updatedAt: Date };
-    try { committed = await posts.publish(tk, tokens); }
+    try { committed = await posts.publish(tk, tokens, validatePublication); }
     catch (e) {
+      if (e instanceof PublicationImageError) return reply.code(409).send({
+        error: e.message, code: e.code,
+        ...(e.foreign.length ? { foreignImages: e.foreign.slice(0, FOREIGN_EXAMPLES), foreignImageCount: e.foreign.length } : { notReady: e.notReady }),
+      });
       if (e instanceof GpxError) return reply.code(e.statusCode).send({ error: e.code, code: e.code, ...(e.counts ? { counts: e.counts } : {}) });
       if (e instanceof PostError) return reply.code(e.code === 'storage_read_only' ? 503 : e.code === 'not_found' ? 404 : 409).send({ error: e.message, code: e.code });
       throw e;
@@ -1688,7 +1753,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // altAudit rides along so the editor can name the photos that went live
     // undescribed (src/alt-audit.ts) without a second round trip. It is
     // reported AFTER the publish succeeded, on purpose: it never gates one.
-    const audit = auditAltText(pair, galleryMetadata);
+    const audit = auditAltText(pair, galleryMetadata, state.language.locales);
     return reply.send({
       published: true,
       build,
@@ -1727,11 +1792,15 @@ export function buildServer(cfg: ServerConfig): AppServer {
   type BulkAction = (typeof BULK_ACTIONS)[number];
 
   app.post('/posts/bulk', { preHandler: requireAdmin }, async (req, reply) => {
-    const b = (req.body ?? {}) as { action?: unknown; keys?: unknown };
+    const b = (req.body ?? {}) as { action?: unknown; keys?: unknown; baseLanguageUpdatedAt?: unknown };
     const action = String(b.action ?? '') as BulkAction;
     if (!BULK_ACTIONS.includes(action)) {
       return reply.code(400).send({ error: `action must be one of ${BULK_ACTIONS.join(', ')}` });
     }
+    if (action === 'publish' && (typeof b.baseLanguageUpdatedAt !== 'string'
+      || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(b.baseLanguageUpdatedAt)
+      || !Number.isFinite(Date.parse(b.baseLanguageUpdatedAt))
+      || new Date(b.baseLanguageUpdatedAt).toISOString() !== b.baseLanguageUpdatedAt)) return reply.code(400).send({ code: 'invalid_publish_tokens', error: 'invalid language token' });
     if (!Array.isArray(b.keys)) return reply.code(400).send({ error: 'keys must be an array' });
     if (b.keys.length > MAX_BULK_KEYS) {
       return reply.code(400).send({ error: `at most ${MAX_BULK_KEYS} posts per request` });
@@ -1751,14 +1820,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
         const pair = action === 'publish' ? state?.pair : await posts.get(tk);
         if (!pair) throw new PostError('post not found');
         if (action === 'publish') {
-          validateForPublish(pair);
-          const { foreign, keys: imageKeys } = await publicationImages(pair);
-          if (foreign.length > 0) throw new PostError(foreignImagesMessage(foreign.length));
-          const notReady = await notReadyPhotos(pair, imageKeys);
-          if (notReady.length > 0) {
-            throw new PostError(`${notReady.length} photo(s) are still processing or failed to encode`);
-          }
-          await posts.publish(tk, { baseUpdatedAt: pair.updatedAt, baseRouteVersion: state!.routeVersion });
+          await posts.publish(tk, { baseUpdatedAt: pair.updatedAt, baseRouteVersion: state!.routeVersion,
+            baseLanguageUpdatedAt: new Date(String(b.baseLanguageUpdatedAt)) }, validatePublication);
           liveChanged = true;
           await posts.getPublishedTrack(tk)
             .then((track) => exportPost(pair, cfg.backupDir, track))
@@ -1918,7 +1981,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const status = (req.query as { status?: string }).status ?? 'pending';
     if (!isCommentStatus(status)) return reply.code(400).send({ error: 'status must be pending or approved' });
     if (!commentsAdmin) return noStore(reply);
-    return reply.header('cache-control', 'no-store').send({ comments: await commentsAdmin.list(status) });
+    return reply.header('cache-control', 'no-store').send({ comments: await withPublicLocaleMetadata(await commentsAdmin.list(status), posts) });
   });
 
   app.post('/moderation/comments/:id/status', { preHandler: requireAdmin }, async (req, reply) => {
@@ -1965,7 +2028,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // Admin-only: writing a page rebuilds the public site (like publishing a post).
   app.put('/pages/:key', { preHandler: requireAdmin }, async (req, reply) => {
     const key = (req.params as { key: string }).key;
-    const b = (req.body ?? {}) as Partial<Record<'de' | 'en', Partial<PageContent>>> & { updatedAt?: unknown };
+    const b = (req.body ?? {}) as Partial<Record<'de' | 'en', Partial<PageContent>>> & { updatedAt?: unknown; prepareLocale?: unknown };
     const mkLocale = (loc: 'de' | 'en'): PageContent => {
       const src = b[loc] ?? {};
       return {
@@ -1979,7 +2042,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
         images: (src.images ?? {}) as Record<string, ImageDims>,
       };
     };
-    const pair: PagePair = { key, de: mkLocale('de'), en: mkLocale('en') };
+    const pair: PageUpdate = { key, ...(b.de !== undefined ? { de: mkLocale('de') } : {}), ...(b.en !== undefined ? { en: mkLocale('en') } : {}) };
+    if (b.prepareLocale !== undefined && b.prepareLocale !== 'de' && b.prepareLocale !== 'en') return reply.code(400).send({ error: 'invalid preparation locale' });
+    if (b.prepareLocale !== undefined && !Object.hasOwn(b, 'updatedAt')) return reply.code(400).send({ error: 'Preparation requires the loaded updatedAt token.' });
     // `updatedAt` is the optimistic-concurrency echo (issue #141), same
     // contract as posts: optional, and only ever able to make a save fail.
     let baseUpdatedAt: Date | undefined;
@@ -1988,7 +2053,15 @@ export function buildServer(cfg: ServerConfig): AppServer {
       if (Number.isNaN(baseUpdatedAt.getTime())) return reply.code(400).send({ error: 'invalid updatedAt' });
     }
     try {
-      const saved = await cfg.pages.save(pair, baseUpdatedAt);
+      const saved = await cfg.pages.save(pair, baseUpdatedAt, {
+        prepareLocale: b.prepareLocale,
+        validate: async (candidate, mode, client) => {
+          for (const locale of mode.locales) {
+            const reason = await pageImageFailure(candidate[locale].bodyMarkdown, candidate[locale].images, mode, locale, client);
+            if (reason) throw new PageError(reason, 'images_not_ready');
+          }
+        },
+      });
       const build = await cfg.builder.build();
       return reply.send({ saved, build });
     } catch (e) {
@@ -2111,6 +2184,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     try {
       prepared = await (cfg.prepareImport ?? prepareImport)(xml, {
         postStore: cfg.posts, storageDir: cfg.storageDir, baseUrl: cfg.baseUrl,
+        language: await language.get(),
         delayMs: importDelayMs,
         retries: importRetries,
         encoding: { convertJpeg, webpQuality, avifQuality },

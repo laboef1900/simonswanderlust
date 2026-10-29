@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
@@ -23,6 +23,7 @@ import { createSettingsStore, defaultSettings } from '../src/settings.js';
 import { createEncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock } from '../src/work-lock.js';
 import { createDbBackup } from '../src/backup.js';
+import { pgLanguageStore, type LanguageConfig } from '../src/language.js';
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
 const geometry = (offset = 0): PrivateGeometry => ({ version: 1, segments: [
@@ -71,12 +72,12 @@ maybe('explicit GPX publication snapshots (real PostgreSQL and admin worker)', (
 
   it('publishes A identically in DE/EN; draft B/rebuild reads keep A; publishes B; detach/rebuild reads keep B until explicit routeless publish', async () => {
     const f = await fixture();
-    expect(await f.posts.getPublishedTrack(f.tk)).toBeUndefined();
+    expect((await f.posts.getPublishedTrack(f.tk)).track).toBeUndefined();
     await f.attach(geometry());
-    expect(await f.posts.getPublishedTrack(f.tk)).toBeUndefined();
+    expect((await f.posts.getPublishedTrack(f.tk)).track).toBeUndefined();
     const first = await f.posts.publish(f.tk, await publishTokens(f.posts, f.tk));
     expect(first.updatedAt).toEqual((await f.posts.get(f.tk))!.updatedAt);
-    expect(await f.posts.getPublishedTrack(f.tk)).toEqual(expected());
+    expect((await f.posts.getPublishedTrack(f.tk)).track).toEqual(expected());
     const a = await f.snapshots();
     for (const row of a) expect(row.published_snapshot).toMatchObject({ track: expected() });
     expect(JSON.stringify(a)).not.toMatch(/elevation|2026-01-01T00:00:00.000Z|23.456789|source_id/);
@@ -84,17 +85,17 @@ maybe('explicit GPX publication snapshots (real PostgreSQL and admin worker)', (
     await f.posts.upsertDraft({ ...(await f.posts.get(f.tk))!, de: { ...f.pair.de, title: 'Draft B' } });
     await ensureSchema(pool); // boot/backfill must not promote draft geometry
     expect(await f.snapshots()).toEqual(a);
-    expect(await f.posts.getPublishedTrack(f.tk)).toEqual(expected());
+    expect((await f.posts.getPublishedTrack(f.tk)).track).toEqual(expected());
     await f.posts.publish(f.tk, await publishTokens(f.posts, f.tk));
-    expect(await f.posts.getPublishedTrack(f.tk)).toEqual(expected(1));
+    expect((await f.posts.getPublishedTrack(f.tk)).track).toEqual(expected(1));
     const b = await f.snapshots();
     const tokens = await publishTokens(f.posts, f.tk);
     await f.routes.detach(f.tk, { baseVersion: tokens.baseRouteVersion, baseUpdatedAt: tokens.baseUpdatedAt.toISOString() });
     await ensureSchema(pool);
     expect(await f.snapshots()).toEqual(b);
-    expect(await f.posts.getPublishedTrack(f.tk)).toEqual(expected(1));
+    expect((await f.posts.getPublishedTrack(f.tk)).track).toEqual(expected(1));
     await f.posts.publish(f.tk, await publishTokens(f.posts, f.tk));
-    expect(await f.posts.getPublishedTrack(f.tk)).toBeUndefined();
+    expect((await f.posts.getPublishedTrack(f.tk)).track).toBeUndefined();
     for (const row of await f.snapshots()) expect(row.published_snapshot).not.toHaveProperty('track');
   });
 
@@ -190,13 +191,13 @@ maybe('explicit GPX publication snapshots (real PostgreSQL and admin worker)', (
       await pool.query('DROP FUNCTION refuse_public_snapshot()');
     }
     await f.posts.publish(f.tk, tokens);
-    expect(await f.posts.getPublishedTrack(f.tk)).toEqual(expected(1));
+    expect((await f.posts.getPublishedTrack(f.tk)).track).toEqual(expected(1));
   });
 
-  it('returns only pair plus route token from coherent publish-state reads', async () => {
+  it('returns pair, language and route token without private geometry from coherent publish-state reads', async () => {
     const f = await fixture(); const route = await f.attach(geometry());
     const state = await f.posts.getPublishState(f.tk);
-    expect(Object.keys(state!).sort()).toEqual(['pair', 'routeVersion']);
+    expect(Object.keys(state!).sort()).toEqual(['language', 'pair', 'routeVersion']);
     expect(state!.routeVersion).toBe(route.version);
     expect(state!.pair.updatedAt).toEqual(route.updatedAt);
     expect(JSON.stringify(state)).not.toMatch(/segments|elevation|sourceId|23.456789/);
@@ -204,7 +205,10 @@ maybe('explicit GPX publication snapshots (real PostgreSQL and admin worker)', (
 });
 
 maybe('GPX publish HTTP bulk and failed-build boundary (real PostgreSQL)', () => {
-  it('serially publishes two attached pairs; a failed build leaves both new snapshots available to an explicit rebuild', async () => {
+  it.each<LanguageConfig>([
+    { primary: 'de', locales: ['de'] }, { primary: 'en', locales: ['en'] },
+    { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
+  ])('publishes and backs up primary-only tracks through bulk/single/Export all: $primary/$locales', async language => {
     const schema = `gpx_publish_http_${randomUUID().replaceAll('-', '')}`;
     const owner = new pg.Pool({ connectionString: url });
     await owner.query(`CREATE SCHEMA ${schema}`);
@@ -230,6 +234,7 @@ maybe('GPX publish HTTP bulk and failed-build boundary (real PostgreSQL)', () =>
     const app = buildServer({
       storageDir: join(root, 'images'), siteDir: join(root, 'site'), backupDir: join(root, 'mdx'),
       baseUrl: 'https://images.test', imgHost: 'images.test', users, sessions, posts,
+      language: pgLanguageStore(pool),
       pages: memoryPageStore(), media, encodeQueue: queue, secrets: memorySecretsStore(),
       settings: createSettingsStore({ path: join(root, 'settings.json'), defaults: defaultSettings() }),
       dbBackup: createDbBackup({ db: pool, dir: join(root, 'backup'), retention: () => 10 }),
@@ -239,30 +244,44 @@ maybe('GPX publish HTTP bulk and failed-build boundary (real PostgreSQL)', () =>
         build: async () => {
           buildCount++;
           if (failBuild) return { ok: false, error: 'synthetic build failure' };
-          builtTracks.push(...await Promise.all(keys.map((tk) => posts.getPublishedTrack(tk))));
+          builtTracks.push(...await Promise.all(keys.map(async (tk) => (await posts.getPublishedTrack(tk)).track)));
           return { ok: true, release: 'synthetic' };
         },
       },
     });
     try {
       await ensureSchema(pool);
+      await pool.query('UPDATE site_language SET primary_locale=$1,enabled_locales=$2::text[]', [language.primary, language.locales]);
       await mkdir(join(root, 'images'), { recursive: true });
       const admin = await users.create({ username: 'synthetic-admin', password: 'synthetic-password', isAdmin: true });
       const cookies = { sid: await sessions.create(admin.id, 60_000) };
       for (let i = 0; i < 2; i++) {
         const id = randomUUID();
-        const locale = (locale: 'de' | 'en'): PostLocale => ({ locale, slug: `${locale}-${id}`, title: 'Synthetic', country: 'Test', excerpt: 'Synthetic excerpt', heroImage: { src: 'https://images.test/hero', width: 100, height: 100, alt: 'Synthetic' }, bodyMarkdown: 'Synthetic text', images: {} });
+        const locale = (locale: 'de' | 'en'): PostLocale => ({ locale, slug: `${locale}-${id}`, omitted: locale !== language.primary, title: 'Synthetic', country: 'Test', excerpt: 'Synthetic excerpt', heroImage: { src: 'https://images.test/hero', width: 100, height: 100, alt: 'Synthetic' }, bodyMarkdown: 'Synthetic text', images: {} });
         const pair = await posts.upsertDraft({ translationKey: '', status: 'draft', shared: { date: '2026-01-01', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 2 } }, de: locale('de'), en: locale('en') });
         keys.push(pair.translationKey);
         await routes.attach(pair.translationKey, { baseVersion: null, baseUpdatedAt: pair.updatedAt.toISOString() }, geometry(i),
           { translationKey: pair.translationKey, sourceId: randomUUID(), sha256: 'a'.repeat(64), bytes: 100 }, false);
       }
-      const response = await app.inject({ method: 'POST', url: '/posts/bulk', cookies, payload: { action: 'publish', keys } });
+      const baseLanguageUpdatedAt = (await pgLanguageStore(pool).get()).updatedAt.toISOString();
+      const response = await app.inject({ method: 'POST', url: '/posts/bulk', cookies, payload: { action: 'publish', keys, baseLanguageUpdatedAt } });
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({ succeeded: 2, failed: 0, build: { ok: false } });
       expect({ maximum, transformed, buildCount }).toEqual({ maximum: 1, transformed: 2, buildCount: 1 });
       expect(builtTracks).toEqual([]);
-      for (const [i, tk] of keys.entries()) expect(await posts.getPublishedTrack(tk)).toEqual(expected(i));
+      for (const [i, tk] of keys.entries()) expect((await posts.getPublishedTrack(tk)).track).toEqual(expected(i));
+      for (const [index, tk] of keys.entries()) {
+        const pair = (await posts.get(tk))!;
+        const text = await readFile(join(root, 'mdx', 'trips', language.primary, `${pair[language.primary].slug}.mdx`), 'utf8');
+        const trackLine = /^track: (.+)$/m.exec(text);
+        expect(trackLine).not.toBeNull();
+        // PostgreSQL JSONB reorders object keys. The contract is the complete
+        // public geometry (including segment boundaries), not its JSON spelling.
+        expect(JSON.parse(trackLine![1]!)).toEqual(expected(index));
+        expect(text).not.toMatch(/elevation|sourceId|source_id|sha256|12\.345678|23\.456789/);
+        const secondary = language.primary === 'de' ? 'en' : 'de';
+        await expect(readFile(join(root, 'mdx', 'trips', secondary, `${pair[secondary].slug}.mdx`))).rejects.toMatchObject({ code: 'ENOENT' });
+      }
       failBuild = false;
       expect((await app.inject({ method: 'POST', url: '/rebuild', cookies })).json().ok).toBe(true);
       expect(builtTracks).toEqual([expected(), expected(1)]);
@@ -276,7 +295,7 @@ maybe('GPX publish HTTP bulk and failed-build boundary (real PostgreSQL)', () =>
         { translationKey: tk, sourceId: randomUUID(), sha256: 'b'.repeat(64), bytes: 100 }, true);
       const changed = await publishTokens(posts, tk);
       const refused = await app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies,
-        payload: { baseUpdatedAt: changed.baseUpdatedAt.toISOString(), baseRouteVersion: changed.baseRouteVersion } });
+        payload: { baseUpdatedAt: changed.baseUpdatedAt.toISOString(), baseRouteVersion: changed.baseRouteVersion, baseLanguageUpdatedAt } });
       expect(refused.statusCode).toBe(422);
       expect(refused.headers['cache-control']).toBe('no-store');
       expect(refused.json()).toEqual({
@@ -288,11 +307,33 @@ maybe('GPX publish HTTP bulk and failed-build boundary (real PostgreSQL)', () =>
       expect(counts.retainedRuns).toBeLessThanOrEqual(101);
       expect(counts.bytes).toBeGreaterThan(0);
       expect(counts.bytes).toBeLessThanOrEqual(65_537);
-      const bulkRefusal = await app.inject({ method: 'POST', url: '/posts/bulk', cookies, payload: { action: 'publish', keys: [tk] } });
+      const bulkRefusal = await app.inject({ method: 'POST', url: '/posts/bulk', cookies, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt } });
       expect(bulkRefusal.json()).toMatchObject({ succeeded: 0, failed: 1,
         results: [{ key: tk, ok: false, code: 'track_public_limit', counts: refused.json().counts }] });
-      expect(await posts.getPublishedTrack(tk)).toEqual(expected());
+      expect((await posts.getPublishedTrack(tk)).track).toEqual(expected());
       expect(buildCount).toBe(2); // Neither refusal switches a release or starts a build.
+      // An ordinary single Publish and Export all use the same validated artifact.
+      const secondKey = keys[1]!;
+      const secondTokens = await publishTokens(posts, secondKey);
+      const single = await app.inject({ method: 'POST', url: `/posts/${secondKey}/publish`, cookies,
+        payload: { baseUpdatedAt: secondTokens.baseUpdatedAt.toISOString(), baseRouteVersion: secondTokens.baseRouteVersion, baseLanguageUpdatedAt } });
+      expect(single.statusCode).toBe(200);
+      const pair = (await posts.get(secondKey))!;
+      const singleExport = await readFile(join(root, 'mdx', 'trips', language.primary, `${pair[language.primary].slug}.mdx`), 'utf8');
+      const singleTrack = /^track: (.+)$/m.exec(singleExport);
+      expect(singleTrack).not.toBeNull();
+      expect(JSON.parse(singleTrack![1]!)).toEqual(expected(1));
+      const exported = await app.inject({ method: 'POST', url: '/export', cookies });
+      expect(exported.statusCode).toBe(200);
+      expect(exported.json()).toMatchObject({ count: 2 });
+      for (const [index, key] of keys.entries()) {
+        const exportedPair = (await posts.get(key))!;
+        const text = await readFile(join(root, 'mdx', 'trips', language.primary, `${exportedPair[language.primary].slug}.mdx`), 'utf8');
+        const exportedTrack = /^track: (.+)$/m.exec(text);
+        expect(exportedTrack).not.toBeNull();
+        expect(JSON.parse(exportedTrack![1]!)).toEqual(expected(index));
+        expect(text).not.toMatch(/elevation|sourceId|source_id|sha256|12\.345678|23\.456789/);
+      }
     } finally {
       await app.close(); await queue.quiesce(); await worker.close(); await pool.end();
       await owner.query(`DROP SCHEMA ${schema} CASCADE`); await owner.end();

@@ -63,7 +63,7 @@ maybe('GPX and text saves share PostgreSQL pair isolation', () => {
     fixtures.push({ root, service });
     const posts = pgPostStore(pool, { routeFiles: files });
     const slug = randomUUID();
-    const locale = (locale: 'de' | 'en'): PostLocale => ({ locale, slug: `${locale}-${slug}`, title: 'Before save', country: 'Test', excerpt: '', heroImage: { src: '', width: 1, height: 1, alt: '' }, bodyMarkdown: 'Original text', images: {} });
+    const locale = (locale: 'de' | 'en'): PostLocale => ({ locale, slug: `${locale}-${slug}`, title: 'Before save', country: 'Test', excerpt: 'Synthetic excerpt', heroImage: { src: 'https://images.test/hero', width: 100, height: 100, alt: 'Landscape' }, bodyMarkdown: 'Original text', images: {} });
     const pair = await posts.upsertDraft({ translationKey: '', status: 'draft', shared: { date: '2026-01-01', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 2 } }, de: locale('de'), en: locale('en') });
     const preview = await service.importBytes('synthetic-author', xml);
     const attach = (token: string, version: string | null = null) => service.attach('synthetic-author', pair.translationKey, { importId: preview.importId, baseVersion: version, baseUpdatedAt: token, selection, confirmReplace: version !== null });
@@ -158,7 +158,22 @@ maybe('GPX and text saves share PostgreSQL pair isolation', () => {
     try {
       await blocker.query('BEGIN'); await lockPostPair(blocker, tk);
       const deleted = outcome(f.posts.remove(tk)); pending.push(deleted); await waiters(1);
-      const saved = outcome(f.posts.upsertDraft(current, current.updatedAt)); pending.push(saved); await waiters(2);
+      const saved = outcome(f.posts.upsertDraft(current, current.updatedAt)); pending.push(saved);
+      // Delete holds the language row while waiting for our pair lock. Save
+      // must wait behind Delete at that row, not bypass it to the pair lock.
+      const blockerPid = (await blocker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+      await until(async () => {
+        const result = await owner.query<{ blocked: boolean }>(
+          `SELECT EXISTS (
+             SELECT 1 FROM pg_stat_activity deletion
+             JOIN pg_stat_activity saving ON deletion.pid = ANY(pg_blocking_pids(saving.pid))
+             WHERE deletion.application_name=$1 AND saving.application_name=$1
+               AND $2::int = ANY(pg_blocking_pids(deletion.pid))
+               AND deletion.wait_event='advisory' AND saving.wait_event_type='Lock'
+           ) AS blocked`, [applicationName, blockerPid],
+        );
+        return result.rows[0]?.blocked === true;
+      });
       await blocker.query('COMMIT');
       expect((await deleted).ok).toBe(true);
       expect(await saved).toMatchObject({ ok: false, error: { code: 'not_found' } });

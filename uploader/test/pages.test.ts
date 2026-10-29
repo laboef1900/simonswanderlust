@@ -111,8 +111,8 @@ describe('memoryPageStore', () => {
     expect(revs).toHaveLength(REVISION_CAP);
     // The newest revision is the state the LAST save overwrote (v21), the
     // oldest survivors dropped the seed and v1.
-    expect(revs[0]!.titleDe).toBe(`v${REVISION_CAP + 1}`);
-    expect(revs[REVISION_CAP - 1]!.titleDe).toBe('v2');
+    expect(revs[0]!.title).toBe(`v${REVISION_CAP + 1}`);
+    expect(revs[REVISION_CAP - 1]!.title).toBe('v2');
     const full = await s.getRevision('about', revs[0]!.id);
     expect(full!.snapshot).toEqual({ de: { ...pair().de, title: `v${REVISION_CAP + 1}`, bodyMarkdown: `body ${REVISION_CAP + 1}` }, en: pair().en });
     expect(await s.getRevision('about', 'nope')).toBeNull();

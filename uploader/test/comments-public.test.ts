@@ -15,9 +15,10 @@ import type { EncodeQueue } from '../src/encode-queue.js';
 import type { DbBackup } from '../src/backup.js';
 import { memorySecretsStore } from '../src/secrets.js';
 import { memoryCommentStore } from '../src/comments.js';
-import { memoryCommentAdminStore } from '../src/comments-admin.js';
+import { memoryCommentAdminStore, withPublicLocaleMetadata } from '../src/comments-admin.js';
 import { commentLimiters, fixedWindowLimiter } from '../src/rate-limit.js';
 import { requestOrigin } from '../src/comments-public.js';
+import { memoryLanguageStore } from '../src/language.js';
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'cpub-')); });
@@ -92,6 +93,78 @@ function post(b: B, payload: unknown, headers: Record<string, string> = { origin
 }
 
 const PUBLIC_KEYS = ['id', 'authorName', 'body', 'createdAt', 'isAuthor', 'postedLocale'].sort();
+
+describe('committed comment locale coverage', () => {
+  it.each(['de', 'en'] as const)('keeps saved secondary work private until publication with %s primary', async (primary) => {
+    const secondary = primary === 'de' ? 'en' : 'de';
+    const language = memoryLanguageStore({ primary, locales: [primary, secondary] });
+    const posts = memoryPostStore({ language });
+    const b = { ...build({ posts }), posts };
+    const tk = `coverage-${primary}`;
+    const initial = pair(tk);
+    initial[secondary].omitted = true;
+    await posts.upsertDraft(initial);
+    await posts.publish(tk, await publishTokens(posts, tk));
+    const legacy = await b.comments.create({ translationKey: tk, locale: secondary, name: 'Legacy', body: 'Retained translation discussion' });
+    await b.comments.approve(legacy.id);
+    const active = await b.comments.create({ translationKey: tk, locale: primary, name: 'Active', body: 'Primary discussion' });
+    await b.comments.approve(active.id);
+    const list = async () => (await b.app.inject({ method: 'GET', url: `/comments?tk=${tk}` })).json();
+    const hidden = async () => {
+      expect((await post(b, good(tk, { postedLocale: secondary }))).statusCode).toBe(400);
+      expect((await list()).comments.map((row: { id: string }) => row.id)).toEqual([active.id]);
+      const moderation = await withPublicLocaleMetadata([legacy, active], posts);
+      expect(moderation.map((row) => [row.id, row.publicLocale])).toEqual([[legacy.id, false], [active.id, true]]);
+    };
+    await hidden();
+    const saved = (await posts.get(tk))!;
+    const incomplete = await posts.upsertDraft({ ...saved, [secondary]: { ...saved[secondary], omitted: false, title: '' } }, saved.updatedAt);
+    await expect(posts.publish(tk, await publishTokens(posts, tk))).rejects.toThrow(/title required/);
+    await hidden();
+    await posts.upsertDraft({ ...incomplete, [secondary]: { ...incomplete[secondary], title: 'Translated title' } }, incomplete.updatedAt);
+    await hidden();
+    const staleTokens = await publishTokens(posts, tk);
+    const current = (await posts.get(tk))!;
+    await posts.upsertDraft({ ...current, [secondary]: { ...current[secondary], title: 'Changed after token' } }, current.updatedAt);
+    await expect(posts.publish(tk, staleTokens)).rejects.toThrow();
+    await hidden();
+    await posts.publish(tk, await publishTokens(posts, tk));
+    expect((await post(b, good(tk, { postedLocale: secondary }))).statusCode).toBe(201);
+    const publishedRows = (await list()).comments;
+    expect(new Set(publishedRows.map((row: { id: string }) => row.id))).toEqual(new Set([legacy.id, active.id]));
+    for (const row of publishedRows) expect(Object.keys(row).sort()).toEqual(PUBLIC_KEYS);
+    expect((await withPublicLocaleMetadata([legacy, active], posts)).every((row) => row.publicLocale)).toBe(true);
+    await posts.unpublish(tk);
+    expect((await b.app.inject({ method: 'GET', url: `/comments?tk=${tk}` })).statusCode).toBe(404);
+    expect((await post(b, good(tk, { postedLocale: primary }))).statusCode).toBe(404);
+    expect(b.comments.all().some((row) => row.id === legacy.id)).toBe(true);
+    expect((await withPublicLocaleMetadata([legacy, active], posts)).every((row) => !row.publicLocale)).toBe(true);
+    await b.app.close();
+  });
+
+  it('filters hidden locales before the public result cap and before the flags verdict', async () => {
+    const posts = memoryPostStore();
+    const b = { ...build({ posts }), posts };
+    const tk = 'coverage-cap';
+    const initial = pair(tk, { commentsEnabled: false });
+    initial.en.omitted = true;
+    await posts.upsertDraft(initial);
+    await posts.publish(tk, await publishTokens(posts, tk));
+    for (let i = 0; i < 501; i++) {
+      const row = await b.comments.create({ translationKey: tk, locale: 'en', name: 'Legacy', body: `Hidden ${i}` });
+      await b.comments.approve(row.id);
+    }
+    const active = await b.comments.create({ translationKey: tk, locale: 'de', name: 'Active', body: 'Still returned' });
+    await b.comments.approve(active.id);
+    const result = await b.app.inject({ method: 'GET', url: `/comments?tk=${tk}` });
+    expect(result.json()).toMatchObject({ enabled: false, comments: [{ id: active.id }] });
+    expect(result.json().comments).toHaveLength(1);
+    expect((await post(b, good(tk, { postedLocale: 'en' }))).statusCode).toBe(400);
+    expect((await post(b, good(tk))).statusCode).toBe(409);
+    expect(b.comments.all()).toHaveLength(502);
+    await b.app.close();
+  });
+});
 
 describe('GET /comments (SPEC-API-001)', () => {
   it('400 without tk, empty tk, or an over-long tk', async () => {
