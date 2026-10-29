@@ -312,6 +312,10 @@ signed):
   locale payload cannot demand confirmation for a value the save will ignore. Retained disabled
   slug/body values stay unchanged; enabled draft renames still require consent and published
   locale slugs stay locked.
+  The route passes the language token used for this consent check into `upsertDraft`.
+  Both stores recheck it under the language lock before writing. If activation enables the
+  submitted secondary between route precheck and transaction, Save returns 409 without changing
+  either locale; it cannot apply that newly enabled slug without the required confirmation.
 - **Published snapshot (#20):** unchanged per row. Omitted rows never get one (CHECK).
   A never-published, non-omitted secondary may also have no snapshot: it is a requested draft,
   not committed publication. A draft save leaves existing published snapshots/status unchanged.
