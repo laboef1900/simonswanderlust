@@ -613,7 +613,7 @@
           }
           tr.appendChild(td);
           tbody.appendChild(tr);
-          if (focusedControl) emptyAction.focus({ preventScroll: true });
+          if (focusedControl) emptyAction.focus({ preventScroll: !!nextFocus });
           return;
         }
         for (const p of posts) {
@@ -750,7 +750,7 @@
 
           tbody.appendChild(tr);
         }
-        if (focusedControl) (nextFocus || matchingTitle || $('fSearch')).focus({ preventScroll: true });
+        if (focusedControl) (nextFocus || matchingTitle || $('fSearch')).focus({ preventScroll: !!nextFocus });
       }
 
       function syncSelectAll() {
