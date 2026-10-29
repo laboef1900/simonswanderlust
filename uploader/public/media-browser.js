@@ -364,6 +364,7 @@
     var save = el('button', null, 'Save details');
     save.id = 'dSave';
     save.type = 'button';
+    save.disabled = state.detailSaving;
     save.addEventListener('click', function () { saveDetail(item.key); });
     panel.appendChild(save);
     var unsaved = el('p', 'muted', 'Unsaved changes — Save details to keep them.');
@@ -785,6 +786,7 @@
     if (state.detailSaving) return;
     if (state.detailRecovery && !current) { say(copy.mediaConditionalReview); return; }
     var generation = state.detailGeneration;
+    var titleInput = $('dTitle');
     setDetailSaving(true);
     try {
       var patch = detailPatch(current && state.detailRecovery ? state.detailRecovery.patch : null);
@@ -796,6 +798,12 @@
       var saved = await api.savePatch(client, key, patch, api.expectations(patch, current || state.detailItem));
       state.items = state.items.map(function (item) { return item.key === key ? saved : item; });
       if ($('detail').dataset.key !== key) return;
+      if ($('dTitle') !== titleInput) {
+        // Navigation discarded that form. Refresh a clean reopened panel, but
+        // never advance a new dirty panel's editing base underneath its inputs.
+        if (!state.detailDirty) renderDetail();
+        return;
+      }
       if (state.detailGeneration !== generation) {
         // Advance only acknowledged leaves. Newer inputs stay untouched, and
         // unrelated values in the response must not become unintended edits.
@@ -818,6 +826,7 @@
       if (error.status === 401 || (error.probeError && error.probeError.status === 401)) {
         fail(error.probeError || error);
       }
+      if ($('dTitle') !== titleInput) return;
       if (error.unsupported || error.unknown || error.status === 409) {
         error.patch = patch;
         error.generation = generation;
