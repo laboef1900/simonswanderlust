@@ -525,9 +525,14 @@ Only 401 redirects to login; other failures stay unavailable with read-only retr
 `/setup`, `/login`, `/auth/status`, session issuance, setup locking and auth rate limits
 are unchanged. Client roles only gate presentation; `GET`/`POST /onboarding` require admin.
 Both onboarding routes are `no-store`. GET returns `{ status: 'retired' }` or
-`{ status: 'open' | 'dismissed', complete, steps: [{ id, state, required, href }] }`;
-internal reasons, timestamps and content counts are not exposed. Progress is derived in one
-read-only REPEATABLE READ snapshot. POST accepts only `{ action: 'dismiss' | 'resume' | 'finish' }`
+`{ status: 'open' | 'dismissed', complete, steps: [{ id, state, required, href }], language }`.
+The eligible-only language projection is `{ primary, locales, lockedAt, updatedAt }`, read
+with progress through the same read-only REPEATABLE READ client. Internal onboarding reasons,
+timestamps and content counts are not exposed. Language is optional configuration after Account,
+not a completion step: no acknowledgement is stored and the three Finish predicates are unchanged.
+Its explicit Save uses the existing admin-only `PUT /language`; publication-locked onboarding is
+read-only, while Settings retains allowed secondary activation. POST onboarding accepts only
+`{ action: 'dismiss' | 'resume' | 'finish' }`
 (1 KiB limit); invalid actions return 400, retired/incomplete actions 409 and owner loss
 503 `storage_read_only`. Finish locks/rechecks the singleton and required predicates in one
 transaction; it never trusts the browser. Metadata actions do not create content or publish.

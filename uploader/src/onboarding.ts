@@ -1,6 +1,7 @@
 import type { DbPool, DbClient } from './db.js';
 import { StorageReadOnlyError } from './storage-owner.js';
 import { identityConfigured } from './site-identity.js';
+import { readLanguage, type LanguageConfig } from './language.js';
 
 export const RETIRED_REASONS = ['existing-schema', 'existing-accounts', 'existing-content', 'existing-data', 'restored-content', 'finished'] as const;
 export type RetiredReason = typeof RETIRED_REASONS[number];
@@ -10,8 +11,9 @@ export type OnboardingState =
 export type OnboardingAction = 'dismiss' | 'resume' | 'finish';
 export type StepId = 'account' | 'identity' | 'photo' | 'story' | 'publish';
 export type StepState = 'done' | 'todo' | 'in_progress' | 'attention';
-export type OnboardingView = { status: 'retired' } | { status: 'open' | 'dismissed'; complete: boolean; steps: { id: StepId; state: StepState; required: boolean; href: string | null }[] };
-export interface OnboardingProgress { identity: boolean; ready: boolean; processing: boolean; attention: boolean; story: boolean; published: boolean; newest: string | null; newestDraft: string | null }
+export type OnboardingLanguage = LanguageConfig & { lockedAt: string | null; updatedAt: string };
+export type OnboardingView = { status: 'retired' } | { status: 'open' | 'dismissed'; complete: boolean; language: OnboardingLanguage; steps: { id: StepId; state: StepState; required: boolean; href: string | null }[] };
+export interface OnboardingProgress { language: OnboardingLanguage; identity: boolean; ready: boolean; processing: boolean; attention: boolean; story: boolean; published: boolean; newest: string | null; newestDraft: string | null }
 export interface OnboardingStore { read(): Promise<OnboardingView>; act(action: OnboardingAction): Promise<OnboardingView> }
 export class OnboardingError extends Error {
   constructor(readonly code: 'onboarding_retired' | 'onboarding_incomplete') { super(code); }
@@ -41,6 +43,8 @@ export function onboardingView(state: OnboardingState, progress?: OnboardingProg
   return {
     status: state.dismissedAt === null ? 'open' : 'dismissed',
     complete: progress.ready && progress.story && progress.published,
+    language: { primary: progress.language.primary, locales: [...progress.language.locales],
+      lockedAt: progress.language.lockedAt, updatedAt: progress.language.updatedAt },
     steps: [
       { id: 'account', state: 'done', required: false, href: null },
       { id: 'identity', state: progress.identity ? 'done' : 'todo', required: false, href: '/admin/settings.html#identity' },
@@ -55,8 +59,10 @@ export async function readOnboardingState(client: Pick<DbClient, 'query'>, lock 
   if (result.rows.length > 1) throw invalid();
   return result.rows.length === 0 ? null : decodeOnboardingRow(result.rows[0]);
 }
-export async function readOnboardingProgress(client: Pick<DbClient, 'query'>): Promise<OnboardingProgress> {
+export async function readOnboardingProgress(client: DbClient): Promise<OnboardingProgress> {
   const identity = await identityConfigured(client);
+  // Use this transaction's snapshot, including the history-derived publication lock.
+  const language = await readLanguage(client);
   const { rows } = await client.query(`SELECT
     EXISTS(SELECT 1 FROM media WHERE status='ready') AS ready,
     EXISTS(SELECT 1 FROM media WHERE status='processing') AS processing,
@@ -65,7 +71,8 @@ export async function readOnboardingProgress(client: Pick<DbClient, 'query'>): P
     EXISTS(SELECT 1 FROM posts WHERE status='published') AS published,
     (SELECT translation_key FROM posts ORDER BY created_at DESC, translation_key ASC, locale ASC LIMIT 1) AS newest,
     (SELECT translation_key FROM posts WHERE status='draft' ORDER BY created_at DESC, translation_key ASC, locale ASC LIMIT 1) AS "newestDraft"`);
-  return { identity, ...rows[0] };
+  return { identity, ...rows[0], language: { primary: language.primary, locales: language.locales,
+    lockedAt: language.lockedAt?.toISOString() ?? null, updatedAt: language.updatedAt.toISOString() } };
 }
 function transition(state: OnboardingState, action: OnboardingAction, progress: OnboardingProgress, now: string): OnboardingState {
   if (state.state === 'retired') throw new OnboardingError('onboarding_retired');
