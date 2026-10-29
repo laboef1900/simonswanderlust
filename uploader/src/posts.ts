@@ -94,7 +94,7 @@ export interface StoredPostPair extends PostPair { hasUnpublishedChanges: boolea
 /** Operational evidence, never part of content, revisions or exports. */
 export interface SaveReceipt { readonly saveId: string; readonly ownerUserId: string }
 export interface SaveRead<T> { content: T; ownerUserId: string; lastSaveId: string | null }
-export interface PostSaveOptions { createOnly?: boolean; receipt?: SaveReceipt }
+export interface PostSaveOptions { createOnly?: boolean; receipt?: SaveReceipt; baseLanguageUpdatedAt?: Date }
 /** Whole-pair snapshot of the working copy just BEFORE a save overwrote it (issue #28). */
 export type RevisionSnapshot = Pick<PostPair, 'status' | 'shared' | 'de' | 'en'>;
 export interface RevisionSummary {
@@ -171,6 +171,12 @@ export function assertPublishTokens(state: PublishState, tokens: PublishTokens):
   }
 }
 
+function assertDraftLanguage(language: LanguageState, baseUpdatedAt?: Date): void {
+  if (baseUpdatedAt && language.updatedAt.getTime() !== baseUpdatedAt.getTime()) {
+    throw new PostError('language changed since validation; reload before saving', 'conflict');
+  }
+}
+
 export interface PostStore {
   readonly language: LanguageStore;
   list(): Promise<PostSummary[]>;
@@ -185,6 +191,8 @@ export interface PostStore {
    * 'conflict' if the stored pair was modified since — optimistic concurrency.
    * Omitting it skips the check (new posts, WP importer). Every overwrite of
    * an existing pair first snapshots the pre-save state into the revisions.
+   * Route-level slug consent uses this language token; recheck it under the
+   * language lock before a newly enabled locale can become writable.
    */
   upsertDraft(pair: PostPair, baseUpdatedAt?: Date, options?: PostSaveOptions): Promise<StoredPostPair>;
   publish(translationKey: string, tokens: PublishTokens, validate?: PublishValidation): Promise<{ updatedAt: Date }>;
@@ -696,6 +704,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
       return language.runExclusive((mode) => withPair(key, () => {
         const existing = byKey.get(key);
         if (options.createOnly && existing) throw new PostError('post already exists', 'already_exists');
+        assertDraftLanguage(mode, options.baseLanguageUpdatedAt);
         validateDraft(pair, mode);
         pair = draftWithDefaults(pair, mode, existing);
         if (!existing && baseUpdatedAt) throw new PostError('post not found', 'not_found');
@@ -1106,6 +1115,7 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
           const present = await client.query('SELECT 1 FROM posts WHERE translation_key=$1 LIMIT 1', [tk]);
           if (present.rows.length) throw new PostError('post already exists', 'already_exists');
         }
+        assertDraftLanguage(language, options.baseLanguageUpdatedAt);
         validateDraft(pair, language);
         const existing = await readPostPair(client, tk, language, true);
         pair = draftWithDefaults(pair, language, existing);

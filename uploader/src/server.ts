@@ -1643,7 +1643,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
           }
         }
       }
-      const saved = await posts.upsertDraft(pair, baseUpdatedAt ?? existing?.updatedAt, { createOnly, receipt });
+      const saved = await posts.upsertDraft(pair, baseUpdatedAt ?? existing?.updatedAt, { createOnly, receipt, baseLanguageUpdatedAt: mode.updatedAt });
       return reply.send({ ...saved, ownerUserId: receipt.ownerUserId, saveId: receipt.saveId });
     } catch (e) {
       if (e instanceof PostError) {
