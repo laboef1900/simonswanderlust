@@ -668,13 +668,20 @@ describe('posts.html status views and language states', () => {
     expect(views(el).map((v) => v.pressed)).toEqual(['false', 'false', 'false', 'false', 'true']);
   });
 
-  it('hides the views and drops their counts when a reload fails', async () => {
-    const { ctx, el } = await loadedPage('');
-    expect(el('statusViews').hidden).toBe(false);
+  it('retains filter context on a failed refresh while disabling stale publication actions', async () => {
+    const { ctx, el } = await loadedPage('?country=Romania&sort=title');
+    const before = views(el);
     ctx.fetch = () => Promise.reject(NETWORK_DOWN);
     await (vm.runInContext('load', ctx) as () => Promise<void>)();
-    expect(el('statusViews').hidden).toBe(true);
-    expect(views(el).map((v) => v.count)).toEqual(['', '', '', '', '']);
+    expect(el('statusViews').hidden).toBe(false);
+    expect(views(el)).toEqual(before);
+    expect(el('fCountry').value).toBe('Romania');
+    expect(el('fSort').value).toBe('title');
+    expect(el('loadMsg').attrs.role).toBe('alert');
+    expect(el('retryLoad').hidden).toBe(false);
+    expect(el('bulkPublish').disabled).toBe(true);
+    expect(el('bulkUnpublish').disabled).toBe(true);
+    expect(el('bulkDelete').disabled).toBe(true);
   });
 
   it('reports secondary body state without claiming publish readiness, and keeps trip meta', () => {
@@ -739,13 +746,13 @@ describe('posts.html row actions', () => {
 
   it('gives an author Edit alone, never an empty More actions menu', () => {
     const { ctx, el } = loadPosts();
-    expect(rowActions(ctx, el, false, [post, { ...post, translationKey: 'd', status: 'draft' }]))
+    expect(rowActions(ctx, el, false, [post, { ...post, translationKey: 'd', status: 'draft', publication: publication('draft') }]))
       .toEqual([['Edit'], ['Edit']]);
   });
 
-  it('gives an admin Unpublish on a live trip and Delete on every trip', () => {
+  it('gives an admin Unpublish on a CMS-published trip and Delete on every trip', () => {
     const { ctx, el } = loadPosts();
-    expect(rowActions(ctx, el, true, [post, { ...post, translationKey: 'd', status: 'draft' }]))
+    expect(rowActions(ctx, el, true, [post, { ...post, translationKey: 'd', status: 'draft', publication: publication('draft') }]))
       .toEqual([['Edit', ['Unpublish', 'Delete']], ['Edit', ['Delete']]]);
   });
 });

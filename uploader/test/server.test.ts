@@ -2256,9 +2256,13 @@ describe('POST /posts/bulk', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body).toMatchObject({ succeeded: 1, failed: 1 });
-    expect(body.results).toContainEqual({ key: good, ok: true });
-    expect(body.results).toContainEqual({ key: 'does-not-exist', ok: false, error: 'post not found' });
-    expect(s.calls.length).toBe(1); // the successful one still went live
+    expect(body.results).toContainEqual({ key: good, ok: true,
+      updatedAt: (await b.posts.get(good))!.updatedAt.toISOString(),
+      publication: { availability: 'available', status: 'published', requestedLocales: ['de', 'en'],
+        committedLocales: ['de', 'en'], draftDiffers: false, live: { de: 'not-live', en: 'not-live' } } });
+    expect(body.results).toContainEqual({ key: 'does-not-exist', ok: false, error: 'post not found',
+      publication: { availability: 'missing' } });
+    expect(s.calls.length).toBe(1); // one build was requested; only a manifest can prove inclusion
   });
 
   it('surfaces a validation failure per post without touching the others', async () => {

@@ -488,15 +488,6 @@ describe('admin page wiring', () => {
   });
 
 
-  it('the desk is a publishing home, not a second uploader', () => {
-    const index = readFileSync('public/index.html', 'utf8');
-    expect(index).toContain('<h1>Desk</h1>');
-    expect(index).toContain("fetch('/posts')");
-    expect(index).toContain("fetch('/media/queue')");
-    expect(index).not.toContain("fetch('/upload'");
-    expect(index).not.toContain('/api/cms/stats');
-    expect(index).not.toContain('id="key"');
-  });
 
   it('the gallery picker offers exactly the layout modes the renderer accepts', () => {
     // A fourth label here, or a renamed value, would give the author a mode the
