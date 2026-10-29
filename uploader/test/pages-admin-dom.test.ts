@@ -42,7 +42,7 @@ async function editor(key = 'contact', status = 'draft', prepare = false) {
   for (const file of ['language.js', 'tabs.js', 'pages-ui.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
   vm.runInContext(html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>')), context);
   await settle();
-  return { el, requests, questions, page, context, confirm(value: boolean) { confirmed = value; }, fail(status: number, body: object) { failure = { status, body }; } };
+  return { dom, el, requests, questions, page, context, confirm(value: boolean) { confirmed = value; }, fail(status: number, body: object) { failure = { status, body }; } };
 }
 
 describe('generalized page editor', () => {
@@ -72,6 +72,19 @@ describe('generalized page editor', () => {
     h.confirm(true); h.el('deleteBtn').click(); await settle();
     const request = h.requests.find(({ init }) => init.method === 'DELETE')!;
     expect(JSON.parse(String(request.init.body))).toEqual({ updatedAt: stamp });
+  });
+  it('restores keyboard focus to Delete after cancelling its native confirmation', async () => {
+    const h = await editor('contact', 'published');
+    vm.runInContext(readFileSync('public/admin-confirm.js', 'utf8'), h.context);
+    h.el('deleteBtn').focus();
+    h.el('deleteBtn').click(); await settle();
+    const dialog = h.el('adminConfirm');
+    expect(dialog.open).toBe(true);
+    dialog.returnValue = '';
+    dialog.close(); h.dom.flushDialogEvents(); await settle();
+    expect(h.el('deleteBtn').disabled).toBe(false);
+    expect(h.dom.document.activeElement).toBe(h.el('deleteBtn'));
+    expect(h.requests.some(({ init }) => init.method === 'DELETE')).toBe(false);
   });
   it('keeps About undeletable with no editable slug and preserves live-save confirmation', async () => {
     const h = await editor('about', 'published');

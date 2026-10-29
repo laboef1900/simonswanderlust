@@ -251,12 +251,17 @@
       $('deleteBtn').addEventListener('click', async () => {
         if (hasUnsaved()) { showErr(PagesUI.text('SaveFirst')); return; }
         $('deleteBtn').disabled = true; showErr('');
+        let cancelled = false;
         try {
           if (await PagesUI.remove(KEY)) { guard.markClean(guard.snapshot()); location.href = '/admin/pages.html'; }
+          else cancelled = true;
         } catch (error) {
           if (error.body?.persisted) { guard.markClean(guard.snapshot()); $('saveBtn').disabled = true; $('deleteBtn').hidden = true; $('publishBtn').hidden = true; $('unpublishBtn').hidden = true; }
           showErr(error.message);
-        } finally { $('deleteBtn').disabled = false; }
+        } finally {
+          $('deleteBtn').disabled = false;
+          if (cancelled) $('deleteBtn').focus();
+        }
       });
 
       // ---- revisions (#141): same shape as the post editor's card ----
