@@ -101,7 +101,7 @@ Unpublish. The save indicator distinguishes **Not saved yet**, **Unsaved changes
 leaves edits unsaved; edits typed while a save is running still need another save.
 Browser recovery copies do not mean the draft has been saved to the server.
 
-**When a save response is lost:** keep the tab open. The editor and About make one bounded
+**When a save response is lost:** keep the tab open. Story and registered page editors make one bounded
 read to check whether that exact account's save landed; **Check again** performs another
 read, never a replay. A confirmed save advances only its captured snapshot: text typed
 while waiting stays dirty. If another writer changed the stored version, compare the
@@ -111,9 +111,14 @@ stays Unknown; it does not prove the original request failed.
 
 **A different account in another tab:** the form keeps its original owner and pauses.
 Sign in in a second tab, then explicitly resume as that same account. Signing in/focusing
-alone does not send writes. An editor/About 401 may return to login after stashing; restore
+alone does not send writes. A story/page editor 401 may return to login after stashing; restore
 the original account's copy afterwards. Browser recovery copies are scoped to account,
 resource and independent tab context; logout and expiry always keep them.
+
+Ordinary page editing and inactive-language preparation have separate recovery scopes.
+Return to the same editing mode to restore its copy; saving in one mode cannot clean the
+other mode's unsent text.
+
 Old unscoped copies have no trustworthy owner and are not shown or adopted by any account,
 including admins. Browser-profile access can still expose local copies on a shared device.
 
