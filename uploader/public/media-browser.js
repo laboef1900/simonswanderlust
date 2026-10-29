@@ -45,7 +45,12 @@
     canWrite: function () { return !!state.me && !uploads.snapshot().paused; },
   });
   var uploads = api.createUploadQueue(client, {
-    onChange: function (snap) { state.queue = snap; renderQueue(); },
+    onChange: function (snap) {
+      var completed = snap.done > (state.queue ? state.queue.done : 0);
+      state.queue = snap;
+      renderQueue();
+      if (completed) void reload();
+    },
   });
   window.addEventListener('beforeunload', function (event) {
     if (!uploads.snapshot().unsettled) return;
@@ -780,6 +785,9 @@
         if (operation.kind === 'folder') {
           var folders = await client.folders();
           if (!Array.isArray(folders) || folders.some(function (path) { return typeof path !== 'string'; })) throw new Error('invalid_response');
+          state.folders = folders;
+          renderFolders();
+          renderToolbar();
           var present = folders.indexOf(operation.path) !== -1;
           message.textContent = (present ? copy.folderPresent : copy.folderAbsent) + ' ' + operation.path;
           again.hidden = present;
@@ -791,6 +799,8 @@
           message.textContent = copy.moveStored + ' ' + copy.movePolicy;
           lookup.items.forEach(function (item) { results.appendChild(el('li', '', item.key + ': ' + (item.missing ? copy.moveDeleted : item.folder || '/'))); });
           again.hidden = false;
+          // Refresh the visible query separately; the scoped lookup remains its evidence.
+          void reload();
         }
       } catch (error) { message.textContent = copy.writeUnknown; if (error.status === 401) fail(error); }
       finally { check.hidden = false; check.disabled = false; busy = false; }

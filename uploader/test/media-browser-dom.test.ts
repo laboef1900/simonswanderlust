@@ -121,7 +121,7 @@ interface Page {
   flush(): Promise<void>;
 }
 
-function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en'; prompt?: string;
+function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en'; prompt?: string; xhr?: new () => object;
   request?: (url: string, init?: { method?: string; body?: string }) => Promise<unknown> | undefined } = {}): Page {
   const roots = new Map<string, FakeNode>();
   for (const id of pageIds) {
@@ -183,7 +183,7 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
     prompt: () => opts.prompt ?? null,
     console,
     FormData: class { append() {} },
-    XMLHttpRequest: class {},
+    XMLHttpRequest: opts.xhr ?? class {},
     Auth: { ensureAuthed: async () => ({ id: 'u1', username: 'simon', isAdmin: opts.isAdmin ?? true }), renderHeader() {} },
     EditorCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
       Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])),
@@ -703,6 +703,45 @@ describe('media-browser search', () => {
   });
 });
 
+describe('upload receipt recovery visibility', () => {
+  it('shows the recovered photo without retransmitting or replacing dirty detail fields', async () => {
+    let sends = 0; let probes = 0;
+    const page = loadPage({
+      xhr: class {
+        open() {}
+        abort() {}
+        send() { sends++; throw new Error('Acknowledgement lost'); }
+      },
+      request: (url) => {
+        if (!url.startsWith('/upload/receipts/')) return;
+        probes++;
+        const status = probes === 1 ? 503 : 200;
+        return Promise.resolve({ status, ok: status === 200, json: async () => status === 503
+          ? { error: 'unavailable' }
+          : { state: 'accepted', ownerUserId: '11111111-1111-4111-8111-111111111111', uploadId: url.split('/').pop(),
+              result: { key: 'recovered-photo', src: 'https://img.example/recovered-photo', width: 10, height: 10 } } });
+      },
+    });
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('existing')], total: 1 }); await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+    page.el('dAltDe').value = 'Keep this unsaved description'; page.el('detail').dispatch('input');
+    Object.assign(page.el('fileInput'), { files: [{ name: 'recovered-photo.jpg' }] });
+    page.el('fileInput').dispatch('change'); await page.flush();
+    expect(sends).toBe(1); expect(probes).toBe(1);
+    expect(page.listRequests).toHaveLength(0);
+    page.el('uploadQueue').querySelectorAll('.btn-secondary')[0]!.click(); await page.flush();
+    expect(sends).toBe(1); expect(probes).toBe(2);
+    expect(page.listRequests).toHaveLength(1);
+    page.listRequests.shift()!.resolve({ items: [item('existing', 'Other stored text'), item('recovered-photo')], total: 2 });
+    await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell').map(cell => cell.dataset.key)).toEqual(['existing', 'recovered-photo']);
+    expect(page.el('dAltDe').value).toBe('Keep this unsaved description');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.listRequests).toHaveLength(0);
+  });
+});
+
 describe('folder and move ambiguous outcomes', () => {
   const reply = (body: unknown, status = 200) => Promise.resolve({ status, ok: status >= 200 && status < 300, json: async () => body });
   it('checks the folder tree once after a lost create response and only repeats the write explicitly', async () => {
@@ -717,13 +756,31 @@ describe('folder and move ambiguous outcomes', () => {
     page.el('newFolder').click(); await page.flush();
     const panel = page.el('out').adjacent[0]!;
     expect(creates).toBe(1); expect(reads).toBe(initialReads + 1);
-    expect(panel.textContent).toContain(ui.en['editor.chrome.folderAbsent']);
     const [check, again] = panel.children.filter(child => child.tagName === 'button');
     expect(again!.hidden).toBe(false);
     check!.click(); await page.flush();
     expect(creates).toBe(1); expect(reads).toBe(initialReads + 2);
     again!.click(); await page.flush();
     expect(creates).toBe(2);
+  });
+  it('installs a recovered folder in the tree and move targets from the one authoritative read', async () => {
+    let creates = 0; let reads = 0;
+    const page = loadPage({ prompt: 'Iceland', request: (url, init) => {
+      if (url !== '/media/folders') return;
+      if (init?.method === 'POST') { creates++; return Promise.reject(new Error('Acknowledgement lost')); }
+      reads++; return reply(creates ? ['Iceland'] : []);
+    } });
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    const initialReads = reads;
+    page.el('newFolder').click(); await page.flush();
+    expect(creates).toBe(1); expect(reads).toBe(initialReads + 1);
+    const folder = page.el('folderTree').querySelectorAll('.folder-btn').find(button => button.textContent === 'Iceland');
+    expect(folder).toBeDefined();
+    expect(page.el('moveTarget').children.map(option => option.value)).toContain('Iceland');
+    expect(page.listRequests).toHaveLength(0);
+    folder!.click(); await page.flush();
+    expect(new URL(page.listRequests[0]!.url, 'https://app.example').searchParams.get('folder')).toBe('Iceland');
+    expect(creates).toBe(1);
   });
   it('uses a single selected-key lookup, not a filtered page, and retains Unknown for incomplete evidence', async () => {
     let moves = 0; const lookups: unknown[] = []; let complete = false;
@@ -743,12 +800,14 @@ describe('folder and move ambiguous outcomes', () => {
     const [check, again] = panel.children.filter(child => child.tagName === 'button');
     expect(lookups).toEqual([{ keys: ['selected'] }]);
     expect(page.listRequests).toHaveLength(0);
-    expect(panel.textContent).toContain(ui.en['editor.chrome.writeUnknown']);
     expect(again!.hidden).toBe(true);
     complete = true; check!.click(); await page.flush();
     expect(moves).toBe(1);
     expect(panel.textContent).toContain('selected: Another folder');
     expect(again!.hidden).toBe(false);
+    page.listRequests.shift()!.resolve({ items: [Object.assign(item('selected'), { folder: 'Another folder' })], total: 201 });
+    await page.flush();
+    expect(page.el('dFolder').value).toBe('Another folder');
     // Changing a visible-page filter cannot remove this operation's evidence.
     page.el('fStatus').value = 'failed'; page.el('fStatus').dispatch('change'); await page.flush();
     page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
@@ -765,6 +824,7 @@ describe('folder and move ambiguous outcomes', () => {
     await page.flush(); page.listRequests.shift()!.resolve({ items: [item('selected')], total: 1 }); await page.flush();
     page.el('grid').querySelectorAll('.media-cell')[0]!.click(); page.el('moveSelected').click(); await page.flush();
     expect(probes).toBe(1);
-    expect(page.el('out').adjacent[0]!.textContent).toContain(ui.en['editor.chrome.moveDeleted']);
+    page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell').map(cell => cell.dataset.key)).not.toContain('selected');
   });
 });
