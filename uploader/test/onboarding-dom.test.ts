@@ -1,9 +1,14 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { setImmediate as nextTurn } from 'node:timers/promises';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { editorDocument, type EditorElement } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
+
+const deskWindows: EventTarget[] = [];
+afterEach(() => {
+  for (const window of deskWindows.splice(0)) window.dispatchEvent(new Event('pagehide'));
+});
 
 const sources = ['desk.js', 'admin-confirm.js', 'onboarding.js'].map((name) => readFileSync('public/' + name, 'utf8'));
 type StepState = 'done' | 'todo' | 'in_progress' | 'attention';
@@ -308,8 +313,13 @@ async function deskPage(options: {
   const document = Object.assign(dom.document, { documentElement: { lang: 'en' }, title: 'Desk' });
   const location = { pathname: '/admin/', search: '?from=setup', href: '' };
   const requests: Request[] = [];
+  const window = new EventTarget();
+  deskWindows.push(window);
   const context: Record<string, unknown> = {
     document, location,
+    AbortController, setTimeout, clearTimeout,
+    addEventListener: window.addEventListener.bind(window),
+    removeEventListener: window.removeEventListener.bind(window),
     EditorCopy: { en: Object.fromEntries(Object.entries(ui.en)
       .filter(([key]) => key.startsWith('editor.chrome.'))
       .map(([key, text]) => [key.slice('editor.chrome.'.length), text])) },
@@ -332,6 +342,7 @@ async function deskPage(options: {
       if (url === '/media/queue') return Response.json({ pending: 0, running: 0 });
       if (url === '/health') return Response.json({ release: false });
       if (url === '/rebuild/status') return Response.json({ record: 'missing', running: null, last: null, live: null });
+      if (url === '/publication/summary') return Response.json({ availability: 'available', release: 'none', posts: null, galleryDescriptions: null });
       throw new Error('Unexpected Desk request: ' + url);
     },
   };

@@ -24,6 +24,7 @@ const pruneFaults = vi.hoisted(() => ({
   recordWrite: undefined as (() => void) | undefined,
   manifestRemove: undefined as ((path: string) => Promise<void> | void) | undefined,
   manifestMkdir: undefined as (() => void) | undefined,
+  manifestSourceRemove: undefined as ((path: string) => Promise<void> | void) | undefined,
 }));
 vi.mock('node:fs/promises', async (original) => {
   const fs = await original<typeof FileSystem>();
@@ -52,6 +53,7 @@ vi.mock('node:fs/promises', async (original) => {
       return replacement ?? fs.readlink(path);
     },
     rm: async (...args: Parameters<typeof fs.rm>) => {
+      if (/\.manifest\.json(?:\.partial)?$/.test(String(args[0]))) await pruneFaults.manifestSourceRemove?.(String(args[0]));
       if (pruneFaults.promoted) {
         if (String(args[0]).includes('/manifests/')) await pruneFaults.manifestRemove?.(String(args[0]));
         else await pruneFaults.remove?.(String(args[0]));
@@ -79,6 +81,7 @@ afterEach(() => {
   pruneFaults.recordWrite = undefined;
   pruneFaults.manifestRemove = undefined;
   pruneFaults.manifestMkdir = undefined;
+  pruneFaults.manifestSourceRemove = undefined;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -783,6 +786,40 @@ describe('publication manifest deployment boundaries', () => {
     expect(observed).toBe(true);
     expect(result.ok).toBe(true);
     expect(await createReleaseManifestReader(site).read()).toEqual({ release: 'known', manifest: { schema: 1, stamp: result.release, posts: [] } });
+  });
+
+  it('keeps optional scratch cleanup failures nonfatal and sweeps the leftover on the next build', async () => {
+    const site = join(root, 'site');
+    let refused = '';
+    pruneFaults.manifestSourceRemove = (path) => {
+      if (!path.endsWith('.manifest.json')) return;
+      refused = path;
+      throw Object.assign(new Error('scratch cleanup failure'), { code: 'EACCES' });
+    };
+    const builder = createSiteBuilder({ siteAppDir: siteApp, releasesRoot: site, runBuild: fakeBuild('new') });
+    const first = await builder.build('rebuild');
+    expect(first.ok).toBe(true);
+    expect(await createReleaseManifestReader(site).read()).toMatchObject({ release: 'known', manifest: { stamp: first.release } });
+    expect(await disk.readFile(refused, 'utf8')).toBeTruthy();
+    pruneFaults.manifestSourceRemove = undefined;
+    expect((await builder.build('rebuild')).ok).toBe(true);
+    expect(await disk.readdir(join(siteApp, '.build-tmp'))).toEqual([]);
+    await expect(disk.readFile(refused)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('admits no second scratch removal or flip after ownership is lost during the first removal', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const site = join(root, 'site');
+    let writable = true;
+    const removals: string[] = [];
+    pruneFaults.manifestSourceRemove = (path) => { removals.push(path); writable = false; };
+    const result = await createSiteBuilder({ siteAppDir: siteApp, releasesRoot: site,
+      isWritable: () => writable, runBuild: fakeBuild('new') }).build('rebuild');
+    expect(result).toMatchObject({ ok: false, code: 'build_stopped' });
+    expect(removals).toHaveLength(1);
+    expect(removals[0]).toMatch(/\.manifest\.json$/);
+    expect(await createReleaseManifestReader(site).read()).toEqual({ release: 'none' });
+    await expect(disk.readlink(join(site, 'current'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('retains previous current manifest after a pre-flip failure', async () => {

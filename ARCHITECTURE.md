@@ -197,6 +197,9 @@ stamp and the 8 MiB cap, then publishes the manifest outside `current` before th
 symlink flip. Recording failures never turn an otherwise successful build into failure.
 Ownership-checked pruning removes a manifest only after removing its release; orphan/temp cleanup
 never mutates after observed lease loss and never touches `build-state.json`.
+Child manifest scratch files are removed best-effort when the attempt settles, with a fresh
+ownership check before each removal. A cleanup failure leaves only scratch for the next guarded
+sweep; it does not invalidate the release manifest or fail an otherwise successful build.
 
 Post reads and mutation responses carry the exact `publication` availability union. Projection
 reads inspect `current`, read its manifest, then read consistent language/row facts. Only one

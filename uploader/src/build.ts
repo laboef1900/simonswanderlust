@@ -297,6 +297,13 @@ async function buildAndDeploy(opts: Pick<SiteBuilderOptions, 'siteAppDir' | 'rel
     throw e;
   } finally {
     if (isWorkWritable(opts)) await rm(buildTmp, { recursive: true, force: true });
+    // The copied manifest is durable beside its release; child scratch output
+    // has no remaining reader. Optional cleanup never changes the build result,
+    // and each removal must independently retain storage ownership.
+    for (const path of [manifestPath, `${manifestPath}.partial`]) {
+      if (!isWorkWritable(opts)) break;
+      await rm(path, { force: true }).catch(() => { /* swept before the next build */ });
+    }
   }
   const tmpLink = join(opts.releasesRoot, `.current.${stamp}`);
   assertWorkWritable(opts);
