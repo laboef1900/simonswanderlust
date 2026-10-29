@@ -13,7 +13,7 @@ import { ui } from '../i18n/ui';
 import { publicTrackSummary } from '../lib/public-track';
 const content = vi.hoisted(() => ({ journeys: [] as Journey[], trips: [] as Trip[] }));
 vi.mock('astro:content', () => ({
-  getCollection: async (name: string) => name === 'journeys' ? content.journeys : content.trips,
+  getCollection: async (name: string) => name === 'journeys' ? content.journeys : name === 'trips' ? content.trips : [],
   getEntry: async () => undefined, render: async () => ({ headings: [] }),
 }));
 const windows: Window[] = [];
@@ -46,6 +46,22 @@ describe('journey public HTML consumers', () => {
       expect(document.querySelectorAll('link[hreflang]')).toHaveLength(language.locales.length === 2 ? 3 : 0);
       const index = documentOf(await container.renderToString(JourneysPage, { props: { locale, journeys: live } }));
       expect(index.querySelector('main ul a')?.getAttribute('href')).toBe(live[0]!.path);
+    }
+  });
+  it('omits an uncommitted journey locale from pages, index alternates and links', async () => {
+    vi.stubEnv('SITE_LANGUAGE_JSON', JSON.stringify(modes[0]));
+    content.journeys = [journeyFixture('de')];
+    content.trips = [tripFixture('a', 'de'), tripFixture('a', 'en')];
+    const container = await AstroContainer.create();
+    const live = liveJourneys(content.journeys, content.trips, 'de');
+    for (const html of [
+      await container.renderToString(JourneyPage, { props: { journey: live[0] } }),
+      await container.renderToString(JourneysPage, { props: { locale: 'de', journeys: live } }),
+    ]) {
+      const document = documentOf(html);
+      expect(document.querySelectorAll('link[hreflang]')).toHaveLength(0);
+      expect([...document.querySelectorAll('a[href]')].some((link) => link.getAttribute('href')!.startsWith('/en/journeys/'))).toBe(false);
+      expect(document.querySelector('main')?.textContent).not.toContain('Published journey en');
     }
   });
   it('keeps each public run summary and endpoint in the non-JavaScript fallback', async () => {

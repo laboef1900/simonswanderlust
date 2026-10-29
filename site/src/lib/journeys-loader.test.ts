@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Loader } from 'astro/loaders';
 import { journeyEntries, postgresJourneysLoader } from './journeys-loader';
 import { hero, modes } from '../../test/journey-fixtures';
+import type { JourneySnapshotLocale } from './journey-snapshot';
 const db = vi.hoisted(() => ({
   sql: [] as string[], rows: [] as { id: string; published_snapshot: unknown }[],
   fail: '', released: vi.fn(), ended: vi.fn(), connected: vi.fn(),
@@ -73,6 +74,26 @@ describe('snapshot-only journey loader', () => {
     db.rows = [{ id: 'id', published_snapshot: { ...snapshot(), workingSecret: 'never emit' } }];
     await expect(load()).rejects.toThrow('Invalid journey snapshot');
     expect(db.sql.at(-1)).toBe('ROLLBACK'); expect(db.released).toHaveBeenCalledOnce();
+  });
+  it.each([
+    { title: 'A\u0001private control' },
+    { intro: '   ' },
+    { workingBody: 'private working copy' },
+    { heroImage: { ...hero, src: hero.src + '?private=1' } },
+    { heroImage: { ...hero, focus: { x: 23, y: 71, privateCoordinate: 12 } } },
+  ])('uses the shared strict snapshot boundary for every committed locale (%j)', (invalid) => {
+    const valid = snapshot();
+    const malformed = { ...valid, locales: { ...valid.locales, en: { ...valid.locales.en, ...invalid } } };
+    // A disabled locale is never emitted, but cannot weaken the shared stored-snapshot contract.
+    expect(() => journeyEntries({ id: 'id', published_snapshot: malformed }, modes[2]!, 'https://public.example'))
+      .toThrow('Invalid journey snapshot');
+  });
+  it('preserves the authoring snapshot hero type through the public projection', () => {
+    const locale: JourneySnapshotLocale = snapshot().locales.de;
+    const projected = journeyEntries({ id: 'id', published_snapshot: {
+      version: 1, members: ['a'], locales: { de: locale },
+    } }, modes[2]!, 'https://public.example')[0]!;
+    expect(projected.data.heroImage).toEqual({ ...locale.heroImage, src: 'https://public.example/photos/journey' });
   });
   it('retargets only a valid canonical base and preserves dimensions/focus', () => {
     const entries = journeyEntries({ id: 'id', published_snapshot: snapshot() }, modes[0]!, 'https://public.example');

@@ -36,8 +36,10 @@ const site = Astro.site ?? PROD_SITE;
 const canonical = new URL(Astro.url.pathname, site);
 const ogLocale: Record<Locale, string> = { de: 'de_DE', en: 'en_US' };
 const otherLocale: Locale = locale === 'de' ? 'en' : 'de';
-const [trips, pages, navEntry] = await Promise.all([getCollection('trips'), getCollection('pages'), getEntry('navigation', 'site')]);
-const routes = publicRoutes(trips, language, pages);
+const [trips, pages, journeys, navEntry] = await Promise.all([
+  getCollection('trips'), getCollection('pages'), getCollection('journeys'), getEntry('navigation', 'site'),
+]);
+const routes = publicRoutes(trips, language, { pages, journeys });
 const navigation = resolveNavigation(navEntry?.data ?? DEFAULT_NAVIGATION, routes, language, locale, Astro.url.pathname);
 
 // @ai-warning Preconnect to the IMAGE host, never to `site.origin`: the document's

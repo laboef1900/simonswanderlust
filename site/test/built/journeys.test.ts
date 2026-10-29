@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 // Real Astro release fixtures, not container renders. Parent qualification prepares:
 // BUILT_JOURNEY_CONTRACT_ROOT/{de-bilingual,en-bilingual,de-only,en-only}/{before,live,dormant}.
-// `before`: pre-#310 code, same published stories a,c,n in each enabled locale.
+// `before`: actual #309/#289 prerequisite code, same published stories a,c,n in each enabled locale.
+// Keep published generic pages and seeded navigation identical across all three releases;
+// do not substitute the historical pre-#289 fixture or add automatic journey navigation.
 // `live`: published journey expedition with members a,b,c; b is draft. A second
 // published journey dormant has only b. `dormant`: both journeys have only b.
 // Every unpublished field/slug uses private-draft-310; journey working fields use
