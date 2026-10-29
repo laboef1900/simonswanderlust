@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const uploader = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const source = process.argv[2] ?? resolve(uploader, '../.github/issue-304-native');
+const source = process.argv[2] ?? resolve(uploader, '../.github/native-owner');
 assert.equal(process.versions.node.split('.')[0], '26', 'Native build requires Node 26');
 const scratch = mkdtempSync(join(tmpdir(), 'swl-native-build-'));
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
