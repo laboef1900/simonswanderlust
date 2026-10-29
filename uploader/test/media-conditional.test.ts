@@ -70,14 +70,27 @@ describe('memory conditional Media writes', () => {
   it('allows concurrent unrelated locale writes and compares canonical expected values', async () => {
     const store = makeStore();
     await store.upsert({ ...seed, tags: ['sea'], title: 'ab' });
-    await Promise.all([
+    const writes = await Promise.all([
       store.patchConditional('photo', { version: 1, patch: { alt: { de: 'DE' } }, expect: { alt: { de: '' } } }),
       store.patchConditional('photo', { version: 1, patch: { alt: { en: 'EN' } }, expect: { alt: { en: '' } } }),
+    ]);
+    expect(writes.map((write) => write.changedDescriptions)).toEqual([
+      { de: { alt: true, caption: false }, en: { alt: false, caption: false } },
+      { de: { alt: false, caption: false }, en: { alt: true, caption: false } },
     ]);
     const saved = await store.patchConditional('photo', {
       version: 1, patch: { title: 'c\u0000d', tags: ['next', 'next'] }, expect: { title: 'a\u0000b', tags: [' sea ', 'sea'] },
     });
     expect(saved).toMatchObject({ alt: { de: 'DE', en: 'EN' }, title: 'cd', tags: ['next'] });
+    expect(saved.changedDescriptions).toEqual({ de: { alt: false, caption: false }, en: { alt: false, caption: false } });
+    const same = await store.patchConditional('photo', {
+      version: 1, patch: { alt: { de: 'D\u0000E' } }, expect: { alt: { de: 'DE' } },
+    });
+    expect(same.changedDescriptions.de.alt).toBe(false);
+    const reverted = await store.patchConditional('photo', {
+      version: 1, patch: { alt: { de: '' } }, expect: { alt: { de: 'DE' } },
+    });
+    expect(reverted.changedDescriptions.de.alt).toBe(true);
   });
 
   it('refuses malformed input without mutation and distinguishes missing from conflict', async () => {

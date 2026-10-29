@@ -65,6 +65,19 @@ export interface NewMediaItem {
 }
 
 export type MediaPatch = Partial<Pick<NewMediaItem, 'folder' | 'title' | 'alt' | 'caption' | 'tags'>>;
+export interface ChangedDescriptions {
+  de: { alt: boolean; caption: boolean };
+  en: { alt: boolean; caption: boolean };
+}
+export type ConditionalMediaResult = MediaItem & { changedDescriptions: ChangedDescriptions };
+
+/** Compare normalized stored values, not payload presence or a later writer's row. */
+function descriptionDelta(before: MediaDescriptions, after: MediaDescriptions): ChangedDescriptions {
+  return {
+    de: { alt: before.alt.de !== after.alt.de, caption: before.caption.de !== after.caption.de },
+    en: { alt: before.alt.en !== after.alt.en, caption: before.caption.en !== after.caption.en },
+  };
+}
 
 /** The library's localized gallery text for one photo (see `MediaStore.descriptions`). */
 export interface MediaDescriptions {
@@ -86,7 +99,7 @@ export interface MediaStore {
   upsert(item: NewMediaItem): Promise<MediaItem>;
   patch(key: string, fields: MediaPatch, client?: Pick<DbClient, 'query'>): Promise<MediaItem>;
   /** Atomic field-level compare-and-set; internal patch deliberately remains unconditional. */
-  patchConditional(key: string, conditional: MediaConditional): Promise<MediaItem>;
+  patchConditional(key: string, conditional: MediaConditional): Promise<ConditionalMediaResult>;
   move(keys: string[], folder: string): Promise<number>;
   remove(key: string, client?: Pick<DbClient, 'query'>): Promise<void>;
   /** One snapshot, independent of filters; every requested key appears explicitly. */
@@ -395,13 +408,14 @@ export function memoryMediaStore(opts: MediaStoreOptions): MediaStore {
       for (const [field, expected] of conditionalFields(expect)) {
         if (JSON.stringify(stored.get(field)) !== JSON.stringify(expected)) throw new MediaChangedError(toItem(r));
       }
+      const before = { alt: { ...r.alt }, caption: { ...r.caption } };
       // No await between compare and mutation: concurrent callers cannot interleave.
       if (patch.folder !== undefined) { r.folder = patch.folder; addFolders(patch.folder); }
       if (patch.title !== undefined) r.title = patch.title;
       if (patch.alt) r.alt = { ...r.alt, ...patch.alt };
       if (patch.caption) r.caption = { ...r.caption, ...patch.caption };
       if (patch.tags !== undefined) r.tags = patch.tags;
-      return toItem(r);
+      return { ...toItem(r), changedDescriptions: descriptionDelta(before, r) };
     },
     async move(keys, folder) {
       assertSafeFolder(folder);
@@ -708,7 +722,10 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
     },
     async patchConditional(key, conditional) {
       const { patch, expect } = conditionalInput(conditional);
-      const write = async (client: Pick<DbClient, 'query'>): Promise<MediaItem> => {
+      const write = async (client: Pick<DbClient, 'query'>): Promise<ConditionalMediaResult> => {
+        const locked = await client.query<MediaRow>(`SELECT ${COLS} FROM media WHERE key = $1 FOR UPDATE`, [key]);
+        if (!locked.rows[0]) throw new MediaStoreError('media not found', 'not_found');
+        const before = rowToItem(locked.rows[0], baseUrl);
         const values: unknown[] = [key];
         const sets = conditionalFields(patch).map(([column, value]) => {
           values.push(value);
@@ -729,10 +746,11 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
           throw new MediaChangedError(rowToItem(current, baseUrl));
         }
         if (patch.folder !== undefined) await ensureFolders(patch.folder, client);
-        return rowToItem(result.rows[0], baseUrl);
+        const saved = rowToItem(result.rows[0], baseUrl);
+        return { ...saved, changedDescriptions: descriptionDelta(before, saved) };
       };
-      // Folder ancestors and the successful media mutation commit or roll back together.
-      return patch.folder !== undefined ? transaction(write) : write(pool);
+      // The preimage, conditional mutation, delta and folder ancestors share one row lock and transaction.
+      return transaction(write);
     },
     async move(keys, folder) {
       assertSafeFolder(folder);

@@ -607,6 +607,15 @@ new reconciliation gate, foreign token adoption or offline queue is added here.
   returned content/token into a dirty form. Lists/Desk read `/posts`; Media refreshes only the
   selected detail's impact and (admin) livePending, preserving dirty metadata fields. Desk/Settings
   admins refresh summary and #297 status under the same schedule; authors never request them.
+- Media reuses the selected item's PATCH acknowledgement, conflict observation, AI preflight
+  GET or the conditional protocol's one bounded recovery GET for the projection. These settle
+  through the shared lifecycle without a trailing projection GET; an invalid/failed observation
+  is unavailable, not permission to probe again. Only the conditional protocol can establish a
+  saved outcome or offer comparison choices. Initial detail observation is a separate read;
+  valid acknowledgements and unsupported old-server successes add no recovery reads. Manual,
+  focus and 30-second refresh remain enabled, and a nested selection/non-item action still
+  requests its required post-action observation. Shared generation fencing rejects older item
+  responses as well as older background responses without adopting fields into the form.
 - Use a local request generation per active resource. Invalidate it on a local action start,
   completion, navigation or detail selection change. Discard late/out-of-order responses and do
   not launch projection refresh during a local mutation; refresh once it settles. No token is
@@ -876,3 +885,34 @@ or runtime qualification were executed by the source-writing agents. The parent 
 the complete §16 gates, including PostgreSQL, real build/promotion and browser failure/
 refresh protocols, before treating the implementation as qualified. No deployment,
 owner-content mutation, migration or automatic build is authorized by this handoff.
+
+## 21. #318 implementation handoff (2026-10-29)
+
+The Media detail GET/PATCH source adds the exact §8 impact union and admin-only nullable
+`livePending`, reusing `classifyRow`, `galleryPending` and the existing admin summary.
+`PostStore.mediaImpactCorpus()` captures language mode, authoritative coverage and working/
+published rows in a single consistent read (PostgreSQL REPEATABLE READ; memory exclusive
+language read). It is story-only and has no cross-request working-content cache.
+`ConditionalMediaResult` extends the acknowledged Media item with `changedDescriptions`;
+the conditional write captures the normalized preimage under `FOR UPDATE` and returns its
+own postimage/delta from the same transaction. Internal unconditional patches are unchanged.
+
+The detail panel consumes the actual shared `PublicationRefresh` lifecycle, installs only
+observations, preserves conditional expectations/dirty fields, and retains this session's
+acknowledged write delta separately. DE/EN copy explains scope, occurrence versus distinct-story
+counts, caption inheritance, unchanged locales, removed newer-draft uses and no-gallery effects.
+Only existing authorized `usedIn` titles become editor links. Summary rendering remains the
+#317 implementation beside Rebuild, with #297 build status independent.
+
+The precise owner-approved §8.5 amendment is implemented as specified, not as a claim that
+the original literal whole-response AC4 is satisfied. Exact GET/PATCH projection-key assertions
+sit beside whole-item camera/lens/capture preservation and null GPS/uploader assertions.
+Regression source also covers fresh draft classification, conditional deltas/races/unknown
+commit outcomes, pending content changes/reverts/captured-release behavior, optional enrichment
+failure, dirty detail refresh, stale responses, and author-only request/control boundaries.
+
+**Verification status:** no checks, builds, installs or runtime exercises were run by the
+#318 implementation worker. These are source/test additions, not passing-test or rendered-page
+evidence. Parent qualification must run the full PostgreSQL-enabled suites, Astro checks/build,
+real browser and served-gallery protocol, actual-PR review and final-head CI before delivery.
+No schema/dump change, rendering-policy change, deployment or owner-data mutation is authorized.

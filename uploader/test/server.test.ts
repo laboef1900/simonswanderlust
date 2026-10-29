@@ -30,6 +30,7 @@ import { memoryLanguageStore } from '../src/language.js';
 import { memoryNavigationStore } from '../src/navigation.js';
 import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
+import type { MediaImpact } from '../src/media-impact.js';
 import { createEncodeQueue, type EncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock, type WorkLock } from '../src/work-lock.js';
 import { fixedWindowLimiter, accountLockoutLimiter } from '../src/rate-limit.js';
@@ -846,6 +847,134 @@ describe('media library', () => {
       title: 'Sonnenaufgang', alt: { de: 'DE alt', en: 'EN alt' }, caption: { de: 'Tag 3' },
       tags: ['island'], conditionalVersion: 1, uploadedBy: null,
     });
+  });
+
+  it('GET and PATCH expose only the approved author impact keys and retain amended AC4 whole-item redaction', async () => {
+    const b = build();
+    const author = await authed(b, { isAdmin: false, username: 'impact-author' });
+    const admin = await authed(b);
+    const photo = await b.media.upsert({ key: 'impact', status: 'ready', width: 800, height: 600, origBytes: 1,
+      alt: { de: 'DE', en: 'EN' }, caption: { de: 'Before', en: 'Same' }, uploadedBy: 'private-user',
+      exif: { takenAt: new Date('2025-01-01T10:00:00Z'), camera: 'Leica', lens: 'Summilux', lat: 1, lng: 2 } });
+    for (let n = 0; n < 3; n++) {
+      const input = draftUsing(photo.src);
+      for (const locale of ['de', 'en'] as const) {
+        input[locale].slug += '-' + n;
+        input[locale].bodyMarkdown = `\`\`\`gallery\n${photo.src} | 800x600\n\`\`\``;
+      }
+      const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: author.cookie, payload: input });
+      expect(created.statusCode).toBe(200);
+      if (n < 2) await b.posts.publish(created.json().translationKey, await publishTokens(b.posts, created.json().translationKey));
+    }
+    const get = await b.app.inject({ method: 'GET', url: '/media/items/impact', cookies: author.cookie });
+    const patch = await b.app.inject({ method: 'PATCH', url: '/media/items/impact', cookies: author.cookie,
+      payload: { conditional: { version: 1, patch: { caption: { de: 'After', en: 'Same' } }, expect: { caption: { de: 'Before', en: 'Same' } } } } });
+    for (const response of [get, patch]) {
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['cache-control']).toBe('no-store');
+      const body = response.json();
+      expect(body).not.toHaveProperty('livePending');
+      expect(body.uploadedBy).toBeNull();
+      expect(body.exif).toEqual({ takenAt: '2025-01-01T10:00:00.000Z', camera: 'Leica', lens: 'Summilux', lat: null, lng: null });
+      const impact = body.impact as MediaImpact;
+      expect(Object.keys(impact).sort()).toEqual(['availability', 'drafts', 'newerDrafts', 'published']);
+      if (impact.availability !== 'available') throw new Error('expected impact');
+      expect(impact.published).toHaveLength(2); expect(impact.drafts).toHaveLength(1); expect(impact.newerDrafts).toEqual([]);
+      for (const story of [...impact.published, ...impact.drafts]) {
+        expect(Object.keys(story).sort()).toEqual(['locales', 'title', 'translationKey']);
+        expect(Object.keys(story.locales).sort()).toEqual(['de', 'en']);
+        for (const locale of ['de', 'en'] as const) {
+          expect(Object.keys(story.locales[locale]).sort()).toEqual(['gallery', 'galleryCaptionFollowsLibrary', 'heroTitle', 'inline']);
+          // draftUsing references this photo as DE hero, but a different EN hero.
+          expect(story.locales[locale]).toEqual({ gallery: 1, galleryCaptionFollowsLibrary: 1, heroTitle: locale === 'de', inline: 0 });
+        }
+      }
+    }
+    expect(patch.json().conditionalVersion).toBe(1);
+    expect(patch.json().changedDescriptions).toEqual({ de: { alt: false, caption: true }, en: { alt: false, caption: false } });
+    expect((await b.app.inject({ method: 'GET', url: '/media/items/impact', cookies: admin.cookie })).json().livePending).toBeNull();
+    expect((await b.app.inject({ method: 'GET', url: '/publication/summary', cookies: author.cookie })).statusCode).toBe(403);
+  });
+
+  it.each(['about', 'contact'])('keeps %s-only references in deletion guards but out of story impact', async (key) => {
+    const b = build(); const { cookie } = await authed(b);
+    const photo = await b.media.upsert({ key: 'about-only', status: 'ready', width: 800, height: 600, origBytes: 1,
+      uploadedBy: null, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null } });
+    const about = await b.pages.get(key);
+    await b.pages.save({ ...about, de: { ...about.de, bodyMarkdown: `\`\`\`gallery\n${photo.src} | 800x600\n\`\`\`` } });
+    const response = await b.app.inject({ method: 'GET', url: '/media/items/about-only', cookies: cookie });
+    expect(response.json().impact).toEqual({ availability: 'available', published: [], drafts: [], newerDrafts: [] });
+    expect(response.json().usedIn).toMatchObject([{ kind: 'page', key }]);
+    expect((await b.app.inject({ method: 'DELETE', url: '/media/items/about-only', cookies: cookie })).statusCode).toBe(409);
+  });
+
+  it('preserves this write and its delta when optional enrichment fails or another writer lands', async () => {
+    const s = stubBuilder(); const b = build({ builder: s.builder }); const { cookie } = await authed(b);
+    await b.media.upsert({ key: 'impact', status: 'ready', width: 800, height: 600, origBytes: 1,
+      uploadedBy: null, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null } });
+    b.posts.mediaImpactCorpus = async () => {
+      await b.media.patch('impact', { caption: { de: 'later writer', en: 'later EN' } });
+      throw new Error('optional classification failed');
+    };
+    const response = await b.app.inject({ method: 'PATCH', url: '/media/items/impact', cookies: cookie,
+      payload: { conditional: { version: 1, patch: { caption: { de: 'mine' } }, expect: { caption: { de: '' } } } } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ conditionalVersion: 1, caption: { de: 'mine', en: '' },
+      changedDescriptions: { de: { alt: false, caption: true }, en: { alt: false, caption: false } },
+      impact: { availability: 'unavailable' }, livePending: null });
+    expect(Object.keys(response.json().impact)).toEqual(['availability']);
+    expect((await b.media.get('impact'))?.caption).toEqual({ de: 'later writer', en: 'later EN' });
+    expect(s.calls).toEqual([]);
+  });
+
+  it('refreshes same-release Media pending content, clears only captured descriptions, and never rebuilds on save', async () => {
+    const builder = stubBuilder({ ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') });
+    const b = build({ builder: builder.builder }); const { cookie } = await authed(b);
+    const photo = await b.media.upsert({ key: 'pending', status: 'ready', width: 800, height: 600, origBytes: 1,
+      alt: { de: 'DE', en: 'EN' }, caption: { de: 'Before', en: 'English' }, uploadedBy: null,
+      exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null } });
+    const input = draftUsing(photo.src);
+    for (const locale of ['de', 'en'] as const) input[locale].bodyMarkdown =
+      `\`\`\`gallery\n${photo.src} | 800x600\n${photo.src} | 800x600 | caption-override=""\n\`\`\``;
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: input });
+    const tk = created.json().translationKey as string;
+    await b.posts.publish(tk, await publishTokens(b.posts, tk));
+    const fact = (await b.posts.publicationFacts())[0]!;
+    async function promote(stamp: string, caption: string) {
+      const manifest: ReleaseManifestV1 = { schema: 1, stamp, posts: (['de', 'en'] as const).map((locale) => ({
+        translationKey: tk, locale, slug: input[locale].slug, digest: fact.rowDigest[locale]!,
+        gallery: [{ src: photo.src, alt: locale === 'de' ? 'DE' : 'EN', caption: locale === 'de' ? caption : 'English' },
+          { src: photo.src, alt: locale === 'de' ? 'DE' : 'EN', caption: null }],
+      })) };
+      await mkdir(join(dir, 'site', 'manifests'), { recursive: true });
+      await mkdir(join(dir, 'site', 'releases', stamp), { recursive: true });
+      await writeFile(join(dir, 'site', 'manifests', `${stamp}.json`), JSON.stringify(manifest));
+      await symlink(join('releases', stamp), join(dir, 'site', 'next'));
+      await rename(join(dir, 'site', 'next'), join(dir, 'site', 'current'));
+    }
+    const get = async () => (await b.app.inject({ method: 'GET', url: '/media/items/pending', cookies: cookie })).json();
+    const summary = async () => (await b.app.inject({ method: 'GET', url: '/publication/summary', cookies: cookie })).json();
+    const patch = async (before: string, after: string) => b.app.inject({ method: 'PATCH', url: '/media/items/pending', cookies: cookie,
+      payload: { conditional: { version: 1, patch: { caption: { de: after } }, expect: { caption: { de: before } } } } });
+    await promote('1793000000000-1-0001', 'Before');
+    expect((await get()).livePending.de.caption).toBe(false);
+    expect((await patch('Before', '')).json().livePending).toEqual({ de: { alt: false, caption: true }, en: { alt: false, caption: false } });
+    expect((await summary()).galleryDescriptions).toEqual({ photos: 1, stories: 1 });
+    expect((await patch('', '')).json().changedDescriptions.de.caption).toBe(false);
+    await patch('', 'Before');
+    expect((await summary()).galleryDescriptions).toEqual({ photos: 0, stories: 0 });
+    await patch('Before', 'Captured');
+    expect(builder.calls).toEqual([]);
+    expect((await b.app.inject({ method: 'POST', url: '/rebuild', cookies: cookie })).json().ok).toBe(false);
+    // A failed build leaves current unchanged; its optional status cannot clear content differences.
+    expect((await get()).livePending.de.caption).toBe(true);
+    await patch('Captured', 'After capture');
+    await promote('1793000000001-1-0002', 'Captured');
+    expect((await get()).livePending.de.caption).toBe(true);
+    await promote('1793000000002-1-0003', 'After capture');
+    expect((await get()).livePending.de.caption).toBe(false);
+    expect((await summary()).galleryDescriptions).toEqual({ photos: 0, stories: 0 });
+    expect(builder.calls).toEqual(['rebuild']);
   });
 
   it('conditional media writes reject malformed and legacy envelopes without changing metadata or folders', async () => {

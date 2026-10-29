@@ -4,7 +4,7 @@ import vm from 'node:vm';
 
 interface Refresh {
   start(initial?: boolean): void; stop(): void; refresh(trigger?: string): Promise<void>;
-  beginAction(): void; endAction(): void; accept(value: unknown): void; invalidate(): void;
+  beginAction(): number; endAction(refreshAfter?: boolean): void; accept(value: unknown, version?: number): void; invalidate(): void;
 }
 function surface(read: (signal: AbortSignal, publish: (value: unknown) => void) => Promise<unknown>, resource?: () => string) {
   const window = new EventTarget();
@@ -83,6 +83,58 @@ describe('read-only publication observation bounds', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(read).toHaveBeenCalledTimes(2);
     expect(s.apply.mock.calls.map(([value]) => value)).toEqual(['acknowledged draft', 'fresh draft']);
+    s.refresh.stop();
+  });
+  it('reuses an item observation without a trailing read, including nested actions and an aborted active read', async () => {
+    vi.useFakeTimers();
+    const old = Promise.withResolvers<unknown>();
+    const read = vi.fn().mockImplementationOnce(() => old.promise).mockResolvedValue('later external change');
+    const s = surface(read);
+    s.refresh.start();
+    await vi.advanceTimersByTimeAsync(0);
+    s.refresh.beginAction();
+    const version = s.refresh.beginAction();
+    s.refresh.accept('item recovery observation', version);
+    s.refresh.endAction(false);
+    s.refresh.endAction(false);
+    old.resolve('old projection');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(s.apply.mock.calls.map(([value]) => value)).toEqual(['item recovery observation']);
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(s.apply).toHaveBeenLastCalledWith('later external change');
+    s.refresh.stop();
+  });
+  it('rejects an item observation superseded by another action', async () => {
+    vi.useFakeTimers();
+    const read = vi.fn(async () => 'background');
+    const s = surface(read);
+    s.refresh.start(false);
+    const oldVersion = s.refresh.beginAction();
+    const currentVersion = s.refresh.beginAction();
+    s.refresh.accept('current item', currentVersion);
+    s.refresh.accept('old item', oldVersion);
+    s.refresh.endAction(false);
+    s.refresh.endAction(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.apply.mock.calls.map(([value]) => value)).toEqual(['current item']);
+    expect(read).not.toHaveBeenCalled();
+    s.refresh.stop();
+  });
+  it('retains a nested selection refresh when an older item read settles without requesting another read', async () => {
+    vi.useFakeTimers();
+    const read = vi.fn(async () => 'selected item');
+    const s = surface(read);
+    s.refresh.start(false);
+    const oldVersion = s.refresh.beginAction();
+    s.refresh.beginAction();
+    s.refresh.endAction();
+    s.refresh.accept('old item', oldVersion);
+    s.refresh.endAction(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(s.apply.mock.calls.map(([value]) => value)).toEqual(['selected item']);
     s.refresh.stop();
   });
   it('discards a late resource response after selection change', async () => {
