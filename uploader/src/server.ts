@@ -374,7 +374,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     constraints: { host: cfg.imgHost },
     // Public variants must be readable by the editor on a different origin.
     // Scope CORS to this file mount, never authenticated APIs or private originals.
-    setHeaders: (reply) => { reply.setHeader('Access-Control-Allow-Origin', '*'); },
+    setHeaders: (reply) => { reply.header('Access-Control-Allow-Origin', '*'); },
     // Only finished variants (`<key>-<width>.<avif|webp|jpeg>`) are web assets.
     // Untouched full-resolution originals (`<key>-orig.<ext>`) live in
     // storageDir so the incremental backup tar captures them, but they are a
