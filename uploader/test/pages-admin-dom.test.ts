@@ -10,7 +10,7 @@ const buildCopy = Object.fromEntries(['de', 'en'].map(locale => [locale, Object.
 const owner = '11111111-1111-4111-8111-111111111111';
 type UnloadEvent = { defaultPrevented: boolean; returnValue?: string; preventDefault(): void };
 async function settle() { for (let i = 0; i < 40; i++) await Promise.resolve(); }
-async function editor(key = 'contact', status = 'draft', prepare = false) {
+async function editor(key = 'contact', status = 'draft', prepare = false, options: { storage?: Map<string, string>; userId?: string } = {}) {
   const html = readFileSync('public/about.html', 'utf8'); const dom = editorDocument(html);
   const el = (id: string) => { const node = dom.document.getElementById(id); if (!node) throw new Error(id); return node; };
   const locale = (locale: 'de' | 'en') => ({ locale, title: locale + ' title', bodyMarkdown: locale + ' body', images: {}, slug: key === 'about' ? '' : locale + '-contact', publishedAt: status === 'published' && !(prepare && locale === 'en') ? stamp : null });
@@ -19,7 +19,8 @@ async function editor(key = 'contact', status = 'draft', prepare = false) {
   let confirmed = true; let failure: { status: number; body: object } | null = null;
   let lifecycleWait: Promise<void> | undefined;
   let unload: ((event: UnloadEvent) => void) | undefined;
-  const storage = new Map<string, string>();
+  const storage = options.storage ?? new Map<string, string>();
+  const userId = options.userId ?? owner;
   const timers = new Map<number, () => void>();
   let timerId = 0;
   class EasyMDE {
@@ -41,7 +42,7 @@ async function editor(key = 'contact', status = 'draft', prepare = false) {
     setTimeout: (callback: () => void) => { const id = ++timerId; timers.set(id, callback); return id; },
     clearTimeout: (id: number) => timers.delete(id),
     addEventListener: (type: string, callback: (event: UnloadEvent) => void) => { if (type === 'beforeunload') unload = callback; },
-    Auth: { ensureAuthed: async () => ({ userId: owner, isAdmin: true }), renderHeader() {} },
+    Auth: { ensureAuthed: async () => ({ userId, isAdmin: true }), renderHeader() {} },
     AdminConfirm: { ask: async (question: { title: string; body: string }) => { questions.push(question); return confirmed; } },
     fetch: async (url: string, init: RequestInit = {}) => {
       requests.push({ url, init });
@@ -54,11 +55,12 @@ async function editor(key = 'contact', status = 'draft', prepare = false) {
         navigation: [{ slot: 'footer', label: { en: 'Write to Simon' } }], bodyReferences: 2, updatedAt: stamp });
       if (init.method === 'PUT') {
         const sent = JSON.parse(String(init.body));
-        return response({ ownerUserId: owner, saveId: sent.saveId, saved: { ...page, ...sent, updatedAt: '2026-10-29T00:01:00.000Z' }, build: status === 'published' ? { ok: true, release: 'new-release' } : null });
+        if (sent.updatedAt !== page.updatedAt) return response({ code: 'conflict' }, 409);
+        return response({ ownerUserId: userId, saveId: sent.saveId, saved: { ...page, ...sent, updatedAt: '2026-10-29T00:01:00.000Z' }, build: status === 'published' ? { ok: true, release: 'new-release' } : null });
       }
       if (init.method === 'DELETE') return response({ saved: { key }, build: null });
       if (init.method === 'POST') return response({ saved: { ...page, status: url.endsWith('/unpublish') ? 'draft' : 'published' }, build: { ok: true } });
-      return response({ ...page, ownerUserId: owner, lastSaveId: null });
+      return response({ ...page, ownerUserId: userId, lastSaveId: null });
     },
   };
   context.window = context; vm.createContext(context);
@@ -79,6 +81,76 @@ async function editor(key = 'contact', status = 'draft', prepare = false) {
 }
 
 describe('generalized page editor', () => {
+  it.each(['about', 'contact', 'privacy', 'legal'])('retains the actual restored base and full copy when rebasing %s', async (key) => {
+    const first = await editor(key);
+    first.el('deTitle').value = 'Private German';
+    first.el('enTitle').value = 'Private English';
+    first.el('deTitle').fire('input'); first.flushStash();
+    const [sourceKey, sourceRaw] = [...first.storage][0]!;
+    const source = JSON.parse(sourceRaw);
+    source.payload.de.bodyMarkdown = 'German body with a photo';
+    source.payload.en.bodyMarkdown = 'English body with a photo';
+    source.payload.de.images = { 'https://journal.test/images/de': { width: 640, height: 480 } };
+    source.payload.en.images = { 'https://journal.test/images/en': { width: 480, height: 640 } };
+    source.recovery.baseUpdatedAt = '2026-10-01T00:00:00.000Z';
+    first.storage.set(sourceKey, JSON.stringify(source));
+    const restored = await editor(key, 'draft', false, { storage: first.storage });
+    expect(restored.el('deTitle').value).toBe('Private German');
+    expect(restored.el('enTitle').value).toBe('Private English');
+    const comparison = restored.dom.document.querySelector('details')!;
+    expect(comparison.hidden).toBe(false);
+    restored.el('saveBtn').click(); await settle();
+    expect(restored.requests.some(({ init }) => init.method === 'PUT')).toBe(false);
+    comparison.querySelectorAll('button')[1]!.click(); await settle();
+    expect(restored.storage.get(sourceKey)).toBe(JSON.stringify(source));
+    expect(restored.el('deTitle').value).toBe('Private German');
+    restored.el('saveBtn').click(); await settle();
+    const sent = JSON.parse(String(restored.requests.find(({ init }) => init.method === 'PUT')!.init.body));
+    expect(sent.updatedAt).toBe(stamp);
+    expect(sent.de.title).toBe('Private German'); expect(sent.en.title).toBe('Private English');
+    expect(sent.de.bodyMarkdown).toBe(source.payload.de.bodyMarkdown);
+    expect(sent.en.bodyMarkdown).toBe(source.payload.en.bodyMarkdown);
+    expect(sent.de.images).toEqual(source.payload.de.images);
+    expect(sent.en.images).toEqual(source.payload.en.images);
+    expect(restored.storage.get(sourceKey)).toBe(JSON.stringify(source));
+  });
+  it.each([undefined, 'not-a-token'])('blocks a missing/malformed page base until explicit compare/rebase (%s)', async (base) => {
+    const first = await editor();
+    first.el('deTitle').value = 'Unsubmitted text'; first.el('deTitle').fire('input'); first.flushStash();
+    const [key, raw] = [...first.storage][0]!;
+    const record = JSON.parse(raw); record.recovery.baseUpdatedAt = base;
+    first.storage.set(key, JSON.stringify(record));
+    const h = await editor('contact', 'draft', false, { storage: first.storage });
+    h.el('saveBtn').click(); await settle();
+    expect(h.requests.some(({ init }) => init.method === 'PUT')).toBe(false);
+    expect(h.dom.document.querySelector('details')!.hidden).toBe(false);
+    h.dom.document.querySelector('details')!.querySelectorAll('button')[1]!.click(); await settle();
+    h.el('saveBtn').click(); await settle();
+    expect(JSON.parse(String(h.requests.find(({ init }) => init.method === 'PUT')!.init.body)).updatedAt).toBe(stamp);
+    expect(h.storage.get(key)).toBe(JSON.stringify(record));
+  });
+  it('loads the stored page in a fresh context without deleting the previous complete record', async () => {
+    const h = await editor();
+    h.el('deTitle').value = 'Keep DE'; h.el('enTitle').value = 'Keep EN';
+    h.el('deTitle').fire('input');
+    h.page.updatedAt = '2026-10-29T00:02:00.000Z';
+    h.el('saveBtn').click(); await settle();
+    h.dom.document.querySelector('details')!.querySelector('button')!.click(); await settle();
+    expect(h.el('deTitle').value).toBe(h.page.de.title);
+    const recovered = [...h.storage.values()].map(raw => JSON.parse(raw));
+    expect(recovered.some(record => record.payload.de.title === 'Keep DE' && record.payload.en.title === 'Keep EN')).toBe(true);
+    expect(h.requests.filter(({ init }) => init.method === 'PUT')).toHaveLength(1);
+  });
+  it('never offers another account’s page records or unknown-owner legacy bytes, even to admins', async () => {
+    const first = await editor('about');
+    first.el('deTitle').value = 'A private'; first.el('deTitle').fire('input'); first.flushStash();
+    first.storage.set('swl:draft:about', '{"title":"Unknown private"}');
+    const before = [...first.storage];
+    const second = await editor('about', 'draft', false, { storage: first.storage, userId: '22222222-2222-4222-8222-222222222222' });
+    expect(second.questions).toEqual([]);
+    expect(second.el('deTitle').value).toBe('de title');
+    expect([...second.storage]).toEqual(before);
+  });
   it('edits a non-About slug and saves a draft without a publication confirmation', async () => {
     const h = await editor(); expect(h.el('deSlugFields').hidden).toBe(false); expect(h.el('deSlug').readOnly).toBe(false);
     expect(h.el('saveBtn').textContent).toBe(ui.en['editor.chrome.pagesSave']);

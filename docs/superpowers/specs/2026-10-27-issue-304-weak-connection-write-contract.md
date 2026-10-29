@@ -1075,3 +1075,38 @@ source changes, tests being present, or a green combined CI run. Containment and
 documented in `SECURITY.md` and `ARCHITECTURE.md`: stop writers first, keep backups and receipt
 evidence, never delete the stable lock inode, and do not roll back only one side of this
 fail-closed client/server protocol.
+
+## #306 source implementation handoff
+
+The #306 branch extends the frozen #305 implementation, rather than introducing another
+draft or receipt convention. These are source notes, **not verification or deployment proof**.
+
+- DraftGuard keeps immutable owner/resource/context/record storage; all recovery entry points
+  are inert before owner initialization. Logout never offers deletion. Unknown-owner legacy
+  bytes remain private, unchanged and unavailable to admins. The workflow and security guide
+  describe private author/custodian recovery and precise disposal after backup.
+- The shared post/page recovery controller retains the actual restored base. Invalid/missing
+  bases cannot borrow an initial server load's token; one read opens comparison instead.
+  Explicit rebase and stored-version loading preserve a separate full local record first.
+  The story editor and all four generic page keys use these same controls. Receipt restoration
+  resets to the captured generation, so an own landed attempt can clean only its matching
+  generation, never newer recovered edits. Online/offline signals display information only.
+- `media-conditional.js` is the shared pure text/tag/folder canonicalizer. Public PATCH
+  requires the v1 envelope and identical nonempty patch/expect leaf sets. Internal fill-only
+  `MediaStore.patch` remains explicit and unchanged; `patchConditional` performs one atomic
+  conditional UPDATE with RETURNING (memory parity), with transactional folder creation.
+  Success carries `conditionalVersion: 1`; conflict current values use normal role redaction.
+- Detail, single-photo AI and bulk AI use the same conditional transport and one bounded
+  item read after Unknown, comparing each field without replay or partial patch. Missing
+  version acknowledgement or malformed evidence cannot clean local work.
+
+Parent verification: full uploader typecheck/Vitest against disposable PostgreSQL, site
+Vitest/i18n and Astro checks/build, plus real-browser two-tab and request-drop/offline scenarios.
+Exercise each page key with stale, missing and malformed restored bases; own late receipt
+adoption with newer text; same-account interleaved record cleanup/re-keying; A→B author/admin,
+logout/expiry and legacy quarantine; storage-quota refusal of replacement; conflict rebase and
+stored reload with both locales and images. Media scenarios must include same-field races,
+unrelated-field success, canonical tags/controls, old/new client-server envelopes, malformed
+acknowledgements and reads, mixed unknown results, detail edits during requests, single/bulk
+AI empty-fill races, and session-end pause/no navigation. No worker ran checks or browser
+sessions for this handoff. The actual deployment-mount restriction above is unchanged.

@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
 import { setImmediate } from 'node:timers/promises';
 import { ui } from '../../site/src/i18n/ui.js';
+import * as MediaConditional from '../public/media-conditional.js';
 
 // media-browser.js is the library page's DOM glue (media.html). Its
 // user-visible contracts that no pure helper can carry — the detail panel
@@ -153,8 +154,14 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
     if (url === '/auth/me') return ok({ authenticated: true, userId: '11111111-1111-4111-8111-111111111111', username: 'simon', isAdmin: opts.isAdmin ?? true });
     if (url.startsWith('/media/folders')) return ok([]);
     if (init?.method === 'PATCH') {
-      patches.push({ url, body: JSON.parse(init.body ?? '{}') as Record<string, unknown> });
-      return ok({});
+      const body = JSON.parse(init.body ?? '{}') as { conditional: { patch: Partial<Item> } };
+      patches.push({ url, body });
+      const key = url.slice('/media/items/'.length);
+      const base = rows.get(key) ?? item(key);
+      const patch = body.conditional.patch;
+      const saved = { ...base, ...patch, alt: { ...base.alt, ...patch.alt }, caption: { ...base.caption, ...patch.caption } };
+      rows.set(key, saved);
+      return ok({ ...saved, conditionalVersion: 1 });
     }
     if (url.startsWith('/media/items/')) return ok(rows.get(url.slice('/media/items/'.length)));
     const { promise, resolve } = Promise.withResolvers<unknown>();
@@ -188,6 +195,7 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
     EditorCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
       Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])),
     ])),
+    MediaConditional,
     EditorGalleryImageOrigin: 'https://img.example',
     AltSuggest: {
       loadConfig: async () => ({
@@ -371,7 +379,9 @@ describe('media-browser detail panel', () => {
     await page.flush();
     expect(page.patches).toHaveLength(1);
     expect(page.patches[0]!.url).toBe('/media/items/a');
-    expect(page.patches[0]!.body).toEqual({ alt: { de: 'Fjord' } });
+    expect(page.patches[0]!.body).toEqual({ conditional: {
+      version: 1, patch: { alt: { de: 'Fjord' } }, expect: { alt: { de: 'alt-a' } },
+    } });
   });
 });
 
@@ -410,12 +420,12 @@ describe('media-browser AI suggestion in the detail panel', () => {
 
     page.el('dSave').dispatch('click');
     await page.flush();
-    expect(page.patches).toEqual([{ url: '/media/items/a', body: {
+    expect(page.patches).toEqual([{ url: '/media/items/a', body: { conditional: { version: 1, patch: {
       title: DETAILS.title,
       alt: { en: DETAILS.altEn },
       caption: { de: DETAILS.captionDe, en: DETAILS.captionEn },
       tags: DETAILS.tags,
-    } }]);
+    }, expect: { title: 'a', alt: { en: '' }, caption: { de: '', en: '' }, tags: [] } } } }]);
   });
 
   it('abandons a suggestion once the panel shows another photo', async () => {
@@ -502,11 +512,11 @@ describe('media-browser bulk AI dialog', () => {
     await page.flush();
     expect(page.described).toEqual(['https://img.example/b-640.webp']);
     // b's title ("b") already had text, so it is kept; everything empty is filled.
-    expect(page.patches).toEqual([{ url: '/media/items/b', body: {
+    expect(page.patches).toEqual([{ url: '/media/items/b', body: { conditional: { version: 1, patch: {
       alt: { de: DETAILS.altDe, en: DETAILS.altEn },
       caption: { de: DETAILS.captionDe, en: DETAILS.captionEn },
       tags: DETAILS.tags,
-    } }]);
+    }, expect: { alt: { de: '', en: '' }, caption: { de: '', en: '' }, tags: [] } } } }]);
     expect(page.el('aiSummary').textContent).toBe('Done. Saved 1, skipped 0, failed 0.');
     expect(page.el('aiCancel').textContent).toBe('Close');
     // The grid reloads to show what was saved.
@@ -535,7 +545,9 @@ describe('media-browser bulk AI dialog', () => {
     expect(page.el('aiSummary').textContent).toMatch(/^1 photo will be sent to the model.*overwritten/);
     page.el('aiStart').dispatch('click');
     await page.flush();
-    expect(page.patches).toEqual([{ url: '/media/items/a', body: { title: DETAILS.title } }]);
+    expect(page.patches).toEqual([{ url: '/media/items/a', body: { conditional: {
+      version: 1, patch: { title: DETAILS.title }, expect: { title: 'Done' },
+    } } }]);
   });
 
   it('"all photos in this view" pages through the listing with the current filters', async () => {
@@ -605,7 +617,7 @@ describe('media-browser bulk AI dialog', () => {
     await page.flush();
     expect(page.patches).toEqual([]);
     expect(page.described).toHaveLength(1);
-    expect(page.el('aiSummary').textContent).toBe('Stopped. Saved 0, skipped 0, failed 0, not processed 2. Nothing was changed.');
+    expect(page.el('aiSummary').textContent).toBe('Stopped. Saved 0, skipped 0, failed 0, not processed 2.');
     page.el('aiCancel').dispatch('click');
     expect(page.el('aiDialog').open).toBe(false);
   });
@@ -766,5 +778,343 @@ describe('folder and move ambiguous outcomes', () => {
     page.el('grid').querySelectorAll('.media-cell')[0]!.click(); page.el('moveSelected').click(); await page.flush();
     expect(probes).toBe(1);
     expect(page.el('out').adjacent[0]!.textContent).toContain(ui.en['editor.chrome.moveDeleted']);
+  });
+});
+
+describe('media conditional save recovery in real consumers', () => {
+  const response = (status: number, body: unknown) => Promise.resolve({
+    status, ok: status >= 200 && status < 300, json: async () => body,
+  });
+  async function open(page: Page, row = item('a')): Promise<void> {
+    page.rows.set(row.key, row);
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [row], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+  }
+  function change(page: Page, id: string, value: string): void {
+    page.el(id).value = value;
+    page.el('detail').dispatch('input');
+  }
+
+  it('keeps a stale form and explicitly resends the whole patch against compared stored values', async () => {
+    const writes: unknown[] = [];
+    const current = { ...item('a'), title: 'Someone else', tags: ['elsewhere'] };
+    const page = loadPage({ request: (_url, init) => {
+      if (init?.method !== 'PATCH') return;
+      writes.push(JSON.parse(init.body!));
+      return writes.length === 1 ? response(409, { error: 'media_changed', current })
+        : response(200, { ...current, title: 'Mine', tags: ['local'], conditionalVersion: 1 });
+    } });
+    await open(page);
+    change(page, 'dTitle', 'Mine');
+    change(page, 'dTags', 'local, local');
+    page.el('dSave').click();
+    await page.flush();
+    expect(page.el('dTitle').value).toBe('Mine');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dCompare').textContent).toContain('Another value stored');
+    page.el('dSave').click();
+    await page.flush();
+    expect(writes).toHaveLength(1);
+    page.el('dUseMine').click();
+    await page.flush();
+    expect(writes).toEqual([
+      { conditional: { version: 1, patch: { title: 'Mine', tags: ['local'] }, expect: { title: 'a', tags: [] } } },
+      { conditional: { version: 1, patch: { title: 'Mine', tags: ['local'] }, expect: { title: 'Someone else', tags: ['elsewhere'] } } },
+    ]);
+    expect(page.el('dUnsaved').hidden).toBe(true);
+  });
+
+  it('adopts stored values only by explicit choice and never discards newer form generations', async () => {
+    const current = { ...item('a'), title: 'Stored' };
+    const page = loadPage({ request: (_url, init) => init?.method === 'PATCH'
+      ? response(409, { error: 'media_changed', current }) : undefined });
+    await open(page);
+    change(page, 'dTitle', 'Mine');
+    page.el('dSave').click();
+    await page.flush();
+    change(page, 'dTitle', 'Newer mine');
+    page.el('dUseStored').click();
+    expect(page.el('dTitle').value).toBe('Newer mine');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    page.el('dUseStored').click();
+    expect(page.el('dTitle').value).toBe('Stored');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+  });
+
+  it('shows mixed unknown leaf outcomes after exactly one GET and never partially retries', async () => {
+    let reads = 0;
+    let writes = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (init?.method === 'PATCH') { writes++; return Promise.reject(new Error('connection lost')); }
+      if (url === '/media/items/a') {
+        reads++;
+        return response(200, { ...item('a'), title: 'Mine', tags: ['someone else'] });
+      }
+    } });
+    await open(page);
+    change(page, 'dTitle', 'Mine');
+    change(page, 'dAltDe', 'Local alt');
+    change(page, 'dTags', 'local');
+    page.el('dSave').click();
+    await page.flush();
+    expect(reads).toBe(1);
+    expect(writes).toBe(1);
+    const comparison = page.el('dCompare').textContent;
+    expect(comparison).toContain('title: Intended value stored');
+    expect(comparison).toContain('alt.de: Expected value visible');
+    expect(comparison).toContain('tags: Another value stored');
+    expect(comparison).toContain('write arriving later');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    page.el('dSave').click();
+    await page.flush();
+    expect(writes).toBe(1);
+    expect(reads).toBe(1);
+  });
+
+  it('does not call an all-achieved probe a confirmed save or clean later edits', async () => {
+    const pending = Promise.withResolvers<unknown>();
+    let reads = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (init?.method === 'PATCH') return Promise.reject(new Error('lost'));
+      if (url === '/media/items/a') { reads++; return pending.promise; }
+    } });
+    await open(page);
+    change(page, 'dTitle', 'Submitted');
+    page.el('dSave').click();
+    await page.flush();
+    change(page, 'dTitle', 'Newer');
+    pending.resolve(await response(200, { ...item('a'), title: 'Submitted' }));
+    await page.flush();
+    expect(reads).toBe(1);
+    expect(page.el('dTitle').value).toBe('Newer');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dCompare').textContent).toContain('Intended value stored');
+  });
+
+  it('keeps newer edits after a valid acknowledgement and rejects unversioned success', async () => {
+    for (const marker of [true, false]) {
+      const pending = Promise.withResolvers<unknown>();
+      let reads = 0;
+      const page = loadPage({ request: (url, init) => {
+        if (init?.method === 'PATCH') return pending.promise;
+        if (url === '/media/items/a') { reads++; return response(200, item('a')); }
+      } });
+      await open(page);
+      change(page, 'dTitle', 'Submitted');
+      page.el('dSave').click();
+      await page.flush();
+      change(page, 'dTitle', 'Newer');
+      pending.resolve(await response(200, { ...item('a'), title: 'Submitted', ...(marker ? { conditionalVersion: 1 } : {}) }));
+      await page.flush();
+      expect(page.el('dTitle').value).toBe('Newer');
+      expect(page.el('dUnsaved').hidden).toBe(false);
+      expect(reads).toBe(0);
+      if (!marker) expect(page.el('dCompare').textContent).toContain('Compatible software is required');
+    }
+  });
+
+  it('preserves dirty details and the media page on a refused 401', async () => {
+    let writes = 0;
+    const page = loadPage({ request: (_url, init) => {
+      if (init?.method === 'PATCH') { writes++; return response(401, { error: 'unauthorized' }); }
+    } });
+    await open(page);
+    change(page, 'dTitle', 'Mine');
+    page.el('dSave').click();
+    await page.flush();
+    expect(page.el('dTitle').value).toBe('Mine');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('out').textContent).toContain('Session ended');
+    expect(page.win.location).toMatchObject({ href: '' });
+    page.el('dSave').click();
+    await page.flush();
+    expect(writes).toBe(1); // paused queue fences all media writes
+  });
+
+  it('displays bulk AI mixed results, never claims nothing changed, and does not replay', async () => {
+    let writes = 0;
+    let reads = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (init?.method === 'PATCH') { writes++; return Promise.reject(new Error('lost')); }
+      if (url === '/media/items/a') {
+        reads++;
+        return response(200, reads === 1 ? item('a') : {
+          ...item('a'), alt: { de: DETAILS.altDe, en: '' }, tags: ['elsewhere'],
+        });
+      }
+    } });
+    await open(page);
+    page.el('aiSelected').click();
+    await page.flush();
+    page.el('aiStart').click();
+    await page.flush();
+    expect(writes).toBe(1);
+    expect(reads).toBe(2);
+    expect(page.el('aiFailures').textContent).toContain('alt.de: Intended value stored');
+    expect(page.el('aiFailures').textContent).toContain('alt.en: Expected value visible');
+    expect(page.el('aiFailures').textContent).toContain('tags: Another value stored');
+    expect(page.el('aiSummary').textContent).not.toContain('Nothing was changed');
+    expect(page.el('aiSummary').textContent).toContain('Saved 0');
+  });
+});
+
+describe('single-photo AI conditional expectations', () => {
+  it('keeps suggested values on a concurrent fill conflict and sends only render-snapshot expectations', async () => {
+    let sent: unknown;
+    const page = loadPage({ request: (_url, init) => {
+      if (init?.method !== 'PATCH') return;
+      sent = JSON.parse(init.body!);
+      return Promise.resolve({ status: 409, ok: false, json: async () => ({
+        error: 'media_changed', current: { ...item('a'), alt: { de: 'Other author', en: '' } },
+      }) });
+    } });
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('a')], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+    page.el('dSuggest').click();
+    await page.flush();
+    page.el('dSave').click();
+    await page.flush();
+    expect(sent).toEqual({ conditional: { version: 1, patch: {
+      alt: { de: DETAILS.altDe, en: DETAILS.altEn },
+      caption: { de: DETAILS.captionDe, en: DETAILS.captionEn }, tags: DETAILS.tags,
+    }, expect: { alt: { de: '', en: '' }, caption: { de: '', en: '' }, tags: [] } } });
+    expect(page.el('dAltDe').value).toBe(DETAILS.altDe);
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dCompare').textContent).toContain('Other author');
+  });
+});
+
+describe('conditional media response validation', () => {
+  const response = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
+  async function clearTitle(page: Page): Promise<void> {
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('a')], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+    page.el('dTitle').value = '';
+    page.el('detail').dispatch('input');
+    page.el('dSave').click();
+    await page.flush();
+  }
+
+  it.each([
+    {},
+    { ...item('b'), title: '' },
+    { ...item('a'), title: undefined },
+    { ...item('a'), title: 42 },
+    { ...item('a'), title: '', alt: { de: '' } },
+    { ...item('a'), title: '', tags: [42] },
+  ])('does not infer empty fields from an invalid recovery read: %j', async (current) => {
+    let reads = 0;
+    let writes = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (init?.method === 'PATCH') { writes++; return Promise.reject(new Error('lost')); }
+      if (url === '/media/items/a') { reads++; return response(current); }
+    } });
+    await clearTitle(page);
+    expect(reads).toBe(1);
+    expect(writes).toBe(1);
+    expect(page.el('dTitle').value).toBe('');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dCompare').textContent).toContain('Save outcome unknown');
+    expect(page.el('dCompare').textContent).not.toContain('Intended value stored');
+    expect(page.el('detail').find('dUseMine')).toBeNull();
+    expect(page.el('detail').find('dUseStored')).toBeNull();
+    page.el('dSave').click();
+    await page.flush();
+    expect(writes).toBe(1);
+  });
+
+  it.each([
+    { conditionalVersion: 1 },
+    { ...item('b'), title: '', conditionalVersion: 1 },
+    { ...item('a'), title: 42, conditionalVersion: 1 },
+    { ...item('a'), conditionalVersion: 1 },
+  ])('does not clean on an invalid versioned acknowledgement: %j', async (acknowledgement) => {
+    let reads = 0;
+    let writes = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (init?.method === 'PATCH') { writes++; return response(acknowledgement); }
+      if (url === '/media/items/a') { reads++; return response({}); }
+    } });
+    await clearTitle(page);
+    expect(writes).toBe(1);
+    expect(reads).toBe(1);
+    expect(page.el('dTitle').value).toBe('');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dCompare').textContent).toContain('Save outcome unknown');
+    expect(page.el('detail').find('dUseStored')).toBeNull();
+  });
+});
+
+describe('explicit conditional detail choices after more editing', () => {
+  async function open(page: Page): Promise<void> {
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('a')], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+  }
+  function change(page: Page, id: string, value: string): void {
+    page.el(id).value = value;
+    page.el('detail').dispatch('input');
+  }
+
+  it('Use mine retains attempted leaves reverted to their original values and adds new edits only', async () => {
+    const writes: unknown[] = [];
+    const current = {
+      ...item('a'), title: 'Stored', folder: 'Elsewhere', alt: { de: 'Other DE', en: 'Other EN' },
+    };
+    const page = loadPage({ request: (_url, init) => {
+      if (init?.method !== 'PATCH') return;
+      writes.push(JSON.parse(init.body!));
+      return Promise.resolve({
+        status: writes.length === 1 ? 409 : 200, ok: writes.length !== 1,
+        json: async () => writes.length === 1 ? { error: 'media_changed', current } : {
+          ...current, title: 'a', alt: { de: '', en: 'New local EN' }, conditionalVersion: 1,
+        },
+      });
+    } });
+    await open(page);
+    change(page, 'dTitle', 'Mine');
+    change(page, 'dAltDe', 'My DE');
+    page.el('dSave').click();
+    await page.flush();
+    change(page, 'dTitle', 'a');
+    change(page, 'dAltDe', '');
+    change(page, 'dAltEn', 'New local EN');
+    page.el('dUseMine').click();
+    await page.flush();
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual({ conditional: { version: 1,
+      patch: { title: 'a', alt: { de: '', en: 'New local EN' } },
+      expect: { title: 'Stored', alt: { de: 'Other DE', en: 'Other EN' } },
+    } });
+    expect(page.el('dFolder').value).toBe('Elsewhere');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+  });
+
+  it('Use stored first compares newer edits made before a late conflict response', async () => {
+    const pending = Promise.withResolvers<unknown>();
+    const page = loadPage({ request: (_url, init) => init?.method === 'PATCH' ? pending.promise : undefined });
+    await open(page);
+    change(page, 'dTitle', 'Submitted');
+    page.el('dSave').click();
+    await page.flush();
+    change(page, 'dTitle', 'Newer');
+    pending.resolve({ status: 409, ok: false, json: async () => ({
+      error: 'media_changed', current: { ...item('a'), title: 'Stored' },
+    }) });
+    await page.flush();
+    page.el('dUseStored').click();
+    expect(page.el('dTitle').value).toBe('Newer');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dCompare').textContent).toContain('"Newer"');
+    page.el('dUseStored').click();
+    expect(page.el('dTitle').value).toBe('Stored');
+    expect(page.el('dUnsaved').hidden).toBe(true);
   });
 });
