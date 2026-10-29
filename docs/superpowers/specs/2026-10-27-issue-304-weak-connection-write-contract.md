@@ -1238,3 +1238,21 @@ committed200 plus newer title/DE-caption edits retained acknowledged leaf expect
 an independent EN-caption update. Six qualifying UI PATCHes were200/200/409/200/200/200,
 without automatic replay. Settled desktop/320px controls were inspected. Synthetic sessions
 were revoked, both tabs closed and the app stopped; retained evidence records harness limits.
+
+A third review found that Use stored could replace and falsely clean the form while a
+Use mine request was pending. Save and both conflicting recovery choices now share the
+pending-state gate; the replacement handler also refuses a forced event while saving.
+A stored-value read is tied to its comparison object, so a late response cannot reopen a
+comparison that an acknowledged write has already settled. Both consumer regressions failed
+before repair; all 50 Media DOM cases passed afterward.
+
+Actual `5397a2a` qualification used two browser tabs and real PostgreSQL-backed conditional
+writes. Response-stage interception held genuine committed200 responses without replacing
+their bodies: native Tab skipped the disabled choices, Mine remained dirty, and release
+produced the acknowledged clean form. A genuine older Check stored response released after
+the PATCH acknowledgement did not reopen the comparison. Independent caption Saves retained
+their leaf expectations without resending title; HTTP and SQL confirmed the intended title.
+The scoped record contains 14 intentional UI PATCHes (10 successful, four conflicts),
+including disclosed preliminary/capture repetitions, and zero spurious PATCHes. Desktop and
+320px keyboard states were inspected. Interceptions and observers were removed, owned
+sessions revoked, tabs closed and the app stopped; synthetic data and evidence are retained.

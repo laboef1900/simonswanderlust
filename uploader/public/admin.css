@@ -794,7 +794,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .posts-page .posts-table tbody .col-updated:not(:empty)::before { content: attr(data-label) ': '; }
   .posts-page .posts-table tbody td.col-actions { grid-row: 4; }
   .posts-page .posts-table tbody .posts-empty { grid-column: 1 / -1; padding: 1.25rem 0; }
-  .posts-page .post-more-actions { right: auto; left: 0; }
   .posts-page #bulkCount,
   .posts-page .selection-review { flex-basis: 100%; }
   .posts-page .bulk-bar > button { flex: 1 1 7rem; }

@@ -21,6 +21,10 @@
     }
     return value;
   }
+  function workingCopy(row) {
+    const working = locale => ({ title: locale.title, slug: locale.slug, intro: locale.intro, heroImage: locale.heroImage, omitted: locale.omitted });
+    return { de: working(row.de), en: working(row.en), members: [...row.members] };
+  }
   function showError(error) { $('journeyError').hidden = false; $('journeyError').textContent = error.outcomeUnknown ? BuildReporting.text('unknown') : error.message || text('Failed'); $('journeyError').focus(); }
   function dirty() { guard.markDirty(); }
   function field(parent, locale, name, copy, kind = 'input') {
@@ -113,12 +117,25 @@
   }
   async function lifecycle(action) {
     if (guard.isDirty()) throw new Error(text('SaveFirst'));
+    const generation = guard.snapshot(), baseUpdatedAt = saved.updatedAt;
     const title = saved[language.primary].title || text('New');
     if (!await AdminConfirm.ask({ title: text(action), body: text(action + 'Scope', { title, count: saved.members.length }), confirmLabel: text(action), danger: action !== 'Publish' })) return;
     const deleting = action === 'Delete';
     const result = await request('/' + id + (deleting ? '' : '/' + action.toLowerCase()), { method: deleting ? 'DELETE' : 'POST', ...(action === 'Publish' ? { body: JSON.stringify({ baseUpdatedAt: saved.updatedAt }) } : {}) }, guard);
     if (deleting) id = null;
-    else { saved = result.saved; syncActions(); }
+    else {
+      saved = result.saved;
+      if (guard.snapshot() === generation) {
+        // The concurrency token and the working copy must describe the same version.
+        draft = workingCopy(saved);
+        for (const locale of ['de', 'en']) automatic[locale] = !draft[locale].slug;
+        renderLocales(); renderMembers();
+      } else {
+        // Keep newer local inputs on their old base; saving must conflict until reload.
+        saved.updatedAt = baseUpdatedAt;
+      }
+      syncActions();
+    }
     BuildReporting.renderOutcome($('journeyStatus'), action.toLowerCase(), result, { title });
   }
   async function operate(fn) {
@@ -146,8 +163,7 @@
       const response = await fetch('/posts', { cache: 'no-store' }); if (!response.ok) throw new Error(text('Failed')); stories = await response.json();
       if (id) saved = await request('/' + id, {}, guard);
       const empty = locale => ({ title: '', slug: '', intro: '', heroImage: null, omitted: !language.locales.includes(locale) });
-      const working = row => ({ title: row.title, slug: row.slug, intro: row.intro, heroImage: row.heroImage, omitted: row.omitted });
-      draft = saved ? { de: working(saved.de), en: working(saved.en), members: [...saved.members] } : { de: empty('de'), en: empty('en'), members: [] };
+      draft = saved ? workingCopy(saved) : { de: empty('de'), en: empty('en'), members: [] };
       for (const locale of ['de', 'en']) automatic[locale] = !draft[locale].slug;
       renderLocales(); renderMembers(); syncActions(); $('journeyFields').disabled = false;
       $('journeyStatus').textContent = text(saved?.status === 'published' ? 'Published' : 'Draft') + (saved?.hasUnpublishedChanges ? ' · ' + text('Changes') : '');
@@ -155,7 +171,12 @@
       if (stash && !guard.wasDismissed(stash)) {
         if (await AdminConfirm.ask({ title: text('Restore'), body: text('RestoreScope'), confirmLabel: text('Restore') })) {
           const p = stash.payload;
-          if (p.de && p.en && Array.isArray(p.members)) { draft = { de: p.de, en: p.en, members: p.members }; if (saved) saved.updatedAt = p.baseUpdatedAt; guard.adopt(stash); renderLocales(); renderMembers(); syncActions(); dirty(); }
+          if (p.de && p.en && Array.isArray(p.members)) {
+            draft = { de: p.de, en: p.en, members: p.members };
+            for (const locale of ['de', 'en']) automatic[locale] = !draft[locale].slug;
+            if (saved) saved.updatedAt = p.baseUpdatedAt;
+            guard.adopt(stash); renderLocales(); renderMembers(); syncActions(); dirty();
+          }
         } else guard.dismissRestore(stash);
       }
     } catch (error) { $('journeyStatus').textContent = ''; showError(error); }

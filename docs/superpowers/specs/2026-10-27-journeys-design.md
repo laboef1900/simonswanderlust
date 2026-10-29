@@ -1028,3 +1028,23 @@ Desktop/320/390px controls and keyboard outcomes were inspected. All owned apps/
 were closed and permissions restored; no owner content was used. The actual-target
 collision report, landing format allocation, human implementation approval and applicable
 physical/screen-reader checks remain separate gates, not established by these fixtures.
+
+Independent implementation review identified two editor state defects: a stale clean
+Unpublish adopted a newer token without its working copy, and recovery of a never-saved
+journey left automatic derivation enabled for a manually chosen slug. Lifecycle results
+now adopt working copy and token together; a newer input generation retains its original
+editing base rather than silently accepting a newer token. Recovered nonempty slugs disable
+automatic derivation, while empty ones remain automatic. Both consumer regressions failed
+before repair; all19 journey editor cases passed afterward.
+
+Actual `9288b32` qualification used two native browser tabs and genuine PostgreSQL-backed
+routes/builds. B saved both introductions, EN title, hero metadata/focus and reordered
+membership. Stale clean A's Unpublish returned and displayed B's working copy; A's next
+one-field Save used that returned token. HTTP and independent SQL confirmed that B's other
+values/order survived. Native typing could not modify the disabled form during the real
+Unpublish build. A separate new-journey recovery used actual debounced/beforeunload storage
+and the real confirmation dialog: the next title edit preserved the manual DE slug while
+the recovered empty EN slug derived normally. POST, GET and SQL agreed. Desktop/320px
+keyboard states were inspected. The record discloses rejected fixture attempts and an
+initially cancelled recovery; successful qualification was separate. Owned sessions,
+browser storage/tabs and app were closed, with synthetic data and evidence retained.
