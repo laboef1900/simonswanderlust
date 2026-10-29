@@ -1,3 +1,5 @@
+import { idleBuildState } from './build-fixture.js';
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -15,9 +17,13 @@ import type { DbBackup } from '../src/backup.js';
 import { memoryMediaStore } from '../src/media-store.js';
 import type { EncodeQueue } from '../src/encode-queue.js';
 import { memorySecretsStore } from '../src/secrets.js';
+import { LEGACY_REDIRECTS } from '../src/redirects.js';
+import { memoryLanguageStore, type LanguageConfig } from '../src/language.js';
 
 /** This suite only exercises host routing, so the queue never needs to run. */
 const noopQueue = (): EncodeQueue => ({
+  withAdmission: (_key, operation) => operation(),
+  availableCapacity: () => 100, onCapacity: () => () => {},
   enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {}, idle: async () => {},
   quiesce: async () => {},
   stats: () => ({ pending: 0, running: 0 }),
@@ -74,9 +80,10 @@ function stubBackup(backupDir: string): DbBackup {
 
 function build(extra: Partial<ServerConfig> = {}) {
   const hasRelease = () => existsSync(join(siteDir, 'current'));
-  const builder: SiteBuilder = { build: async () => ({ ok: true, release: 'r' }), hasRelease, quiesce: async () => {} };
+  const builder: SiteBuilder = { ...idleBuildState, build: async () => ({ ok: true, attemptId: 'r', release: 'r' }), hasRelease, quiesce: async () => {} };
   const backupDir = join(dir, 'backup');
   return buildServer({
+    trustProxy: TEST_TRUST,
     storageDir: join(dir, 'images'), baseUrl: `https://${IMG}`, imgHost: IMG,
     siteDir, mapDir: join(dir, 'map'),
     users: memoryUserStore(), sessions: memorySessionStore(), posts: memoryPostStore(),
@@ -352,7 +359,7 @@ describe('img-host blog fallback gate (local dev only)', () => {
 
 describe('legacy WordPress redirects', () => {
   it('301s the /feed/ family to /rss.xml on the main host', async () => {
-    await release('r1', { 'index.html': 'home', '404.html': 'nf' });
+    await release('r1', { 'index.html': '<!doctype html><html lang="de"><body>home</body></html>', '404.html': 'nf' });
     const app = build();
     for (const url of ['/feed/', '/feed', '/comments/feed/', '/feed/atom/', '/feed/rss2/']) {
       const res = await app.inject({ method: 'GET', url, headers: { host: MAIN } });
@@ -362,14 +369,14 @@ describe('legacy WordPress redirects', () => {
   });
 
   it('301s /en/feed/ to /en/rss.xml', async () => {
-    await release('r1', { 'index.html': 'home', '404.html': 'nf' });
+    await release('r1', { 'index.html': '<!doctype html><html lang="de"><body>home</body></html>', '404.html': 'nf' });
     const res = await build().inject({ method: 'GET', url: '/en/feed/', headers: { host: MAIN } });
     expect(res.statusCode).toBe(301);
     expect(res.headers.location).toBe('/en/rss.xml');
   });
 
   it('strips the query string before matching (/feed/?withoutcomments=1)', async () => {
-    await release('r1', { 'index.html': 'home', '404.html': 'nf' });
+    await release('r1', { 'index.html': '<!doctype html><html lang="de"><body>home</body></html>', '404.html': 'nf' });
     const res = await build().inject({
       method: 'GET', url: '/feed/?withoutcomments=1', headers: { host: MAIN },
     });
@@ -378,7 +385,7 @@ describe('legacy WordPress redirects', () => {
   });
 
   it('301s category archives to their region pages', async () => {
-    await release('r1', { 'index.html': 'home', '404.html': 'nf' });
+    await release('r1', { 'index.html': '<!doctype html><html lang="de"><body>home</body></html>', '404.html': 'nf' });
     const app = build();
     const de = await app.inject({ method: 'GET', url: '/category/europa/', headers: { host: MAIN } });
     expect(de.statusCode).toBe(301);
@@ -389,7 +396,7 @@ describe('legacy WordPress redirects', () => {
   });
 
   it('answers HEAD requests with the 301 too (feed readers probe with HEAD)', async () => {
-    await release('r1', { 'index.html': 'home', '404.html': 'nf' });
+    await release('r1', { 'index.html': '<!doctype html><html lang="de"><body>home</body></html>', '404.html': 'nf' });
     const res = await build().inject({ method: 'HEAD', url: '/feed/', headers: { host: MAIN } });
     expect(res.statusCode).toBe(301);
     expect(res.headers.location).toBe('/rss.xml');
@@ -409,10 +416,10 @@ describe('legacy WordPress redirects', () => {
     expect(res.body).toBe('custom not found');
   });
 
-  it('redirects even before the first release exists (no 503 for legacy URLs)', async () => {
+  it('refuses to guess a language before the first release exists', async () => {
     const res = await build().inject({ method: 'GET', url: '/feed/', headers: { host: MAIN } });
-    expect(res.statusCode).toBe(301);
-    expect(res.headers.location).toBe('/rss.xml');
+    expect(res.statusCode).toBe(503);
+    expect(res.headers.location).toBeUndefined();
   });
 
   it('never shadows a real static file: a released feed/index.html wins over the 301', async () => {
@@ -422,6 +429,38 @@ describe('legacy WordPress redirects', () => {
     const res = await build().inject({ method: 'GET', url: '/feed/', headers: { host: MAIN } });
     expect(res.statusCode).toBe(200);
     expect(res.body).toBe('static feed');
+  });
+
+  it.each<LanguageConfig>([
+    { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
+    { primary: 'de', locales: ['de'] }, { primary: 'en', locales: ['en'] },
+  ])('uses only activated HTML language for $primary / $locales, without target existence probes', async (language) => {
+    await release('r1', {
+      'index.html': `<!doctype html><html lang="${language.primary}" data-site-primary="${language.primary}" data-site-locales="${language.locales.join(',')}"><body>home</body></html>`,
+      '404.html': 'nf',
+    });
+    const store = memoryLanguageStore({ primary: 'en', locales: ['en'] });
+    store.get = async () => { throw new Error('Public redirects must not query the database'); };
+    const app = build({ language: store });
+    for (const [url, target] of LEGACY_REDIRECTS) {
+      const eligible = language.primary === 'de' && (!url.startsWith('/en/') || language.locales.includes('en'));
+      const response = await app.inject({ method: 'GET', url, headers: { host: MAIN } });
+      expect(response.statusCode, url).toBe(eligible ? 301 : 404);
+      expect(response.headers.location, url).toBe(eligible ? target : undefined);
+    }
+  });
+
+  it('changes redirect eligibility only when the new release is activated', async () => {
+    await release('old', { 'index.html': '<html data-site-primary="de" data-site-locales="de"></html>', '404.html': 'nf' });
+    const language = memoryLanguageStore({ primary: 'de', locales: ['de'] });
+    const app = build({ language });
+    await language.update({ primary: 'en', locales: ['en'] });
+    // A failed build has not replaced current: old DE redirects remain.
+    expect((await app.inject({ url: '/feed/', headers: { host: MAIN } })).statusCode).toBe(301);
+    await release('new', { 'index.html': '<html data-site-primary="en" data-site-locales="en"></html>', '404.html': 'nf' });
+    const response = await app.inject({ url: '/feed/', headers: { host: MAIN } });
+    expect(response.statusCode).toBe(404);
+    expect(response.headers.location).toBeUndefined();
   });
 });
 

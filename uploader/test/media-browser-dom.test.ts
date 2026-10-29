@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { webcrypto } from 'node:crypto';
 import { setImmediate } from 'node:timers/promises';
+import { ui } from '../../site/src/i18n/ui.js';
 
 // media-browser.js is the library page's DOM glue (media.html). Its
 // user-visible contracts that no pure helper can carry — the detail panel
@@ -24,7 +26,9 @@ type Listener = (ev: Record<string, unknown>) => void;
 class FakeNode {
   id = '';
   className = '';
-  textContent = '';
+  private text = '';
+  get textContent(): string { return this.text + this.children.map(child => child.textContent).join(''); }
+  set textContent(value: string) { this.text = value; this.children = []; }
   value = '';
   hidden = false;
   disabled = false;
@@ -38,13 +42,19 @@ class FakeNode {
   attrs: Record<string, string> = {};
   children: FakeNode[] = [];
   listeners: Record<string, Listener[]> = {};
-  constructor(public tagName: string) {}
+  constructor(public tagName: string, private onFocus?: (node: FakeNode) => void) {}
   get innerHTML(): string { return ''; }
   set innerHTML(v: string) { if (v === '') this.children = []; }
   get firstElementChild(): FakeNode | null { return this.children[0] ?? null; }
   appendChild(c: FakeNode): FakeNode { this.children.push(c); return c; }
+  append(...nodes: FakeNode[]): void { nodes.forEach(node => this.appendChild(node)); }
+  contains(node: FakeNode | null): boolean { return node === this || this.children.some(child => child.contains(node)); }
+  adjacent: FakeNode[] = [];
+  insertAdjacentElement(_position: string, node: FakeNode): FakeNode { this.adjacent.push(node); return node; }
   remove(): void {}
-  focus(): void {}
+  focused = false;
+  focus(): void { this.focused = true; this.onFocus?.(this); }
+  click(): void { this.dispatch('click'); }
   showModal(): void { this.open = true; }
   close(): void { this.open = false; this.dispatch('close'); }
   setAttribute(k: string, v: string): void { this.attrs[k] = v; }
@@ -100,6 +110,7 @@ type Describe = (url: string, signal: AbortSignal) => Promise<Details>;
 /** The loaded page: the DOM stub plus everything the page sent over the wire. */
 interface Page {
   el(id: string): FakeNode;
+  activeElement(): FakeNode | null;
   /** The page's global object, for replacing a module's function after load. */
   win: Record<string, unknown>;
   timers: { fn: () => void; cleared: boolean }[];
@@ -112,10 +123,13 @@ interface Page {
   flush(): Promise<void>;
 }
 
-function loadPage(opts: { describe?: Describe } = {}): Page {
+function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en'; prompt?: string; xhr?: new () => object;
+  request?: (url: string, init?: { method?: string; body?: string }) => Promise<unknown> | undefined } = {}): Page {
   const roots = new Map<string, FakeNode>();
+  let activeElement: FakeNode | null = null;
+  const createElement = (tag: string): FakeNode => new FakeNode(tag, node => { activeElement = node; });
   for (const id of pageIds) {
-    const n = new FakeNode('div');
+    const n = createElement('div');
     n.id = id;
     n.checked = checkedIds.has(id);
     roots.set(id, n);
@@ -138,6 +152,9 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
   const confirmAnswer = { value: false };
   const ok = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
   const fetch = (url: string, init?: { method?: string; body?: string }): Promise<unknown> => {
+    const override = opts.request?.(url, init);
+    if (override) return override;
+    if (url === '/auth/me') return ok({ authenticated: true, userId: '11111111-1111-4111-8111-111111111111', username: 'simon', isAdmin: opts.isAdmin ?? true });
     if (url.startsWith('/media/folders')) return ok([]);
     if (init?.method === 'PATCH') {
       patches.push({ url, body: JSON.parse(init.body ?? '{}') as Record<string, unknown> });
@@ -155,21 +172,27 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
   const describePhoto = opts.describe ?? (async () => DETAILS);
   const ctx: Record<string, unknown> = {
     document: {
+      documentElement: { lang: opts.locale ?? 'en' },
+      get activeElement() { return activeElement; },
       getElementById,
-      createElement: (tag: string) => new FakeNode(tag),
+      createElement,
       createTextNode: (text: string) => Object.assign(new FakeNode('#text'), { textContent: text }),
     },
     location: { href: '', origin: 'https://app.example', protocol: 'https:' },
     fetch,
     URL, AbortController, AbortSignal,
+    crypto: webcrypto, addEventListener() {},
     setTimeout: (fn: () => void) => { timers.push({ fn, cleared: false }); return timers.length; },
     clearTimeout: (id: number) => { const t = timers[id - 1]; if (t) t.cleared = true; },
     confirm: (msg: string) => { confirms.push(msg); return confirmAnswer.value; },
-    prompt: () => null,
+    prompt: () => opts.prompt ?? null,
     console,
     FormData: class { append() {} },
-    XMLHttpRequest: class {},
-    Auth: { ensureAuthed: async () => ({ id: 'u1', username: 'simon', isAdmin: true }), renderHeader() {} },
+    XMLHttpRequest: opts.xhr ?? class {},
+    Auth: { ensureAuthed: async () => ({ id: 'u1', username: 'simon', isAdmin: opts.isAdmin ?? true }), renderHeader() {} },
+    EditorCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
+      Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])),
+    ])),
     EditorGalleryImageOrigin: 'https://img.example',
     AltSuggest: {
       loadConfig: async () => ({
@@ -195,7 +218,7 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
   vm.runInContext(dialogSrc, ctx);
   vm.runInContext(browserSrc, ctx);
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await setImmediate(); };
-  return { el, win: ctx, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush };
+  return { el, activeElement: () => activeElement, win: ctx, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush };
 }
 
 function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
@@ -203,6 +226,61 @@ function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
   timers.length = 0;
   for (const t of due) t.fn();
 }
+
+describe('media-browser empty states', () => {
+  it.each([
+    { isAdmin: true, locale: 'en' as const },
+    { isAdmin: false, locale: 'en' as const },
+    { isAdmin: false, locale: 'de' as const },
+  ])('offers an upload, not an admin recovery action ($isAdmin / $locale)', async (options) => {
+    const page = loadPage(options);
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [], total: 0 });
+    await page.flush();
+    expect(page.el('mediaEmpty').hidden).toBe(false);
+    expect(page.el('grid').hidden).toBe(true);
+    expect(page.el('grid').children).toHaveLength(0);
+    expect(page.el('mediaEmptyMessage').textContent).toContain(ui[options.locale]['editor.chrome.mediaEmptyHelp']);
+    expect(page.el('emptyShowAll').hidden).toBe(true);
+    const choose = vi.fn();
+    page.el('fileInput').addEventListener('click', choose);
+    page.el('emptyChoosePhotos').click();
+    expect(choose).toHaveBeenCalledOnce();
+    expect(page.el('fileInput').focused).toBe(true);
+    if (!options.isAdmin) expect(page.el('rescan').hidden).toBe(true);
+    expect(page.patches).toHaveLength(0);
+  });
+
+  it('recovers from an empty filtered view without adding content and removes the state when photos return', async () => {
+    const page = loadPage({ isAdmin: false });
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('one')], total: 1 });
+    await page.flush();
+    page.el('fStatus').value = 'failed';
+    page.el('fStatus').dispatch('change');
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [], total: 0 });
+    await page.flush();
+    expect(page.el('mediaEmptyMessage').textContent).toContain(ui.en['editor.chrome.mediaNoResults']);
+    expect(page.el('emptyShowAll').hidden).toBe(false);
+    page.el('emptyShowAll').click();
+    await page.flush();
+    const reset = page.listRequests.shift()!;
+    const query = new URL(reset.url, 'https://app.example').searchParams;
+    expect(query.get('status') || '').toBe('');
+    expect(query.get('q') || '').toBe('');
+    expect(query.get('folder') || '').toBe('');
+    expect(page.el('fStatus').value).toBe('');
+    expect(page.el('fSearch').focused).toBe(true);
+    reset.resolve({ items: [item('one')], total: 1 });
+    await page.flush();
+    expect(page.el('mediaEmpty').hidden).toBe(true);
+    expect(page.el('mediaEmptyMessage').textContent).toBe('');
+    expect(page.el('grid').hidden).toBe(false);
+    expect(page.el('grid').querySelectorAll('.media-cell')).toHaveLength(1);
+    expect(page.patches).toHaveLength(0);
+  });
+});
 
 describe('media-browser detail panel', () => {
   it('keeps unsaved edits across a reload and asks before switching photos', async () => {
@@ -627,5 +705,140 @@ describe('media-browser search', () => {
     await page.flush();
     expect(page.el('out').textContent).toBe('1 photo(s)');
     expect(page.el('grid').querySelectorAll('.media-cell')).toHaveLength(1);
+  });
+});
+
+describe('upload receipt recovery visibility', () => {
+  it('recovers the photo and keyboard focus without retransmitting or replacing dirty detail fields', async () => {
+    let sends = 0; let probes = 0;
+    let releaseCheck: (() => void) | undefined;
+    const page = loadPage({
+      xhr: class {
+        open() {}
+        abort() {}
+        send() { sends++; throw new Error('Acknowledgement lost'); }
+      },
+      request: (url) => {
+        if (!url.startsWith('/upload/receipts/')) return;
+        probes++;
+        if (probes === 1) return Promise.resolve({ status: 503, ok: false, json: async () => ({ error: 'unavailable' }) });
+        return new Promise(resolve => {
+          releaseCheck = () => resolve({ status: 200, ok: true, json: async () => ({
+            state: 'accepted', ownerUserId: '11111111-1111-4111-8111-111111111111', uploadId: url.split('/').pop(),
+            result: { key: 'recovered-photo', src: 'https://img.example/recovered-photo', width: 10, height: 10 },
+          }) });
+        });
+      },
+    });
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('existing')], total: 1 }); await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+    page.el('dAltDe').value = 'Keep this unsaved description'; page.el('detail').dispatch('input');
+    Object.assign(page.el('fileInput'), { files: [{ name: 'recovered-photo.jpg' }] });
+    page.el('fileInput').dispatch('change'); await page.flush();
+    expect(sends).toBe(1); expect(probes).toBe(1);
+    expect(page.listRequests).toHaveLength(0);
+    const check = page.el('uploadQueue').querySelectorAll('.btn-secondary')[0]!;
+    check.focus(); check.click(); await page.flush();
+    expect(page.activeElement()).toBe(page.el('uploadQueue').querySelectorAll('.upload-row')[0]);
+    releaseCheck!(); await page.flush();
+    expect(page.activeElement()).toBe(page.el('uploadQueue').querySelectorAll('.upload-row')[0]);
+    expect(sends).toBe(1); expect(probes).toBe(2);
+    expect(page.listRequests).toHaveLength(1);
+    page.el('dAltDe').focus();
+    page.listRequests.shift()!.resolve({ items: [item('existing', 'Other stored text'), item('recovered-photo')], total: 2 });
+    await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell').map(cell => cell.dataset.key)).toEqual(['existing', 'recovered-photo']);
+    expect(page.el('dAltDe').value).toBe('Keep this unsaved description');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.activeElement()).toBe(page.el('dAltDe'));
+    expect(page.listRequests).toHaveLength(0);
+  });
+});
+
+describe('folder and move ambiguous outcomes', () => {
+  const reply = (body: unknown, status = 200) => Promise.resolve({ status, ok: status >= 200 && status < 300, json: async () => body });
+  it('checks the folder tree once after a lost create response and only repeats the write explicitly', async () => {
+    let creates = 0; let reads = 0;
+    const page = loadPage({ prompt: 'Iceland', request: (url, init) => {
+      if (url !== '/media/folders') return;
+      if (init?.method === 'POST') { creates++; return Promise.reject(new Error('Response lost')); }
+      reads++; return reply([]);
+    } });
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    const initialReads = reads;
+    page.el('newFolder').click(); await page.flush();
+    const panel = page.el('out').adjacent[0]!;
+    expect(creates).toBe(1); expect(reads).toBe(initialReads + 1);
+    const [check, again] = panel.children.filter(child => child.tagName === 'button');
+    expect(again!.hidden).toBe(false);
+    check!.click(); await page.flush();
+    expect(creates).toBe(1); expect(reads).toBe(initialReads + 2);
+    again!.click(); await page.flush();
+    expect(creates).toBe(2);
+  });
+  it('installs a recovered folder in the tree and move targets from the one authoritative read', async () => {
+    let creates = 0; let reads = 0;
+    const page = loadPage({ prompt: 'Iceland', request: (url, init) => {
+      if (url !== '/media/folders') return;
+      if (init?.method === 'POST') { creates++; return Promise.reject(new Error('Acknowledgement lost')); }
+      reads++; return reply(creates ? ['Iceland'] : []);
+    } });
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    const initialReads = reads;
+    page.el('newFolder').click(); await page.flush();
+    expect(creates).toBe(1); expect(reads).toBe(initialReads + 1);
+    const folder = page.el('folderTree').querySelectorAll('.folder-btn').find(button => button.textContent === 'Iceland');
+    expect(folder).toBeDefined();
+    expect(page.el('moveTarget').children.map(option => option.value)).toContain('Iceland');
+    expect(page.listRequests).toHaveLength(0);
+    folder!.click(); await page.flush();
+    expect(new URL(page.listRequests[0]!.url, 'https://app.example').searchParams.get('folder')).toBe('Iceland');
+    expect(creates).toBe(1);
+  });
+  it('uses a single selected-key lookup, not a filtered page, and retains Unknown for incomplete evidence', async () => {
+    let moves = 0; const lookups: unknown[] = []; let complete = false;
+    const page = loadPage({ request: (url, init) => {
+      if (url === '/media/move') { moves++; return reply({ error: 'upstream timeout' }, 503); }
+      if (url === '/media/lookup') {
+        lookups.push(JSON.parse(init?.body ?? '{}'));
+        return reply({ items: complete ? [{ key: 'selected', folder: 'Another folder' }] : [] });
+      }
+    } });
+    page.rows.set('selected', item('selected'));
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [item('selected')], total: 201 }); await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+    page.el('moveTarget').value = 'Target';
+    page.el('moveSelected').click(); await page.flush();
+    const panel = page.el('out').adjacent[0]!;
+    const [check, again] = panel.children.filter(child => child.tagName === 'button');
+    expect(lookups).toEqual([{ keys: ['selected'] }]);
+    expect(page.listRequests).toHaveLength(0);
+    expect(again!.hidden).toBe(true);
+    complete = true; check!.click(); await page.flush();
+    expect(moves).toBe(1);
+    expect(panel.textContent).toContain('selected: Another folder');
+    expect(again!.hidden).toBe(false);
+    page.listRequests.shift()!.resolve({ items: [Object.assign(item('selected'), { folder: 'Another folder' })], total: 201 });
+    await page.flush();
+    expect(page.el('dFolder').value).toBe('Another folder');
+    // Changing a visible-page filter cannot remove this operation's evidence.
+    page.el('fStatus').value = 'failed'; page.el('fStatus').dispatch('change'); await page.flush();
+    page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    expect(panel.textContent).toContain('selected: Another folder');
+    again!.click(); await page.flush(); expect(moves).toBe(2);
+  });
+  it('does not treat an empty 2xx move body as acknowledgement', async () => {
+    let probes = 0;
+    const page = loadPage({ request: (url) => {
+      if (url === '/media/move') return reply({});
+      if (url === '/media/lookup') { probes++; return reply({ items: [{ key: 'selected', missing: true }] }); }
+    } });
+    page.rows.set('selected', item('selected'));
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [item('selected')], total: 1 }); await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click(); page.el('moveSelected').click(); await page.flush();
+    expect(probes).toBe(1);
+    page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell').map(cell => cell.dataset.key)).not.toContain('selected');
   });
 });

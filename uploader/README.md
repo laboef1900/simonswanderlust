@@ -78,11 +78,42 @@ open http://localhost:3000/login      # macOS (or just browse to the URL)
 ```
 
 On first run, when no users exist, `/login` shows a "Create the first admin"
-form. Fill in a username and password to create the admin account; the form is
-closed once any user exists. Sign in at `/login`, then pick a key
-(e.g. `trips/rhodes-2021/hero`) and alt text, choose a photo, and click
-**Upload** — the page prints the `heroImage:` snippet to paste into the post's
-frontmatter.
+form. Fill in a username and password; the form closes once any user exists. Setup/login
+take you to the existing publishing **Desk**, not a snippet/frontmatter workflow.
+
+On a genuinely fresh installation the admin Desk offers this checklist:
+
+1. **Admin account created** — informational, already done after setup.
+2. **Name your blog — Optional** — opens Settings → Site identity. Only an explicit save
+   completes it; leaving seeded identity untouched never blocks Finish or Publish.
+3. **Upload your first photo** — opens Media. Upload and wait until a photo is ready;
+   processing is not completion, and failed/missing photos link to the existing retry workflow.
+4. **Write your first story** — opens the existing editor (or your newest saved story).
+   Pick the uploaded hero, fill the required locale/story fields and **Save draft**.
+   The checklist creates no post, slug or sample content for you.
+5. **Publish it** — explicitly Publish in the editor after its normal validation and
+   confirmation. This rebuilds the public site; saving a draft never publishes.
+
+Progress counts only the three required photo/story/publish steps and reflects current data.
+Deleting the only ready photo/story or unpublishing the only publication regresses progress.
+**Hide checklist** is install-wide and survives browser changes/restarts; **Show setup checklist**
+appears only in the Desk header. Once the three required steps are done, explicit **Finish**
+permanently retires the checklist after confirmation; Publish alone never finishes it.
+A hidden complete checklist stays hidden until you Show it. Nothing reopens it after Finish.
+
+Authors retain normal upload/draft actions but never receive the checklist or admin setup CTAs.
+Upgrades, restored installations and zero-user installations with existing content/data are
+excluded; absence of a checklist is not an error or a reason to erase data. There is no reset.
+On context/checklist failure use the displayed read-only Retry; uncertainty is not logout or
+an empty checklist. No language placeholder is added by this feature.
+
+Recovery is offline: every JSON/SQL/host/clone restore permanently retires onboarding.
+For a fresh JSON target use `prepare-native-restore [--yes]`, not an HTTP boot for schema;
+SQL/filesystem recovery uses fence-only `onboarding-retire` before replacement and verifies
+the final root again before activation. Keep all writers stopped and auto-start disabled
+between commands—the CLI lease ends on exit. Follow
+[the complete recovery procedure](../ARCHITECTURE.md#database-dumps); never delete retirement
+metadata, old volumes or owner content to make setup look fresh.
 
 Uploaded variants — plus the untouched original as `{key}-orig.<ext>` — are
 written to `./data/images/` on the host (a Docker volume), so they survive
@@ -107,17 +138,24 @@ node -e "require('sharp')({create:{width:1600,height:1067,channels:3,background:
 curl -s -c cookies.txt -X POST http://localhost:3000/login \
   -H 'content-type: application/json' \
   -d '{"username":"simon","password":"YOUR_PASSWORD"}'
+OWNER_ID=$(curl -s -b cookies.txt http://localhost:3000/auth/me | node -e "let s='';process.stdin.on('data',b=>s+=b).on('end',()=>process.stdout.write(JSON.parse(s).userId))")
+UPLOAD_ID=$(node -p "require('node:crypto').randomUUID()")
 curl -s -b cookies.txt -X POST http://localhost:3000/upload \
+  -F "expectedOwnerId=$OWNER_ID" -F "uploadId=$UPLOAD_ID" -F retryGeneration=0 \
   -F key=trips/smoke/hero -F alt="Smoke" -F file=@/tmp/sample.jpg
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/trips/smoke/hero-640.webp  # -> 200
+# An accepted response names the hash-versioned src/key; wait for Media status ready
+# before requesting that src's variants. On an unknown response, GET the receipt:
+curl -s -b cookies.txt "http://localhost:3000/upload/receipts/$UPLOAD_ID"
 ```
 
 ## Run locally without Docker (Node)
 
-**Prerequisite:** Node >= 26, a local Postgres instance.
+**Prerequisite:** Node 26, local Postgres, and Xcode command-line tools on macOS (or the
+qualified Linux compiler/toolchain). The native lock artifact is required, not optional.
 
 ```bash
 npm install
+npm run build:native
 DATABASE_URL=postgres://images:YOUR_PASSWORD@127.0.0.1:5432/images \
   STORAGE_DIR=./data/images PUBLIC_BASE_URL=http://localhost:3000 npm start
 # -> "image uploader listening on :3000", open /login to create the first admin
@@ -128,6 +166,37 @@ For an isolated feature worktree, set absolute writable paths for `STORAGE_DIR`,
 `PORT`. Set `MAP_DIR` to the self-hosted basemap assets. Use a dedicated database;
 integration tests require a different `TEST_DATABASE_URL`, never the content database.
 An empty `SITE_DIR` starts a build from `SITE_APP_DIR`, so check both paths before launch.
+
+The production build inputs live in `.github/native-owner/`: the owned C binding and
+its qualified compiler/container recipes are preserved byte-for-byte. The historical
+qualification wording and `/proof` build-stage path in those files are retained to
+preserve that source identity; they do not install a proof worker in the app.
+`npm run build:native` uses pinned Node 26.12.1 headers and writes the addon, ABI/build
+record, header/license provenance and Node license into `uploader/native/`. The root
+Dockerfile builds these with the pinned DHI indices and Debian snapshot in an isolated
+stage; neither its native build driver nor the test subprocesses ship in the runtime.
+
+The permanent `owned flock · native amd64` / `owned flock · native arm64` CI jobs build
+the current checkout on standard public native Ubuntu runners and run:
+
+```sh
+# From uploader/, after dependencies in both trees and build:native are installed.
+# TEST_DATABASE_URL must name an owned, disposable PostgreSQL 18 fixture.
+npm test -- --project integration test/data-owner.integration.test.ts test/storage-owner.integration.test.ts test/gpx-main-boot.integration.test.ts
+```
+
+These are host-runner regressions, not production-image or deployment-mount qualification.
+The descriptor suite covers invalid/closed/non-file descriptors, live/stopped contention,
+stable inodes, clean close, SIGKILL, ordinary-child noninheritance and deliberately inherited
+last-close exclusion. Product ownership/main suites retain real PG-loss, admission failure,
+draining app/offline-restore exclusion and graceful native release coverage.
+
+Native binding qualification inherited from #304 covers macOS arm64/APFS and native
+DHI/glibc amd64+arm64 ext4 bind/named volumes. The actual deployment mount must pass the
+same process/descriptor/PG-loss/restore matrix before deployment or enablement; a successful
+lock acquisition is not filesystem qualification. Docker Desktop sharing, NFS/SMB/FUSE
+and musl are not approved. Never delete or replace the stable `.storage-owner.lock` beside
+the images directory. See [write ownership](../ARCHITECTURE.md#write-reconciliation-and-storage-ownership-305).
 
 ---
 
@@ -144,16 +213,26 @@ An empty `SITE_DIR` starts a build from `SITE_APP_DIR`, so check both paths befo
    now covers image variants *and* the built blog output, since both live under the same `/data`
    volume: `mkdir -p uploader/data && sudo chown -R 1000:1000 uploader/data` (run from the
    monorepo root).
-5. Point your reverse proxy (nginx/Caddy/Traefik) at the container, terminating TLS: **both**
-   `https://simonswanderlust.com` **and** `https://img.simonswanderlust.com` → `127.0.0.1:3000`.
-   One Fastify process serves both domains — a host-header check (`IMG_HOST`) picks image-variant
-   serving vs. the blog/admin, so each domain behaves exactly as before the merge. **The proxy
-   must forward the original, verbatim `Host` header for both domains** (nginx:
-   `proxy_set_header Host $host;` — do not rely on the default, which some nginx configs override
-   with `$proxy_host`/the upstream name). If the `Host` header reaching the app isn't exactly
-   `img.simonswanderlust.com`, image URLs silently fall through to the blog/admin routing instead
-   of serving image variants.
-6. Open `https://simonswanderlust.com/login` to create the first admin account, then upload.
+5. Run **one host-level TLS proxy** (nginx/Caddy/Traefik), without a CDN or additional proxy
+   hop: **both** `https://simonswanderlust.com` **and** `https://img.simonswanderlust.com`
+   → `127.0.0.1:3000`. One Fastify process serves both domains; its raw `Host` check
+   (`IMG_HOST`) selects image variants versus blog/admin.
+   Preserve the verbatim `Host`, overwrite `X-Forwarded-Proto` with the proxy's scheme,
+   and append or overwrite XFF so the rightmost address is the client the proxy accepted.
+   nginx: `proxy_set_header Host $http_host;`,
+   `proxy_set_header X-Forwarded-Proto $scheme;`,
+   `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
+   Never rely on an upstream-name `Host` rewrite: it sends image requests to blog/admin.
+   Compose's literal `TRUSTED_PROXY: docker-gateway` trusts only loopback and the discovered
+   bridge gateway at hop zero. Do not put it in `.env`; a different network/proxy topology
+   requires a new spec. Failed gateway discovery refuses boot rather than losing `Secure`
+   cookies or collapsing every reader into one limiter bucket.
+6. Open `https://simonswanderlust.com/login` to create the first admin account, then follow
+   the Desk checklist above (or use the ordinary Media/editor workflow on an existing install).
+   Before public cutover, inspect the target server's observed proxy peer, confirm `Secure`
+   on an HTTPS login, and verify independent login-limit buckets from two external networks.
+   The #369 Docker Desktop production-image TCP probe covers the Linux VM host-network
+   proxy → app bridge path, not the target VPS's published-loopback/NAT configuration.
 
 The admin panel is reachable directly at `https://simonswanderlust.com/admin/` — the same process
 serves it, so there's nothing to proxy to separately anymore.
@@ -163,14 +242,21 @@ lists published trips with saved changes, reports the photo-processing count, an
 current live site. Those three data sources load independently. If posts, queue status, or health
 is unavailable, only that section shows a retry; unknown queue/release state is never presented as
 an idle queue or as confirmation that no release exists.
+The optional first-run checklist sits above these existing sections; it does not replace them.
+Protected pages share read-only `GET /auth/me`, returning exactly
+`{ authenticated: true, userId, username, isAdmin, needsSetup: false }` with `no-store`.
+Only a 401 redirects to login; other context failures offer retry without logging out.
+`/setup`, `/login` and `/auth/status` keep their existing contracts.
 
 ### Security notes
 
 Full details in [`../SECURITY.md`](../SECURITY.md); the essentials:
 
-- **Always run behind the TLS-terminating reverse proxy.** The app trusts `X-Forwarded-*`
-  (so per-IP login throttling and the cookie `secure` flag work); your proxy MUST set
-  `X-Forwarded-Proto`. Do not expose port 3000 directly to the internet.
+- **Public hosting requires the documented host TLS proxy.** Forwarded headers are accepted
+  only from an allow-listed immediate peer, never from an arbitrary bridge container.
+  Host-local processes remain inside the trust boundary. The proxy must preserve `Host`,
+  overwrite forwarded protocol and supply the accepted client as rightmost XFF. Never expose
+  port 3000 directly or broaden trust to a subnet to compensate for misconfiguration.
 - **Password-verifying endpoints are rate-limited** per client IP (`/login`, `/setup`, and the
   authenticated `POST /users/me/password`: 10 requests per 15 minutes) to slow brute-force; they
   share one bucket, so failed current-password guesses count against login attempts from that IP.
@@ -230,9 +316,10 @@ The admin-only **Pages** catalogue at `/admin/pages.html` opens the incumbent
 keeps its fixed URLs and cannot be unpublished/deleted. Other pages start as
 drafts; publication locks each enabled locale's slug permanently through unpublish.
 Draft saves do not build; published saves/revision restores, Publish, unpublish
-and published deletion commit then build once. A `502 page_build_failed` with
-`persisted: true` means the new DB state is saved and the old release is still
-serving: retry **Rebuild site now** after repair.
+and published deletion commit then build once. A committed HTTP 200 response with
+`build.ok: false` means the new DB state is saved and the old release is still
+serving: retry **Rebuild site now** after repair. PUT includes its owner/save receipt;
+an actual 5xx remains Unknown and follows the one-probe/manual-check contract.
 
 Language settings' **Prepare translations** opens the explicit inactive-locale
 workflow without exposing those fields in ordinary editing. Activation validates
@@ -269,6 +356,31 @@ flagging rows whose files have vanished, and demoting a `ready` row whose varian
 longer complete for its original's width — and then `encodeQueue.recover()` re-seeds the queue
 from `status = 'processing'`). Variant and original files are written atomically (temp +
 rename), so a crash never leaves a truncated file under a final name.
+
+The backlog admits at most 200 waiting jobs, in addition to the two running jobs. When an
+upload receives **429** because that backlog is full, a new photo keeps its original as
+`failed` / `queue_full`, not stranded `processing`; an existing photo's prior status/error is
+restored unless another request already admitted or completed its job. Once capacity returns,
+bounded receipt recovery finishes retained uploads without retransmitting their bytes.
+Use **Check again** for transfer evidence; an admin can run **Rescan** after a recovery error.
+Media **Retry** still re-encodes retained failed originals under #348's contract. A new explicit
+upload can also repair an older orphan, but an unresolved upload is never automatically resent.
+Upload, Retry, and boot/rescan recovery serialize admission and refusal rollback for the
+same key, including the awaited status write. Recovery re-reads the row after waiting rather
+than admitting a stale `processing` snapshot. Re-uploading a `queue_full` photo changes only
+its status and restores its original; curated folder, localized descriptions, title, tags,
+and the saved encoding profile are retained even across repeated refusals.
+Recovery starts each admitted job immediately, so a later candidate's database read failure
+does not strand earlier admissions. The rescan still reports the error; already admitted
+photos finish independently, while remaining `processing` photos can recover on a later rescan.
+
+Upload IDs remain bound to the original account, byte hash, initial fields and frozen
+encoding profile. Missing receipts are Unknown, not authorization to resend. A retry is
+offered only after the server proves a nonrecoverable attempt and advances its generation.
+Deletion makes all receipts for that media key terminal (`gone`). The Media batch stays
+on screen after session expiry: sign in in a second tab, then explicitly resume as the
+same account. Files stay only in this tab's memory; leaving/reloading loses that queue.
+Completed transfer evidence remains visible even if another file pauses the batch.
 
 Three consequences worth knowing:
 
@@ -507,8 +619,9 @@ deploying: rollback is the older image + that dump + the `.pre-ai-registry` copy
 **Recovery:** v6 and later DB dumps include encrypted secrets, not the master key or settings.json.
 Escrow the master key separately offsite and keep historical keys for historical dumps.
 Absent secrets in legacy v1–v5 preserve live rows; an empty v6-or-later array intentionally clears
-them. Restore is still CLI-only, confirmed, with a pre-restore undo dump. Pause AI/settings
-edits during restore and reconcile the providers in settings.json before resuming; a restored
+them. Follow the [offline restore procedure](../ARCHITECTURE.md#database-dumps): stop every app
+and maintenance writer, confirm the CLI's target/counts, and retain its verified undo set.
+Reconcile the providers in settings.json before restarting remote use; a restored
 pre-registry `ai_api_key` row is never read — re-enter keys per provider.
 
 To rotate a provider key, replace it in that provider's form then revoke the old one externally.
@@ -616,8 +729,13 @@ success reply, so the editor can name what just went live undescribed.
 
 ## CLI upload (Phase 2 migration)
 
+This is an **offline storage writer**: stop app/maintenance writers first and supply
+`DATABASE_URL` as well as the correct shared storage path. It acquires native then PG
+ownership and refuses active app sessions, just like restore; it does not bypass admission.
+
 ```bash
-STORAGE_DIR=./data/images PUBLIC_BASE_URL=https://img.simonswanderlust.com \
+DATABASE_URL=postgres://images:YOUR_PASSWORD@127.0.0.1:5432/images \
+  STORAGE_DIR=./data/images PUBLIC_BASE_URL=https://img.simonswanderlust.com \
   npm run upload -- ./photo.jpg trips/bucharest-2024/hero "Old town at dusk"
 ```
 
@@ -640,7 +758,19 @@ It asks the **running** app over loopback (minting and immediately revoking a on
 session) rather than spawning its own `astro build`. That is deliberate: `work-lock.ts` makes a
 build and image encoding mutually exclusive within one process, and `docker-compose.yml` sizes
 `mem_limit` as `max(build, encode) + baseline` on exactly that assumption — a second, unlocked
-builder could OOM the container. It exits non-zero on a failed build and prints the reason.
+builder could OOM the container. It exits non-zero on a failed build and prints a fixed
+failure code/reason plus `docker compose logs app`; raw generator diagnostics stay in
+server logs. Its temporary admin session is removed on both success and failure.
+
+Admins can inspect the latest attempt and the independently observed live release on
+Desk or Settings (`GET /rebuild/status`, admin-only and `no-store`). The latest record
+survives restart in unserved `SITE_DIR/build-state.json`; a previously running attempt
+becomes interrupted, not successful merely because an older release exists. After fixing
+the cause, use **Rebuild site now** or this CLI command explicitly.
+
+A failed rebuild can follow a successful CMS mutation. Follow the saved/published/deleted
+acknowledgement; do not repeat that mutation to repair generation. The previous release
+remains served until another build promotes a replacement.
 
 ## CLI password reset (recovery)
 
@@ -658,4 +788,4 @@ logged in uses the "Change my password" card on
 
 ## Develop
 
-`npm install` · `npm test` · `npm run typecheck` · `npm run dev`
+`npm install` · `npm run build:native` · `npm test` · `npm run typecheck` · `npm run dev`

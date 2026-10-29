@@ -83,6 +83,10 @@ Implementation approval and merge authorization remain separate from design appr
   a verified undo set and stages fresh source IDs before replacing database state.
   Unknown commit outcomes retain both source sets until reference-checked reconciliation.
   Restore is offline; do not force-terminate another process to bypass its admission check.
+  Release pruning rechecks writability immediately before each removal. Once lease loss is
+  observed, it admits no further cleanup mutation; an already-issued filesystem operation
+  cannot be recalled. A release promoted before lease loss remains a successful promotion,
+  not permission to write a recovery record or resume cleanup without ownership (#397).
 
 The specification defines transaction/file ordering, paired restore, misuse cases and
 rollback. Reverting code is not erasure, and removing future published geometry requires
@@ -114,8 +118,37 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   carries the admin cookie, and a forged cookie on a public page costs no lookup. A store failure
   on a guarded route is a sanitized 500, never "anonymous" — a database outage must not read as
   "logged out". Spec: `docs/superpowers/specs/2026-09-06-lazy-session-resolution-design.md`.
+- **Protected-page context** (independently owner-approved 2026-10-29, #278 §9):
+  `GET /auth/me` requires a session and returns only
+  `{ authenticated: true, userId, username, isAdmin, needsSetup: false }`.
+  All responses, including 401 and server errors, are `Cache-Control: no-store`.
+  The shared `Auth.ensureAuthed` helper requests this context without caching, preserves
+  author/admin gating, and redirects only a 401 to login with an encoded local return path.
+  Network, non-401 HTTP and malformed-response failures never become "logged out".
+  The Desk consumes this same helper before its admin-only checklist; client roles are
+  presentation gates, while the onboarding routes still require admin authorization.
+  Login, setup, `/auth/status`, session issuance and expiry are unchanged.
+  The non-secret account ID is correlation context, never authorization. Separately approved
+  #305 uses it for captured-owner comparisons, writer-only receipt reads and scoped local
+  recovery; authenticated route roles remain authoritative (see **Ambiguous writes and local
+  recovery** below). Rolling back the helper now also requires rolling back those dependent
+  clients together, without clearing onboarding retirement state or restore fences.
 - **First-admin setup** (`/setup`) is only available while no users exist, and is **serialized**
   with a per-process lock so two concurrent requests cannot both create an admin (TOCTOU closed).
+- **First-run checklist** (#279, approved #278 Q1–Q5/P1–P2) is install-wide admin-only
+  operational metadata, not an authentication/setup permission input. `GET`/`POST /onboarding`
+  require `requireAdmin` (anonymous 401, author 403), with `no-store` on success and errors.
+  The strict 1 KiB action object permits only dismiss/resume/finish. Progress uses one
+  REPEATABLE READ snapshot; Finish locks/rechecks required photo/story/publication predicates
+  before permanent retirement. Identity is optional. Responses contain only fixed step/state
+  identifiers, required flags and server-built destinations (translation keys URL-encoded);
+  no content titles, counts, retirement reasons, timestamps or photo metadata are disclosed.
+  No account/session/content/build writes or cookies are performed by these handlers.
+  Missing/invalid state and DB errors fail through the sanitized error path, never anonymous
+  or a fabricated fresh checklist. Boot classifies before cleanup/listen and aborts on
+  uncertain evidence or commit; retired state cannot become eligible through an app action.
+  Existing `/setup`, `/login`, `/auth/status` contracts, setup lock, zero-user check,
+  login/setup rate limits and session policy are reconfirmed unchanged.
 - **Password changes** — `POST /users/me/password` lets an authenticated user rotate their own
   password after re-proving the **current** one (rate-limited, so a hijacked session cannot
   brute-force it — see *Rate limiting*). On success **all of that user's sessions are destroyed**
@@ -124,11 +157,70 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   (`docker compose exec app node --import tsx src/cli.ts set-password <username>`), which also
   invalidates all of that user's sessions — recovery procedure in `ARCHITECTURE.md`.
 
+## Ambiguous writes and local recovery (#305)
+
+The owner-approved [weak-connection contract](docs/superpowers/specs/2026-10-27-issue-304-weak-connection-write-contract.md)
+adds no anonymous surface and does not renew sessions. `POST /posts` requires a
+client-generated UUID and is create-only; post/page saves require a UUID `saveId` and
+the form's captured `expectedOwnerId`. The latter is compared with the authenticated
+session before mutation; it is correlation, never authorization. Store transactions
+stamp the requesting writer and return content/token/receipt from one snapshot.
+Reads expose a last-save ID only to that writer. Import, publication, unpublication,
+GPX/token-changing writes and offline restore invalidate this evidence.
+
+Every upload caller supplies a captured owner, UUID upload ID and retry generation.
+Receipts bind one account/ID to one byte hash, canonical request identity and frozen
+encoding profile/key for the account's lifetime; account deletion cascades them.
+They contain no photo bytes, EXIF/GPS, credentials or session tokens. A receipt hit
+does not repeat metadata changes. A pending receipt is not success, a missing receipt
+is not permission to resend, and age never grants takeover. `GET /upload/receipts/:uploadId`
+is authenticated, owner-scoped, no-store and read-only. The selected-key folder probe
+(`POST /media/lookup`, 1–100 unique validated keys) is also authenticated/no-store and
+returns only key plus folder or an explicit missing marker, independently of listing
+pagination; existing GPS/uploader redaction remains unchanged.
+
+`data-owner.ts` holds the owned Node-API filesystem lock **before** acquiring the
+existing PostgreSQL owner. The stable lock file is `.storage-owner.lock` in the
+canonical parent of `STORAGE_DIR`. It must be a private, singly linked regular file;
+symlinks, failed acquisition or ownership changes fail closed. Never remove or replace
+this inode. The descriptor has CLOEXEC and remains strongly owned after a PG disconnect
+and until admitted asynchronous work quiesces. App, offline upload and restore/maintenance
+entry points use the same order. Receipt recovery uses receipt ownership followed by
+the existing #348 media-key admission boundary, with bounded pages, capacity wakeups
+and explicit admin Rescan. Deletion atomically makes receipts terminal with DB removal.
+
+The Media batch pauses in place on session loss. Login opens another tab; resuming is
+explicit and restricted to the original account. No File queue is persisted. Post/About
+reconciliation performs at most one automatic bounded read after an unknown response or
+receipt-check conflict; **Check again** is manual and never replays a write. Acknowledgement
+adoption checks owner, attempt identity and exact form generation, preserving newer edits.
+Local records contain owner/resource/context, base/attempt metadata and form snapshots,
+not credentials. Logout and expiry preserve drafts. Legacy unknown-owner bytes are
+neither exposed nor deleted, including for admins; private browser-profile recovery is
+manual. Someone with access to the same browser profile can still inspect its storage.
+
+**Qualification and deployment restriction:** inherited native-binding evidence covers
+macOS arm64/APFS and native DHI Node 26.12.1/glibc amd64+arm64 on inspected ext4 bind mounts
+and Docker local named volumes (CI run 40866450527). This is not an execution claim for
+the integrated #305 product. The actual deployment mount remains unqualified and MUST
+pass the process/descriptor/PG-loss/restore matrix before deployment or enablement.
+NFS/SMB/FUSE, musl and Docker Desktop sharing are not approved. This gate is operational:
+successful lock acquisition does not identify or qualify a filesystem.
+
+**Containment/rollback:** there is no safe mixed-version online downgrade. Stop admission,
+drain or terminate all writers, retire open sessions/clients and deploy compatible
+client/server code together before authenticated reload. Keep local records and additive
+schema; reconcile by compatible roll-forward rather than treating ignored IDs as safety.
+Offline native restore clears post/page receipts and the upload table in its content
+transaction, including pages preserved by legacy v1 restore. Raw SQL/filesystem recovery
+must invalidate the same operational evidence offline before traffic resumes.
+
 ## Authorization
 
 - `requireAuth` gates all CMS/editor/upload endpoints.
 - `requireAdmin` gates **user management**, **settings** (`/settings` — backup schedule and
-  retention), **backups**, **rebuild**, **page edits**, the **WordPress import** (`POST /import`,
+  retention), **backups**, **rebuild and its status** (`POST /rebuild`, `GET /rebuild/status`),
+  **page edits**, the **WordPress import** (`POST /import`,
   since #97 — it creates/overwrites drafts, writes gigabytes under `/data`, and makes hundreds of
   outbound fetches to a host chosen by the export, governed by admin-only settings knobs), and,
   importantly, everything that
@@ -202,8 +294,8 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
 - **Hold-for-moderation.** Every accepted comment is `pending`; nothing is public until an admin
   approves it on `/admin/comments.html` (`requireAdmin`, see below). Deletion is erasure.
 - **Rate limit:** 5 `POST`s per address per 15 minutes plus a process-wide 200 per hour, keyed on
-  `req.ip` under `trustProxy: 1` — never on the reader-chosen name, which would let anyone DoS a
-  name. See *Rate limiting* for why these maps are separate from the login limiter.
+  `req.ip` under the address-validated, immediate-peer policy below — never on the reader-chosen
+  name, which would let anyone DoS a name. See *Rate limiting* for the separate limiter maps.
 - **Nothing on the public comment path logs a comment field** — not the name, body, honeypot
   value or translation key (spec invariant 11). A store failure is caught in the route and logged
   as the driver message only, because the global error handler logs `req.url`, which on `GET`
@@ -378,9 +470,11 @@ A per-client-IP fixed-window limiter throttles the password-verifying endpoints 
 unauthenticated `/login` and `/setup`, plus the authenticated `POST /users/me/password` — to slow
 brute-force attempts: **10 requests per address per 15 minutes**. All three share the same per-IP
 bucket, so failed current-password guesses also count against login attempts from that IP. The
-per-IP key is `req.ip` derived under `trustProxy: 1`: the address the single trusted reverse
-proxy appended to `X-Forwarded-For`; client-supplied (leftmost) entries are ignored, so rotating
-the header does not open a fresh bucket.
+per-IP key is `req.ip`: only an allow-listed immediate socket peer may supply forwarding headers.
+For that peer, the rightmost `X-Forwarded-For` entry is the client; the walk stops after one hop,
+even if that entry is itself a trusted address. For any other peer, its socket address is the key.
+Rotating client-supplied leftmost entries or sending forged headers directly from another
+container does not open a fresh bucket.
 
 `/login` additionally keeps a **per-account failure budget across all sources** — the defence
 against a guess spread over many addresses, which the per-IP bucket cannot see — and checks it
@@ -436,6 +530,25 @@ multiple replicas, limits would be counted per replica.)
   8, and the app sets an explicit `requestTimeout` (120 s) — @fastify/multipart's parser never
   consumes the body itself, so without these an authenticated caller could stream an effectively
   unbounded request. (`uploader/src/server.ts`)
+
+### Native image decoders
+
+Image decoding uses sharp's prebuilt libvips in the app image. The #347 candidate DHI builds
+were exercised on Linux ARM64 (native) and AMD64 (emulated): both application trees loaded
+sharp **0.35.5**, libheif **1.23.5**, librsvg **2.63.2** and libvips **8.18.7**. Both DHI Node
+executables were measured as PIE (`ELF e_type = DYN`) on glibc 2.41; this is hardening evidence,
+not a substitute for patched decoders. See the [approved codec specification](docs/superpowers/specs/2026-10-27-issue-347-sharp-codec-upgrade.md)
+for advisory references and verification.
+
+Changing a lockfile or rebuilding the static blog does not patch a running container. Shipping
+this fix requires a new release image and an owner-controlled redeployment. Recovery is
+**roll forward only** while retaining the patched codec floors: restoring sharp 0.35.3/0.35.4
+would reopen vulnerable decoding, including boot/rescan of retained originals. Preserve data;
+do not re-import or bulk re-encode as a dependency rollback.
+
+The metadata allow-list below, private-original restrictions, SVG original naming, accepted
+formats, and upload/import/preview authorization are unchanged. Benign JPEG, AVIF and SVG
+runtime checks retained those contracts, including EXIF-free previews and zero GPS variants.
 
 ### Published image metadata (allow-list)
 
@@ -740,8 +853,8 @@ sanitizer cannot distinguish a Shiki `<span style="color:…">` from an author-t
 author-typed `style="position:fixed;inset:0;background:url(https://evil/…)"` would overlay every
 reader page (defacement) and fire a third-party request per view (reader IP leak), on the draft
 preview as well, so publish review would not catch it. Shiki therefore no longer emits inline
-styles at all: `site/src/lib/shiki-classes.ts` registers a transformer (in both
-`astro.config.mjs` and `MARKDOWN_OPTIONS`, lockstep-tested) that rewrites each colour into a
+styles at all: `site/src/lib/shiki-classes.ts` supplies the transformer registered in
+`MARKDOWN_OPTIONS`, shared directly by Astro configuration and draft previews, which rewrites each colour into a
 class, and `SHIKI_CSS` — generated from the same theme object — is inlined by `Base.astro` and
 by the draft preview. `style` is off the schema for every element; the gallery `--r` ratios and
 the hero focal point are the only inline styles on a page, and both are injected post-sanitize
@@ -850,22 +963,44 @@ preview even though the live site would load it.
   intentionally omitted on the admin pages because they use inline scripts; a strict policy would
   need nonces. The one exception is `GET /posts/:tk/preview`, which renders author markup and has
   no scripts — see *Output sanitization*.)
-- The app sets `trustProxy: 1` (exactly one trusted hop), so it reads `X-Forwarded-*` as set by
-  that one reverse proxy for the client IP (rate limiting) and the cookie `Secure` flag. **It must
-  run behind a TLS-terminating reverse proxy that sets `X-Forwarded-Proto`**; the compose file
-  publishes port 3000 on `127.0.0.1` only, so the host proxy is the sole ingress. A second proxy
-  layer needs the hop count raised to `2` — never `true`, which trusts client-supplied entries.
-- **The proxy must forward the original, verbatim `Host` header for both domains**
-  (`simonswanderlust.com` and `img.simonswanderlust.com`) — nginx: `proxy_set_header Host $host;`.
-  Image-vs-blog/admin routing is a single Fastify process that dispatches on the `Host` header
-  (`IMG_HOST`); a proxy that rewrites `Host` (e.g. nginx's default `$proxy_host` behavior) breaks
-  every image URL by routing image requests into the blog/admin handler instead.
+- **Proxy trust validates the immediate peer's address and hop zero**, never `true`, a bare hop
+  count or a hop-only function. `TRUSTED_PROXY` unset or `loopback` trusts only `127.0.0.0/8`
+  and `::1` (including mapped IPv4). Compose sets the literal `TRUSTED_PROXY: docker-gateway`:
+  loopback plus the single IPv4 default gateway discovered from `/proc/net/route`, not the
+  bridge subnet or RFC1918 ranges. Empty/unknown modes and unreadable, missing or ambiguous
+  gateway discovery refuse boot; there is no silent loopback fallback.
+- **Supported public topology: one host-level TLS proxy, no CDN or second proxy hop.**
+  Compose publishes `127.0.0.1:3000` only. Container traffic from the host can arrive as the
+  bridge gateway rather than loopback, which is why the gateway is trusted. Other bridge
+  containers retain their own untrusted addresses. `docker-gateway` is valid only for this
+  bridge topology; changing `networks`/`network_mode`, adding a proxy container or adding a
+  CDN requires a new trust spec, not a broader allow-list or larger hop count.
+- **The proxy must preserve the original, verbatim `Host` for both domains**, overwrite
+  `X-Forwarded-Proto` with its own scheme, and append or overwrite `X-Forwarded-For` so its
+  rightmost entry is the client it accepted. For nginx, use `proxy_set_header Host $http_host;`,
+  `proxy_set_header X-Forwarded-Proto $scheme;`, and
+  `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
+  Routing and GPX Origin checks use raw `Host`, never `X-Forwarded-Host`. Rewriting `Host`
+  breaks image-domain routing; missing XFF collapses clients into one limiter bucket.
+- **Accepted residual: the host is the trust boundary.** A host-local process can forge
+  forwarding headers through the trusted gateway. A co-tenant container cannot. Trusted HTTPS
+  forwarding controls `Secure` cookies and GPX Origin matching; untrusted forwarded protocol
+  is ignored. Local plain HTTP intentionally does not set `Secure`.
+- **Verification boundary (#369):** an ARM64 production-image TCP probe in Docker Desktop's
+  Linux VM observed a host-network TLS proxy arriving as gateway `172.31.0.1`, two bridge
+  clients retaining independent limiter buckets, direct-container spoof refusal, HTTPS-only
+  `Secure` cookies, and trusted/untrusted GPX Origin acceptance/refusal. An internal bridge
+  without a default route refused boot. This is not a production/VPS rehearsal: that proxy
+  connected directly to the app bridge IP, not through published loopback DNAT. Before DNS
+  cutover, measure the target server's peer and proxy configuration and repeat independent
+  limiter checks from two external networks. See the
+  [#369 spec](docs/superpowers/specs/2026-10-27-issue-369-dependency-proxy-trust.md).
 
 ## Secrets
 
 - `DATABASE_URL` is provided via environment (compose `.env`), never committed. `.env`,
   credentials, and binaries are git-ignored.
-- The rebuild trigger (`POST /rebuild`) and the DB backup routes (`GET`/`POST /backups`,
+- The rebuild trigger/status (`POST /rebuild`, `GET /rebuild/status`) and the DB backup routes (`GET`/`POST /backups`,
   `GET /backups/:name`) are gated by `requireAdmin` — no separate shared secret; the retired
   `BUILD_SECRET` / `x-build-secret` mechanism no longer exists.
 - **AI provider credentials (#214, registry 2026-10-19):** one `app_secrets` row per remote
@@ -950,10 +1085,28 @@ deliberate trade-off, not an oversight:
   `site/src/lib/loader-pool.ts`, whose connection and query timeouts turn a silently hung
   Postgres into a build error within about a minute. The deadline is not request-controlled, and
   every route that starts a build is admin-only, so an author cannot hold the lock by crafting
-  content. The last 4 KiB of the child's **stderr** (ANSI-stripped) is appended to the build error
-  returned to the authenticated caller so the admin learns which post failed the schema; it is
-  build diagnostics (entry ids, schema paths, library file paths), never `DATABASE_URL` — the
-  child reads that from the environment and neither astro nor pg echoes it on a query error.
+  content. Child stderr remains in server logs, not browser/CLI response bodies. Responses
+  carry a fixed failure code and localized safe copy; the pool-backed snapshot deadline is
+  also classified as `build_timeout`. Operators use `docker compose logs app` for details.
+- **Build reporting (#297):** `GET /rebuild/status` is admin-only and `no-store`; authors'
+  Desk does not request it. `/data/site/build-state.json` is unserved operational metadata,
+  bounded and validated on read, containing no stderr, stack trace or content body. A prior
+  running record becomes `interrupted` after restart; missing/unreadable/unpersisted records
+  remain explicit. The independently observed `current` release is not inferred from the
+  attempt outcome. Status persistence is best-effort and cannot undo a CMS commit or demote
+  a promoted release; ownership loss stops further writes. `/health` carries no attempt
+  history. A failed rebuild acknowledgement does not mean the preceding CMS mutation failed.
+- **Promotion commit point (#397):** a successful atomic `current` rename is final for the
+  build outcome. Post-promotion cleanup failures cannot reverse that success or change CMS
+  content. Unreadable release/current state or a current target different from the promoted
+  directory skips pruning; the current/promoted release and staging entries are protected.
+  Ordinary deletion errors are isolated per existing retention candidate, but ownership loss
+  stops new mutations. Warnings contain only a fixed message, generated promotion stamp,
+  fixed stage and allow-listed errno (otherwise `unknown`); neither arbitrary names, raw
+  exceptions nor build stderr enter these diagnostics. A logging failure also cannot reverse
+  promotion. The exclusive work lock, pre-promotion failures, retention selection, admin
+  authorization and storage-owner fencing remain unchanged. See the
+  [approved contract and containment plan](docs/superpowers/specs/2026-10-27-issue-397-promoted-release-pruning.md).
 - **`/health` reports `release`** (whether a built site exists) beside free space, and like free
   space it is **information, never a verdict**: a fresh volume legitimately has no release for
   the first minutes, a persistent build failure is healed by a publish rather than a container
@@ -981,24 +1134,98 @@ deliberate trade-off, not an oversight:
   unset `saved_at`, clear assets and keep the live canonical origin if set; otherwise they use
   the legacy origin. The CLI announces the legacy recovery and includes live identity/assets
   in the verified undo set. Restart loads the restored cache; public output waits for Rebuild.
-- Image archives (`/data/backup/db/images-*.tar`) contain no password hashes — only the already
-  publicly served image files — but their download route stays behind the same admin gate and
-  strict filename validation as the dumps.
+- Image archives (`/data/backup/db/images-*.tar`) contain public variants **and private
+  full-resolution originals**. Originals may retain EXIF/GPS and other source metadata:
+  handle these archives as sensitive recovery material, like database dumps. Downloads remain
+  admin-only with strict filename validation. Image archives are **never pruned** automatically;
+  each may hold a unique part of the recovery chain. Deleting a photo from the media library
+  does **not** purge earlier archives or their offsite copies.
+  The read-only [`audit-exif` command](#published-image-metadata-allow-list) inspects public
+  variants, not private originals or archive history: a clean result does not certify those
+  copies GPS-free and does not erase anything. Private GPX originals belong to **separate
+  companion route archives** referenced by v10 database dump manifests, not image tars.
+  Protect offsite copies and retain separate key escrow as described in
+  [Backups & disaster recovery](ARCHITECTURE.md#backups--disaster-recovery).
 - The download route (`GET /backups/:name`) is **admin-only** and validates the filename against a
   strict pattern (`^db-\d{8}-\d{6}\.json\.gz$` or `^images-\d{8}-\d{6}\.tar$`) before touching the
   filesystem — no path traversal.
-- Restore is **CLI-only**
-  (`docker compose exec app node --import tsx src/cli.ts restore [--yes] /data/backup/db/<file>`
-  — the shell-less runtime image requires invoking `node` directly), never a web route, because
-  it's destructive: it deletes and re-inserts `users`, `posts`, media, and `pages` in one
-  transaction (`pages` only when present in the dump — v1 dumps predate them and leave existing
-  pages untouched). Deleting `users` cascades to `sessions`, so a restore invalidates every login.
-  The CLI is guarded against operator mistakes, not attackers (#114): the file name must match
-  the dump pattern, the operator confirms against a summary of the dump and of the live rows
-  (`--yes` for scripts; the printed target is `host:port/dbname` — the `DATABASE_URL` password is
-  never echoed), and a **pre-restore dump** of the current state is written into the backup
-  directory first — the restore aborts if that dump fails, so a restore that cannot be undone is
-  never run.
+- Restore is **CLI-only**, never a web route. Confirm the intended image, database and `/data`
+  mount, retain the source recovery set, stop every app/maintenance writer sharing them and
+  wait for exit and drained database sessions; keep Postgres running. Use:
+
+  ```sh
+  docker compose stop app
+  docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore /data/backup/db/db-YYYYMMDD-HHmmss.json.gz
+  ```
+
+  The explicit Node entrypoint supports the shell-less image. Do not add service ports.
+  Fresh-target recovery uses offline `prepare-native-restore [--yes]`, not HTTP boot to
+  create schema; keep ingress closed and auto-start disabled throughout the zero-user window.
+  Only recognized bootstrap-only schema/default singleton values are admitted, never saved
+  identity/content or unknown shapes. The shared schema/identity/language seed runs after permanent
+  fencing, without listeners/builds/workers. Preparation does not itself verify an undo set.
+  The language singleton may be absent or contain only the installed unlocked DE-primary,
+  DE+EN default; changed modes, publication history and invalid timestamps refuse admission.
+  Its exact column defaults, nullability, primary key and CHECK expressions, together with
+  `posts.omitted` and its unpublished-only CHECK, remain load-bearing. A genuinely absent
+  additive column/table/seed may be initialized; a missing CHECK on existing columns or an
+  altered constraint is not absence and is refused before any fence or schema mutation.
+  Catalog admission includes all installed indexes, not only table constraints: changed
+  uniqueness, expressions, predicates, methods or invalid enforcement refuse preparation before
+  any fence/schema mutation. Missing standalone indexes may be created by normal initialization
+  only when their schema-wide names are free: a non-index relation such as a sequence is refused,
+  including before the owning table exists. Same-name replacements cannot hide behind
+  `IF NOT EXISTS`. Fence durability includes all
+  data-root ancestor entries, re-flushed on retries even when a failed mkdir/fsync attempt left
+  directories present. Any unresolved flush failure still blocks replacement.
+  See [offline preparation](ARCHITECTURE.md#offline-preparation-for-a-fresh-native-restore-target).
+  This guidance reconfirms the unchanged [GPX storage-owner boundary](#gpx-routes--private-source-and-public-snapshot):
+  exclusive ownership and absence of app sessions are mandatory, never bypassed by killing
+  sessions or disabling fencing.
+  Current v11 recovery replaces `users`, `posts`, `pages`, `media`, `media_folders`,
+  `app_secrets`, `comments`, `post_routes`, `site_identity` and `site_identity_assets`,
+  with manifest-paired private originals.
+  [Database dumps](ARCHITECTURE.md#database-dumps) documents legacy absent-field behavior.
+  Sessions are not restored; deleting users invalidates every login. Settings/key escrow
+  remain external. The CLI validates the source set, prints a credential-free target and
+  live/dump counts, and requires literal `yes`. `--yes` skips only that prompt, never ownership,
+  source validation or the **verified pre-restore recovery set** written before replacement.
+  If undo capture/verification fails, replacement aborts. Restart with `docker compose up -d app`
+  only after successful completion and result inspection, reconcile settings/key escrow,
+  then sign in and explicitly rebuild. Failed or ambiguous completion: leave the app stopped,
+  preserve input/undo/staged sets and investigate rather than retrying blindly.
+- **Restore-safe onboarding retirement:** native JSON excludes `onboarding_state`, but SQL,
+  physical backups and snapshots may contain eligible metadata. Every supported restore
+  (self/empty/partial/legacy, filesystem-only, host/clone and undo included) must retire before
+  replacement/activation. Native restore validates source and the actual captured undo dump,
+  identity assets and required paired archive first, then publishes the permanent off-DB
+  fence and separately commits retirement **before GPX staging**. Retirement survives later
+  failure, rollback and unknown content COMMIT; it does not certify successful content recovery.
+  Unknown fence durability or retirement commit stops replacement.
+  The fence is derived from `STORAGE_DIR`'s resolved parent as `onboarding.restore-retired`,
+  normally `/data/onboarding.restore-retired`; its fixed payload is
+  `swl-onboarding-restore-retired-v1\n`, with no credentials, owner content or progress.
+  Publication flushes the private temporary file and parent directory using no-clobber
+  activation; reads reject non-regular/symlink/multi-link/wrong-payload entries and unsafe roots.
+  Invalid/unreadable metadata fails boot/recovery closed; preserve it for diagnosis and
+  repair only to retired, under stopped writers. Never remove a fence to recover eligibility.
+- **SQL/host activation boundary:** use `onboarding-retire` against the configured destination
+  before replacement; it immediately writes/verifies only the fence, needs reachable
+  Postgres for the existing owner/drain check, and needs no application schema. Its lease
+  **ends on CLI exit**: it does not guard subsequent `psql`, copies, restart policies or
+  different-cluster writers. Stop all writers and disable automatic activation across command
+  boundaries and failures; use `psql -v ON_ERROR_STOP=1`. Preserve/exclude the destination
+  fence during copying and verify/re-fence the final recovered root before activation,
+  even if copied SQL is eligible. Raw whole-root snapshots require isolated offline staging
+  followed by fencing before the live-root switch. Never auto-start an unfenced restored
+  snapshot; unannounced whole-machine rollback cannot be inferred after both stores roll back.
+  Keep the prior root and recovery evidence. The
+  [managed recovery procedure](ARCHITECTURE.md#sql-filesystem-host-and-clone-recovery)
+  remains mandatory, not replaced by a filesystem lock or perpetual lease.
+  Code rollback preserves the table/fence; older code does not enforce them, so retain the
+  current retirement CLI/procedure and recheck before rolling forward. No web/CLI reset,
+  metadata deletion or owner-data wipe is authorized. Password/account-only recovery leaves
+  onboarding unchanged and is not a content restore.
 - In-app backups live on the **same disk** as the live data; disaster recovery requires an
   offsite host-level backup of `./uploader/data` — see
   [ARCHITECTURE.md](ARCHITECTURE.md#backups--disaster-recovery).

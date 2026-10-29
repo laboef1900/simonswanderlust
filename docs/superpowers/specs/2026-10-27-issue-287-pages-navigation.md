@@ -940,11 +940,15 @@ boundary; it must preserve About's existing fixed-route fallback and sanitizatio
 | `GET /pages/:key/deletion` | Admin; `{key,titles,paths,revisions,navigation,bodyReferences,updatedAt,published}` |
 | `DELETE /pages/:key` | Admin; optional `{updatedAt}`; same deletion impact as committed result |
 
-Successful mutations return `{saved,build}`, where `build:null` means no rebuild
-(draft save/deletion). A post-commit build failure returns HTTP 502,
-`code:"page_build_failed"`, `persisted:true`, `saved`; clients must adopt that token
-and report the prior release remains served. Validation/stale failures commit no
-revision. Reserved claims return HTTP 409 `reserved_slug` with `{owner:{type,name}}`;
+Committed mutations return HTTP 200 `{saved,build}`, where `build:null` means no rebuild
+(draft save/deletion). The #305 integration adopts #297's projected build outcome:
+a post-commit build failure is `build.ok:false`, with the original committed `saved`
+token and prior-release evidence, never a 5xx masquerading as a refused save.
+PUT also returns `{ownerUserId,saveId}` and requires the captured `expectedOwnerId`
+and `saveId`; GET returns writer-only `lastSaveId` atomically with page content.
+This replaces the earlier implementation-only 502 response, not the approved
+saved-but-not-rebuilt behavior. Validation/stale failures commit no revision.
+Reserved claims return HTTP 409 `reserved_slug` with `{owner:{type,name}}`;
 unknown kinds return 400 `unknown_page_kind`; fixed About operations and sticky
 slug edits return 409. A stale token for a deleted page returns 404, not recreation.
 Explicit inactive preparation requires the loaded token and rejects active-locale
@@ -1019,6 +1023,14 @@ This qualifies the CMS boundary, not #285's public language-mode routes or #289'
 non-About rendering/navigation. Those downstream public build/browser checks,
 independent actual-PR review, exact-head CI and stack integration remain distinct
 gates. Successful CMS publication alone does not establish the new public routes.
+
+The #305 integration also merges the actual `c18f516` lifecycle/focus repair:
+Publish/Unpublish never clean unsaved form fields, and catalogue Delete cancellation
+re-enables the opener before restoring focus. The real DraftGuard regression uses
+#305's owner/resource/context-scoped recovery records rather than legacy keys.
+The historical #288 evidence above does not qualify the combined #305 receipt,
+HTTP-200 build-reporting, native-ownership and dependency/proxy stack; that final
+integrated source requires the separately documented parent qualification wave.
 
 
 Independent PR review subsequently found two additional UI defects: lifecycle

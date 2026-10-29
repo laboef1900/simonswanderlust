@@ -10,6 +10,8 @@ import { imageOrigin, largestVariant } from '../lib/images';
 import { PROD_SITE, type SeoImage } from '../lib/seo';
 import { SHIKI_CSS } from '../lib/shiki-classes';
 import { identitySiteName } from '../lib/build-identity';
+import { rssPath } from '../lib/paths';
+import { siteLanguage } from '../lib/site-language';
 
 interface Props {
   title: string;
@@ -22,7 +24,9 @@ interface Props {
   ogType?: 'website' | 'article';
 }
 
-const { title, description, locale, alternates, image, ogType = 'website' } = Astro.props;
+const { title, description, locale, alternates: requestedAlternates, image, ogType = 'website' } = Astro.props;
+const language = siteLanguage();
+const alternates = language.locales.length === 2 ? requestedAlternates : undefined;
 const t = useTranslations(locale);
 const site = Astro.site ?? PROD_SITE;
 const canonical = new URL(Astro.url.pathname, site);
@@ -50,7 +54,7 @@ const shikiStyle = `<style>${SHIKI_CSS}</style>`;
 ---
 
 <!doctype html>
-<html lang={locale}>
+<html lang={locale} data-site-primary={language.primary} data-site-locales={language.locales.join(',')}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -60,7 +64,7 @@ const shikiStyle = `<style>${SHIKI_CSS}</style>`;
     <link
       rel="alternate"
       type="application/rss+xml"
-      href={locale === 'en' ? '/en/rss.xml' : '/rss.xml'}
+      href={rssPath(locale)}
       title={identitySiteName(locale)}
     />
     <link rel="canonical" href={canonical} />
@@ -71,7 +75,7 @@ const shikiStyle = `<style>${SHIKI_CSS}</style>`;
         <>
           <link rel="alternate" hreflang="de" href={new URL(alternates.de, site)} />
           <link rel="alternate" hreflang="en" href={new URL(alternates.en, site)} />
-          <link rel="alternate" hreflang="x-default" href={new URL(alternates.de, site)} />
+          <link rel="alternate" hreflang="x-default" href={new URL(alternates[language.primary], site)} />
         </>
       )
     }

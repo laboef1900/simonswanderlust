@@ -2,6 +2,8 @@ import type { Loader } from 'astro/loaders';
 import { loaderPool, withLoaderSnapshot } from './loader-pool.js';
 import { transformBodyImages, type ImageDims } from './body-images.js';
 import { imageOrigin, retargetImageOrigins, type RemoteHeroImage } from './images.js';
+import { siteLanguage } from './site-language.js';
+import { assertLoaderLanguage } from './build-language.js';
 
 interface PostRow {
   translation_key: string; locale: 'de' | 'en'; slug: string; title: string; date: Date | string;
@@ -99,12 +101,14 @@ export function postgresTripsLoader(): Loader {
       // PUBLIC_BASE_URL (repo-root .env already does) to preview galleries.
       const galleryOrigin = imageOrigin(process.env.PUBLIC_BASE_URL);
       const pool = loaderPool(url);
+      const language = siteLanguage();
       try {
         store.clear();
         // @ai-warning: article content still comes ONLY from published snapshots,
         // never working columns (#20). Current library gallery descriptions are
         // the sole approved exception; they do not mutate the stored snapshot.
         const { rows, media } = await withLoaderSnapshot(pool, async (client) => {
+          await assertLoaderLanguage(client, language);
           const { rows } = await client.query<{ published_snapshot: PostRow }>(
             `SELECT published_snapshot
                FROM posts WHERE status = 'published' AND published_snapshot IS NOT NULL`,
@@ -114,6 +118,8 @@ export function postgresTripsLoader(): Loader {
           );
           return { rows, media };
         });
+        const enabledRows = rows.filter(({ published_snapshot: row }) => language.locales.includes(row.locale));
+        if (enabledRows.length !== rows.length) logger.info(`postgres-trips: excluded ${rows.length - enabledRows.length} disabled-locale entries`);
         const descriptions = {
           de: new Map<string, { alt: string; caption: string }>(),
           en: new Map<string, { alt: string; caption: string }>(),
@@ -123,14 +129,14 @@ export function postgresTripsLoader(): Loader {
           descriptions.de.set(src, { alt: photo.alt_de, caption: photo.caption_de });
           descriptions.en.set(src, { alt: photo.alt_en, caption: photo.caption_en });
         }
-        for (const { published_snapshot: row } of rows) {
+        for (const { published_snapshot: row } of enabledRows) {
           const input = rowToEntryInput(row, galleryOrigin);
           const data = await parseData({ id: input.id, data: input.data });
           const rendered = await renderMarkdown(input.body);
           rendered.html = transformBodyImages(rendered.html, input.images, galleryOrigin, descriptions[row.locale]);
           store.set({ id: input.id, data, body: input.body, rendered });
         }
-        logger.info(`postgres-trips: loaded ${rows.length} published entries`);
+        logger.info(`postgres-trips: loaded ${enabledRows.length} published entries`);
       } finally {
         await pool.end();
       }

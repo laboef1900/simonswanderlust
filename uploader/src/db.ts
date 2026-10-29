@@ -6,7 +6,7 @@ export type DbPool = pg.Pool;
 /** A checked-out connection (`pool.connect()`), for multi-statement transactions. */
 export type DbClient = pg.PoolClient;
 
-const ABOUT_SEED = {
+export const ABOUT_SEED = {
   de: {
     title: 'Über mich',
     body: 'Hier teile ich meine Leidenschaft fürs Reisen — Geschichten und Erinnerungen von den belebten Straßen Europas bis zu den geheimnisvollen Pfaden Südamerikas. Der vollständige Über-mich-Text wird in Phase 2 von der bestehenden Seite migriert.',
@@ -73,6 +73,24 @@ export const POST_SNAPSHOT_SQL = `jsonb_build_object(
   'featured', featured
 )`;
 
+/** Narrow operational migration, also safe before an offline content restore. */
+export async function ensureOnboardingSchema(db: Pick<DbClient, 'query'>): Promise<void> {
+  await db.query(`CREATE TABLE IF NOT EXISTS onboarding_state (
+    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    schema_version smallint NOT NULL DEFAULT 1 CHECK (schema_version = 1),
+    state text NOT NULL CHECK (state IN ('eligible', 'retired')),
+    reason text NOT NULL,
+    evaluated_at timestamptz NOT NULL,
+    dismissed_at timestamptz,
+    retired_at timestamptz,
+    CHECK (
+      (state = 'eligible' AND reason = 'fresh' AND retired_at IS NULL)
+      OR (state = 'retired' AND reason IN ('existing-schema','existing-accounts','existing-content',
+        'existing-data','restored-content','finished') AND retired_at IS NOT NULL AND dismissed_at IS NULL)
+    )
+  )`);
+}
+
 export async function ensureSchema(pool: DbPool): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -84,6 +102,30 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
     );
   `);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx ON users (lower(username));`);
+  // Operational, account-lifetime identities. Never included in content dumps.
+  // Account deletion atomically invalidates receipts through the FK; restore
+  // explicitly clears them while all filesystem writers are stopped.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS upload_receipts (
+      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      upload_id uuid NOT NULL,
+      media_key text NOT NULL,
+      sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+      identity jsonb NOT NULL,
+      frozen jsonb NOT NULL,
+      state text NOT NULL CHECK (state IN ('pending','accepted','retryable','gone')),
+      incarnation uuid NOT NULL,
+      claim uuid NOT NULL,
+      generation integer NOT NULL DEFAULT 0 CHECK (generation >= 0),
+      reason text CHECK (reason IN ('queue_full','recovery_required')),
+      original_retained boolean NOT NULL DEFAULT false,
+      result jsonb,
+      PRIMARY KEY (user_id, upload_id)
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS upload_receipts_pending_idx
+    ON upload_receipts (user_id, upload_id) WHERE state = 'pending'`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS upload_receipts_media_idx ON upload_receipts (media_key)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sessions (
       id         text PRIMARY KEY,
@@ -105,6 +147,7 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       images jsonb NOT NULL DEFAULT '{}', status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
       featured boolean NOT NULL DEFAULT false,
       comments_enabled boolean NOT NULL DEFAULT true,
+      last_save_id uuid, last_save_by uuid,
       created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())
   `);
   // @ai-note Partial: '' means "no slug yet" (a DE-first draft without an EN
@@ -199,6 +242,8 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       status        text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
       published_at  timestamptz,
       updated_at    timestamptz NOT NULL DEFAULT now(),
+      last_save_id   uuid,
+      last_save_by   uuid,
       PRIMARY KEY (key, locale)
     )
   `);
@@ -549,4 +594,10 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
         CHECK (NOT omitted OR (status='draft' AND published_snapshot IS NULL AND published_at IS NULL));
     END IF;
   END $$`);
+  // Operational write evidence is deliberately excluded from snapshots and dumps.
+  await pool.query('ALTER TABLE posts ADD COLUMN IF NOT EXISTS last_save_id uuid');
+  await pool.query('ALTER TABLE posts ADD COLUMN IF NOT EXISTS last_save_by uuid');
+  await pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS last_save_id uuid');
+  await pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS last_save_by uuid');
+  await ensureOnboardingSchema(pool);
 }

@@ -61,6 +61,8 @@ interface SandboxOptions {
   /** Render a page that declares a `.cms-page-actions` command group. */
   pageActions?: boolean;
   identity?: { siteName: string; studioDescriptor: { de?: string; en?: string }; canonicalOrigin: string | null };
+  search?: string;
+  response?: () => Promise<Response>;
 }
 
 function shellSandbox(pathname: string, options: SandboxOptions = {}) {
@@ -233,26 +235,34 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
   let href = '';
   const location = {
     pathname,
-    search: '',
+    search: options.search ?? '',
     get href() { return href; },
     set href(next: string) { href = next; navigation.resolve(next); },
   };
   const requests: { url: string; method: string | undefined }[] = [];
+  const requestOptions: (RequestInit | undefined)[] = [];
   const context: Record<string, unknown> = {
     SiteIdentity: options.identity,
     EditorCopy: { en: copy },
     document: documentStub,
     location,
-    fetch: async (url: string, init?: { method?: string }) => {
+    fetch: async (url: string, init?: RequestInit) => {
       requests.push({ url, method: init?.method });
-      return { json: async () => ({}) };
+      requestOptions.push(init);
+      return options.response ? options.response() : Response.json({});
     },
     matchMedia: () => media,
   };
   context.window = context;
   vm.createContext(context);
   vm.runInContext(authSource, context);
-  const Auth = context.Auth as { renderHeader(session: { username: string; isAdmin: boolean }): void };
+  const Auth = context.Auth as {
+    renderHeader(session: { username: string; isAdmin: boolean }): void;
+    ensureAuthed(options?: { admin?: boolean }): Promise<{
+      authenticated: true; userId: string; username: string; isAdmin: boolean; needsSetup: false;
+    } | null>;
+    status(): Promise<unknown>;
+  };
   Auth.renderHeader({ username: 'simon', isAdmin });
 
   const shell = ((): StubElement | null => renderedShell)();
@@ -266,6 +276,9 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
   const accountTrigger = part('.cms-account-menu__trigger');
 
   return {
+    Auth,
+    location,
+    requestOptions,
     get title() { return documentStub.title; },
     main,
     heading,
@@ -508,5 +521,64 @@ describe('Auth navigation shell', () => {
     expect(shell.main.id).toBe('cms-main');
     expect(shell.main.getAttribute('tabindex')).toBe('-1');
     expect(shell.html).toContain('class="skip-link" href="#cms-main"');
+  });
+});
+
+describe('Auth protected-page context', () => {
+  const context = (isAdmin: boolean) => ({
+    authenticated: true, userId: 'user-1', username: 'author', isAdmin, needsSetup: false,
+  });
+
+  it.each([true, false])('retains identity and roles from the non-cacheable context, admin=%s', async (isAdmin) => {
+    const shell = shellSandbox('/admin/', { response: async () => Response.json(context(isAdmin)) });
+    expect(await shell.Auth.ensureAuthed()).toEqual(context(isAdmin));
+    expect(shell.requests).toEqual([{ url: '/auth/me', method: undefined }]);
+    expect(shell.requestOptions).toEqual([{ cache: 'no-store' }]);
+    expect(shell.location.href).toBe('');
+  });
+
+  it('preserves the admin gate without redirecting an ordinary author page', async () => {
+    const shell = shellSandbox('/admin/settings.html', { response: async () => Response.json(context(false)) });
+    expect(await shell.Auth.ensureAuthed({ admin: true })).toBeNull();
+    expect(shell.location.href).toBe('/admin/');
+    const admin = shellSandbox('/admin/settings.html', { response: async () => Response.json(context(true)) });
+    expect(await admin.Auth.ensureAuthed({ admin: true })).toEqual(context(true));
+    expect(admin.location.href).toBe('');
+  });
+
+  it('redirects only a 401 to a safely encoded local return path including the query', async () => {
+    const shell = shellSandbox('/admin/editor.html', {
+      search: '?tk=abc&next=https://untrusted.example/',
+      response: async () => Response.json({ error: 'unauthorized' }, { status: 401 }),
+    });
+    expect(await shell.Auth.ensureAuthed()).toBeNull();
+    expect(shell.location.href).toBe('/login?next=' + encodeURIComponent('/admin/editor.html?tk=abc&next=https://untrusted.example/'));
+  });
+
+  it.each([403, 429, 500, 503])('retains HTTP %s as unavailable, never logged out', async (status) => {
+    const shell = shellSandbox('/admin/', { response: async () => Response.json({ error: 'unavailable' }, { status }) });
+    await expect(shell.Auth.ensureAuthed()).rejects.toThrow('auth_context_unavailable');
+    expect(shell.location.href).toBe('');
+  });
+
+  it.each([
+    async () => { throw new TypeError('network unavailable'); },
+    async () => new Response('{'),
+    async () => Response.json({ authenticated: false, needsSetup: true }),
+    async () => Response.json({ ...context(true), isAdmin: 'true' }),
+    async () => Response.json({ ...context(true), userId: undefined }),
+  ])('retains a network or malformed context failure without granting access or navigating', async (response) => {
+    const shell = shellSandbox('/admin/', { response });
+    await expect(shell.Auth.ensureAuthed()).rejects.toThrow();
+    expect(shell.location.href).toBe('');
+  });
+
+  it('keeps the login/setup status helper on its existing public contract', async () => {
+    const status = { authenticated: false, needsSetup: true };
+    const shell = shellSandbox('/login', { response: async () => Response.json(status) });
+    expect(await shell.Auth.status()).toEqual(status);
+    expect(shell.requests).toEqual([{ url: '/auth/status', method: undefined }]);
+    expect(shell.requestOptions).toEqual([undefined]);
+    expect(shell.location.href).toBe('');
   });
 });

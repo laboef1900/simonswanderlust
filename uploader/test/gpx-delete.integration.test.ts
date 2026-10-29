@@ -1,4 +1,6 @@
+import { idleBuildState } from './build-fixture.js';
 import { seedSiteIdentity } from '../src/site-identity.js';
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { publishTokens } from './publish-tokens.js';
 import { createPublicTrackWorker, type PublicTrackWorker } from '../src/gpx-public-worker.js';
 import { randomUUID } from 'node:crypto';
@@ -46,7 +48,7 @@ maybe('private GPX post deletion and durable cleanup', () => {
   let authorId: string;
   let cookies: { sid: string };
   let writable: boolean;
-  const build = vi.fn(async () => ({ ok: true as const, release: 'synthetic' }));
+  const build = vi.fn(async () => ({ ok: true as const, attemptId: 'synthetic', release: 'synthetic' }));
 
   function start() {
     files = createGpxFiles({ storageDir: join(root, 'images'), isWritable: () => writable });
@@ -57,12 +59,13 @@ maybe('private GPX post deletion and durable cleanup', () => {
     const media = memoryMediaStore({ baseUrl: 'https://images.test' });
     queue = createEncodeQueue({ store: media, storageDir: join(root, 'images'), lock: createWorkLock() });
     app = buildServer({
+      trustProxy: TEST_TRUST,
       storageDir: join(root, 'images'), baseUrl: 'https://images.test', imgHost: 'images.test',
       siteDir: join(root, 'site'), backupDir,
       users: pgUserStore(pool), sessions: pgSessionStore(pool), posts,
       pages: memoryPageStore(), media, encodeQueue: queue, secrets: memorySecretsStore(),
       settings: createSettingsStore({ path: join(root, 'settings.json'), defaults: defaultSettings() }),
-      builder: { build, hasRelease: () => true, quiesce: async () => {} },
+      builder: { ...idleBuildState, build, hasRelease: () => true, quiesce: async () => {} },
       dbBackup: createDbBackup({ db: pool, dir: backupDir, retention: () => 10, routeFiles: files }),
       dbCheck: async () => { await pool.query('SELECT 1'); }, gpx: service, isWritable: () => writable,
     });

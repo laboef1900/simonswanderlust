@@ -1,3 +1,5 @@
+import { idleBuildState } from './build-fixture.js';
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -37,13 +39,14 @@ maybe('renderer-based publication readiness (real PostgreSQL, #334)', () => {
     const queue = createEncodeQueue({ store: media, storageDir: join(root, 'images'), lock: createWorkLock() });
     let builds = 0;
     const app = buildServer({
+      trustProxy: TEST_TRUST,
       storageDir: join(root, 'images'), siteDir: join(root, 'site'), backupDir: join(root, 'mdx'),
       baseUrl: origin, imgHost: 'images.test', users, sessions, posts, media,
       pages: memoryPageStore(), secrets: memorySecretsStore(), encodeQueue: queue,
       settings: createSettingsStore({ path: join(root, 'settings.json'), defaults: defaultSettings() }),
       dbBackup: createDbBackup({ db: pool, dir: join(root, 'backup'), retention: () => 10 }),
       dbCheck: async () => { await pool.query('SELECT 1'); },
-      builder: { hasRelease: () => true, quiesce: async () => {}, build: async () => { builds++; return { ok: true, release: 'test' }; } },
+      builder: { ...idleBuildState, hasRelease: () => true, quiesce: async () => {}, build: async () => { builds++; return { ok: true, attemptId: 'test', release: 'test' }; } },
     });
     try {
       await ensureSchema(pool);

@@ -97,7 +97,7 @@ function openPicker(store: MediaStore, options: PageOptions = {}) {
     return options.list ? options.list(url, result) : result;
   };
   const ctx: Record<string, unknown> = {
-    document: dom.document, EditorCopy: { en: copy }, fetch: fetcher, URL,
+    document: dom.document, EditorCopy: { en: copy }, fetch: fetcher, URL, AbortController,
     matchMedia: () => ({ matches: options.compact ?? false }),
     location: { href: '' },
     setTimeout: (run: () => void) => { timers.push({ run, cancelled: false }); return timers.length; },
