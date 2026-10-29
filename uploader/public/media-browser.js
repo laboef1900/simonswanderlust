@@ -808,7 +808,7 @@
       check.disabled = true;
       try {
         var current = await client.get(key);
-        if ($('detail').dataset.key !== key) return;
+        if ($('detail').dataset.key !== key || state.detailRecovery !== error) return;
         var patch = detailPatch(error.patch);
         showDetailRecovery(key, { unknown: error.unknown, current: current,
           patch: patch, generation: state.detailGeneration,
@@ -821,13 +821,16 @@
     var mine = el('button', null, copy.mediaConditionalUseMine);
     mine.type = 'button';
     mine.id = 'dUseMine';
+    mine.disabled = state.detailSaving;
     mine.addEventListener('click', function () { saveDetail(key, error.current); });
     box.appendChild(mine);
     var generation = error.generation;
     var stored = el('button', 'btn-link', copy.mediaConditionalUseStored);
     stored.type = 'button';
     stored.id = 'dUseStored';
+    stored.disabled = state.detailSaving;
     stored.addEventListener('click', function () {
+      if (state.detailSaving) return;
       if (state.detailGeneration !== generation) {
         say(copy.mediaConditionalNewer);
         var patch = detailPatch(error.patch);
@@ -843,15 +846,22 @@
     box.appendChild(stored);
   }
 
+  function setDetailSaving(saving) {
+    state.detailSaving = saving;
+    ['dSave', 'dUseMine', 'dUseStored'].forEach(function (id) {
+      var control = $(id);
+      if (control) control.disabled = saving;
+    });
+  }
+
   async function saveDetail(key, current) {
     if (state.detailSaving) return;
     if (state.detailRecovery && !current) { say(copy.mediaConditionalReview); return; }
     var generation = state.detailGeneration;
-    state.detailSaving = true;
+    setDetailSaving(true);
     detailRefresh.beginAction();
     state.detailChanged = null;
     renderImpact();
-    $('dSave').disabled = true;
     try {
       var patch = detailPatch(current && state.detailRecovery ? state.detailRecovery.patch : null);
       if (!Object.keys(patch).length) {
@@ -894,8 +904,7 @@
       }
       else fail(error);
     } finally {
-      state.detailSaving = false;
-      if ($('dSave')) $('dSave').disabled = false;
+      setDetailSaving(false);
       detailRefresh.endAction(false);
     }
   }
