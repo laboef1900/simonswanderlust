@@ -998,7 +998,34 @@ F2–F6 remain correctness clarifications of the approved invariants, not new pr
 - **Review:** first EN-primary production install or 2027-10-27, whichever comes first.
 - Release, deployment and production/owner-content changes remain outside this authorization.
 
-## 21. #285 public-output qualification (2026-10-29)
+## 21. #284 implementation qualification (2026-10-29)
+
+The isolated current-source qualification exercised all four language modes through the real
+authoring, publication and recovery paths. Retained evidence separates the original baseline
+(361 HTTP records / 48 screenshots), corrected phase (481 / 54), and final phase (210 / 12);
+the earlier evidence is not relabelled as proof of later fixes.
+
+- Readiness validation reuses the locked transaction client. Concurrent activation cannot bypass
+  draft-slug consent: both stores recheck the route's captured language token under that lock.
+- Mirrored first About preparation preserves an explicit `updatedAt: null`; actual browser saves
+  returned 200, preserved active content and did not activate the candidate. Stale replay returned
+  409. Ordinary boot seeds About rows, so the null boundary was exercised in backed-up synthetic
+  database clones with only their cloned default About rows removed—not called a fresh-boot state.
+- The final phase exercised GPX publication/export/archive/restore/restart in all four modes,
+  actual current CLI restores of dump formats 1–11, patched older-v10 reader rejection, populated
+  pre-language migration and public-comment/moderation locale workflows. Historical reader proof
+  is limited to patched v10; restoring older formats with the current CLI is not an older-binary test.
+- Uploader TypeScript and its complete PostgreSQL-enabled suite, site tests, Astro check and an
+  actual build passed after the null-token correction. Eight public desktop/mobile axe audits
+  reported zero violations; retained shared-shell best-practice and incomplete-audit observations
+  mean this is not a blanket WCAG claim.
+
+Reports and synthetic fixtures remain in the gitignored execution ledger. Final PR review/CI and
+downstream combined-source qualification are separate gates. Public routing belongs to #285,
+canonical origins to #276, and the page registry/navigation to #288/#289; this record does not
+claim those dependent stacks are merge-ready or authorize production changes.
+
+## 22. #285 public-output qualification (2026-10-29)
 
 The actual-build matrix compares a pre-change DE-primary bilingual baseline with all
 four approved modes using synthetic published stories and retained inactive-locale
