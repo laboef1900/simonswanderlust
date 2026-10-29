@@ -1,12 +1,12 @@
 # First-run language choice: truthful state without inferred consent (#281)
 
-Date: 2026-10-29. Status: PROPOSAL — owner decision required before implementation.
-Risk: high inherited language-write boundary; the recommended option adds no schema or content policy.
+Date: 2026-10-29. Status: OWNER APPROVED — option A; implementation and qualification pending.
+Risk: high inherited language-write boundary; approved option A adds no schema or content policy.
 Base: integrated #279/#280/#284/#285 on `feature/issue-280-empty-states` at `c23c2da`.
 
-## Evidence and unresolved decision
+## Evidence and settled decision
 
-The owner-approved #278 §9 requires #281 to define a real completion signal and explicitly says
+Before this amendment, approved #278 §9 required #281 to define a real completion signal and said
 that the seeded language default does not prove a choice. #283 §7 and §10 approve four modes,
 publication-history locking and the shared admin-only `PUT /language`. Same-mode PUT is a no-op:
 `LanguageStore.update` retains the original `updatedAt`; comparing timestamps cannot distinguish
@@ -20,14 +20,14 @@ invent evidence; adding a confirmation field would change the approved operation
 
 ## Owner choice
 
-**A — Recommended: optional configuration section, no completion badge.** Add a Language section
+**A — Approved: optional configuration section, no completion badge.** Add a Language section
 inside the existing eligible-admin Desk checklist, after Account and before Identity. Show the
 current stored mode and its URL consequences, not a remembered completion state. A successful
 Save is acknowledged for that request; subsequent reads show only current configuration. Do not add
 Language to the checklist's done/required counters or to Finish. This explicitly amends #278 §9:
 the language section has no completion claim; the shared stored configuration is its state.
 
-**B — Persist explicit choice.** Design and approve an additive confirmation record on
+**B — Not selected: persist explicit choice.** This alternative would design and approve an additive confirmation record on
 `onboarding_state`, recording the selected primary/enabled locales rather than inferring consent
 from a seed or timestamp. `PUT /language` would atomically acknowledge the exact current selection
 with the language transaction, including same-mode submission; completion would be derived by
@@ -36,7 +36,7 @@ migration, memory/PG parity, concurrency and restore treatment before implementa
 field, endpoint flag or migration is authorized by this proposal. Language would remain optional
 for Finish unless the owner separately changes the approved three required predicates.
 
-## Recommended option A contract
+## Approved option A contract
 
 ### Eligibility and authorization
 
@@ -113,6 +113,10 @@ for Finish unless the owner separately changes the approved three required predi
 
 ## Approval record
 
-Pending. This document records a concrete proposal only. It authorizes no implementation,
-merge, deployment, production-content operation or scope reduction. The owner must choose A or B;
-B requires the follow-on concrete persistence contract before coding.
+Owner selected **“A — Optional configuration”** on 2026-10-29 after the actual PR #482
+proposal received independent review (no findings, confidence 0.95) and green exact-head CI.
+The decision is recorded in the ignored execution ledger's `issue-281-owner-decision.json`.
+This approves the optional current-configuration section and the explicit amendment to
+#278 §9: no completion badge, no persisted acknowledgement, unchanged Finish requirements.
+Option B is not selected. Implementation and its automated/runtime verification remain
+required; this decision authorizes no merge, deployment or owner-content operation.
