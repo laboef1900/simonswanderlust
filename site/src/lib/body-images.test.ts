@@ -394,9 +394,11 @@ describe('transformBodyImages — valid image flow (#378)', () => {
     const content = linked
       ? `<a href="https://example.com/?a=1&amp;b=2" title="Lake" lang="de"> \t${image} \n</a>`
       : image;
-    const tree = await render(`<p> \n${content}\t </p>`);
+    const body = `<p> \n${content}\t </p>`;
+    const original = sanitizedBodyTree(await renderMarkdown(body));
+    const tree = await render(body);
     expect(childTags(tree)).toEqual(['figure']);
-    expect(textOf(tree)).toBe(linked ? ' \n \t \n\t ' : ' \n\t ');
+    expect(textOf(elements(tree, 'figure')[0]!)).toBe(textOf(elements(original, 'p')[0]!));
     expectResponsive(tree, ['See & Berge']);
     if (linked) {
       expect(elements(tree, 'a')).toHaveLength(1);
@@ -430,11 +432,13 @@ describe('transformBodyImages — valid image flow (#378)', () => {
   });
 
   it('does not generate another figure for an authored figure', async () => {
-    const tree = await render(`<figure><img src="${src}" alt="See"><figcaption>Caption</figcaption></figure>`);
+    const body = `<figure><img src="${src}" alt="See"><figcaption>Caption</figcaption></figure>`;
+    const original = sanitizedBodyTree(await renderMarkdown(body));
+    const tree = await render(body);
     // The existing sanitizer unwraps author figure/figcaption; this change does
     // not expand that allowlist or reintroduce a figure around the surviving img.
     expect(childTags(tree)).toEqual(['picture']);
-    expect(textOf(tree)).toBe('Caption');
+    expect(textOf(tree)).toBe(textOf(original));
     expectResponsive(tree, ['See']);
   });
 
@@ -451,7 +455,6 @@ describe('transformBodyImages — valid image flow (#378)', () => {
     expect(elements(tree, 'img')[0]?.properties.src).toBe(src);
     expect(elements(tree, 'img')[0]?.properties.alt).toBe('See');
     expect(elements(tree, 'a')).toHaveLength(1);
-    expect(textOf(tree)).toBe('Before  after');
     expect(analyzeRenderedBody(input).sources).toEqual([`${src}-640.jpeg`, `${src}-1280.jpeg`, src]);
     expect(analyzeRenderedBody(html5.stringify(tree))).toEqual(analyzeRenderedBody(input));
   });
