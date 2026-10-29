@@ -358,8 +358,9 @@ without migrations/seeding. Never silently overwrite such values to pass admissi
 Installed indexes are part of that shape: inspect all standalone and primary-key indexes,
 including uniqueness, expressions, predicates, ordering, access method and enforcement state.
 Reject altered or unknown installed indexes before fencing/seeding. Genuinely absent standalone
-indexes are admitted because the incumbent initializer creates them; an existing same-name
-index is not absence and `CREATE INDEX IF NOT EXISTS` cannot repair its semantics.
+indexes are admitted only when their schema-wide names are free, including before the owning
+table exists. A same-name sequence or other non-index relation is not absence: PostgreSQL's
+`CREATE INDEX IF NOT EXISTS` skips it rather than enforcing the missing index.
 
 This admits retry after a crashed empty-cluster preparation but never runs orphan cleanup over
 a populated target without its normal verified recovery set. A populated target uses ordinary
@@ -713,6 +714,11 @@ the expected unique index then permitted preparation and repeat. Evidence:
 `.local/backlog-execution-2026-10-27/issue-279-runtime/recovery-review-779c2a5dcb55.json`.
 This proves local macOS/arm64 filesystem and PostgreSQL execution, not physical
 power-loss durability or qualification of an uninspected deployment filesystem.
+The follow-on namespace-collision regression failed before its fix for both empty and
+partially initialized targets. Both now refuse before mutation. A separate real CLI run
+verified those refusals, preserved catalog entries and absence of a fence, then successful
+preparation/repeat after removal of the synthetic colliding sequences:
+`issue-279-runtime/recovery-review-922e0f1f3774.json` in the same evidence root.
 
 ## 13. Compatibility, rollback and containment
 

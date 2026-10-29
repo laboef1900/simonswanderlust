@@ -996,8 +996,10 @@ deliberate trade-off, not an oversight:
   fencing, without listeners/builds/workers. Preparation does not itself verify an undo set.
   Catalog admission includes all installed indexes, not only table constraints: changed
   uniqueness, expressions, predicates, methods or invalid enforcement refuse preparation before
-  any fence/schema mutation. Missing standalone indexes may be created by normal initialization;
-  same-name replacements cannot hide behind `IF NOT EXISTS`. Fence durability includes all
+  any fence/schema mutation. Missing standalone indexes may be created by normal initialization
+  only when their schema-wide names are free: a non-index relation such as a sequence is refused,
+  including before the owning table exists. Same-name replacements cannot hide behind
+  `IF NOT EXISTS`. Fence durability includes all
   data-root ancestor entries, re-flushed on retries even when a failed mkdir/fsync attempt left
   directories present. Any unresolved flush failure still blocks replacement.
   See [offline preparation](ARCHITECTURE.md#offline-preparation-for-a-fresh-native-restore-target).

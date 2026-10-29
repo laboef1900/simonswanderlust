@@ -360,6 +360,13 @@ export async function assertBootstrapOnlyTarget(pool: DbPool, assertOwner: () =>
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
     const tables = await tableInventory(client);
+    // IF NOT EXISTS accepts any same-name relation, even a sequence with no
+    // owning table yet. Missing indexes are safe only when their names are free.
+    const collisions = await client.query(`SELECT c.relname FROM pg_class c
+      JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname=current_schema() AND c.relname=ANY($1::text[]) AND c.relkind<>'i'`,
+    [[...BOOTSTRAP_INDEX_NAMES]]);
+    if (collisions.rows.length) throw new Error('Preparation refuses occupied bootstrap index names.');
     for (const [table, kind] of tables) {
       const expected = BOOTSTRAP_COLUMNS[table];
       if (!expected || kind !== 'r') throw new Error('Preparation refuses unknown application tables.');

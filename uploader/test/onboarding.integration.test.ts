@@ -333,6 +333,25 @@ describe.skipIf(!url)('onboarding PostgreSQL boot and snapshot boundary', () => 
     await insertStory('unset-one'); await insertStory('unset-two');
     await pool.query("UPDATE posts SET slug='' WHERE translation_key IN ('unset-one','unset-two')");
   });
+  it.each([false, true])('refuses a sequence occupying a required index name before bootstrap (partial=%s)', async partial => {
+    if (partial) {
+      await ensureSchema(pool);
+      await pool.query('DROP INDEX users_username_lower_idx');
+    }
+    await pool.query('CREATE SEQUENCE users_username_lower_idx');
+    const inventory = () => pool.query(`SELECT c.relname, c.relkind FROM pg_class c
+      JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname=current_schema() ORDER BY c.relname`);
+    const before = (await inventory()).rows;
+    await expect(prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true }))
+      .rejects.toThrow(/bootstrap index/);
+    expect((await inventory()).rows).toEqual(before);
+    expect(await readRestoreFence(paths.storageDir)).toBe(false);
+    if (partial) {
+      expect((await pool.query('SELECT * FROM site_identity')).rows).toEqual([]);
+      expect((await pool.query('SELECT * FROM onboarding_state')).rows).toEqual([]);
+    }
+  });
   it.each([
     'DROP INDEX users_username_lower_idx; CREATE INDEX users_username_lower_idx ON users (lower(username))',
     "DROP INDEX posts_locale_slug_idx; CREATE INDEX posts_locale_slug_idx ON posts (locale, slug) WHERE slug <> ''",
