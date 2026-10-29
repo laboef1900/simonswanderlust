@@ -1,0 +1,40 @@
+/* A flat opening section within the incumbent editorial Desk, not a tour. */
+.onboarding {
+  min-width: 0;
+  margin-bottom: 1.75rem;
+  padding-bottom: 1.75rem;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.onboarding[hidden], .onboarding-opener[hidden] { display: none; }
+.onboarding .desk-heading { margin-bottom: 0.375rem; }
+.onboarding-status { font-variant-numeric: tabular-nums; }
+.onboarding-status:empty { display: none; }
+.onboarding-intro { max-width: 65ch; margin: 0.75rem 0 1rem; }
+.onboarding-steps { list-style: none; margin: 0; padding: 0; }
+.onboarding-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding-block: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+.onboarding-step:last-child { border-bottom: 0; }
+.onboarding-icon { display: block; flex: 0 0 1.25rem; margin-top: 0.125rem; color: var(--muted); }
+.onboarding-icon svg { display: block; width: 1.25rem; height: 1.25rem; }
+.onboarding-detail { min-width: 0; }
+.onboarding-step-label { color: var(--ink); font-weight: 600; line-height: 1.5; }
+.onboarding a.onboarding-step-label { text-decoration: underline; text-underline-offset: 0.2em; }
+.onboarding a.onboarding-step-label:hover { color: var(--studio-accent); }
+.onboarding-optional { display: inline-block; margin-inline-start: 0.5rem; color: var(--muted); font-size: 0.75rem; }
+.onboarding-step-status { margin-top: 0.125rem; }
+.onboarding-complete { max-width: 65ch; margin: 1rem 0; }
+.onboarding-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
+.onboarding-help { max-width: 65ch; margin-top: 0.75rem; }
+.onboarding-body > button { margin-top: 0.75rem; }
+.onboarding button, .onboarding-opener button { max-width: 100%; min-height: 2.75rem; white-space: normal; overflow-wrap: anywhere; }
+.onboarding-opener { min-width: 0; max-width: 100%; }
+.onboarding :is(a, button, h2):focus-visible, .onboarding-opener button:focus-visible {
+  outline: 2px solid var(--studio-accent);
+  outline-offset: 3px;
+}

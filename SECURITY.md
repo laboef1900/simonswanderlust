@@ -114,6 +114,19 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   carries the admin cookie, and a forged cookie on a public page costs no lookup. A store failure
   on a guarded route is a sanitized 500, never "anonymous" — a database outage must not read as
   "logged out". Spec: `docs/superpowers/specs/2026-09-06-lazy-session-resolution-design.md`.
+- **Protected-page context** (independently owner-approved 2026-10-29, #278 §9):
+  `GET /auth/me` requires a session and returns only
+  `{ authenticated: true, userId, username, isAdmin, needsSetup: false }`.
+  All responses, including 401 and server errors, are `Cache-Control: no-store`.
+  The shared `Auth.ensureAuthed` helper requests this context without caching, preserves
+  author/admin gating, and redirects only a 401 to login with an encoded local return path.
+  Network, non-401 HTTP and malformed-response failures never become "logged out".
+  The Desk consumes this same helper before its admin-only checklist; client roles are
+  presentation gates, while the onboarding routes still require admin authorization.
+  Login, setup, `/auth/status`, session issuance and expiry are unchanged.
+  The non-secret account ID does not authorize owner fencing, write receipts, draft stashes
+  or native locking (#304/#305/#306). Rollback removes the endpoint/helper cutover and Desk
+  activation together without clearing onboarding retirement state or restore fences.
 - **First-admin setup** (`/setup`) is only available while no users exist, and is **serialized**
   with a per-process lock so two concurrent requests cannot both create an admin (TOCTOU closed).
 - **Password changes** — `POST /users/me/password` lets an authenticated user rotate their own

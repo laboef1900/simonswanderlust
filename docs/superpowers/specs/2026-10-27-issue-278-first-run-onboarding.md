@@ -31,8 +31,9 @@ block ordinary work, or add Publish prerequisites. The incumbent editorial Desk 
   restores. There is no provenance/timestamp exemption.
 - State is install-wide, never browser- or account-owned. No new `.env` setting.
 - No language step, including a disabled placeholder, until #281 and its approved dependencies.
-- #304's shared authenticated-context proposal is **separately unapproved**. This design does
-  not approve `/auth/me`, owner fencing, receipts or any other #304 policy or API.
+- Only the narrow shared authenticated-context prerequisite was independently approved on
+  2026-10-29 (§9). This does not approve #304/#305/#306 owner fencing, receipts, stashes,
+  native locking or any other policy/API beyond that prerequisite.
 
 ## 2. Source and review evidence
 
@@ -510,12 +511,27 @@ Optionality is now settled by Q1; do not reopen it. #280 depends only on the inv
 not persistence or #279 runtime. Onboarding neither solves nor modifies the adjacent last-admin
 race (#368) or origin contract (#319/#276).
 
-The shared #304/#305 context proposal is `GET /auth/me` under `requireAuth`, `no-store`, returning
-`{ authenticated: true, userId, username, isAdmin, needsSetup: false }`; the protected-page
-helper would consume it, preserve role fields, redirect on 401 and retain other failures.
-Login/setup would keep `/auth/status`. **That remains a separately unapproved dependency, not
-an endpoint authorized here.** Land an independently approved shared helper before #279 uses
-it; do not add a private duplicate or expand `/auth/status` to unblock onboarding.
+**Independent narrow owner approval, 2026-10-29:** implement `GET /auth/me` under
+`requireAuth`, with `Cache-Control: no-store` on success and refusal/error responses, returning
+exactly `{ authenticated: true, userId, username, isAdmin, needsSetup: false }`.
+`userId` is the existing non-secret account identifier, not a session token. The existing
+`Auth.ensureAuthed` protected-page helper consumes this endpoint with `cache: 'no-store'`
+and preserves its role fields and admin-only page gate. The helper already returned roles;
+this is a separately approved context boundary, **not a missing-role bug**.
+
+Only HTTP 401 redirects to `/login` with the encoded current local pathname and query as
+`next`; network failures, other HTTP errors and malformed success responses remain failures,
+never anonymous/logout. Login/setup keep the existing `/auth/status` helper and exact
+contracts. The Desk uses this one shared context before initializing its admin-only checklist;
+authors make no onboarding request and retain ordinary draft-authoring empty states.
+An unavailable context offers a read-only retry, not a logout or automatic mutation.
+
+Trust boundary: the server authenticates the session and serializes only these five fields;
+client roles control affordances, never replace endpoint authorization. No new session,
+credential, content, publication, receipt, stash or locking behavior is authorized.
+Rollback is a code rollback of this endpoint/helper and Desk activation together; it must
+retain the onboarding retirement state and restore fences. This independent approval
+satisfies only the shared-context prerequisite, not the broader #304/#305/#306 proposals.
 
 Independent full specification review and P1/P2 owner approval are complete. Remaining
 implementation order: land the approved identity and independently approved context
@@ -684,11 +700,11 @@ corrected **685-line contract** after ReviewOnboardingWrites' clean independent 
   the unannounced-snapshot support boundary (§6).
 
 Q1/Q3/Q4/Q5 remain settled. #278's owner-approval acceptance is satisfied; no new onboarding
-policy decision is outstanding for this contract. #304 remains separately unapproved, and its
-shared context cannot be introduced on the strength of this approval. Required dependency
-integration, code, automated tests, real Postgres/restore/fault-injection/browser evidence and
-implementation review remain outstanding as specified in §9 and §12. Design approval is not
-a claim that #279 is implemented, verified or ready to enable.
+policy decision is outstanding for this contract. The shared-context prerequisite received
+its separate narrow approval on 2026-10-29 (§9); broader #304/#305/#306 policy remains outside
+this approval. Required dependency integration, code, automated tests, real Postgres/restore/
+fault-injection/browser evidence and implementation review remain outstanding as specified
+in §9 and §12. Design approval is not a claim that #279 is verified or ready to ship.
 
 These decisions authorize the documented design for implementation subject to those gates,
 not a merge, deployment, owner-data operation, login/session-policy change or revival of the
