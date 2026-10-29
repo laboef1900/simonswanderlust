@@ -1212,3 +1212,15 @@ the real admin form and split-host comment path. These observations do not autho
 an owner-domain change, production content mutation, deployment or PR merge; final
 actual-PR review and required CI remain separate gates.
 
+Final integrated source `a614ab5baf94d8e847d959bae4b081414d929371` passed a
+fresh twelve-build matrix under `canonical-modes-1793283746741/` and a separate
+actual-`main.ts` run under `final-head-1793283762700/`: 168 assertions passed,
+including two application-triggered builds, browser domain confirmation/cancel/save,
+revision conflicts, immediate comment-Origin changes and unchanged image URLs.
+The synthetic fixture's existing posts/pages/media/language rows stayed unchanged;
+only the exercised identity save, pending comment and operational state changed.
+Earlier evidence above retains its original source attribution. Production DNS,
+public TLS, deployed ingress, other browser engines and outbound providers were not
+qualified by this loopback run. Both required CI jobs and the independent actual-PR
+review passed at the qualified source; stack retargeting still needs requalification.
+
