@@ -7,7 +7,7 @@ import { buildFailureMessage, type BuildTrigger } from '../src/build-state.js';
 import { TEST_TRUST, GATEWAY_TRUST } from './trusted-proxy-fixture.js';
 import { publishBody, publishTokens } from './publish-tokens.js';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, rm, writeFile, symlink, rename } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -34,6 +34,8 @@ import type { SiteBuilder, BuildOutcome } from '../src/build.js';
 import { memorySecretsStore, SecretsError } from '../src/secrets.js';
 import type { AiProvider, AiProviderKind } from '../src/ai-providers.js';
 import { memoryOnboardingStore, type OnboardingProgress, type OnboardingState } from '../src/onboarding.js';
+import type { ReleaseManifestV1 } from '../../site/src/lib/publication-manifest.js';
+import { memoryLanguageStore } from '../src/language.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -2611,6 +2613,149 @@ describe('posts editor', () => {
     en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
 
+  async function installManifest(posts: PostStore, stamp: string) {
+    const entries: ReleaseManifestV1['posts'] = [];
+    for (const fact of await posts.publicationFacts()) {
+      const pair = (await posts.get(fact.translationKey))!;
+      for (const locale of fact.committedLocales) entries.push({
+        translationKey: fact.translationKey, locale, slug: pair[locale].slug,
+        digest: fact.rowDigest[locale]!, gallery: [],
+      });
+    }
+    const root = join(dir, 'site');
+    await mkdir(join(root, 'manifests'), { recursive: true });
+    await mkdir(join(root, 'releases', stamp), { recursive: true });
+    await writeFile(join(root, 'manifests', `${stamp}.json`), JSON.stringify({ schema: 1, stamp, posts: entries }));
+    await symlink(join('releases', stamp), join(root, 'next'));
+    await rename(join(root, 'next'), join(root, 'current'));
+  }
+
+  it('observes failed publish, matching rebuild, failed republish, failed unpublish and deletion against the actual current manifest', async () => {
+    const failed = stubBuilder({ ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') });
+    const b = build({ builder: failed.builder });
+    const { cookie } = await authed(b);
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const first = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ published: true, build: { ok: false },
+      publication: { status: 'published', live: { de: 'not-live', en: 'not-live' }, draftDiffers: false } });
+    await installManifest(b.posts, '1793000000000-1-0001');
+    let read = await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie });
+    expect(read.headers['cache-control']).toBe('no-store');
+    expect(read.json().publication.live).toEqual({ de: 'live', en: 'live' });
+    const unchanged = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, cookies: cookie, payload: sample() });
+    expect(unchanged.json().publication.draftDiffers).toBe(false);
+    await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), de: { ...sample().de, bodyMarkdown: 'Changed saved body' } } });
+    const second = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    expect(second.json().publication).toMatchObject({ status: 'published', draftDiffers: false,
+      live: { de: 'older-version-live', en: 'live' } });
+    const unpublished = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    expect(unpublished.json().publication.status).toBe('draft');
+    expect(unpublished.json().publication.live.de).toBe('older-version-live');
+    const summary = await b.app.inject({ method: 'GET', url: '/publication/summary', cookies: cookie });
+    expect(summary.json()).toMatchObject({ availability: 'available', release: 'known', posts: { unpublishedStillLive: 1 } });
+    const deleted = await b.app.inject({ method: 'DELETE', url: `/posts/${tk}`, cookies: cookie });
+    expect(deleted.json().publication).toEqual({ availability: 'missing' });
+    expect((await b.app.inject({ method: 'GET', url: '/publication/summary', cookies: cookie })).json().posts.deletedStillLive).toBe(1);
+    read = await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie });
+    expect(read.statusCode).toBe(404);
+  });
+
+  it('returns a concurrent unpublish observation without borrowing its token or changing the publish acknowledgement', async () => {
+    const posts = memoryPostStore();
+    let tk = '';
+    let ownToken = '';
+    let laterToken = '';
+    const b = build({ posts, builder: {
+      ...idleBuildState, hasRelease: () => false, quiesce: async () => {},
+      build: async () => {
+        ownToken = (await posts.get(tk))!.updatedAt.toISOString();
+        laterToken = (await posts.unpublish(tk)).updatedAt.toISOString();
+        return { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') };
+      },
+    } });
+    const { cookie } = await authed(b);
+    tk = (await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: sample() })).json().translationKey;
+    const response = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(posts, tk) });
+    expect(response.json()).toMatchObject({ published: true, updatedAt: ownToken,
+      publication: { status: 'draft', live: { de: 'not-live', en: 'not-live' } } });
+    expect(response.json().updatedAt).not.toBe(laterToken);
+  });
+
+  it.each(['save', 'publish', 'unpublish', 'bulk-publish', 'bulk-unpublish', 'bulk-delete'] as const)(
+    'keeps a committed %s successful with its action token when optional projection fails', async (action) => {
+      const b = build(); const { cookie } = await authed(b);
+      const tk = (await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: sample() })).json().translationKey;
+      if (action.includes('unpublish')) await b.posts.publish(tk, await publishTokens(b.posts, tk));
+      const original = (await b.posts.get(tk))!.updatedAt.toISOString();
+      vi.spyOn(b.posts, 'publicationFacts').mockRejectedValue(new Error('projection DB read failed'));
+      const response = action === 'save'
+        ? await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+            payload: { ...sample(), de: { ...sample().de, title: 'Acknowledged change' } } })
+        : action.startsWith('bulk-')
+          ? await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: {
+              action: action.slice(5), keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } })
+          : await b.app.inject({ method: 'POST', url: `/posts/${tk}/${action}`, cookies: cookie,
+              ...(action === 'publish' ? { payload: await publishBody(b.posts, tk) } : {}) });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['cache-control']).toBe('no-store');
+      const acknowledged = action.startsWith('bulk-') ? response.json().results[0] : response.json();
+      expect(acknowledged.publication).toEqual({ availability: 'unavailable' });
+      if (action === 'bulk-delete') {
+        expect(acknowledged.ok).toBe(true);
+        expect(await b.posts.get(tk)).toBeNull();
+      } else {
+        expect(acknowledged.updatedAt).not.toBe(original);
+        expect(acknowledged.updatedAt).toBe((await b.posts.get(tk))!.updatedAt.toISOString());
+      }
+    });
+
+  it('gives authors only enumerated post facts and refuses site-wide summary access', async () => {
+    const b = build(); const { cookie } = await authed(b, { isAdmin: false });
+    const saved = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = saved.json().translationKey;
+    await b.posts.publish(tk, await publishTokens(b.posts, tk));
+    await installManifest(b.posts, '1793000000000-1-0001');
+    const response = await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie });
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.json()[0].publication).toEqual({ availability: 'available', status: 'published',
+      requestedLocales: ['de', 'en'], committedLocales: ['de', 'en'], draftDiffers: false, live: { de: 'live', en: 'live' } });
+    expect(response.body).not.toContain('digest');
+    expect(response.body).not.toContain('attemptId');
+    expect(response.body).not.toContain('1793000000000-1-0001');
+    expect((await b.app.inject({ method: 'GET', url: '/publication/summary', cookies: cookie })).statusCode).toBe(403);
+  });
+
+  it.each(['de', 'en'] as const)('keeps %s primary translation coverage pending through rejection and distinguishes commit from live inclusion', async (primary) => {
+    const secondary = primary === 'de' ? 'en' : 'de';
+    const language = memoryLanguageStore({ primary, locales: [primary, secondary] });
+    const b = build({ language, builder: stubBuilder({ ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') }).builder });
+    const { cookie } = await authed(b);
+    const input = sample();
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie,
+      payload: { ...input, [secondary]: { ...input[secondary], omitted: true, slug: '' } } });
+    const tk = created.json().translationKey;
+    await b.posts.publish(tk, await publishTokens(b.posts, tk));
+    await installManifest(b.posts, '1793000000000-1-0001');
+    const incomplete = { ...input, [secondary]: { ...input[secondary], omitted: false, bodyMarkdown: '' } };
+    const saved = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, cookies: cookie, payload: incomplete });
+    expect(saved.json().publication).toMatchObject({ status: 'published', draftDiffers: true,
+      requestedLocales: ['de', 'en'], committedLocales: [primary], live: { [primary]: 'live', [secondary]: 'not-live' } });
+    const refused = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    expect(refused.statusCode).toBe(400);
+    expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().publication.draftDiffers).toBe(true);
+    await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, cookies: cookie, payload: input });
+    const committed = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    expect(committed.json()).toMatchObject({ published: true, build: { ok: false }, publication: {
+      status: 'published', draftDiffers: false, committedLocales: ['de', 'en'],
+      live: { [primary]: 'live', [secondary]: 'not-live' },
+    } });
+    await installManifest(b.posts, '1793000000001-1-0002');
+    expect((await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json()[0].publication.live).toEqual({ de: 'live', en: 'live' });
+  });
+
   it('requires the strict 4KiB explicit publish body without a bodyless compatibility path', async () => {
     const b = build(); const { cookie } = await authed(b);
     const saved = await b.posts.upsertDraft({ ...sample(), status: 'draft', de: { ...sample().de, locale: 'de' }, en: { ...sample().en, locale: 'en' } });
@@ -2687,7 +2832,7 @@ describe('posts editor', () => {
     else expect(response.json()).toMatchObject({ succeeded: 1, failed: 0 });
     // The later edit is only a working copy, not part of the committed snapshot.
     expect(edited.status).toBe('published');
-    expect(edited.hasUnpublishedChanges).toBe(true);
+    expect(edited.publication).toMatchObject({ availability: 'available', draftDiffers: true });
     expect(s.calls).toHaveLength(1);
     const retry = await b.app.inject({ method: 'POST', url: `/posts/${saved.translationKey}/publish`,
       cookies: cookie, payload: await publishBody(b.posts, saved.translationKey) });
@@ -2718,7 +2863,7 @@ describe('posts editor', () => {
     expect(response.json().updatedAt).toBe(committed!.toISOString());
     expect(response.json().build.ok).toBe(false);
     expect((await posts.get(tk))!.updatedAt.getTime()).toBeGreaterThan(committed!.getTime());
-    expect((await posts.get(tk))!.hasUnpublishedChanges).toBe(true);
+    expect((await posts.get(tk))!.publication).toMatchObject({ availability: 'available', draftDiffers: true });
   });
 
   it('GET /posts 401 without auth', async () => {
@@ -2760,31 +2905,31 @@ describe('posts editor', () => {
     expect(pub.statusCode).toBe(400);
   });
 
-  it('draft edits over a published post surface hasUnpublishedChanges until re-publish', async () => {
+  it('draft edits over a published post surface content differences until re-publish', async () => {
     const b = build(); const { cookie } = await authed(b);
     const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
     await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     let got = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
-    expect(got).toMatchObject({ status: 'published', hasUnpublishedChanges: false });
+    expect(got).toMatchObject({ status: 'published', publication: { availability: 'available', draftDiffers: false } });
 
     const edited = { ...sample(), de: { ...sample().de, bodyMarkdown: '## edited' } };
     const put = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie, payload: edited });
     expect(put.statusCode).toBe(200);
-    expect(put.json()).toMatchObject({ status: 'published', hasUnpublishedChanges: true });
+    expect(put.json()).toMatchObject({ status: 'published', publication: { availability: 'available', draftDiffers: true } });
 
     // The editor still gets the edited WORKING copy; the list carries the flag
     // for the posts page's "edited" badge.
     got = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
     expect(got.de.bodyMarkdown).toBe('## edited');
-    expect(got.hasUnpublishedChanges).toBe(true);
+    expect(got.publication).toMatchObject({ availability: 'available', draftDiffers: true });
     const list = (await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json();
-    expect(list[0]).toMatchObject({ status: 'published', hasUnpublishedChanges: true });
+    expect(list[0]).toMatchObject({ status: 'published', publication: { availability: 'available', draftDiffers: true } });
 
     const repub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(repub.statusCode).toBe(200);
     got = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
-    expect(got).toMatchObject({ status: 'published', hasUnpublishedChanges: false });
+    expect(got).toMatchObject({ status: 'published', publication: { availability: 'available', draftDiffers: false } });
   });
 
   it('delete and unpublish are admin-only (401 anonymous, 403 author)', async () => {
@@ -2817,7 +2962,7 @@ describe('posts editor', () => {
     const tk = created.json().translationKey;
     const del = await b.app.inject({ method: 'DELETE', url: `/posts/${tk}`, cookies: cookie });
     expect(del.statusCode).toBe(200);
-    expect(del.json()).toEqual({ deleted: true });
+    expect(del.json()).toEqual({ deleted: true, publication: { availability: 'missing' } });
     expect(s.calls.length).toBe(0); // a draft was never on the live site
     expect((await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json()).toHaveLength(0);
   });
@@ -2832,7 +2977,7 @@ describe('posts editor', () => {
     expect(s.calls.length).toBe(1); // publish built once
     const del = await b.app.inject({ method: 'DELETE', url: `/posts/${tk}`, cookies: cookie });
     expect(del.statusCode).toBe(200);
-    expect(del.json()).toEqual({ deleted: true, build: { ok: true, attemptId: 'r1', release: 'r1' } });
+    expect(del.json()).toEqual({ deleted: true, publication: { availability: 'missing' }, build: { ok: true, attemptId: 'r1', release: 'r1' } });
     expect(s.calls.length).toBe(2);
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).statusCode).toBe(404);
   });
@@ -2859,7 +3004,10 @@ describe('posts editor', () => {
     expect(s.calls.length).toBe(1);
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
-    expect(un.json()).toEqual({ unpublished: true, previousUpdatedAt: published.json().updatedAt, updatedAt: expect.any(String), build: { ok: true, attemptId: 'r1', release: 'r1' } });
+    expect(un.json()).toEqual({ unpublished: true, previousUpdatedAt: published.json().updatedAt, updatedAt: expect.any(String),
+      publication: { availability: 'available', status: 'draft', requestedLocales: ['de', 'en'], committedLocales: [],
+        draftDiffers: false, live: { de: 'not-live', en: 'not-live' } },
+      build: { ok: true, attemptId: 'r1', release: 'r1' } });
     expect(s.calls.length).toBe(2);
     const got = await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie });
     expect(got.json().status).toBe('draft');
@@ -2901,13 +3049,16 @@ describe('posts editor', () => {
     const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
-    expect(un.json()).toEqual({ unpublished: true, previousUpdatedAt: published.json().updatedAt, updatedAt: expect.any(String), build: { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') } });
+    expect(un.json()).toEqual({ unpublished: true, previousUpdatedAt: published.json().updatedAt, updatedAt: expect.any(String),
+      publication: { availability: 'available', status: 'draft', requestedLocales: ['de', 'en'], committedLocales: [],
+        draftDiffers: false, live: { de: 'not-live', en: 'not-live' } },
+      build: { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') } });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('draft');
     // re-publish, then delete while the builder keeps failing: DB delete lands, outcome surfaced
     await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     const del = await b.app.inject({ method: 'DELETE', url: `/posts/${tk}`, cookies: cookie });
     expect(del.statusCode).toBe(200);
-    expect(del.json()).toEqual({ deleted: true, build: { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') } });
+    expect(del.json()).toEqual({ deleted: true, publication: { availability: 'missing' }, build: { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') } });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).statusCode).toBe(404);
   });
 

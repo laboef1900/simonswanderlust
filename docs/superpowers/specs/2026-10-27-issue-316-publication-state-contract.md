@@ -854,3 +854,25 @@ The approved manifest design remains required; this evidence does not replace th
 verification matrix. Current authorization and Media redaction boundaries are reconfirmed as
 unchanged by this documentation-only issue. #317/#318 must implement and document the new
 projection and unserved release-state boundaries described in §18.
+
+## 20. #317 implementation handoff (2026-10-29)
+
+The #317 source implementation adds the shared strict manifest/digest module, guarded
+build lifecycle, actual-render gallery observations, uncached row classification,
+consistent store facts, per-post projection union and admin summary. Editor/list/Desk
+consumers replace the former post timestamp flag; preview labels distinguish the working
+copy from the live site. `ARCHITECTURE.md` records the release layout and refresh lifecycle,
+and `SECURITY.md` reconfirms authorization, redaction and ownership boundaries.
+
+Reusable interfaces for #318 are `bodyImageUses`/`classifyRow`, `ReleaseObservation`,
+`PostStore.publicationFacts`, `createPublicationProjection` and `galleryPending`. The latter
+returns photo/story counts and per-key locale/field booleans from fresh Media descriptions;
+it does not add Media endpoint fields or UI in #317. `classifyRow` returns retargeted
+hero/title fields plus ordered gallery and inline occurrences, so an impact consumer
+applies §8.2's exact per-item count rules without another parser.
+
+Regression coverage is added for the specified boundaries, but no implementation checks
+or runtime qualification were executed by the source-writing agents. The parent must run
+the complete §16 gates, including PostgreSQL, real build/promotion and browser failure/
+refresh protocols, before treating the implementation as qualified. No deployment,
+owner-content mutation, migration or automatic build is authorized by this handoff.

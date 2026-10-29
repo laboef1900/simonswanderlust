@@ -261,12 +261,16 @@ export function editorDocument(markup: string) {
   const created: EditorElement[] = [];
   return {
     document: {
+      hidden: false,
+      documentElement: { lang: root.querySelector('html')?.getAttribute('lang') || 'en' },
       get activeElement() { return state.activeElement; },
       get body() { return root.querySelector('body'); },
       getElementById: (id: string) => root.querySelector('#' + id),
       querySelector: (selector: string) => root.querySelector(selector),
       querySelectorAll: (selector: string) => root.querySelectorAll(selector),
       addEventListener: root.addEventListener.bind(root),
+      removeEventListener: root.removeEventListener.bind(root),
+      dispatchEvent: root.dispatchEvent.bind(root),
       createElement: (tag: string) => { const element = new EditorElement(tag.toUpperCase(), state); created.push(element); return element; },
       createTextNode: (text: string) => { const element = new EditorElement('#TEXT', state); element.textContent = text; return element; },
     },

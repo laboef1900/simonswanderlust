@@ -1,0 +1,140 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+
+interface Refresh {
+  start(initial?: boolean): void; stop(): void; refresh(trigger?: string): Promise<void>;
+  beginAction(): void; endAction(): void; accept(value: unknown): void; invalidate(): void;
+}
+function surface(read: (signal: AbortSignal, publish: (value: unknown) => void) => Promise<unknown>, resource?: () => string) {
+  const window = new EventTarget();
+  const document = Object.assign(new EventTarget(), { hidden: false });
+  const apply = vi.fn(), unavailable = vi.fn(), unauthorized = vi.fn();
+  const context = vm.createContext({ window, document, AbortController, Date, setTimeout, clearTimeout });
+  vm.runInContext(readFileSync('public/publication-refresh.js', 'utf8'), context);
+  const api = (window as EventTarget & { PublicationRefresh: { create(options: unknown): Refresh } }).PublicationRefresh;
+  const refresh = api.create({ read, resource, apply, unavailable, unauthorized });
+  return { refresh, window, document, apply, unavailable, unauthorized };
+}
+afterEach(() => { vi.useRealTimers(); });
+
+describe('read-only publication observation bounds', () => {
+  it('observes external rebuilds within 30 seconds even after Live; pauses while hidden and coalesces focus/visibility', async () => {
+    vi.useFakeTimers();
+    const read = vi.fn(async () => 'live');
+    const s = surface(read);
+    s.refresh.start();
+    await vi.advanceTimersByTimeAsync(0);
+    read.mockResolvedValue('draft still live');
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(s.apply).toHaveBeenLastCalledWith('draft still live');
+    expect(read).toHaveBeenCalledTimes(2);
+    s.document.hidden = true;
+    s.document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(read).toHaveBeenCalledTimes(2);
+    s.document.hidden = false;
+    s.document.dispatchEvent(new Event('visibilitychange'));
+    s.window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(3);
+    s.window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(read).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    s.window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(4);
+    s.refresh.stop();
+  });
+  it('bounds a hung read to ten seconds, discards its late Live, and has no catch-up queue', async () => {
+    vi.useFakeTimers();
+    const pending = Promise.withResolvers<unknown>();
+    const read = vi.fn(() => pending.promise);
+    const s = surface(read);
+    s.refresh.start();
+    await vi.advanceTimersByTimeAsync(0);
+    s.window.dispatchEvent(new Event('focus'));
+    s.refresh.refresh();
+    expect(read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(s.unavailable).toHaveBeenCalledTimes(1);
+    pending.resolve('stale live');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.apply).not.toHaveBeenCalled();
+    expect(read).toHaveBeenCalledTimes(1);
+    s.refresh.stop();
+  });
+  it('invalidates reads on mutation start and completion, renders the receipt projection, then reads once without write replay', async () => {
+    vi.useFakeTimers();
+    const old = Promise.withResolvers<unknown>();
+    const read = vi.fn().mockImplementationOnce(() => old.promise).mockResolvedValue('fresh draft');
+    const s = surface(read);
+    s.refresh.start();
+    await vi.advanceTimersByTimeAsync(0);
+    s.refresh.beginAction();
+    await vi.advanceTimersByTimeAsync(60000);
+    s.window.dispatchEvent(new Event('focus'));
+    expect(read).toHaveBeenCalledTimes(1);
+    s.refresh.accept('acknowledged draft');
+    expect(s.apply).toHaveBeenLastCalledWith('acknowledged draft');
+    s.refresh.endAction();
+    old.resolve('old live');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(s.apply.mock.calls.map(([value]) => value)).toEqual(['acknowledged draft', 'fresh draft']);
+    s.refresh.stop();
+  });
+  it('discards a late resource response after selection change', async () => {
+    vi.useFakeTimers();
+    let selected = 'first';
+    const old = Promise.withResolvers<unknown>();
+    const s = surface(vi.fn().mockImplementationOnce(() => old.promise).mockResolvedValue('second publication'), () => selected);
+    s.refresh.start();
+    await vi.advanceTimersByTimeAsync(0);
+    selected = 'second';
+    s.refresh.invalidate();
+    await vi.advanceTimersByTimeAsync(0);
+    await s.refresh.refresh();
+    old.resolve('first publication');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.apply.mock.calls.map(([value]) => value)).toEqual(['second publication']);
+    s.refresh.stop();
+  });
+  it('marks 401 unavailable, invokes session handling once and stops reads', async () => {
+    vi.useFakeTimers();
+    const read = vi.fn(async () => { throw Object.assign(new Error('unauthorized'), { status: 401 }); });
+    const s = surface(read);
+    s.refresh.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(90000);
+    expect(s.unavailable).toHaveBeenCalledTimes(1);
+    expect(s.unauthorized).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('independent optional observation deadlines', () => {
+  it('retains fresh post facts when optional history stalls, aborts the request, and rejects late progress', async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    let late: ((value: unknown) => void) | undefined;
+    const pending = Promise.withResolvers<unknown>();
+    const s = surface(async (readSignal, publish) => {
+      signal = readSignal;
+      late = publish;
+      publish('fresh live post; history unavailable');
+      return pending.promise;
+    });
+    s.refresh.start();
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(signal?.aborted).toBe(true);
+    expect(s.apply).toHaveBeenLastCalledWith('fresh live post; history unavailable');
+    expect(s.unavailable).not.toHaveBeenCalled();
+    late?.('stale history');
+    pending.resolve('stale final response');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.apply).toHaveBeenCalledTimes(1);
+    s.refresh.stop();
+  });
+});
