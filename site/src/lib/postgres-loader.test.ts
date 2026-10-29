@@ -3,6 +3,11 @@ import type { Loader } from 'astro/loaders';
 import { postgresTripsLoader, rowToEntryInput } from './postgres-loader';
 import { renderMarkdown } from './render-markdown.js';
 import { publicTrackSchema, type PublicTrack } from './public-track';
+import { unified } from 'unified';
+import rehypeParse from 'rehype-parse';
+import { visit } from 'unist-util-visit';
+import { resizeBodyImages, STORY_BODY_SIZES, STORY_OPENING_SIZES } from './body-images.js';
+import { splitOpening } from './story-opening.js';
 
 const publicTrack: PublicTrack = {
   version: 1, type: 'MultiLineString', coordinates: [[[1, 2], [3, 4]], [[10, 20], [11, 21]]],
@@ -149,6 +154,57 @@ describe('postgresTripsLoader load()', () => {
     db.rows = [];
     db.media = [];
     db.sql = [];
+  });
+
+  it.each(['de', 'en'] as const)('composes final %s opening/rest hints from loader output, including unsplit and empty bodies', async (locale) => {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    vi.stubEnv('PUBLIC_BASE_URL', 'https://img');
+    const first = 'https://img/trips/sizes/first';
+    const second = 'https://img/trips/sizes/second';
+    const intro = `![Opening](${first})`;
+    const body = `${intro}\n\n## Next\n\n![Remainder](${second})`;
+    const heading = { depth: 2, slug: 'next', text: 'Next' };
+    for (const scenario of [
+      { body, headings: [heading], openingImages: 1, restImages: 1 },
+      { body: intro, headings: [], openingImages: 1, restImages: 0 },
+      { body, headings: [{ ...heading, slug: 'unknown' }], openingImages: 2, restImages: 0 },
+      { body: '', headings: [], openingImages: 0, restImages: 0 },
+    ]) {
+      db.rows = [{ status: 'published', published_snapshot: {
+        ...row, locale, body_markdown: scenario.body,
+        images: { [first]: { width: 3000, height: 2000 }, [second]: { width: 3000, height: 2000 } },
+      } }];
+      const { entries, ctx } = fakeLoadContext();
+      await postgresTripsLoader().load(ctx);
+      const loaded = entries.get(`${locale}/${row.slug}`)?.rendered?.html;
+      expect(loaded).toBeDefined();
+      const parser = unified().use(rehypeParse, { fragment: true });
+      visit(parser.parse(loaded!), 'element', node => {
+        if (node.tagName === 'source') expect(node.properties.sizes).toBe(STORY_BODY_SIZES);
+      });
+      const split = splitOpening(loaded!, scenario.headings);
+      for (const [section, policy, count] of [
+        [split.opening, STORY_OPENING_SIZES, scenario.openingImages],
+        [split.rest, STORY_BODY_SIZES, scenario.restImages],
+      ] as const) {
+        const final = resizeBodyImages(section, policy);
+        const alts: string[] = [];
+        let sources = 0;
+        visit(parser.parse(final), 'element', node => {
+          if (node.tagName === 'img') alts.push(String(node.properties.alt));
+          if (node.tagName === 'source') {
+            expect(node.properties.sizes).toBe(policy);
+            expect(node.properties.srcSet).toContain('1920w');
+            sources++;
+          }
+        });
+        expect(alts).toHaveLength(count);
+        expect(sources).toBe(count * 2);
+        if (count === 1) expect(alts).toEqual([policy === STORY_OPENING_SIZES ? 'Opening' : 'Remainder']);
+        if (section === '') expect(final).toBe('');
+      }
+      if (scenario.restImages === 0) expect(split.rest).toBe('');
+    }
   });
 
   it('builds localized decorative gallery names from each published story locale', async () => {

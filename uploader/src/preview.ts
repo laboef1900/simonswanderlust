@@ -11,7 +11,7 @@
 // so typecheck/tests here need `npm ci` in site/ too (CI does this).
 import { setImmediate } from 'node:timers/promises';
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
-import { transformBodyImages, type GalleryMetadata } from '../../site/src/lib/body-images.js';
+import { PREVIEW_BODY_SIZES, transformBodyImages, type GalleryMetadata } from '../../site/src/lib/body-images.js';
 import { SHIKI_CSS } from '../../site/src/lib/shiki-classes.js';
 import { focusPosition, sourceFormats, srcset, fallbackSrc } from '../../site/src/lib/images.js';
 import { coordsLabel, dateLabel } from '../../site/src/lib/format.js';
@@ -189,6 +189,7 @@ export async function renderPreviewHtml(
   const shared = pair.shared;
   const body = await transformBodyImages(await renderMarkdown(post.bodyMarkdown), post.images, imageOrigin, {
     locale,
+    inlineSizes: PREVIEW_BODY_SIZES,
     schedule: () => setImmediate(),
   }, galleryMetadata);
 

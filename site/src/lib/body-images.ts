@@ -1,5 +1,6 @@
 import { unified } from 'unified';
 import rehypeStringify from 'rehype-stringify';
+import rehypeParse from 'rehype-parse';
 import { visit, SKIP } from 'unist-util-visit';
 import { h } from 'hastscript';
 import { useTranslations, type Locale } from '../i18n/ui.js';
@@ -8,6 +9,7 @@ import { galleryCode, sanitizedBodyTree, textOf } from './gallery-identity.js';
 import { srcset, fallbackSrc, largestVariant, sourceFormats, type RemoteHeroImage } from './images.js';
 import {
   BREAKOUT_WIDTH,
+  COLUMN_WIDTH,
   ROW_GAP,
   containerWidthFor,
   partitionRowsAsync,
@@ -38,11 +40,21 @@ export interface ImageDims { width: number; height: number; alt?: string; captio
 /** Current localized library descriptions, keyed by the photo's full base URL. */
 export type GalleryMetadata = ReadonlyMap<string, { alt: string; caption: string }>;
 
-/** Locale is required for names in static output; requests may also yield partition work. */
+/** Callers own the layout policy; requests may also yield partition work. */
 export interface BodyRenderOptions extends PartitionOptions {
   locale: Locale;
+  inlineSizes: string;
 }
-const SIZES = '(min-width: 768px) 720px, 100vw';
+
+// CSS uses rem geometry; COLUMN_WIDTH is the same story measure in default-root px.
+// Keep these envelopes in step with StoryPage/AboutPage and preview's main.
+const storyWidthRem = COLUMN_WIDTH / 16;
+const storyLockRem = storyWidthRem + 2.5;
+export const STORY_BODY_SIZES = `(min-width: ${storyLockRem}rem) ${storyWidthRem}rem, (min-width: 64rem) calc(100vw - 2.5rem), (min-width: 48rem) 45.5rem, calc(100vw - 2.5rem)`;
+export const STORY_OPENING_SIZES = `(min-width: ${storyLockRem}rem) ${storyWidthRem - 21}rem, (min-width: 64rem) calc(100vw - 23.5rem), (min-width: 48rem) 45.5rem, calc(100vw - 2.5rem)`;
+// 2.2 / 3.2 of the grid after its 2.5rem padding and 3rem gap.
+export const ABOUT_BODY_SIZES = '(min-width: 72rem) 45.71875rem, (min-width: 64rem) calc(68.75vw - 3.78125rem), calc(100vw - 2.5rem)';
+export const PREVIEW_BODY_SIZES = '(min-width: 46rem) 43.5rem, calc(100vw - 2.5rem)';
 
 /**
  * Viewport below which the CSS container query stacks a justified row to one
@@ -90,9 +102,9 @@ function sourceNodes(image: RemoteHeroImage, sizes: string) {
 }
 
 /** Responsive phrasing content, shared by standalone figures and inline images. */
-function pictureNode(image: RemoteHeroImage) {
-  return h('picture', [
-    ...sourceNodes(image, SIZES),
+function pictureNode(image: RemoteHeroImage, sizes: string) {
+  return h('picture', { 'data-body-image': '' }, [
+    ...sourceNodes(image, sizes),
     h('img', {
       src: fallbackSrc(image),
       alt: image.alt,
@@ -105,7 +117,7 @@ function pictureNode(image: RemoteHeroImage) {
   ]);
 }
 
-function resolvedPicture(node: Element, images: Record<string, ImageDims>): Element | null {
+function resolvedPicture(node: Element, images: Record<string, ImageDims>, sizes: string): Element | null {
   if (node.tagName !== 'img') return null;
   const src = node.properties.src;
   if (typeof src !== 'string' || !src || !images[src]) return null;
@@ -115,7 +127,7 @@ function resolvedPicture(node: Element, images: Record<string, ImageDims>): Elem
   return pictureNode({
     src, alt, width: d.width, height: d.height,
     ...(d.format === 'jpeg' ? { format: d.format } : {}),
-  });
+  }, sizes);
 }
 
 function onlyMeaningfulChild(node: Element): Element | null {
@@ -337,9 +349,9 @@ async function galleryNode(
  *   runs both under `astro build` (where `import.meta.env` exists) and under
  *   the uploader's tsx runtime via `preview.ts` (where it does not). Keep it
  *   pure and env-free.
- * @param options explicit content locale; request callers may inject a real
- *   event-loop scheduler. Builds drain the identical optimizer synchronously.
- *   Completion must always be awaited.
+ * @param options explicit content locale and trusted inline layout sizes;
+ *   request callers may inject a real event-loop scheduler. Builds drain the
+ *   identical optimizer synchronously. Completion must always be awaited.
  * @param galleryMetadata current library alt/caption; only galleries consult it.
  */
 export async function transformBodyImages(
@@ -377,7 +389,7 @@ export async function transformBodyImages(
       const only = onlyMeaningfulChild(node);
       const imageParent = only?.tagName === 'a' ? only : node;
       const image = only?.tagName === 'a' ? onlyMeaningfulChild(only) : only;
-      const picture = image && resolvedPicture(image, images);
+      const picture = image && resolvedPicture(image, images, options.inlineSizes);
       if (image && picture) {
         imageParent.children[imageParent.children.indexOf(image)] = picture;
         // Move the sanitized anchor itself, never clone it or create a new link.
@@ -387,7 +399,7 @@ export async function transformBodyImages(
       }
     }
     if (node.tagName === 'img') {
-      const picture = resolvedPicture(node, images);
+      const picture = resolvedPicture(node, images, options.inlineSizes);
       if (picture) {
         parent.children[index] = picture;
         return SKIP;
@@ -396,6 +408,27 @@ export async function transformBodyImages(
   });
   for (const render of galleries) await render();
   return unified().use(rehypeStringify, { allowDangerousHtml: true }).stringify(tree);
+}
+
+/**
+ * Apply a section's trusted layout hint AFTER splitting sanitized/transformed HTML.
+ * The reserved marker is injected only after sanitization, never author-preserved.
+ * Do not sanitize again: galleries carry trusted post-sanitize attributes too.
+ */
+export function resizeBodyImages(html: string, sizes: string): string {
+  if (!html.includes('data-body-image')) return html;
+  const processor = unified().use(rehypeParse, { fragment: true }).use(rehypeStringify);
+  const tree = processor.parse(html);
+  visit(tree, 'element', (node) => {
+    if (node.tagName !== 'picture') return;
+    if (Object.hasOwn(node.properties, 'dataBodyImage')) {
+      for (const child of node.children) {
+        if (child.type === 'element' && child.tagName === 'source') child.properties.sizes = sizes;
+      }
+    }
+    return SKIP;
+  });
+  return processor.stringify(tree);
 }
 
 /** Candidate URLs of a `srcset` (hast gives a comma-list as an array or a string). */

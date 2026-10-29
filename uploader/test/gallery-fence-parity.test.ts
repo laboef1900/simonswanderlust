@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { normalizeGalleryFences, galleryFencesToMdx, rewriteOutsideGalleries } from '../src/body-content.js';
 import { analyzeGallerySource, type GalleryBlock } from '../../site/src/lib/gallery-source.js';
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
-import { analyzeRenderedBody, transformBodyImages } from '../../site/src/lib/body-images.js';
+import { STORY_BODY_SIZES, analyzeRenderedBody, transformBodyImages } from '../../site/src/lib/body-images.js';
 import { analyzeBodyContent } from '../src/publish-gate.js';
 import { auditAltText } from '../src/alt-audit.js';
 import type { PostLocale } from '../src/posts.js';
@@ -86,7 +86,7 @@ for (const [name, shape, recognized] of GALLERY_CORPUS) {
     if (block) expect(await G.fenceAt(typed, block.lines[0]?.start ?? block.start)).toMatchObject({ start: block.start, end: block.end });
     expect(saved.images.unrelated).toEqual(initial.unrelated);
     expect(await normalizeGalleryFences(saved.bodyMarkdown, saved.images)).toEqual(saved);
-    const output = await transformBodyImages(await renderMarkdown(saved.bodyMarkdown), saved.images, 'https://i', { locale: 'en' });
+    const output = await transformBodyImages(await renderMarkdown(saved.bodyMarkdown), saved.images, 'https://i', { locale: 'en', inlineSizes: STORY_BODY_SIZES });
     expect(output.includes('class="jgal ')).toBe(recognized);
     const exported = await galleryFencesToMdx(saved.bodyMarkdown, saved.images);
     const restored = await normalizeGalleryFences(exported, initial);
@@ -165,7 +165,7 @@ describe('invalid metadata obeys the same authoritative gallery definition', () 
       const edit = await G.replaceFenceAt(body, body.indexOf(URL), '```gallery\nhttps://i/b\n```');
       expect(edit.blocked).toBeTruthy();
       expect(body.slice(0, edit.start) + edit.text + body.slice(edit.end)).toBe(body);
-      const rendered = await transformBodyImages(await renderMarkdown(body), images, 'https://i', { locale: 'en' });
+      const rendered = await transformBodyImages(await renderMarkdown(body), images, 'https://i', { locale: 'en', inlineSizes: STORY_BODY_SIZES });
       expect(rendered).toContain('alt="Original"');
       expect(rendered.includes('Original caption')).toBe(!body.includes('#captions: hidden'));
       expect(rendered).not.toContain('must not apply');

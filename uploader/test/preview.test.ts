@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { previewCsp, renderPreviewHtml } from '../src/preview.js';
 import { SHIKI_CSS } from '../../site/src/lib/shiki-classes.js';
 import type { PostPair } from '../src/posts.js';
+import { PREVIEW_BODY_SIZES } from '../../site/src/lib/body-images.js';
+import { editorDocument } from './editor-dom-harness.js';
 
 /** The app's own image base — what server.ts passes as the gallery allow-list. */
 const ORIGIN = 'https://img.example.com';
@@ -92,6 +94,23 @@ describe('renderPreviewHtml', () => {
     expect(html).toContain('type="image/webp"');
     expect(html).toContain('https://img.example.com/trips/bukarest/old-town-1280.webp');
     expect(html).toContain('alt="Old town"');
+  });
+
+  it.each(['de', 'en'] as const)('renders inline %s hints for the standalone preview, not either story column', async (locale) => {
+    const p = pair();
+    const src = `${ORIGIN}/trips/bukarest/preview-body`;
+    p[locale].bodyMarkdown = `![First](${src})\n\n## Next\n\nText ![Second](${src}) after.`;
+    p[locale].images = { [src]: { width: 3000, height: 2000 } };
+    const html = await renderPreviewHtml(p, locale, ORIGIN);
+    const { document } = editorDocument(html);
+    const pictures = document.querySelectorAll('picture[data-body-image]');
+    expect(pictures).toHaveLength(2);
+    for (const picture of pictures) {
+      const sources = picture.querySelectorAll('source');
+      expect(sources).toHaveLength(2);
+      for (const source of sources) expect(source.getAttribute('sizes')).toBe(PREVIEW_BODY_SIZES);
+    }
+    expect(html).not.toContain('<script');
   });
 
   it('renders JPEG-only body references without requesting nonexistent modern variants', async () => {

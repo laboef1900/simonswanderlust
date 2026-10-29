@@ -27,7 +27,7 @@
  */
 import { setImmediate } from 'node:timers/promises';
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
-import { analyzeRenderedBody, transformBodyImages, type ImageDims } from '../../site/src/lib/body-images.js';
+import { STORY_BODY_SIZES, analyzeRenderedBody, transformBodyImages, type ImageDims } from '../../site/src/lib/body-images.js';
 import type { Locale } from '../../site/src/i18n/ui.js';
 
 /** Heading semantics and foreign references before resolution; image loads after it. */
@@ -61,6 +61,7 @@ export async function analyzeBodyContent(
     foreign: [...found],
     sources: analyzeRenderedBody(await transformBodyImages(html, images, allowed, {
       locale,
+      inlineSizes: STORY_BODY_SIZES,
       schedule: () => setImmediate(),
     })).sources,
   };
