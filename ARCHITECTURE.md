@@ -723,6 +723,15 @@ On the server: pull the GHCR image directly (no `dhi.io` login needed there — 
 `IMAGE_TAG` in `.env`, then `docker compose pull && docker compose up -d`. Cutting a release = bump
 the `IMAGE_TAG` defaults (`docker-compose.yml`, `uploader/.env.example`), commit, tag, push the tag.
 
+**Native codec updates (#347):** record the current image digest before an owner-controlled
+upgrade, then release and deploy a newly built image; changing `package-lock.json` or running
+Rebuild site does not replace loaded codecs. The verified sharp 0.35.5 candidate uses libheif
+1.23.5, librsvg 2.63.2 and libvips 8.18.7 in both trees on both supported Linux architectures.
+The previous digest is diagnostic/recovery evidence, **not** authorization to restore vulnerable
+codecs: #347 recovery is roll-forward only. No schema/data migration or re-encoding is required;
+the existing originals, variants and static releases remain intact. Release/deployment is a
+separate owner action, not part of the dependency PR.
+
 ## Configuration (environment)
 
 | Var | Used by | Purpose |

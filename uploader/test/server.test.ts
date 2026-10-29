@@ -3621,6 +3621,28 @@ describe('POST /settings/image-preview', () => {
     expect((await b.media.list({})).items).toEqual([]);
   });
 
+  it.each(['avif', 'svg'] as const)('decodes %s preview input without retaining metadata or writing media', async (source) => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const input = source === 'avif'
+      ? await sharp(await gpsJpeg(300, 200)).withMetadata().avif().toBuffer()
+      : Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200"><rect width="300" height="200" fill="#5a7"/></svg>');
+    if (source === 'avif') expect((await sharp(input).metadata()).exif).toBeDefined();
+    const before = await readdir(dir);
+    // Decoder selection follows bytes, not the caller's untrusted MIME label.
+    const result = await preview(b, cookie, { format: 'webp', quality: '60' }, input);
+    expect(result.statusCode).toBe(200);
+    const meta = await sharp(result.rawPayload).metadata();
+    expect({ format: meta.format, width: meta.width, height: meta.height, exif: meta.exif })
+      .toEqual({ format: 'webp', width: 300, height: 200, exif: undefined });
+    const pixel = await sharp(result.rawPayload).extract({ left: 0, top: 0, width: 1, height: 1 }).raw().toBuffer();
+    for (const [index, expected] of [85, 170, 119].entries()) {
+      expect(Math.abs(pixel[index]! - expected)).toBeLessThan(25);
+    }
+    expect(await readdir(dir)).toEqual(before);
+    expect((await b.media.list({})).items).toEqual([]);
+  });
+
   it('accepts quality 1 and 100, and refuses anything else with a fixed message', async () => {
     const b = build();
     const { cookie } = await authed(b);
