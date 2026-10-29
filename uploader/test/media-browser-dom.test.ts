@@ -904,6 +904,51 @@ describe('media conditional save recovery in real consumers', () => {
     expect(page.el('dUnsaved').hidden).toBe(true);
   });
 
+  it('cannot replace the form with an earlier comparison while Use mine is pending', async () => {
+    const current = { ...item('a'), title: 'Stored elsewhere' };
+    const pending = Promise.withResolvers<Awaited<ReturnType<typeof response>>>();
+    let writes = 0;
+    const page = loadPage({ request: (_url, init) => {
+      if (init?.method !== 'PATCH') return;
+      return ++writes === 1 ? response(409, { error: 'media_changed', current }) : pending.promise;
+    } });
+    await open(page);
+    change(page, 'dTitle', 'Mine');
+    page.el('dSave').click(); await page.flush();
+    page.el('dUseMine').click(); await page.flush();
+    page.el('dUseStored').click();
+    expect(page.el('dTitle').value).toBe('Mine');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dUseMine').disabled).toBe(true);
+    expect(page.el('dUseStored').disabled).toBe(true);
+    pending.resolve(response(200, { ...current, title: 'Mine', conditionalVersion: 1 }));
+    await page.flush();
+    expect(page.el('dTitle').value).toBe('Mine');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+    expect(writes).toBe(2);
+  });
+
+  it('does not reopen an earlier comparison when a stored read arrives after acknowledgement', async () => {
+    const current = { ...item('a'), title: 'Stored elsewhere' };
+    const pending = Promise.withResolvers<Awaited<ReturnType<typeof response>>>();
+    let writes = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (init?.method === 'PATCH') return ++writes === 1
+        ? response(409, { error: 'media_changed', current })
+        : response(200, { ...current, title: 'Mine', conditionalVersion: 1 });
+      if (url === '/media/items/a') return pending.promise;
+    } });
+    await open(page);
+    change(page, 'dTitle', 'Mine');
+    page.el('dSave').click(); await page.flush();
+    page.el('dCheckStored').click(); await page.flush();
+    page.el('dUseMine').click(); await page.flush();
+    pending.resolve(response(200, current)); await page.flush();
+    expect(page.el('dTitle').value).toBe('Mine');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+    expect(page.el('dCompare').textContent).toBe('');
+  });
+
   it.each([false, true])('preserves a newly observed folder on the next edit (Use stored: %s)', async (useStored) => {
     const current = { ...item('a'), title: 'Stored elsewhere', folder: 'Created elsewhere' };
     let refused = false;
