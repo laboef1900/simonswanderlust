@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { setImmediate as turn } from 'node:timers/promises';
 import sharp from 'sharp';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createUploadService, type UploadInput } from '../src/upload-service.js';
@@ -41,10 +40,6 @@ async function fixture(options: { blocked?: boolean; receipts?: UploadReceiptSto
   const input = (key = 'trips/test/photo'): UploadInput => ({ userId, uploadId: randomUUID(), retryGeneration: 0, bytes, key, filename: 'photo.jpg', title: 'Title', alt: 'View', folder: '' });
   return { service, receipts, media, queue, encoded, dir, gate, input, store };
 }
-async function until(predicate: () => Promise<boolean>) {
-  for (let i = 0; i < 300; i++) { if (await predicate()) return; await turn(); }
-  throw new Error('Receipt recovery did not settle within deterministic event turns');
-}
 
 describe('durable upload receipts', () => {
   it('answers a lost accepted response without re-enqueue, metadata mutation or re-deriving profile/year', async () => {
@@ -81,8 +76,15 @@ describe('durable upload receipts', () => {
     expect(await readFile(join(f.dir, `${receipt.mediaKey}-orig.${receipt.frozen.ext}`))).toEqual(third.bytes);
     for (let i = 0; i < 3; i++) await f.service.get(third.userId, third.uploadId);
     expect(f.queue.stats()).toEqual({ running: 1, pending: 1 });
+    const recovered = deferred(); const accept = f.receipts.accept.bind(f.receipts);
+    vi.spyOn(f.receipts, 'accept').mockImplementation(async (...args) => {
+      const accepted = await accept(...args);
+      if (accepted && args[0].uploadId === third.uploadId) recovered.release();
+      return accepted;
+    });
     f.gate.release();
-    await until(async () => (await f.service.get(third.userId, third.uploadId))?.state === 'accepted');
+    await recovered.promise;
+    expect(await f.service.get(third.userId, third.uploadId)).toMatchObject({ state: 'accepted' });
     await f.queue.idle(); expect(f.encoded.filter(k => k === receipt.mediaKey)).toHaveLength(1);
   });
   it('makes deletion terminal for all receipts and never resurrects the media row', async () => {
@@ -94,11 +96,11 @@ describe('durable upload receipts', () => {
     expect(await f.media.get(key)).toBeNull();
   });
   it('keeps an issued write owned while receipt finalization is delayed and GET remains inert', async () => {
-    const receipts = memoryUploadReceiptStore(); const finalize = receipts.accept.bind(receipts); const gate = deferred();
-    receipts.accept = async (...args) => { await gate.promise; return finalize(...args); };
+    const receipts = memoryUploadReceiptStore(); const finalize = receipts.accept.bind(receipts); const gate = deferred(); const finalizing = deferred();
+    receipts.accept = async (...args) => { finalizing.release(); await gate.promise; return finalize(...args); };
     const f = await fixture({ receipts }); const input = f.input(); const pending = f.service.upload(input);
     cleanups.push(async () => { gate.release(); await pending.catch(() => {}); });
-    await until(async () => await receipts.get(input.userId, input.uploadId) !== null);
+    await finalizing.promise;
     expect((await f.service.get(input.userId, input.uploadId))?.state).toBe('pending');
     const recovery = await f.service.recover(); expect(recovery.accepted).toBe(0);
     expect((await f.service.get(input.userId, input.uploadId))?.state).toBe('pending');
@@ -161,8 +163,17 @@ describe('durable upload receipts', () => {
     const receipt = (await f.receipts.get(input.userId, input.uploadId))!;
     for (let i = 0; i < 105; i++) await f.receipts.insert({ ...receipt, uploadId: randomUUID(), state: 'pending', result: null, claim: randomUUID() });
     const get = vi.spyOn(f.receipts, 'pending');
+    // Observe completed receipt writes: event-loop turns do not bound the real
+    // filesystem reads performed by each recovery pass.
+    const recovered = deferred(); const accept = f.receipts.accept.bind(f.receipts);
+    vi.spyOn(f.receipts, 'accept').mockImplementation(async (...args) => {
+      const accepted = await accept(...args);
+      if ((await f.receipts.counts()).pending === 0) recovered.release();
+      return accepted;
+    });
     const first = await f.service.start(); expect(first.examined).toBeLessThanOrEqual(100);
-    await until(async () => (await f.receipts.counts()).pending === 0);
+    await recovered.promise;
+    expect(await f.receipts.counts()).toEqual({ pending: 0, blocked: 0 });
     expect(get.mock.calls.every(([, limit]) => limit === 100)).toBe(true);
     expect(f.encoded).toEqual([String(result.body.key)]);
   });
