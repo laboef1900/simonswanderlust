@@ -30,6 +30,7 @@ import { isSafePageKey } from './pages.js';
 import { imagesMapError } from './body-content.js';
 import { isSafeSlug } from './posts.js';
 import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js';
+import { isCanonicalJourneyHero, parseJourneySnapshot, type JourneySnapshot } from '../../site/src/lib/journey-snapshot.js';
 
 /**
  * v8 (issue #204) added reader `comments` (no email — the spec stores none;
@@ -43,6 +44,8 @@ import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js'
  * v11 adds the singleton site identity and bounded PNG identity assets.
  * Pre-identity restores recover the legacy brand while retaining a live canonical origin.
  * v12 adds language configuration and explicit per-row omission.
+ * v13 adds page lifecycle metadata and site navigation.
+ * v14 adds journeys, locale publication history and ordered membership.
  * v7 added media `format` + `encoding`, preserving JPEG-only sets and their
  * snapped retry/recovery profile across restore.
  * v6 added encrypted `app_secrets` (never the encryption master key);
@@ -50,13 +53,14 @@ import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js'
  * v3 added `media` + `media_folders`; v2 added `pages`.
  * @ai-warning Bumping this ALSO requires widening the allow-list guard below.
  */
-export const DUMP_VERSION = 13;
+export const DUMP_VERSION = 14;
+export const JOURNEYS_DUMP_VERSION = 14;
 export const PAGES_NAV_DUMP_VERSION = 13;
 export const LANGUAGE_DUMP_VERSION = 12;
 /** Introduction boundary, independent of later language/content format additions. */
 export const IDENTITY_DUMP_VERSION = 11;
 /** Every version `readDump` accepts — an allow-list, not a minimum. */
-export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
 export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 /**
@@ -191,6 +195,9 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
   let identityAssets: Record<string, unknown>[] | undefined;
   let siteLanguage: Record<string, unknown>[] | undefined;
   let siteNav: Record<string, unknown>[] | undefined;
+  let journeys: Record<string, unknown>[] | undefined;
+  let journeyLocales: Record<string, unknown>[] | undefined;
+  let journeyMembers: Record<string, unknown>[] | undefined;
   let version = DUMP_VERSION;
   let routeRows: RouteDumpRow[] = [];
   let routeArchive: RouteArchiveManifest | undefined;
@@ -253,6 +260,29 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
       version = Math.min(version, LANGUAGE_DUMP_VERSION);
       pages = (await client.query('SELECT key,locale,title,body_markdown,images FROM pages ORDER BY key,locale')).rows;
     }
+    const journeyTables = (await client.query(`SELECT to_regclass('journeys') IS NOT NULL AS journeys,
+      to_regclass('journey_locales') IS NOT NULL AS locales, to_regclass('journey_members') IS NOT NULL AS members`)).rows[0];
+    if (journeyTables?.journeys || journeyTables?.locales || journeyTables?.members) {
+      if (!journeyTables.journeys || !journeyTables.locales || !journeyTables.members || version < PAGES_NAV_DUMP_VERSION) {
+        throw new BackupError('Incomplete journey recovery schema.');
+      }
+      journeys = (await client.query('SELECT id, status, published_snapshot, published_at, created_at, updated_at FROM journeys ORDER BY id')).rows;
+      journeyLocales = (await client.query('SELECT journey_id, locale, slug, title, intro, hero_image, omitted, published_at FROM journey_locales ORDER BY journey_id, locale')).rows;
+      journeyMembers = (await client.query('SELECT journey_id, translation_key, position FROM journey_members ORDER BY journey_id, position')).rows;
+      // Native pg timestamps serialize to strings in the file. Validate that same
+      // representation before making the recovery set's completion marker visible.
+      for (const row of journeys) for (const key of ['published_at', 'created_at', 'updated_at']) {
+        if (row[key] instanceof Date) row[key] = row[key].toISOString();
+      }
+      for (const row of journeyLocales) {
+        if (row.published_at instanceof Date) row.published_at = row.published_at.toISOString();
+      }
+      validateDumpJourneys({ version, createdAt: now.toISOString(),
+        tables: { users, posts, site_language: siteLanguage, journeys, journey_locales: journeyLocales, journey_members: journeyMembers } });
+    } else {
+      if (!options.prePagesMigration && !options.preLanguageMigration) throw new BackupError('Journey schema is missing.');
+      version = Math.min(version, PAGES_NAV_DUMP_VERSION);
+    }
     // The media library's metadata. The FILES are captured by the incremental
     // images archive, not here — without these rows a restore would bring the
     // photos back but lose every folder, caption and tag, which is the worst
@@ -312,7 +342,8 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
     const payload = gzipSync(JSON.stringify({
       version, createdAt: now.toISOString(),
       tables: { users, posts, pages, media, media_folders: mediaFolders, app_secrets: appSecrets, comments,
-        post_routes: routeRows, site_identity: siteIdentity, site_identity_assets: identityAssets, site_language: siteLanguage, site_nav: siteNav },
+        post_routes: routeRows, site_identity: siteIdentity, site_identity_assets: identityAssets, site_language: siteLanguage, site_nav: siteNav,
+        journeys, journey_locales: journeyLocales, journey_members: journeyMembers },
       routeArchive,
     }));
     // Claim the final name atomically: a same-second backup or pre-restore
@@ -823,7 +854,99 @@ export interface Dump {
     site_identity_assets?: Record<string, unknown>[];
     site_language?: Record<string, unknown>[];
     site_nav?: Record<string, unknown>[];
+    journeys?: Record<string, unknown>[];
+    journey_locales?: Record<string, unknown>[];
+    journey_members?: Record<string, unknown>[];
   };
+}
+
+/** Closed recovery format: working membership plus live snapshots claim stories;
+ * even retained draft snapshots must reference stories present in this dump. */
+function validateDumpJourneys(dump: Dump): void {
+  const tables = ['journeys', 'journey_locales', 'journey_members'] as const;
+  if (dump.version < JOURNEYS_DUMP_VERSION) {
+    if (tables.some(table => Object.hasOwn(dump.tables, table))) throw new BackupError('Journeys require a version 14 recovery set.');
+    return;
+  }
+  const fail = (): never => { throw new BackupError('Invalid journeys in backup.'); };
+  const record = (value: unknown, keys: readonly string[]): value is Record<string, unknown> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+  const uuid = (value: unknown): value is string =>
+    typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  const timestamp = (value: unknown) => value === null || isIdentityTimestamp(value);
+  if (tables.some(table => !Array.isArray(dump.tables[table]))) fail();
+  const mode = dumpLanguage(dump);
+  const parents = new Map<string, Record<string, unknown>>();
+  const locales = new Map<string, Map<'de' | 'en', Record<string, unknown>>>();
+  const members = new Map<string, Map<number, string>>();
+  const claims = new Map<string, string>();
+  const postKeys = new Set(dump.tables.posts.map(post => post.translation_key));
+  const slugs = new Set<string>();
+  const claim = (key: string, id: string) => {
+    if (!postKeys.has(key) || (claims.has(key) && claims.get(key) !== id)) fail();
+    claims.set(key, id);
+  };
+  for (const row of dump.tables.journeys!) {
+    if (!record(row, ['id', 'status', 'published_snapshot', 'published_at', 'created_at', 'updated_at'])
+      || !uuid(row.id) || parents.has(row.id.toLowerCase()) || (row.status !== 'draft' && row.status !== 'published')
+      || !timestamp(row.published_at) || !isIdentityTimestamp(row.created_at) || !isIdentityTimestamp(row.updated_at)
+      || (row.published_snapshot === null) !== (row.published_at === null)
+      || (row.status === 'published' && row.published_snapshot === null)) fail();
+    parents.set((row.id as string).toLowerCase(), row);
+  }
+  for (const row of dump.tables.journey_locales!) {
+    if (!record(row, ['journey_id', 'locale', 'slug', 'title', 'intro', 'hero_image', 'omitted', 'published_at'])
+      || !uuid(row.journey_id) || (row.locale !== 'de' && row.locale !== 'en')
+      || typeof row.slug !== 'string' || row.slug.length > 100 || (row.slug !== '' && !isSafeSlug(row.slug))
+      || typeof row.title !== 'string' || row.title.length > 200 || /\p{C}/u.test(row.title)
+      || typeof row.intro !== 'string' || row.intro.length > 2000 || row.intro.includes('\0')
+      || typeof row.omitted !== 'boolean' || !timestamp(row.published_at)
+      || (row.hero_image !== null && !isCanonicalJourneyHero(row.hero_image))) fail();
+    const id = (row.journey_id as string).toLowerCase();
+    const locale = row.locale as 'de' | 'en';
+    const pair = locales.get(id) ?? new Map<'de' | 'en', Record<string, unknown>>();
+    const slug = `${locale}:${row.slug}`;
+    if (!parents.has(id) || pair.has(locale) || (row.slug !== '' && slugs.has(slug))
+      || (locale === mode.primary && row.omitted)
+      || (row.omitted && row.published_at !== null)
+      || (!mode.locales.includes(locale) && !row.omitted)) fail();
+    if (row.slug !== '') slugs.add(slug);
+    pair.set(locale, row); locales.set(id, pair);
+  }
+  for (const row of dump.tables.journey_members!) {
+    if (!record(row, ['journey_id', 'translation_key', 'position']) || !uuid(row.journey_id)
+      || typeof row.translation_key !== 'string' || !row.translation_key || /\p{C}/u.test(row.translation_key)
+      || typeof row.position !== 'number' || !Number.isInteger(row.position) || row.position < 0 || row.position >= 50) fail();
+    const id = (row.journey_id as string).toLowerCase();
+    const ordered = members.get(id) ?? new Map<number, string>();
+    if (!parents.has(id) || ordered.has(row.position as number) || [...ordered.values()].includes(row.translation_key as string)) fail();
+    claim(row.translation_key as string, id);
+    ordered.set(row.position as number, row.translation_key as string); members.set(id, ordered);
+  }
+  for (const [id, row] of parents) {
+    const pair = locales.get(id);
+    if (!pair || pair.size !== 2) fail();
+    const ordered = members.get(id);
+    if (ordered && [...ordered.keys()].some(position => position >= ordered.size)) fail();
+    let snapshot: JourneySnapshot | null = null;
+    try { snapshot = row.published_snapshot === null ? null : parseJourneySnapshot(row.published_snapshot); }
+    catch { fail(); }
+    if (snapshot) {
+      if (!snapshot.locales[mode.primary]) fail();
+      for (const key of snapshot.members) {
+        if (!postKeys.has(key)) fail();
+        if (row.status === 'published') claim(key, id);
+      }
+    }
+    for (const locale of ['de', 'en'] as const) {
+      const working = pair!.get(locale)!;
+      const committed = snapshot?.locales[locale];
+      if (Boolean(committed) !== (working.published_at !== null)
+        || (committed && (!mode.locales.includes(locale) || working.omitted || working.slug !== committed.slug))
+        || (working.published_at !== null && dump.tables.site_language![0]!.locked_at === null)) fail();
+    }
+  }
 }
 
 /** New format metadata is mandatory; legacy formats are normalized only during restore. */
@@ -1035,6 +1158,7 @@ export function readDump(filePath: string): Dump {
   }
   validateDumpIdentity(dump);
   validateDumpPages(dump);
+  validateDumpJourneys(dump);
   return dump;
 }
 
@@ -1058,7 +1182,7 @@ export interface RestoreOptions {
   assertOwner?: () => Promise<void>;
 }
 export interface RestoreCounts {
-  users: number; posts: number; pages: number; media: number; comments: number; appSecrets: number | null; routes: number;
+  users: number; posts: number; pages: number; media: number; comments: number; appSecrets: number | null; routes: number; journeys: number;
 }
 
 /** Restore a dump inside one transaction. Deleting users cascades to sessions
@@ -1080,6 +1204,7 @@ async function restoreDatabaseContents(pool: DbPool, filePath: string, options: 
     users: dump.tables.users.length, posts: dump.tables.posts.length,
     pages: dump.tables.pages?.length ?? 0, media: dump.tables.media?.length ?? 0,
     comments: dump.tables.comments?.length ?? 0, appSecrets: dump.tables.app_secrets?.length ?? null, routes: routes.length,
+    journeys: dump.tables.journeys?.length ?? 0,
   };
   try {
     if (options.routeFiles) staged = await stageRouteRestore(options.routeFiles, filePath, dump.routeArchive, routes);
@@ -1087,6 +1212,11 @@ async function restoreDatabaseContents(pool: DbPool, filePath: string, options: 
     await options.assertOwner?.();
     await client.query('BEGIN');
     await client.query('SELECT id FROM site_language WHERE id = true FOR UPDATE');
+    // Offline restore invalidates operational evidence in this same transaction,
+    // including pages a v1 dump deliberately preserves. Absence is not non-commit.
+    await client.query('UPDATE posts SET last_save_id=NULL, last_save_by=NULL');
+    await client.query('UPDATE pages SET last_save_id=NULL, last_save_by=NULL');
+    await client.query('DELETE FROM upload_receipts');
     // Read before replacing anything. Legacy recovery keeps the destination's
     // configured domain, but never its text or assets.
     const liveOrigin = dump.version < IDENTITY_DUMP_VERSION
@@ -1129,6 +1259,9 @@ async function restoreDatabaseContents(pool: DbPool, filePath: string, options: 
     // Operational cleanup intents survive restoration. Fresh restored source
     // identities cannot be erased by a pre-restore deletion intent.
     await client.query('DELETE FROM post_routes');
+    // Always clear journeys, including pre-v14 recovery. Keeping destination
+    // snapshots beside a restored language mode would violate the URL contract.
+    await client.query('DELETE FROM journeys');
     await client.query('DELETE FROM posts');
     // @ai-warning media MUST be deleted before users. `media.uploaded_by`
     // references `users(id) ON DELETE SET NULL`, so deleting users first would
@@ -1165,6 +1298,20 @@ async function restoreDatabaseContents(pool: DbPool, filePath: string, options: 
          // absent from v<=7 dumps → true (the column default); only an explicit false disables
          p.comments_enabled !== false, asJsonb(p.title_image), p.omitted],
       );
+    }
+    for (const row of dump.tables.journeys ?? []) {
+      await client.query(`INSERT INTO journeys (id,status,published_snapshot,published_at,created_at,updated_at)
+        VALUES ($1,$2,$3::jsonb,$4,$5,$6)`,
+      [row.id, row.status, asJsonb(row.published_snapshot), row.published_at, row.created_at, row.updated_at]);
+    }
+    for (const row of dump.tables.journey_locales ?? []) {
+      await client.query(`INSERT INTO journey_locales (journey_id,locale,slug,title,intro,hero_image,omitted,published_at)
+        VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8)`,
+      [row.journey_id, row.locale, row.slug, row.title, row.intro, asJsonb(row.hero_image), row.omitted, row.published_at]);
+    }
+    for (const row of dump.tables.journey_members ?? []) {
+      await client.query('INSERT INTO journey_members (journey_id,translation_key,position) VALUES ($1,$2,$3)',
+        [row.journey_id, row.translation_key, row.position]);
     }
     for (const route of staged?.rows ?? []) {
       await client.query(

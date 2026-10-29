@@ -198,7 +198,7 @@ export async function renderPreviewHtml(
   // {lat:0,lng:0} is the incomplete-draft placeholder (see draftWithDefaults
   // in posts.ts) — don't render a bogus "0.0000° N" line for it.
   const hasCoords = shared.coordinates && (shared.coordinates.lat !== 0 || shared.coordinates.lng !== 0);
-  const banner = pair.status === 'draft' ? 'Draft preview — not published' : 'Preview — published post';
+  const banner = ui[locale]['editor.chrome.publicationPreview'];
   const title = post.title.trim() === '' ? '(untitled)' : post.title;
 
   return `<!doctype html>
@@ -207,11 +207,11 @@ export async function renderPreviewHtml(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>${escapeHtml(title)} · Preview</title>
+<title>${escapeHtml(title)} · ${escapeHtml(banner)}</title>
 <style>${STYLE}</style>
 </head>
 <body>
-<div class="banner">${escapeHtml(banner)} · ${locale.toUpperCase()}</div>
+<div class="banner">${escapeHtml(banner)} · ${locale.toUpperCase()}<br>${escapeHtml(ui[locale]['editor.chrome.publicationPreviewMedia'])}</div>
 ${heroHtml(post.titleImage ?? post.heroImage)}
 <main>
   <p class="meta">${escapeHtml(metaParts.join(' · '))}</p>

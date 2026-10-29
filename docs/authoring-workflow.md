@@ -71,9 +71,9 @@ text by hand.
 > Key naming: use `trips/<slug>/<name>` (lowercase `a–z 0–9 / _ -`). The `<slug>` should match
 > the post slug (below). Upload before publishing, or the URLs 404.
 
-> The uploader accepts **one photo per request** (a second file in the same upload is rejected —
-> bulk upload is a Phase 2 feature), and published variants keep only camera make/model, lens,
-> capture date and exposure settings — never location, even if the original photo had it.
+> The uploader accepts **one photo per request**; Media batches send separate identified
+> requests. Published variants keep only camera make/model, lens, capture date and exposure
+> settings — never location, even if the original photo had it.
 
 ---
 
@@ -100,6 +100,66 @@ Unpublish. The save indicator distinguishes **Not saved yet**, **Unsaved changes
 **Saving…** and **Saved to server**. Publish readiness is separate. A failed save
 leaves edits unsaved; edits typed while a save is running still need another save.
 Browser recovery copies do not mean the draft has been saved to the server.
+
+**When a save response is lost:** keep the tab open. The story editor and every page editor
+(About, Contact, Privacy and Legal) make one bounded read to check whether that exact account's
+save landed; **Check again** performs another read, never a replay. A confirmed save advances
+only its captured snapshot: text typed while waiting stays dirty. If another writer changed
+the stored version, compare the local form, attempted snapshots and stored content. You can
+open the latest version/revisions in another tab, keep editing locally, load the stored
+version, or explicitly use your copy against that stored base and then save. Loading or
+rebasing preserves a separate complete recovery record first; if browser storage cannot
+preserve it, replacement is refused. A restored copy keeps its original base, not the token
+of the newly loaded page. A missing or corrupt base requires explicit comparison/rebase.
+Missing or unavailable receipt evidence stays Unknown; it does not prove the request failed.
+
+**A different account in another tab:** the form keeps its original owner and pauses.
+Sign in in a second tab, then explicitly resume as that same account. Signing in/focusing
+alone does not send writes. An editor/About 401 may return to login after stashing; restore
+the original account's copy afterwards. Browser recovery copies are scoped to account,
+resource and independent tab context; logout and expiry always keep them.
+Old unscoped copies have no trustworthy owner and are not shown or adopted by any account,
+including admins. Browser-profile access can still expose local copies on a shared device.
+
+**Offline is information, not a queue.** The banner warns that Save, Preview and Publish
+will not reach the server when the browser reports offline. Editing and local stashing
+continue. A connection indicator is not server evidence: request results remain authoritative.
+Coming online or focusing the tab never sends a write. There is no offline saving, service
+worker, background sync or automatic replay.
+
+**Media details and AI saves:** each changed field carries the canonical value originally
+read. A changed field refuses the entire patch; unrelated fields do not conflict. Compare
+the current stored values before choosing **Use mine** or **Use stored**. Fill-empty AI
+expects empty fields; overwrite expects the last-read values. After a lost response the
+app reads the item once and compares each field (intended value, previous value, or a
+different value). Mixed results stay visible; neither a check nor AI automatically retries.
+An incompatible server response cannot mark the form saved.
+
+**Local recovery privacy and limits**
+
+- Save server drafts before upgrading. Unknown-owner legacy records remain unchanged and
+  are never previewed, downloaded, imported or attributed by the app, even for admins.
+  The original author/device custodian may privately back up the browser profile, inspect
+  and export the exact legacy record using browser tools, and manually copy their own text
+  into an authenticated editor. Only dispose of individually identified records after
+  backup/export; upgrading, logout and session expiry never delete them.
+- Browser recovery contains plain-text form content, image URLs/dimensions and non-secret
+  owner/resource/base/attempt/context/record/generation metadata with attempted snapshots.
+  It contains no passwords, session tokens, AI keys, executable actions or file queue.
+- Clearing site data, cleanup tools, profile resets and browser storage eviction (including
+  WebKit's inactivity policy) can remove copies without warning. Private windows discard
+  storage on close and may refuse it. localStorage has only a few MB per origin; quota
+  failure can stop stash updates. Keep a separate trusted backup for irreplaceable work.
+- Copies are not encrypted, synced between devices or backed up by the server. Device loss
+  or theft can lose or expose them. Account-scoped recovery prevents app disclosure, not
+  direct access by someone sharing the browser profile. Logout always keeps drafts; use
+  separate trusted profiles.
+- Selected photos exist only in the open page. Closing, reloading, crashing or discarding a
+  background tab loses unfinished transfers and their in-memory IDs. Select files again
+  explicitly; reselection is a new upload and has no receipt-level deduplication promise
+  across year/encoding-profile changes. Completed uploads are retained on the server.
+- A local stash is never proof of a server save. Only an acknowledgement or successful
+  server check establishes what is stored.
 
 Alt-text warnings start as a compact, collapsed **Alt-text review** disclosure
 above the story, within the writing column. Expand it to see photos grouped by
@@ -343,6 +403,25 @@ get back are final, but the responsive AVIF/WebP variants take a few seconds per
 thumbnail appears once it is done. You can close the tab: uploading needs the tab open,
 encoding does not.
 
+**Unknown transfer is not a failed transfer.** Media, hero, body, About and title-image
+uploads keep a client-generated ID and check its server receipt once after an ambiguous
+response. **Check again** is read-only. Only an explicit retry authorized by definite
+failure or a new server retry generation can send bytes again. A retained original waiting
+for queue capacity recovers on the server; **Rescan** is the explicit admin recovery action
+after a disk/database error. An accepted transfer may still be encoding or later fail encoding.
+
+If a Media batch loses its session, it pauses in place: sign in in a second tab and use
+the explicit same-account resume action. Completed records remain visible, and unresolved
+files cannot move to another account. The tab warns before leaving with pending work.
+Files and their queue are never saved to browser storage; closing or reloading loses them.
+Reselecting a file is a **new upload**, with no cross-year or changed-profile deduplication
+promise. Do not reselect merely because an earlier response is Unknown.
+
+Folder creation and bulk moves also keep ambiguous outcomes visible. A folder check reads
+the authoritative tree; a move check reports each selected photo's stored folder or deletion,
+independent of the visible page and filters. Explicit **Create again** is idempotent;
+**Move again** is last-writer-wins. Neither read proves an earlier request cannot finish later.
+
 Two consequences worth knowing:
 
 - **Publish refuses while a post's photos are still processing**, with a message naming them.
@@ -385,6 +464,33 @@ Clearing a Media field clears it in the galleries too. Review generated descript
 before saving: they can appear in every article gallery using that photo.
 The title labels the photo in the library/editor; it does not replace alt text.
 Hero/title-image and ordinary inline-image descriptions remain article-specific.
+
+**Story impact** in the photo detail panel distinguishes published snapshots (next successful
+rebuild), drafts (Preview now, live after successful Publish), and separately changed saved
+draft uses. It counts distinct stories, not repeated photos, and shows DE/EN gallery,
+following-caption, hero/title and inline occurrences. After **Save details**, its effect
+counts use only the fields that actually changed in that write. A submitted unchanged
+English field does not make English affected; a title/tag-only save says **Descriptions
+unchanged**. Hidden captions and local caption overrides do not follow library captions.
+Empty library descriptions remain empty rather than falling back to older post text.
+
+An all-zero newer-draft row can record a removed use. It does not increase the published
+reach. About and other pages are not story reach, even if their references still prevent
+deleting the photo. Global library descriptions do not publish draft prose, reorder photos,
+change dimensions, or replace post-local hero/title/inline text.
+
+Admins also see per-photo pending description fields compared with the currently served
+release. The aggregate photo/story counts remain beside the existing **Rebuild site now**
+action on Desk/Settings, separate from the last build outcome. Unknown/unavailable is not
+zero. A no-op or reverted description is not pending; a successful rebuild clears only the
+values its loader captured. A later edit stays pending, and a failed pre-promotion build
+clears nothing. There is no per-photo Publish or automatic rebuild.
+
+The selected photo's observations refresh every 30 seconds while visible, and on return
+or focus, with a 10-second read deadline. **Refresh** is read-only; it preserves unsaved
+fields and the values against which Save compares. Failed observations show unavailable/
+stale without claiming that an acknowledged save failed. Counts describe the last read,
+not a promise that another author has not changed the story since.
 
 > Photo GPS is stored for you but is **never published** — image variants carry an EXIF
 > allow-list with no location at all, and the API hides coordinates from non-admin accounts.
@@ -596,6 +702,15 @@ DB backups, not posts-only MDX exports, preserve pages and navigation.
 The **Publish** button in the editor triggers a rebuild automatically and waits for it to finish
 before confirming — you don't need to run anything manually under normal authoring conditions.
 This section explains what happens under the hood and how to trigger a rebuild manually if needed.
+
+If the response says a change was saved/published/deleted in the CMS but the rebuild failed,
+that mutation is already committed. Editor and About retain its acknowledged save token;
+you may continue editing without reloading or resubmitting the completed action. The live
+site can still be serving an earlier release. Admin Desk and Settings show the last build
+attempt separately from that observed live release, including interrupted, missing or
+unavailable records. Fix the named failure, inspect `docker compose logs app` for generator
+details, then explicitly choose **Rebuild site now**. Restart alone is not proof of recovery,
+and an interrupted attempt is not evidence that nothing was saved.
 
 The blog is a **static site**, but there's no separate build server or web server anymore: the
 same `app` container that runs the admin/CMS also builds and serves the blog. Content lives in

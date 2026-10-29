@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import * as MediaConditional from '../public/media-conditional.js';
 
 // Media-library AI details. Two shipped browser modules, each run in a vm
 // sandbox like media-api.js: the photo-details contract in llm.js (prompt,
@@ -8,6 +9,7 @@ import vm from 'node:vm';
 // runner — the part that saves to the library without a per-photo review.
 const llmSource = readFileSync('public/llm.js', 'utf8');
 const aiSource = readFileSync('public/media-ai.js', 'utf8');
+const apiSource = readFileSync('public/media-api.js', 'utf8');
 
 interface Details { title: string; altEn: string; altDe: string; captionEn: string; captionDe: string; tags: string[] }
 interface BrowserLlm {
@@ -156,13 +158,15 @@ describe('LLM.describePhoto transport', () => {
 });
 
 interface Item {
-  key: string; status: string; thumbSrc: string | null; title: string;
+  key: string; status: string; thumbSrc: string | null; title: string; folder: string;
   alt: { de: string; en: string }; caption: { de: string; en: string }; tags: string[];
 }
 type Fields = Partial<Record<'title' | 'alt' | 'caption' | 'tags', boolean>>;
 interface Report {
   total: number; processed: number; saved: number; skipped: number;
-  failed: { key: string; reason: string }[]; stopped: null | 'cancelled' | 'failures'; current: string | null;
+  failed: { key: string; reason: string; unknown?: boolean; unsupported?: boolean; conflict?: boolean;
+    fields?: { field: string; outcome: string; intended: unknown; expected: unknown; stored: unknown }[] }[];
+  stopped: null | 'cancelled' | 'failures' | 'session'; current: string | null;
 }
 interface MediaAi {
   MAX_CONSECUTIVE_FAILURES: number;
@@ -175,14 +179,16 @@ interface MediaAi {
 }
 
 function mediaAi(): MediaAi {
-  const window = {} as { MediaAi: MediaAi };
-  vm.runInNewContext(aiSource, { window, URL, AbortSignal });
+  const window = { MediaConditional } as { MediaAi: MediaAi; MediaConditional: typeof MediaConditional };
+  const context = vm.createContext({ window, URL, AbortSignal });
+  vm.runInContext(apiSource, context);
+  vm.runInContext(aiSource, context);
   return window.MediaAi;
 }
 
 function photo(key: string, over: Partial<Item> = {}): Item {
   return {
-    key, status: 'ready', thumbSrc: 'https://img.example/' + key + '-640.webp', title: '',
+    key, status: 'ready', thumbSrc: 'https://img.example/' + key + '-640.webp', title: '', folder: '',
     alt: { de: '', en: '' }, caption: { de: '', en: '' }, tags: [], ...over,
   };
 }
@@ -260,7 +266,14 @@ describe('MediaAi.runBulk', () => {
     const patches: { key: string; body: Record<string, unknown> }[] = [];
     const client = {
       get: vi.fn(async (key: string) => structuredClone(store.get(key))),
-      patch: vi.fn(async (key: string, body: Record<string, unknown>) => { patches.push({ key, body }); return {}; }),
+      patch: vi.fn(async (key: string, body: Record<string, unknown>, _expect: Record<string, unknown>): Promise<Record<string, unknown>> => {
+        patches.push({ key, body });
+        const base = store.get(key)!;
+        return { ...base, ...body, conditionalVersion: 1,
+          alt: { ...base.alt, ...(body.alt as Partial<Item['alt']> | undefined) },
+          caption: { ...base.caption, ...(body.caption as Partial<Item['caption']> | undefined) },
+        };
+      }),
     };
     const describeFn = vi.fn(describe ?? (async () => DETAILS));
     const controller = new AbortController();
@@ -307,7 +320,7 @@ describe('MediaAi.runBulk', () => {
     const report = await h.run();
     expect(report.stopped).toBe('failures');
     expect(report.saved).toBe(1);
-    expect(report.failed).toEqual(['b', 'c', 'd'].map((key) => ({ key, reason: 'Photo details request HTTP 503' })));
+    expect(report.failed).toMatchObject(['b', 'c', 'd'].map((key) => ({ key, reason: 'Photo details request HTTP 503' })));
     expect(report.processed).toBe(4);
     expect(h.describe).toHaveBeenCalledTimes(4);
   });
@@ -316,7 +329,7 @@ describe('MediaAi.runBulk', () => {
     const h = harness([photo('a')], async () => ({ title: 'Only a title' }));
     const report = await h.run({ alt: true });
     expect(h.patches).toEqual([]);
-    expect(report.failed).toEqual([{ key: 'a', reason: 'The model returned none of the selected fields' }]);
+    expect(report.failed).toMatchObject([{ key: 'a', reason: 'The model returned none of the selected fields' }]);
   });
 
   it('sends no save once stopped, even for a suggestion already received', async () => {
@@ -328,11 +341,70 @@ describe('MediaAi.runBulk', () => {
     expect(report).toMatchObject({ stopped: 'cancelled', processed: 0, failed: [] });
   });
 
-  it('reports a failed save with its stage and carries on', async () => {
+  it('reports a refused save and carries on without probing', async () => {
     const h = harness([photo('a'), photo('b')]);
-    h.client.patch.mockRejectedValueOnce(new Error('image not found'));
+    h.client.patch.mockRejectedValueOnce(Object.assign(new Error('image not found'), { status: 404 }));
     const report = await h.run();
-    expect(report.failed).toEqual([{ key: 'a', reason: 'Could not save: image not found' }]);
+    expect(report.failed).toMatchObject([{ key: 'a', reason: 'image not found', unknown: false }]);
+    expect(h.client.get).toHaveBeenCalledTimes(2);
     expect(report.saved).toBe(1);
+  });
+  it('uses canonical empty expectations for fill and last-read values for overwrite', async () => {
+    const fill = harness([photo('a', { title: '\u0000', tags: ['\u0000'] })]);
+    await fill.run({ title: true, tags: true });
+    expect(fill.client.patch).toHaveBeenCalledWith('a',
+      { title: DETAILS.title, tags: DETAILS.tags }, { title: '', tags: [] });
+    const overwrite = harness([photo('a', { title: 'before' })]);
+    overwrite.describe.mockImplementationOnce(async () => {
+      overwrite.store.get('a')!.title = 'last read';
+      return DETAILS;
+    });
+    await overwrite.run({ title: true }, true);
+    expect(overwrite.client.patch).toHaveBeenCalledWith('a', { title: DETAILS.title }, { title: 'last read' });
+  });
+
+  it('reports every mixed unknown field after one probe, without replaying or saving a subset', async () => {
+    const h = harness([photo('a')]);
+    h.client.patch.mockImplementationOnce(async () => {
+      Object.assign(h.store.get('a')!, { title: DETAILS.title, tags: ['someone else'] });
+      throw new Error('connection lost');
+    });
+    const report = await h.run({ title: true, alt: true, tags: true });
+    expect(h.client.patch).toHaveBeenCalledTimes(1);
+    expect(h.client.get).toHaveBeenCalledTimes(2); // pre-write read + one recovery probe
+    expect(report.saved).toBe(0);
+    expect(report.failed[0]).toMatchObject({ unknown: true, fields: [
+      { field: 'title', outcome: 'achieved' },
+      { field: 'alt.de', outcome: 'expected' },
+      { field: 'alt.en', outcome: 'expected' },
+      { field: 'tags', outcome: 'other' },
+    ] });
+  });
+
+  it('reports conflicts and unsupported acknowledgements without probing or retrying', async () => {
+    for (const unsupported of [false, true]) {
+      const h = harness([photo('a')]);
+      if (unsupported) h.client.patch.mockResolvedValueOnce({});
+      else h.client.patch.mockRejectedValueOnce(Object.assign(new Error('media_changed'), {
+        status: 409, current: photo('a', { title: 'changed elsewhere' }),
+      }));
+      const report = await h.run({ title: true });
+      expect(report.saved).toBe(0);
+      expect(report.failed[0]).toMatchObject(unsupported ? { unsupported: true } : {
+        conflict: true, fields: [{ field: 'title', outcome: 'other' }],
+      });
+      expect(h.client.get).toHaveBeenCalledTimes(1);
+      expect(h.client.patch).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('stops the bulk run on an expired session without probing or touching later photos', async () => {
+    const h = harness([photo('a'), photo('b')]);
+    h.client.patch.mockRejectedValueOnce(Object.assign(new Error('unauthorized'), { status: 401 }));
+    const report = await h.run();
+    expect(report.stopped).toBe('session');
+    expect(h.client.patch).toHaveBeenCalledTimes(1);
+    expect(h.client.get).toHaveBeenCalledTimes(1);
+    expect(h.describe).toHaveBeenCalledTimes(1);
   });
 });

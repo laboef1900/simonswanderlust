@@ -1,3 +1,7 @@
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
+import { injectAuthoring } from './authoring-request.js';
+import { idleBuildState } from './build-fixture.js';
+import { buildFailureMessage } from '../src/build-state.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
@@ -39,17 +43,18 @@ async function fixture(initial: LanguageConfig = modes[0]!, pool?: DbPool) {
   const lock = createWorkLock();
   const queue = createEncodeQueue({ store: media, storageDir: dir, lock });
   let settings = defaultSettings();
-  let outcome: BuildOutcome = { ok: true, release: 'language-release' };
+  let outcome: BuildOutcome = { ok: true, attemptId: 'language-release', release: 'language-release' };
   // Acquiring the real non-reentrant work lock here also catches a route that
   // incorrectly wraps an ordinary builder invocation in that same lock.
   const build = vi.fn(async () => lock.runExclusive(async () => ({ ...outcome })));
   const unavailable = async (): Promise<never> => { throw new Error('Not part of this fixture'); };
   const app = buildServer({
+    trustProxy: TEST_TRUST,
     storageDir: dir, baseUrl: 'https://images.test', imgHost: 'images.test', siteDir: join(dir, 'site'),
     posts, pages, media, users, sessions, secrets: memorySecretsStore(),
     // Deliberately omit cfg.language: the server must use posts.language.
     settings: { get: () => ({ ...settings }), update: (patch) => (settings = validate({ ...settings, ...patch })) },
-    builder: { build, hasRelease: () => true, quiesce: async () => {} },
+    builder: { ...idleBuildState, build, hasRelease: () => true, quiesce: async () => {} },
     workLock: lock, encodeQueue: queue, backupDir: join(dir, 'backup'), dbCheck: unavailable,
     dbBackup: { dir, runNow: unavailable, running: () => false, sweepTempFiles: () => [], list: () => [],
       listImageArchives: () => [], listRouteArchives: () => [], state: () => ({}), quiesce: async () => {} },
@@ -60,7 +65,7 @@ async function fixture(initial: LanguageConfig = modes[0]!, pool?: DbPool) {
     return { sid: await sessions.create(user.id, 60_000) };
   }
   const cookies = await login(true);
-  const put = (payload: object) => app.inject({ method: 'PUT', url: '/language', cookies, payload });
+  const put = (payload: object) => injectAuthoring(app, { method: 'PUT', url: '/language', cookies, payload });
   async function story(suffix = 'one') {
     await media.upsert({ key: 'hero', width: 100, height: 100, origBytes: 100, status: 'ready',
       exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
@@ -72,8 +77,8 @@ async function fixture(initial: LanguageConfig = modes[0]!, pool?: DbPool) {
       de: locale('de'), en: locale('en') });
   }
   return { app, language, posts, pages, media, cookies, login, put, story, build,
-    failBuild: () => { outcome = { ok: false, error: 'Synthetic build failure' }; },
-    recoverBuild: () => { outcome = { ok: true, release: 'recovered-release' }; } };
+    failBuild: () => { outcome = { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') }; },
+    recoverBuild: () => { outcome = { ok: true, attemptId: 'recovered-release', release: 'recovered-release' }; } };
 }
 
 describe('language API', () => {
@@ -81,15 +86,15 @@ describe('language API', () => {
     const f = await fixture();
     const author = await f.login(false);
     for (const method of ['GET', 'PUT'] as const) {
-      const response = await f.app.inject({ method, url: '/language', ...(method === 'PUT' ? { payload: modes[2] } : {}) });
+      const response = await injectAuthoring(f.app, { method, url: '/language', ...(method === 'PUT' ? { payload: modes[2] } : {}) });
       expect(response.statusCode).toBe(401);
       expect(response.headers['cache-control']).toBe('no-store');
     }
-    const read = await f.app.inject({ method: 'GET', url: '/language', cookies: author });
+    const read = await injectAuthoring(f.app, { method: 'GET', url: '/language', cookies: author });
     expect(read.statusCode).toBe(200);
     expect(read.headers['cache-control']).toBe('no-store');
     expect(read.json()).toMatchObject({ ...modes[0], lockedAt: null });
-    const denied = await f.app.inject({ method: 'PUT', url: '/language', cookies: author, payload: modes[2] });
+    const denied = await injectAuthoring(f.app, { method: 'PUT', url: '/language', cookies: author, payload: modes[2] });
     expect(denied.statusCode).toBe(403);
     expect(denied.headers['cache-control']).toBe('no-store');
     expect(await f.language.get()).toMatchObject(modes[0]!);
@@ -103,7 +108,9 @@ describe('language API', () => {
     expect(response.headers['cache-control']).toBe('no-store');
     expect(response.json()).toMatchObject({ ...mode, lockedAt: null });
     expect(await f.language.get()).toMatchObject(mode);
-    expect((await f.app.inject({ method: 'GET', url: '/language', cookies: f.cookies })).json()).toEqual(response.json());
+    const { build, ...storedLanguage } = response.json();
+    expect(build).toMatchObject({ ok: true, attemptId: 'language-release', release: 'language-release' });
+    expect((await injectAuthoring(f.app, { method: 'GET', url: '/language', cookies: f.cookies })).json()).toEqual(storedLanguage);
     expect(f.build).toHaveBeenCalledTimes(1);
     const saved = await f.language.get();
     expect((await f.put(mode)).statusCode).toBe(200);
@@ -137,7 +144,7 @@ describe('language API', () => {
     const secondary = primary === 'de' ? 'en' : 'de';
     const f = await fixture({ primary, locales: [primary, secondary] });
     const pair = await f.story();
-    const published = await f.app.inject({ method: 'POST', url: `/posts/${pair.translationKey}/publish`, cookies: f.cookies,
+    const published = await injectAuthoring(f.app, { method: 'POST', url: `/posts/${pair.translationKey}/publish`, cookies: f.cookies,
       payload: await publishBody(f.posts, pair.translationKey) });
     expect(published.statusCode).toBe(200);
     const locked = await f.language.get();
@@ -161,7 +168,7 @@ describe('language API', () => {
     const secondary = primary === 'de' ? 'en' : 'de';
     const f = await fixture({ primary, locales: [primary] });
     const pair = await f.story();
-    const response = await f.app.inject({ method: 'POST', url: `/posts/${pair.translationKey}/publish`, cookies: f.cookies,
+    const response = await injectAuthoring(f.app, { method: 'POST', url: `/posts/${pair.translationKey}/publish`, cookies: f.cookies,
       payload: await publishBody(f.posts, pair.translationKey) });
     expect(response.statusCode).toBe(200);
     const before = await f.posts.get(pair.translationKey);
@@ -175,12 +182,13 @@ describe('language API', () => {
     const f = await fixture();
     f.failBuild();
     const response = await f.put(modes[3]);
-    expect(response.statusCode).toBe(502);
+    expect(response.statusCode).toBe(200);
     expect(response.headers['cache-control']).toBe('no-store');
-    expect(response.json()).toMatchObject({ code: 'language_build_failed', persisted: true, language: modes[3] });
+    expect(response.json()).toMatchObject({ ...modes[3], build: { ok: false, code: 'internal' } });
+    expect(f.build).toHaveBeenCalledWith('rebuild');
     expect(await f.language.get()).toMatchObject(modes[3]!);
     f.recoverBuild();
-    const retried = await f.app.inject({ method: 'POST', url: '/rebuild', cookies: f.cookies });
+    const retried = await injectAuthoring(f.app, { method: 'POST', url: '/rebuild', cookies: f.cookies });
     expect(retried.statusCode).toBe(200);
     expect(await f.language.get()).toMatchObject(modes[3]!);
     expect(f.build).toHaveBeenCalledTimes(2);
@@ -192,7 +200,7 @@ describe('inactive About preparation', () => {
     const secondary = primary === 'de' ? 'en' : 'de';
     const f = await fixture({ primary, locales: [primary] });
     const active = { locale: primary, title: 'Active About', bodyMarkdown: 'Keep this public text.', images: {} };
-    const save = (payload: object) => f.app.inject({ method: 'PUT', url: '/pages/about', cookies: f.cookies, payload });
+    const save = (payload: object) => injectAuthoring(f.app, { method: 'PUT', url: '/pages/about', cookies: f.cookies, payload });
     expect((await save({ [primary]: active })).statusCode).toBe(200);
     const original = await f.pages.get('about');
     const unsafe = { title: '', bodyMarkdown: '![unsafe](https://foreign.test/photo.jpg)', images: {} };
@@ -226,7 +234,7 @@ describe('inactive About preparation', () => {
     const f = await fixture({ primary, locales: [primary] });
     await f.media.upsert({ key: 'prepared-photo', width: 100, height: 80, origBytes: 100, status: 'processing',
       exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
-    const prepared = await f.app.inject({ method: 'PUT', url: '/pages/about', cookies: f.cookies,
+    const prepared = await injectAuthoring(f.app, { method: 'PUT', url: '/pages/about', cookies: f.cookies,
       payload: { prepareLocale: secondary, updatedAt: null, [secondary]: { title: 'Prepared', bodyMarkdown: '![Photo](https://images.test/prepared-photo)', images: {} } } });
     expect(prepared.statusCode).toBe(200);
     f.build.mockClear();
@@ -250,9 +258,8 @@ describe('inactive About preparation', () => {
     expect(before[secondary].publishedAt).toBeNull();
     f.failBuild();
     const failed = await f.put({ primary, locales: [primary, secondary] });
-    expect(failed.statusCode).toBe(502);
-    expect(failed.json()).toMatchObject({ code: 'language_build_failed', persisted: true,
-      language: { primary, locales: [primary, secondary] } });
+    expect(failed.statusCode).toBe(200);
+    expect(failed.json()).toMatchObject({ primary, locales: [primary, secondary], build: { ok: false } });
     const activated = await f.pages.get('about');
     expect(activated[secondary].publishedAt).toBeInstanceOf(Date);
     expect(activated).toEqual({
@@ -265,7 +272,7 @@ describe('inactive About preparation', () => {
     expect(await f.pages.get('about')).toEqual(activated);
     expect(await f.language.get()).toMatchObject({ primary, locales: [primary, secondary] });
     f.recoverBuild();
-    expect((await f.app.inject({ method: 'POST', url: '/rebuild', cookies: f.cookies })).statusCode).toBe(200);
+    expect((await injectAuthoring(f.app, { method: 'POST', url: '/rebuild', cookies: f.cookies })).statusCode).toBe(200);
     expect(await f.pages.get('about')).toEqual(activated);
   });
 });
@@ -284,7 +291,7 @@ for (const publication of ['single', 'bulk'] as const) {
         await release.promise;
         return publish(...args);
       });
-      const request = f.app.inject(publication === 'single'
+      const request = injectAuthoring(f.app, publication === 'single'
         ? { method: 'POST', url: `/posts/${pair.translationKey}/publish`, cookies: f.cookies, payload: tokens }
         : { method: 'POST', url: '/posts/bulk', cookies: f.cookies,
           payload: { action: 'publish', keys: [pair.translationKey], baseLanguageUpdatedAt: tokens.baseLanguageUpdatedAt } }).then((response) => response);
@@ -320,7 +327,7 @@ for (const publication of ['single', 'bulk'] as const) {
         await release.promise;
         await markPublished();
       });
-      const publishing = f.app.inject(publication === 'single'
+      const publishing = injectAuthoring(f.app, publication === 'single'
         ? { method: 'POST', url: `/posts/${pair.translationKey}/publish`, cookies: f.cookies, payload: tokens }
         : { method: 'POST', url: '/posts/bulk', cookies: f.cookies,
           payload: { action: 'publish', keys: [pair.translationKey], baseLanguageUpdatedAt: tokens.baseLanguageUpdatedAt } }).then((response) => response);
@@ -342,7 +349,7 @@ for (const publication of ['single', 'bulk'] as const) {
       const f = await fixture();
       const pair = await f.story();
       const tokens = await publishBody(f.posts, pair.translationKey);
-      const response = await f.app.inject(publication === 'single'
+      const response = await injectAuthoring(f.app, publication === 'single'
         ? { method: 'POST', url: `/posts/${pair.translationKey}/publish`, cookies: f.cookies,
           payload: { baseUpdatedAt: tokens.baseUpdatedAt, baseRouteVersion: tokens.baseRouteVersion, baseLanguageUpdatedAt } }
         : { method: 'POST', url: '/posts/bulk', cookies: f.cookies, payload: { action: 'publish', keys: [pair.translationKey], baseLanguageUpdatedAt } });
@@ -359,43 +366,71 @@ describe('editable page API lifecycle', () => {
     de: { title: 'Kontakt', bodyMarkdown: 'Schreib mir.', images: {}, slug: 'kontakt' },
     en: { title: 'Contact', bodyMarkdown: 'Write to me.', images: {}, slug: 'contact' },
   });
+  it.each(['about', 'contact', 'privacy', 'legal'])('requires and privately reconciles the captured owner/save identity for %s', async key => {
+    const f = await fixture();
+    const before = await f.pages.get(key);
+    const beforeHistory = await f.pages.listRevisions(key);
+    const ownerUserId = (await f.app.inject({ method: 'GET', url: '/auth/me', cookies: f.cookies })).json().userId;
+    const body = Object.fromEntries((['de', 'en'] as const).map(locale => [locale, {
+      title: locale + ' title', bodyMarkdown: 'Complete page', images: {}, slug: key === 'about' ? '' : 'receipt-' + key + '-' + locale,
+    }]));
+    const missing = await f.app.inject({ method: 'PUT', url: '/pages/' + key, cookies: f.cookies, payload: body });
+    expect(missing.statusCode).toBe(400);
+    const wrong = await f.app.inject({ method: 'PUT', url: '/pages/' + key, cookies: f.cookies,
+      payload: { ...body, saveId: randomUUID(), expectedOwnerId: randomUUID() } });
+    expect(wrong.statusCode).toBe(403); expect(wrong.json().code).toBe('owner_changed');
+    expect(await f.pages.get(key)).toEqual(before);
+    expect(await f.pages.listRevisions(key)).toEqual(beforeHistory);
+    expect(f.build).not.toHaveBeenCalled();
+    const saveId = randomUUID();
+    const saved = await f.app.inject({ method: 'PUT', url: '/pages/' + key, cookies: f.cookies,
+      payload: { ...body, updatedAt: before.updatedAt, saveId, expectedOwnerId: ownerUserId } });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({ ownerUserId, saveId });
+    const read = await f.app.inject({ method: 'GET', url: '/pages/' + key, cookies: f.cookies });
+    expect(read.headers['cache-control']).toBe('no-store');
+    expect(read.json()).toEqual({ ...saved.json().saved, ownerUserId, lastSaveId: saveId });
+    const other = await f.app.inject({ method: 'GET', url: '/pages/' + key, cookies: await f.login(false) });
+    expect(other.json().lastSaveId).toBeNull();
+    expect(other.json().ownerUserId).not.toBe(ownerUserId);
+  });
   it('returns owner-naming 409s for page/story and static claims in either creation order', async () => {
     const f = await fixture(); const storedStory = await f.story();
-    const reserved = await f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies,
+    const reserved = await injectAuthoring(f.app, { method: 'PUT', url: '/pages/contact', cookies: f.cookies,
       payload: { ...payload(), de: { ...payload().de, slug: 'settings' } } });
     expect(reserved.statusCode).toBe(409); expect(reserved.json()).toMatchObject({ code: 'reserved_slug', owner: { type: 'app', name: 'settings' } });
-    const taken = await f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies,
+    const taken = await injectAuthoring(f.app, { method: 'PUT', url: '/pages/contact', cookies: f.cookies,
       payload: { ...payload(), de: { ...payload().de, slug: storedStory.de.slug } } });
     expect(taken.statusCode).toBe(409); expect(taken.json()).toMatchObject({ owner: { type: 'story', name: storedStory.translationKey } });
-    expect((await f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies, payload: payload() })).statusCode).toBe(200);
-    const changedStory = await f.app.inject({ method: 'PUT', url: '/posts/' + storedStory.translationKey, cookies: f.cookies,
+    expect((await injectAuthoring(f.app, { method: 'PUT', url: '/pages/contact', cookies: f.cookies, payload: payload() })).statusCode).toBe(200);
+    const changedStory = await injectAuthoring(f.app, { method: 'PUT', url: '/posts/' + storedStory.translationKey, cookies: f.cookies,
       payload: { ...storedStory, de: { ...storedStory.de, slug: 'kontakt' }, confirmSlugChange: true, baseUpdatedAt: storedStory.updatedAt.toISOString() } });
     expect(changedStory.statusCode).toBe(409); expect(changedStory.json()).toMatchObject({ code: 'reserved_slug', owner: { type: 'page', name: 'contact' } });
     expect((await f.posts.get(storedStory.translationKey))!.de.slug).toBe(storedStory.de.slug); expect(f.build).not.toHaveBeenCalled();
   });
   it('creates drafts without rebuilding, previews sanitized content, publishes, locks slugs and deletes histories', async () => {
     const f = await fixture();
-    const put = (body: object) => f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies, payload: body });
+    const put = (body: object) => injectAuthoring(f.app, { method: 'PUT', url: '/pages/contact', cookies: f.cookies, payload: body });
     const first = await put({ ...payload(), en: { ...payload().en, bodyMarkdown: ['Write to me.', '<script>alert("page-preview")</script>', '<a href="javascript:alert(1)">Unsafe link</a>'].join('\n\n') } });
     expect(first.statusCode).toBe(200); expect(first.json().saved.status).toBe('draft'); expect(first.json().build).toBeNull();
     expect(f.build).not.toHaveBeenCalled();
-    const preview = await f.app.inject({ method: 'GET', url: '/pages/contact/preview?locale=en', cookies: f.cookies });
+    const preview = await injectAuthoring(f.app, { method: 'GET', url: '/pages/contact/preview?locale=en', cookies: f.cookies });
     expect(preview.statusCode).toBe(200); expect(preview.headers['cache-control']).toBe('no-store');
     expect(preview.headers['content-security-policy']).toContain("default-src 'none'");
     expect(preview.body).toContain('Write to me.');
     expect(preview.body).not.toContain('<script>'); expect(preview.body).not.toContain('javascript:');
     const saved = await put({ ...payload(), updatedAt: first.json().saved.updatedAt });
     const rev = (await f.pages.listRevisions('contact'))[0]!;
-    const published = await f.app.inject({ method: 'POST', url: '/pages/contact/publish', cookies: f.cookies, payload: { updatedAt: saved.json().saved.updatedAt } });
+    const published = await injectAuthoring(f.app, { method: 'POST', url: '/pages/contact/publish', cookies: f.cookies, payload: { updatedAt: saved.json().saved.updatedAt } });
     expect(published.statusCode).toBe(200); expect(f.build).toHaveBeenCalledTimes(1);
     const locked = await put({ ...payload(), de: { ...payload().de, slug: 'changed' }, updatedAt: published.json().saved.updatedAt });
     expect(locked.statusCode).toBe(409); expect(locked.json().code).toBe('page_slug_locked');
     const incomplete = await put({ ...payload(), en: { ...payload().en, bodyMarkdown: '' }, updatedAt: published.json().saved.updatedAt });
     expect(incomplete.statusCode).toBe(400); expect(f.build).toHaveBeenCalledTimes(1);
-    const deleted = await f.app.inject({ method: 'DELETE', url: '/pages/contact', cookies: f.cookies, payload: { updatedAt: published.json().saved.updatedAt } });
+    const deleted = await injectAuthoring(f.app, { method: 'DELETE', url: '/pages/contact', cookies: f.cookies, payload: { updatedAt: published.json().saved.updatedAt } });
     expect(deleted.statusCode).toBe(200); expect(f.build).toHaveBeenCalledTimes(2);
     for (const path of ['/pages/contact/revisions', '/pages/contact/revisions/' + rev.id, '/pages/contact/preview?locale=en']) {
-      expect((await f.app.inject({ method: 'GET', url: path, cookies: f.cookies })).statusCode).toBe(404);
+      expect((await injectAuthoring(f.app, { method: 'GET', url: path, cookies: f.cookies })).statusCode).toBe(404);
     }
   });
 
@@ -403,35 +438,35 @@ describe('editable page API lifecycle', () => {
     const f = await fixture(); const author = await f.login(false);
     await f.pages.save({ key: 'contact', de: { locale: 'de', ...payload().de }, en: { locale: 'en', ...payload().en } });
     for (const path of ['/pages', '/pages/contact', '/pages/contact/revisions', '/pages/contact/preview?locale=de']) {
-      expect((await f.app.inject({ method: 'GET', url: path, cookies: author })).statusCode).toBe(200);
-      expect((await f.app.inject({ method: 'GET', url: path })).statusCode).toBe(401);
+      expect((await injectAuthoring(f.app, { method: 'GET', url: path, cookies: author })).statusCode).toBe(200);
+      expect((await injectAuthoring(f.app, { method: 'GET', url: path })).statusCode).toBe(401);
     }
     for (const [method, path] of [['PUT', '/pages/contact'], ['POST', '/pages/contact/publish'], ['POST', '/pages/contact/unpublish'], ['DELETE', '/pages/contact'], ['GET', '/pages/contact/deletion']] as const) {
-      expect((await f.app.inject({ method, url: path, cookies: author, ...(method !== 'GET' ? { payload: payload() } : {}) })).statusCode).toBe(403);
+      expect((await injectAuthoring(f.app, { method, url: path, cookies: author, ...(method !== 'GET' ? { payload: payload() } : {}) })).statusCode).toBe(403);
     }
     expect(f.build).not.toHaveBeenCalled();
-    expect((await f.app.inject({ method: 'PUT', url: '/pages/new-kind', cookies: f.cookies, payload: payload() })).json()).toMatchObject({ code: 'unknown_page_kind' });
+    expect((await injectAuthoring(f.app, { method: 'PUT', url: '/pages/new-kind', cookies: f.cookies, payload: payload() })).json()).toMatchObject({ code: 'unknown_page_kind' });
     for (const [method, path] of [['DELETE', '/pages/about'], ['POST', '/pages/about/unpublish']] as const) {
       await f.pages.save({ key: 'about' });
-      expect((await f.app.inject({ method, url: path, cookies: f.cookies })).json()).toMatchObject({ code: 'page_fixed' });
+      expect((await injectAuthoring(f.app, { method, url: path, cookies: f.cookies })).json()).toMatchObject({ code: 'page_fixed' });
     }
   });
 
   it('refuses foreign images on first Publish, live PUT and revision restoration before any write or build', async () => {
     const f = await fixture(); const clean = payload();
     const bad = { ...clean, de: { ...clean.de, bodyMarkdown: '```gallery\nhttps://foreign.test/photo | 800x600 | alt="Photo"\n```' } };
-    const draft = await f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies, payload: bad });
+    const draft = await injectAuthoring(f.app, { method: 'PUT', url: '/pages/contact', cookies: f.cookies, payload: bad });
     expect(draft.statusCode).toBe(200);
-    const refused = await f.app.inject({ method: 'POST', url: '/pages/contact/publish', cookies: f.cookies });
+    const refused = await injectAuthoring(f.app, { method: 'POST', url: '/pages/contact/publish', cookies: f.cookies });
     expect(refused.statusCode).toBe(409); expect(refused.json()).toMatchObject({ code: 'foreign_images', locale: 'de', foreignImageCount: 1, foreignImages: ['https://foreign.test/photo'] });
     expect(f.build).not.toHaveBeenCalled();
-    await f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies, payload: clean });
+    await injectAuthoring(f.app, { method: 'PUT', url: '/pages/contact', cookies: f.cookies, payload: clean });
     const unsafe = (await f.pages.listRevisions('contact'))[0]!;
-    await f.app.inject({ method: 'POST', url: '/pages/contact/publish', cookies: f.cookies });
+    await injectAuthoring(f.app, { method: 'POST', url: '/pages/contact/publish', cookies: f.cookies });
     const before = await f.pages.get('contact'); const history = await f.pages.listRevisions('contact');
     const revision = (await f.pages.getRevision('contact', unsafe.id))!;
     for (const body of [bad, revision.snapshot]) {
-      const result = await f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies, payload: { ...body, updatedAt: before.updatedAt?.toISOString() } });
+      const result = await injectAuthoring(f.app, { method: 'PUT', url: '/pages/contact', cookies: f.cookies, payload: { ...body, updatedAt: before.updatedAt?.toISOString() } });
       expect(result.statusCode).toBe(409); expect(result.json().code).toBe('foreign_images');
       expect(await f.pages.get('contact')).toEqual(before); expect(await f.pages.listRevisions('contact')).toEqual(history);
     }
@@ -442,11 +477,11 @@ describe('editable page API lifecycle', () => {
     const f = await fixture();
     const initial = { key: 'about', de: { locale: 'de' as const, title: 'Before', bodyMarkdown: '', images: {} } };
     await f.pages.save(initial); f.failBuild();
-    const result = await f.app.inject({ method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: { de: { ...initial.de, title: 'Saved despite build failure' } } });
-    expect(result.statusCode).toBe(502); expect(result.json()).toMatchObject({ persisted: true, code: 'page_build_failed', saved: { de: { title: 'Saved despite build failure' } } });
+    const result = await injectAuthoring(f.app, { method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: { de: { ...initial.de, title: 'Saved despite build failure' } } });
+    expect(result.statusCode).toBe(200); expect(result.json()).toMatchObject({ build: { ok: false }, ownerUserId: expect.any(String), saveId: expect.any(String), saved: { de: { title: 'Saved despite build failure' } } });
     const revision = (await f.pages.getRevision('about', (await f.pages.listRevisions('about'))[0]!.id))!;
     f.recoverBuild();
-    const restored = await f.app.inject({ method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: { ...revision.snapshot, updatedAt: result.json().saved.updatedAt } });
+    const restored = await injectAuthoring(f.app, { method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: { ...revision.snapshot, updatedAt: result.json().saved.updatedAt } });
     expect(restored.statusCode).toBe(200); expect(restored.json().saved.de.title).toBe('Before'); expect(restored.json().build.ok).toBe(true);
   });
 
@@ -458,16 +493,18 @@ describe('editable page API lifecycle', () => {
     const denied = await f.put({ primary, locales: [primary, secondary] });
     expect(denied.statusCode).toBe(409); expect(denied.json().code).toBe('language_pages_incomplete'); expect(await f.language.get()).toEqual(before);
     const current = await f.pages.get('contact');
-    const prepared = await f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies,
+    const prepared = await injectAuthoring(f.app, { method: 'PUT', url: '/pages/contact', cookies: f.cookies,
       payload: { prepareLocale: secondary, updatedAt: current.updatedAt?.toISOString(), [secondary]: payload()[secondary] } });
     expect(prepared.statusCode).toBe(200); expect(prepared.json().saved[secondary].publishedAt).toBeNull();
+    expect((await f.pages.getForSave('contact', prepared.json().ownerUserId)).lastSaveId).toBe(prepared.json().saveId);
     expect(await f.language.get()).toEqual(before);
     f.failBuild();
     const activation = await f.put({ primary, locales: [primary, secondary] });
-    expect(activation.statusCode).toBe(502); expect(activation.json().persisted).toBe(true);
+    expect(activation.statusCode).toBe(200); expect(activation.json().build.ok).toBe(false);
     expect((await f.pages.get('contact'))[secondary].publishedAt).toBeInstanceOf(Date);
+    expect((await f.pages.getForSave('contact', prepared.json().ownerUserId)).lastSaveId).toBeNull();
     f.recoverBuild();
-    expect((await f.app.inject({ method: 'POST', url: '/rebuild', cookies: f.cookies })).json().ok).toBe(true);
+    expect((await injectAuthoring(f.app, { method: 'POST', url: '/rebuild', cookies: f.cookies })).json().ok).toBe(true);
   });
 });
 
@@ -477,7 +514,7 @@ describe('revision restoration with a disabled language', () => {
     const f = await fixture({ primary, locales: [primary, secondary] });
     const original = await f.story();
     const tk = original.translationKey;
-    const save = (payload: object) => f.app.inject({ method: 'PUT', url: `/posts/${tk}`, cookies: f.cookies, payload });
+    const save = (payload: object) => injectAuthoring(f.app, { method: 'PUT', url: `/posts/${tk}`, cookies: f.cookies, payload });
     const renamed = await save({ ...original, confirmSlugChange: true,
       [secondary]: { ...original[secondary], slug: `renamed-${secondary}`, bodyMarkdown: 'Retained translation.' } });
     expect(renamed.statusCode).toBe(200);
@@ -497,7 +534,7 @@ describe('revision restoration with a disabled language', () => {
     expect(draftRename.statusCode).toBe(409);
     expect(draftRename.json()).toMatchObject({ code: 'slug_change_unconfirmed' });
     expect(await f.posts.get(tk)).toEqual(saved);
-    const published = await f.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: f.cookies,
+    const published = await injectAuthoring(f.app, { method: 'POST', url: `/posts/${tk}/publish`, cookies: f.cookies,
       payload: await publishBody(f.posts, tk) });
     expect(published.statusCode).toBe(200);
     const live = (await f.posts.get(tk))!;
@@ -531,7 +568,7 @@ for (const backend of ['memory', 'postgres'] as const) {
       const f = await fixture({ primary, locales: [primary, secondary] }, pool);
       const original = await f.story();
       const tk = original.translationKey;
-      const save = (payload: object) => f.app.inject({ method: 'PUT', url: `/posts/${tk}`, cookies: f.cookies, payload });
+      const save = (payload: object) => injectAuthoring(f.app, { method: 'PUT', url: `/posts/${tk}`, cookies: f.cookies, payload });
       const renamed = await save({ ...original, confirmSlugChange: true,
         [secondary]: { ...original[secondary], slug: `renamed-${secondary}` } });
       expect(renamed.statusCode).toBe(200);
@@ -608,12 +645,12 @@ for (const backend of ['memory', 'postgres'] as const) {
       return notReadyKeys(...args);
     });
     const request = (operation === 'single'
-      ? f.app.inject({ method: 'POST', url: `/posts/${pair.translationKey}/publish`, cookies: f.cookies, payload: tokens })
+      ? injectAuthoring(f.app, { method: 'POST', url: `/posts/${pair.translationKey}/publish`, cookies: f.cookies, payload: tokens })
       : operation === 'bulk'
-        ? f.app.inject({ method: 'POST', url: '/posts/bulk', cookies: f.cookies,
+        ? injectAuthoring(f.app, { method: 'POST', url: '/posts/bulk', cookies: f.cookies,
           payload: { action: 'publish', keys: [pair.translationKey], baseLanguageUpdatedAt: tokens.baseLanguageUpdatedAt } })
         : operation === 'about'
-          ? f.app.inject({ method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: { de: content } })
+          ? injectAuthoring(f.app, { method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: { de: content } })
           : f.put({ primary: 'de', locales: ['de', 'en'] })).then((response) => response);
     const waiters: Array<Promise<unknown>> = [];
     try {

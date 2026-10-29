@@ -1,6 +1,6 @@
 window.SettingsLanguage = (function () {
   'use strict';
-  function init() {
+  function init(publication) {
     const $ = (id) => document.getElementById(id);
     let loaded = null;
     let busy = false;
@@ -58,19 +58,21 @@ window.SettingsLanguage = (function () {
       event.preventDefault();
       if (busy || !loaded) return;
       const next = candidate();
+      let mutating = false;
       busy = true;
       $('languageFields').disabled = true;
       $('languageReload').disabled = true;
       try {
         if (!(await AdminConfirm.ask({ title: SiteLanguage.text('ChangeTitle'), body: scope(), confirmLabel: SiteLanguage.text('Save') }))) return;
+        mutating = true;
+        publication.beginAction();
         status(SiteLanguage.text('Saving'));
         $('languageBlockers').replaceChildren();
         const response = await fetch('/language', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(next) });
         if (response.status === 401) { location.href = '/login'; return; }
         const body = await response.json();
         if (!response.ok) {
-          if (body.persisted && body.language) paint(body.language);
-          status(SiteLanguage.error(body) || SiteLanguage.text('SaveFailed'));
+          status(response.status >= 500 ? BuildReporting.text('unknown') : (SiteLanguage.error(body) || SiteLanguage.text('SaveFailed')));
           for (const blocker of body.blockers || []) {
             const li = document.createElement('li');
             li.textContent = (SiteLanguage.names[blocker.locale] || blocker.locale) + ' / ' + blocker.key + ' / ' + blocker.field + ': ' + blocker.reason;
@@ -80,13 +82,14 @@ window.SettingsLanguage = (function () {
           return;
         }
         paint(body);
-        status(SiteLanguage.text('Saved'));
+        BuildReporting.renderOutcome($('languageStatus'), 'language', body);
       } catch (error) {
-        status(SiteLanguage.text('ChangeUnknown') + ' ' + error.message);
+        status(BuildReporting.text('unknown'));
       } finally {
         busy = false;
         $('languageFields').disabled = false;
         $('languageReload').disabled = false;
+        if (mutating) publication.endAction();
       }
     });
     return load();

@@ -1,7 +1,7 @@
 // Identity is saved independently of operational settings. Only the active locale
 // projection is sent; canonical origin and assets belong to their own features.
 window.SettingsIdentity = (function () {
-  function init() {
+  function init(publication) {
     const $ = (id) => document.getElementById(id);
     const locale = document.documentElement.lang === 'de' ? 'de' : 'en';
     const copy = EditorCopy[locale];
@@ -164,6 +164,7 @@ window.SettingsIdentity = (function () {
       }
       lock(true);
       status(copy.identitySaving);
+      publication.beginAction();
       try {
         const response = await fetch('/settings/identity', {
           method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ revision, identity }),
@@ -177,26 +178,31 @@ window.SettingsIdentity = (function () {
           // Field paths come from the server's fixed validation contract, not its supplied value.
           status(copy.identityInvalid + ' ' + (result.field || ''), true);
         } else if (!response.ok) {
-          status(copy.identityFailed, true);
+          status(BuildReporting.text('unknown'), true);
         } else {
           revision = result.revision;
           dirty = false;
           status(copy.identitySaved);
         }
-      } catch { status(copy.identityFailed, true); }
-      finally { lock(false); }
+      } catch { status(BuildReporting.text('unknown'), true); }
+      finally { lock(false); publication.endAction(); }
     });
     $('identityRebuild').addEventListener('click', async () => {
       if (busy || !await AdminConfirm.ask({ title: copy.identityRebuild, body: copy.identityRebuildConfirm, confirmLabel: copy.identityRebuild })) return;
       lock(true);
       status(copy.identityRebuilding);
+      publication.beginAction();
       try {
         const response = await fetch('/rebuild', { method: 'POST' });
         if (response.status === 401) { location.href = '/login'; return; }
         const result = await response.json();
-        status(response.ok && result.ok ? copy.identityRebuilt : copy.identityRebuildFailed, !response.ok || !result.ok);
-      } catch { status(copy.identityRebuildFailed, true); }
-      finally { lock(false); }
+        if (response.ok && typeof result.ok === 'boolean') BuildReporting.renderOutcome($('identityStatus'), 'rebuild', result);
+        else status(BuildReporting.text('unknown'), true);
+      } catch { status(BuildReporting.text('unknown'), true); }
+      finally {
+        lock(false);
+        publication.endAction();
+      }
     });
     return load();
   }

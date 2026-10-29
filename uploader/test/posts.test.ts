@@ -1,6 +1,6 @@
 import { publishTokens } from './publish-tokens.js';
 import { describe, expect, it, vi } from 'vitest';
-import { memoryPostStore, normalizeBodyImages, PostError, REVISION_CAP, validateDraft, validateForPublish, type PostPair } from '../src/posts.js';
+import { memoryPostStore, normalizeBodyImages, PostError, REVISION_CAP, snapshotDraftDiffers, validateDraft, validateForPublish, type PostPair } from '../src/posts.js';
 import { renderPostToMdx } from '../src/export.js';
 import { imageUsage } from '../src/media-files.js';
 import { REGIONS } from '../src/db.js';
@@ -21,6 +21,68 @@ function pair(overrides: Partial<PostPair> = {}): PostPair {
 }
 
 describe('memoryPostStore', () => {
+  it('compares content, not save timestamps; no-op saves and reverted edits have no pending draft', async () => {
+    const store = memoryPostStore();
+    const saved = await store.upsertDraft(pair());
+    const tk = saved.translationKey;
+    await store.publish(tk, await publishTokens(store, tk));
+    const original = (await store.get(tk))!;
+    const originalFacts = (await store.publicationFacts())[0]!;
+    const noOp = await store.upsertDraft(original);
+    expect(noOp.updatedAt.getTime()).toBeGreaterThan(original.updatedAt.getTime());
+    expect(await store.listRevisions(tk)).toHaveLength(1);
+    expect(noOp.publication).toEqual({
+      availability: 'available', status: 'published', requestedLocales: ['de', 'en'],
+      committedLocales: ['de', 'en'], draftDiffers: false, live: { de: 'unknown', en: 'unknown' },
+    });
+    const edits: PostPair[] = [
+      { ...original, de: { ...original.de, bodyMarkdown: 'Changed body' } },
+      { ...original, en: { ...original.en, title: 'Changed title' } },
+      { ...original, shared: { ...original.shared, featured: true } },
+      { ...original, shared: { ...original.shared, tags: ['changed'] } },
+      { ...original, shared: { ...original.shared, categories: ['changed'] } },
+      { ...original, shared: { ...original.shared, scheduledAt: '2027-01-01T00:00:00Z' } },
+      { ...original, shared: { ...original.shared, route: 'Changed route' } },
+      { ...original, de: { ...original.de, titleImage: original.de.heroImage } },
+    ];
+    for (const edit of edits) {
+      expect((await store.upsertDraft(edit)).publication).toMatchObject({ draftDiffers: true });
+      expect((await store.list())[0]?.publication).toMatchObject({ draftDiffers: true });
+      expect((await store.publicationFacts())[0]).toMatchObject({ draftDiffers: true, rowDigest: originalFacts.rowDigest });
+      expect((await store.upsertDraft(original)).publication).toMatchObject({ draftDiffers: false });
+      expect((await store.publicationFacts())[0]).toEqual(originalFacts);
+    }
+    // Comments are live configuration, not a published snapshot field.
+    expect((await store.upsertDraft({ ...original, shared: { ...original.shared, commentsEnabled: false } })).publication)
+      .toMatchObject({ draftDiffers: false });
+    expect(originalFacts.rowDigest).toEqual({ de: expect.stringMatching(/^[a-f0-9]{64}$/), en: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    expect(noOp).not.toHaveProperty('rowDigest');
+    expect(noOp.publication).not.toHaveProperty('rowDigest');
+  });
+
+  it('uses JSON content identity and legacy absence defaults in the memory comparison', () => {
+    const legacy = { title: 'Story', images: { photo: { width: 800, height: 600 } }, track: { version: 1 } };
+    const current = { images: { photo: { height: 600, width: 800 } }, title: 'Story',
+      title_image: null, featured: false, categories: [], tags: [], scheduled_at: null };
+    expect(snapshotDraftDiffers(legacy, current)).toBe(false);
+    for (const delta of [{ featured: true }, { title_image: { src: 'photo' } }, { categories: ['a'] }, { tags: ['b'] }, { scheduled_at: '2027-01-01' }]) {
+      expect(snapshotDraftDiffers(legacy, { ...current, ...delta })).toBe(true);
+    }
+    expect(snapshotDraftDiffers({ ...current, featured: true }, current)).toBe(true);
+  });
+
+  it('compares replacing and removing the stored route content', async () => {
+    const store = memoryPostStore();
+    const input = pair(); input.shared.route = 'Original route';
+    const saved = await store.upsertDraft(input);
+    await store.publish(saved.translationKey, await publishTokens(store, saved.translationKey));
+    for (const route of ['Replacement route', undefined]) {
+      expect((await store.upsertDraft({ ...saved, shared: { ...saved.shared, route } })).publication).toMatchObject({ draftDiffers: true });
+    }
+    await store.publish(saved.translationKey, await publishTokens(store, saved.translationKey));
+    expect((await store.publicationFacts())[0]?.draftDiffers).toBe(false);
+  });
+
   it('keeps title images independent and protects the published banner after a draft removal', async () => {
     const store = memoryPostStore();
     const input = pair();
@@ -142,11 +204,11 @@ describe('memoryPostStore', () => {
   it('a new draft and a fresh publish report no unpublished changes', async () => {
     const s = memoryPostStore();
     const c = await s.upsertDraft(pair());
-    expect(c.hasUnpublishedChanges).toBe(false);
-    expect((await s.list())[0]?.hasUnpublishedChanges).toBe(false);
+    expect(c.publication).toMatchObject({ availability: 'available', draftDiffers: false });
+    expect((await s.list())[0]?.publication).toMatchObject({ availability: 'available', draftDiffers: false });
     await s.publish(c.translationKey, await publishTokens(s, c.translationKey));
-    expect((await s.get(c.translationKey))?.hasUnpublishedChanges).toBe(false);
-    expect((await s.list())[0]?.hasUnpublishedChanges).toBe(false);
+    expect((await s.get(c.translationKey))?.publication).toMatchObject({ availability: 'available', draftDiffers: false });
+    expect((await s.list())[0]?.publication).toMatchObject({ availability: 'available', draftDiffers: false });
   });
 
   it('a draft save over a published post keeps it published but flags unpublished changes', async () => {
@@ -155,11 +217,11 @@ describe('memoryPostStore', () => {
     await s.publish(c.translationKey, await publishTokens(s, c.translationKey));
     const saved = await s.upsertDraft({ ...c, de: { ...c.de, bodyMarkdown: '## edited' } });
     expect(saved.status).toBe('published');
-    expect(saved.hasUnpublishedChanges).toBe(true);
+    expect(saved.publication).toMatchObject({ availability: 'available', draftDiffers: true });
     const got = await s.get(c.translationKey);
     expect(got?.de.bodyMarkdown).toBe('## edited'); // editor sees the working copy
-    expect(got?.hasUnpublishedChanges).toBe(true);
-    expect((await s.list())[0]?.hasUnpublishedChanges).toBe(true);
+    expect(got?.publication).toMatchObject({ availability: 'available', draftDiffers: true });
+    expect((await s.list())[0]?.publication).toMatchObject({ availability: 'available', draftDiffers: true });
   });
 
   it('re-publish picks up the newest working copy and clears the flag', async () => {
@@ -170,8 +232,8 @@ describe('memoryPostStore', () => {
     await s.publish(c.translationKey, await publishTokens(s, c.translationKey));
     const got = await s.get(c.translationKey);
     expect(got?.de.bodyMarkdown).toBe('## edited');
-    expect(got?.hasUnpublishedChanges).toBe(false);
-    expect((await s.list())[0]?.hasUnpublishedChanges).toBe(false);
+    expect(got?.publication).toMatchObject({ availability: 'available', draftDiffers: false });
+    expect((await s.list())[0]?.publication).toMatchObject({ availability: 'available', draftDiffers: false });
   });
 
   it('rejects changing a slug once published', async () => {
@@ -206,12 +268,18 @@ describe('memoryPostStore', () => {
     expect((await s.get(created.translationKey))?.shared.stops).toBeUndefined();
   });
 
-  it('unpublish flips a published pair back to draft', async () => {
+  it('unpublish returns its new token for the next save without acknowledging later writes', async () => {
     const s = memoryPostStore();
     const c = await s.upsertDraft(pair());
-    await s.publish(c.translationKey, await publishTokens(s, c.translationKey));
-    await s.unpublish(c.translationKey);
-    expect((await s.get(c.translationKey))?.status).toBe('draft');
+    const published = await s.publish(c.translationKey, await publishTokens(s, c.translationKey));
+    const unpublished = await s.unpublish(c.translationKey);
+    expect(unpublished.previousUpdatedAt).toEqual(published.updatedAt);
+    expect(unpublished.updatedAt.getTime()).toBeGreaterThan(published.updatedAt.getTime());
+    expect(await s.get(c.translationKey)).toMatchObject({ status: 'draft', updatedAt: unpublished.updatedAt });
+    const saved = await s.upsertDraft({ ...c, de: { ...c.de, title: 'After unpublish' } }, unpublished.updatedAt);
+    expect(saved.de.title).toBe('After unpublish');
+    expect(saved.updatedAt.getTime()).toBeGreaterThan(unpublished.updatedAt.getTime());
+    await expect(s.upsertDraft(c, unpublished.updatedAt)).rejects.toMatchObject({ code: 'conflict' });
   });
 
   it('unpublish retains the per-row publication slug lock', async () => {

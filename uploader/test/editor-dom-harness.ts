@@ -127,6 +127,17 @@ export class EditorElement {
       else { const text = new EditorElement('#TEXT', this.state); text.textContent = child; this.appendChild(text); }
     }
   }
+  after(...children: EditorElement[]) {
+    const parent = this.parentElement;
+    if (!parent) return;
+    let anchor: EditorElement = this;
+    for (const child of children) {
+      if (child === anchor) continue;
+      child.remove(); child.parentElement = parent;
+      parent.childNodes.splice(parent.childNodes.indexOf(anchor) + 1, 0, child);
+      anchor = child;
+    }
+  }
   replaceChildren(...children: EditorElement[]) {
     for (const child of this.childNodes) child.parentElement = null;
     this.childNodes.length = 0;
@@ -250,12 +261,16 @@ export function editorDocument(markup: string) {
   const created: EditorElement[] = [];
   return {
     document: {
+      hidden: false,
+      documentElement: { lang: root.querySelector('html')?.getAttribute('lang') || 'en' },
       get activeElement() { return state.activeElement; },
       get body() { return root.querySelector('body'); },
       getElementById: (id: string) => root.querySelector('#' + id),
       querySelector: (selector: string) => root.querySelector(selector),
       querySelectorAll: (selector: string) => root.querySelectorAll(selector),
       addEventListener: root.addEventListener.bind(root),
+      removeEventListener: root.removeEventListener.bind(root),
+      dispatchEvent: root.dispatchEvent.bind(root),
       createElement: (tag: string) => { const element = new EditorElement(tag.toUpperCase(), state); created.push(element); return element; },
       createTextNode: (text: string) => { const element = new EditorElement('#TEXT', state); element.textContent = text; return element; },
     },

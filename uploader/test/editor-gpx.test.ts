@@ -1,3 +1,4 @@
+import { webcrypto } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
@@ -109,8 +110,10 @@ function setup(options: SetupOptions = {}) {
   const adopted: { name: string; lat: number; lng: number }[][] = [];
   const renders: unknown[] = [];
   let saveCalls = 0;
+  const publicationActions: string[] = [];
   const fetcher = async (url: string, request: RequestInit = {}) => {
     requests.push({ url, options: request });
+    if (url.endsWith('/route') && ['PUT', 'DELETE'].includes(request.method || '')) publicationActions.push('request');
     const override = await options.fetch?.(url, request);
     if (override) return override;
     if (url.endsWith('/route') && request.method === 'GET') return response(route);
@@ -142,6 +145,8 @@ function setup(options: SetupOptions = {}) {
   vm.runInContext(script, context, { filename: 'editor-gpx.js' });
   const host = {
     getPost: () => ({ ...state }),
+    beginAction: () => { publicationActions.push('begin'); },
+    endAction: () => { publicationActions.push('end'); },
     setBaseUpdatedAt: (value: string) => { state.baseUpdatedAt = value; },
     saveDraft: async () => { saveCalls++; if (options.failSave) return false; state.tk = 'new-pair'; state.baseUpdatedAt = '2026-10-24T10:00:30.000Z'; return true; },
     adoptStops(stops: { name: string; lat: number; lng: number }[]) { adopted.push(stops); },
@@ -162,7 +167,7 @@ function setup(options: SetupOptions = {}) {
     if (!el) throw new Error('missing #' + id);
     return el;
   };
-  return { api, element, requests, state, adopted, renders, get focused() { return dom.document.activeElement; }, get saveCalls() { return saveCalls; } };
+  return { api, element, requests, state, adopted, renders, publicationActions, get focused() { return dom.document.activeElement; }, get saveCalls() { return saveCalls; } };
 }
 
 function startImport(h: GpxTestHarness) {
@@ -188,6 +193,8 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
   const dom = gpxDocument();
   const requests: RequestRecord[] = [];
   const values = new Map<string, string>();
+  const owner = '11111111-1111-4111-8111-111111111111';
+  let createdKey = '';
   const local = {
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => { values.set(key, String(value)); },
@@ -225,18 +232,22 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
     sessionStorage: local,
     fetch: async (url: string, options: RequestInit = {}) => {
       requests.push({ url, options });
+      const sent = options.body && (url === '/posts' || /^\/posts\/[^/]+$/.test(url)) ? JSON.parse(String(options.body)) : null;
+      if (url === '/posts' && sent) createdKey = sent.translationKey;
       const overridden = await fetchOverride?.(url, options);
-      if (overridden) return overridden;
+      if (overridden) {
+        if (overridden.ok && sent) return response({ ...(await overridden.json() as Record<string, unknown>), translationKey: createdKey,
+          ownerUserId: owner, saveId: sent.saveId });
+        return overridden;
+      }
       if (url === '/gpx/imports') return response(candidate, 201);
       if (url.startsWith('/gpx/imports/') && options.method === 'DELETE') return response({}, 204);
       if (url === '/posts' && options.method === 'POST') return response({
-        translationKey: 'saved-pair', updatedAt: '2026-10-24T10:00:30.000Z',
-        de: { slug: 'private-walk' }, en: { slug: '' },
+        ...sent, translationKey: createdKey, updatedAt: '2026-10-24T10:00:30.000Z', ownerUserId: owner, saveId: sent.saveId,
       });
-      if (url === '/posts/saved-pair/route' && options.method === 'PUT') return response({ error: 'gpx_conflict' }, 409);
-      if (url === '/posts/saved-pair' && options.method === 'PUT') return response({
-        translationKey: 'saved-pair', updatedAt: '2026-10-24T10:00:40.000Z',
-        de: { slug: 'private-walk' }, en: { slug: '' },
+      if (url === '/posts/' + createdKey + '/route' && options.method === 'PUT') return response({ error: 'gpx_conflict' }, 409);
+      if (url === '/posts/' + createdKey && options.method === 'PUT') return response({
+        ...sent, translationKey: createdKey, updatedAt: '2026-10-24T10:00:40.000Z', ownerUserId: owner, saveId: sent.saveId,
       });
       if (url.endsWith('/revisions')) return response([]);
       if (url.endsWith('/alt-audit')) return response({ images: [] });
@@ -247,7 +258,9 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
     setTimeout: () => 0,
     clearTimeout() {},
     addEventListener: dom.document.addEventListener,
+    removeEventListener: dom.document.removeEventListener,
     URLSearchParams, URL, AbortController, Event: EditorEvent, KeyboardEvent: EditorEvent, console,
+    crypto: webcrypto, structuredClone,
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     navigator: {},
     alert() {},
@@ -267,7 +280,7 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
   };
   context.window = context;
   vm.createContext(context);
-  for (const file of ['language.js', 'draft-guard.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js',
+  for (const file of ['publication-state.js', 'publication-refresh.js', 'language.js', 'draft-guard.js', 'write-recovery.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js',
     'gallery-fence.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js',
     'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js',
     'editor-review.js', 'editor-inspector.js', 'editor-gpx.js']) {
@@ -281,7 +294,7 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
   controller.wire = (host) => wire({ ...host, loadGeometry: async () => browserGeometry, loadPublicTrack: async () => browserPublicTrack });
   const inline = html.slice(html.indexOf("'use strict'", html.lastIndexOf('<script>')), html.lastIndexOf('</script>'));
   vm.runInContext(inline, context, { filename: 'editor.html' });
-  vm.runInContext('language = SiteLanguage.config(); loadBlocked = false', context);
+  vm.runInContext(`language = SiteLanguage.config(); loadBlocked = false; writeRecovery.initialize('${owner}')`, context);
   const editor = vm.runInContext('({ buildPayload, doSaveDraft, guard, gpxEditor, deMDE, addStopRow })', context) as {
     buildPayload(): Omit<PostPair, 'status'>;
     doSaveDraft(): Promise<boolean>;
@@ -325,6 +338,7 @@ describe('private GPX editor lifecycle', () => {
     expect(h.state.baseUpdatedAt).toBe('2026-10-24T10:01:00.000Z');
     expect(h.saveCalls).toBe(0);
     expect(h.api.hasPreview()).toBe(false);
+    expect(h.publicationActions).toEqual(['begin', 'request', 'end']);
   });
 
   it('saves a new post before route attachment and retains its saved identity when attachment fails', async () => {
@@ -337,6 +351,7 @@ describe('private GPX editor lifecycle', () => {
     expect(h.requests.some((request) => request.options.method === 'PUT')).toBe(true);
     expect(h.api.hasPreview()).toBe(true);
     expect(h.focused).toBe(h.element('gpxError'));
+    expect(h.publicationActions).toEqual(['begin', 'request', 'end']);
   });
 
   it('cancels a private preview without changing the attached route', async () => {
@@ -580,6 +595,7 @@ describe('private GPX editor lifecycle', () => {
     expect(h.focused).toBe(h.element(originalAvailable ? 'gpxReimport' : 'gpxImportOpen'));
     expect(h.focused?.hidden).toBe(false);
     expect(h.focused?.disabled).toBe(false);
+    expect(h.publicationActions).toEqual(['begin', 'request', 'end']);
   });
 
   it.each([
@@ -606,6 +622,7 @@ describe('private GPX editor lifecycle', () => {
     } else h.element('gpxDetach').click();
     await settle();
     expect(routeWrites(h)).toHaveLength(1);
+    expect(h.publicationActions).toEqual(['begin', 'request', 'end']);
     const mutationIndex = h.requests.findIndex(({ options }) => options.method === method);
     expect(h.requests.slice(mutationIndex + 1)).toContainEqual({ url: '/posts/pair-1/route', options: { method: 'GET' } });
     expect(h.element('gpxRouteStatus').textContent).toBe(method === 'PUT' ? 'statusAttached' : 'statusNone');
@@ -777,8 +794,9 @@ describe('GPX privacy through the real editor save and stash boundary', () => {
     await settle();
     const saved = h.requests.find(({ url, options }) => url === '/posts' && options.method === 'POST')!;
     expect(saved).toBeDefined();
-    expect(JSON.parse(String(saved.options.body))).toEqual(expected);
-    expect(h.state.tk).toBe('saved-pair');
+    const sent = JSON.parse(String(saved.options.body));
+    expect(sent).toEqual({ ...expected, translationKey: expect.any(String), saveId: expect.any(String), expectedOwnerId: expect.any(String) });
+    expect(h.state.tk).toBe(sent.translationKey);
     expect(h.api.hasPreview()).toBe(true);
     expect(h.editor.deMDE.value()).toBe('## Unsaved story\n\nKeep these paragraphs.');
     const attached = routeWrites(h)[0]!;
@@ -792,10 +810,10 @@ describe('GPX privacy through the real editor save and stash boundary', () => {
     h.editor.deMDE.value('## Later edit\n\nKeep these too.');
     const later = JSON.parse(JSON.stringify(h.editor.buildPayload()));
     h.editor.guard.stashNow();
-    expect(JSON.parse(h.local.getItem('swl:draft:saved-pair')!).payload).toEqual(later);
+    expect(Array.from({ length: h.local.length }, (_, index) => JSON.parse(h.local.getItem(h.local.key(index)!)!)).some(stash => JSON.stringify(stash.payload) === JSON.stringify(later))).toBe(true);
     expect(await h.editor.doSaveDraft()).toBe(true);
-    const retry = h.requests.find(({ url, options }) => url === '/posts/saved-pair' && options.method === 'PUT')!;
-    expect(JSON.parse(String(retry.options.body))).toEqual(later);
+    const retry = h.requests.find(({ url, options }) => url === '/posts/' + h.state.tk && options.method === 'PUT')!;
+    expect(JSON.parse(String(retry.options.body))).toEqual({ ...later, saveId: expect.any(String), expectedOwnerId: expect.any(String) });
     expect(h.saveCalls).toBe(1);
     expect(routeWrites(h)).toHaveLength(1);
   });

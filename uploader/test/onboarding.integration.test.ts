@@ -300,6 +300,48 @@ describe.skipIf(!url)('onboarding PostgreSQL boot and snapshot boundary', () => 
     await pool.query('DELETE FROM site_identity');
     expect(await prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).toBe(true);
   });
+  it.each(['table', 'save-columns'] as const)('repairs only absent upload/save receipt bootstrap metadata: %s', async missing => {
+    await ensureSchema(pool);
+    await assertBootstrapOnlyTarget(pool, guard);
+    if (missing === 'table') await pool.query('DROP TABLE upload_receipts');
+    else {
+      await pool.query('ALTER TABLE posts DROP COLUMN last_save_id, DROP COLUMN last_save_by');
+      await pool.query('ALTER TABLE pages DROP COLUMN last_save_id, DROP COLUMN last_save_by');
+    }
+    await assertBootstrapOnlyTarget(pool, guard);
+    expect(await prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).toBe(true);
+    await assertBootstrapOnlyTarget(pool, guard);
+    expect((await pool.query('SELECT * FROM upload_receipts')).rows).toEqual([]);
+    expect((await pool.query('SELECT last_save_id, last_save_by FROM pages')).rows.every(row => row.last_save_id === null && row.last_save_by === null)).toBe(true);
+  });
+  it.each(['navigation-table', 'navigation-seed', 'page-columns'] as const)('repairs only genuinely absent generic page metadata: %s', async missing => {
+    await ensureSchema(pool);
+    await assertBootstrapOnlyTarget(pool, guard);
+    if (missing === 'navigation-table') await pool.query('DROP TABLE site_nav');
+    else if (missing === 'navigation-seed') await pool.query('DELETE FROM site_nav');
+    else await pool.query('ALTER TABLE pages DROP COLUMN slug, DROP COLUMN status, DROP COLUMN published_at');
+    await assertBootstrapOnlyTarget(pool, guard);
+    expect(await prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).toBe(true);
+    await assertBootstrapOnlyTarget(pool, guard);
+    expect((await pool.query('SELECT id FROM site_nav')).rows).toEqual([{ id: 1 }]);
+    expect((await pool.query("SELECT status FROM pages WHERE key='about'")).rows.every(row => row.status === 'published')).toBe(true);
+  });
+  it.each([
+    'ALTER TABLE pages DROP CONSTRAINT pages_status_check',
+    "ALTER TABLE pages ALTER COLUMN status SET DEFAULT 'published'",
+    'ALTER TABLE pages ALTER COLUMN published_at SET DEFAULT now()',
+    'ALTER TABLE site_nav DROP CONSTRAINT site_nav_id_check',
+    'ALTER TABLE site_nav ALTER COLUMN config DROP NOT NULL',
+    'DROP INDEX pages_locale_slug_idx; CREATE INDEX pages_locale_slug_idx ON pages(locale,slug)',
+    `UPDATE site_nav SET config='{"version":1,"header":[],"footer":[],"legal":[]}'::jsonb`,
+  ])('refuses altered generic page catalogue or owner navigation before fencing: %s', async sql => {
+    await ensureSchema(pool);
+    await assertBootstrapOnlyTarget(pool, guard);
+    await pool.query(sql);
+    await expect(prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).rejects.toThrow();
+    expect(await readRestoreFence(paths.storageDir)).toBe(false);
+    expect((await pool.query('SELECT * FROM site_identity')).rows).toEqual([]);
+  });
   it.each(['table', 'seed', 'omitted-column'] as const)('repairs only genuinely absent language bootstrap metadata: %s', async (missing) => {
     await ensureSchema(pool);
     await assertBootstrapOnlyTarget(pool, guard);
@@ -391,10 +433,12 @@ describe.skipIf(!url)('onboarding PostgreSQL boot and snapshot boundary', () => 
     const indexQuery = `SELECT idx.relname AS name, pg_get_indexdef(i.indexrelid) AS definition
       FROM pg_index i JOIN pg_class idx ON idx.oid=i.indexrelid
       JOIN pg_namespace n ON n.oid=idx.relnamespace
-      WHERE n.nspname=current_schema() AND NOT i.indisprimary ORDER BY idx.relname`;
+      WHERE n.nspname=current_schema()
+        AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid=i.indexrelid)
+      ORDER BY idx.relname`;
     const installed = (await pool.query<{ name: string; definition: string }>(indexQuery)).rows;
     expect(installed.length).toBeGreaterThan(0);
-    // Exercise the whole real initializer's inventory, not a fixture-only subset.
+    // Constraint-owned indexes cannot be dropped independently of their constraints.
     for (const index of installed) await pool.query(`DROP INDEX "${index.name.replaceAll('"', '""')}"`);
     await assertBootstrapOnlyTarget(pool, guard);
     expect(await prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).toBe(true);
@@ -471,7 +515,7 @@ describe.skipIf(!url)('onboarding PostgreSQL boot and snapshot boundary', () => 
     expect((await pool.query('SELECT * FROM onboarding_state')).rows).toEqual([]);
     expect((await pool.query("SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='posts' AND column_name='title_image'")).rows).toEqual([]);
     expect(await readRestoreFence(paths.storageDir)).toBe(false);
-  });
+  }, 30_000); // Full schema creation plus two catalogue scans use a bounded integration deadline.
   it('refuses an invalid same-definition unique index left by interrupted concurrent creation', async () => {
     await ensureSchema(pool);
     await pool.query('DROP INDEX users_username_lower_idx');
@@ -486,6 +530,10 @@ describe.skipIf(!url)('onboarding PostgreSQL boot and snapshot boundary', () => 
     expect((await pool.query('SELECT * FROM onboarding_state')).rows).toEqual([]);
   });
   it.each([
+    'ALTER TABLE upload_receipts DROP CONSTRAINT upload_receipts_state_check',
+    "ALTER TABLE upload_receipts DROP CONSTRAINT upload_receipts_generation_check; ALTER TABLE upload_receipts ADD CHECK (generation >= -1)",
+    'ALTER TABLE upload_receipts DROP CONSTRAINT upload_receipts_user_id_fkey',
+    'ALTER TABLE upload_receipts DROP CONSTRAINT upload_receipts_user_id_fkey; ALTER TABLE upload_receipts ADD FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT',
     'ALTER TABLE pages DROP CONSTRAINT pages_locale_check',
     "ALTER TABLE pages DROP CONSTRAINT pages_locale_check; ALTER TABLE pages ADD CONSTRAINT pages_locale_check CHECK (locale IN ('de','en','fr'))",
     "ALTER TABLE pages ADD CONSTRAINT owner_title CHECK (title <> 'Owner')",

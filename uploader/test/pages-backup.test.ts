@@ -10,6 +10,7 @@ const stamp = '2026-10-29T12:00:00.000Z';
 function fixture(): Dump {
   return { version: DUMP_VERSION, createdAt: stamp, tables: { users: [], posts: [], post_routes: [],
     site_identity: [identityDumpRow()], site_identity_assets: [],
+    journeys: [], journey_locales: [], journey_members: [],
     site_language: [{ id: true, primary_locale: 'de', enabled_locales: ['de', 'en'], locked_at: null, updated_at: stamp }],
     pages: (['de', 'en'] as const).map((locale) => ({ key: 'contact', locale, title: 'Contact', body_markdown: 'Details', images: {}, slug: locale + '-contact', status: 'published', published_at: stamp, updated_at: stamp })),
     site_nav: [{ id: 1, config: { ...structuredClone(DEFAULT_NAVIGATION), footer: [{ kind: 'page', target: 'contact' }] }, updated_at: stamp }],

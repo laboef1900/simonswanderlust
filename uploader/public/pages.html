@@ -4,9 +4,11 @@
 <header class="cms-page-meta"><h1 data-pages-copy="Title"></h1></header>
 <main><p id="pagesNotice" class="muted" role="status" data-pages-copy="Loading"></p>
 <p id="pagesError" class="err" role="alert" hidden></p>
+<p id="pagesOutcome" role="status"></p>
 <a id="languageSettingsLink" href="/admin/settings.html#language" data-language-copy="Back" hidden></a>
 <div id="pagesList"></div></main>
 <script src="/admin/editor-image-copy.js"></script><script src="/admin/auth.js"></script>
+<script src="/admin/build-reporting.js"></script>
 <script src="/admin/language.js"></script><script src="/admin/admin-confirm.js"></script><script src="/admin/pages-ui.js"></script>
 <script>
 'use strict';
@@ -39,9 +41,15 @@ async function loadPages() {
       const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'btn-remove'; remove.textContent = PagesUI.text('Delete');
       remove.addEventListener('click', async () => {
         remove.disabled = true; errorEl.hidden = true;
-        try { if (await PagesUI.remove(page.key)) await loadPages(); }
-        catch (error) { showError(error); if (error.body?.persisted) await loadPages(); }
-        finally { remove.disabled = false; }
+        let cancelled = false;
+        try {
+          const result = await PagesUI.remove(page.key);
+          if (result) {
+            BuildReporting.renderOutcome(document.getElementById('pagesOutcome'), 'delete', result, { title: PagesUI.kind(page.key) });
+            await loadPages();
+          } else cancelled = true;
+        } catch (error) { showError(error); }
+        finally { remove.disabled = false; if (cancelled) remove.focus(); }
       }); actions.append(remove);
     }
     if (!page.deletable) { const fixed = document.createElement('p'); fixed.className = 'muted'; fixed.textContent = PagesUI.text('Fixed'); actions.append(fixed); }

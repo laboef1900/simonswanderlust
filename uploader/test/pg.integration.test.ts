@@ -225,7 +225,7 @@ maybe('pgPostStore (integration)', () => {
     };
     const created = await store.upsertDraft(base);
     const tk = created.translationKey;
-    expect(created.hasUnpublishedChanges).toBe(false); // drafts have nothing published to diverge from
+    expect(created.publication).toMatchObject({ availability: 'available', draftDiffers: false });
 
     await store.publish(tk, await publishTokens(store, tk));
     const snapshotDe = async () => (await pool.query(
@@ -237,15 +237,15 @@ maybe('pgPostStore (integration)', () => {
     expect(row.s.date).toBe('2024-10-03'); // jsonb round-trip keeps the calendar date as text
     expect(row.s.slug).toBe('snap-de');
     expect(row.s.hero_image).toEqual(base.de.heroImage);
-    expect((await store.get(tk))?.hasUnpublishedChanges).toBe(false);
+    expect((await store.get(tk))?.publication).toMatchObject({ availability: 'available', draftDiffers: false });
 
     // Draft save over the published post: working copy changes, snapshot must not.
     await store.upsertDraft({ ...created, de: { ...base.de, bodyMarkdown: '## edited' } });
     const got = await store.get(tk);
     expect(got?.status).toBe('published');
     expect(got?.de.bodyMarkdown).toBe('## edited');
-    expect(got?.hasUnpublishedChanges).toBe(true);
-    expect((await store.list()).find((s) => s.translationKey === tk)?.hasUnpublishedChanges).toBe(true);
+    expect(got?.publication).toMatchObject({ availability: 'available', draftDiffers: true });
+    expect((await store.list()).find((s) => s.translationKey === tk)?.publication).toMatchObject({ availability: 'available', draftDiffers: true });
     row = await snapshotDe();
     expect(row.s.body_markdown).toBe('## live');
 
@@ -253,7 +253,7 @@ maybe('pgPostStore (integration)', () => {
     await store.publish(tk, await publishTokens(store, tk));
     row = await snapshotDe();
     expect(row.s.body_markdown).toBe('## edited');
-    expect((await store.get(tk))?.hasUnpublishedChanges).toBe(false);
+    expect((await store.get(tk))?.publication).toMatchObject({ availability: 'available', draftDiffers: false });
     await pool.end();
   });
 
@@ -375,9 +375,15 @@ maybe('pgPostStore (integration)', () => {
     };
     const created = await store.upsertDraft(base);
     expect((await store.list()).find((p) => p.translationKey === created.translationKey)?.secondaryStatus).toBe('started');
-    await store.publish(created.translationKey, await publishTokens(store, created.translationKey));
-    await store.unpublish(created.translationKey);
-    expect((await store.get(created.translationKey))?.status).toBe('draft');
+    const published = await store.publish(created.translationKey, await publishTokens(store, created.translationKey));
+    const unpublished = await store.unpublish(created.translationKey);
+    expect(unpublished.previousUpdatedAt).toEqual(published.updatedAt);
+    expect(unpublished.updatedAt.getTime()).toBeGreaterThan(published.updatedAt.getTime());
+    expect(await store.get(created.translationKey)).toMatchObject({ status: 'draft', updatedAt: unpublished.updatedAt });
+    const saved = await store.upsertDraft({ ...created, de: { ...created.de, title: 'After unpublish' } }, unpublished.updatedAt);
+    expect(saved.de.title).toBe('After unpublish');
+    expect(saved.updatedAt.getTime()).toBeGreaterThan(unpublished.updatedAt.getTime());
+    await expect(store.upsertDraft(created, unpublished.updatedAt)).rejects.toMatchObject({ code: 'conflict' });
     await expect(store.upsertDraft({ ...created, de: { ...created.de, slug: 'renamed-after-unpublish' } }))
       .rejects.toMatchObject({ code: 'slug_locked' });
     await store.remove(created.translationKey);

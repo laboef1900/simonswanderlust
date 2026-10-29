@@ -4,7 +4,7 @@
 **Issue:** #308, child of epic #307. It blocks #309 (storage, admin, backups) and #310 (public pages).
 **Risk:** HIGH. It adds new public routes (Golden Rule 2 territory), new tables in
 `uploader/src/db.ts`, a new `DUMP_VERSION`, and a restore allow-list change.
-**Status:** **OWNER APPROVED, 2026-10-28 — implementation contract, not implemented.** The owner
+**Status:** **OWNER APPROVED, 2026-10-28 — implementation qualification tracked in §21.** The owner
 approved D1–D10, selecting D3's permanent per-locale first-publication slug lock and D4's required
 non-empty plain-text intro (§20). No implementation PR, merge, deployment, publication, existing
 story URL rename or owner-data operation is approved by this record. #309 and #310 retain their
@@ -953,11 +953,38 @@ canonical hero retarget/rendering and an actual-release contract suite at
 artifacts; its fixture protocol is in the test header. Component rendering is not
 represented as a full Astro build or screen-reader verification.
 
-At this source handoff no tests, builds, browser checks or collision queries have
-been run by the implementation worker. The integrating parent must first merge #309,
-then run affected suites/type checks, build the required fixture releases and exercise
-the real app at 320/390px. An actual assistive-technology/screen-reader pass remains
-required; an accessibility-tree assertion is not that evidence. The actual deployment/
+The public integration merges #309 checkpoint `08677a2`, including the actual #289
+page/navigation implementation. `publicRoutes(trips, language, { pages, journeys }, warn)`
+requires both collections explicitly; dispatch, alternates and navigation share that
+collision-checked emitted inventory. Journey owners include their stable journey identity.
+The public reader continues to reuse #309's strict snapshot validator and shared build epoch.
+
+No tests, builds, browser checks or collision queries were run by the integration worker.
+The integrating parent must run affected suites/type checks, build the required fixture
+releases and exercise the real app at 320/390px. An actual assistive-technology/screen-reader
+pass remains required; an accessibility-tree assertion is not that evidence. The actual deployment/
 content target's public-prefix reverse-collision query and matching boot report remain
 separate pre-merge gates. No synthetic Postgres result qualifies the owner-data target,
 and no permission to inspect or change that target is inferred here.
+
+## 21. #309 implementation and qualification boundary (2026-10-29)
+
+The authoring implementation uses `uploader/src/journeys.ts`, `journey-cleanup.ts` and
+`journeys-admin.ts`. Its three tables are separate from posts; the only post-store coupling
+is same-transaction reference removal. `site/src/lib/journey-snapshot.ts` is the strict,
+versioned snapshot boundary shared by storage, recovery and the public reader. Native
+recovery format **14** follows pages/navigation format 13; allocation must be rechecked
+against the integration branch before landing.
+
+The API owns **`/journey-admin`**, not `/journeys`. Static reservation and synthetic
+collision/route regression coverage do **not** establish the actual-target reverse gate.
+The owner/deployment target must supply the read-only report for `(root, journey-admin)`,
+covering story/page working and committed slug claims, before merge. No target-content
+read, rewrite, publication, deployment or collision clearance is claimed here.
+
+Source regression coverage accompanies the store, real PostgreSQL lock races, ownership
+loss, cleanup, recovery, authenticated routes and editor. Source completion is not evidence
+that those checks ran: the integration owner must run the full affected suites with
+`TEST_DATABASE_URL`, type checking, a real main-process build/publication smoke, and
+keyboard/browser qualification after merging the source slices. The approved security
+floors, human implementation-PR approval and rollback/recovery limits in §§13/16 remain.

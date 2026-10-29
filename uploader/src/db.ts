@@ -102,6 +102,30 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
     );
   `);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx ON users (lower(username));`);
+  // Operational, account-lifetime identities. Never included in content dumps.
+  // Account deletion atomically invalidates receipts through the FK; restore
+  // explicitly clears them while all filesystem writers are stopped.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS upload_receipts (
+      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      upload_id uuid NOT NULL,
+      media_key text NOT NULL,
+      sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+      identity jsonb NOT NULL,
+      frozen jsonb NOT NULL,
+      state text NOT NULL CHECK (state IN ('pending','accepted','retryable','gone')),
+      incarnation uuid NOT NULL,
+      claim uuid NOT NULL,
+      generation integer NOT NULL DEFAULT 0 CHECK (generation >= 0),
+      reason text CHECK (reason IN ('queue_full','recovery_required')),
+      original_retained boolean NOT NULL DEFAULT false,
+      result jsonb,
+      PRIMARY KEY (user_id, upload_id)
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS upload_receipts_pending_idx
+    ON upload_receipts (user_id, upload_id) WHERE state = 'pending'`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS upload_receipts_media_idx ON upload_receipts (media_key)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sessions (
       id         text PRIMARY KEY,
@@ -123,6 +147,7 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       images jsonb NOT NULL DEFAULT '{}', status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
       featured boolean NOT NULL DEFAULT false,
       comments_enabled boolean NOT NULL DEFAULT true,
+      last_save_id uuid, last_save_by uuid,
       created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())
   `);
   // @ai-note Partial: '' means "no slug yet" (a DE-first draft without an EN
@@ -217,6 +242,8 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       status        text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
       published_at  timestamptz,
       updated_at    timestamptz NOT NULL DEFAULT now(),
+      last_save_id   uuid,
+      last_save_by   uuid,
       PRIMARY KEY (key, locale)
     )
   `);
@@ -543,6 +570,41 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
     END $$;
   `);
 
+  // Journey CHECKs are write-once; later changes require named constraint migrations.
+  // No FK to posts: pair deletion and boot repair scrub every retained reference.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS journeys (
+      id uuid PRIMARY KEY,
+      status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
+      published_snapshot jsonb,
+      published_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT journeys_published_has_snapshot CHECK (status = 'draft' OR published_snapshot IS NOT NULL)
+    );
+    CREATE TABLE IF NOT EXISTS journey_locales (
+      journey_id uuid NOT NULL REFERENCES journeys(id) ON DELETE CASCADE,
+      locale text NOT NULL CHECK (locale IN ('de','en')),
+      slug text NOT NULL DEFAULT '' CHECK (char_length(slug) <= 100),
+      title text NOT NULL DEFAULT '' CHECK (char_length(title) <= 200),
+      intro text NOT NULL DEFAULT '' CHECK (char_length(intro) <= 2000),
+      hero_image jsonb,
+      omitted boolean NOT NULL DEFAULT false,
+      published_at timestamptz,
+      CONSTRAINT journey_locales_omitted_unpublished CHECK (NOT omitted OR published_at IS NULL),
+      PRIMARY KEY (journey_id, locale)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS journey_locales_slug_idx ON journey_locales (locale, slug) WHERE slug <> '';
+    CREATE TABLE IF NOT EXISTS journey_members (
+      journey_id uuid NOT NULL REFERENCES journeys(id) ON DELETE CASCADE,
+      translation_key text NOT NULL,
+      position integer NOT NULL CHECK (position >= 0),
+      PRIMARY KEY (journey_id, translation_key),
+      UNIQUE (journey_id, position)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS journey_members_tk_idx ON journey_members (translation_key);
+  `);
+
   // Language metadata is content identity: never replace this singleton on boot.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS site_language (
@@ -567,5 +629,10 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
         CHECK (NOT omitted OR (status='draft' AND published_snapshot IS NULL AND published_at IS NULL));
     END IF;
   END $$`);
+  // Operational write evidence is deliberately excluded from snapshots and dumps.
+  await pool.query('ALTER TABLE posts ADD COLUMN IF NOT EXISTS last_save_id uuid');
+  await pool.query('ALTER TABLE posts ADD COLUMN IF NOT EXISTS last_save_by uuid');
+  await pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS last_save_id uuid');
+  await pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS last_save_by uuid');
   await ensureOnboardingSchema(pool);
 }

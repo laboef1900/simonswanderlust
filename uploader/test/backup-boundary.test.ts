@@ -58,7 +58,7 @@ vi.mock('node:fs', async (original) => {
 const db: Connectable = {
   query: async () => ({ rows: [] }),
   connect: async () => ({
-    query: async (sql: string) => ({ rows: sql.includes('to_regclass') ? [{ present: true }]
+    query: async (sql: string) => ({ rows: sql.includes('to_regclass') ? [{ present: true, journeys: true, locales: true, members: true }]
       : sql.includes('FROM site_language') ? [{
         id: true, primary_locale: 'de', enabled_locales: ['de', 'en'],
         locked_at: null, updated_at: '2026-10-27T12:00:00.000Z',

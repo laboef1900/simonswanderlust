@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { webcrypto } from 'node:crypto';
 import { setImmediate } from 'node:timers/promises';
 import { ui } from '../../site/src/i18n/ui.js';
+import * as MediaConditional from '../public/media-conditional.js';
+import type { MediaImpact, StoryUse } from '../src/media-impact.js';
+import type { ChangedDescriptions } from '../src/media-store.js';
 
 // media-browser.js is the library page's DOM glue (media.html). Its
 // user-visible contracts that no pure helper can carry — the detail panel
@@ -16,6 +20,8 @@ const apiSrc = readFileSync('public/media-api.js', 'utf8');
 const aiSrc = readFileSync('public/media-ai.js', 'utf8');
 const dialogSrc = readFileSync('public/media-ai-dialog.js', 'utf8');
 const browserSrc = readFileSync('public/media-browser.js', 'utf8');
+const impactSrc = readFileSync('public/media-impact.js', 'utf8');
+const refreshSrc = readFileSync('public/publication-refresh.js', 'utf8');
 const markup = readFileSync('public/media.html', 'utf8');
 const pageIds = [...markup.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]!);
 const checkedIds = new Set([...markup.matchAll(/<input[^>]*\bid="([^"]+)"[^>]*\bchecked\b/g)].map((m) => m[1]!));
@@ -25,7 +31,10 @@ type Listener = (ev: Record<string, unknown>) => void;
 class FakeNode {
   id = '';
   className = '';
-  textContent = '';
+  href = '';
+  private text = '';
+  get textContent(): string { return this.text + this.children.map(child => child.textContent).join(''); }
+  set textContent(value: string) { this.text = value; this.children = []; }
   value = '';
   hidden = false;
   disabled = false;
@@ -44,6 +53,9 @@ class FakeNode {
   set innerHTML(v: string) { if (v === '') this.children = []; }
   get firstElementChild(): FakeNode | null { return this.children[0] ?? null; }
   appendChild(c: FakeNode): FakeNode { this.children.push(c); return c; }
+  append(...nodes: FakeNode[]): void { nodes.forEach(node => this.appendChild(node)); }
+  adjacent: FakeNode[] = [];
+  insertAdjacentElement(_position: string, node: FakeNode): FakeNode { this.adjacent.push(node); return node; }
   remove(): void {}
   focused = false;
   focus(): void { this.focused = true; }
@@ -61,7 +73,10 @@ class FakeNode {
     const cls = sel.replace(/^\./, '');
     const out: FakeNode[] = [];
     const walk = (n: FakeNode): void => {
-      for (const c of n.children) { if (c.className.split(' ').includes(cls)) out.push(c); walk(c); }
+      for (const c of n.children) {
+        if (sel.startsWith('.') ? c.className.split(' ').includes(cls) : c.tagName.toLowerCase() === sel.toLowerCase()) out.push(c);
+        walk(c);
+      }
     };
     walk(this);
     return out;
@@ -77,6 +92,10 @@ interface Item {
   key: string; title: string; folder: string; status: string; thumbSrc: string;
   alt: { de: string; en: string }; caption: { de: string; en: string };
   tags: string[]; exif: null; width: number; height: number; origBytes: number; variantBytes: number;
+  impact?: MediaImpact;
+  livePending?: ChangedDescriptions | null;
+  changedDescriptions?: ChangedDescriptions;
+  usedIn?: { kind: string; key: string; title: string }[];
 }
 function item(key: string, altDe = ''): Item {
   return {
@@ -105,7 +124,7 @@ interface Page {
   el(id: string): FakeNode;
   /** The page's global object, for replacing a module's function after load. */
   win: Record<string, unknown>;
-  timers: { fn: () => void; cleared: boolean }[];
+  timers: { fn: () => void; cleared: boolean; ms: number }[];
   listRequests: Deferred[];
   patches: { url: string; body: Record<string, unknown> }[];
   rows: Map<string, Item>;
@@ -113,9 +132,12 @@ interface Page {
   confirms: string[];
   confirmAnswer: { value: boolean };
   flush(): Promise<void>;
+  focus(): void;
+  visibility(hidden: boolean): void;
 }
 
-function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en' } = {}): Page {
+function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en'; prompt?: string; xhr?: new () => object;
+  request?: (url: string, init?: { method?: string; body?: string }) => Promise<unknown> | undefined } = {}): Page {
   const roots = new Map<string, FakeNode>();
   for (const id of pageIds) {
     const n = new FakeNode('div');
@@ -132,7 +154,9 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
     if (!n) throw new Error('no element #' + id);
     return n;
   };
-  const timers: { fn: () => void; cleared: boolean }[] = [];
+  const timers: { fn: () => void; cleared: boolean; ms: number }[] = [];
+  const windowEvents = new FakeNode('window');
+  const documentEvents = new FakeNode('document');
   const listRequests: Deferred[] = [];
   const patches: { url: string; body: Record<string, unknown> }[] = [];
   const rows = new Map<string, Item>();
@@ -141,10 +165,22 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   const confirmAnswer = { value: false };
   const ok = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
   const fetch = (url: string, init?: { method?: string; body?: string }): Promise<unknown> => {
+    const override = opts.request?.(url, init);
+    if (override) return override;
+    if (url === '/auth/me') return ok({ authenticated: true, userId: '11111111-1111-4111-8111-111111111111', username: 'simon', isAdmin: opts.isAdmin ?? true });
     if (url.startsWith('/media/folders')) return ok([]);
     if (init?.method === 'PATCH') {
-      patches.push({ url, body: JSON.parse(init.body ?? '{}') as Record<string, unknown> });
-      return ok({});
+      const body = JSON.parse(init.body ?? '{}') as { conditional: { patch: Partial<Item> } };
+      patches.push({ url, body });
+      const key = url.slice('/media/items/'.length);
+      const base = rows.get(key) ?? item(key);
+      const patch = body.conditional.patch;
+      const saved = { ...base, ...patch, alt: { ...base.alt, ...patch.alt }, caption: { ...base.caption, ...patch.caption } };
+      rows.set(key, saved);
+      return ok({ ...saved, conditionalVersion: 1, changedDescriptions: {
+        de: { alt: base.alt.de !== saved.alt.de, caption: base.caption.de !== saved.caption.de },
+        en: { alt: base.alt.en !== saved.alt.en, caption: base.caption.en !== saved.caption.en },
+      } });
     }
     if (url.startsWith('/media/items/')) return ok(rows.get(url.slice('/media/items/'.length)));
     const { promise, resolve } = Promise.withResolvers<unknown>();
@@ -158,6 +194,9 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   const describePhoto = opts.describe ?? (async () => DETAILS);
   const ctx: Record<string, unknown> = {
     document: {
+      hidden: false,
+      addEventListener: documentEvents.addEventListener.bind(documentEvents),
+      removeEventListener() {},
       documentElement: { lang: opts.locale ?? 'en' },
       getElementById,
       createElement: (tag: string) => new FakeNode(tag),
@@ -166,17 +205,21 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
     location: { href: '', origin: 'https://app.example', protocol: 'https:' },
     fetch,
     URL, AbortController, AbortSignal,
-    setTimeout: (fn: () => void) => { timers.push({ fn, cleared: false }); return timers.length; },
+    crypto: webcrypto,
+    addEventListener: windowEvents.addEventListener.bind(windowEvents),
+    removeEventListener() {},
+    setTimeout: (fn: () => void, ms: number) => { timers.push({ fn, cleared: false, ms }); return timers.length; },
     clearTimeout: (id: number) => { const t = timers[id - 1]; if (t) t.cleared = true; },
     confirm: (msg: string) => { confirms.push(msg); return confirmAnswer.value; },
-    prompt: () => null,
+    prompt: () => opts.prompt ?? null,
     console,
     FormData: class { append() {} },
-    XMLHttpRequest: class {},
+    XMLHttpRequest: opts.xhr ?? class {},
     Auth: { ensureAuthed: async () => ({ id: 'u1', username: 'simon', isAdmin: opts.isAdmin ?? true }), renderHeader() {} },
     EditorCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
       Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])),
     ])),
+    MediaConditional,
     EditorGalleryImageOrigin: 'https://img.example',
     AltSuggest: {
       loadConfig: async () => ({
@@ -200,9 +243,18 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   vm.runInContext(apiSrc, ctx);
   vm.runInContext(aiSrc, ctx);
   vm.runInContext(dialogSrc, ctx);
+  vm.runInContext(refreshSrc, ctx);
+  vm.runInContext(impactSrc, ctx);
   vm.runInContext(browserSrc, ctx);
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await setImmediate(); };
-  return { el, win: ctx, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush };
+  return { el, win: ctx, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush,
+    focus: () => windowEvents.dispatch('focus'),
+    visibility: (hidden) => {
+      const document = ctx.document;
+      if (!document || typeof document !== 'object') throw new Error('missing document');
+      Reflect.set(document, 'hidden', hidden);
+      documentEvents.dispatch('visibilitychange');
+    } };
 }
 
 function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
@@ -360,7 +412,9 @@ describe('media-browser detail panel', () => {
     await page.flush();
     expect(page.patches).toHaveLength(1);
     expect(page.patches[0]!.url).toBe('/media/items/a');
-    expect(page.patches[0]!.body).toEqual({ alt: { de: 'Fjord' } });
+    expect(page.patches[0]!.body).toEqual({ conditional: {
+      version: 1, patch: { alt: { de: 'Fjord' } }, expect: { alt: { de: 'alt-a' } },
+    } });
   });
 });
 
@@ -399,12 +453,12 @@ describe('media-browser AI suggestion in the detail panel', () => {
 
     page.el('dSave').dispatch('click');
     await page.flush();
-    expect(page.patches).toEqual([{ url: '/media/items/a', body: {
+    expect(page.patches).toEqual([{ url: '/media/items/a', body: { conditional: { version: 1, patch: {
       title: DETAILS.title,
       alt: { en: DETAILS.altEn },
       caption: { de: DETAILS.captionDe, en: DETAILS.captionEn },
       tags: DETAILS.tags,
-    } }]);
+    }, expect: { title: 'a', alt: { en: '' }, caption: { de: '', en: '' }, tags: [] } } } }]);
   });
 
   it('abandons a suggestion once the panel shows another photo', async () => {
@@ -491,11 +545,11 @@ describe('media-browser bulk AI dialog', () => {
     await page.flush();
     expect(page.described).toEqual(['https://img.example/b-640.webp']);
     // b's title ("b") already had text, so it is kept; everything empty is filled.
-    expect(page.patches).toEqual([{ url: '/media/items/b', body: {
+    expect(page.patches).toEqual([{ url: '/media/items/b', body: { conditional: { version: 1, patch: {
       alt: { de: DETAILS.altDe, en: DETAILS.altEn },
       caption: { de: DETAILS.captionDe, en: DETAILS.captionEn },
       tags: DETAILS.tags,
-    } }]);
+    }, expect: { alt: { de: '', en: '' }, caption: { de: '', en: '' }, tags: [] } } } }]);
     expect(page.el('aiSummary').textContent).toBe('Done. Saved 1, skipped 0, failed 0.');
     expect(page.el('aiCancel').textContent).toBe('Close');
     // The grid reloads to show what was saved.
@@ -524,7 +578,9 @@ describe('media-browser bulk AI dialog', () => {
     expect(page.el('aiSummary').textContent).toMatch(/^1 photo will be sent to the model.*overwritten/);
     page.el('aiStart').dispatch('click');
     await page.flush();
-    expect(page.patches).toEqual([{ url: '/media/items/a', body: { title: DETAILS.title } }]);
+    expect(page.patches).toEqual([{ url: '/media/items/a', body: { conditional: {
+      version: 1, patch: { title: DETAILS.title }, expect: { title: 'Done' },
+    } } }]);
   });
 
   it('"all photos in this view" pages through the listing with the current filters', async () => {
@@ -594,7 +650,7 @@ describe('media-browser bulk AI dialog', () => {
     await page.flush();
     expect(page.patches).toEqual([]);
     expect(page.described).toHaveLength(1);
-    expect(page.el('aiSummary').textContent).toBe('Stopped. Saved 0, skipped 0, failed 0, not processed 2. Nothing was changed.');
+    expect(page.el('aiSummary').textContent).toBe('Stopped. Saved 0, skipped 0, failed 0, not processed 2.');
     page.el('aiCancel').dispatch('click');
     expect(page.el('aiDialog').open).toBe(false);
   });
@@ -689,5 +745,627 @@ describe('media-browser search', () => {
     await page.flush();
     expect(page.el('out').textContent).toBe('1 photo(s)');
     expect(page.el('grid').querySelectorAll('.media-cell')).toHaveLength(1);
+  });
+});
+
+describe('upload receipt recovery visibility', () => {
+  it('shows the recovered photo without retransmitting or replacing dirty detail fields', async () => {
+    let sends = 0; let probes = 0;
+    const page = loadPage({
+      xhr: class {
+        open() {}
+        abort() {}
+        send() { sends++; throw new Error('Acknowledgement lost'); }
+      },
+      request: (url) => {
+        if (!url.startsWith('/upload/receipts/')) return;
+        probes++;
+        const status = probes === 1 ? 503 : 200;
+        return Promise.resolve({ status, ok: status === 200, json: async () => status === 503
+          ? { error: 'unavailable' }
+          : { state: 'accepted', ownerUserId: '11111111-1111-4111-8111-111111111111', uploadId: url.split('/').pop(),
+              result: { key: 'recovered-photo', src: 'https://img.example/recovered-photo', width: 10, height: 10 } } });
+      },
+    });
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('existing')], total: 1 }); await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+    page.el('dAltDe').value = 'Keep this unsaved description'; page.el('detail').dispatch('input');
+    Object.assign(page.el('fileInput'), { files: [{ name: 'recovered-photo.jpg' }] });
+    page.el('fileInput').dispatch('change'); await page.flush();
+    expect(sends).toBe(1); expect(probes).toBe(1);
+    expect(page.listRequests).toHaveLength(0);
+    page.el('uploadQueue').querySelectorAll('.btn-secondary')[0]!.click(); await page.flush();
+    expect(sends).toBe(1); expect(probes).toBe(2);
+    expect(page.listRequests).toHaveLength(1);
+    page.listRequests.shift()!.resolve({ items: [item('existing', 'Other stored text'), item('recovered-photo')], total: 2 });
+    await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell').map(cell => cell.dataset.key)).toEqual(['existing', 'recovered-photo']);
+    expect(page.el('dAltDe').value).toBe('Keep this unsaved description');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.listRequests).toHaveLength(0);
+  });
+});
+
+describe('folder and move ambiguous outcomes', () => {
+  const reply = (body: unknown, status = 200) => Promise.resolve({ status, ok: status >= 200 && status < 300, json: async () => body });
+  it('checks the folder tree once after a lost create response and only repeats the write explicitly', async () => {
+    let creates = 0; let reads = 0;
+    const page = loadPage({ prompt: 'Iceland', request: (url, init) => {
+      if (url !== '/media/folders') return;
+      if (init?.method === 'POST') { creates++; return Promise.reject(new Error('Response lost')); }
+      reads++; return reply([]);
+    } });
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    const initialReads = reads;
+    page.el('newFolder').click(); await page.flush();
+    const panel = page.el('out').adjacent[0]!;
+    expect(creates).toBe(1); expect(reads).toBe(initialReads + 1);
+    const [check, again] = panel.children.filter(child => child.tagName === 'button');
+    expect(again!.hidden).toBe(false);
+    check!.click(); await page.flush();
+    expect(creates).toBe(1); expect(reads).toBe(initialReads + 2);
+    again!.click(); await page.flush();
+    expect(creates).toBe(2);
+  });
+  it('installs a recovered folder in the tree and move targets from the one authoritative read', async () => {
+    let creates = 0; let reads = 0;
+    const page = loadPage({ prompt: 'Iceland', request: (url, init) => {
+      if (url !== '/media/folders') return;
+      if (init?.method === 'POST') { creates++; return Promise.reject(new Error('Acknowledgement lost')); }
+      reads++; return reply(creates ? ['Iceland'] : []);
+    } });
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    const initialReads = reads;
+    page.el('newFolder').click(); await page.flush();
+    expect(creates).toBe(1); expect(reads).toBe(initialReads + 1);
+    const folder = page.el('folderTree').querySelectorAll('.folder-btn').find(button => button.textContent === 'Iceland');
+    expect(folder).toBeDefined();
+    expect(page.el('moveTarget').children.map(option => option.value)).toContain('Iceland');
+    expect(page.listRequests).toHaveLength(0);
+    folder!.click(); await page.flush();
+    expect(new URL(page.listRequests[0]!.url, 'https://app.example').searchParams.get('folder')).toBe('Iceland');
+    expect(creates).toBe(1);
+  });
+  it('uses a single selected-key lookup, not a filtered page, and retains Unknown for incomplete evidence', async () => {
+    let moves = 0; const lookups: unknown[] = []; let complete = false;
+    const page = loadPage({ request: (url, init) => {
+      if (url === '/media/move') { moves++; return reply({ error: 'upstream timeout' }, 503); }
+      if (url === '/media/lookup') {
+        lookups.push(JSON.parse(init?.body ?? '{}'));
+        return reply({ items: complete ? [{ key: 'selected', folder: 'Another folder' }] : [] });
+      }
+    } });
+    page.rows.set('selected', item('selected'));
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [item('selected')], total: 201 }); await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+    page.el('moveTarget').value = 'Target';
+    page.el('moveSelected').click(); await page.flush();
+    const panel = page.el('out').adjacent[0]!;
+    const [check, again] = panel.children.filter(child => child.tagName === 'button');
+    expect(lookups).toEqual([{ keys: ['selected'] }]);
+    expect(page.listRequests).toHaveLength(0);
+    expect(again!.hidden).toBe(true);
+    complete = true; check!.click(); await page.flush();
+    expect(moves).toBe(1);
+    expect(panel.textContent).toContain('selected: Another folder');
+    expect(again!.hidden).toBe(false);
+    page.listRequests.shift()!.resolve({ items: [Object.assign(item('selected'), { folder: 'Another folder' })], total: 201 });
+    await page.flush();
+    expect(page.el('dFolder').value).toBe('Another folder');
+    // Changing a visible-page filter cannot remove this operation's evidence.
+    page.el('fStatus').value = 'failed'; page.el('fStatus').dispatch('change'); await page.flush();
+    page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    expect(panel.textContent).toContain('selected: Another folder');
+    again!.click(); await page.flush(); expect(moves).toBe(2);
+  });
+  it('does not treat an empty 2xx move body as acknowledgement', async () => {
+    let probes = 0;
+    const page = loadPage({ request: (url) => {
+      if (url === '/media/move') return reply({});
+      if (url === '/media/lookup') { probes++; return reply({ items: [{ key: 'selected', missing: true }] }); }
+    } });
+    page.rows.set('selected', item('selected'));
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [item('selected')], total: 1 }); await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click(); page.el('moveSelected').click(); await page.flush();
+    expect(probes).toBe(1);
+    page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell').map(cell => cell.dataset.key)).not.toContain('selected');
+  });
+});
+
+describe('media conditional save recovery in real consumers', () => {
+  const response = (status: number, body: unknown) => Promise.resolve({
+    status, ok: status >= 200 && status < 300, json: async () => body,
+  });
+  async function open(page: Page, row = item('a')): Promise<void> {
+    page.rows.set(row.key, row);
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [row], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    await page.flush();
+  }
+  function change(page: Page, id: string, value: string): void {
+    page.el(id).value = value;
+    page.el('detail').dispatch('input');
+  }
+
+  it('keeps a stale form and explicitly resends the whole patch against compared stored values', async () => {
+    const writes: unknown[] = [];
+    const current = { ...item('a'), title: 'Someone else', tags: ['elsewhere'] };
+    const page = loadPage({ request: (_url, init) => {
+      if (init?.method !== 'PATCH') return;
+      writes.push(JSON.parse(init.body!));
+      return writes.length === 1 ? response(409, { error: 'media_changed', current })
+        : response(200, { ...current, title: 'Mine', tags: ['local'], conditionalVersion: 1 });
+    } });
+    await open(page);
+    change(page, 'dTitle', 'Mine');
+    change(page, 'dTags', 'local, local');
+    page.el('dSave').click();
+    await page.flush();
+    expect(page.el('dTitle').value).toBe('Mine');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dCompare').textContent).toContain('Another value stored');
+    page.el('dSave').click();
+    await page.flush();
+    expect(writes).toHaveLength(1);
+    page.el('dUseMine').click();
+    await page.flush();
+    expect(writes).toEqual([
+      { conditional: { version: 1, patch: { title: 'Mine', tags: ['local'] }, expect: { title: 'a', tags: [] } } },
+      { conditional: { version: 1, patch: { title: 'Mine', tags: ['local'] }, expect: { title: 'Someone else', tags: ['elsewhere'] } } },
+    ]);
+    expect(page.el('dUnsaved').hidden).toBe(true);
+  });
+
+  it('adopts stored values only by explicit choice and never discards newer form generations', async () => {
+    const current = { ...item('a'), title: 'Stored' };
+    const page = loadPage({ request: (_url, init) => init?.method === 'PATCH'
+      ? response(409, { error: 'media_changed', current }) : undefined });
+    await open(page);
+    change(page, 'dTitle', 'Mine');
+    page.el('dSave').click();
+    await page.flush();
+    change(page, 'dTitle', 'Newer mine');
+    page.el('dUseStored').click();
+    expect(page.el('dTitle').value).toBe('Newer mine');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    page.el('dUseStored').click();
+    expect(page.el('dTitle').value).toBe('Stored');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+  });
+
+  it('shows mixed unknown leaf outcomes after exactly one GET and never partially retries', async () => {
+    let reads = 0;
+    let writes = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (init?.method === 'PATCH') { writes++; return Promise.reject(new Error('connection lost')); }
+      if (url === '/media/items/a') {
+        reads++;
+        return response(200, { ...item('a'), title: 'Mine', tags: ['someone else'] });
+      }
+    } });
+    await open(page);
+    expect(reads).toBe(1); // Initial impact observation, before the save/recovery phase.
+    reads = 0;
+    change(page, 'dTitle', 'Mine');
+    change(page, 'dAltDe', 'Local alt');
+    change(page, 'dTags', 'local');
+    page.el('dSave').click();
+    await page.flush();
+    expect(reads).toBe(1);
+    expect(writes).toBe(1);
+    const comparison = page.el('dCompare').textContent;
+    expect(comparison).toContain('title: Intended value stored');
+    expect(comparison).toContain('alt.de: Expected value visible');
+    expect(comparison).toContain('tags: Another value stored');
+    expect(comparison).toContain('write arriving later');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    page.el('dSave').click();
+    await page.flush();
+    expect(writes).toBe(1);
+    expect(reads).toBe(1);
+    page.el('dCheckStored').click();
+    await page.flush();
+    expect(reads).toBe(2); // Explicit comparison reuses its own read for impact too.
+    expect(writes).toBe(1);
+  });
+
+  it('does not call an all-achieved probe a confirmed save or clean later edits', async () => {
+    const pending = Promise.withResolvers<unknown>();
+    let reads = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (init?.method === 'PATCH') return Promise.reject(new Error('lost'));
+      if (url === '/media/items/a') { reads++; return reads === 1 ? response(200, item('a')) : pending.promise; }
+    } });
+    await open(page);
+    expect(reads).toBe(1); // Initial impact observation must not serve as post-write recovery.
+    change(page, 'dTitle', 'Submitted');
+    page.el('dSave').click();
+    await page.flush();
+    change(page, 'dTitle', 'Newer');
+    pending.resolve(await response(200, { ...item('a'), title: 'Submitted' }));
+    await page.flush();
+    expect(reads).toBe(2); // One initial impact read plus exactly one recovery read.
+    expect(page.el('dTitle').value).toBe('Newer');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dCompare').textContent).toContain('Intended value stored');
+  });
+
+  it('keeps newer edits after a valid acknowledgement and rejects unversioned success', async () => {
+    for (const marker of [true, false]) {
+      const pending = Promise.withResolvers<unknown>();
+      let reads = 0;
+      const page = loadPage({ request: (url, init) => {
+        if (init?.method === 'PATCH') return pending.promise;
+        if (url === '/media/items/a') { reads++; return response(200, item('a')); }
+      } });
+      await open(page);
+      expect(reads).toBe(1); // Isolate save-time reads from initial impact observation.
+      reads = 0;
+      change(page, 'dTitle', 'Submitted');
+      page.el('dSave').click();
+      await page.flush();
+      change(page, 'dTitle', 'Newer');
+      pending.resolve(await response(200, { ...item('a'), title: 'Submitted', ...(marker ? { conditionalVersion: 1 } : {}) }));
+      await page.flush();
+      expect(page.el('dTitle').value).toBe('Newer');
+      expect(page.el('dUnsaved').hidden).toBe(false);
+      expect(reads).toBe(0);
+      if (!marker) expect(page.el('dCompare').textContent).toContain('Compatible software is required');
+    }
+  });
+
+  it('preserves dirty details and the media page on a refused 401', async () => {
+    let writes = 0;
+    const page = loadPage({ request: (_url, init) => {
+      if (init?.method === 'PATCH') { writes++; return response(401, { error: 'unauthorized' }); }
+    } });
+    await open(page);
+    change(page, 'dTitle', 'Mine');
+    page.el('dSave').click();
+    await page.flush();
+    expect(page.el('dTitle').value).toBe('Mine');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('out').textContent).toContain('Session ended');
+    expect(page.win.location).toMatchObject({ href: '' });
+    page.el('dSave').click();
+    await page.flush();
+    expect(writes).toBe(1); // paused queue fences all media writes
+  });
+
+  it('displays bulk AI mixed results, never claims nothing changed, and does not replay', async () => {
+    let writes = 0;
+    let reads = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (init?.method === 'PATCH') { writes++; return Promise.reject(new Error('lost')); }
+      if (url === '/media/items/a') {
+        reads++;
+        return response(200, reads === 1 ? item('a') : {
+          ...item('a'), alt: { de: DETAILS.altDe, en: '' }, tags: ['elsewhere'],
+        });
+      }
+    } });
+    await open(page);
+    expect(reads).toBe(1); // Initial impact observation, separate from AI preflight/recovery.
+    reads = 0;
+    page.el('aiSelected').click();
+    await page.flush();
+    page.el('aiStart').click();
+    await page.flush();
+    expect(writes).toBe(1);
+    expect(reads).toBe(2);
+    expect(page.el('aiFailures').textContent).toContain('alt.de: Intended value stored');
+    expect(page.el('aiFailures').textContent).toContain('alt.en: Expected value visible');
+    expect(page.el('aiFailures').textContent).toContain('tags: Another value stored');
+    expect(page.el('aiSummary').textContent).not.toContain('Nothing was changed');
+    expect(page.el('aiSummary').textContent).toContain('Saved 0');
+  });
+});
+
+describe('single-photo AI conditional expectations', () => {
+  it('keeps suggested values on a concurrent fill conflict and sends only render-snapshot expectations', async () => {
+    let sent: unknown;
+    const page = loadPage({ request: (_url, init) => {
+      if (init?.method !== 'PATCH') return;
+      sent = JSON.parse(init.body!);
+      return Promise.resolve({ status: 409, ok: false, json: async () => ({
+        error: 'media_changed', current: { ...item('a'), alt: { de: 'Other author', en: '' } },
+      }) });
+    } });
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('a')], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+    page.el('dSuggest').click();
+    await page.flush();
+    page.el('dSave').click();
+    await page.flush();
+    expect(sent).toEqual({ conditional: { version: 1, patch: {
+      alt: { de: DETAILS.altDe, en: DETAILS.altEn },
+      caption: { de: DETAILS.captionDe, en: DETAILS.captionEn }, tags: DETAILS.tags,
+    }, expect: { alt: { de: '', en: '' }, caption: { de: '', en: '' }, tags: [] } } });
+    expect(page.el('dAltDe').value).toBe(DETAILS.altDe);
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dCompare').textContent).toContain('Other author');
+  });
+});
+
+describe('conditional media response validation', () => {
+  const response = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
+  async function clearTitle(page: Page, afterInitialRead: () => void): Promise<void> {
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('a')], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+    await page.flush();
+    afterInitialRead();
+    page.el('dTitle').value = '';
+    page.el('detail').dispatch('input');
+    page.el('dSave').click();
+    await page.flush();
+  }
+
+  it.each([
+    {},
+    { ...item('b'), title: '' },
+    { ...item('a'), title: undefined },
+    { ...item('a'), title: 42 },
+    { ...item('a'), title: '', alt: { de: '' } },
+    { ...item('a'), title: '', tags: [42] },
+  ])('does not infer empty fields from an invalid recovery read: %j', async (current) => {
+    let reads = 0;
+    let writes = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (init?.method === 'PATCH') { writes++; return Promise.reject(new Error('lost')); }
+      if (url === '/media/items/a') { reads++; return response(current); }
+    } });
+    await clearTitle(page, () => {
+      expect(reads).toBe(1); // Initial impact read; recovery gets its own one-read budget.
+      reads = 0;
+    });
+    expect(reads).toBe(1);
+    expect(writes).toBe(1);
+    expect(page.el('dTitle').value).toBe('');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dCompare').textContent).toContain('Save outcome unknown');
+    expect(page.el('dCompare').textContent).not.toContain('Intended value stored');
+    expect(page.el('detail').find('dUseMine')).toBeNull();
+    expect(page.el('detail').find('dUseStored')).toBeNull();
+    page.el('dSave').click();
+    await page.flush();
+    expect(writes).toBe(1);
+  });
+
+  it.each([
+    { conditionalVersion: 1 },
+    { ...item('b'), title: '', conditionalVersion: 1 },
+    { ...item('a'), title: 42, conditionalVersion: 1 },
+    { ...item('a'), conditionalVersion: 1 },
+  ])('does not clean on an invalid versioned acknowledgement: %j', async (acknowledgement) => {
+    let reads = 0;
+    let writes = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (init?.method === 'PATCH') { writes++; return response(acknowledgement); }
+      if (url === '/media/items/a') { reads++; return response({}); }
+    } });
+    await clearTitle(page, () => {
+      expect(reads).toBe(1); // Initial impact read; recovery gets its own one-read budget.
+      reads = 0;
+    });
+    expect(writes).toBe(1);
+    expect(reads).toBe(1);
+    expect(page.el('dTitle').value).toBe('');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dCompare').textContent).toContain('Save outcome unknown');
+    expect(page.el('detail').find('dUseStored')).toBeNull();
+  });
+});
+
+describe('explicit conditional detail choices after more editing', () => {
+  async function open(page: Page): Promise<void> {
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('a')], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+  }
+  function change(page: Page, id: string, value: string): void {
+    page.el(id).value = value;
+    page.el('detail').dispatch('input');
+  }
+
+  it('Use mine retains attempted leaves reverted to their original values and adds new edits only', async () => {
+    const writes: unknown[] = [];
+    const current = {
+      ...item('a'), title: 'Stored', folder: 'Elsewhere', alt: { de: 'Other DE', en: 'Other EN' },
+    };
+    const page = loadPage({ request: (_url, init) => {
+      if (init?.method !== 'PATCH') return;
+      writes.push(JSON.parse(init.body!));
+      return Promise.resolve({
+        status: writes.length === 1 ? 409 : 200, ok: writes.length !== 1,
+        json: async () => writes.length === 1 ? { error: 'media_changed', current } : {
+          ...current, title: 'a', alt: { de: '', en: 'New local EN' }, conditionalVersion: 1,
+        },
+      });
+    } });
+    await open(page);
+    change(page, 'dTitle', 'Mine');
+    change(page, 'dAltDe', 'My DE');
+    page.el('dSave').click();
+    await page.flush();
+    change(page, 'dTitle', 'a');
+    change(page, 'dAltDe', '');
+    change(page, 'dAltEn', 'New local EN');
+    page.el('dUseMine').click();
+    await page.flush();
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual({ conditional: { version: 1,
+      patch: { title: 'a', alt: { de: '', en: 'New local EN' } },
+      expect: { title: 'Stored', alt: { de: 'Other DE', en: 'Other EN' } },
+    } });
+    expect(page.el('dFolder').value).toBe('Elsewhere');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+  });
+
+  it('Use stored first compares newer edits made before a late conflict response', async () => {
+    const pending = Promise.withResolvers<unknown>();
+    const page = loadPage({ request: (_url, init) => init?.method === 'PATCH' ? pending.promise : undefined });
+    await open(page);
+    change(page, 'dTitle', 'Submitted');
+    page.el('dSave').click();
+    await page.flush();
+    change(page, 'dTitle', 'Newer');
+    pending.resolve({ status: 409, ok: false, json: async () => ({
+      error: 'media_changed', current: { ...item('a'), title: 'Stored' },
+    }) });
+    await page.flush();
+    page.el('dUseStored').click();
+    expect(page.el('dTitle').value).toBe('Newer');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dCompare').textContent).toContain('"Newer"');
+    page.el('dUseStored').click();
+    expect(page.el('dTitle').value).toBe('Stored');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+  });
+});
+
+describe('Media publication impact and bounded refresh', () => {
+  const zero = { gallery: 0, galleryCaptionFollowsLibrary: 0, heroTitle: false, inline: 0 };
+  const unchanged = { de: { alt: false, caption: false }, en: { alt: false, caption: false } };
+  const story = (translationKey: string, captions = 1) => ({ translationKey, title: translationKey,
+    locales: { de: { ...zero, gallery: 3, galleryCaptionFollowsLibrary: captions }, en: { ...zero, gallery: 1, galleryCaptionFollowsLibrary: 1 } } });
+  const impact: MediaImpact = { availability: 'available', published: [story('one'), story('two')],
+    drafts: [story('draft')], newerDrafts: [{ ...story('removed'), locales: { de: zero, en: zero } }] };
+  async function open(page: Page, photo: Item = item('a')) {
+    page.rows.set(photo.key, photo);
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [photo, item('b')], total: 2 });
+    await page.flush(); page.el('grid').querySelectorAll('.media-cell')[0]!.click(); await page.flush();
+  }
+
+  it('explains the per-write DE caption union, distinct stories, separate draft scope and unaffected EN without author admin requests', async () => {
+    const requests: string[] = [];
+    const page = loadPage({ isAdmin: false, request: (url) => { requests.push(url); return undefined; } });
+    await open(page, { ...item('a'), impact, usedIn: [{ kind: 'post', key: 'one', title: 'Authorized title' }] });
+    page.el('dCapDe').value = 'Saved caption'; page.el('detail').dispatch('input');
+    page.el('dSave').click(); await page.flush();
+    const text = page.el('dImpact').textContent;
+    expect(text).toContain('2 distinct stories with gallery effects from this save');
+    expect(text).toContain('1 distinct stories with gallery effects from this save');
+    expect(text).toContain('EN: unaffected by this save.');
+    expect(text).toContain('preview now, live after successful Publish');
+    expect(text).toContain('Different saved drafts');
+    expect(text).toContain('0 distinct stories with gallery effects from this save');
+    expect(text).toContain('3 gallery occurrences');
+    expect(text).not.toContain('Pending live descriptions');
+    expect(page.el('dImpact').querySelectorAll('a').map((link) => link.href)).toEqual(['/admin/editor.html?tk=one']);
+    expect(requests.some((url) => /publication\/summary|rebuild|settings/.test(url))).toBe(false);
+    expect(page.patches).toHaveLength(1);
+    const helper = page.win.MediaImpact as { affected(stories: StoryUse[], changed: ChangedDescriptions): string[] };
+    expect(helper.affected([story('one'), story('one'), story('two', 0)], { de: { alt: true, caption: true }, en: { alt: true, caption: false } })).toEqual(['one', 'two']);
+  });
+
+  it('reports unchanged descriptions, hero-only no-gallery effect and About-only empty impact', async () => {
+    const page = loadPage({ isAdmin: false });
+    const heroOnly: MediaImpact = { availability: 'available', published: [{ ...story('hero'),
+      locales: { de: { ...zero, heroTitle: true, inline: 1 }, en: zero } }], drafts: [], newerDrafts: [] };
+    await open(page, { ...item('a'), impact: heroOnly });
+    page.el('dTitle').value = 'Only title'; page.el('detail').dispatch('input'); page.el('dSave').click(); await page.flush();
+    expect(page.el('dImpact').textContent).toContain('Descriptions unchanged.');
+    page.el('dCapDe').value = 'Description'; page.el('detail').dispatch('input'); page.el('dSave').click(); await page.flush();
+    expect(page.el('dImpact').textContent).toContain('No gallery effect.');
+    expect(page.el('dImpact').textContent).toContain('hero/title: yes');
+    const helper = page.win.MediaImpact as { render(...args: unknown[]): void };
+    const editorCopy = page.win.EditorCopy as { en: object };
+    helper.render(page.el('dImpact'), { impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] },
+      usedIn: [{ kind: 'page', key: 'about', title: 'About' }] }, unchanged, false,
+      editorCopy.en, () => {});
+    expect(page.el('dImpact').textContent).toContain('No eligible story');
+    expect(page.el('dImpact').querySelectorAll('a')).toEqual([]);
+  });
+
+  it.each([false, true])('reuses the item response for impact without another GET (unknown outcome: %s)', async (unknown) => {
+    let reads = 0;
+    let writes = 0;
+    const fresh: Item = { ...item('a', 'saved alt'),
+      impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] },
+      livePending: { de: { alt: true, caption: false }, en: { alt: false, caption: false } } };
+    const response = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
+    const page = loadPage({ request: (url, init) => {
+      if (url !== '/media/items/a') return;
+      if (init?.method === 'PATCH') {
+        writes++;
+        return unknown ? Promise.reject(new Error('lost acknowledgement')) : response({
+          ...fresh, conditionalVersion: 1,
+          changedDescriptions: { de: { alt: true, caption: false }, en: { alt: false, caption: false } },
+        });
+      }
+      reads++;
+      return response(writes ? fresh : { ...item('a'), impact });
+    } });
+    await open(page);
+    expect(reads).toBe(1);
+    expect(page.el('dImpact').textContent).toContain('2 stories with uses');
+    page.el('dAltDe').value = 'saved alt'; page.el('detail').dispatch('input');
+    page.el('dSave').click(); await page.flush();
+    expect(reads).toBe(unknown ? 2 : 1);
+    expect(writes).toBe(1);
+    expect(page.el('dImpact').textContent).toContain('No eligible story');
+    expect(page.el('dImpact').textContent).toContain('DE: pending against the live release — alt text: yes, caption: no.');
+    expect(page.el('dUnsaved').hidden).toBe(!unknown);
+    if (unknown) expect(page.el('dCompare').textContent).toContain('Save outcome unknown');
+    else expect(page.el('out').textContent).toContain('Photo details saved.');
+  });
+
+  it('refreshes only projections while dirty, preserving base expectations and last save result', async () => {
+    const page = loadPage();
+    await open(page, { ...item('a', 'base'), impact, livePending: unchanged });
+    page.el('dAltDe').value = 'local'; page.el('detail').dispatch('input');
+    page.rows.set('a', { ...item('a', 'foreign base'), impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] },
+      livePending: { de: { alt: false, caption: true }, en: { alt: false, caption: false } } });
+    page.timers.find((timer) => timer.ms === 30000 && !timer.cleared)!.fn(); await page.flush();
+    expect(page.el('dAltDe').value).toBe('local');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dImpact').textContent).toContain('No eligible story');
+    expect(page.el('dImpact').textContent).toContain('caption: yes');
+    expect(page.patches).toEqual([]);
+    page.el('dSave').click(); await page.flush();
+    expect(page.patches[0]?.body).toMatchObject({ conditional: { patch: { alt: { de: 'local' } }, expect: { alt: { de: 'base' } } } });
+    expect(page.el('out').textContent).toContain('Photo details saved.');
+  });
+
+  it('discards reads superseded by selection and save; deadline marks unavailable without clearing dirty text', async () => {
+    const reads: Array<{ key: string; response: { resolve(value: unknown): void } }> = [];
+    const page = loadPage({ request: (url, init) => {
+      if (!url.startsWith('/media/items/') || init?.method === 'PATCH') return undefined;
+      const response = Promise.withResolvers<unknown>(); reads.push({ key: url, response }); return response.promise;
+    } });
+    await open(page);
+    expect(reads).toHaveLength(1);
+    page.el('grid').querySelectorAll('.media-cell')[1]!.click(); await page.flush();
+    expect(reads).toHaveLength(2);
+    reads[0]!.response.resolve({ ok: true, status: 200, json: async () => ({ ...item('a'), impact }) });
+    reads[1]!.response.resolve({ ok: true, status: 200, json: async () => ({ ...item('b'), impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] } }) });
+    await page.flush();
+    expect(page.el('detail').dataset.key).toBe('b');
+    expect(page.el('dImpact').textContent).toContain('No eligible story');
+    expect(page.el('dImpact').textContent).not.toContain('Authorized title');
+    page.el('dAltDe').value = 'keep dirty'; page.el('detail').dispatch('input');
+    page.timers.find((timer) => timer.ms === 30000 && !timer.cleared)!.fn(); await page.flush();
+    expect(reads).toHaveLength(3);
+    page.focus(); page.focus(); await page.flush(); expect(reads).toHaveLength(3);
+    page.timers.find((timer) => timer.ms === 10000 && !timer.cleared)!.fn(); await page.flush();
+    expect(page.el('dImpact').textContent).toContain('Impact unavailable or stale');
+    expect(page.el('dAltDe').value).toBe('keep dirty');
+    page.el('dSave').click(); await page.flush();
+    reads[2]!.response.resolve({ ok: true, status: 200, json: async () => ({ ...item('b'), impact }) });
+    await page.flush();
+    expect(page.el('dImpact').textContent).not.toContain('2 stories with uses');
+    expect(page.patches).toHaveLength(1);
+    page.visibility(true);
+    expect(page.timers.filter((timer) => timer.ms === 30000 && !timer.cleared)).toHaveLength(0);
   });
 });

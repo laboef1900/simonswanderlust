@@ -138,17 +138,24 @@ node -e "require('sharp')({create:{width:1600,height:1067,channels:3,background:
 curl -s -c cookies.txt -X POST http://localhost:3000/login \
   -H 'content-type: application/json' \
   -d '{"username":"simon","password":"YOUR_PASSWORD"}'
+OWNER_ID=$(curl -s -b cookies.txt http://localhost:3000/auth/me | node -e "let s='';process.stdin.on('data',b=>s+=b).on('end',()=>process.stdout.write(JSON.parse(s).userId))")
+UPLOAD_ID=$(node -p "require('node:crypto').randomUUID()")
 curl -s -b cookies.txt -X POST http://localhost:3000/upload \
+  -F "expectedOwnerId=$OWNER_ID" -F "uploadId=$UPLOAD_ID" -F retryGeneration=0 \
   -F key=trips/smoke/hero -F alt="Smoke" -F file=@/tmp/sample.jpg
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/trips/smoke/hero-640.webp  # -> 200
+# An accepted response names the hash-versioned src/key; wait for Media status ready
+# before requesting that src's variants. On an unknown response, GET the receipt:
+curl -s -b cookies.txt "http://localhost:3000/upload/receipts/$UPLOAD_ID"
 ```
 
 ## Run locally without Docker (Node)
 
-**Prerequisite:** Node >= 26, a local Postgres instance.
+**Prerequisite:** Node 26, local Postgres, and Xcode command-line tools on macOS (or the
+qualified Linux compiler/toolchain). The native lock artifact is required, not optional.
 
 ```bash
 npm install
+npm run build:native
 DATABASE_URL=postgres://images:YOUR_PASSWORD@127.0.0.1:5432/images \
   STORAGE_DIR=./data/images PUBLIC_BASE_URL=http://localhost:3000 npm start
 # -> "image uploader listening on :3000", open /login to create the first admin
@@ -159,6 +166,37 @@ For an isolated feature worktree, set absolute writable paths for `STORAGE_DIR`,
 `PORT`. Set `MAP_DIR` to the self-hosted basemap assets. Use a dedicated database;
 integration tests require a different `TEST_DATABASE_URL`, never the content database.
 An empty `SITE_DIR` starts a build from `SITE_APP_DIR`, so check both paths before launch.
+
+The production build inputs live in `.github/native-owner/`: the owned C binding and
+its qualified compiler/container recipes are preserved byte-for-byte. The historical
+qualification wording and `/proof` build-stage path in those files are retained to
+preserve that source identity; they do not install a proof worker in the app.
+`npm run build:native` uses pinned Node 26.12.1 headers and writes the addon, ABI/build
+record, header/license provenance and Node license into `uploader/native/`. The root
+Dockerfile builds these with the pinned DHI indices and Debian snapshot in an isolated
+stage; neither its native build driver nor the test subprocesses ship in the runtime.
+
+The permanent `owned flock · native amd64` / `owned flock · native arm64` CI jobs build
+the current checkout on standard public native Ubuntu runners and run:
+
+```sh
+# From uploader/, after dependencies in both trees and build:native are installed.
+# TEST_DATABASE_URL must name an owned, disposable PostgreSQL 18 fixture.
+npm test -- --project integration test/data-owner.integration.test.ts test/storage-owner.integration.test.ts test/gpx-main-boot.integration.test.ts
+```
+
+These are host-runner regressions, not production-image or deployment-mount qualification.
+The descriptor suite covers invalid/closed/non-file descriptors, live/stopped contention,
+stable inodes, clean close, SIGKILL, ordinary-child noninheritance and deliberately inherited
+last-close exclusion. Product ownership/main suites retain real PG-loss, admission failure,
+draining app/offline-restore exclusion and graceful native release coverage.
+
+Native binding qualification inherited from #304 covers macOS arm64/APFS and native
+DHI/glibc amd64+arm64 ext4 bind/named volumes. The actual deployment mount must pass the
+same process/descriptor/PG-loss/restore matrix before deployment or enablement; a successful
+lock acquisition is not filesystem qualification. Docker Desktop sharing, NFS/SMB/FUSE
+and musl are not approved. Never delete or replace the stable `.storage-owner.lock` beside
+the images directory. See [write ownership](../ARCHITECTURE.md#write-reconciliation-and-storage-ownership-305).
 
 ---
 
@@ -278,9 +316,10 @@ The admin-only **Pages** catalogue at `/admin/pages.html` opens the incumbent
 keeps its fixed URLs and cannot be unpublished/deleted. Other pages start as
 drafts; publication locks each enabled locale's slug permanently through unpublish.
 Draft saves do not build; published saves/revision restores, Publish, unpublish
-and published deletion commit then build once. A `502 page_build_failed` with
-`persisted: true` means the new DB state is saved and the old release is still
-serving: retry **Rebuild site now** after repair.
+and published deletion commit then build once. A committed HTTP 200 response with
+`build.ok: false` means the new DB state is saved and the old release is still
+serving: retry **Rebuild site now** after repair. PUT includes its owner/save receipt;
+an actual 5xx remains Unknown and follows the one-probe/manual-check contract.
 
 Language settings' **Prepare translations** opens the explicit inactive-locale
 workflow without exposing those fields in ordinary editing. Activation validates
@@ -291,6 +330,30 @@ Logical dump v13 preserves page lifecycle metadata and `site_nav`; MDX is still
 posts-only. Public generic pages/navigation rendering is #289, not this API slice.
 See [authoring](../docs/authoring-workflow.md#editable-pages) and the
 [#287 implementation interface](../docs/superpowers/specs/2026-10-27-issue-287-pages-navigation.md).
+
+## Journeys
+
+Authors use the Journeys catalogue and editor to group up to 50 existing stories in manual
+order, including draft stories. Move-up/down controls support keyboard reordering. Both
+locale working copies are retained; primary content is required at Publish, while a
+never-published secondary can be explicitly omitted. Save never updates the live snapshot.
+Only admins publish, unpublish or delete. Publication validates every requested locale,
+including a nonblank plain-text introduction and a canonical unsuffixed hero backed by a
+ready media row. Per-locale slugs remain locked after first publication, even after unpublish.
+The story editor shows its claiming journey read-only. Deleting a journey leaves stories
+and their URLs untouched; deleting a story removes every journey reference transactionally.
+
+Logical dump **v14** backs up `journeys`, `journey_locales` and `journey_members`, including
+retained snapshots/history and working order. Export all remains stories-only; journeys
+have no MDX export, preview or revision history. Use the
+[offline recovery procedure](../ARCHITECTURE.md#database-dumps), never a live restore.
+Every restore into a journey schema needs a journey-aware, security-compliant reader even
+when the input predates v14: old input clears journeys and restores its matching language
+state in the same transaction. The verified pre-restore set is the undo. Preserve stopped
+writers, exclusive ownership, private archive validation and explicit cross-mode consent.
+Rollback keeps additive tables inert and patched codecs/ownership safeguards intact;
+an older reader accepting the dump version is not sufficient schema compatibility.
+Public journey pages and member strips are the separate #310 integration.
 
 ## Media library
 
@@ -317,6 +380,31 @@ flagging rows whose files have vanished, and demoting a `ready` row whose varian
 longer complete for its original's width — and then `encodeQueue.recover()` re-seeds the queue
 from `status = 'processing'`). Variant and original files are written atomically (temp +
 rename), so a crash never leaves a truncated file under a final name.
+
+The backlog admits at most 200 waiting jobs, in addition to the two running jobs. When an
+upload receives **429** because that backlog is full, a new photo keeps its original as
+`failed` / `queue_full`, not stranded `processing`; an existing photo's prior status/error is
+restored unless another request already admitted or completed its job. Once capacity returns,
+bounded receipt recovery finishes retained uploads without retransmitting their bytes.
+Use **Check again** for transfer evidence; an admin can run **Rescan** after a recovery error.
+Media **Retry** still re-encodes retained failed originals under #348's contract. A new explicit
+upload can also repair an older orphan, but an unresolved upload is never automatically resent.
+Upload, Retry, and boot/rescan recovery serialize admission and refusal rollback for the
+same key, including the awaited status write. Recovery re-reads the row after waiting rather
+than admitting a stale `processing` snapshot. Re-uploading a `queue_full` photo changes only
+its status and restores its original; curated folder, localized descriptions, title, tags,
+and the saved encoding profile are retained even across repeated refusals.
+Recovery starts each admitted job immediately, so a later candidate's database read failure
+does not strand earlier admissions. The rescan still reports the error; already admitted
+photos finish independently, while remaining `processing` photos can recover on a later rescan.
+
+Upload IDs remain bound to the original account, byte hash, initial fields and frozen
+encoding profile. Missing receipts are Unknown, not authorization to resend. A retry is
+offered only after the server proves a nonrecoverable attempt and advances its generation.
+Deletion makes all receipts for that media key terminal (`gone`). The Media batch stays
+on screen after session expiry: sign in in a second tab, then explicitly resume as the
+same account. Files stay only in this tab's memory; leaving/reloading loses that queue.
+Completed transfer evidence remains visible even if another file pauses the batch.
 
 Three consequences worth knowing:
 
@@ -665,8 +753,13 @@ success reply, so the editor can name what just went live undescribed.
 
 ## CLI upload (Phase 2 migration)
 
+This is an **offline storage writer**: stop app/maintenance writers first and supply
+`DATABASE_URL` as well as the correct shared storage path. It acquires native then PG
+ownership and refuses active app sessions, just like restore; it does not bypass admission.
+
 ```bash
-STORAGE_DIR=./data/images PUBLIC_BASE_URL=https://img.simonswanderlust.com \
+DATABASE_URL=postgres://images:YOUR_PASSWORD@127.0.0.1:5432/images \
+  STORAGE_DIR=./data/images PUBLIC_BASE_URL=https://img.simonswanderlust.com \
   npm run upload -- ./photo.jpg trips/bucharest-2024/hero "Old town at dusk"
 ```
 
@@ -689,7 +782,19 @@ It asks the **running** app over loopback (minting and immediately revoking a on
 session) rather than spawning its own `astro build`. That is deliberate: `work-lock.ts` makes a
 build and image encoding mutually exclusive within one process, and `docker-compose.yml` sizes
 `mem_limit` as `max(build, encode) + baseline` on exactly that assumption — a second, unlocked
-builder could OOM the container. It exits non-zero on a failed build and prints the reason.
+builder could OOM the container. It exits non-zero on a failed build and prints a fixed
+failure code/reason plus `docker compose logs app`; raw generator diagnostics stay in
+server logs. Its temporary admin session is removed on both success and failure.
+
+Admins can inspect the latest attempt and the independently observed live release on
+Desk or Settings (`GET /rebuild/status`, admin-only and `no-store`). The latest record
+survives restart in unserved `SITE_DIR/build-state.json`; a previously running attempt
+becomes interrupted, not successful merely because an older release exists. After fixing
+the cause, use **Rebuild site now** or this CLI command explicitly.
+
+A failed rebuild can follow a successful CMS mutation. Follow the saved/published/deleted
+acknowledgement; do not repeat that mutation to repair generation. The previous release
+remains served until another build promotes a replacement.
 
 ## CLI password reset (recovery)
 
@@ -707,4 +812,4 @@ logged in uses the "Change my password" card on
 
 ## Develop
 
-`npm install` · `npm test` · `npm run typecheck` · `npm run dev`
+`npm install` · `npm run build:native` · `npm test` · `npm run typecheck` · `npm run dev`

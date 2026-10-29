@@ -35,19 +35,98 @@
     detailKey: null,
     detailDirty: false,  // unsaved edits in the detail panel; render() leaves it alone while set
     detailItem: null,    // the row the panel was built from (diff base for saveDetail)
+    detailGeneration: 0,
+    detailSaving: false,
+    detailRecovery: null,
+    detailObservation: null,
+    detailChanged: null, // only this session's acknowledged write, never inferred by a read
+    observedKey: null,
     suggest: null,       // in-flight AI suggestion for the panel's photo: { key, controller }
     offers: null,        // suggestions shown under fields that had text: { key, slots: [[inputId, value, what]] }
     queue: null,
   };
 
-  var client = api.makeClient({ onUnauthed: function () { location.href = '/login'; } });
-  var uploads = api.createUploadQueue(client, {
-    onChange: function (snap) { state.queue = snap; renderQueue(); },
+  var client = api.makeClient({
+    onUnauthed: function () { uploads.pause(); say(copy.uploadNeedsAuth); },
+    canWrite: function () { return !!state.me && !uploads.snapshot().paused; },
   });
+  var uploads = api.createUploadQueue(client, {
+    onChange: function (snap) {
+      var completed = snap.done > (state.queue ? state.queue.done : 0);
+      state.queue = snap;
+      renderQueue();
+      if (completed) void reload();
+    },
+  });
+  window.addEventListener('beforeunload', function (event) {
+    if (!uploads.snapshot().unsettled) return;
+    event.preventDefault(); event.returnValue = '';
+  });
+  window.addEventListener('focus', async function () {
+    try { uploads.observeOwner((await client.me()).userId); }
+    catch (error) { if (error.status === 401) uploads.pause(); }
+  });
+
+  var detailRefresh = window.PublicationRefresh.create({
+    resource: function () { return state.detailKey; },
+    read: function (signal) {
+      return window.PublicationRefresh.json('/media/items/' + state.detailKey, signal);
+    },
+    apply: function (item) {
+      // Deliberately do not replace detailItem, form values, or conditional-write expectations.
+      state.detailObservation = { impact: item.impact, livePending: item.livePending,
+        usedIn: item.usedIn || state.detailObservation?.usedIn || state.detailItem?.usedIn || [] };
+      renderImpact();
+    },
+    unavailable: function () {
+      state.detailObservation = { impact: { availability: 'unavailable' }, livePending: null };
+      renderImpact();
+    },
+    unauthorized: function () { uploads.pause(); say(copy.uploadNeedsAuth); },
+  });
+  // Reuse item responses for observation only, never for form values or write
+  // acknowledgement. savePatch alone owns validation and the one recovery GET.
+  ['get', 'patch'].forEach(function (method) {
+    var request = client[method];
+    client[method] = async function (key) {
+      var version = detailRefresh.beginAction();
+      function observe(item) {
+        if (key !== state.detailKey) return;
+        try { api.assertItem(item, key); }
+        catch (_) { item = { impact: { availability: 'unavailable' }, livePending: null }; }
+        detailRefresh.accept(item, version);
+      }
+      try {
+        var item = await request.apply(client, arguments);
+        observe(item);
+        return item;
+      } catch (error) {
+        observe(error.current);
+        throw error;
+      } finally { detailRefresh.endAction(false); }
+    };
+  });
+  // Other mutations have no item projection, so observe after they settle.
+  // Background projection reads use PublicationRefresh.json, never this wrapped client.
+  ['remove', 'move', 'retry', 'rescan', 'renameFolder', 'deleteFolder', 'createFolder'].forEach(function (method) {
+    var mutate = client[method];
+    client[method] = async function () {
+      detailRefresh.beginAction();
+      try { return await mutate.apply(client, arguments); }
+      finally { detailRefresh.endAction(); }
+    };
+  });
+
+  function renderImpact() {
+    var box = $('dImpact');
+    if (box) window.MediaImpact.render(box, state.detailObservation, state.detailChanged,
+      !!state.me?.isAdmin, copy, function () { detailRefresh.refresh(); });
+  }
 
   function say(msg) { $('out').textContent = msg; }
 
   function fail(err) {
+    if (err && (err.status === 401 || err.code === 'owner_changed')) { uploads.pause(); say(copy.uploadNeedsAuth); return; }
     say('Error: ' + (err && err.message ? err.message : String(err)));
   }
 
@@ -199,23 +278,54 @@
     var box = $('uploadQueue');
     var snap = state.queue;
     box.innerHTML = '';
-    if (!snap || !snap.total) { box.hidden = true; return; }
+    if (!snap || !snap.total && !snap.paused) { box.hidden = true; return; }
     box.hidden = false;
     box.appendChild(el('p', 'muted', snap.done + ' of ' + snap.total + ' uploaded'
       + (snap.failed ? ' · ' + snap.failed + ' failed' : '')));
+    box.appendChild(el('p', 'muted', copy.uploadLimit));
+    if (snap.paused) {
+      var banner = el('div', 'upload-session');
+      banner.setAttribute('role', 'alert');
+      banner.appendChild(el('p', '', copy.uploadSessionSummary.replace('{done}', snap.done).replace('{waiting}', snap.waiting)));
+      var login = el('a', '', copy.uploadSignIn);
+      login.href = '/login?next=%2Fadmin%2F'; login.target = '_blank'; login.rel = 'noopener';
+      var resume = el('button', 'btn-secondary', copy.uploadResume); resume.type = 'button';
+      resume.addEventListener('click', async function () {
+        var me = await uploads.resume();
+        if (!me) { say(copy.uploadOwnerChanged); return; }
+        await activate(me);
+      });
+      var stop = el('button', 'btn-secondary', copy.uploadStop); stop.type = 'button';
+      stop.addEventListener('click', async function () {
+        var count = uploads.snapshot().items.filter(function (item) { return ['queued', 'needs-auth', 'failed', 'retryable'].indexOf(item.state) !== -1; }).length;
+        if (count && await window.AdminConfirm.ask({ title: copy.uploadStop, body: copy.uploadStopConfirm.replace('{count}', count), confirmLabel: copy.uploadStop, danger: true })) uploads.stopWaiting();
+      });
+      banner.append(login, resume, stop); box.appendChild(banner);
+    }
     snap.items.forEach(function (i) {
       var row = el('div', 'upload-row');
       row.appendChild(el('span', 'upload-row__name', i.name));
-      row.appendChild(el('span', 'upload-row__state', api.queueState(i)));
+      var label = i.state === 'unknown' ? copy.uploadUnknown : i.state === 'checking' ? copy.uploadChecking
+        : i.state === 'needs-auth' ? copy.uploadNeedsAuth : i.state === 'retryable' ? copy.uploadRetryable
+        : i.state === 'gone' ? copy.uploadGone : api.queueState(i);
+      row.appendChild(el('span', 'upload-row__state', label));
+      if (i.originalRetained) row.appendChild(el('span', 'muted', copy.uploadRetained));
+      if (i.reason === 'queue_full' || i.reason === 'recovery_required') row.appendChild(el('span', 'muted', copy.uploadRecoveryRequired));
+      if (i.state === 'unknown') {
+        var check = el('button', 'btn-secondary', copy.uploadCheckAgain); check.type = 'button'; check.disabled = snap.paused;
+        check.addEventListener('click', function () { uploads.check(i.id); });
+        row.appendChild(check);
+      }
       box.appendChild(row);
     });
     if (snap.failed) {
-      var retry = el('button', 'btn-secondary', 'Retry failed (' + snap.failed + ')');
+      var retry = el('button', 'btn-secondary', copy.uploadRetry + ' (' + snap.failed + ')');
       retry.type = 'button';
+      retry.disabled = snap.paused;
       retry.addEventListener('click', function () { uploads.retryFailed(); });
       box.appendChild(retry);
     }
-    if (snap.done && snap.active === 0) {
+    if (snap.done && snap.active === 0 && !snap.paused && !snap.unsettled) {
       var clear = el('button', 'btn-secondary', 'Clear finished');
       clear.type = 'button';
       clear.addEventListener('click', function () { uploads.clearFinished(); reload(); });
@@ -230,6 +340,13 @@
   // (see detailReplaceable).
   function renderDetail() {
     if (state.detailDirty) return;
+    var selectionChanged = state.observedKey !== state.detailKey;
+    if (selectionChanged) {
+      detailRefresh.beginAction();
+      state.observedKey = state.detailKey;
+      state.detailObservation = null;
+      state.detailChanged = null;
+    }
     var panel = $('detail');
     panel.innerHTML = '';
     var item = state.items.filter(function (i) { return i.key === state.detailKey; })[0];
@@ -241,10 +358,13 @@
     if (!item) {
       delete panel.dataset.key;
       panel.appendChild(el('p', 'muted', 'Select a photo to edit its details.'));
+      if (selectionChanged) detailRefresh.endAction();
       return;
     }
     panel.dataset.key = item.key;
     state.detailItem = item;
+    state.detailGeneration++;
+    state.detailRecovery = null;
     panel.appendChild(el('p', 'section-label', 'Photo'));
     panel.appendChild(el('p', 'media-key', item.key));
     renderSuggest(panel, item);
@@ -300,6 +420,16 @@
     unsaved.setAttribute('role', 'status');
     unsaved.hidden = true;
     panel.appendChild(unsaved);
+    var comparison = el('section');
+    comparison.id = 'dCompare';
+    comparison.setAttribute('aria-live', 'polite');
+    panel.appendChild(comparison);
+    var impact = el('section');
+    impact.id = 'dImpact';
+    impact.setAttribute('aria-live', 'polite');
+    panel.appendChild(impact);
+    renderImpact();
+    if (selectionChanged) detailRefresh.endAction();
 
     // EXIF is read-only. lat/lng are absent entirely for non-admins.
     panel.appendChild(el('p', 'section-label', 'Camera'));
@@ -395,6 +525,7 @@
   }
 
   function markDetailDirty() {
+    state.detailGeneration++;
     state.detailDirty = true;
     var hint = $('dUnsaved');
     if (hint) hint.hidden = false;
@@ -620,32 +751,126 @@
    * not the freshest row. alt and caption send only the locale that changed,
    * for the same reason: a bulk AI run may have filled the other one meanwhile.
    */
-  function detailPatch() {
-    var base = state.detailItem;
-    var patch = {};
-    var title = $('dTitle').value;
-    if (title !== (base.title || '')) patch.title = title;
-    var pair = function (field, deId, enId) {
-      var changed = {};
-      if ($(deId).value !== (base[field].de || '')) changed.de = $(deId).value;
-      if ($(enId).value !== (base[field].en || '')) changed.en = $(enId).value;
-      if (Object.keys(changed).length) patch[field] = changed;
+  function detailPatch(retained) {
+    var values = {
+      title: $('dTitle').value,
+      alt: { de: $('dAltDe').value, en: $('dAltEn').value },
+      caption: { de: $('dCapDe').value, en: $('dCapEn').value },
+      tags: $('dTags').value.split(','),
+      folder: $('dFolder').value,
     };
-    pair('alt', 'dAltDe', 'dAltEn');
-    pair('caption', 'dCapDe', 'dCapEn');
-    var tags = $('dTags').value.split(',').map(function (t) { return t.trim(); }).filter(Boolean);
-    if (tags.join('\n') !== (base.tags || []).join('\n')) patch.tags = tags;
-    var folder = $('dFolder').value;
-    if (folder !== (base.folder || '')) patch.folder = folder;
+    var patch = api.changedFields(values, state.detailItem);
+    // Explicit Use mine still writes an attempted leaf when the author has
+    // changed it back to the render value: the compared stored value may differ.
+    var attempted = api.expectations(retained || {}, values);
+    Object.keys(attempted).forEach(function (field) {
+      patch[field] = field === 'alt' || field === 'caption'
+        ? Object.assign({}, patch[field], attempted[field]) : attempted[field];
+    });
     return patch;
   }
 
-  async function saveDetail(key) {
-    try {
-      await client.patch(key, detailPatch());
+  function showDetailRecovery(key, error) {
+    state.detailRecovery = error;
+    var box = $('dCompare');
+    box.innerHTML = '';
+    box.appendChild(el('p', null, error.unsupported ? copy.mediaConditionalUnsupported
+      : error.unknown ? copy.mediaConditionalUnknown : copy.mediaConditionalConflict));
+    (error.fields || []).forEach(function (field) {
+      box.appendChild(el('p', null, field.field + ': ' + copy['mediaConditional' + {
+        achieved: 'Achieved', expected: 'Expected', other: 'Other',
+      }[field.outcome]] + ' — ' + copy.mediaConditionalMine + ': ' + JSON.stringify(field.intended)
+        + '; ' + copy.mediaConditionalStored + ': ' + JSON.stringify(field.stored)));
+    });
+    if (error.unsupported) return;
+    var check = el('button', 'btn-link', copy.mediaConditionalCheck);
+    check.type = 'button';
+    check.id = 'dCheckStored';
+    check.addEventListener('click', async function () {
+      check.disabled = true;
+      try {
+        var current = await client.get(key);
+        if ($('detail').dataset.key !== key) return;
+        var patch = detailPatch(error.patch);
+        showDetailRecovery(key, { unknown: error.unknown, current: current,
+          patch: patch, generation: state.detailGeneration,
+          fields: api.compareFields(patch, api.expectations(patch, state.detailItem), current, key) });
+      } catch (failure) { fail(failure); }
+      finally { check.disabled = false; }
+    });
+    box.appendChild(check);
+    if (!error.current) return;
+    var mine = el('button', null, copy.mediaConditionalUseMine);
+    mine.type = 'button';
+    mine.id = 'dUseMine';
+    mine.addEventListener('click', function () { saveDetail(key, error.current); });
+    box.appendChild(mine);
+    var generation = error.generation;
+    var stored = el('button', 'btn-link', copy.mediaConditionalUseStored);
+    stored.type = 'button';
+    stored.id = 'dUseStored';
+    stored.addEventListener('click', function () {
+      if (state.detailGeneration !== generation) {
+        say(copy.mediaConditionalNewer);
+        var patch = detailPatch(error.patch);
+        showDetailRecovery(key, { unknown: error.unknown, current: error.current,
+          patch: patch, generation: state.detailGeneration,
+          fields: api.compareFields(patch, api.expectations(patch, state.detailItem), error.current, key) });
+        return;
+      }
+      state.items = state.items.map(function (item) { return item.key === key ? error.current : item; });
       state.detailDirty = false;
-      await reload('Saved.');
-    } catch (e) { fail(e); }
+      renderDetail();
+    });
+    box.appendChild(stored);
+  }
+
+  async function saveDetail(key, current) {
+    if (state.detailSaving) return;
+    if (state.detailRecovery && !current) { say(copy.mediaConditionalReview); return; }
+    var generation = state.detailGeneration;
+    state.detailSaving = true;
+    detailRefresh.beginAction();
+    state.detailChanged = null;
+    renderImpact();
+    $('dSave').disabled = true;
+    try {
+      var patch = detailPatch(current && state.detailRecovery ? state.detailRecovery.patch : null);
+      if (!Object.keys(patch).length) {
+        state.detailDirty = false;
+        state.detailChanged = { de: { alt: false, caption: false }, en: { alt: false, caption: false } };
+        renderDetail();
+        return;
+      }
+      var saved = await api.savePatch(client, key, patch, api.expectations(patch, current || state.detailItem));
+      if ($('detail').dataset.key === key) {
+        state.detailChanged = saved.changedDescriptions || null;
+        renderImpact();
+      }
+      if ($('detail').dataset.key !== key || state.detailGeneration !== generation) {
+        say(copy.mediaConditionalNewer);
+        return;
+      }
+      state.items = state.items.map(function (item) { return item.key === key ? saved : item; });
+      state.detailDirty = false;
+      renderDetail();
+      say(copy.mediaConditionalSaved);
+    } catch (error) {
+      if ($('detail').dataset.key !== key) return;
+      if (error.status === 401 || (error.probeError && error.probeError.status === 401)) {
+        fail(error.probeError || error);
+      }
+      if (error.unsupported || error.unknown || error.status === 409) {
+        error.patch = patch;
+        error.generation = generation;
+        showDetailRecovery(key, error);
+      }
+      else fail(error);
+    } finally {
+      state.detailSaving = false;
+      if ($('dSave')) $('dSave').disabled = false;
+      detailRefresh.endAction(false);
+    }
   }
 
   async function deleteOne(item) {
@@ -716,12 +941,78 @@
     });
   }
 
+  // Each uncertain operation keeps its own bounded read/control. A listing,
+  // filter change or later operation cannot erase evidence about selected keys.
+  async function folderMoveOperation(operation) {
+    var panel = el('section', 'write-recovery');
+    var message = el('p', '');
+    message.setAttribute('role', 'status');
+    var results = el('ul', '');
+    var check = el('button', 'btn-secondary', copy.writeCheckAgain); check.type = 'button';
+    var again = el('button', 'btn-secondary', operation.kind === 'folder' ? copy.folderCreateAgain : copy.moveAgain); again.type = 'button';
+    check.hidden = true; again.hidden = true;
+    panel.append(message, results, check, again);
+    $('out').insertAdjacentElement('afterend', panel);
+    var busy = false;
+    async function probe() {
+      if (busy) return;
+      busy = true; check.disabled = true; again.hidden = true; results.textContent = '';
+      message.textContent = operation.kind === 'folder' ? copy.folderChecking : copy.moveChecking;
+      try {
+        if (operation.kind === 'folder') {
+          var folders = await client.folders();
+          if (!Array.isArray(folders) || folders.some(function (path) { return typeof path !== 'string'; })) throw new Error('invalid_response');
+          state.folders = folders;
+          renderFolders();
+          renderToolbar();
+          var present = folders.indexOf(operation.path) !== -1;
+          message.textContent = (present ? copy.folderPresent : copy.folderAbsent) + ' ' + operation.path;
+          again.hidden = present;
+        } else {
+          var lookup = await client.lookup(operation.keys);
+          if (!lookup || !Array.isArray(lookup.items) || lookup.items.length !== operation.keys.length
+            || new Set(lookup.items.map(function (item) { return item.key; })).size !== operation.keys.length
+            || lookup.items.some(function (item) { return operation.keys.indexOf(item.key) === -1 || item.missing !== true && typeof item.folder !== 'string'; })) throw new Error('invalid_response');
+          message.textContent = copy.moveStored + ' ' + copy.movePolicy;
+          lookup.items.forEach(function (item) { results.appendChild(el('li', '', item.key + ': ' + (item.missing ? copy.moveDeleted : item.folder || '/'))); });
+          again.hidden = false;
+          // Refresh the visible query separately; the scoped lookup remains its evidence.
+          void reload();
+        }
+      } catch (error) { message.textContent = copy.writeUnknown; if (error.status === 401) fail(error); }
+      finally { check.hidden = false; check.disabled = false; busy = false; }
+    }
+    async function send() {
+      if (busy) return;
+      busy = true; check.hidden = true; again.hidden = true;
+      try {
+        var acknowledged = operation.kind === 'folder'
+          ? await client.createFolder(operation.path)
+          : await client.move(operation.keys, operation.folder);
+        if (!acknowledged || acknowledged.ok !== true
+          || operation.kind === 'folder' && (!Array.isArray(acknowledged.folders) || acknowledged.folders.indexOf(operation.path) === -1)
+          || operation.kind === 'move' && (!Number.isSafeInteger(acknowledged.moved) || acknowledged.moved < 0 || acknowledged.moved > operation.keys.length)) {
+          throw Object.assign(new Error('invalid_response'), { unknown: true });
+        }
+        // A valid acknowledgement is displayed separately from this optional refresh.
+        message.textContent = operation.kind === 'folder' ? copy.folderPresent : copy.moveStored;
+        void reload().catch(function () {});
+      } catch (error) {
+        if (api.isUnknown(error)) { busy = false; await probe(); }
+        else { message.textContent = error.message; fail(error); }
+      } finally { busy = false; }
+    }
+    check.addEventListener('click', probe);
+    again.addEventListener('click', send);
+    await send();
+  }
+
   function bindFolderActions() {
     $('newFolder').addEventListener('click', async function () {
       var path = prompt('New folder name (inside "' + (state.folder || 'root') + '"):');
       if (!path) return;
       var full = state.folder ? state.folder + '/' + path : path;
-      try { await client.createFolder(full); await reload('Folder created.'); } catch (e) { fail(e); }
+      await folderMoveOperation({ kind: 'folder', path: full });
     });
     $('renameFolder').addEventListener('click', async function () {
       if (!state.folder) { say('Pick a folder first.'); return; }
@@ -752,10 +1043,9 @@
 
   function bindBulk() {
     $('moveSelected').addEventListener('click', async function () {
-      try {
-        var res = await client.move(state.selected, $('moveTarget').value);
-        await reload('Moved ' + res.moved + ' photo(s).');
-      } catch (e) { fail(e); }
+      var keys = state.selected.slice();
+      if (!keys.length || keys.length > 100) { say(copy.mediaLookupLimit); return; }
+      await folderMoveOperation({ kind: 'move', keys: keys, folder: $('moveTarget').value });
     });
     $('retrySelected').addEventListener('click', async function () {
       try {
@@ -811,15 +1101,18 @@
     });
   }
 
-  (async function init() {
-    state.me = await window.Auth.ensureAuthed();
-    if (!state.me) return;
+  var initialized = false;
+  async function activate(me) {
+    state.me = me;
+    uploads.initialize(me.userId);
     window.Auth.renderHeader(state.me);
     if (!state.me.isAdmin) {
       $('rescan').hidden = true;
       $('renameFolder').hidden = true;
       $('deleteFolder').hidden = true;
     }
+    if (initialized) { await reload(); return; }
+    initialized = true;
     $('emptyChoosePhotos').textContent = copy.mediaChoosePhotos;
     $('emptyChoosePhotos').addEventListener('click', function () {
       $('fileInput').focus();
@@ -843,6 +1136,11 @@
     // Delegated: the panel's inputs are rebuilt by renderDetail; the panel is not.
     $('detail').addEventListener('input', markDetailDirty);
     $('detail').addEventListener('change', markDetailDirty);
+    detailRefresh.start(false);
     await reload();
+  }
+  (async function init() {
+    try { await activate(await client.me()); }
+    catch (error) { fail(error); }
   })();
 })();

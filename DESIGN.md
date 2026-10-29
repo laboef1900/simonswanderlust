@@ -744,6 +744,13 @@ using the same media picker, upload and framing controls rather than a new visua
   (`2.2fr 1fr 1fr`), `32px` vertical padding (`40px` from `md`) and `24px` row
   gaps when stacked. Every secondary colour is `/70` or heavier — a floor, not a
   preference. Links are `44px`-tall boxes and focus with the light accent ring.
+- **Configurable links:** the approved ordered header/footer/legal lists retain
+  this typography and target sizing. Labels wrap rather than overflow. Only builtin
+  and page targets receive `aria-current`; external links show an arrow and localized
+  new-tab description. Footer social links remain a separate, unchanged list.
+- **Basic pages:** Contact/Privacy/Legal use a restrained prose column, one title and
+  the existing sanitized gallery island. No invented legal text, forms, comment
+  surface or story-specific rail is introduced. About keeps its incumbent layout.
 
 ### Featured Hero (signature)
 
@@ -985,6 +992,14 @@ and the `<dialog>`s appended to `<body>` share one set:
   entry shows one inactive locale with a notice and return to Language settings.
   Deletion uses the existing scoped confirmation dialog, never a second modal
   convention. Legal/Privacy explain author responsibility without seeded legal prose.
+- **Navigation settings** uses the existing vertical tab and flat field-row pattern.
+  Header/footer/legal sections show bounded item counts; each row exposes type,
+  target and enabled-locale label/URL fields, with move up/down and confirmed removal.
+  Unpublished/missing targets are explicit notices, not hidden authoring failures.
+  Social links are read-only here with a Site identity link. Saving rebuilds once;
+  a failed rebuild acknowledges the committed draft and offers explicit retry.
+  Conflicts/network ambiguity retain edits and require a confirmed reload, never
+  silent last-write-wins. Disabled translations remain stored but are not displayed.
 - `[hidden]` is enforced globally with `!important`, because every control carries an
   author `display`.
 

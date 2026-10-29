@@ -39,6 +39,8 @@ jobs:
             uploader/package-lock.json
             site/package-lock.json
       - run: npm ci
+      # Product boot/restore tests exercise the owned addon, not a PG-only substitute.
+      - run: npm run build:native
       # The draft-preview route (src/preview.ts) reuses site/src/lib markdown
       # modules, whose deps (@astrojs/markdown-satteri, unified, rehype-*) live
       # in site/node_modules — install them so typecheck + tests can compile.
@@ -49,6 +51,65 @@ jobs:
       # (serialized against the shared DB by vitest.config.ts's integration
       # project; unit suites keep full file parallelism).
       - run: npm test
+        env:
+          TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/ci
+
+  # Permanent architecture coverage of current product source. These host-runner
+  # tests are NOT DHI/container/deployment-mount qualification.
+  native-owner:
+    if: >-
+      github.repository == 'laboef1900/simonswanderlust' &&
+      github.event.repository.private == false &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    name: owned flock · native ${{ matrix.arch }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: uploader
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: |
+            uploader/package-lock.json
+            site/package-lock.json
+      - run: npm ci
+      - run: npm run build:native
+      - run: npm ci
+        working-directory: site
+      # Native public amd64/arm64 hosts only: no QEMU, paid or self-hosted runners.
+      # The service database and test-created schema/data are disposable; no
+      # raw fixtures, credentials, logs or binaries are uploaded as artifacts.
+      - run: npm test -- --project integration test/data-owner.integration.test.ts test/storage-owner.integration.test.ts test/gpx-main-boot.integration.test.ts
         env:
           TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/ci
 
@@ -79,10 +140,9 @@ jobs:
             uploader/package-lock.json
       - run: npm ci
         working-directory: site
-      # The Content Layer loader queries Postgres during astro check, so
-      # bootstrap the schema first via the uploader's db module. The script
-      # only needs pg (+ tsx to run TS) — skip the full uploader install.
-      - run: npm install --no-save pg tsx
+      # The site snapshot integration exercises the uploader's real builder and
+      # schema alongside Astro loaders. Install its locked dependencies too.
+      - run: npm ci
         working-directory: uploader
       - run: npx tsx scripts/ci-ensure-schema.ts
         working-directory: uploader
