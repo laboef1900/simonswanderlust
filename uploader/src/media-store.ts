@@ -74,13 +74,13 @@ export interface MediaQuery {
 
 export interface MediaStore {
   list(q: MediaQuery): Promise<{ items: MediaItem[]; total: number }>;
-  get(key: string): Promise<MediaItem | null>;
+  get(key: string, client?: Pick<DbClient, 'query'>): Promise<MediaItem | null>;
   upsert(item: NewMediaItem): Promise<MediaItem>;
   patch(key: string, fields: MediaPatch): Promise<MediaItem>;
   move(keys: string[], folder: string): Promise<number>;
   remove(key: string): Promise<void>;
-  /** Publish gate: which of these keys are not `ready` (unknown keys are NOT returned). */
-  notReadyKeys(keys: string[]): Promise<Set<string>>;
+  /** Publish gate: unknown keys are NOT returned. Reuse the caller's transaction when supplied. */
+  notReadyKeys(keys: string[], client?: Pick<DbClient, 'query'>): Promise<Set<string>>;
   /**
    * Current localized alt/caption of these keys, one query; unknown keys are
    * absent. Reads ONLY the four description columns — never EXIF, GPS or
@@ -547,8 +547,8 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
     return { sql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', values };
   }
 
-  async function getRow(key: string): Promise<MediaRow | null> {
-    const { rows } = await pool.query<MediaRow>(`SELECT ${COLS} FROM media WHERE key = $1`, [key]);
+  async function getRow(key: string, client: Pick<DbClient, 'query'> = pool): Promise<MediaRow | null> {
+    const { rows } = await client.query<MediaRow>(`SELECT ${COLS} FROM media WHERE key = $1`, [key]);
     return rows[0] ?? null;
   }
 
@@ -598,8 +598,8 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
       );
       return { items: rows.map((r) => rowToItem(r, baseUrl)), total: Number(countRes.rows[0]?.n ?? 0) };
     },
-    async get(key) {
-      const r = await getRow(key);
+    async get(key, client) {
+      const r = await getRow(key, client);
       return r ? rowToItem(r, baseUrl) : null;
     },
     async upsert(item) {
@@ -674,9 +674,9 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
     async remove(key) {
       await pool.query(`DELETE FROM media WHERE key = $1`, [key]);
     },
-    async notReadyKeys(keys) {
+    async notReadyKeys(keys, client = pool) {
       if (keys.length === 0) return new Set();
-      const { rows } = await pool.query<{ key: string }>(
+      const { rows } = await client.query<{ key: string }>(
         `SELECT key FROM media WHERE key = ANY($1::text[]) AND status <> 'ready'`, [keys],
       );
       return new Set(rows.map((r) => r.key));

@@ -154,7 +154,8 @@ export class PostError extends Error {
 
 export interface PublishTokens { baseUpdatedAt: Date; baseRouteVersion: string | null; baseLanguageUpdatedAt: Date }
 export interface PublishState { pair: StoredPostPair; routeVersion: string | null; language: LanguageState }
-export type PublishValidation = (pair: StoredPostPair, language: LanguageState) => Promise<void>;
+/** SQL validation must reuse the locked transaction, never borrow another pool connection. */
+export type PublishValidation = (pair: StoredPostPair, language: LanguageState, client?: DbClient) => Promise<void>;
 
 /** Publish uses exact reviewed tokens, not save's older-than comparison. */
 export function assertPublishTokens(state: PublishState, tokens: PublishTokens): void {
@@ -1164,7 +1165,7 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         );
         assertPublishTokens({ pair, routeVersion: route.rows[0]?.version ?? null, language }, tokens);
         validateForPublish(pair, language);
-        await validate?.(pair, language);
+        await validate?.(pair, language, client);
         const updatedAt = await touchPostPair(client, tk);
         // This merge exists ONLY at explicit Publish; legacy backfills stay route-free.
         await client.query(

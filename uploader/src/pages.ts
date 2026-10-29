@@ -48,7 +48,7 @@ export function validatePagePair(pair: PagePair): void {
 export type PageUpdate = Pick<PagePair, 'key'> & Partial<Pick<PagePair, 'de' | 'en'>>;
 export interface PageSaveOptions {
   prepareLocale?: LanguageLocale;
-  validate?: (pair: StoredPagePair, language: LanguageConfig) => Promise<void>;
+  validate?: (pair: StoredPagePair, language: LanguageConfig, client?: DbClient) => Promise<void>;
 }
 export interface PageRemoval {
   key: string; titles: Record<Locale, string>; paths: string[]; revisions: number;
@@ -243,7 +243,7 @@ export function pgPageStore(pool: DbPool, options: { imageOrigin?: string } = {}
       const pair = mergePageUpdate(update ?? { key }, existing, mode, opts);
       if (action !== 'save') pair.status = action === 'publish' ? 'published' : 'draft';
       if (action !== 'unpublish') await pgClaims(client, pair, mode);
-      if (pair.status === 'published') { await validatePublishedPage(pair, mode, origin); await opts.validate?.(pair, mode); }
+      if (pair.status === 'published') { await validatePublishedPage(pair, mode, origin); await opts.validate?.(pair, mode, client); }
       if (existing.updatedAt) {
         await client.query('INSERT INTO page_revisions(id,key,snapshot,saved_at) VALUES($1,$2,$3,clock_timestamp())', [randomUUID(), key, JSON.stringify({ de: existing.de, en: existing.en })]);
         await client.query('DELETE FROM page_revisions WHERE key=$1 AND id NOT IN (SELECT id FROM page_revisions WHERE key=$1 ORDER BY saved_at DESC,id DESC LIMIT $2)', [key, REVISION_CAP]);
@@ -303,7 +303,7 @@ export function pgPageStore(pool: DbPool, options: { imageOrigin?: string } = {}
       const blockers: LanguageBlocker[] = [];
       for (const key of new Set(rows.map((row) => row.key))) if (isPageKind(key)) {
         const pair = pagePairFromRows(key, rows.filter((r) => r.key === key));
-        try { await pgClaims(client, pair, mode); await validatePublishedPage(pair, mode, origin); await extra?.(pair, mode); }
+        try { await pgClaims(client, pair, mode); await validatePublishedPage(pair, mode, origin); await extra?.(pair, mode, client); }
         catch (error) { blockers.push(...blocker(key, error, mode)); }
       }
       if (blockers.length) throw new LanguageError('Prepare page translations before activating this language.', 'language_pages_incomplete', blockers);
