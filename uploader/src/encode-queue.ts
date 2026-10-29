@@ -38,6 +38,10 @@ export const MAX_BACKLOG = 200;
 export interface EncodeQueue {
   /** Enqueue a stored key for encoding. Throws when the backlog is full. */
   enqueue(key: string): void;
+  /** Serializes upload/recovery/deletion status transitions for the same physical key. */
+  withAdmission<T>(key: string, operation: () => Promise<T>): Promise<T>;
+  availableCapacity(): number;
+  onCapacity(listener: () => void): () => void;
   /**
    * True while `key` is queued or encoding. `DELETE /media/items/*` refuses
    * such a key: the job holds the original in memory and would write its
@@ -117,6 +121,20 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
 
   const pending: string[] = [];
   const inFlight = new Set<string>();
+  const admissions = new Map<string, Promise<unknown>>();
+  const capacityListeners = new Set<() => void>();
+  function withAdmission<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = admissions.get(key) ?? Promise.resolve();
+    const result = previous.catch(() => {}).then(() => {
+      work.assertWritable();
+      return operation();
+    });
+    admissions.set(key, result);
+    void result.finally(() => {
+      if (admissions.get(key) === result) admissions.delete(key);
+    }).catch(() => {});
+    return result;
+  }
   let idleWaiters: (() => void)[] = [];
   /** Set by stop()/drain(): pump() stops dequeuing while admitted jobs settle. */
   let draining = false;
@@ -201,6 +219,9 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
     } finally {
       inFlight.delete(key);
       pump();
+      if (!draining && work.isWritable()) {
+        for (const listener of capacityListeners) listener();
+      }
     }
   }
 
@@ -219,6 +240,12 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
   work.signal.addEventListener('abort', stop, { once: true });
   if (!work.isWritable()) stop();
   return {
+    withAdmission,
+    availableCapacity: () => draining || !work.isWritable() ? 0 : Math.max(0, maxBacklog - pending.length),
+    onCapacity(listener) {
+      capacityListeners.add(listener);
+      return () => { capacityListeners.delete(listener); };
+    },
     enqueue(key) {
       work.assertWritable();
       if (draining) throw new Error('the encode queue is draining');
@@ -239,13 +266,16 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
         });
         work.assertWritable();
         if (draining) throw new Error('the encode queue is draining');
-        const queued = new Set<string>([...pending, ...inFlight]);
         let n = 0;
         for (const item of items) {
-          if (queued.has(item.key) || pending.length >= maxBacklog) continue;
-          pending.push(item.key);
-          queued.add(item.key);
-          n++;
+          await withAdmission(item.key, async () => {
+            const current = await opts.store.get(item.key);
+            if (current?.status !== 'processing' || inFlight.has(item.key) || pending.includes(item.key)) return;
+            if (pending.length >= maxBacklog) return;
+            work.assertWritable();
+            pending.push(item.key);
+            n++;
+          });
         }
         if (n > 0) log(`encode queue: recovered ${n} unfinished upload(s)`);
         // No silent truncation: say so when the cap left work behind. The rest
@@ -262,6 +292,7 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
     async quiesce() {
       work.stop();
       await Promise.allSettled([...recoveries]);
+      await Promise.allSettled([...admissions.values()]);
       if (isIdle()) return;
       const { promise, resolve } = Promise.withResolvers<void>();
       idleWaiters.push(resolve);

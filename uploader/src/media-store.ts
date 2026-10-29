@@ -22,7 +22,7 @@ export type MediaStatus = 'processing' | 'ready' | 'failed' | 'missing';
  * displays this field — the real error is logged to stdout only, matching the
  * global error handler's contract.
  */
-export type MediaError = 'decode_failed' | 'encode_failed' | 'write_failed' | 'no_space';
+export type MediaError = 'decode_failed' | 'encode_failed' | 'write_failed' | 'no_space' | 'queue_full';
 
 export interface MediaItem {
   key: string;
@@ -76,9 +76,11 @@ export interface MediaStore {
   list(q: MediaQuery): Promise<{ items: MediaItem[]; total: number }>;
   get(key: string, client?: Pick<DbClient, 'query'>): Promise<MediaItem | null>;
   upsert(item: NewMediaItem): Promise<MediaItem>;
-  patch(key: string, fields: MediaPatch): Promise<MediaItem>;
+  patch(key: string, fields: MediaPatch, client?: Pick<DbClient, 'query'>): Promise<MediaItem>;
   move(keys: string[], folder: string): Promise<number>;
-  remove(key: string): Promise<void>;
+  remove(key: string, client?: Pick<DbClient, 'query'>): Promise<void>;
+  /** One snapshot, independent of filters; every requested key appears explicitly. */
+  lookup(keys: string[]): Promise<Array<{ key: string; folder: string } | { key: string; missing: true }>>;
   /** Publish gate: unknown keys are NOT returned. Reuse the caller's transaction when supplied. */
   notReadyKeys(keys: string[], client?: Pick<DbClient, 'query'>): Promise<Set<string>>;
   /**
@@ -324,6 +326,12 @@ export function memoryMediaStore(opts: MediaStoreOptions): MediaStore {
     async get(key) {
       const r = rows.get(key);
       return r ? toItem(r) : null;
+    },
+    async lookup(keys) {
+      return keys.map((key) => {
+        const item = rows.get(key);
+        return item ? { key, folder: item.folder } : { key, missing: true as const };
+      });
     },
     async upsert(item) {
       assertSafeFolder(item.folder ?? '');
@@ -602,6 +610,14 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
       const r = await getRow(key, client);
       return r ? rowToItem(r, baseUrl) : null;
     },
+    async lookup(keys) {
+      const { rows } = await pool.query<{ key: string; folder: string }>(
+        `SELECT key, folder FROM media WHERE key = ANY($1::text[])`, [keys],
+      );
+      const folders = new Map(rows.map((row) => [row.key, row.folder]));
+      return keys.map((key) => folders.has(key)
+        ? { key, folder: folders.get(key)! } : { key, missing: true as const });
+    },
     async upsert(item) {
       const folder = item.folder ?? '';
       assertSafeFolder(folder);
@@ -641,14 +657,14 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
       if (!saved) throw new MediaStoreError('failed to save media row');
       return rowToItem(saved, baseUrl);
     },
-    async patch(key, fields) {
+    async patch(key, fields, client = pool) {
       const sets: string[] = [];
       const values: unknown[] = [];
       const set = (col: string, value: unknown, cast = '') => {
         values.push(value);
         sets.push(`${col} = $${values.length}${cast}`);
       };
-      if (fields.folder !== undefined) { assertSafeFolder(fields.folder); await ensureFolders(fields.folder); set('folder', fields.folder); }
+      if (fields.folder !== undefined) { assertSafeFolder(fields.folder); await ensureFolders(fields.folder, client); set('folder', fields.folder); }
       if (fields.title !== undefined) set('title', cleanText(fields.title));
       if (fields.alt?.de !== undefined) set('alt_de', cleanText(fields.alt.de));
       if (fields.alt?.en !== undefined) set('alt_en', cleanText(fields.alt.en));
@@ -657,10 +673,10 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
       if (fields.tags !== undefined) set('tags', normalizeTags(fields.tags), '::text[]');
       if (sets.length > 0) {
         values.push(key);
-        const res = await pool.query(`UPDATE media SET ${sets.join(', ')} WHERE key = $${values.length}`, values);
+        const res = await client.query(`UPDATE media SET ${sets.join(', ')} WHERE key = $${values.length}`, values);
         if (res.rowCount === 0) throw new MediaStoreError('media not found', 'not_found');
       }
-      const saved = await getRow(key);
+      const saved = await getRow(key, client);
       if (!saved) throw new MediaStoreError('media not found', 'not_found');
       return rowToItem(saved, baseUrl);
     },
@@ -671,8 +687,8 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
       const res = await pool.query(`UPDATE media SET folder = $1 WHERE key = ANY($2::text[])`, [folder, keys]);
       return res.rowCount ?? 0;
     },
-    async remove(key) {
-      await pool.query(`DELETE FROM media WHERE key = $1`, [key]);
+    async remove(key, client = pool) {
+      await client.query(`DELETE FROM media WHERE key = $1`, [key]);
     },
     async notReadyKeys(keys, client = pool) {
       if (keys.length === 0) return new Set();

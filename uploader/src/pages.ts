@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DbClient, DbPool } from './db.js';
 import { imagesMapError, normalizeGalleryFences, type ImageMeta } from './body-content.js';
-import { REVISION_CAP } from './posts.js';
+import { REVISION_CAP, type SaveReceipt, type SaveRead } from './posts.js';
 import { memoryLanguageStore, readLanguage, type LanguageStore, type LanguageState, type LanguageLocale } from './language.js';
 
 export type Locale = 'de' | 'en';
@@ -76,6 +76,7 @@ function pageWithDefaults(pair: PagePair): PagePair {
 export type PageUpdate = Pick<PagePair, 'key'> & Partial<Pick<PagePair, 'de' | 'en'>>;
 export interface PageSaveOptions {
   prepareLocale?: LanguageLocale;
+  receipt?: SaveReceipt;
   validate?: (pair: PagePair, language: LanguageState, client?: DbClient) => Promise<void>;
 }
 function mergePageUpdate(update: PageUpdate, existing: StoredPagePair, language: LanguageState, options: PageSaveOptions): PagePair {
@@ -93,6 +94,7 @@ function mergePageUpdate(update: PageUpdate, existing: StoredPagePair, language:
 
 export interface PageStore {
   get(key: string): Promise<StoredPagePair>;
+  getForSave(key: string, ownerUserId: string): Promise<SaveRead<StoredPagePair>>;
   /**
    * Create or overwrite a page. When `baseUpdatedAt` is given (the `updatedAt`
    * the editor loaded), the save is rejected with PageError code 'conflict'
@@ -112,6 +114,7 @@ export interface PageStore {
 export function memoryPageStore(language: LanguageStore = memoryLanguageStore()): PageStore {
   const byKeyLocale = new Map<string, PageContent>();
   const updatedAtByKey = new Map<string, Date>();
+  const receipts = new Map<string, SaveReceipt>();
   // Oldest first (append order) — mirrors the pg store's page_revisions table.
   const revisionsByKey = new Map<string, PageRevision[]>();
   return {
@@ -122,6 +125,12 @@ export function memoryPageStore(language: LanguageStore = memoryLanguageStore())
         en: structuredClone(byKeyLocale.get(`${key}:en`) ?? emptyContent('en')),
         updatedAt: updatedAtByKey.get(key) ?? null,
       };
+    },
+    async getForSave(key, ownerUserId) {
+      // get() snapshots synchronously; capture receipt before yielding as well.
+      const content = this.get(key);
+      const receipt = receipts.get(key);
+      return { content: await content, ownerUserId, lastSaveId: receipt?.ownerUserId === ownerUserId ? receipt.saveId : null };
     },
     async save(pair, baseUpdatedAt, options = {}) {
       return language.runExclusive(async (mode) => {
@@ -144,6 +153,8 @@ export function memoryPageStore(language: LanguageStore = memoryLanguageStore())
       // transaction.
       const prev = existing.updatedAt?.getTime() ?? 0;
       updatedAtByKey.set(pair.key, new Date(Math.max(Date.now(), prev + 1)));
+      if (options.receipt) receipts.set(pair.key, { ...options.receipt });
+      else receipts.delete(pair.key);
       return this.get(pair.key);
       });
     },
@@ -182,6 +193,19 @@ export function pgPageStore(pool: DbPool): PageStore {
       const updatedAt = rows.length ? new Date(Math.max(...rows.map((r) => r.updated_at.getTime()))) : null;
       return { key, de: de ? rowToContent(de) : emptyContent('de'), en: en ? rowToContent(en) : emptyContent('en'), updatedAt };
     },
+    async getForSave(key, ownerUserId) {
+      const { rows } = await pool.query<PageRow & { last_save_id: string | null; last_save_by: string | null }>(
+        'SELECT key,locale,title,body_markdown,images,updated_at,last_save_id,last_save_by FROM pages WHERE key=$1', [key],
+      );
+      const de = rows.find((r) => r.locale === 'de');
+      const en = rows.find((r) => r.locale === 'en');
+      const updatedAt = rows.length ? new Date(Math.max(...rows.map((r) => r.updated_at.getTime()))) : null;
+      const receipt = rows[0];
+      const lastSaveId = receipt?.last_save_by === ownerUserId
+        && rows.every((row) => row.last_save_by === ownerUserId && row.last_save_id === receipt.last_save_id)
+        ? receipt.last_save_id : null;
+      return { content: { key, de: de ? rowToContent(de) : emptyContent('de'), en: en ? rowToContent(en) : emptyContent('en'), updatedAt }, ownerUserId, lastSaveId };
+    },
     async save(pair, baseUpdatedAt, options = {}) {
       const client = await pool.connect();
       try {
@@ -218,11 +242,13 @@ export function pgPageStore(pool: DbPool): PageStore {
         for (const locale of ['de', 'en'] as Locale[]) {
           const c = normalized[locale];
           await client.query(
-            `INSERT INTO pages (key, locale, title, body_markdown, images, updated_at)
-             VALUES ($1,$2,$3,$4,$5::jsonb,$6)
+            `INSERT INTO pages (key, locale, title, body_markdown, images, updated_at, last_save_id, last_save_by)
+             VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8)
              ON CONFLICT (key, locale) DO UPDATE SET
-               title=EXCLUDED.title, body_markdown=EXCLUDED.body_markdown, images=EXCLUDED.images, updated_at=EXCLUDED.updated_at`,
-            [pair.key, locale, c.title, c.bodyMarkdown, JSON.stringify(c.images ?? {}), timestamp.rows[0]!.updated_at],
+               title=EXCLUDED.title, body_markdown=EXCLUDED.body_markdown, images=EXCLUDED.images, updated_at=EXCLUDED.updated_at,
+               last_save_id=EXCLUDED.last_save_id, last_save_by=EXCLUDED.last_save_by`,
+            [pair.key, locale, c.title, c.bodyMarkdown, JSON.stringify(c.images ?? {}), timestamp.rows[0]!.updated_at,
+              options.receipt?.saveId ?? null, options.receipt?.ownerUserId ?? null],
           );
         }
         await client.query('COMMIT');
