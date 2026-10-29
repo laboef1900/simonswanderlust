@@ -786,8 +786,8 @@ sanitizer cannot distinguish a Shiki `<span style="color:…">` from an author-t
 author-typed `style="position:fixed;inset:0;background:url(https://evil/…)"` would overlay every
 reader page (defacement) and fire a third-party request per view (reader IP leak), on the draft
 preview as well, so publish review would not catch it. Shiki therefore no longer emits inline
-styles at all: `site/src/lib/shiki-classes.ts` registers a transformer (in both
-`astro.config.mjs` and `MARKDOWN_OPTIONS`, lockstep-tested) that rewrites each colour into a
+styles at all: `site/src/lib/shiki-classes.ts` supplies the transformer registered in
+`MARKDOWN_OPTIONS`, shared directly by Astro configuration and draft previews, which rewrites each colour into a
 class, and `SHIKI_CSS` — generated from the same theme object — is inlined by `Base.astro` and
 by the draft preview. `style` is off the schema for every element; the gallery `--r` ratios and
 the hero focal point are the only inline styles on a page, and both are injected post-sanitize
@@ -1073,8 +1073,14 @@ deliberate trade-off, not an oversight:
   Fresh-target recovery uses offline `prepare-native-restore [--yes]`, not HTTP boot to
   create schema; keep ingress closed and auto-start disabled throughout the zero-user window.
   Only recognized bootstrap-only schema/default singleton values are admitted, never saved
-  identity/content or unknown shapes. The shared schema/identity seed runs after permanent
+  identity/content or unknown shapes. The shared schema/identity/language seed runs after permanent
   fencing, without listeners/builds/workers. Preparation does not itself verify an undo set.
+  The language singleton may be absent or contain only the installed unlocked DE-primary,
+  DE+EN default; changed modes, publication history and invalid timestamps refuse admission.
+  Its exact column defaults, nullability, primary key and CHECK expressions, together with
+  `posts.omitted` and its unpublished-only CHECK, remain load-bearing. A genuinely absent
+  additive column/table/seed may be initialized; a missing CHECK on existing columns or an
+  altered constraint is not absence and is refused before any fence or schema mutation.
   Catalog admission includes all installed indexes, not only table constraints: changed
   uniqueness, expressions, predicates, methods or invalid enforcement refuse preparation before
   any fence/schema mutation. Missing standalone indexes may be created by normal initialization

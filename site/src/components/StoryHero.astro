@@ -4,6 +4,7 @@ import Stamp from './Stamp.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
 import { coordsLabel, dateLabel } from '../lib/format';
 import { heroAltOf, type Trip } from '../lib/trips';
+import { siteLanguage } from '../lib/site-language';
 
 interface Props {
   trip: Trip;
@@ -51,7 +52,7 @@ const sizes = `(max-width: 639px) 100vw, max(100vw, clamp(${240 * aspect}px, ${3
     </h1>
     <div class="mt-4 min-w-0 self-center">
       {
-        otherHref && (
+        otherHref && siteLanguage().locales.includes(otherLocale) && (
           <a
             href={otherHref}
             lang={otherLocale}

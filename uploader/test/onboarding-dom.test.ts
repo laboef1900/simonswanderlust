@@ -299,6 +299,7 @@ async function deskPage(options: {
   isAdmin?: boolean;
   initial?: View;
   auth?: () => Promise<Response>;
+  language?: () => Promise<Response>;
   onboarding?: (request: Request) => Promise<Response>;
   posts?: () => Promise<Response>;
 } = {}) {
@@ -318,6 +319,9 @@ async function deskPage(options: {
       requests.push(request);
       if (url === '/auth/me') return options.auth ? options.auth() : Response.json({
         authenticated: true, userId: 'user-1', username: 'writer', isAdmin: options.isAdmin ?? true, needsSetup: false,
+      });
+      if (url === '/language') return options.language ? options.language() : Response.json({
+        primary: 'de', locales: ['de', 'en'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z',
       });
       if (url === '/onboarding') return options.onboarding ? options.onboarding(request) : Response.json(options.initial ?? view());
       if (url === '/posts') return options.posts ? options.posts() : Response.json([]);
@@ -342,6 +346,38 @@ async function deskPage(options: {
 }
 
 describe('Actual Desk authenticated onboarding activation', () => {
+  it('waits for language context before exposing the Desk or onboarding', async () => {
+    const pending = Promise.withResolvers<Response>();
+    const h = await deskPage({ language: () => pending.promise });
+    expect(h.requests.map((request) => request.url)).toEqual(['/auth/me', '/language']);
+    expect(h.get('#onboardingChecklist').hidden).toBe(true);
+    expect(h.document.querySelector('.cms-app-shell')).toBeNull();
+    pending.resolve(Response.json({ primary: 'en', locales: ['en'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' }));
+    await h.flush();
+    expect(h.get('#onboardingChecklist').hidden).toBe(false);
+    expect(h.get('#deskNext').querySelector('a')?.href).toBe('/admin/editor.html');
+    expect(h.get('#deskNext').textContent).toContain(ui.en['editor.chrome.deskNoDrafts']);
+    expect(h.requests.every((request) => request.method === 'GET')).toBe(true);
+  });
+
+  it('does not turn unavailable language context into logout or a default-language Desk', async () => {
+    let attempts = 0;
+    const h = await deskPage({ language: async () => {
+      if (attempts++ === 0) return Response.json({ error: 'unavailable' }, { status: 503 });
+      return Response.json({ primary: 'en', locales: ['en'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' });
+    } });
+    expect(h.location.href).toBe('');
+    expect(h.requests.map((request) => request.url)).toEqual(['/auth/me', '/language']);
+    expect(h.get('#onboardingChecklist').hidden).toBe(true);
+    expect(h.get('#deskError').hidden).toBe(false);
+    h.get('#deskError').querySelector('button')!.click();
+    await h.flush();
+    expect(h.get('#deskError').hidden).toBe(true);
+    expect(h.get('#deskNext').querySelector('a')?.href).toBe('/admin/editor.html');
+    expect(h.requests.filter((request) => request.url === '/language')).toHaveLength(2);
+    expect(h.requests.every((request) => request.method === 'GET')).toBe(true);
+  });
+
   it('waits for the shared role context before loading data or exposing actions', async () => {
     const pending = Promise.withResolvers<Response>();
     const h = await deskPage({ auth: () => pending.promise });
@@ -380,7 +416,7 @@ describe('Actual Desk authenticated onboarding activation', () => {
     const h = await deskPage({ isAdmin: false });
     expect(h.get('#onboardingChecklist').hidden).toBe(true);
     expect(h.get('#onboardingOpener').hidden).toBe(true);
-    expect(h.requests.map((request) => request.url).sort()).toEqual(['/auth/me', '/health', '/media/queue', '/posts']);
+    expect(h.requests.map((request) => request.url).sort()).toEqual(['/auth/me', '/health', '/language', '/media/queue', '/posts']);
     expect(h.get('#deskNext').querySelector('a')?.href).toBe('/admin/editor.html');
     expect(h.get('#deskRelease').textContent).toBe(ui.en['editor.chrome.deskNoReleaseAuthor']);
     expect(h.document.querySelector('a[href="/admin/settings.html"]')).toBeNull();

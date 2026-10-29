@@ -14,6 +14,7 @@ import { verifyRouteArchive } from '../src/gpx-backup.js';
 import { createGpxFiles } from '../src/gpx-files.js';
 import { seedSiteIdentity } from '../src/site-identity.js';
 import { StorageReadOnlyError } from '../src/storage-owner.js';
+import { DEFAULT_LANGUAGE, readLanguage } from '../src/language.js';
 import { interceptOnboardingTransactions } from './onboarding-query-fixture.js';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -281,6 +282,10 @@ describe.skipIf(!url)('onboarding PostgreSQL boot and snapshot boundary', () => 
     await verifyRouteArchive(file, dump.routeArchive, dump.tables.post_routes ?? []);
     expect(dump.tables.site_identity).toHaveLength(1);
     expect(dump.tables.site_identity![0]).toMatchObject({ saved_at: null, seed_source: 'neutral' });
+    expect(dump.tables.site_language).toHaveLength(1);
+    expect(dump.tables.site_language![0]).toMatchObject({
+      primary_locale: DEFAULT_LANGUAGE.primary, enabled_locales: DEFAULT_LANGUAGE.locales, locked_at: null,
+    });
     expect(dump.tables).not.toHaveProperty('onboarding_state');
     expect(await prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).toBe(true);
   });
@@ -294,6 +299,82 @@ describe.skipIf(!url)('onboarding PostgreSQL boot and snapshot boundary', () => 
     expect(await prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).toBe(true);
     await pool.query('DELETE FROM site_identity');
     expect(await prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).toBe(true);
+  });
+  it.each(['table', 'seed', 'omitted-column'] as const)('repairs only genuinely absent language bootstrap metadata: %s', async (missing) => {
+    await ensureSchema(pool);
+    await assertBootstrapOnlyTarget(pool, guard);
+    if (missing === 'table') await pool.query('DROP TABLE site_language');
+    if (missing === 'seed') await pool.query('DELETE FROM site_language');
+    if (missing === 'omitted-column') await pool.query('ALTER TABLE posts DROP COLUMN omitted');
+    await assertBootstrapOnlyTarget(pool, guard);
+    expect(await prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).toBe(true);
+    expect(await readLanguage(pool)).toMatchObject({ ...DEFAULT_LANGUAGE, lockedAt: null });
+    await assertBootstrapOnlyTarget(pool, guard);
+    // Recreated omitted metadata must enforce the real publication invariant.
+    await insertStory();
+    await pool.query('UPDATE posts SET omitted=true');
+    await expect(pool.query("UPDATE posts SET status='published'")).rejects.toMatchObject({ code: '23514' });
+    await expect(pool.query('UPDATE posts SET published_at=now()')).rejects.toMatchObject({ code: '23514' });
+    await expect(pool.query("UPDATE posts SET published_snapshot='{}'")).rejects.toMatchObject({ code: '23514' });
+  });
+  it.each([
+    ['site_language', 'site_language_id_check'],
+    ['site_language', 'site_language_primary_locale_check'],
+    ['site_language', 'site_language_enabled_locales_check'],
+    ['site_language', 'site_language_check'],
+    ['posts', 'posts_omitted_unpublished'],
+  ])('refuses a missing or weakened installed language CHECK on %s: %s', async (table, constraint) => {
+    await ensureSchema(pool);
+    await assertBootstrapOnlyTarget(pool, guard);
+    await pool.query(`ALTER TABLE ${table} DROP CONSTRAINT ${constraint}`);
+    await expect(prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).rejects.toThrow();
+    expect(await readRestoreFence(paths.storageDir)).toBe(false);
+    expect((await pool.query('SELECT * FROM site_identity')).rows).toEqual([]);
+    expect((await pool.query('SELECT * FROM onboarding_state')).rows).toEqual([]);
+    await pool.query(`ALTER TABLE ${table} ADD CONSTRAINT ${constraint} CHECK (true)`);
+    await expect(prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).rejects.toThrow();
+    expect(await readRestoreFence(paths.storageDir)).toBe(false);
+    expect((await pool.query('SELECT * FROM site_identity')).rows).toEqual([]);
+    expect((await pool.query('SELECT * FROM onboarding_state')).rows).toEqual([]);
+  });
+  it.each([
+    'ALTER TABLE posts ALTER COLUMN omitted SET DEFAULT true',
+    'ALTER TABLE posts ALTER COLUMN omitted DROP DEFAULT',
+    'ALTER TABLE posts ALTER COLUMN omitted DROP NOT NULL',
+    'ALTER TABLE site_language ALTER COLUMN id SET DEFAULT false',
+    'ALTER TABLE site_language ALTER COLUMN primary_locale DROP NOT NULL',
+    "ALTER TABLE site_language ALTER COLUMN primary_locale SET DEFAULT 'de'",
+    'ALTER TABLE site_language ALTER COLUMN locked_at SET DEFAULT now()',
+    'ALTER TABLE site_language ALTER COLUMN updated_at DROP DEFAULT',
+    'ALTER TABLE site_language DROP COLUMN locked_at',
+    'ALTER TABLE site_language ADD COLUMN owner_state text',
+    "UPDATE site_language SET primary_locale='en', enabled_locales=ARRAY['en','de']",
+    "UPDATE site_language SET enabled_locales=ARRAY['de']",
+    "UPDATE site_language SET enabled_locales=ARRAY['en','de']",
+    'UPDATE site_language SET locked_at=now()',
+    "UPDATE site_language SET updated_at='infinity'",
+  ])('refuses altered language metadata before fencing or seeding: %s', async (sql) => {
+    await ensureSchema(pool);
+    await assertBootstrapOnlyTarget(pool, guard);
+    await pool.query(sql);
+    const before = (await pool.query('SELECT * FROM site_language')).rows;
+    await expect(prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).rejects.toThrow();
+    expect((await pool.query('SELECT * FROM site_language')).rows).toEqual(before);
+    expect((await pool.query('SELECT * FROM site_identity')).rows).toEqual([]);
+    expect((await pool.query('SELECT * FROM onboarding_state')).rows).toEqual([]);
+    expect(await readRestoreFence(paths.storageDir)).toBe(false);
+  });
+  it('treats a pre-existing language-only schema as existing, not a fresh install', async () => {
+    await ensureSchema(pool);
+    const tables = (await pool.query<{ tablename: string }>('SELECT tablename FROM pg_tables WHERE schemaname=current_schema()')).rows;
+    for (const { tablename } of tables) {
+      if (tablename !== 'site_language') await pool.query(`DROP TABLE "${tablename.replaceAll('"', '""')}" CASCADE`);
+    }
+    const before = await captureBootEvidence(pool, guard);
+    expect(before.priorSchema).toBe(true);
+    await initializeApplicationSchema(pool, guard);
+    await initializeOnboarding(pool, paths, before, guard);
+    expect(await readOnboardingState(pool)).toMatchObject({ state: 'retired', reason: 'existing-schema' });
   });
   it('admits a recognized partial schema before offline initialization completes it', async () => {
     await ensureSchema(pool);

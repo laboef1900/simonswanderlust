@@ -1629,6 +1629,7 @@ describe('blog serving is DB-independent (#129)', () => {
     down.find = async () => { throw new Error('pg: connection to db:5432 refused'); };
     await mkdir(join(dir, 'site', 'current', 'de'), { recursive: true });
     await writeFile(join(dir, 'site', 'current', 'de', 'index.html'), '<h1>de</h1>');
+    await writeFile(join(dir, 'site', 'current', 'index.html'), '<!doctype html><html lang="de"><body>home</body></html>');
     const b = build({ sessions: down });
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -1925,6 +1926,7 @@ describe('security headers', () => {
   it('the public blog, its 404 page, legacy redirects and the image host get nosniff only', async () => {
     await mkdir(join(dir, 'site', 'current', 'de'), { recursive: true });
     await writeFile(join(dir, 'site', 'current', 'de', 'index.html'), '<h1>de</h1>');
+    await writeFile(join(dir, 'site', 'current', 'index.html'), '<!doctype html><html lang="de"><body>home</body></html>');
     await mkdir(join(dir, 'map'), { recursive: true });
     await writeFile(join(dir, 'map', 'tiles.pmtiles'), 'x');
     const b = build({ mapDir: join(dir, 'map') });

@@ -132,10 +132,15 @@
   function renderGrid() {
     var grid = $('grid');
     grid.innerHTML = '';
-    if (!state.items.length) {
-      grid.appendChild(el('p', 'muted', 'No photos here yet.'));
-      return;
-    }
+    var empty = !state.items.length;
+    var narrowed = Boolean(state.folder || state.q || state.tag || state.status || !state.recursive || state.page > 1);
+    $('mediaEmpty').hidden = !empty;
+    grid.hidden = empty;
+    $('mediaEmptyMessage').textContent = empty
+      ? (narrowed ? copy.mediaNoResults + ' ' + copy.mediaNoResultsHelp : copy.mediaEmpty + ' ' + copy.mediaEmptyHelp)
+      : '';
+    $('emptyShowAll').hidden = !narrowed;
+    if (empty) return;
     state.items.forEach(function (item, index) {
       var cell = el('div', 'media-cell' + (state.selected.indexOf(item.key) !== -1 ? ' is-selected' : ''));
       cell.setAttribute('role', 'option');
@@ -921,6 +926,21 @@
     }
     if (initialized) { await reload(); return; }
     initialized = true;
+    $('emptyChoosePhotos').textContent = copy.mediaChoosePhotos;
+    $('emptyChoosePhotos').addEventListener('click', function () {
+      $('fileInput').focus();
+      $('fileInput').click();
+    });
+    $('emptyShowAll').textContent = copy.mediaShowAll;
+    $('emptyShowAll').addEventListener('click', function () {
+      state.folder = state.q = state.tag = state.status = '';
+      state.recursive = true;
+      state.page = 1;
+      $('fSearch').value = $('fStatus').value = '';
+      $('fRecursive').checked = true;
+      $('fSearch').focus();
+      reload();
+    });
     bindFilters();
     bindUpload();
     bindFolderActions();

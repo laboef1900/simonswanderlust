@@ -51,7 +51,7 @@ import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, comment
 import type { CommentStore } from './comments.js';
 import { registerPublicComments } from './comments-public.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
-import { legacyRedirect } from './redirects.js';
+import { legacyRedirectForRelease } from './redirects.js';
 import { compressionHook } from './compress.js';
 import { CommentError, isCommentStatus, withPublicLocaleMetadata, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
 import { ui } from '../../site/src/i18n/ui.js';
@@ -2307,19 +2307,20 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // before any 404/503 — see redirects.ts (issue #35). Static files always
     // win: this handler only runs after @fastify/static misses. Explicit
     // code+header instead of reply.redirect() (its signature changed in v5).
-    const target = legacyRedirect(req.raw.url ?? '');
-    if (target) return reply.code(301).header('location', target).send();
-    if (!cfg.builder.hasRelease()) {
-      return reply
-        .code(503)
-        .header('retry-after', '30')
-        .type('text/html')
-        .send('<!doctype html><meta charset="utf-8"><title>Building…</title><h1>Site is building</h1><p>The first build is in progress — try again in a moment.</p>');
-    }
-    return readFile(join(currentDir, '404.html'), 'utf8').then(
-      (html) => reply.code(404).type('text/html').send(html),
-      () => reply.code(404).send('Not found'),
-    );
+    return legacyRedirectForRelease(req.raw.url ?? '', currentDir).then((target) => {
+      if (target) return reply.code(301).header('location', target).send();
+      if (!cfg.builder.hasRelease()) {
+        return reply
+          .code(503)
+          .header('retry-after', '30')
+          .type('text/html')
+          .send('<!doctype html><meta charset="utf-8"><title>Building…</title><h1>Site is building</h1><p>The first build is in progress — try again in a moment.</p>');
+      }
+      return readFile(join(currentDir, '404.html'), 'utf8').then(
+        (html) => reply.code(404).type('text/html').send(html),
+        () => reply.code(404).send('Not found'),
+      );
+    });
   });
 
   return Object.assign(app, { quiesceMutations });

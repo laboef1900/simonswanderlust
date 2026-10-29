@@ -92,6 +92,9 @@ jobs:
           DATABASE_URL: postgres://ci:ci@localhost:5432/ci
       - run: npm test
         working-directory: site
+        env:
+          # The real empty-build regression creates its own migrated schema.
+          TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/ci
       - run: npx astro check
         working-directory: site
         env:

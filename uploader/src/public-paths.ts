@@ -1,11 +1,11 @@
 import type { LanguageConfig, LanguageLocale } from './language.js';
 import { regionSlugs, type Region } from '../../site/src/lib/paths.js';
+import { wordsFor } from '../../site/src/lib/route-words.js';
 export type PublicPathKind = 'home' | 'story' | 'about' | 'map' | 'regions' | 'region' | 'rss';
 export function publicPath(language: LanguageConfig, locale: LanguageLocale, kind: PublicPathKind, slug?: string): string {
   if (!language.locales.includes(locale)) throw new Error('Locale is not enabled');
   const prefix = locale === language.primary ? '' : `/${locale}`;
-  const words = locale === 'de' ? { about: 'uber-mich', map: 'karte', regions: 'reiseziele' }
-    : { about: 'about-me', map: prefix ? 'map' : 'travel-map', regions: 'destinations' };
+  const words = wordsFor(locale, language.primary);
   if (kind === 'home') return `${prefix}/`;
   if (kind === 'rss') return `${prefix}/rss.xml`;
   if (kind === 'story') {
