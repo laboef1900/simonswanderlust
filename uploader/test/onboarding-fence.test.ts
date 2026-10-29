@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { link, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import type * as FsPromises from 'node:fs/promises';
 import { publishRestoreFence, readRestoreFence, RESTORE_FENCE_PAYLOAD, restoreFencePath, validateDataRoot } from '../src/onboarding-fence.js';
 
@@ -81,6 +81,11 @@ afterEach(async () => {
 
 function owner() { return vi.fn(async () => {}); }
 function ioError() { return Object.assign(new Error('injected filesystem failure'), { code: 'EIO' }); }
+function ancestorFlushes(): string[] {
+  const parents: string[] = [];
+  for (let path = root; path !== dirname(path); path = dirname(path)) parents.unshift(dirname(path));
+  return parents.flatMap(path => [`sync:start:${path}`, `sync:done:${path}`]);
+}
 async function temporary(): Promise<string> {
   const names = (await readdir(root)).filter(name => name.startsWith(`${NAME}.part-`));
   expect(names).toHaveLength(1);
@@ -182,12 +187,14 @@ describe('restore fence durable publication', () => {
       expect(to).toBe(final);
       expect(await readFile(from, 'utf8')).toBe(PAYLOAD);
       expect((await lstat(from)).mode & 0o777).toBe(0o600);
-      expect(hooks.events).toEqual([`sync:start:${from}`, `sync:done:${from}`]);
+      expect(hooks.events).toEqual([...ancestorFlushes(), ...ancestorFlushes(), `sync:start:${from}`, `sync:done:${from}`]);
       await expect(lstat(final)).rejects.toMatchObject({ code: 'ENOENT' });
     };
     await expect(publishRestoreFence(storage, owner())).resolves.toBeUndefined();
     expect(hooks.events).toEqual([
+      ...ancestorFlushes(), ...ancestorFlushes(),
       `sync:start:${temp}`, `sync:done:${temp}`, 'link:start', 'link:done', 'unlink:done',
+      ...ancestorFlushes(),
       `sync:start:${final}`, `sync:done:${final}`, `sync:start:${root}`, `sync:done:${root}`,
     ]);
     expect(await readdir(root)).toEqual([NAME]);
@@ -203,6 +210,7 @@ describe('restore fence durable publication', () => {
       hooks.events.length = 0;
       await publishRestoreFence(storage, owner());
       expect(hooks.events).toEqual([
+        ...ancestorFlushes(), ...ancestorFlushes(),
         `sync:start:${final}`, `sync:done:${final}`, `sync:start:${root}`, `sync:done:${root}`,
       ]);
       expect((await lstat(final)).ino).toBe(inode);
@@ -241,6 +249,7 @@ describe('restore fence durable publication', () => {
     hooks.events.length = 0;
     await publishRestoreFence(storage, owner());
     expect(hooks.events).toEqual([
+      ...ancestorFlushes(), ...ancestorFlushes(),
       `sync:start:${final}`, `sync:done:${final}`, `sync:start:${root}`, `sync:done:${root}`,
     ]);
     expect((await lstat(final)).ino).toBe(inode);
@@ -327,12 +336,51 @@ describe('restore fence ownership and data root', () => {
     expect(hooks.events.at(-1)).toBe(`sync:done:${nested}`);
   });
 
-  it('refuses an uncertain parent flush while creating the data root without publishing a fence', async () => {
+  it.each(['before', 'after'] as const)('retries every ancestor flush after a failure %s fsync without trusting the surviving directory', async boundary => {
     const error = ioError();
-    const nested = join(root, 'new');
-    hooks.beforeSync = path => { if (path === root) throw error; };
-    await expect(publishRestoreFence(join(nested, 'images'), owner())).rejects.toBe(error);
+    const nested = join(root, 'new', 'data');
+    const nestedStorage = join(nested, 'images');
+    const parent = join(root, 'new');
+    const fail = (path: string) => { if (path === parent) throw error; };
+    if (boundary === 'before') hooks.beforeSync = fail;
+    else hooks.afterSync = fail;
+    await expect(publishRestoreFence(nestedStorage, owner())).rejects.toBe(error);
     expect(await readdir(nested)).toEqual([]);
+    expect(hooks.events).not.toContain('link:start');
+    // A fresh call sees both directories, but must still refuse until the
+    // uncertain ancestor entry is flushed, before it can publish retirement.
+    hooks.events.length = 0;
+    await expect(publishRestoreFence(nestedStorage, owner())).rejects.toBe(error);
+    expect(hooks.events).toContain(`sync:start:${parent}`);
+    expect(hooks.events).not.toContain('link:start');
+    expect(await readRestoreFence(nestedStorage)).toBe(false);
+    expect(await readdir(nested)).toEqual([]);
+    hooks.beforeSync = undefined;
+    hooks.afterSync = undefined;
+    hooks.events.length = 0;
+    await expect(publishRestoreFence(nestedStorage, owner())).resolves.toBeUndefined();
+    expect(await readRestoreFence(nestedStorage)).toBe(true);
+    expect(await readdir(nested)).toEqual([NAME]);
+    expect(hooks.events.indexOf(`sync:done:${root}`)).toBeGreaterThanOrEqual(0);
+    expect(hooks.events.indexOf(`sync:done:${parent}`)).toBeGreaterThanOrEqual(0);
+    expect(hooks.events.indexOf(`sync:done:${root}`)).toBeLessThan(hooks.events.indexOf('link:start'));
+    expect(hooks.events.indexOf(`sync:done:${parent}`)).toBeLessThan(hooks.events.indexOf('link:start'));
+  });
+
+  it('refuses an existing fence when ancestor durability cannot be acknowledged and reflushes it on retry', async () => {
+    const nested = join(root, 'existing');
+    const nestedStorage = join(nested, 'images');
+    await publishRestoreFence(nestedStorage, owner());
+    const error = ioError();
+    hooks.beforeSync = path => { if (path === root) throw error; };
+    await expect(publishRestoreFence(nestedStorage, owner())).rejects.toBe(error);
+    await expect(readRestoreFence(nestedStorage, true)).rejects.toBe(error);
+    expect(await readRestoreFence(nestedStorage)).toBe(true);
+    hooks.beforeSync = undefined;
+    hooks.events.length = 0;
+    await expect(publishRestoreFence(nestedStorage, owner())).resolves.toBeUndefined();
+    expect(hooks.events).toContain(`sync:done:${root}`);
+    expect(hooks.events).toContain(`sync:done:${restoreFencePath(nestedStorage)}`);
     expect(hooks.events).not.toContain('link:start');
   });
 

@@ -300,6 +300,60 @@ async function assertBootstrapConstraints(db: Query, table: string, columns: Set
   }
   if (!primary || checks.size || notNull.size || foreign !== (expectedForeign !== null)) throw new Error('Preparation refuses missing bootstrap constraints.');
 }
+
+// Exact installed definitions, not just names: IF NOT EXISTS will leave a
+// same-name altered index untouched. Missing standalone indexes are safe for
+// ensureSchema to create; unknown or changed existing indexes are not.
+const BOOTSTRAP_INDEXES: Record<string, Record<string, { unique: boolean; definition: string }>> = {
+  users: { users_username_lower_idx: { unique: true, definition: 'btree (lower(username))' } },
+  sessions: { sessions_user_id_idx: { unique: false, definition: 'btree (user_id)' } },
+  posts: {
+    posts_locale_slug_idx: { unique: true, definition: "btree (locale, slug) WHERE (slug <> ''::text)" },
+    posts_translation_key_idx: { unique: false, definition: 'btree (translation_key)' },
+    posts_categories_idx: { unique: false, definition: 'gin (categories)' },
+    posts_tags_idx: { unique: false, definition: 'gin (tags)' },
+    posts_tk_locale_idx: { unique: true, definition: 'btree (translation_key, locale)' },
+  },
+  post_revisions: { post_revisions_tk_saved_idx: { unique: false, definition: 'btree (translation_key, saved_at DESC)' } },
+  page_revisions: { page_revisions_key_saved_idx: { unique: false, definition: 'btree (key, saved_at DESC)' } },
+  media: {
+    media_folder_idx: { unique: false, definition: 'btree (folder)' },
+    media_taken_at_idx: { unique: false, definition: 'btree (taken_at DESC NULLS LAST)' },
+    media_uploaded_idx: { unique: false, definition: 'btree (uploaded_at DESC)' },
+    media_tags_idx: { unique: false, definition: 'gin (tags)' },
+    media_status_idx: { unique: false, definition: "btree (status) WHERE (status <> 'ready'::text)" },
+  },
+  import_jobs: { import_jobs_started_idx: { unique: false, definition: 'btree (started_at DESC)' } },
+  comments: {
+    comments_post_idx: { unique: false, definition: 'btree (translation_key, locale, status, created_at)' },
+    comments_status_idx: { unique: false, definition: 'btree (status, created_at)' },
+  },
+};
+const BOOTSTRAP_INDEX_NAMES = new Set(Object.values(BOOTSTRAP_INDEXES).flatMap(indexes => Object.keys(indexes)));
+interface BootstrapIndex {
+  name: string; target: string; definition: string; primary: boolean;
+  valid: boolean; ready: boolean; live: boolean; immediate: boolean; exclusion: boolean;
+}
+async function assertBootstrapIndexes(db: Query, table: string): Promise<void> {
+  const indexes = await db.query<BootstrapIndex>(`SELECT idx.relname AS name,
+    format('%I ON %I.%I',idx.relname,n.nspname,t.relname) AS target,
+    pg_get_indexdef(i.indexrelid) AS definition, i.indisprimary AS primary,
+    i.indisvalid AS valid, i.indisready AS ready, i.indislive AS live,
+    i.indimmediate AS immediate, i.indisexclusion AS exclusion
+    FROM pg_index i JOIN pg_class idx ON idx.oid=i.indexrelid
+    JOIN pg_class t ON t.oid=i.indrelid JOIN pg_namespace n ON n.oid=t.relnamespace
+    WHERE i.indrelid=to_regclass($1)`, [table]);
+  for (const index of indexes.rows) {
+    const expected = index.primary
+      ? { unique: true, definition: `btree (${PRIMARY_KEYS[table]!.join(', ')})` }
+      : BOOTSTRAP_INDEXES[table]?.[index.name];
+    if (!expected || (index.primary && BOOTSTRAP_INDEX_NAMES.has(index.name))
+      || !index.valid || !index.ready || !index.live || !index.immediate || index.exclusion
+      || index.definition !== `CREATE ${expected.unique ? 'UNIQUE ' : ''}INDEX ${index.target} USING ${expected.definition}`) {
+      throw new Error('Preparation refuses unknown or modified bootstrap indexes.');
+    }
+  }
+}
 export async function assertBootstrapOnlyTarget(pool: DbPool, assertOwner: () => void | Promise<void>): Promise<void> {
   await assertOwner();
   const client = await pool.connect();
@@ -320,6 +374,7 @@ export async function assertBootstrapOnlyTarget(pool: DbPool, assertOwner: () =>
           || column.default_value !== (BOOTSTRAP_DEFAULTS[table]?.[column.name] ?? null))
         || Object.keys(expected).some((name) => !names.has(name) && !ADDITIVE_COLUMNS[table]?.includes(name))) throw new Error('Preparation refuses an unknown table shape.');
       await assertBootstrapConstraints(client, table, names);
+      await assertBootstrapIndexes(client, table);
       const policies = await client.query(`SELECT 1 FROM pg_class WHERE oid=to_regclass($1)
         AND (relrowsecurity OR relforcerowsecurity)
         UNION ALL SELECT 1 FROM pg_rewrite WHERE ev_class=to_regclass($1) LIMIT 1`, [table]);

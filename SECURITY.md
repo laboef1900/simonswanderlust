@@ -994,6 +994,12 @@ deliberate trade-off, not an oversight:
   Only recognized bootstrap-only schema/default singleton values are admitted, never saved
   identity/content or unknown shapes. The shared schema/identity seed runs after permanent
   fencing, without listeners/builds/workers. Preparation does not itself verify an undo set.
+  Catalog admission includes all installed indexes, not only table constraints: changed
+  uniqueness, expressions, predicates, methods or invalid enforcement refuse preparation before
+  any fence/schema mutation. Missing standalone indexes may be created by normal initialization;
+  same-name replacements cannot hide behind `IF NOT EXISTS`. Fence durability includes all
+  data-root ancestor entries, re-flushed on retries even when a failed mkdir/fsync attempt left
+  directories present. Any unresolved flush failure still blocks replacement.
   See [offline preparation](ARCHITECTURE.md#offline-preparation-for-a-fresh-native-restore-target).
   This guidance reconfirms the unchanged [GPX storage-owner boundary](#gpx-routes--private-source-and-public-snapshot):
   exclusive ownership and absence of app sessions are mandatory, never bypassed by killing

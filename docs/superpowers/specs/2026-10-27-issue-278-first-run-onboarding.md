@@ -275,6 +275,9 @@ Publish once with a private `0600` temp file, file flush, atomic no-clobber publ
 parent-directory flush; use the incumbent durable/no-clobber backup publication pattern.
 Validate the fixed regular, non-symlink, single-link final file before accepting an existing
 fence and repeat durability checks on retry if an earlier flush/acknowledgement was uncertain.
+Durability includes every ancestor directory entry of the configured data root, not only the
+fence's immediate parent. Reflush those parents on publication/retry even when an earlier
+failed attempt left the directory present; existence does not acknowledge the earlier fsync.
 A partial temporary alone is not proof of retirement; retry must publish/verify the final fence
 before replacement. No replacement starts after a failed/uncertain fence write. Unknown content,
 wrong type or read errors abort recovery and boot; preserve evidence for explicit operator
@@ -352,6 +355,11 @@ and optional retired onboarding metadata. Compare semantic seed fields using fea
 defaults; generated timestamps are not evidence of an admin save. Unknown tables/shapes,
 non-default/saved singleton values, owner content or uncertain inspection refuse preparation
 without migrations/seeding. Never silently overwrite such values to pass admission.
+Installed indexes are part of that shape: inspect all standalone and primary-key indexes,
+including uniqueness, expressions, predicates, ordering, access method and enforcement state.
+Reject altered or unknown installed indexes before fencing/seeding. Genuinely absent standalone
+indexes are admitted because the incumbent initializer creates them; an existing same-name
+index is not absence and `CREATE INDEX IF NOT EXISTS` cannot repair its semantics.
 
 This admits retry after a crashed empty-cluster preparation but never runs orphan cleanup over
 a populated target without its normal verified recovery set. A populated target uses ordinary
@@ -695,6 +703,16 @@ The recorded full uploader pass is not a claim that every §12 case has independ
 proof. Final merged-head affected checks, remaining acceptance-evidence reconciliation,
 implementation review and CI remain gates; none is claimed complete by this documentation
 update. No deployment, owner-data operation or merge is authorized by these results.
+
+Review-fix verification on 2026-10-29 passed the complete uploader and site suites, both
+type checks and the real Astro build with isolated PostgreSQL data. A separate real
+`prepare-native-restore --yes` CLI smoke used two newly created synthetic databases:
+fresh nested-root preparation and repeat succeeded; an installed non-unique username
+index was refused before fencing or initialization and preserved unchanged; restoring
+the expected unique index then permitted preparation and repeat. Evidence:
+`.local/backlog-execution-2026-10-27/issue-279-runtime/recovery-review-779c2a5dcb55.json`.
+This proves local macOS/arm64 filesystem and PostgreSQL execution, not physical
+power-loss durability or qualification of an uninspected deployment filesystem.
 
 ## 13. Compatibility, rollback and containment
 

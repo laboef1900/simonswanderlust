@@ -304,6 +304,87 @@ describe.skipIf(!url)('onboarding PostgreSQL boot and snapshot boundary', () => 
     expect((await pool.query('SELECT seed_source,saved_at FROM site_identity')).rows).toEqual([{ seed_source: 'neutral', saved_at: null }]);
     expect(await readOnboardingState(pool)).toMatchObject({ state: 'retired', reason: 'restored-content' });
   });
+  it('admits every installed index and recreates genuinely absent standalone indexes before accepting a prepared target', async () => {
+    await ensureSchema(pool);
+    await assertBootstrapOnlyTarget(pool, guard);
+    const indexQuery = `SELECT idx.relname AS name, pg_get_indexdef(i.indexrelid) AS definition
+      FROM pg_index i JOIN pg_class idx ON idx.oid=i.indexrelid
+      JOIN pg_namespace n ON n.oid=idx.relnamespace
+      WHERE n.nspname=current_schema() AND NOT i.indisprimary ORDER BY idx.relname`;
+    const installed = (await pool.query<{ name: string; definition: string }>(indexQuery)).rows;
+    expect(installed.length).toBeGreaterThan(0);
+    // Exercise the whole real initializer's inventory, not a fixture-only subset.
+    for (const index of installed) await pool.query(`DROP INDEX "${index.name.replaceAll('"', '""')}"`);
+    await assertBootstrapOnlyTarget(pool, guard);
+    expect(await prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).toBe(true);
+    expect((await pool.query(indexQuery)).rows).toEqual(installed);
+    await assertBootstrapOnlyTarget(pool, guard);
+    expect(await readRestoreFence(paths.storageDir)).toBe(true);
+    expect(await readOnboardingState(pool)).toMatchObject({ state: 'retired', reason: 'restored-content' });
+    await pool.query("INSERT INTO users(id,username,password_hash) VALUES($1,'Owner','fixture')", [randomUUID()]);
+    await expect(pool.query("INSERT INTO users(id,username,password_hash) VALUES($1,'owner','fixture')", [randomUUID()])).rejects.toMatchObject({ code: '23505' });
+    await insertStory();
+    await insertStory('other');
+    await expect(pool.query("UPDATE posts SET slug='story' WHERE translation_key='other'")).rejects.toMatchObject({ code: '23505' });
+    // Different slug still cannot create a second locale in the same pair.
+    await pool.query("UPDATE posts SET slug='first-story' WHERE translation_key='story'");
+    await expect(insertStory()).rejects.toMatchObject({ code: '23505' });
+    // The restored partial slug index continues to admit unset slugs.
+    await insertStory('unset-one'); await insertStory('unset-two');
+    await pool.query("UPDATE posts SET slug='' WHERE translation_key IN ('unset-one','unset-two')");
+  });
+  it.each([
+    'DROP INDEX users_username_lower_idx; CREATE INDEX users_username_lower_idx ON users (lower(username))',
+    "DROP INDEX posts_locale_slug_idx; CREATE INDEX posts_locale_slug_idx ON posts (locale, slug) WHERE slug <> ''",
+    'DROP INDEX posts_tk_locale_idx; CREATE INDEX posts_tk_locale_idx ON posts (translation_key, locale)',
+    'DROP INDEX users_username_lower_idx; CREATE UNIQUE INDEX users_username_lower_idx ON users (username)',
+    "DROP INDEX users_username_lower_idx; CREATE UNIQUE INDEX users_username_lower_idx ON users (lower(username)) WHERE is_admin",
+    'DROP INDEX users_username_lower_idx; CREATE UNIQUE INDEX users_username_lower_idx ON users (lower(username)) NULLS NOT DISTINCT',
+    'DROP INDEX users_username_lower_idx; CREATE UNIQUE INDEX users_username_lower_idx ON users (lower(username)) INCLUDE (is_admin)',
+    'DROP INDEX users_username_lower_idx; CREATE UNIQUE INDEX users_username_lower_idx ON users (lower(username) text_pattern_ops)',
+    'DROP INDEX users_username_lower_idx; CREATE UNIQUE INDEX users_username_lower_idx ON users (lower(username) COLLATE "C")',
+    'DROP INDEX posts_locale_slug_idx; CREATE UNIQUE INDEX posts_locale_slug_idx ON posts (locale, slug)',
+    "DROP INDEX posts_locale_slug_idx; CREATE UNIQUE INDEX posts_locale_slug_idx ON posts (locale, slug) WHERE slug <> 'owner'",
+    'DROP INDEX posts_tk_locale_idx; CREATE UNIQUE INDEX posts_tk_locale_idx ON posts (locale, translation_key)',
+    'DROP INDEX sessions_user_id_idx; CREATE INDEX sessions_user_id_idx ON sessions USING hash (user_id)',
+    'DROP INDEX media_taken_at_idx; CREATE INDEX media_taken_at_idx ON media (taken_at DESC)',
+    'DROP INDEX posts_tags_idx; CREATE INDEX posts_tags_idx ON posts USING btree (tags)',
+    'DROP INDEX comments_status_idx; CREATE UNIQUE INDEX comments_status_idx ON comments (status, created_at)',
+    'CREATE UNIQUE INDEX owner_only_title ON pages (title)',
+    'DROP INDEX users_username_lower_idx; CREATE UNIQUE INDEX users_username_lower_idx ON pages (title)',
+    'DROP INDEX users_username_lower_idx; ALTER INDEX users_pkey RENAME TO users_username_lower_idx',
+    'ALTER TABLE pages DROP CONSTRAINT pages_pkey; ALTER TABLE pages ADD PRIMARY KEY (key,locale) INCLUDE (title)',
+  ])('refuses altered installed indexes before fencing, migration or seeding: %s', async sql => {
+    await ensureSchema(pool);
+    await pool.query('ALTER TABLE posts DROP COLUMN title_image');
+    await assertBootstrapOnlyTarget(pool, guard);
+    await pool.query(sql);
+    const indexQuery = `SELECT idx.oid, pg_get_indexdef(idx.oid) AS definition, row_to_json(i) AS state
+      FROM pg_index i JOIN pg_class idx ON idx.oid=i.indexrelid
+      JOIN pg_namespace n ON n.oid=idx.relnamespace
+      WHERE n.nspname=current_schema() ORDER BY idx.oid`;
+    const before = (await pool.query(indexQuery)).rows;
+    await expect(prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true }))
+      .rejects.toThrow(/bootstrap indexes/);
+    expect((await pool.query(indexQuery)).rows).toEqual(before);
+    expect((await pool.query('SELECT * FROM site_identity')).rows).toEqual([]);
+    expect((await pool.query('SELECT * FROM onboarding_state')).rows).toEqual([]);
+    expect((await pool.query("SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='posts' AND column_name='title_image'")).rows).toEqual([]);
+    expect(await readRestoreFence(paths.storageDir)).toBe(false);
+  });
+  it('refuses an invalid same-definition unique index left by interrupted concurrent creation', async () => {
+    await ensureSchema(pool);
+    await pool.query('DROP INDEX users_username_lower_idx');
+    await pool.query("INSERT INTO users(id,username,password_hash) VALUES($1,'Owner','fixture'),($2,'owner','fixture')", [randomUUID(), randomUUID()]);
+    await expect(pool.query('CREATE UNIQUE INDEX CONCURRENTLY users_username_lower_idx ON users (lower(username))')).rejects.toMatchObject({ code: '23505' });
+    await pool.query('DELETE FROM users');
+    expect((await pool.query("SELECT indisvalid FROM pg_index WHERE indexrelid='users_username_lower_idx'::regclass")).rows).toEqual([{ indisvalid: false }]);
+    await expect(prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true }))
+      .rejects.toThrow(/bootstrap indexes/);
+    expect(await readRestoreFence(paths.storageDir)).toBe(false);
+    expect((await pool.query('SELECT * FROM site_identity')).rows).toEqual([]);
+    expect((await pool.query('SELECT * FROM onboarding_state')).rows).toEqual([]);
+  });
   it.each([
     'ALTER TABLE pages DROP CONSTRAINT pages_locale_check',
     "ALTER TABLE pages DROP CONSTRAINT pages_locale_check; ALTER TABLE pages ADD CONSTRAINT pages_locale_check CHECK (locale IN ('de','en','fr'))",

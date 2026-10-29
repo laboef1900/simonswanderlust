@@ -9,7 +9,7 @@ export function restoreFencePath(storageDir: string): string {
 }
 function missing(error: unknown): boolean { return error instanceof Error && 'code' in error && error.code === 'ENOENT'; }
 /** Reject symlink ancestors as well as the final entry. Never follow a copied data-root link. */
-export async function validateDataRoot(storageDir: string, create = false): Promise<string> {
+export async function validateDataRoot(storageDir: string, create = false, durable = create): Promise<string> {
   const root = dirname(resolve(storageDir));
   if (root === sep) throw new Error('Refusing filesystem root as the recovery data root.');
   let path: string = sep;
@@ -20,17 +20,21 @@ export async function validateDataRoot(storageDir: string, create = false): Prom
     catch (error) {
       if (!create || !missing(error)) throw error;
       await mkdir(path, { mode: 0o700 });
-      const parent = await open(dirname(path), constants.O_RDONLY | constants.O_NOFOLLOW);
-      try { await parent.sync(); } finally { await parent.close(); }
       stat = await lstat(path);
     }
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unsafe recovery data root.');
+    if (durable) {
+      // A previous mkdir may have succeeded before its parent fsync failed.
+      // Re-establish every ancestor entry on retry, even if it already exists.
+      const parent = await open(dirname(path), constants.O_RDONLY | constants.O_NOFOLLOW);
+      try { await parent.sync(); } finally { await parent.close(); }
+    }
   }
   return root;
 }
 /** A missing root/fence is fresh evidence; malformed/unreadable metadata is never absence. */
 export async function readRestoreFence(storageDir: string, durable = false): Promise<boolean> {
-  try { await validateDataRoot(storageDir); }
+  try { await validateDataRoot(storageDir, false, durable); }
   catch (error) { if (missing(error)) return false; throw error; }
   let handle;
   try { handle = await open(restoreFencePath(storageDir), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
