@@ -1,14 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import pg from 'pg';
+import { ensureSchema, type DbPool } from '../src/db.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildServer } from '../src/server.js';
-import { memoryLanguageStore, type LanguageConfig } from '../src/language.js';
-import { memoryPostStore, type PostLocale } from '../src/posts.js';
-import { memoryPageStore } from '../src/pages.js';
+import { memoryLanguageStore, pgLanguageStore, type LanguageConfig } from '../src/language.js';
+import { memoryPostStore, pgPostStore, type PostLocale } from '../src/posts.js';
+import { memoryPageStore, pgPageStore } from '../src/pages.js';
 import { memoryUserStore } from '../src/users.js';
 import { memorySessionStore } from '../src/sessions.js';
-import { memoryMediaStore } from '../src/media-store.js';
+import { memoryMediaStore, pgMediaStore } from '../src/media-store.js';
 import { memorySecretsStore } from '../src/secrets.js';
 import { defaultSettings, validate } from '../src/settings.js';
 import { createEncodeQueue } from '../src/encode-queue.js';
@@ -23,12 +26,14 @@ const modes: [LanguageConfig, LanguageConfig, LanguageConfig, LanguageConfig] = 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
-async function fixture(initial: LanguageConfig = modes[0]!) {
+async function fixture(initial: LanguageConfig = modes[0]!, pool?: DbPool) {
   const dir = await mkdtemp(join(tmpdir(), 'language-api-'));
-  const language = memoryLanguageStore(initial);
-  const posts = memoryPostStore({ language });
-  const pages = memoryPageStore(language);
-  const media = memoryMediaStore({ baseUrl: 'https://images.test' });
+  const language = pool ? pgLanguageStore(pool) : memoryLanguageStore(initial);
+  if (pool) await language.update(initial);
+  const posts = pool ? pgPostStore(pool) : memoryPostStore({ language });
+  const pages = pool ? pgPageStore(pool) : memoryPageStore(language);
+  const mediaOptions = { baseUrl: 'https://images.test' };
+  const media = pool ? pgMediaStore(pool, mediaOptions) : memoryMediaStore(mediaOptions);
   const users = memoryUserStore();
   const sessions = memorySessionStore();
   const lock = createWorkLock();
@@ -337,3 +342,119 @@ for (const publication of ['single', 'bulk'] as const) {
     });
   });
 }
+
+describe('revision restoration with a disabled language', () => {
+  it.each(['de', 'en'] as const)('ignores the hidden %s slug while preserving active slug protections', async (secondary) => {
+    const primary = secondary === 'de' ? 'en' : 'de';
+    const f = await fixture({ primary, locales: [primary, secondary] });
+    const original = await f.story();
+    const tk = original.translationKey;
+    const save = (payload: object) => f.app.inject({ method: 'PUT', url: `/posts/${tk}`, cookies: f.cookies, payload });
+    const renamed = await save({ ...original, confirmSlugChange: true,
+      [secondary]: { ...original[secondary], slug: `renamed-${secondary}`, bodyMarkdown: 'Retained translation.' } });
+    expect(renamed.statusCode).toBe(200);
+    const revision = await f.posts.getRevision(tk, (await f.posts.listRevisions(tk))[0]!.id);
+    expect(revision?.snapshot[secondary].slug).toBe(original[secondary].slug);
+    expect((await f.put({ primary, locales: [primary] })).statusCode).toBe(200);
+    const before = (await f.posts.get(tk))!;
+    const restored = await save({ ...revision!.snapshot, updatedAt: before.updatedAt,
+      [primary]: { ...revision!.snapshot[primary], bodyMarkdown: 'Restored and edited active content.' } });
+    expect(restored.statusCode).toBe(200);
+    const saved = (await f.posts.get(tk))!;
+    expect(saved[primary].bodyMarkdown).toBe('Restored and edited active content.');
+    expect(saved[secondary]).toEqual(before[secondary]);
+    expect(saved[secondary]).toMatchObject({ slug: `renamed-${secondary}`, bodyMarkdown: 'Retained translation.', omitted: true });
+
+    const draftRename = await save({ ...saved, [primary]: { ...saved[primary], slug: `renamed-${primary}` } });
+    expect(draftRename.statusCode).toBe(409);
+    expect(draftRename.json()).toMatchObject({ code: 'slug_change_unconfirmed' });
+    expect(await f.posts.get(tk)).toEqual(saved);
+    const published = await f.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: f.cookies,
+      payload: await publishBody(f.posts, tk) });
+    expect(published.statusCode).toBe(200);
+    const live = (await f.posts.get(tk))!;
+    const liveRename = await save({ ...live, confirmSlugChange: true,
+      [primary]: { ...live[primary], slug: `renamed-${primary}` } });
+    expect(liveRename.statusCode).toBe(409);
+    expect(liveRename.json()).toMatchObject({ code: 'slug_locked' });
+    expect(await f.posts.get(tk)).toEqual(live);
+  });
+});
+
+const databaseUrl = process.env.TEST_DATABASE_URL;
+(databaseUrl ? describe : describe.skip)('publication readiness with a saturated PostgreSQL pool', () => {
+  it.each(['single', 'bulk', 'about', 'activation'] as const)('%s reuses its locked client while other mutations wait', async (operation) => {
+    const schema = `readiness_${randomUUID().replaceAll('-', '')}`;
+    const observer = new pg.Pool({ connectionString: databaseUrl });
+    // The acquisition deadline is test containment: a regression fails rather than
+    // hanging teardown. Production must not depend on a timeout to free this cycle.
+    const pool = new pg.Pool({ connectionString: databaseUrl, max: 3, connectionTimeoutMillis: 1500,
+      application_name: schema, options: `-c search_path=${schema}` });
+    cleanups.push(async () => {
+      await pool.end();
+      await observer.query(`DROP SCHEMA ${schema} CASCADE`);
+      await observer.end();
+    });
+    await observer.query(`CREATE SCHEMA ${schema}`);
+    await ensureSchema(pool);
+    const f = await fixture({ primary: 'de', locales: ['de'] }, pool);
+    const pair = await f.story();
+    pair.de.titleImage = { ...pair.de.heroImage };
+    await f.posts.upsertDraft(pair);
+    const tokens = await publishBody(f.posts, pair.translationKey);
+    const content = { title: 'About', bodyMarkdown: '![View](https://images.test/hero-640.webp)', images: {} };
+    if (operation === 'activation') {
+      await f.pages.save({ key: 'about', de: { locale: 'de', ...content } });
+    }
+    const waitingDrafts = await Promise.all([f.story('waiting-one'), f.story('waiting-two')]);
+    const entered = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const notReadyKeys = f.media.notReadyKeys.bind(f.media);
+    vi.spyOn(f.media, 'notReadyKeys').mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await resume.promise;
+      return notReadyKeys(...args);
+    });
+    const request = (operation === 'single'
+      ? f.app.inject({ method: 'POST', url: `/posts/${pair.translationKey}/publish`, cookies: f.cookies, payload: tokens })
+      : operation === 'bulk'
+        ? f.app.inject({ method: 'POST', url: '/posts/bulk', cookies: f.cookies,
+          payload: { action: 'publish', keys: [pair.translationKey], baseLanguageUpdatedAt: tokens.baseLanguageUpdatedAt } })
+        : operation === 'about'
+          ? f.app.inject({ method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: { de: content } })
+          : f.put({ primary: 'de', locales: ['de', 'en'] })).then((response) => response);
+    const waiters: Array<Promise<unknown>> = [];
+    try {
+      await Promise.race([entered.promise, request.then(() => { throw new Error('readiness barrier was not reached'); })]);
+      for (const draft of waitingDrafts) {
+        const waiting = f.posts.upsertDraft({ ...draft, de: { ...draft.de, title: 'Queued edit' } });
+        waiters.push(waiting);
+        // Observe rejection immediately even if the assertion below fails first.
+        void waiting.catch(() => {});
+      }
+      // An independent observer proves both other checked-out connections are
+      // blocked on the actual language-row lock, not merely scheduled promises.
+      await expect.poll(async () => Number((await observer.query<{ count: string }>(
+        `SELECT count(*) FROM pg_stat_activity WHERE application_name=$1
+          AND wait_event_type='Lock' AND query LIKE '%FROM site_language%'`, [schema],
+      )).rows[0]!.count), { timeout: 3000, interval: 10 }).toBe(2);
+      expect(pool.totalCount).toBe(3);
+      expect(pool.idleCount).toBe(0);
+      resume.resolve();
+      const [response] = await Promise.all([request, ...waiters]);
+      expect(response.statusCode).toBe(200);
+      if (operation === 'single' || operation === 'bulk') {
+        expect(await f.posts.getPublishedLocales(pair.translationKey)).toEqual(['de']);
+        expect((await f.language.get()).lockedAt).toBeInstanceOf(Date);
+      } else if (operation === 'about') {
+        expect((await f.pages.get('about')).de.bodyMarkdown).toBe(content.bodyMarkdown);
+      } else {
+        expect((await f.language.get()).locales).toEqual(['de', 'en']);
+      }
+      for (const draft of waitingDrafts) expect((await f.posts.get(draft.translationKey))?.de.title).toBe('Queued edit');
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([request, ...waiters]);
+    }
+  });
+});
