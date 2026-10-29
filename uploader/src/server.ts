@@ -65,8 +65,10 @@ import { IdentityError, neutralIdentity } from '../../site/src/lib/site-identity
 import { LanguageError, validateLanguage, type LanguageConfig, type LanguageStore, type LanguageLocale } from './language.js';
 import { publicPath } from './public-paths.js';
 import { OnboardingError, type OnboardingStore } from './onboarding.js';
+import type { TrustPolicy } from './trusted-proxy.js';
 
 export interface ServerConfig {
+  trustProxy: TrustPolicy['trust'];
   storageDir: string;
   baseUrl: string;
   users: UserStore;
@@ -182,15 +184,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // @fastify/static requires an absolute root; tolerate a relative STORAGE_DIR
   // (e.g. ./data/images from env) by resolving against the process cwd.
   const storageDir = resolve(cfg.storageDir);
-  // @ai-warning: trustProxy makes Fastify read X-Forwarded-* (so req.ip and the
-  // cookie `secure` flag reflect the real client). `trustProxy: 1` trusts exactly
-  // ONE hop — the reverse proxy in front of the container — so req.ip is the
-  // RIGHTMOST X-Forwarded-For entry, the one that proxy appended; any leftmost,
-  // client-supplied entries are ignored. `true` trusted every hop, which made
-  // req.ip (and with it the per-IP auth limiter) spoofable by a client that
-  // rotates the header (#108). A second proxy layer needs `2`, never `true`.
-  // The compose file publishes port 3000 on loopback only, so the host proxy
-  // is the sole ingress and the one hop this trusts.
+  // @ai-warning: validate the immediate socket address AND stop at hop zero.
+  // Never use `true`, a bare hop count, or a hop-only function: they let an
+  // untrusted peer forge req.ip and req.protocol. A second proxy layer needs
+  // a new spec, not a larger number (#369 dependency/proxy-trust spec).
   // @ai-note: http.Server#requestTimeout bounds how long the server waits to
   // fully RECEIVE a request (headers + body) — it does not bound how long a
   // handler then takes to process it (e.g. encoding an upload). Fastify sets
@@ -198,7 +195,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // default, so without an explicit value a stalled request would never time
   // out at this layer. 120s is generous for even a large multipart upload
   // over a slow connection while still bounding one that stalls outright.
-  const app = Fastify({ logger: false, trustProxy: 1, requestTimeout: 120_000 });
+  const app = Fastify({ logger: false, trustProxy: cfg.trustProxy, requestTimeout: 120_000 });
   if (cfg.onRoute) app.addHook('onRoute', cfg.onRoute);
   const { users, sessions } = cfg;
   const language = cfg.language ?? cfg.posts.language;
@@ -280,9 +277,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // immutable by construction — while `${siteDir}/current` is a symlink a
     // publish repoints, which is exactly why the DOCUMENT must not be cached:
     // it is what points at the new asset names.
-    // @ai-note Set here rather than via the mount's `setHeaders`, which
-    // @fastify/static overwrites with its own cacheControl value (see the
-    // image mount below); an onSend `reply.header` is the last writer.
+    // Apply the fingerprint-specific policy after static serving; the rest of
+    // the blog mount retains its native revalidation policy.
     if (path.startsWith('/_astro/') && reply.statusCode < 400) {
       reply.header('cache-control', 'public, max-age=31536000, immutable');
     }
@@ -357,9 +353,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // (wp-images.ts) stay deterministic so re-imports are idempotent, so
   // re-importing a remote image that changed since the first import is the one
   // residual path that can rewrite bytes under an immutable-cached URL —
-  // accepted trade-off. (A custom setHeaders is overwritten by
-  // @fastify/static's own cacheControl, so use the native maxAge + immutable
-  // options instead.)
+  // accepted trade-off. Use the native maxAge + immutable options.
   app.register(fastifyStatic, {
     root: storageDir,
     prefix: '/',
@@ -369,7 +363,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     constraints: { host: cfg.imgHost },
     // Public variants must be readable by the editor on a different origin.
     // Scope CORS to this file mount, never authenticated APIs or private originals.
-    setHeaders: (res) => { res.setHeader('Access-Control-Allow-Origin', '*'); },
+    setHeaders: (reply) => { reply.header('Access-Control-Allow-Origin', '*'); },
     // Only finished variants (`<key>-<width>.<avif|webp|jpeg>`) are web assets.
     // Untouched full-resolution originals (`<key>-orig.<ext>`) live in
     // storageDir so the incremental backup tar captures them, but they are a
