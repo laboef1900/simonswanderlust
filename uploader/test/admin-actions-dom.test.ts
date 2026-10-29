@@ -98,7 +98,13 @@ function element(): Element {
     contains(node) { return node === this || this.children.some((child) => child.contains(node)); },
     setAttribute(name, value) { this.attrs[name] = value; },
     getAttribute(name) { return this.attrs[name] ?? null; },
-    querySelectorAll() { return []; },
+    querySelectorAll(selector) {
+      if (!selector.startsWith('.')) return [];
+      return this.children.flatMap((child) => [
+        ...(child.classList.contains(selector.slice(1)) ? [child] : []),
+        ...child.querySelectorAll(selector),
+      ]);
+    },
     focus() { this.focused = true; },
   };
   let markup = '';
@@ -131,10 +137,16 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
   const markup = html.slice(0, scriptStart);
   const ids = new Set([...markup.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
   const elements = new Map<string, Element>();
+  let activeElement: Element | null = null;
+  const createElement = (): Element => {
+    const node = element();
+    node.focus = () => { node.focused = true; activeElement = node; };
+    return node;
+  };
   const el = (id: string): Element => {
     if (!ids.has(id)) throw new Error('no element #' + id + ' in ' + file);
     let e = elements.get(id);
-    if (!e) { e = element(); e.id = id; elements.set(id, e); }
+    if (!e) { e = createElement(); e.id = id; elements.set(id, e); }
     return e;
   };
   // ARIA tabs carry their state in markup that tabs.js reads; mirror just that.
@@ -164,7 +176,7 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
       title: '',
       documentElement: { lang: 'en' },
       getElementById: (id: string): Element | null => (ids.has(id) ? el(id) : null),
-      createElement: () => element(),
+      createElement,
       createTextNode: (text: string) => Object.assign(element(), { textContent: text }),
     }),
     location: {
@@ -202,6 +214,7 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
     AdminConfirm: { ask: async () => true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     ...extraGlobals,
   };
+  Object.defineProperty(ctx.document, 'activeElement', { get: () => activeElement });
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(renderGpxCopy(), ctx);
@@ -2173,6 +2186,71 @@ describe('publication refresh in list, Desk and Settings consumers', () => {
       await promise;
     }
   };
+
+  it('preserves a focused open row action through both list and delayed history observations', async () => {
+    startClock();
+    const history = Promise.withResolvers<Response>();
+    let holdHistory = false;
+    const page = loadPosts({ ...clockGlobals(),
+      Auth: { ensureAuthed: async () => ({ isAdmin: true }), renderHeader() {} },
+      fetch: async (url: string) => {
+        if (holdHistory && url === '/rebuild/status') return history.promise;
+        return Response.json(url === '/posts' ? [post] : { record: 'missing' });
+      },
+    });
+    await flush();
+    const menu = () => page.el('postsList').querySelectorAll('.post-more')[0]!;
+    const remove = () => page.el('postsList').querySelectorAll('.btn-remove')[0]!;
+    const doc = page.ctx.document as { activeElement: Element | null };
+    const oldMenu = menu();
+    oldMenu.open = true; await oldMenu.fire('toggle');
+    remove().focus();
+    holdHistory = true;
+    const refreshing = vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>;
+    await flush();
+    expect(menu().open).toBe(true);
+    expect(doc.activeElement).toBe(remove());
+    // A native toggle queued on the discarded disclosure must not close its replacement.
+    await oldMenu.fire('toggle');
+    expect(menu().open).toBe(true);
+    history.resolve(Response.json({ record: 'missing' }));
+    await refreshing;
+    expect(menu().open).toBe(true);
+    expect(doc.activeElement).toBe(remove());
+    await menu().fire('keydown', { key: 'Escape' });
+    expect(menu().open).toBe(false);
+    expect(doc.activeElement).toBe(menu().children[0]);
+    page.el('fSearch').focus();
+    await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
+    expect(doc.activeElement).toBe(page.el('fSearch'));
+    vm.runInContext('publicationRefresh.stop()', page.ctx);
+  });
+
+  it('retains row keyboard focus by story identity after reordering and falls back when its action disappears', async () => {
+    startClock();
+    let rows = [post, { ...post, translationKey: 'other', title: 'Other' }];
+    const page = loadPosts({ ...clockGlobals(),
+      Auth: { ensureAuthed: async () => ({ isAdmin: true }), renderHeader() {} },
+      fetch: async (url: string) => Response.json(url === '/posts' ? rows : { record: 'missing' }),
+    });
+    await flush();
+    const doc = page.ctx.document as { activeElement: Element | null };
+    const list = page.el('postsList');
+    list.querySelectorAll('.action-link')[0]!.focus();
+    rows = [rows[1]!, rows[0]!];
+    await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
+    expect(doc.activeElement).toBe(list.querySelectorAll('.action-link')[1]);
+    const menu = list.querySelectorAll('.post-more')[1]!;
+    menu.open = true; await menu.fire('toggle');
+    menu.children[1]!.children[0]!.focus(); // Unpublish.
+    rows = [rows[0]!, { ...post, status: 'draft', publication: publication('draft') }];
+    await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
+    expect(doc.activeElement).toBe(list.querySelectorAll('.post-title-link')[1]);
+    rows = [rows[0]!];
+    await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
+    expect(doc.activeElement).toBe(page.el('fSearch'));
+    vm.runInContext('publicationRefresh.stop()', page.ctx);
+  });
 
   it('refreshes language controls and uses the observed language token for the next bulk publish', async () => {
     startClock();
