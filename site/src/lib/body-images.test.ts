@@ -316,8 +316,13 @@ describe('transformBodyImages — valid image flow (#378)', () => {
     });
     return found;
   };
-  const childTags = (node: Root | Element) =>
-    node.children.filter((child): child is Element => child.type === 'element').map((child) => child.tagName);
+  function childTags(node: Root | Element): string[] {
+    const tags: string[] = [];
+    for (const child of node.children) {
+      if (child.type === 'element') tags.push(child.tagName);
+    }
+    return tags;
+  }
   async function render(body: string, imageMap: Record<string, ImageDims> = stored) {
     const out = await transformBodyImages(await renderMarkdown(body), imageMap, ORIGIN, { locale: 'en' });
     const tree = html5.parse(out);
@@ -463,7 +468,8 @@ describe('transformBodyImages — valid image flow (#378)', () => {
   it('keeps unknown images and unsupported stored formats untransformed', async () => {
     // JSON is the runtime boundary for persisted format values.
     const unsupported: ImageDims = JSON.parse('{"width":3000,"height":2000,"format":"png"}');
-    for (const imageMap of [{}, { [src]: unsupported }]) {
+    const imageMaps: Record<string, ImageDims>[] = [{}, { [src]: unsupported }];
+    for (const imageMap of imageMaps) {
       for (const body of [`![See](${src})`, `[![See](${src})](https://example.com/)`, `Before ![See](${src}) after`]) {
         const tree = await render(body, imageMap);
         expect(childTags(tree)).toEqual(['p']);
