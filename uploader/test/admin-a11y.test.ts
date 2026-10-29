@@ -44,7 +44,8 @@ describe('admin outcome messages are announced (SC 4.1.3)', () => {
     // in editor-dom.test.ts rather than pinned to a particular HTML tag.
     ['editor', ['actionStatus', 'actionError', 'deHeroStatus', 'enHeroStatus', 'deBodyImgStatus', 'enBodyImgStatus']],
     ['about', ['actionStatus', 'actionError', 'deBodyImgStatus', 'enBodyImgStatus']],
-    ['index', ['deskStatus', 'deskError']],
+    // Desk loading/error announcements are exercised through the real page's
+    // DOM and async auth retry in onboarding-dom.test.ts, not an HTML tag regex.
   ];
   for (const [page, ids] of cases) {
     it(`${page}.html`, () => {

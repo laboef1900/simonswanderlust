@@ -4,7 +4,7 @@ import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
@@ -570,8 +570,11 @@ maybe('backup round-trip (Postgres)', () => {
       const dumpDir = await mkdtemp(join(tmpdir(), 'bk-cli-src-'));
       const dumpFile = join(dumpDir, await dumpDatabase(pool, dumpDir));
       await users.create({ username: 'bob', password: 'password-bob-1', isAdmin: false });
-      const backupDir = await mkdtemp(join(tmpdir(), 'bk-cli-dst-'));
-      return { dumpFile, backupDir, env: { ...process.env, DATABASE_URL: url!, BACKUP_DIR: backupDir } };
+      const backupDir = await realpath(await mkdtemp(join(tmpdir(), 'bk-cli-dst-')));
+      // Restore now durably fences its data root. Never inherit the developer's
+      // storage path or fall back to the container-only /data/images in CI.
+      const storageDir = join(backupDir, 'data', 'images');
+      return { dumpFile, backupDir, env: { ...process.env, DATABASE_URL: url!, BACKUP_DIR: backupDir, STORAGE_DIR: storageDir } };
     }
 
     it('without --yes and no confirmation line (stdin EOF) it aborts: no rows touched, no pre-dump written', async () => {
