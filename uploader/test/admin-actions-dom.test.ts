@@ -29,6 +29,7 @@ import { publication, loadPublicationState } from './publication-client-fixture.
 
 interface Element {
   id: string;
+  tagName: string;
   value: string;
   textContent: string;
   href: string;
@@ -73,6 +74,7 @@ function element(): Element {
   const listeners: Element['listeners'] = {};
   const e: Element = {
     id: '', value: '', textContent: '', innerHTML: '', href: '', hidden: false, disabled: false, checked: false,
+    tagName: 'DIV',
     indeterminate: false, open: false, focused: false, className: '', tabIndex: 0, dataset: {},
     src: '', alt: '', scrollLeft: 0, scrollTop: 0, files: [],
     style: {}, attrs: {}, listeners, options: [], children: [],
@@ -99,9 +101,9 @@ function element(): Element {
     setAttribute(name, value) { this.attrs[name] = value; },
     getAttribute(name) { return this.attrs[name] ?? null; },
     querySelectorAll(selector) {
-      if (!selector.startsWith('.')) return [];
       return this.children.flatMap((child) => [
-        ...(child.classList.contains(selector.slice(1)) ? [child] : []),
+        ...((selector.startsWith('.') ? child.classList.contains(selector.slice(1))
+          : child.tagName === selector.toUpperCase()) ? [child] : []),
         ...child.querySelectorAll(selector),
       ]);
     },
@@ -138,8 +140,8 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
   const ids = new Set([...markup.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
   const elements = new Map<string, Element>();
   let activeElement: Element | null = null;
-  const createElement = (): Element => {
-    const node = element();
+  const createElement = (tag = 'div'): Element => {
+    const node = Object.assign(element(), { tagName: tag.toUpperCase() });
     node.focus = () => { node.focused = true; activeElement = node; };
     return node;
   };
@@ -2379,6 +2381,68 @@ describe('publication refresh in list, Desk and Settings consumers', () => {
     await flush();
     if (admin) expect(textOf(page.el('deskAttention'))).toContain('Published, not yet live');
     else expect(textOf(page.el('deskUnpub'))).toContain('No newer drafts');
+    vm.runInContext('publicationRefresh.stop()', page.ctx);
+  });
+
+  it('preserves focused Desk links through polling and separately arriving history without taking outside focus', async () => {
+    startClock();
+    const history = Promise.withResolvers<Response>();
+    let held = false;
+    const rows = [
+      { ...post, publication: publication('published', true) },
+      { ...post, translationKey: 'draft', publication: publication('draft') },
+      { ...post, translationKey: 'attention', publication: { ...publication(), live: { de: 'not-live', en: 'live' } } },
+    ];
+    const page = loadPage('public/index.html', { ...clockGlobals(), fetch: async (url: string) => {
+      if (url === '/posts') return Response.json(rows);
+      if (held && url === '/rebuild/status') return history.promise;
+      return Response.json({ record: 'missing' });
+    } }, ['public/desk.js', 'public/posts-filter.js']);
+    vm.runInContext('isAdmin = true; authenticatedContext = { isAdmin: true }; publicationRefresh.start()', page.ctx);
+    await flush();
+    const doc = page.ctx.document as { activeElement: Element | null };
+    for (const id of ['deskNext', 'deskUnpub', 'deskAttention']) {
+      for (const selector of ['.desk-title', '.action-link']) {
+        page.el(id).querySelectorAll(selector)[0]!.focus();
+        await vi.advanceTimersByTimeAsync(30000); await flush();
+        expect(doc.activeElement).toBe(page.el(id).querySelectorAll(selector)[0]);
+      }
+    }
+    held = true;
+    page.el('deskUnpub').querySelectorAll('.action-link')[0]!.focus();
+    const refresh = vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>;
+    await flush();
+    expect(doc.activeElement).toBe(page.el('deskUnpub').querySelectorAll('.action-link')[0]);
+    history.resolve(Response.json({ record: 'missing' })); await refresh;
+    expect(doc.activeElement).toBe(page.el('deskUnpub').querySelectorAll('.action-link')[0]);
+    page.el('publicationRefresh').focus();
+    await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
+    expect(doc.activeElement).toBe(page.el('publicationRefresh'));
+    vm.runInContext('publicationRefresh.stop()', page.ctx);
+  });
+
+  it('keeps Desk focus on a surviving story across sections and uses Refresh when its link disappears', async () => {
+    startClock();
+    let rows = [{ ...post, publication: publication('published', true) }];
+    const page = loadPage('public/index.html', { ...clockGlobals(),
+      fetch: async (url: string) => Response.json(url === '/posts' ? rows : { record: 'missing' }),
+    }, ['public/desk.js', 'public/posts-filter.js']);
+    vm.runInContext('isAdmin = true; authenticatedContext = { isAdmin: true }; publicationRefresh.start()', page.ctx);
+    await flush();
+    const doc = page.ctx.document as { activeElement: Element | null };
+    page.el('deskUnpub').querySelectorAll('.action-link')[0]!.focus();
+    rows = [{ ...post, publication: { ...publication(), live: { de: 'not-live', en: 'live' } } }];
+    await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
+    expect(doc.activeElement).toBe(page.el('deskAttention').querySelectorAll('.action-link')[0]);
+    rows = [];
+    await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
+    expect(doc.activeElement).toBe(page.el('publicationRefresh'));
+    page.el('deskNext').querySelectorAll('.btn-new')[0]!.focus();
+    await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
+    expect(doc.activeElement).toBe(page.el('deskNext').querySelectorAll('.btn-new')[0]);
+    rows = [{ ...post, publication: publication('draft') }];
+    await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
+    expect(doc.activeElement).toBe(page.el('publicationRefresh'));
     vm.runInContext('publicationRefresh.stop()', page.ctx);
   });
 
