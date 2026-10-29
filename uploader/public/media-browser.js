@@ -1126,7 +1126,12 @@
       $('renameFolder').hidden = true;
       $('deleteFolder').hidden = true;
     }
-    if (initialized) { await reload(); return; }
+    if (initialized) {
+      detailRefresh.start(false);
+      await reload();
+      await detailRefresh.refresh();
+      return;
+    }
     initialized = true;
     $('emptyChoosePhotos').textContent = copy.mediaChoosePhotos;
     $('emptyChoosePhotos').addEventListener('click', function () {

@@ -1260,6 +1260,58 @@ describe('Media publication impact and bounded refresh', () => {
     await page.flush(); page.el('grid').querySelectorAll('.media-cell')[0]!.click(); await page.flush();
   }
 
+  it('resumes read-only detail observations after explicit same-owner reauthentication without replacing dirty inputs', async () => {
+    let expired = false, reads = 0;
+    const photo = { ...item('a', 'base'), impact, livePending: unchanged };
+    const page = loadPage({ request: (url, init) => {
+      if (url !== '/media/items/a' || init?.method === 'PATCH') return;
+      reads++;
+      return Promise.resolve({ status: expired ? 401 : 200, ok: !expired,
+        json: async () => expired ? { error: 'unauthorized' } : page.rows.get('a') });
+    } });
+    await open(page, photo);
+    page.el('dAltDe').value = 'unsaved local'; page.el('detail').dispatch('input');
+    expired = true;
+    page.el('dImpact').querySelectorAll('button')[0]!.click(); await page.flush();
+    expect(reads).toBe(2);
+    expect(page.el('uploadQueue').hidden).toBe(false);
+    expired = false;
+    page.rows.set('a', { ...photo, impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] } });
+    page.el('uploadQueue').querySelectorAll('button').find(button => button.textContent === ui.en['editor.chrome.uploadResume'])!.click();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [photo], total: 1 }); await page.flush();
+    expect(reads).toBe(3);
+    expect(page.el('dImpact').textContent).toContain('No eligible story');
+    expect(page.el('dAltDe').value).toBe('unsaved local');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    page.el('dImpact').querySelectorAll('button')[0]!.click(); await page.flush();
+    expect(reads).toBe(4);
+    page.timers.find(timer => timer.ms === 30000 && !timer.cleared)!.fn(); await page.flush();
+    expect(reads).toBe(5);
+    expect(page.patches).toEqual([]);
+  });
+
+  it('retains focused impact controls through refresh, falls back when a link disappears, and never steals external focus', async () => {
+    const page = loadPage();
+    const photo = { ...item('a'), impact, usedIn: [{ kind: 'post', key: 'one', title: 'Authorized title' }] };
+    await open(page, photo);
+    const refresh = () => page.el('dImpact').querySelectorAll('button')[0]!;
+    refresh().focus(); refresh().click(); await page.flush();
+    expect(page.activeElement()).toBe(refresh());
+    const link = page.el('dImpact').querySelectorAll('a')[0]!;
+    link.focus();
+    page.timers.find(timer => timer.ms === 30000 && !timer.cleared)!.fn(); await page.flush();
+    expect(page.activeElement()).toBe(page.el('dImpact').querySelectorAll('a')[0]);
+    expect(page.activeElement()?.href).toBe('/admin/editor.html?tk=one');
+    page.rows.set('a', { ...photo, impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] } });
+    page.timers.find(timer => timer.ms === 30000 && !timer.cleared)!.fn(); await page.flush();
+    expect(page.el('dImpact').querySelectorAll('a')).toEqual([]);
+    expect(page.activeElement()).toBe(refresh());
+    page.el('dTitle').focus();
+    page.timers.find(timer => timer.ms === 30000 && !timer.cleared)!.fn(); await page.flush();
+    expect(page.activeElement()).toBe(page.el('dTitle'));
+  });
+
   it('explains the per-write DE caption union, distinct stories, separate draft scope and unaffected EN without author admin requests', async () => {
     const requests: string[] = [];
     const page = loadPage({ isAdmin: false, request: (url) => { requests.push(url); return undefined; } });

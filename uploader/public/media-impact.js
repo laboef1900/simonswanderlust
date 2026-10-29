@@ -9,6 +9,8 @@ window.MediaImpact = (function () {
       .map((story) => story.translationKey))];
   }
   function render(box, observation, changed, isAdmin, copy, refresh) {
+    const focusKey = box.contains(document.activeElement) ? document.activeElement.dataset.impactFocus : undefined;
+    let focusTarget;
     box.innerHTML = '';
     const text = (tag, value, parent = box) => {
       const node = document.createElement(tag); node.textContent = value; parent.appendChild(node); return node;
@@ -48,6 +50,8 @@ window.MediaImpact = (function () {
           if (authorized) {
             const link = text('a', authorized.title, item);
             link.href = '/admin/editor.html?tk=' + encodeURIComponent(story.translationKey);
+            link.dataset.impactFocus = scope + ':' + story.translationKey;
+            if (link.dataset.impactFocus === focusKey) focusTarget = link;
           } else text('span', copy.mediaImpactReferenceUnavailable, item);
           if (changedKeys) text('p', changedKeys.has(story.translationKey)
             ? copy.mediaImpactStoryAffected : copy.mediaImpactStoryUnaffected, item);
@@ -71,6 +75,8 @@ window.MediaImpact = (function () {
     }
     const button = text('button', copy.publicationRefresh);
     button.type = 'button'; button.className = 'btn-link'; button.addEventListener('click', refresh);
+    button.dataset.impactFocus = 'refresh';
+    if (focusKey) (focusTarget || button).focus({ preventScroll: true });
   }
   return { affected, render };
 })();
