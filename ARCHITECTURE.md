@@ -112,6 +112,10 @@ are in the specification.
    is Markdown; hero and body photos are uploaded inline and optimized by the app's image pipeline.
 2. **Store** — drafts and published posts live in the Postgres `posts` table (one row per locale).
    Postgres is the source of truth; git holds no content.
+   Pasted `<BodyImage … />` tags in posts remain supported export/import syntax:
+   `normalizeBodyImages` in `uploader/src/posts.ts` converts them to Markdown images and
+   per-locale image metadata before storage. They are not globally registered MDX components;
+   public and preview rendering use `site/src/lib/body-images.ts`.
 3. **Publish** — the editor calls `POST /posts/:tk/publish` (admin-only). The app validates the
    post, flips its status to `published`, exports an MDX backup to `/data/backup` (best-effort),
    and **awaits the in-process build** (`buildSite()`) before responding — no HTTP hop, no shared
