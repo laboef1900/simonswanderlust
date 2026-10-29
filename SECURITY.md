@@ -266,11 +266,12 @@ Identity lives in Postgres with content; operational settings remain in `setting
   pixel decode, and refuses embedded EXIF/XMP/IPTC/ICC. The CLI and direct restore perform
   decoding before mutation. Recovered bytes are never repaired or silently skipped.
 
-**Canonical origin (#276):** admin editing requires explicit domain-change confirmation.
+**Canonical origin (#276):** the admin Settings editor asks for explicit domain-change confirmation.
 Strict shared origin validation, IDN serialization and image-topology separation apply at
 save/build/restore boundaries. Static canonical, alternate, social, structured-data, feed
-and sitemap URLs use the captured identity; an unset origin omits canonical output and
-emits noindex/disallow robots behavior. Runtime comment checks use the current cached
+and sitemap URLs use the captured identity. An unset origin retains absolute metadata
+under `https://unconfigured.invalid`, adds `noindex`, and emits `Disallow: /` with no
+`Sitemap:` line. Runtime comment checks use the current cached
 identity, while outbound identification uses its configured origin without changing the
 remote-fetch guards. Neither a domain edit nor a rebuild renames story paths or image URLs.
 Logo/favicon upload and rendering remain #275's separate implementation. Gallery image
