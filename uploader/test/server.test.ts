@@ -39,7 +39,6 @@ import { memorySecretsStore, SecretsError } from '../src/secrets.js';
 import type { AiProvider, AiProviderKind } from '../src/ai-providers.js';
 import { memoryOnboardingStore, type OnboardingProgress, type OnboardingState } from '../src/onboarding.js';
 import type { ReleaseManifestV1 } from '../../site/src/lib/publication-manifest.js';
-import { memoryLanguageStore } from '../src/language.js';
 
 let dir: string;
 beforeEach(async () => {

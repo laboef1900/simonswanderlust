@@ -15,6 +15,8 @@ import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import type { BuildOutcome } from '../src/build.js';
 import { buildFailureMessage } from '../src/build-state.js';
 import { idleBuildState } from './build-fixture.js';
+import { createUploadService } from '../src/upload-service.js';
+import { memoryUploadReceiptStore } from '../src/upload-receipts.js';
 
 const release = '1793000000000-1-0001';
 const successfulBuild: BuildOutcome = { ok: true, attemptId: release, release, liveRelease: release };
@@ -40,10 +42,13 @@ async function fixture() {
     settings: { get: () => settings, update: patch => { settings = validate({ ...settings, ...patch }); return settings; } },
     builder: { ...idleBuildState, build, hasRelease: () => true, quiesce: async () => {} }, dbCheck: async () => {},
     dbBackup: { dir: root, runNow: async () => ({}), running: () => false, state: () => ({}), sweepTempFiles: () => [], list: () => [], listImageArchives: () => [], listRouteArchives: () => [], quiesce: async () => {} },
-    encodeQueue: { enqueue() {}, isActive: () => false, recover: async () => 0, drain: async () => {}, idle: async () => {}, quiesce: async () => {}, stats: () => ({ pending: 0, running: 0 }) },
+    encodeQueue: { withAdmission: (_key, operation) => operation(), availableCapacity: () => 100, onCapacity: () => () => {},
+      enqueue() {}, isActive: () => false, recover: async () => 0, drain: async () => {}, idle: async () => {}, quiesce: async () => {}, stats: () => ({ pending: 0, running: 0 }) },
   };
+  config.uploads = createUploadService({ receipts: memoryUploadReceiptStore(), media, queue: config.encodeQueue,
+    storageDir: root, baseUrl: imageBase, settings: config.settings, isWritable: () => writable });
   const app = buildServer(config);
-  disposers.push(async () => { await app.close(); await rm(root, { recursive: true, force: true }); });
+  disposers.push(async () => { await config.uploads!.quiesce(); await app.close(); await rm(root, { recursive: true, force: true }); });
   const keys: string[] = [];
   for (let i = 0; i < 3; i++) {
     const loc = (locale: 'de' | 'en') => ({ locale, slug: locale + '-story-' + i, title: 'Story ' + i, excerpt: '', country: 'X', bodyMarkdown: '', images: {}, heroImage: { src: imageBase + '/hero', width: 640, height: 400, alt: 'Landscape' } });

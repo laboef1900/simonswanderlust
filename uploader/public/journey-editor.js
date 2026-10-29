@@ -122,7 +122,7 @@
     BuildReporting.renderOutcome($('journeyStatus'), action.toLowerCase(), result, { title });
   }
   async function operate(fn) {
-    if (busy) return;
+    if (busy || !draft || (!id && saved)) return;
     const opener = document.activeElement;
     busy = true; $('journeyFields').disabled = true; $('journeyError').hidden = true; $('journeyStatus').textContent = text('Busy');
     try { await fn(); } catch (error) { $('journeyStatus').textContent = guard.isDirty() ? text('Dirty') : ''; showError(error); }

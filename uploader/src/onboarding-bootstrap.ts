@@ -388,7 +388,6 @@ const BOOTSTRAP_INDEXES: Record<string, Record<string, { unique: boolean; defini
   post_revisions: { post_revisions_tk_saved_idx: { unique: false, definition: 'btree (translation_key, saved_at DESC)' } },
   pages: { pages_locale_slug_idx: { unique: true, definition: "btree (locale, slug) WHERE (slug <> ''::text)" } },
   page_revisions: { page_revisions_key_saved_idx: { unique: false, definition: 'btree (key, saved_at DESC)' } },
-  pages: { pages_locale_slug_idx: { unique: true, definition: "btree (locale, slug) WHERE (slug <> ''::text)" } },
   journey_locales: { journey_locales_slug_idx: { unique: true, definition: "btree (locale, slug) WHERE (slug <> ''::text)" } },
   journey_members: {
     journey_members_tk_idx: { unique: true, definition: 'btree (translation_key)' },
