@@ -770,6 +770,7 @@
       state.items = state.items.map(function (item) { return item.key === key ? error.current : item; });
       state.detailDirty = false;
       renderDetail();
+      void reload();
     });
     box.appendChild(stored);
   }
@@ -787,6 +788,7 @@
     if (state.detailRecovery && !current) { say(copy.mediaConditionalReview); return; }
     var generation = state.detailGeneration;
     var titleInput = $('dTitle');
+    var refreshListing = false;
     setDetailSaving(true);
     try {
       var patch = detailPatch(current && state.detailRecovery ? state.detailRecovery.patch : null);
@@ -796,6 +798,7 @@
         return;
       }
       var saved = await api.savePatch(client, key, patch, api.expectations(patch, current || state.detailItem));
+      refreshListing = true;
       state.items = state.items.map(function (item) { return item.key === key ? saved : item; });
       if ($('detail').dataset.key !== key) return;
       if ($('dTitle') !== titleInput) {
@@ -835,6 +838,9 @@
       else fail(error);
     } finally {
       setDetailSaving(false);
+      // Reconcile server-side filters, order and selection after adoption.
+      // reload preserves dirty panels and fences superseded list responses.
+      if (refreshListing) void reload();
     }
   }
 
