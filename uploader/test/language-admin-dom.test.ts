@@ -147,7 +147,7 @@ describe('browser language URL mirror and tabs', () => {
   });
 });
 
-async function about(primary: Locale, prepareLocale?: Locale, route?: (url: string, init: RequestInit) => BrowserResponse | Promise<BrowserResponse>) {
+async function about(primary: Locale, prepareLocale?: Locale, updatedAt: string | null = stamp, route?: (url: string, init: RequestInit) => BrowserResponse | Promise<BrowserResponse>) {
   const html = readFileSync('public/about.html', 'utf8');
   const dom = editorDocument(html);
   const el = (id: string) => {
@@ -156,7 +156,7 @@ async function about(primary: Locale, prepareLocale?: Locale, route?: (url: stri
     return element;
   };
   const page = {
-    updatedAt: stamp,
+    updatedAt,
     de: { locale: 'de', title: 'Aktiver Inhalt', bodyMarkdown: 'Deutscher Text', images: {} },
     en: { locale: 'en', title: 'Existing heading', bodyMarkdown: 'English text', images: {} },
   };
@@ -196,9 +196,11 @@ async function about(primary: Locale, prepareLocale?: Locale, route?: (url: stri
 }
 
 describe('About inactive translation preparation', () => {
-  it.each(['de', 'en'] as const)('saves only the inactive translation for %s-primary and does not imply activation', async (primary) => {
+  it.each([
+    ['de', stamp], ['en', stamp], ['de', null], ['en', null],
+  ] as const)('saves only the inactive translation for %s-primary at version %s without implying activation', async (primary, updatedAt) => {
     const secondary = primary === 'de' ? 'en' : 'de';
-    const h = await about(primary, secondary);
+    const h = await about(primary, secondary, updatedAt);
     expect(h.el('tab-' + secondary).hidden).toBe(false);
     expect(h.el('tab-' + primary).hidden).toBe(true);
     expect(h.el('preparationNotice').textContent).toContain('not public');
@@ -208,7 +210,7 @@ describe('About inactive translation preparation', () => {
     const request = h.requests.find(({ init }) => init.method === 'PUT')!;
     const payload = JSON.parse(String(request.init.body));
     expect(payload).toEqual({
-      updatedAt: stamp, prepareLocale: secondary,
+      updatedAt, prepareLocale: secondary,
       [secondary]: { ...h.page[secondary], title: 'Prepared title' },
     });
     expect(payload[primary]).toBeUndefined();
@@ -245,7 +247,7 @@ describe('About acknowledged save and failed rebuild', () => {
     let token = stamp;
     const pending = Promise.withResolvers<BrowserResponse>();
     let saves = 0;
-    const h = await about('en', undefined, async (url, init) => {
+    const h = await about('en', undefined, stamp, async (url, init) => {
       if (url.endsWith('/revisions')) throw new Error('optional list unavailable');
       if (init.method === 'PUT') {
         const payload = JSON.parse(String(init.body));

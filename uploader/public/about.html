@@ -161,7 +161,7 @@
         if (!ok) return;
         showErr(''); setStatus('Publishing…');
         const snap = guard.snapshot();
-        const payload = { updatedAt: loadedUpdatedAt || undefined,
+        const payload = { updatedAt: loadedUpdatedAt,
           ...Object.fromEntries(editableLocales.map((locale) => [locale, localeObj(locale)])),
           ...(prepareLocale ? { prepareLocale } : {}) };
         const btn = $('saveBtn');
