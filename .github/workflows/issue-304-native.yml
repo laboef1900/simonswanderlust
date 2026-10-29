@@ -1,0 +1,95 @@
+# TEMPORARY #304 qualification scaffold. Remove after reviewed evidence is retained.
+# Does not authorize #305 integration, deployment, publication or a mount fallback.
+# Only fresh standard public native hosts; no QEMU, larger/paid or self-hosted runner.
+name: issue-304-native-qualification
+
+on:
+  pull_request:
+    branches: [dev]
+    types: [opened, reopened, synchronize]
+    paths:
+      - '.github/workflows/issue-304-native.yml'
+      - '.github/issue-304-native/**'
+
+permissions:
+  contents: read
+
+jobs:
+  qualification:
+    if: >-
+      github.repository == 'laboef1900/simonswanderlust' &&
+      github.event.repository.private == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feature/issue-304-weak-connection-design'
+    name: owned flock · native ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact qualification harness head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          path: harness
+
+      - name: Check out immutable approved product source separately
+        uses: actions/checkout@v4
+        with:
+          ref: 57cd3cc517e1e5a964e85463b26529ae1a8aacc5
+          persist-credentials: false
+          path: approved-source
+
+      # Same DHI credential convention as release.yml. No credentials in build args,
+      # fixture argv, exported artifacts or the Python subprocess environment.
+      - name: Log in to dhi.io (Docker Hardened Images)
+        uses: docker/login-action@v3
+        with:
+          registry: dhi.io
+          username: ${{ vars.DHI_USERNAME }}
+          password: ${{ secrets.DHI_TOKEN }}
+
+      - name: Qualify minimal native runtime and isolated local mounts
+        env:
+          APPROVED_SOURCE: ${{ github.workspace }}/approved-source
+          RUN_ROOT: ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-private
+          EVIDENCE_EXPORT: ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence
+          GENERATION: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+          RUNNER_LABEL: ${{ matrix.runner }}
+          CHECKOUT_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          timeout --signal=TERM --kill-after=180s 50m \
+            python3 "$GITHUB_WORKSPACE/harness/.github/issue-304-native/qualify.py"
+
+      # Exact positive list only. Never upload the private root, db.json, password
+      # files, Docker config, raw logs, mount namespaces, image layers or binaries.
+      - name: Retain secret-screened qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-304-native-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/host.json
+            ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/inputs.json
+            ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/build.json
+            ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/build-failure.json
+            ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/toolchain.json
+            ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/bind-result.json
+            ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/volume-result.json
+            ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/bind-runtime.json
+            ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/volume-runtime.json
+            ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/mounts.json
+            ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/peers.json
+            ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/steps.json
+            ${{ runner.temp }}/issue-304-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-evidence/provenance.json
