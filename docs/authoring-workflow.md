@@ -465,6 +465,33 @@ before saving: they can appear in every article gallery using that photo.
 The title labels the photo in the library/editor; it does not replace alt text.
 Hero/title-image and ordinary inline-image descriptions remain article-specific.
 
+**Story impact** in the photo detail panel distinguishes published snapshots (next successful
+rebuild), drafts (Preview now, live after successful Publish), and separately changed saved
+draft uses. It counts distinct stories, not repeated photos, and shows DE/EN gallery,
+following-caption, hero/title and inline occurrences. After **Save details**, its effect
+counts use only the fields that actually changed in that write. A submitted unchanged
+English field does not make English affected; a title/tag-only save says **Descriptions
+unchanged**. Hidden captions and local caption overrides do not follow library captions.
+Empty library descriptions remain empty rather than falling back to older post text.
+
+An all-zero newer-draft row can record a removed use. It does not increase the published
+reach. About and other pages are not story reach, even if their references still prevent
+deleting the photo. Global library descriptions do not publish draft prose, reorder photos,
+change dimensions, or replace post-local hero/title/inline text.
+
+Admins also see per-photo pending description fields compared with the currently served
+release. The aggregate photo/story counts remain beside the existing **Rebuild site now**
+action on Desk/Settings, separate from the last build outcome. Unknown/unavailable is not
+zero. A no-op or reverted description is not pending; a successful rebuild clears only the
+values its loader captured. A later edit stays pending, and a failed pre-promotion build
+clears nothing. There is no per-photo Publish or automatic rebuild.
+
+The selected photo's observations refresh every 30 seconds while visible, and on return
+or focus, with a 10-second read deadline. **Refresh** is read-only; it preserves unsaved
+fields and the values against which Save compares. Failed observations show unavailable/
+stale without claiming that an acknowledged save failed. Counts describe the last read,
+not a promise that another author has not changed the story since.
+
 > Photo GPS is stored for you but is **never published** — image variants carry an EXIF
 > allow-list with no location at all, and the API hides coordinates from non-admin accounts.
 

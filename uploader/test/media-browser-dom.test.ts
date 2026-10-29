@@ -5,6 +5,8 @@ import { webcrypto } from 'node:crypto';
 import { setImmediate } from 'node:timers/promises';
 import { ui } from '../../site/src/i18n/ui.js';
 import * as MediaConditional from '../public/media-conditional.js';
+import type { MediaImpact, StoryUse } from '../src/media-impact.js';
+import type { ChangedDescriptions } from '../src/media-store.js';
 
 // media-browser.js is the library page's DOM glue (media.html). Its
 // user-visible contracts that no pure helper can carry — the detail panel
@@ -18,6 +20,8 @@ const apiSrc = readFileSync('public/media-api.js', 'utf8');
 const aiSrc = readFileSync('public/media-ai.js', 'utf8');
 const dialogSrc = readFileSync('public/media-ai-dialog.js', 'utf8');
 const browserSrc = readFileSync('public/media-browser.js', 'utf8');
+const impactSrc = readFileSync('public/media-impact.js', 'utf8');
+const refreshSrc = readFileSync('public/publication-refresh.js', 'utf8');
 const markup = readFileSync('public/media.html', 'utf8');
 const pageIds = [...markup.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]!);
 const checkedIds = new Set([...markup.matchAll(/<input[^>]*\bid="([^"]+)"[^>]*\bchecked\b/g)].map((m) => m[1]!));
@@ -27,6 +31,7 @@ type Listener = (ev: Record<string, unknown>) => void;
 class FakeNode {
   id = '';
   className = '';
+  href = '';
   private text = '';
   get textContent(): string { return this.text + this.children.map(child => child.textContent).join(''); }
   set textContent(value: string) { this.text = value; this.children = []; }
@@ -68,7 +73,10 @@ class FakeNode {
     const cls = sel.replace(/^\./, '');
     const out: FakeNode[] = [];
     const walk = (n: FakeNode): void => {
-      for (const c of n.children) { if (c.className.split(' ').includes(cls)) out.push(c); walk(c); }
+      for (const c of n.children) {
+        if (sel.startsWith('.') ? c.className.split(' ').includes(cls) : c.tagName.toLowerCase() === sel.toLowerCase()) out.push(c);
+        walk(c);
+      }
     };
     walk(this);
     return out;
@@ -84,6 +92,10 @@ interface Item {
   key: string; title: string; folder: string; status: string; thumbSrc: string;
   alt: { de: string; en: string }; caption: { de: string; en: string };
   tags: string[]; exif: null; width: number; height: number; origBytes: number; variantBytes: number;
+  impact?: MediaImpact;
+  livePending?: ChangedDescriptions | null;
+  changedDescriptions?: ChangedDescriptions;
+  usedIn?: { kind: string; key: string; title: string }[];
 }
 function item(key: string, altDe = ''): Item {
   return {
@@ -112,7 +124,7 @@ interface Page {
   el(id: string): FakeNode;
   /** The page's global object, for replacing a module's function after load. */
   win: Record<string, unknown>;
-  timers: { fn: () => void; cleared: boolean }[];
+  timers: { fn: () => void; cleared: boolean; ms: number }[];
   listRequests: Deferred[];
   patches: { url: string; body: Record<string, unknown> }[];
   rows: Map<string, Item>;
@@ -120,6 +132,8 @@ interface Page {
   confirms: string[];
   confirmAnswer: { value: boolean };
   flush(): Promise<void>;
+  focus(): void;
+  visibility(hidden: boolean): void;
 }
 
 function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en'; prompt?: string;
@@ -140,7 +154,9 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
     if (!n) throw new Error('no element #' + id);
     return n;
   };
-  const timers: { fn: () => void; cleared: boolean }[] = [];
+  const timers: { fn: () => void; cleared: boolean; ms: number }[] = [];
+  const windowEvents = new FakeNode('window');
+  const documentEvents = new FakeNode('document');
   const listRequests: Deferred[] = [];
   const patches: { url: string; body: Record<string, unknown> }[] = [];
   const rows = new Map<string, Item>();
@@ -161,7 +177,10 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
       const patch = body.conditional.patch;
       const saved = { ...base, ...patch, alt: { ...base.alt, ...patch.alt }, caption: { ...base.caption, ...patch.caption } };
       rows.set(key, saved);
-      return ok({ ...saved, conditionalVersion: 1 });
+      return ok({ ...saved, conditionalVersion: 1, changedDescriptions: {
+        de: { alt: base.alt.de !== saved.alt.de, caption: base.caption.de !== saved.caption.de },
+        en: { alt: base.alt.en !== saved.alt.en, caption: base.caption.en !== saved.caption.en },
+      } });
     }
     if (url.startsWith('/media/items/')) return ok(rows.get(url.slice('/media/items/'.length)));
     const { promise, resolve } = Promise.withResolvers<unknown>();
@@ -175,6 +194,9 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   const describePhoto = opts.describe ?? (async () => DETAILS);
   const ctx: Record<string, unknown> = {
     document: {
+      hidden: false,
+      addEventListener: documentEvents.addEventListener.bind(documentEvents),
+      removeEventListener() {},
       documentElement: { lang: opts.locale ?? 'en' },
       getElementById,
       createElement: (tag: string) => new FakeNode(tag),
@@ -183,8 +205,10 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
     location: { href: '', origin: 'https://app.example', protocol: 'https:' },
     fetch,
     URL, AbortController, AbortSignal,
-    crypto: webcrypto, addEventListener() {},
-    setTimeout: (fn: () => void) => { timers.push({ fn, cleared: false }); return timers.length; },
+    crypto: webcrypto,
+    addEventListener: windowEvents.addEventListener.bind(windowEvents),
+    removeEventListener() {},
+    setTimeout: (fn: () => void, ms: number) => { timers.push({ fn, cleared: false, ms }); return timers.length; },
     clearTimeout: (id: number) => { const t = timers[id - 1]; if (t) t.cleared = true; },
     confirm: (msg: string) => { confirms.push(msg); return confirmAnswer.value; },
     prompt: () => opts.prompt ?? null,
@@ -219,9 +243,18 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   vm.runInContext(apiSrc, ctx);
   vm.runInContext(aiSrc, ctx);
   vm.runInContext(dialogSrc, ctx);
+  vm.runInContext(refreshSrc, ctx);
+  vm.runInContext(impactSrc, ctx);
   vm.runInContext(browserSrc, ctx);
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await setImmediate(); };
-  return { el, win: ctx, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush };
+  return { el, win: ctx, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush,
+    focus: () => windowEvents.dispatch('focus'),
+    visibility: (hidden) => {
+      const document = ctx.document;
+      if (!document || typeof document !== 'object') throw new Error('missing document');
+      Reflect.set(document, 'hidden', hidden);
+      documentEvents.dispatch('visibilitychange');
+    } };
 }
 
 function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
@@ -1116,5 +1149,110 @@ describe('explicit conditional detail choices after more editing', () => {
     page.el('dUseStored').click();
     expect(page.el('dTitle').value).toBe('Stored');
     expect(page.el('dUnsaved').hidden).toBe(true);
+  });
+});
+
+describe('Media publication impact and bounded refresh', () => {
+  const zero = { gallery: 0, galleryCaptionFollowsLibrary: 0, heroTitle: false, inline: 0 };
+  const unchanged = { de: { alt: false, caption: false }, en: { alt: false, caption: false } };
+  const story = (translationKey: string, captions = 1) => ({ translationKey, title: translationKey,
+    locales: { de: { ...zero, gallery: 3, galleryCaptionFollowsLibrary: captions }, en: { ...zero, gallery: 1, galleryCaptionFollowsLibrary: 1 } } });
+  const impact: MediaImpact = { availability: 'available', published: [story('one'), story('two')],
+    drafts: [story('draft')], newerDrafts: [{ ...story('removed'), locales: { de: zero, en: zero } }] };
+  async function open(page: Page, photo: Item = item('a')) {
+    page.rows.set(photo.key, photo);
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [photo, item('b')], total: 2 });
+    await page.flush(); page.el('grid').querySelectorAll('.media-cell')[0]!.click(); await page.flush();
+  }
+
+  it('explains the per-write DE caption union, distinct stories, separate draft scope and unaffected EN without author admin requests', async () => {
+    const requests: string[] = [];
+    const page = loadPage({ isAdmin: false, request: (url) => { requests.push(url); return undefined; } });
+    await open(page, { ...item('a'), impact, usedIn: [{ kind: 'post', key: 'one', title: 'Authorized title' }] });
+    page.el('dCapDe').value = 'Saved caption'; page.el('detail').dispatch('input');
+    page.el('dSave').click(); await page.flush();
+    const text = page.el('dImpact').textContent;
+    expect(text).toContain('2 distinct stories with gallery effects from this save');
+    expect(text).toContain('1 distinct stories with gallery effects from this save');
+    expect(text).toContain('EN: unaffected by this save.');
+    expect(text).toContain('preview now, live after successful Publish');
+    expect(text).toContain('Different saved drafts');
+    expect(text).toContain('0 distinct stories with gallery effects from this save');
+    expect(text).toContain('3 gallery occurrences');
+    expect(text).not.toContain('Pending live descriptions');
+    expect(page.el('dImpact').querySelectorAll('a').map((link) => link.href)).toEqual(['/admin/editor.html?tk=one']);
+    expect(requests.some((url) => /publication\/summary|rebuild|settings/.test(url))).toBe(false);
+    expect(page.patches).toHaveLength(1);
+    const helper = page.win.MediaImpact as { affected(stories: StoryUse[], changed: ChangedDescriptions): string[] };
+    expect(helper.affected([story('one'), story('one'), story('two', 0)], { de: { alt: true, caption: true }, en: { alt: true, caption: false } })).toEqual(['one', 'two']);
+  });
+
+  it('reports unchanged descriptions, hero-only no-gallery effect and About-only empty impact', async () => {
+    const page = loadPage({ isAdmin: false });
+    const heroOnly: MediaImpact = { availability: 'available', published: [{ ...story('hero'),
+      locales: { de: { ...zero, heroTitle: true, inline: 1 }, en: zero } }], drafts: [], newerDrafts: [] };
+    await open(page, { ...item('a'), impact: heroOnly });
+    page.el('dTitle').value = 'Only title'; page.el('detail').dispatch('input'); page.el('dSave').click(); await page.flush();
+    expect(page.el('dImpact').textContent).toContain('Descriptions unchanged.');
+    page.el('dCapDe').value = 'Description'; page.el('detail').dispatch('input'); page.el('dSave').click(); await page.flush();
+    expect(page.el('dImpact').textContent).toContain('No gallery effect.');
+    expect(page.el('dImpact').textContent).toContain('hero/title: yes');
+    const helper = page.win.MediaImpact as { render(...args: unknown[]): void };
+    const editorCopy = page.win.EditorCopy as { en: object };
+    helper.render(page.el('dImpact'), { impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] },
+      usedIn: [{ kind: 'page', key: 'about', title: 'About' }] }, unchanged, false,
+      editorCopy.en, () => {});
+    expect(page.el('dImpact').textContent).toContain('No eligible story');
+    expect(page.el('dImpact').querySelectorAll('a')).toEqual([]);
+  });
+
+  it('refreshes only projections while dirty, preserving base expectations and last save result', async () => {
+    const page = loadPage();
+    await open(page, { ...item('a', 'base'), impact, livePending: unchanged });
+    page.el('dAltDe').value = 'local'; page.el('detail').dispatch('input');
+    page.rows.set('a', { ...item('a', 'foreign base'), impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] },
+      livePending: { de: { alt: false, caption: true }, en: { alt: false, caption: false } } });
+    page.timers.find((timer) => timer.ms === 30000 && !timer.cleared)!.fn(); await page.flush();
+    expect(page.el('dAltDe').value).toBe('local');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dImpact').textContent).toContain('No eligible story');
+    expect(page.el('dImpact').textContent).toContain('caption: yes');
+    expect(page.patches).toEqual([]);
+    page.el('dSave').click(); await page.flush();
+    expect(page.patches[0]?.body).toMatchObject({ conditional: { patch: { alt: { de: 'local' } }, expect: { alt: { de: 'base' } } } });
+    expect(page.el('out').textContent).toContain('Photo details saved.');
+  });
+
+  it('discards reads superseded by selection and save; deadline marks unavailable without clearing dirty text', async () => {
+    const reads: Array<{ key: string; response: { resolve(value: unknown): void } }> = [];
+    const page = loadPage({ request: (url, init) => {
+      if (!url.startsWith('/media/items/') || init?.method === 'PATCH') return undefined;
+      const response = Promise.withResolvers<unknown>(); reads.push({ key: url, response }); return response.promise;
+    } });
+    await open(page);
+    expect(reads).toHaveLength(1);
+    page.el('grid').querySelectorAll('.media-cell')[1]!.click(); await page.flush();
+    expect(reads).toHaveLength(2);
+    reads[0]!.response.resolve({ ok: true, status: 200, json: async () => ({ ...item('a'), impact }) });
+    reads[1]!.response.resolve({ ok: true, status: 200, json: async () => ({ ...item('b'), impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] } }) });
+    await page.flush();
+    expect(page.el('detail').dataset.key).toBe('b');
+    expect(page.el('dImpact').textContent).toContain('No eligible story');
+    expect(page.el('dImpact').textContent).not.toContain('Authorized title');
+    page.el('dAltDe').value = 'keep dirty'; page.el('detail').dispatch('input');
+    page.timers.find((timer) => timer.ms === 30000 && !timer.cleared)!.fn(); await page.flush();
+    expect(reads).toHaveLength(3);
+    page.focus(); page.focus(); await page.flush(); expect(reads).toHaveLength(3);
+    page.timers.find((timer) => timer.ms === 10000 && !timer.cleared)!.fn(); await page.flush();
+    expect(page.el('dImpact').textContent).toContain('Impact unavailable or stale');
+    expect(page.el('dAltDe').value).toBe('keep dirty');
+    page.el('dSave').click(); await page.flush();
+    reads[2]!.response.resolve({ ok: true, status: 200, json: async () => ({ ...item('b'), impact }) });
+    await page.flush();
+    expect(page.el('dImpact').textContent).not.toContain('2 stories with uses');
+    expect(page.patches).toHaveLength(1);
+    page.visibility(true);
+    expect(page.timers.filter((timer) => timer.ms === 30000 && !timer.cleared)).toHaveLength(0);
   });
 });

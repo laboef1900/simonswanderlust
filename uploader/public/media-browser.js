@@ -38,6 +38,9 @@
     detailGeneration: 0,
     detailSaving: false,
     detailRecovery: null,
+    detailObservation: null,
+    detailChanged: null, // only this session's acknowledged write, never inferred by a read
+    observedKey: null,
     suggest: null,       // in-flight AI suggestion for the panel's photo: { key, controller }
     offers: null,        // suggestions shown under fields that had text: { key, slots: [[inputId, value, what]] }
     queue: null,
@@ -58,6 +61,40 @@
     try { uploads.observeOwner((await client.me()).userId); }
     catch (error) { if (error.status === 401) uploads.pause(); }
   });
+
+  var detailRefresh = window.PublicationRefresh.create({
+    resource: function () { return state.detailKey; },
+    read: function (signal) {
+      return window.PublicationRefresh.json('/media/items/' + state.detailKey, signal);
+    },
+    apply: function (item) {
+      // Deliberately do not replace detailItem, form values, or conditional-write expectations.
+      state.detailObservation = { impact: item.impact, livePending: item.livePending,
+        usedIn: item.usedIn || state.detailObservation?.usedIn || state.detailItem?.usedIn || [] };
+      renderImpact();
+    },
+    unavailable: function () {
+      state.detailObservation = { impact: { availability: 'unavailable' }, livePending: null };
+      renderImpact();
+    },
+    unauthorized: function () { uploads.pause(); say(copy.uploadNeedsAuth); },
+  });
+  // Bulk writes and explicit detail/reconciliation reads invalidate older observations.
+  // Background projection reads use PublicationRefresh.json, never this wrapped client.
+  ['get', 'patch', 'remove', 'move', 'retry', 'rescan', 'renameFolder', 'deleteFolder', 'createFolder'].forEach(function (method) {
+    var mutate = client[method];
+    client[method] = async function () {
+      detailRefresh.beginAction();
+      try { return await mutate.apply(client, arguments); }
+      finally { detailRefresh.endAction(); }
+    };
+  });
+
+  function renderImpact() {
+    var box = $('dImpact');
+    if (box) window.MediaImpact.render(box, state.detailObservation, state.detailChanged,
+      !!state.me?.isAdmin, copy, function () { detailRefresh.refresh(); });
+  }
 
   function say(msg) { $('out').textContent = msg; }
 
@@ -276,6 +313,13 @@
   // (see detailReplaceable).
   function renderDetail() {
     if (state.detailDirty) return;
+    var selectionChanged = state.observedKey !== state.detailKey;
+    if (selectionChanged) {
+      detailRefresh.beginAction();
+      state.observedKey = state.detailKey;
+      state.detailObservation = null;
+      state.detailChanged = null;
+    }
     var panel = $('detail');
     panel.innerHTML = '';
     var item = state.items.filter(function (i) { return i.key === state.detailKey; })[0];
@@ -287,6 +331,7 @@
     if (!item) {
       delete panel.dataset.key;
       panel.appendChild(el('p', 'muted', 'Select a photo to edit its details.'));
+      if (selectionChanged) detailRefresh.endAction();
       return;
     }
     panel.dataset.key = item.key;
@@ -352,6 +397,12 @@
     comparison.id = 'dCompare';
     comparison.setAttribute('aria-live', 'polite');
     panel.appendChild(comparison);
+    var impact = el('section');
+    impact.id = 'dImpact';
+    impact.setAttribute('aria-live', 'polite');
+    panel.appendChild(impact);
+    renderImpact();
+    if (selectionChanged) detailRefresh.endAction();
 
     // EXIF is read-only. lat/lng are absent entirely for non-admins.
     panel.appendChild(el('p', 'section-label', 'Camera'));
@@ -752,15 +803,23 @@
     if (state.detailRecovery && !current) { say(copy.mediaConditionalReview); return; }
     var generation = state.detailGeneration;
     state.detailSaving = true;
+    detailRefresh.beginAction();
+    state.detailChanged = null;
+    renderImpact();
     $('dSave').disabled = true;
     try {
       var patch = detailPatch(current && state.detailRecovery ? state.detailRecovery.patch : null);
       if (!Object.keys(patch).length) {
         state.detailDirty = false;
+        state.detailChanged = { de: { alt: false, caption: false }, en: { alt: false, caption: false } };
         renderDetail();
         return;
       }
       var saved = await api.savePatch(client, key, patch, api.expectations(patch, current || state.detailItem));
+      if ($('detail').dataset.key === key) {
+        state.detailChanged = saved.changedDescriptions || null;
+        detailRefresh.accept(saved);
+      }
       if ($('detail').dataset.key !== key || state.detailGeneration !== generation) {
         say(copy.mediaConditionalNewer);
         return;
@@ -783,6 +842,7 @@
     } finally {
       state.detailSaving = false;
       if ($('dSave')) $('dSave').disabled = false;
+      detailRefresh.endAction();
     }
   }
 
@@ -1044,6 +1104,7 @@
     // Delegated: the panel's inputs are rebuilt by renderDetail; the panel is not.
     $('detail').addEventListener('input', markDetailDirty);
     $('detail').addEventListener('change', markDetailDirty);
+    detailRefresh.start(false);
     await reload();
   }
   (async function init() {
