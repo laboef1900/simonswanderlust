@@ -30,7 +30,11 @@ class FakeNode {
   private text = '';
   get textContent(): string { return this.text + this.children.map(child => child.textContent).join(''); }
   set textContent(value: string) { this.text = value; this.children = []; }
-  value = '';
+  private inputValue = '';
+  get value(): string { return this.inputValue; }
+  set value(value: string) {
+    this.inputValue = this.tagName === 'select' && !this.children.some(option => option.value === value) ? '' : value;
+  }
   hidden = false;
   disabled = false;
   checked = false;
@@ -898,6 +902,27 @@ describe('media conditional save recovery in real consumers', () => {
       { conditional: { version: 1, patch: { title: 'Mine', tags: ['local'] }, expect: { title: 'Someone else', tags: ['elsewhere'] } } },
     ]);
     expect(page.el('dUnsaved').hidden).toBe(true);
+  });
+
+  it.each([false, true])('preserves a newly observed folder on the next edit (Use stored: %s)', async (useStored) => {
+    const current = { ...item('a'), title: 'Stored elsewhere', folder: 'Created elsewhere' };
+    let refused = false;
+    const page = loadPage({ request: (_url, init) => {
+      if (!useStored || refused || init?.method !== 'PATCH') return;
+      refused = true;
+      return response(409, { error: 'media_changed', current });
+    } });
+    await open(page);
+    page.rows.set('a', current);
+    change(page, 'dTitle', 'My title');
+    page.el('dSave').click(); await page.flush();
+    if (useStored) page.el('dUseStored').click();
+    expect(page.el('dFolder').value).toBe('Created elsewhere');
+    change(page, 'dAltDe', 'My alt');
+    page.el('dSave').click(); await page.flush();
+    expect(page.patches.at(-1)?.body).toEqual({ conditional: { version: 1,
+      patch: { alt: { de: 'My alt' } }, expect: { alt: { de: '' } } } });
+    expect(page.rows.get('a')?.folder).toBe('Created elsewhere');
   });
 
   it('adopts stored values only by explicit choice and never discards newer form generations', async () => {
