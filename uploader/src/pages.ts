@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { DbPool } from './db.js';
+import type { DbClient, DbPool } from './db.js';
 import { imagesMapError, normalizeGalleryFences, type ImageMeta } from './body-content.js';
 import { REVISION_CAP } from './posts.js';
 import { memoryLanguageStore, readLanguage, type LanguageStore, type LanguageState, type LanguageLocale } from './language.js';
@@ -76,7 +76,7 @@ function pageWithDefaults(pair: PagePair): PagePair {
 export type PageUpdate = Pick<PagePair, 'key'> & Partial<Pick<PagePair, 'de' | 'en'>>;
 export interface PageSaveOptions {
   prepareLocale?: LanguageLocale;
-  validate?: (pair: PagePair, language: LanguageState) => Promise<void>;
+  validate?: (pair: PagePair, language: LanguageState, client?: DbClient) => Promise<void>;
 }
 function mergePageUpdate(update: PageUpdate, existing: StoredPagePair, language: LanguageState, options: PageSaveOptions): PagePair {
   const preparing = options.prepareLocale;
@@ -197,7 +197,7 @@ export function pgPageStore(pool: DbPool): PageStore {
         if (options.prepareLocale && existing.updatedAt && !baseUpdatedAt) throw new PageError('Reload the page before preparing a translation.', 'conflict');
         assertPageNotStale(existing.updatedAt, baseUpdatedAt);
         const normalized = mergePageUpdate(pair, existing, mode, options);
-        await options.validate?.(normalized, mode);
+        await options.validate?.(normalized, mode, client);
         if (existing.updatedAt) {
           await client.query(
             `INSERT INTO page_revisions (id, key, snapshot, saved_at) VALUES ($1, $2, $3, clock_timestamp())`,
