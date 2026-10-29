@@ -186,10 +186,13 @@ def excludes_elf(entry):
     fields = dict(line.split(' ', 1) for line in entry.splitlines() if ' ' in line)
     magic = fields.get('magic', '').lower()
     mask = fields.get('mask', 'ff' * (len(magic) // 2)).lower()
+    prefix_length = min(len(magic), 8)
     return (fields.get('offset') == '0'
-            and re.fullmatch(r'(?:[0-9a-f]{2}){4,}', magic) is not None
-            and re.fullmatch(r'(?:[0-9a-f]{2}){4,}', mask) is not None
-            and mask[:8] == 'ffffffff' and magic[:8] != '7f454c46')
+            and re.fullmatch(r'(?:[0-9a-f]{2})+', magic) is not None
+            and re.fullmatch(r'(?:[0-9a-f]{2})+', mask) is not None
+            and len(mask) == len(magic)
+            and mask[:prefix_length] == 'f' * prefix_length
+            and magic[:prefix_length] != '7f454c46'[:prefix_length])
 
 
 try:
