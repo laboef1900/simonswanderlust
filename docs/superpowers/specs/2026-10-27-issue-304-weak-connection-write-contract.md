@@ -1126,6 +1126,14 @@ completion, while an author who moved to another field keeps that focus. Real de
 320px checks observed a visible focus indicator and preserved unsaved detail text. The full
 uploader/PG suite, types, Astro check, site suite and real build passed at that source.
 
+Independent review found a separate page-mode boundary: ordinary editing and inactive-locale
+preparation must not share a recovery resource, because a save sends only the mode's locales.
+The fix scopes preparation records by locale. The regression failed before the fix; actual
+`cffbe24` browser qualification then exercised all four page keys, both directions of exact
+record preservation, and genuine lost-response receipt recovery. Desktop and 320px keyboard
+restoration retained the intended title/body; stale bases still required explicit comparison.
+Private fixtures and exact records remain in the execution evidence, not in this repository.
+
 `.github/native-owner/package-qualify.py` is the exercised actual-package harness, retained
 outside runtime output. `packaged owner · native amd64/arm64` in `ci.yml` builds the actual
 Dockerfile and runs it on native public Ubuntu runners. It checks exact source/image/native
@@ -1174,3 +1182,23 @@ unrelated-field success, canonical tags/controls, old/new client-server envelope
 acknowledgements and reads, mixed unknown results, detail edits during requests, single/bulk
 AI empty-fill races, and session-end pause/no navigation. No worker ran checks or browser
 sessions for this handoff. The actual deployment-mount restriction above is unchanged.
+
+### Observed #306 qualification
+
+After that source handoff, parent verification passed the full uploader typecheck and
+PostgreSQL-enabled suite, Astro check, site suite and actual build at `358573a`. Real-browser
+qualification covered owner/context isolation, all four page keys, stale/missing/malformed
+bases, late receipts with newer edits, conflicts, offline/no-replay behavior and conditional
+Media detail/single-photo/bulk-AI interruption.
+
+Real storage exhaustion exposed an inaccurate generic outcome message. Both stored-version
+replacement and explicit rebase now identify the local-storage refusal. The actual browser
+recheck retained earlier records byte-for-byte and kept newer DE/EN input in the open form,
+without pretending the newer text had been persisted. Neither refusal nor explicit recovery
+retry sent a mutation. Removing only the test's new quota-filler keys allowed both choices;
+a subsequent explicit Save was acknowledged normally. The narrow keyboard warning was
+inspected. Recovery chrome remains English in the current admin; the DE dictionary is also
+served and completeness-tested, not claimed as a separately exercised German admin surface.
+
+Private exact records and runtime artifacts remain outside version control. No owner data
+was used, and the actual deployment-mount gate above remains unchanged.
