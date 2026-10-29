@@ -988,3 +988,25 @@ unsuccessful fixture probes and this interruption remain disclosed. All owned
 processes/tabs stopped, paused child resumed, query lock rolled back and exact
 filesystem permissions restored; synthetic fixtures remain retained. No owner-data,
 deployment or physical accessibility qualification is claimed.
+
+### Independent-review reauthentication and focus repairs
+
+Independent PR review found that an initialized Media page did not restart its stopped
+detail observer after same-owner reauthentication, and that replacing the impact subtree
+discarded keyboard focus. Both consumer regressions failed before repair. Reactivation
+now restarts read-only observation without adopting dirty fields; repaint restores the
+equivalent focused control, falls back to Refresh when its link disappears, and never
+takes focus from outside the impact section.
+
+Actual qualification at `552f76e` expired only a fresh synthetic session, observed the real
+item401, then signed in and resumed. Resume made one auth, list, folders and selected-item
+read with zero mutations; both dirty input nodes/text survived. The next explicit Save
+made exactly one PATCH200 with original conditional expectations and no item-read echo.
+Native Enter retained Refresh focus, bounds and scroll at desktop and320px. Automatic
+observation retained a focused story link, fell back after a real usage-removal PUT, and
+left an outside input focused. Native visible focus outlines were inspected.
+
+The managed headless browser did not emit native window-focus events on foreground
+switching; that listener was exercised with an explicitly disclosed synthetic focus event
+and genuine reads, not represented as native window-focus proof. Apps, tabs, sessions and
+interception were cleaned up; private evidence records harness limitations.
