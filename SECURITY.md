@@ -367,6 +367,9 @@ this fix requires a new release image and an owner-controlled redeployment. Reco
 **roll forward only** while retaining the patched codec floors: restoring sharp 0.35.3/0.35.4
 would reopen vulnerable decoding, including boot/rescan of retained originals. Preserve data;
 do not re-import or bulk re-encode as a dependency rollback.
+The [app upgrade/recovery policy](ARCHITECTURE.md#app-upgrades-and-supported-recovery) does
+not relax this floor: no backward pair is currently eligible, and #347 remains roll-forward
+only. A retained vulnerable image digest is diagnostic evidence, never deployment approval.
 
 The metadata allow-list below, private-original restrictions, SVG original naming, accepted
 formats, and upload/import/preview authorization are unchanged. Benign JPEG, AVIF and SVG
@@ -897,6 +900,16 @@ deliberate trade-off, not an oversight:
 
 ### Backups
 
+- App upgrades follow the [canonical recovery runbook](ARCHITECTURE.md#app-upgrades-and-supported-recovery).
+  Freeze/drain all mutations and storage writers before capture and retain one coherent
+  dump/settings/bootstrap/image/private-route generation with separate matching key escrow.
+  Settings capture remains operator-managed, not an app-native snapshot. Mixing pre-change
+  credentials with post-change provider settings can disclose a key to the wrong destination;
+  reconcile partial saves before capture. Protect original photo/GPX recovery material as
+  private data. Recovery preserves the storage-owner fence, source validation and verified
+  pre-restore undo set below; no reverse DDL, region mutation or volume deletion is implied.
+  Eligible backward recovery would additionally need an immediately previous secure,
+  release-specific rehearsed pair; none is established, and the codec floor above still applies.
 - Backup dumps (`/data/backup/db/db-*.json.gz`) contain the `users` table **including scrypt
   password hashes** — treat backup files as sensitive, same as the database itself. `sessions` are
   **never** dumped (disposable, and token hashes don't belong in a backup).

@@ -637,6 +637,142 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   above remains the real DR protection. To rebuild the images dir from archives, untar them
   **oldest-first** into an empty `images/` (later duplicates simply overwrite earlier ones).
 
+### App upgrades and supported recovery
+
+This is the canonical app-version runbook ([approved #298 contract](docs/superpowers/specs/2026-10-27-issue-298-supported-upgrade-recovery.md),
+owner decision 2026-10-28). It is not authorization to deploy, restore production or discard
+data. Keep app upgrades separate from [Postgres-major migration](#upgrading-a-postgres-major-eg-17--18).
+
+**Recovery policy: roll forward by default.** Backward recovery is eligible only to the
+immediately preceding published release, when **both exact images meet current security
+floors** and that exact pair has release-specific instructions and successful disposable
+rehearsal evidence. Unknown compatibility is unsupported. There is no arbitrary-version,
+automatic or time-based rollback promise, and no Postgres-major downgrade promise.
+**No eligible backward pair is currently established. #347 is roll-forward only; no supported
+downgrade.** Retaining an old digest is evidence, not permission to run vulnerable codecs:
+boot/rescan can decode originals even when uploads are disabled.
+
+#### Before startup: capture one recovery generation
+
+1. Read the target release's notes and the [release checklist](#release-recovery-checklist).
+   Record source and target app tags, immutable digests and platform, Postgres major,
+   schema/settings changes, source dump writer and target reader versions, required capacity
+   and rebuild policy. A dump-format allow-list is not a tested compatibility matrix.
+   `ensureSchema` does forward/idempotent work; a content restore does **not** reverse DDL.
+2. Establish an **operator-maintained write freeze before taking the backup**. Block new
+   author/admin/public mutations (including comments) and scheduled/storage writers; drain
+   admitted publishes, encodes, imports and backups, and resolve known partial provider saves.
+   Leave only the designated existing backup control available for capture. This is not a
+   built-in maintenance mode or atomic cross-filesystem snapshot. If the freeze cannot be
+   maintained, do not declare a coherent generation or proceed with the upgrade.
+3. On the **old app**, use **Settings → Back up now** (or authenticated `POST /backups`);
+   the default schedule is `off`. Wait for completion and inspect success, errors and degraded
+   private-route status. Validate the dump and its manifest-referenced route archive, not
+   merely their filenames or timestamps. An incomplete/degraded set is not full recovery.
+   Allow space for the backup, complete image chain, restore undo set/staging and any newly
+   required full image archive. Never delete history blindly to make an upgrade fit.
+4. While the freeze remains in force, capture the following as **one generation**:
+
+   | Material | Required association |
+   | :-- | :-- |
+   | Old-app database dump | Exact writer/version, timestamp, counts and integrity evidence; v10 includes private route rows, while v1–v9 cannot recover them |
+   | Private GPX recovery | The dump's manifest-paired `routes-*.tar` and required retained originals; public simplified tracks and image tars are not substitutes |
+   | Images | Configured image storage with originals/variants, or the complete required archive chain replayed oldest-first into an empty isolated destination |
+   | Settings | A fresh copy of the actual configured `SETTINGS_PATH` and any `settings.json.pre-ai-registry`; the migration copy alone is not a current pre-upgrade snapshot |
+   | Bootstrap/deployment | Restricted recovery copy of Compose, required bootstrap values, overrides, image digests/platform and any custom map assets |
+   | Keys | Non-secret association to the matching, separately escrowed AI master-key generation and independently recoverable offsite credentials |
+
+   The #296 owner decision is **operator-managed settings/configuration coverage**: there
+   is no app-native settings snapshot. Configured paths may be outside the default `/data`.
+   Never pair a dump taken before a provider change with settings taken afterward: it could
+   bind an old credential to a new destination. Do not place an escrowed master key inside
+   the data backup merely because a bootstrap file contains it. Protect dumps, image originals
+   and GPX archives as private data; retain an encrypted offsite copy and independent escrow.
+5. Stop every app instance/maintenance writer sharing storage and wait for exit and drained
+   database sessions before stopped-app filesystem copying. Keep the freeze until copying
+   finishes; preserve all earlier valid generations on failure. Do not bypass storage
+   ownership or use a concurrent writer to complete capture.
+
+#### Deploy and distinguish health from publication
+
+1. Apply the target release's **actual Compose/bootstrap changes**, not just its image tag,
+   retaining the old configuration with the recovery generation. Pin the reviewed app image
+   by digest: the existing `IMAGE_TAG` interpolation also accepts a `tag@sha256:…` value, yielding
+   `ghcr.io/laboef1900/simonswanderlust-app:tag@sha256:…`. Substitute the real verified tag/digest
+   privately; do not use the ellipsis literally. Preserve the selected platform and Postgres
+   major. Do not print expanded Compose configuration containing credentials into evidence.
+2. **Host-proxy prerequisite for releases carrying #369:** deploy the matching proxy-trust
+   runtime and Compose contract together. The approved topology is a TLS proxy on the host,
+   the loopback-only published app port and the Compose bridge, with the literal
+   `TRUSTED_PROXY: docker-gateway` in `services.app.environment`. Omitting that mode in the
+   new runtime intentionally trusts only loopback; it is not a compatible host-proxy upgrade.
+   The older Compose/hop-count setup does not establish this prerequisite. Require fail-closed
+   gateway discovery; do not substitute an `.env` workaround, a trusted subnet, arbitrary hop
+   count or `trustProxy: true`. Keep Postgres internal and have the proxy replace forwarded
+   headers and preserve the original Host. If the release lacks the matching runtime/configuration
+   or the topology is different, stop and obtain the release-specific supported procedure.
+3. With the recovery set retained and ingress still controlled, pull and start **only the
+   app**, leaving the existing database service/major unchanged:
+
+   ```sh
+   docker compose pull app
+   docker compose up -d --no-deps app
+   ```
+
+   Confirm the running image matches the recorded digest/platform, successful schema/startup,
+   and `/health` database and storage-owner status. Verify admin login and a known story/image.
+   Through the actual approved TLS proxy, verify Secure cookies, independent client-IP rate
+   limit isolation, rejection of spoofed forwarded headers and GPX Origin enforcement before
+   reopening ingress. These are release qualification requirements, not checks claimed here.
+4. `/health`'s `release` boolean only says a static release exists. It does not prove that a
+   new build succeeded, new content is live or the app still has write ownership.
+   **Deploying an image is not publishing.** Existing `/data/site` output persists. Rebuild only
+   if release notes require it or the owner deliberately requests it; a rebuild can render
+   pending changes to already-published content. Use **Settings → Rebuild site now** (or
+   authenticated `POST /rebuild`), inspect the actual response/logs and expected rendered page,
+   and use the #297 outcome record when available in the selected release. Distinguish
+   promotion from subsequent cleanup warnings under #397's promotion contract when included;
+   neither a health boolean nor an HTTP error alone proves what is serving.
+5. Resume writers/ingress only after the required verification and explicit resolution of
+   failures. If startup or recovery fails, preserve all source and undo material and repair
+   forward on a security-supported image; do not try older tags until one appears to work.
+
+#### Release-specific backward recovery admission
+
+**This section describes the requirements for a future eligible pair, not a runnable downgrade
+for today's releases.** The pair's notes must identify source/target tags, digests/platform,
+schema/settings changes, old writer/target reader versions, private-route/image coverage,
+key/settings association, recovery direction, expected data-loss window and rehearsal evidence.
+Matching dump versions or parseable JSON alone never grants admission.
+
+For an admitted pair, block ingress and stop/drain **all** app/storage writers. Follow the
+[one-shot offline restore procedure](#database-dumps), never `compose exec` into the live app.
+Restore the **old-version pre-upgrade dump**, matching old settings/bootstrap and separately
+escrowed key into the **precise target schema specified by the pair's notes**. When old code
+cannot safely use the migrated schema, use a separately initialized target database/data copy
+and preserve the original. No reverse DDL is inferred and no volume deletion is authorized.
+Keep ingress blocked during any zero-user initialization window; the CLI needs an initialized
+schema for counts and its verified pre-restore undo set.
+
+Before confirmation, name exactly which post-backup edits will be lost. Newer regions,
+encoding profiles or private-route state may be unrepresentable in older code. No automatic
+region reassignment, slug change, content rewriting or preservation of post-upgrade writes
+is promised. If the data cannot be represented, stay on a compatible secure image and repair
+forward unless the owner approves a specific data/recovery decision.
+
+Require source validation, exclusive ownership, literal confirmation and the verified undo
+set; `--yes` bypasses only the prompt. Restart only after confirmed restore success with
+settings/key association reconciled, then explicitly rebuild under the admitted target.
+Verify counts, byte-identical settings (record equality, never contents), supported regions,
+private routes, image rescan and rendered content. Failure or unknown commit outcome means
+leave the app stopped, preserve input/undo/staged sets and diagnose before another attempt.
+
+**Evidence status:** this runbook and policy approval are not an upgrade drill. #295's isolated
+restore foundation alone cannot qualify an app-version pair. A supported upgrade/roll-forward
+rehearsal must still record exact images/platforms, dump metadata and pre/post counts,
+settings equality, route/archive integrity, supported regions, rescan, rendered pages and
+the actual proxy checks above. No historical downgrade or eligible backward pair is claimed.
+
 ### Upgrading a Postgres major (e.g. 17 → 18)
 
 A Postgres major cannot read the previous major's cluster files, and `postgres:18+` images also
@@ -645,13 +781,21 @@ versioned subdirectory). **Deployments with a pre-18 `pgdata` volume must migrat
 dump-and-restore — do NOT just pull the new image**: with the old volume mounted at the new path,
 the entrypoint finds its versioned PGDATA empty and silently `initdb`s a fresh, empty cluster
 (the old data sits unreferenced at the volume root, and the app happily re-seeds — the blog
-comes up blank without an error). The same dump → drop volume → bump tag → restore sequence
-applies to every future major (18 → 19, …). Procedure:
+comes up blank without an error). Every future major (18 → 19, …) needs its own reviewed
+dump-and-restore plan; an app-version recovery never implies a cluster downgrade.
+
+**Destructive legacy procedure below:** do not remove the old volume merely because a dump
+exists. First freeze/drain writers, retain the complete coherent recovery generation described
+above, and verify the SQL dump by successfully restoring it into an isolated target. Removal
+of the specifically identified old volume additionally requires **explicit owner authorization**.
+Without both verified recovery and that authorization, preserve the original cluster and use
+a separately initialized target instead. The example names must match the approved deployment;
+these commands are not permission to delete `pgdata` or `uploader/data`.
 
 ```bash
 # 1. still on the OLD version/compose: dump
 docker exec blog-db-1 pg_dump -U images -d images --no-owner > pg-upgrade-dump.sql
-# 2. stop, drop the old-format volume (the dump is your data now)
+# 2. ONLY after verified isolated restore and explicit owner authorization for this volume:
 docker compose down && docker volume rm blog_pgdata
 # 3. deploy the new compose (new image + mount), start the db, restore
 docker compose up -d db
@@ -719,9 +863,34 @@ warns about.
    `ghcr.io/laboef1900/simonswanderlust-app` tagged `{version}`, `{major}.{minor}`, and `latest`,
 3. creates the GitHub Release with generated notes.
 
-On the server: pull the GHCR image directly (no `dhi.io` login needed there — that's CI-only), set
-`IMAGE_TAG` in `.env`, then `docker compose pull && docker compose up -d`. Cutting a release = bump
-the `IMAGE_TAG` defaults (`docker-compose.yml`, `uploader/.env.example`), commit, tag, push the tag.
+Server upgrades follow [App upgrades and supported recovery](#app-upgrades-and-supported-recovery),
+including the coherent pre-upgrade recovery point, reviewed Compose/bootstrap changes and
+immutable app image selection. GHCR pulls do not require the CI-only `dhi.io` login.
+Cut releases through the protected-branch flow in [README](README.md#cutting-a-release);
+generated GitHub notes do not replace the mandatory recovery notes below.
+
+### Release recovery checklist
+
+A release is **not ready to tag** until its notes state:
+
+- Schema/constraint/data migrations (including an explicit “none”), settings migrations and
+  the meaning/retention of any migration copies.
+- Dump writer version, accepted reader versions and fidelity exclusions; especially the
+  inability of v1–v9 to supply private-route recovery, regardless of format admission.
+- Required generation-coherent dump, settings, bootstrap/key escrow, image chain and private
+  route companions, plus capacity for capture, restore staging/undo and new full archives.
+- Actual Compose/bootstrap/proxy prerequisites and the supported platform/image identities.
+- Whether an explicit rebuild is required and why; deployment alone does not publish.
+- The exact eligible immediately previous secure image and **release-specific** recovery
+  steps, target schema and data-loss window, or **“roll-forward only; no supported downgrade.”**
+- Actual disposable upgrade/recovery evidence and its scope, or an explicit unsupported
+  direction. The historical v0.14.1 → v0.15.0 → v0.14.1 downgrade criterion was amended by the
+  owner on 2026-10-28: exercise supported upgrade/roll-forward recovery; backward qualification
+  remains unsupported/pending until an eligible pair exists. Approval is not rehearsal evidence.
+
+Link the [Postgres-major procedure](#upgrading-a-postgres-major-eg-17--18) rather than silently
+combining it with an app upgrade. Neither “previous tag + dump + settings” nor an unchanged dump
+version is a sufficient per-release recovery instruction.
 
 **Native codec updates (#347):** record the current image digest before an owner-controlled
 upgrade, then release and deploy a newly built image; changing `package-lock.json` or running

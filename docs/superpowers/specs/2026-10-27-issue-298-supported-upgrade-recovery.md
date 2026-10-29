@@ -1,7 +1,7 @@
 # #298 — Upgrade and rollback guidance limited to evidenced, secure release pairs
 
 Date: 2026-10-27. Risk: **High-area documentation — upgrades and destructive recovery.**
-Status: **OWNER APPROVED, 2026-10-28 — immediately-previous security-supported, rehearsed pair only; historical downgrade criterion amended as described below; reviewed recovery guidance and release checklist.** No eligible rollback pair or successful rehearsal is established by this approval. Implementation and applicable disposable evidence remain required; no production operation is authorized.
+Status: **OWNER APPROVED, 2026-10-28 — runbook/checklist documentation implemented; disposable upgrade/roll-forward evidence pending.** Policy is immediately-previous security-supported, rehearsed pair only; the historical downgrade criterion was amended as recorded below. No eligible rollback pair or successful upgrade rehearsal is established by approval or documentation. No production operation is authorized.
 Baseline: `11e16d1b8e43141d296b801ee663a351ae3fe415`. Native dependency: **#295, independent and pending**. Coordinate #296 inventory/settings decision, #398 offline restore, and the already-approved **#347 roll-forward-only codec fix**.
 
 ## Facts, not a tested support matrix
@@ -12,13 +12,13 @@ Baseline: `11e16d1b8e43141d296b801ee663a351ae3fe415`. Native dependency: **#295,
 - README's pre-v0.15.0 notes and the two 2026-10-19 specs require restoring pre-registry settings and the matching old credentials dump. The region spec says the old loader rejects newly introduced regions. The registry spec's historical “v6” example and #298's v9 release example are not a current compatibility guarantee; actual image/dump metadata must decide.
 - #347 explicitly approves sharp 0.35.5, libvips package 1.3.4 and the required runtime dependency update, **roll forward only**. Retaining an old image digest for evidence is not authorization to run vulnerable codecs. Boot/rescan can decode stored originals, so turning off uploads does not make such a downgrade safe.
 
-## Proposed support policy and unresolved acceptance conflict
+## Approved support policy and acceptance amendment
 
-**Recommend:** a rollback is eligible only to the **immediately preceding published release**, and only when that exact source/target image pair has compatible, release-specific recovery instructions and disposable evidence, and both comply with current security floors. Otherwise recovery is roll-forward. No arbitrary older version, automatic rollback, time-based support promise or Postgres-major downgrade is offered.
+**Approved 2026-10-28:** a rollback is eligible only to the **immediately preceding published release**, and only when that exact source/target image pair has compatible, release-specific recovery instructions and disposable evidence, and both comply with current security floors. Otherwise recovery is roll-forward. No arbitrary older version, automatic rollback, time-based support promise or Postgres-major downgrade is offered.
 
 No eligible pair is established here. The first security-fixed release may have **no** eligible predecessor; #347 remains roll-forward-only regardless of this general window. Release notes must say so explicitly rather than imply that “previous tag” is always supported.
 
-The issue explicitly requests a v0.14.1 → v0.15.0 → v0.14.1 rehearsal. That older scenario is outside the proposed current window and cannot authorize a return to vulnerable codecs. Preserve its lesson as historical documentation, but **do not silently substitute another pair and claim the acceptance criterion met**. Owner decision required: amend that rehearsal criterion to an evidenced security-supported pair when one exists; until then exercise upgrade/roll-forward recovery and mark the backward-rehearsal criterion pending/not supported. Approval of #347 is not approval to waive #298's evidence requirement.
+The original issue requested a v0.14.1 → v0.15.0 → v0.14.1 rehearsal. The owner **approved amending that criterion on 2026-10-28**: those historical tags do not authorize a return to vulnerable codecs. Preserve the migration lesson as historical documentation; exercise supported upgrade/roll-forward recovery and mark backward qualification unsupported/pending until an eligible pair exists. Do not silently substitute another pair and claim the historical drill ran. Approval of #347 or this amendment does not waive #298's applicable evidence requirement.
 
 ## Upgrade runbook contract
 
@@ -26,8 +26,8 @@ Add one canonical runbook to existing `ARCHITECTURE.md`, linked from README Back
 
 1. Read the target release's notes before pulling/starting it: schema and settings migrations, dump reader/writer versions, image/archive capacity changes, required explicit rebuild and security/rollback restriction. Record both immutable image digests and platform; tags alone are insufficient evidence of the binaries used.
 2. **Freeze new content/settings/media/public mutations and scheduled/storage writers before taking the recovery point**, then drain already-admitted operations and resolve known partial failures. Maintain that operational freeze through capture of the dump, settings, bootstrap/key-generation association and image material, as specified in #296. Do not mix a pre-change credential snapshot with post-change provider settings.
-3. Establish the recovery point on the **old app** while the freeze remains in force. Backups default off: use the designated existing backup control to trigger a fresh backup, inspect success/degraded state and verify the dump and manifest-paired private route archive. Retain full image recovery material, current configured `settings.json`, any migration copy and bootstrap configuration/separate matching key escrow per #296. Copy settings before upgrade even if an old `.pre-ai-registry` file exists. If #296 later approves native settings snapshots, use only its verified generation-bound contract, not an assumed feature. Do not proceed with incomplete capture or insufficient capacity; never delete recovery history blindly to make space.
-4. Apply the reviewed target release's **Compose/bootstrap changes as well as its immutable image selection** before startup, preserving the old configuration with its recovery generation. For #369's approved host-TLS-proxy/bridge topology, this includes the literal `TRUSTED_PROXY: docker-gateway` in Compose; omitted mode is intentionally loopback-only and is not a compatible host-proxy upgrade. Preserve fail-closed gateway discovery; no `.env` workaround or broadened trust. Then use the existing pull/up flow. This is an operator step after approval, not performed by this proposal. Do not combine an app upgrade with a Postgres-major change.
+3. Establish the recovery point on the **old app** while the freeze remains in force. Backups default off: use the designated existing backup control to trigger a fresh backup, inspect success/degraded state and verify the dump and manifest-paired private route archive. Retain full image recovery material, current configured `settings.json`, any migration copy and bootstrap configuration/separate matching key escrow per #296. Copy settings before upgrade even if an old `.pre-ai-registry` file exists. The #296 decision approved on 2026-10-28 is **operator-managed settings/configuration coverage**, not native settings snapshots. Do not proceed with incomplete capture or insufficient capacity; never delete recovery history blindly to make space.
+4. Apply the reviewed target release's **Compose/bootstrap changes as well as its immutable image selection** before startup, preserving the old configuration with its recovery generation. For #369's approved host-TLS-proxy/bridge topology, this includes the literal `TRUSTED_PROXY: docker-gateway` in Compose; omitted mode is intentionally loopback-only and is not a compatible host-proxy upgrade. Preserve fail-closed gateway discovery; no `.env` workaround or broadened trust. Then use the existing pull/up flow for the app only, leaving the database unchanged. This is a separately authorized operator step, not performed by documentation approval. Do not combine an app upgrade with a Postgres-major change.
 5. Check actual image identity, successful schema/startup, `/health` database/storage ownership and release availability, then admin access and a known story/image. Rehearse HTTPS Secure-cookie behavior, independent client-IP limiter isolation, spoofed forwarded-header rejection and GPX Origin checks through the actual approved proxy topology. Health's `release` boolean proves only that a static release exists; it does not prove a new build succeeded or that new content is live. Consult #297's outcome contract if implemented, otherwise the explicit build response/logs.
 6. Rebuild only when the release notes require it or the owner deliberately requests it. Deploying an image does not rebuild the persisted static site and must not silently publish pending rendered changes. Verify the returned outcome and expected page after the rebuild; use #397's corrected promotion semantics once landed.
 
@@ -68,10 +68,36 @@ Implementation scope is existing `README.md` release/Backups sections and `ARCHI
 
 ## Exact owner decisions and containment
 
-1. Approve the immediately-previous **security-supported and rehearsed pair only** policy, with roll-forward as the default when any prerequisite is missing; #347's prohibition is immutable here.
-2. Approve/reject the explicit amendment of the historical v0.14.1/v0.15.0 rehearsal criterion described above. Until resolved, that named acceptance criterion remains blocked, not silently dropped.
-3. Approve the documented backup/settings/offline-restore safety and per-release checklist. This is not permission for any production restore, data loss, region reassignment or purchase.
+1. **Approved 2026-10-28:** immediately-previous **security-supported and rehearsed pair only**, with roll-forward as the default when any prerequisite is missing; #347's prohibition is immutable here.
+2. **Approved 2026-10-28:** amend the historical v0.14.1/v0.15.0 rehearsal criterion to the supported upgrade/roll-forward scope above. The historical vulnerable downgrade is not executable acceptance; backward qualification remains unsupported/pending until an eligible pair exists.
+3. **Approved 2026-10-28:** documented backup/settings/offline-restore safety and per-release checklist. This is not permission for any production restore, data loss, region reassignment or purchase.
 
 Owner decision recorded 2026-10-28: **Approve policy and criterion amendment.** The named vulnerable historical downgrade is not an executable acceptance requirement. Exercise supported upgrade/roll-forward recovery; explicitly report backward recovery as unsupported/pending until an eligible pair exists. This does not permit claiming a rehearsal that did not run or weakening #347's security floor.
 
 Containment is to preserve existing data/recovery sets and repair forward on a secure image. A runbook defect is corrected in docs; it is never an excuse to roll back codecs, clear volumes, remove GPX originals or relax restore admission. Actual recovery requires the release-specific procedure and operator authorization.
+
+## Documentation implementation and remaining evidence — 2026-10-29
+
+- `ARCHITECTURE.md` now owns the canonical app-upgrade runbook, coherent-generation inventory,
+  restricted backward admission and release checklist. The existing Postgres-major procedure
+  remains separate; its legacy volume-removal example is explicitly gated on a verified isolated
+  restore and owner authorization for that exact volume.
+- `README.md` links the runbook/checklist and records the historical v0.15.0 settings/key and
+  region constraints without prescribing content mutation or authorizing old vulnerable tags.
+  `SECURITY.md` reconfirms key/settings association, private originals, storage ownership,
+  verified undo sets and the non-negotiable codec floor.
+- #296's approved operator-managed decision was cross-checked; no settings snapshot feature,
+  runtime change, test, command execution or upgrade/recovery success is claimed by this work.
+  The deployment instructions require the actual target release's matching proxy-trust runtime
+  and Compose changes; the older checkout's hop-count/Compose setup is not proof of #369.
+
+Still required from the integrator's authorized disposable exercise: exact source/target tags,
+digests and platforms; dump writer/reader metadata and pre/post counts; freeze/drain and coherent
+generation evidence; manifest-paired private-route integrity and image-chain recovery/rescan;
+byte-identical restored settings reported without contents and matching synthetic key recovery;
+accepted regions, explicit rebuild/promotion outcome and rendered story/gallery/comments;
+and actual host-TLS-proxy Secure-cookie, client-IP isolation, forwarded-spoof rejection and GPX
+Origin checks for that target topology. #295's restore foundation is a prerequisite, not proof
+of this release-pair upgrade. Its runtime dependency correction and resulting evidence must be
+supplied before any success claim. No eligible backward pair exists; that direction remains
+unsupported, not a passed rehearsal or permission to run the historical downgrade.
