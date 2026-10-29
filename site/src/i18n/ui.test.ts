@@ -31,11 +31,14 @@ describe('ui dictionaries', () => {
   });
 
   /**
-   * Keys whose DE and EN values are legitimately identical — brand names and
-   * other proper nouns that must NOT be translated. Everything else that is
-   * byte-identical in both locales is almost certainly an untranslated copy/paste.
+   * Keys whose DE and EN values are legitimately identical — brand names,
+   * proper nouns, and cognates. Other byte-identical values are likely an
+   * untranslated copy/paste.
    */
-  const IDENTICAL_ON_PURPOSE: readonly UIKey[] = ['editor.chrome.studioName'];
+  const IDENTICAL_ON_PURPOSE: readonly UIKey[] = [
+    'editor.chrome.studioName',
+    'editor.chrome.onboardingOptional', // “Optional” is the same adjective in DE and EN.
+  ];
 
   it('flags untranslated values (identical in DE and EN) outside the allow-list', () => {
     const identical = (Object.keys(ui[defaultLocale]) as UIKey[]).filter(

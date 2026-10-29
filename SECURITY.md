@@ -114,8 +114,35 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   carries the admin cookie, and a forged cookie on a public page costs no lookup. A store failure
   on a guarded route is a sanitized 500, never "anonymous" — a database outage must not read as
   "logged out". Spec: `docs/superpowers/specs/2026-09-06-lazy-session-resolution-design.md`.
+- **Protected-page context** (independently owner-approved 2026-10-29, #278 §9):
+  `GET /auth/me` requires a session and returns only
+  `{ authenticated: true, userId, username, isAdmin, needsSetup: false }`.
+  All responses, including 401 and server errors, are `Cache-Control: no-store`.
+  The shared `Auth.ensureAuthed` helper requests this context without caching, preserves
+  author/admin gating, and redirects only a 401 to login with an encoded local return path.
+  Network, non-401 HTTP and malformed-response failures never become "logged out".
+  The Desk consumes this same helper before its admin-only checklist; client roles are
+  presentation gates, while the onboarding routes still require admin authorization.
+  Login, setup, `/auth/status`, session issuance and expiry are unchanged.
+  The non-secret account ID does not authorize owner fencing, write receipts, draft stashes
+  or native locking (#304/#305/#306). Rollback removes the endpoint/helper cutover and Desk
+  activation together without clearing onboarding retirement state or restore fences.
 - **First-admin setup** (`/setup`) is only available while no users exist, and is **serialized**
   with a per-process lock so two concurrent requests cannot both create an admin (TOCTOU closed).
+- **First-run checklist** (#279, approved #278 Q1–Q5/P1–P2) is install-wide admin-only
+  operational metadata, not an authentication/setup permission input. `GET`/`POST /onboarding`
+  require `requireAdmin` (anonymous 401, author 403), with `no-store` on success and errors.
+  The strict 1 KiB action object permits only dismiss/resume/finish. Progress uses one
+  REPEATABLE READ snapshot; Finish locks/rechecks required photo/story/publication predicates
+  before permanent retirement. Identity is optional. Responses contain only fixed step/state
+  identifiers, required flags and server-built destinations (translation keys URL-encoded);
+  no content titles, counts, retirement reasons, timestamps or photo metadata are disclosed.
+  No account/session/content/build writes or cookies are performed by these handlers.
+  Missing/invalid state and DB errors fail through the sanitized error path, never anonymous
+  or a fabricated fresh checklist. Boot classifies before cleanup/listen and aborts on
+  uncertain evidence or commit; retired state cannot become eligible through an app action.
+  Existing `/setup`, `/login`, `/auth/status` contracts, setup lock, zero-user check,
+  login/setup rate limits and session policy are reconfirmed unchanged.
 - **Password changes** — `POST /users/me/password` lets an authenticated user rotate their own
   password after re-proving the **current** one (rate-limited, so a hijacked session cannot
   brute-force it — see *Rate limiting*). On success **all of that user's sessions are destroyed**
@@ -270,8 +297,9 @@ time are kept — they are useful and carry no location.
 able to run — see `uploader/src/disk.ts`. A full `/data` otherwise fails mid-pipeline and can
 leave a partial variant set with no complete record. The incremental images archive — the
 largest single writer on the volume — applies the same reserve on its way in (#113): it refuses
-when its estimated size would not leave that room, and its temp file never survives a failed or
-interrupted run, so the backup feature cannot fill the disk it shares with the site. Free space
+when its estimated size would not leave that room. Failed output is removed only after its
+writer settles; exit cleanup is best-effort and SIGKILL leftovers are swept on the next run.
+An unlink failure is logged for the next sweep, not reported as a successful archive. Free space
 is also reported on `/health` — **only to an admin session** (#132): the route itself is public
 because the compose healthcheck polls it without a cookie, but `free`/`total` for `/data` would
 let anyone on the internet watch the volume fill up and time a disk-exhaustion attempt against
@@ -288,6 +316,15 @@ clock rollback, foreign nested mounts and arbitrary network filesystems are outs
 timestamp protocol. Legacy, missing or corrupt cutoff provenance forces a full archive with
 the existing reserve, retaining old archives rather than guessing from filenames. Admin-only
 backup access, private original/EXIF handling, storage ownership and key guards are unchanged.
+
+Writer settlement was reconfirmed for #430 (2026-10-28): an owned tar pack and Node destination
+pipeline await destination open/write/close before failure cleanup or successful activation.
+Cancellation cannot activate the archive or advance its cutoff, and backup quiescence waits
+for that settlement before storage ownership is released. Tar may finish admitted **read-only**
+input work after its pack is destroyed; pipeline error listeners remain installed and the closed
+destination cannot receive further bytes. This does not claim every private tar input descriptor
+has closed at rejection. Prior completed archives, originals, dumps and route companions are
+not failure-cleanup targets. Authorization, restore validation and persisted formats are unchanged.
 
 `POST /import` has the same precondition (issue #94), with the same 507 and the same reserve, but
 sized from a **count** rather than a byte total — a WXR declares URLs, not sizes — using the
@@ -927,24 +964,92 @@ deliberate trade-off, not an oversight:
   unset `saved_at`, clear assets and keep the live canonical origin if set; otherwise they use
   the legacy origin. The CLI announces the legacy recovery and includes live identity/assets
   in the verified undo set. Restart loads the restored cache; public output waits for Rebuild.
-- Image archives (`/data/backup/db/images-*.tar`) contain no password hashes — only the already
-  publicly served image files — but their download route stays behind the same admin gate and
-  strict filename validation as the dumps.
+- Image archives (`/data/backup/db/images-*.tar`) contain public variants **and private
+  full-resolution originals**. Originals may retain EXIF/GPS and other source metadata:
+  handle these archives as sensitive recovery material, like database dumps. Downloads remain
+  admin-only with strict filename validation. Image archives are **never pruned** automatically;
+  each may hold a unique part of the recovery chain. Deleting a photo from the media library
+  does **not** purge earlier archives or their offsite copies.
+  The read-only [`audit-exif` command](#published-image-metadata-allow-list) inspects public
+  variants, not private originals or archive history: a clean result does not certify those
+  copies GPS-free and does not erase anything. Private GPX originals belong to **separate
+  companion route archives** referenced by v10 database dump manifests, not image tars.
+  Protect offsite copies and retain separate key escrow as described in
+  [Backups & disaster recovery](ARCHITECTURE.md#backups--disaster-recovery).
 - The download route (`GET /backups/:name`) is **admin-only** and validates the filename against a
   strict pattern (`^db-\d{8}-\d{6}\.json\.gz$` or `^images-\d{8}-\d{6}\.tar$`) before touching the
   filesystem — no path traversal.
-- Restore is **CLI-only**
-  (`docker compose exec app node --import tsx src/cli.ts restore [--yes] /data/backup/db/<file>`
-  — the shell-less runtime image requires invoking `node` directly), never a web route, because
-  it's destructive: it deletes and re-inserts `users`, `posts`, media, and `pages` in one
-  transaction (`pages` only when present in the dump — v1 dumps predate them and leave existing
-  pages untouched). Deleting `users` cascades to `sessions`, so a restore invalidates every login.
-  The CLI is guarded against operator mistakes, not attackers (#114): the file name must match
-  the dump pattern, the operator confirms against a summary of the dump and of the live rows
-  (`--yes` for scripts; the printed target is `host:port/dbname` — the `DATABASE_URL` password is
-  never echoed), and a **pre-restore dump** of the current state is written into the backup
-  directory first — the restore aborts if that dump fails, so a restore that cannot be undone is
-  never run.
+- Restore is **CLI-only**, never a web route. Confirm the intended image, database and `/data`
+  mount, retain the source recovery set, stop every app/maintenance writer sharing them and
+  wait for exit and drained database sessions; keep Postgres running. Use:
+
+  ```sh
+  docker compose stop app
+  docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore /data/backup/db/db-YYYYMMDD-HHmmss.json.gz
+  ```
+
+  The explicit Node entrypoint supports the shell-less image. Do not add service ports.
+  Fresh-target recovery uses offline `prepare-native-restore [--yes]`, not HTTP boot to
+  create schema; keep ingress closed and auto-start disabled throughout the zero-user window.
+  Only recognized bootstrap-only schema/default singleton values are admitted, never saved
+  identity/content or unknown shapes. The shared schema/identity seed runs after permanent
+  fencing, without listeners/builds/workers. Preparation does not itself verify an undo set.
+  Catalog admission includes all installed indexes, not only table constraints: changed
+  uniqueness, expressions, predicates, methods or invalid enforcement refuse preparation before
+  any fence/schema mutation. Missing standalone indexes may be created by normal initialization
+  only when their schema-wide names are free: a non-index relation such as a sequence is refused,
+  including before the owning table exists. Same-name replacements cannot hide behind
+  `IF NOT EXISTS`. Fence durability includes all
+  data-root ancestor entries, re-flushed on retries even when a failed mkdir/fsync attempt left
+  directories present. Any unresolved flush failure still blocks replacement.
+  See [offline preparation](ARCHITECTURE.md#offline-preparation-for-a-fresh-native-restore-target).
+  This guidance reconfirms the unchanged [GPX storage-owner boundary](#gpx-routes--private-source-and-public-snapshot):
+  exclusive ownership and absence of app sessions are mandatory, never bypassed by killing
+  sessions or disabling fencing.
+  Current v11 recovery replaces `users`, `posts`, `pages`, `media`, `media_folders`,
+  `app_secrets`, `comments`, `post_routes`, `site_identity` and `site_identity_assets`,
+  with manifest-paired private originals.
+  [Database dumps](ARCHITECTURE.md#database-dumps) documents legacy absent-field behavior.
+  Sessions are not restored; deleting users invalidates every login. Settings/key escrow
+  remain external. The CLI validates the source set, prints a credential-free target and
+  live/dump counts, and requires literal `yes`. `--yes` skips only that prompt, never ownership,
+  source validation or the **verified pre-restore recovery set** written before replacement.
+  If undo capture/verification fails, replacement aborts. Restart with `docker compose up -d app`
+  only after successful completion and result inspection, reconcile settings/key escrow,
+  then sign in and explicitly rebuild. Failed or ambiguous completion: leave the app stopped,
+  preserve input/undo/staged sets and investigate rather than retrying blindly.
+- **Restore-safe onboarding retirement:** native JSON excludes `onboarding_state`, but SQL,
+  physical backups and snapshots may contain eligible metadata. Every supported restore
+  (self/empty/partial/legacy, filesystem-only, host/clone and undo included) must retire before
+  replacement/activation. Native restore validates source and the actual captured undo dump,
+  identity assets and required paired archive first, then publishes the permanent off-DB
+  fence and separately commits retirement **before GPX staging**. Retirement survives later
+  failure, rollback and unknown content COMMIT; it does not certify successful content recovery.
+  Unknown fence durability or retirement commit stops replacement.
+  The fence is derived from `STORAGE_DIR`'s resolved parent as `onboarding.restore-retired`,
+  normally `/data/onboarding.restore-retired`; its fixed payload is
+  `swl-onboarding-restore-retired-v1\n`, with no credentials, owner content or progress.
+  Publication flushes the private temporary file and parent directory using no-clobber
+  activation; reads reject non-regular/symlink/multi-link/wrong-payload entries and unsafe roots.
+  Invalid/unreadable metadata fails boot/recovery closed; preserve it for diagnosis and
+  repair only to retired, under stopped writers. Never remove a fence to recover eligibility.
+- **SQL/host activation boundary:** use `onboarding-retire` against the configured destination
+  before replacement; it immediately writes/verifies only the fence, needs reachable
+  Postgres for the existing owner/drain check, and needs no application schema. Its lease
+  **ends on CLI exit**: it does not guard subsequent `psql`, copies, restart policies or
+  different-cluster writers. Stop all writers and disable automatic activation across command
+  boundaries and failures; use `psql -v ON_ERROR_STOP=1`. Preserve/exclude the destination
+  fence during copying and verify/re-fence the final recovered root before activation,
+  even if copied SQL is eligible. Raw whole-root snapshots require isolated offline staging
+  followed by fencing before the live-root switch. Never auto-start an unfenced restored
+  snapshot; unannounced whole-machine rollback cannot be inferred after both stores roll back.
+  Keep the prior root and recovery evidence. The
+  [managed recovery procedure](ARCHITECTURE.md#sql-filesystem-host-and-clone-recovery)
+  remains mandatory, not replaced by a filesystem lock or perpetual lease.
+  Code rollback preserves the table/fence; older code does not enforce them, so retain the
+  current retirement CLI/procedure and recheck before rolling forward. No web/CLI reset,
+  metadata deletion or owner-data wipe is authorized. Password/account-only recovery leaves
+  onboarding unchanged and is not a content restore.
 - In-app backups live on the **same disk** as the live data; disaster recovery requires an
   offsite host-level backup of `./uploader/data` — see
   [ARCHITECTURE.md](ARCHITECTURE.md#backups--disaster-recovery).

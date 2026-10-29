@@ -58,6 +58,13 @@ export function mergeIdentityEdit(current: Identity, input: unknown, locales: re
   }
   return normalizeIdentity(merged);
 }
+/** Onboarding must read the saved predicate on its own transaction snapshot, not the cache. */
+export async function identityConfigured(db: Pick<pg.PoolClient, 'query'>): Promise<boolean> {
+  const result = await db.query<IdentityRow>('SELECT * FROM site_identity');
+  if (result.rows.length !== 1 || result.rows[0]!.id !== true) throw new IdentityError('identity');
+  return fromRow(result.rows[0]!).savedAt !== null;
+}
+
 export async function seedSiteIdentity(pool: pg.Pool, options: { legacy?: Identity; bootstrapBlogOrigin?: string | null; log?: (message: string) => void } = {}): Promise<void> {
   const legacy = normalizeIdentity(options.legacy ?? LEGACY_IDENTITY);
   let bootstrap = options.bootstrapBlogOrigin ?? null;
