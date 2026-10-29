@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import vm from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import Fastify from 'fastify';
+import { registerJourneyAdmin } from '../src/journeys-admin.js';
+import { memoryJourneyStore } from '../src/journeys.js';
+import { memoryPostStore } from '../src/posts.js';
+import { memoryMediaStore } from '../src/media-store.js';
+import { idleBuildState } from './build-fixture.js';
 import { editorDocument, EditorEvent } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 const stamp = '2026-10-29T00:00:00.000Z';
@@ -16,8 +22,40 @@ const buildCopy = Object.fromEntries(Object.entries(ui).map(([locale, values]) =
 const successfulBuild = { ok: true, attemptId: release, release, liveRelease: release };
 const failedBuild = { ok: false, attemptId: '1793000001000-1-0002', code: 'build_failed', liveRelease: release, error: 'PRIVATE /data/secret' };
 async function settle() { for (let i = 0; i < 80; i++) await Promise.resolve(); }
+const disposers: (() => Promise<void>)[] = [];
+afterEach(async () => { for (const dispose of disposers.splice(0)) await dispose(); });
+async function storedEditorFixture() {
+  const imageBase = 'https://images.test';
+  const posts = memoryPostStore(), media = memoryMediaStore({ baseUrl: imageBase });
+  const journeys = memoryJourneyStore(posts, posts.language, media, imageBase);
+  const keys: string[] = [];
+  for (let i = 0; i < 3; i++) {
+    const locale = (locale: 'de' | 'en') => ({ locale, slug: locale + '-story-' + i, title: 'Story ' + i, excerpt: '', country: 'X', bodyMarkdown: '', images: {}, heroImage: { src: imageBase + '/hero', width: 640, height: 480, alt: 'Landscape' } });
+    const post = await posts.upsertDraft({ translationKey: '', status: 'draft', shared: { date: '2026-01-01', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 1 } }, de: locale('de'), en: locale('en') });
+    keys.push(post.translationKey);
+  }
+  for (const key of ['hero', 'chosen']) await media.upsert({ key, width: 640, height: 480, origBytes: 1, status: 'ready', exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+  const locale = { title: 'Journey', slug: 'journey', intro: 'Original intro', heroImage: { src: imageBase + '/hero', width: 640, height: 480, alt: 'Landscape' }, omitted: false };
+  const created = await journeys.create({ de: structuredClone(locale), en: structuredClone(locale), members: keys });
+  const published = await journeys.publish(created.id, created.updatedAt);
+  const app = Fastify();
+  disposers.push(() => app.close());
+  registerJourneyAdmin(app, { store: journeys, posts, language: posts.language, imageBase,
+    builder: { ...idleBuildState, build: async () => ({ ...successfulBuild, ok: true }), hasRelease: () => true, quiesce: async () => {} },
+    requireAuth: async () => {}, requireAdmin: async () => {} });
+  app.get('/posts', () => posts.list());
+  app.get('/language', () => posts.language.get());
+  await app.ready();
+  const fetch = async (url: string, init: RequestInit = {}) => {
+    const result = await app.inject({ url, method: (init.method || 'GET') as 'GET' | 'POST' | 'PUT' | 'DELETE',
+      ...(init.body ? { payload: String(init.body), headers: { 'content-type': 'application/json' } } : {}) });
+    return { status: result.statusCode, ok: result.statusCode >= 200 && result.statusCode < 300, json: async () => result.json() };
+  };
+  return { journeys, published, fetch };
+}
 async function editor(options: { admin?: boolean; published?: boolean; single?: boolean; fresh?: boolean;
-  storage?: Map<string, string>; userId?: string; updatedAt?: string } = {}) {
+  storage?: Map<string, string>; userId?: string; updatedAt?: string; journeyId?: string;
+  fetch?: (url: string, init: RequestInit) => Promise<{ status: number; ok: boolean; json: () => Promise<unknown> }> } = {}) {
   const dom = editorDocument(readFileSync('public/journey-editor.html', 'utf8'));
   const el = (id: string) => { const node = dom.document.getElementById(id); if (!node) throw new Error(id); return node; };
   const locale = (name: string) => ({ slug: name + '-journey', title: name + ' journey', intro: name + ' intro', heroImage: { src: 'https://images.test/hero', width: 640, height: 480, alt: name + ' alt', format: 'jpeg', focus: { x: 12, y: 83 } }, omitted: name === 'en' && !!options.single, publishedAt: options.published && name === 'de' ? stamp : null });
@@ -30,7 +68,7 @@ async function editor(options: { admin?: boolean; published?: boolean; single?: 
   const response = (body: unknown, status = 200) => ({ status, ok: status >= 200 && status < 300, json: async () => structuredClone(body) });
   const context: Record<string, unknown> = {
     document: Object.assign(dom.document, { documentElement: { lang: 'en' } }), EditorCopy: copy, BuildCopy: buildCopy, URLSearchParams, structuredClone, crypto: { randomUUID },
-    location: { search: options.fresh ? '' : '?id=' + id, pathname: '/admin/journey-editor.html', href: '', origin: 'https://journal.test' },
+    location: { search: options.fresh ? '' : '?id=' + (options.journeyId ?? id), pathname: '/admin/journey-editor.html', href: '', origin: 'https://journal.test' },
     history: { replaceState() {} }, setTimeout: () => 1, clearTimeout() {},
     addEventListener: events.addEventListener.bind(events),
     localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key), key: (i: number) => [...storage.keys()][i], get length() { return storage.size; } },
@@ -40,6 +78,7 @@ async function editor(options: { admin?: boolean; published?: boolean; single?: 
     MediaPicker: { open: (value: { onPick: (item: object) => void }) => { picker = value; } },
     fetch: async (url: string, init: RequestInit = {}) => {
       requests.push({ url, init });
+      if (options.fetch) return options.fetch(url, init);
       if (init.method && failure) return response(failure.body, failure.status);
       if (url === '/language') return response({ primary: 'de', locales: options.single ? ['de'] : ['de', 'en'], updatedAt: stamp, lockedAt: null });
       if (url === '/posts') return response(['a', 'b', 'c', 'd'].map((key, index) => ({ translationKey: key, title: index === 1 ? '<img src=x onerror=alert(1)>' : 'Story ' + key, status: index === 1 ? 'draft' : 'published' })));
@@ -54,7 +93,11 @@ async function editor(options: { admin?: boolean; published?: boolean; single?: 
   context.window = context; vm.createContext(context);
   for (const file of ['language.js', 'draft-guard.js', 'build-reporting.js', 'journeys-ui.js', 'journey-editor.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
   await settle();
-  const submit = async () => { el('journeyForm').dispatchEvent(new EditorEvent('submit', { cancelable: true })); await settle(); };
+  if (options.fetch) await vi.waitFor(() => expect(el('journeyFields').disabled).toBe(false));
+  const submit = async () => {
+    el('journeyForm').dispatchEvent(new EditorEvent('submit', { cancelable: true })); await settle();
+    if (options.fetch) await vi.waitFor(() => expect(el('journeyFields').disabled).toBe(false));
+  };
   const edit = (id: string, value: string) => { el(id).value = value; el(id).dispatchEvent(new EditorEvent('input', { bubbles: true })); };
   return { dom, el, context, requests, questions, row, storage, submit, edit,
     hide() { events.dispatchEvent(new Event('pagehide')); },
@@ -100,6 +143,32 @@ describe('journey authoring DOM', () => {
     h.edit('journey-en-slug', 'new-journey'); await h.submit();
     expect(h.questions.at(-1)!.body).toContain('https://journal.test/en/journeys/en-journey/'); expect(h.questions.at(-1)!.body).toContain('https://journal.test/en/journeys/new-journey/');
     expect(JSON.parse(String(h.requests.find(request => request.init.method === 'PUT')!.init.body)).confirmSlugChange).toBe(true);
+  });
+  it('preserves another tab’s stored intro, heroes and membership after stale Unpublish then Save', async () => {
+    const f = await storedEditorFixture();
+    const stale = await editor({ journeyId: f.published.id, fetch: f.fetch });
+    const other = await editor({ journeyId: f.published.id, fetch: f.fetch });
+    other.edit('journey-de-intro', 'Other tab German intro');
+    other.edit('journey-en-intro', 'Other tab English intro');
+    for (const button of other.el('journeyLocales').querySelectorAll('button').filter(button => button.textContent === 'Choose from library')) {
+      button.click(); other.pick({ src: 'https://images.test/chosen', width: 640, height: 480, alt: { de: 'New German hero', en: 'New English hero' } });
+    }
+    other.el('journeyMembers').querySelectorAll('button').find(button => button.dataset.action === 'Remove')!.click();
+    await other.submit();
+    expect(other.el('journeyError').hidden).toBe(true);
+    const changed = await f.journeys.get(f.published.id);
+    expect(changed?.de.intro).toBe('Other tab German intro');
+    expect(changed?.members).toHaveLength(2);
+    stale.el('journeyUnpublish').click(); await settle();
+    await vi.waitFor(() => expect(stale.el('journeyFields').disabled).toBe(false));
+    expect(stale.el('journeyError').hidden).toBe(true);
+    expect((await f.journeys.get(f.published.id))?.status).toBe('draft');
+    await stale.submit();
+    const stored = await f.journeys.get(f.published.id);
+    expect(stored?.de).toEqual(changed?.de);
+    expect(stored?.en).toEqual(changed?.en);
+    expect(stored?.members).toEqual(changed?.members);
+    expect(stale.el('journeyError').hidden).toBe(true);
   });
   it('acknowledges failed publication with its new token, slug lock and accessible recovery', async () => {
     const h = await editor();
@@ -151,6 +220,23 @@ describe('journey authoring DOM', () => {
   it('derives only automatic slugs and stops rewriting a saved identity', async () => {
     const h = await editor({ fresh: true }); h.edit('journey-de-title', 'A new journey'); expect(h.el('journey-de-slug').value).toBe('a-new-journey');
     await h.submit(); h.edit('journey-de-title', 'A corrected title'); expect(h.el('journey-de-slug').value).toBe('a-new-journey');
+  });
+  it('preserves a manually selected new journey slug through local recovery and the next title edit', async () => {
+    const f = await storedEditorFixture(), storage = new Map<string, string>();
+    const first = await editor({ fresh: true, storage, fetch: f.fetch });
+    first.edit('journey-de-title', 'My new journey');
+    first.edit('journey-de-slug', 'chosen-manually');
+    first.hide();
+    const restored = await editor({ fresh: true, storage, fetch: f.fetch });
+    expect(restored.el('journey-de-slug').value).toBe('chosen-manually');
+    restored.edit('journey-de-title', 'Corrected journey title');
+    restored.edit('journey-en-title', 'English journey title');
+    await restored.submit();
+    expect(restored.el('journeyError').hidden).toBe(true);
+    const stored = (await f.journeys.list()).find(row => row.id !== f.published.id);
+    expect(stored?.de.title).toBe('Corrected journey title');
+    expect(stored?.de.slug).toBe('chosen-manually');
+    expect(stored?.en.slug).toBe('english-journey-title');
   });
   it('isolates recovery by immutable owner and clears only the adopted context after acknowledgement', async () => {
     const storage = new Map<string, string>();
