@@ -138,6 +138,11 @@
           if (acknowledgement) BuildReporting.renderOutcome($('actionStatus'), 'page', acknowledgement);
           else setStatus(BuildReporting.text('unknown'));
         },
+        rebase: (saved) => {
+          acceptSaved(saved);
+          loadBlocked = false;
+          showErr('');
+        },
         useStored: async (saved) => {
           loadBlocked = true;
           acceptSaved(saved);
@@ -396,7 +401,8 @@
             if (!writeRecovery.restore(stash.recovery)) {
               loadBlocked = true;
               showErr(EditorCopy.en.writeUnsafeBase);
-            } else await writeRecovery.probe();
+            }
+            await writeRecovery.probe();
             setStatus(EditorCopy.en.writeRestored);
           } else {
             guard.dismissRestore(stash);

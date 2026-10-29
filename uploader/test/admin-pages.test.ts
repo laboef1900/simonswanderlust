@@ -40,11 +40,12 @@ interface StubEvent {
 
 // `store`/`session` may be shared across sandboxes to model two tabs: every
 // tab sees one localStorage, each has its own sessionStorage.
-function makeSandbox(opts: { throwStorage?: boolean; store?: Map<string, string>; session?: Map<string, string> } = {}) {
+function makeSandbox(opts: { throwStorage?: boolean; store?: Map<string, string>; session?: Map<string, string>; owner?: string | null } = {}) {
   const beforeUnload: Array<(e: StubEvent) => void> = [];
   const store = opts.store ?? new Map<string, string>();
   const timers = new Map<number, () => void>();
   let nextId = 1;
+  let storageAccesses = 0;
 
   const localStorageStub = opts.throwStorage
     ? {
@@ -87,8 +88,8 @@ function makeSandbox(opts: { throwStorage?: boolean; store?: Map<string, string>
   vm.runInNewContext(guardSrc, {
     window: windowStub,
     crypto: webcrypto,
-    localStorage: localStorageStub,
-    sessionStorage: sessionStorageStub,
+    localStorage: new Proxy(localStorageStub, { get(target, key) { storageAccesses++; return Reflect.get(target, key); } }),
+    sessionStorage: new Proxy(sessionStorageStub, { get(target, key) { storageAccesses++; return Reflect.get(target, key); } }),
     location,
     setTimeout: (fn: () => void): number => { const id = nextId++; timers.set(id, fn); return id; },
     clearTimeout: (id: number): void => { timers.delete(id); },
@@ -99,7 +100,7 @@ function makeSandbox(opts: { throwStorage?: boolean; store?: Map<string, string>
   const createGuard = api.createDraftGuard;
   api.createDraftGuard = (options) => {
     const guard = createGuard(options);
-    guard.initialize('11111111-1111-4111-8111-111111111111');
+    if (opts.owner !== null) guard.initialize(opts.owner ?? '11111111-1111-4111-8111-111111111111');
     return guard;
   };
 
@@ -108,6 +109,7 @@ function makeSandbox(opts: { throwStorage?: boolean; store?: Map<string, string>
     store,
     session,
     location,
+    storageAccesses: () => storageAccesses,
     pendingTimers: () => timers.size,
     flushTimers: () => {
       const fns = [...timers.values()];
@@ -339,6 +341,30 @@ describe('DraftGuard.createDraftGuard', () => {
 // re-keyed and deleted the other tab's work. Model two tabs as two sandboxes
 // over ONE localStorage, each with its own sessionStorage.
 describe('DraftGuard owner/resource/context stash keys (#138/#305)', () => {
+  it('does not touch storage through any recovery path until auth establishes an owner', () => {
+    const sb = makeSandbox({ owner: null });
+    const guard = sb.api.createDraftGuard({ resource: 'new', collect: () => ({ title: 'Unowned' }) });
+    guard.markDirty(); sb.flushTimers(); guard.stashNow();
+    expect(guard.tryRestore()).toBeNull();
+    guard.adopt({ key: 'swl:draft:new', savedAt: '2026-10-29', payload: {} });
+    guard.dismissRestore({ key: 'swl:draft:new', savedAt: '2026-10-29', payload: {} });
+    expect(guard.wasDismissed({ key: 'swl:draft:new', savedAt: '2026-10-29', payload: {} })).toBe(false);
+    guard.markClean(); guard.setResource('post:one'); sb.fireBeforeUnload();
+    expect(sb.storageAccesses()).toBe(0);
+    expect(sb.store.size).toBe(0);
+  });
+  it.each(['new', 'post:existing', 'page:about', 'page:contact', 'page:privacy', 'page:legal'])('fences discovery and cleanup to the owner for %s', (resource) => {
+    const a = makeSandbox();
+    const source = a.api.createDraftGuard({ resource, collect: () => ({ de: { title: 'Only A' }, en: { title: 'Private EN' } }) });
+    source.markDirty(); source.stashNow();
+    const captured = [...a.store];
+    const b = makeSandbox({ store: a.store, owner: '22222222-2222-4222-8222-222222222222' });
+    const other = b.api.createDraftGuard({ resource, collect: () => ({ title: 'B' }) });
+    expect(other.tryRestore()).toBeNull();
+    other.adopt(source.tryRestore()); other.markClean();
+    expect([...a.store]).toEqual(captured);
+    expect(source.initialize('22222222-2222-4222-8222-222222222222')).toBe(false);
+  });
   const tab = (store: Map<string, string>, resource = 'post:new') => {
     const sb = makeSandbox({ store });
     let title = 'draft';
@@ -352,6 +378,37 @@ describe('DraftGuard owner/resource/context stash keys (#138/#305)', () => {
     expect(store.size).toBe(2);
     a.guard.markClean();
     expect(b.guard.tryRestore()?.payload).toEqual({ title: 'B' });
+  });
+  it.each(['new', 'post:existing', 'page:about', 'page:contact', 'page:privacy', 'page:legal'])('cannot erase an interleaved newer immutable record while cleaning %s', (resource) => {
+    const store = new Map<string, string>();
+    const a = tab(store, resource); a.edit('A original');
+    const source = a.guard.tryRestore()!;
+    const b = tab(store, resource); b.guard.adopt(source);
+    const get = store.get.bind(store);
+    let interleave = true;
+    store.get = (key) => {
+      const value = get(key);
+      if (interleave && key === source.key) { interleave = false; a.edit('A concurrent newer'); }
+      return value;
+    };
+    b.guard.markClean(b.guard.snapshot());
+    expect(a.guard.tryRestore()?.payload).toEqual({ title: 'A concurrent newer' });
+    expect(store.size).toBe(1);
+  });
+  it('rekeys destination-first without touching an independent tab or destroying a failed source', () => {
+    const store = new Map<string, string>();
+    const a = tab(store, 'new'); const b = tab(store, 'new');
+    a.edit('A'); b.edit('B');
+    const previous = [...store];
+    const set = store.set.bind(store);
+    store.set = () => { throw new Error('quota'); };
+    a.guard.setResource('post:created');
+    expect([...store]).toEqual(previous);
+    store.set = set;
+    a.guard.stashNow();
+    expect([...store.values()].map(raw => JSON.parse(raw).payload.title).sort()).toEqual(['A', 'B']);
+    a.guard.markClean();
+    expect([...store.values()].map(raw => JSON.parse(raw).payload.title)).toEqual(['B']);
   });
   it('offers scoped work after reload without overwriting its source on adoption', () => {
     const store = new Map<string, string>();

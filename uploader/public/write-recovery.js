@@ -8,6 +8,7 @@ window.WriteRecovery = (function () {
     let paused = false;
     let busy = false;
     let needsProbe = false;
+    let unsafeRestore = false;
     let createKey = crypto.randomUUID();
     let attempts = [];
     let comparison = null;
@@ -35,10 +36,27 @@ window.WriteRecovery = (function () {
     const stored = document.createElement('pre');
     const useStored = document.createElement('button');
     useStored.type = 'button'; useStored.className = 'btn-secondary'; useStored.textContent = copy.writeUseStored;
-    compare.append(heading, localHeading, local, storedHeading, stored, useStored);
+    const useMine = document.createElement('button');
+    useMine.type = 'button'; useMine.className = 'btn-secondary'; useMine.textContent = copy.writeRebase;
+    const keepEditing = document.createElement('button');
+    keepEditing.type = 'button'; keepEditing.className = 'btn-secondary'; keepEditing.textContent = copy.writeKeepEditing;
+    const latest = document.createElement('a');
+    latest.target = '_blank'; latest.rel = 'noopener'; latest.textContent = copy.writeLatest;
+    compare.append(heading, localHeading, local, storedHeading, stored, latest, useStored, useMine, keepEditing);
     controls.append(check, login, resume);
     box.append(message, controls, compare);
     document.querySelector('main').prepend(box);
+    const offline = document.createElement('p');
+    offline.className = 'write-connectivity';
+    offline.setAttribute('role', 'status');
+    offline.textContent = copy.writeOffline;
+    document.querySelector('main').prepend(offline);
+    function renderConnectivity() {
+      offline.hidden = typeof navigator === 'undefined' || navigator.onLine !== false;
+    }
+    window.addEventListener('online', renderConnectivity);
+    window.addEventListener('offline', renderConnectivity);
+    renderConnectivity();
     function render() {
       box.hidden = !status && !paused && !comparison;
       message.textContent = paused ? copy.writeOwnerChanged : status;
@@ -46,6 +64,9 @@ window.WriteRecovery = (function () {
       login.hidden = !paused; resume.hidden = !paused; resume.disabled = busy;
       compare.hidden = !comparison;
       if (comparison) {
+        latest.href = options.kind === 'pages'
+          ? '/admin/about.html?key=' + encodeURIComponent(resource()) + '#revisionsCard'
+          : '/admin/editor.html?tk=' + encodeURIComponent(resource()) + '#revisionsCard';
         local.textContent = JSON.stringify({ current: options.collect(), attempts }, null, 2);
         stored.textContent = JSON.stringify(comparison, null, 2);
       }
@@ -70,6 +91,9 @@ window.WriteRecovery = (function () {
         baseUpdatedAt: options.base(), attempts: structuredClone(attempts) };
     }
     function restore(state) {
+      // A corrupt/missing base must never inherit the initial server load's token.
+      unsafeRestore = true;
+      options.restoreBase(undefined);
       if (!state || state.version !== 1 || state.expectedOwnerId !== owner || state.kind !== options.kind
         || !uuid.test(state.createKey) || typeof state.resource !== 'string' || !Array.isArray(state.attempts)
         || options.resourceId() && state.resource !== options.resourceId()
@@ -84,6 +108,7 @@ window.WriteRecovery = (function () {
         accepted.push(structuredClone(attempt));
       }
       createKey = state.createKey; attempts = accepted;
+      unsafeRestore = false;
       needsProbe = attempts.length > 0;
       // The caller restores the actual base, never the latest load's token.
       options.restoreBase(state.baseUpdatedAt);
@@ -141,7 +166,7 @@ window.WriteRecovery = (function () {
         if (matched) return await adopt(body, matched, false);
         needsProbe = false;
         const base = options.base();
-        if (body.updatedAt === base) status = copy.writeNotVisible;
+        if (!unsafeRestore && body.updatedAt === base) status = copy.writeNotVisible;
         else {
           options.guard.stashNow(); comparison = body; status = copy.writeChanged;
         }
@@ -152,7 +177,7 @@ window.WriteRecovery = (function () {
     }
     async function save(payload, generation) {
       if (busy || !owner || paused || comparison || needsProbe) { render(); return false; }
-      if (options.resourceId() && !validDate(options.base()) && !(options.kind === 'pages' && options.base() === null)) {
+      if (unsafeRestore || options.resourceId() && !validDate(options.base()) && !(options.kind === 'pages' && options.base() === null)) {
         status = copy.writeUnsafeBase; render(); return false;
       }
       busy = true;
@@ -199,6 +224,30 @@ window.WriteRecovery = (function () {
         if (resumeOwner(auth.userId)) await probe();
       } catch (_) { /* stays paused, never a replay */ }
     });
+    keepEditing.addEventListener('click', () => {
+      compare.open = false;
+      options.guard.stashNow();
+    });
+    useMine.addEventListener('click', async () => {
+      if (!comparison || paused || busy) return;
+      busy = true;
+      const saved = comparison;
+      try {
+        // Keep the complete pre-rebase text, base and attempt history recoverable.
+        // Rebase is an explicit local choice, never an automatic merge or write.
+        options.guard.freshContext();
+        await options.rebase(saved);
+        if (!canAdopt(saved.ownerUserId)) return;
+        attempts = []; comparison = null; needsProbe = false; unsafeRestore = false;
+        options.guard.markDirty();
+        options.guard.stashNow();
+        status = copy.writeRebased;
+      } catch (_) {
+        options.guard.markDirty();
+        status = copy.writeUnknown;
+        options.guard.stashNow();
+      } finally { busy = false; render(); }
+    });
     useStored.addEventListener('click', async () => {
       if (!comparison || paused || busy) return;
       busy = true;
@@ -207,7 +256,7 @@ window.WriteRecovery = (function () {
         options.guard.freshContext();
         await options.useStored(saved);
         if (!canAdopt(saved.ownerUserId)) return;
-        attempts = []; comparison = null; needsProbe = false; status = '';
+        attempts = []; comparison = null; needsProbe = false; unsafeRestore = false; status = '';
       } catch (_) {
         options.guard.markDirty();
         status = copy.writeUnknown;

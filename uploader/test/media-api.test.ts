@@ -383,7 +383,8 @@ describe('media client DOM safety', () => {
 
   it('the page loads the split modules rather than inlining the logic', () => {
     expect(page).toContain('<script src="/admin/media-api.js"></script>');
-    expect(page).toContain('<script src="/admin/media-browser.js"></script>');
+    expect(page).toContain('<script type="module" src="/admin/media-conditional.js"></script>');
+    expect(page).toContain('<script type="module" src="/admin/media-browser.js"></script>');
     // "No bundler" permits multiple <script> tags; it never required one file.
     expect(page).not.toMatch(/<script>[\s\S]{200,}<\/script>/);
   });

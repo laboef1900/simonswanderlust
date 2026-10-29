@@ -3,13 +3,12 @@
 // media-browser.js owns the page; this half is unit-tested in a `vm` sandbox
 // like media-api.js.
 //
-// @ai-note Three write rules carry the bulk run, all deliberate:
+// @ai-note Four write rules carry the bulk run, all deliberate:
 //   1. A suggestion never CLEARS a field: an empty model value is never written.
-//   2. Without `replace`, only empty fields are filled, decided against the row
-//      re-read right before its PATCH — not the list snapshot the run started
-//      from — so text saved elsewhere during a slow model call survives. That
-//      also makes a stopped or failed run resumable: run it again.
+//   2. Fill-only PATCH expects canonical empty values; overwrite expects the
+//      row read immediately before the PATCH. A race conflicts atomically.
 //   3. Stop means stop: no PATCH is sent once the signal has aborted.
+//   4. Unknown gets one item read, never an automatic replay.
 // @ai-context docs/superpowers/specs/2026-10-18-media-ai-details-design.md
 window.MediaAi = (function () {
   /** A run stops after this many failures in a row: a down provider, a wrong
@@ -35,9 +34,10 @@ window.MediaAi = (function () {
   }
 
   function isEmpty(item, field, locale) {
-    if (field === 'title') return !text(item.title);
-    if (field === 'tags') return !(item.tags && item.tags.length);
-    return !text(item[field] && item[field][locale]);
+    const value = window.MediaConditional.canonicalizePatch(field === 'alt' || field === 'caption'
+      ? { [field]: { [locale]: (item[field] && item[field][locale]) || '' } }
+      : { [field]: item[field] || (field === 'tags' ? [] : '') })[field];
+    return field === 'tags' ? value.length === 0 : (locale ? value[locale] : value) === '';
   }
 
   /** True when a run would send this photo to the model at all. */
@@ -88,7 +88,18 @@ window.MediaAi = (function () {
         }
       }
     }
-    return Object.keys(patch).length ? patch : null;
+    const canonical = window.MediaConditional.canonicalizePatch(patch);
+    // A suggestion consisting solely of stripped controls is not a clear.
+    for (const field of Object.keys(canonical)) {
+      if (field === 'alt' || field === 'caption') {
+        for (const locale of Object.keys(canonical[field])) {
+          if (!canonical[field][locale]) delete canonical[field][locale];
+        }
+        if (!Object.keys(canonical[field]).length) delete canonical[field];
+      } else if (!canonical[field].length) delete canonical[field];
+    }
+    const changed = window.MediaApi.changedFields(canonical, item);
+    return Object.keys(changed).length ? changed : null;
   }
 
   /**
@@ -157,7 +168,7 @@ window.MediaAi = (function () {
    *         pageOrigin, signal, onProgress?(report), describe? }
    * `describe(url, config, signal)` defaults to suggest() and is a test seam.
    * Resolves with the final report; a per-photo failure is recorded, never thrown.
-   * report.stopped: null (finished) | 'cancelled' | 'failures'.
+   * report.stopped: null (finished) | 'cancelled' | 'failures' | 'session'.
    */
   async function runBulk(opts) {
     const { items, fields, replace, config, client, signal } = opts;
@@ -175,12 +186,11 @@ window.MediaAi = (function () {
       const suggestion = await describe(url, config, signal);
       if (!hasAny(suggestion, fields)) throw new Error('The model returned none of the selected fields');
       signal.throwIfAborted();
-      let fresh;
-      try { fresh = await client.get(item.key); } catch (error) { throw new Error('Could not re-read the photo: ' + message(error)); }
+      const fresh = window.MediaApi.assertItem(await client.get(item.key), item.key);
       const patch = patchFor(fresh, suggestion, fields, replace);
       if (!patch) return 'skipped';
       signal.throwIfAborted();
-      try { await client.patch(item.key, patch); } catch (error) { throw new Error('Could not save: ' + message(error)); }
+      await window.MediaApi.savePatch(client, item.key, patch, window.MediaApi.expectations(patch, fresh, !replace));
       return 'saved';
     }
 
@@ -194,7 +204,13 @@ window.MediaAi = (function () {
         streak = 0;
       } catch (error) {
         if (signal.aborted) { report.stopped = 'cancelled'; break; }
-        report.failed.push({ key: item.key, reason: message(error) });
+        report.failed.push({ key: item.key, reason: message(error), fields: error.fields,
+          unknown: !!error.unknown, unsupported: !!error.unsupported, conflict: error.status === 409 });
+        if (error.status === 401 || (error.probeError && error.probeError.status === 401)) {
+          report.stopped = 'session';
+          report.processed += 1;
+          break;
+        }
         streak += 1;
       }
       report.processed += 1;

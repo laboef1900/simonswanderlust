@@ -12,9 +12,10 @@ import { WIDTHS } from './variants.js';
 import { assertSafeKey } from './storage.js';
 import { deleteMedia, imageUsage, VARIANT_FILE_RE } from './media-files.js';
 import {
-  redactForNonAdmin, MediaStoreError, assertSafeFolder,
+  redactForNonAdmin, MediaStoreError, MediaChangedError, assertSafeFolder,
   type MediaError, type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
 } from './media-store.js';
+import { canonicalizeConditional } from '../public/media-conditional.js';
 import { BacklogFullError, type EncodeQueue } from './encode-queue.js';
 import type { UploadService } from './upload-service.js';
 import { UPLOAD_UUID_RE } from './upload-receipts.js';
@@ -697,29 +698,19 @@ export function buildServer(cfg: ServerConfig): AppServer {
 
   app.patch('/media/items/*', { preHandler: requireAuth }, async (req, reply) => {
     const key = (req.params as { '*': string })['*'];
-    const b = (req.body ?? {}) as Record<string, unknown>;
-    const patch: Parameters<MediaStore['patch']>[1] = {};
-    if (b.folder !== undefined) patch.folder = String(b.folder);
-    if (b.title !== undefined) patch.title = String(b.title);
-    if (b.alt && typeof b.alt === 'object') {
-      const alt = b.alt as Record<string, unknown>;
-      patch.alt = {
-        ...(alt.de !== undefined ? { de: String(alt.de) } : {}),
-        ...(alt.en !== undefined ? { en: String(alt.en) } : {}),
-      };
-    }
-    if (b.caption && typeof b.caption === 'object') {
-      const cap = b.caption as Record<string, unknown>;
-      patch.caption = {
-        ...(cap.de !== undefined ? { de: String(cap.de) } : {}),
-        ...(cap.en !== undefined ? { en: String(cap.en) } : {}),
-      };
-    }
-    if (Array.isArray(b.tags)) patch.tags = b.tags.map(String);
+    let conditional;
+    try { conditional = canonicalizeConditional(req.body); }
+    catch { return reply.code(400).send({ error: 'invalid_media_conditional' }); }
     try {
-      const saved = await cfg.media.patch(key, patch);
-      return reply.send(serializeMedia(saved, Boolean(req.authUser?.isAdmin)));
+      const saved = await cfg.media.patchConditional(key, conditional);
+      return reply.send({ ...serializeMedia(saved, Boolean(req.authUser?.isAdmin)), conditionalVersion: 1 });
     } catch (e) {
+      if (e instanceof MediaChangedError) {
+        return reply.code(409).send({
+          error: 'media_changed',
+          current: serializeMedia(e.current, Boolean(req.authUser?.isAdmin)),
+        });
+      }
       return mediaError(e, reply);
     }
   });

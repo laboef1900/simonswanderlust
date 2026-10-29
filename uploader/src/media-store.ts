@@ -14,6 +14,11 @@ import type { DbClient, DbPool } from './db.js';
 import type { MediaExif } from './exif.js';
 import { storedProcessOptions, type ProcessOptions } from './pipeline.js';
 import { JPEG_FORMAT, type ImageOutputFormat } from './variants.js';
+import {
+  assertSafeFolder as validateFolder, cleanText, normalizeTags, canonicalizeConditional,
+  type MediaConditional,
+} from '../public/media-conditional.js';
+export { MAX_FOLDER_DEPTH, MAX_FOLDER_LEN, MAX_TAGS, MAX_TAG_LEN, normalizeTags } from '../public/media-conditional.js';
 
 export type MediaStatus = 'processing' | 'ready' | 'failed' | 'missing';
 /**
@@ -80,6 +85,8 @@ export interface MediaStore {
   get(key: string, client?: Pick<DbClient, 'query'>): Promise<MediaItem | null>;
   upsert(item: NewMediaItem): Promise<MediaItem>;
   patch(key: string, fields: MediaPatch, client?: Pick<DbClient, 'query'>): Promise<MediaItem>;
+  /** Atomic field-level compare-and-set; internal patch deliberately remains unconditional. */
+  patchConditional(key: string, conditional: MediaConditional): Promise<MediaItem>;
   move(keys: string[], folder: string): Promise<number>;
   remove(key: string, client?: Pick<DbClient, 'query'>): Promise<void>;
   /** One snapshot, independent of filters; every requested key appears explicitly. */
@@ -116,6 +123,28 @@ export class MediaStoreError extends Error {
   constructor(message: string, code?: string) { super(message); this.code = code; }
 }
 
+export class MediaChangedError extends MediaStoreError {
+  constructor(readonly current: MediaItem) { super('media_changed', 'media_changed'); }
+}
+
+function conditionalInput(value: MediaConditional): MediaConditional {
+  try { return canonicalizeConditional({ conditional: value }); }
+  catch { throw new MediaStoreError('invalid_media_conditional'); }
+}
+
+/** Fixed SQL-column allowlist, shared by the memory comparison and PG predicates. */
+function conditionalFields(fields: MediaPatch): Array<[string, string | string[]]> {
+  const out: Array<[string, string | string[]]> = [];
+  if (fields.title !== undefined) out.push(['title', fields.title]);
+  if (fields.folder !== undefined) out.push(['folder', fields.folder]);
+  if (fields.alt?.de !== undefined) out.push(['alt_de', fields.alt.de]);
+  if (fields.alt?.en !== undefined) out.push(['alt_en', fields.alt.en]);
+  if (fields.caption?.de !== undefined) out.push(['caption_de', fields.caption.de]);
+  if (fields.caption?.en !== undefined) out.push(['caption_en', fields.caption.en]);
+  if (fields.tags !== undefined) out.push(['tags', fields.tags]);
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
@@ -136,52 +165,16 @@ export class MediaStoreError extends Error {
  * ever be introduced, this must be revisited — that is the whole reason
  * `starts_with` is used instead.
  */
-const SAFE_FOLDER_SEG = /^[\p{L}\p{N}](?:[\p{L}\p{N} _.\-]{0,62}[\p{L}\p{N}])?$/u;
-export const MAX_FOLDER_DEPTH = 6;
-export const MAX_FOLDER_LEN = 200;
-/** A GIN index stores one entry per array element, so both are capped. */
-export const MAX_TAGS = 30;
-export const MAX_TAG_LEN = 40;
+// Limits and canonicalization are shared with the browser's outcome probe.
 /** Unbounded LIMIT would materialize the whole table per request. */
 export const MAX_PAGE_SIZE = 200;
 export const DEFAULT_PAGE_SIZE = 50;
-const MAX_TEXT = 1000;
 
 export function assertSafeFolder(path: string): void {
-  if (typeof path !== 'string') throw new MediaStoreError('folder path must be a string');
-  if (path === '') return;                                   // root
-  if (path.length > MAX_FOLDER_LEN) throw new MediaStoreError('folder path too long');
-  if (path.normalize('NFC') !== path) throw new MediaStoreError('folder path must be NFC');
-  if (/[\p{C}\p{Zl}\p{Zp}]/u.test(path)) throw new MediaStoreError('folder path has control/format characters');
-  const segs = path.split('/');
-  if (segs.length > MAX_FOLDER_DEPTH) throw new MediaStoreError('folder nesting too deep');
-  for (const s of segs) {
-    if (!SAFE_FOLDER_SEG.test(s)) throw new MediaStoreError(`invalid folder segment "${s}"`);
-  }
+  try { validateFolder(path); }
+  catch (error) { throw new MediaStoreError(error instanceof Error ? error.message : 'invalid folder'); }
 }
 
-/**
- * Title/alt/caption text. Strips `\p{C}` (NUL, C0/C1 controls, DEL, format
- * characters) exactly as `normalizeTags` does: Postgres `text` rejects a NUL
- * byte outright, which surfaced as a generic 500 from `PATCH /media/items/*`
- * (#133). These are single-line inputs that also land in gallery
- * `alt="…"`/`caption="…"` attributes, so no control character is legitimate.
- */
-function cleanText(v: unknown): string {
-  return typeof v === 'string' ? v.replace(/[\p{C}]/gu, '').slice(0, MAX_TEXT) : '';
-}
-
-export function normalizeTags(tags: unknown): string[] {
-  if (!Array.isArray(tags)) return [];
-  const out: string[] = [];
-  for (const t of tags) {
-    if (typeof t !== 'string') continue;
-    const clean = t.replace(/[\p{C}]/gu, '').trim().slice(0, MAX_TAG_LEN);
-    if (clean && !out.includes(clean)) out.push(clean);
-    if (out.length >= MAX_TAGS) break;
-  }
-  return out;
-}
 
 /** Every ancestor of a folder path, root-first, excluding '' — for upserting the tree. */
 export function folderAncestry(path: string): string[] {
@@ -393,6 +386,21 @@ export function memoryMediaStore(opts: MediaStoreOptions): MediaStore {
       if (fields.alt) r.alt = { de: cleanText(fields.alt.de ?? r.alt.de), en: cleanText(fields.alt.en ?? r.alt.en) };
       if (fields.caption) r.caption = { de: cleanText(fields.caption.de ?? r.caption.de), en: cleanText(fields.caption.en ?? r.caption.en) };
       if (fields.tags !== undefined) r.tags = normalizeTags(fields.tags);
+      return toItem(r);
+    },
+    async patchConditional(key, conditional) {
+      const { patch, expect } = conditionalInput(conditional);
+      const r = need(key);
+      const stored = new Map(conditionalFields(r));
+      for (const [field, expected] of conditionalFields(expect)) {
+        if (JSON.stringify(stored.get(field)) !== JSON.stringify(expected)) throw new MediaChangedError(toItem(r));
+      }
+      // No await between compare and mutation: concurrent callers cannot interleave.
+      if (patch.folder !== undefined) { r.folder = patch.folder; addFolders(patch.folder); }
+      if (patch.title !== undefined) r.title = patch.title;
+      if (patch.alt) r.alt = { ...r.alt, ...patch.alt };
+      if (patch.caption) r.caption = { ...r.caption, ...patch.caption };
+      if (patch.tags !== undefined) r.tags = patch.tags;
       return toItem(r);
     },
     async move(keys, folder) {
@@ -697,6 +705,34 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
       const saved = await getRow(key, client);
       if (!saved) throw new MediaStoreError('media not found', 'not_found');
       return rowToItem(saved, baseUrl);
+    },
+    async patchConditional(key, conditional) {
+      const { patch, expect } = conditionalInput(conditional);
+      const write = async (client: Pick<DbClient, 'query'>): Promise<MediaItem> => {
+        const values: unknown[] = [key];
+        const sets = conditionalFields(patch).map(([column, value]) => {
+          values.push(value);
+          return `${column} = $${values.length}${column === 'tags' ? '::text[]' : ''}`;
+        });
+        const checks = conditionalFields(expect).map(([column, value]) => {
+          values.push(value);
+          return `${column} IS NOT DISTINCT FROM $${values.length}${column === 'tags' ? '::text[]' : ''}`;
+        });
+        // PostgreSQL rechecks these predicates after a competing row writer commits.
+        // RETURNING is this write's result, never a later unrelated get().
+        const result = await client.query<MediaRow>(
+          `UPDATE media SET ${sets.join(', ')} WHERE key = $1 AND ${checks.join(' AND ')} RETURNING ${COLS}`, values,
+        );
+        if (!result.rows[0]) {
+          const current = await getRow(key, client);
+          if (!current) throw new MediaStoreError('media not found', 'not_found');
+          throw new MediaChangedError(rowToItem(current, baseUrl));
+        }
+        if (patch.folder !== undefined) await ensureFolders(patch.folder, client);
+        return rowToItem(result.rows[0], baseUrl);
+      };
+      // Folder ancestors and the successful media mutation commit or roll back together.
+      return patch.folder !== undefined ? transaction(write) : write(pool);
     },
     async move(keys, folder) {
       assertSafeFolder(folder);

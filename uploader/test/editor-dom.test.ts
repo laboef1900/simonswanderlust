@@ -43,6 +43,7 @@ interface EditorOptions {
   fetch?: Fetch;
   auth?: () => Promise<Response>;
   rawPostResponses?: boolean;
+  storage?: Map<string, string>;
   review?: Review;
   isAdmin?: boolean;
   mobile?: boolean;
@@ -82,6 +83,7 @@ async function loadEditor(options: EditorOptions = {}) {
     matches: options.mobile === true,
     addEventListener(_type: string, listener: () => void) { mediaChanged = listener; },
   };
+  const navigator = { onLine: true };
   const requests: { url: string; options: RequestInit }[] = [];
   const galleryPickers: GalleryPicker[] = [];
   const el = (id: string): Element => {
@@ -89,8 +91,7 @@ async function loadEditor(options: EditorOptions = {}) {
     if (!element) throw new Error('no element #' + id + ' in editor.html');
     return element;
   };
-  const storage = () => {
-    const m = new Map<string, string>();
+  const storage = (m = new Map<string, string>()) => {
     return {
       getItem: (k: string): string | null => m.get(k) ?? null,
       setItem: (k: string, v: string): void => { m.set(k, String(v)); },
@@ -99,7 +100,7 @@ async function loadEditor(options: EditorOptions = {}) {
       removeItem: (k: string): void => { m.delete(k); },
     };
   };
-  const local = storage();
+  const local = storage(options.storage);
   if (options.stash) {
     const context = webcrypto.randomUUID(), recordId = webcrypto.randomUUID(), createKey = webcrypto.randomUUID();
     const resource = 'post:' + options.stash.key.replace(/^swl:draft:/, '');
@@ -229,7 +230,7 @@ async function loadEditor(options: EditorOptions = {}) {
     console,
     alert() {},
     confirm: () => false,
-    navigator: {},
+    navigator,
     UploadRecovery: { run: options.upload ?? (() => Promise.reject(new Error('Unexpected upload in fixture'))) },
     matchMedia: (query: string) => query === '(max-width: 900px)'
       ? { matches: false, addEventListener() {} } : media,
@@ -312,6 +313,15 @@ async function loadEditor(options: EditorOptions = {}) {
     api, el, editors, created: dom.created, document: dom.document, requests, local, galleryPickers,
     ctx,
     flushDialogEvents: dom.flushDialogEvents,
+    logout: () => {
+      const auth = ctx.Auth;
+      if (!auth || typeof auth !== 'object' || !('logout' in auth) || typeof auth.logout !== 'function') throw new Error('Auth.logout unavailable');
+      return auth.logout();
+    },
+    setOnline(value: boolean) {
+      navigator.onLine = value;
+      dom.document.body!.fire(value ? 'online' : 'offline');
+    },
     setMobile(mobile: boolean) { media.matches = mobile; mediaChanged?.(); },
     dirtyCalls: () => dirty, redirects: () => redirects,
   };
@@ -490,7 +500,100 @@ describe('complete bilingual conflict reload', () => {
 describe('authenticated editor write recovery', () => {
   const token = '2026-10-25T10:00:00.000Z';
   const otherOwner = '22222222-2222-4222-8222-222222222222';
+  it('serializes two editor consumers through the stored base and preserves the losing tab’s complete form', async () => {
+    const storage = new Map<string, string>();
+    let stored = { ...fullPair(), updatedAt: token, ownerUserId: EDITOR_OWNER, lastSaveId: null as string | null };
+    const fetch: Fetch = async (url, init) => {
+      if (init?.method === 'PUT') {
+        const sent = JSON.parse(String(init.body));
+        if (sent.updatedAt !== stored.updatedAt) return response({ code: 'conflict' }, 409);
+        stored = { ...stored, ...sent, updatedAt: '2026-10-25T12:00:00.000Z', lastSaveId: sent.saveId };
+        return response({ ...stored, saveId: sent.saveId });
+      }
+      return response(url === '/posts/tk1' ? stored : []);
+    };
+    const a = await loadEditor({ storage, search: '?tk=tk1', rawPostResponses: true, fetch });
+    const b = await loadEditor({ storage, search: '?tk=tk1', rawPostResponses: true, fetch });
+    a.el('deTitle').value = 'A saved'; a.el('deTitle').fire('input');
+    b.el('deTitle').value = 'B local'; b.el('enTitle').value = 'B English';
+    b.el('deTitle').fire('input');
+    expect(await a.api.doSaveDraft()).toBe(true);
+    expect(await b.api.doSaveDraft()).toBe(false);
+    expect(stored.de.title).toBe('A saved');
+    expect(b.api.buildPayload().de.title).toBe('B local');
+    expect(b.api.buildPayload().en.title).toBe('B English');
+    expect(b.document.querySelector('.write-recovery')!.querySelector('details')!.hidden).toBe(false);
+    expect([...storage.values()].some(raw => {
+      const record = JSON.parse(raw);
+      return record.payload.de.title === 'B local' && record.payload.en.title === 'B English'
+        && record.recovery.baseUpdatedAt === token;
+    })).toBe(true);
+    expect(b.requests.filter(({ options }) => options.method === 'PUT')).toHaveLength(1);
+  });
 
+  it.each([false, true])('does not disclose A’s new-post or legacy stash after logout to B (admin=%s)', async (isAdmin) => {
+    const storage = new Map<string, string>();
+    const a = await loadEditor({ storage, fetch: async (url) => {
+      if (url === '/logout') return response({});
+      throw new TypeError('offline');
+    } });
+    a.api.populateForm(fullPair());
+    a.el('deTitle').value = 'Private A German'; a.el('enTitle').value = 'Private A English';
+    a.el('deTitle').fire('input');
+    expect(await a.api.doSaveDraft()).toBe(false);
+    storage.set('swl:draft:new', '{"payload":{"de":{"title":"Unknown owner"}}}');
+    storage.set('swl:draft:about', '{"payload":{"en":{"title":"Unknown page owner"}}}');
+    const before = [...storage];
+    await a.logout();
+    expect([...storage]).toEqual(before);
+    const b = await loadEditor({ storage, isAdmin, confirm: true,
+      auth: async () => response({ authenticated: true, userId: otherOwner, username: 'B', isAdmin, needsSetup: false }),
+    });
+    expect(b.api.buildPayload().de.title).toBe('');
+    expect(b.api.buildPayload().en.title).toBe('');
+    expect([...storage]).toEqual(before);
+    expect(b.requests.some(({ url }) => url.startsWith('/posts/'))).toBe(false);
+  });
+  it('keeps offline editing and stashing active without online replay or treating the indicator as server evidence', async () => {
+    const storage = new Map<string, string>();
+    const h = await loadEditor({ storage, fetch: async () => { throw new TypeError('network unreachable'); } });
+    h.api.populateForm(fullPair());
+    h.setOnline(false);
+    expect(h.document.querySelector('.write-connectivity')!.hidden).toBe(false);
+    h.el('deTitle').value = 'Offline local text'; h.el('deTitle').fire('input');
+    expect(await h.api.doSaveDraft()).toBe(false);
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    expect([...storage.values()].some(raw => JSON.parse(raw).payload.de.title === 'Offline local text')).toBe(true);
+    const requests = h.requests.length;
+    h.setOnline(true); await settle();
+    expect(h.document.querySelector('.write-connectivity')!.hidden).toBe(true);
+    expect(h.requests).toHaveLength(requests);
+  });
+  it('restores an own landed create receipt but retains newer recovered text and its generation', async () => {
+    const storage = new Map<string, string>();
+    let saved: Record<string, unknown> | null = null;
+    const a = await loadEditor({ storage, rawPostResponses: true, fetch: async (_url, init) => {
+      if (init?.method === 'POST') saved = JSON.parse(String(init.body));
+      throw new TypeError('lost write and read responses');
+    } });
+    a.api.populateForm(fullPair());
+    a.el('deTitle').value = 'Attempted'; a.el('deTitle').fire('input');
+    await a.api.doSaveDraft();
+    const [key, raw] = [...storage][0]!;
+    const record = JSON.parse(raw);
+    record.payload.de.title = 'Recovered newer';
+    record.generation += 1;
+    storage.set(key, JSON.stringify(record));
+    const b = await loadEditor({ storage, confirm: true, rawPostResponses: true, fetch: async (url) =>
+      response(url === '/posts/' + saved!.translationKey
+        ? { ...saved, ownerUserId: EDITOR_OWNER, lastSaveId: saved!.saveId, updatedAt: token } : []) });
+    await settle();
+    expect(b.api.buildPayload().de.title).toBe('Recovered newer');
+    expect(b.api.buildPayload().updatedAt).toBe(token);
+    expect(b.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    expect(b.requests.some(({ options }) => options.method)).toBe(false);
+    expect(storage.get(key)).toBe(JSON.stringify(record));
+  });
   it('adopts a lost-response receipt without erasing a newer edit or replaying the write', async () => {
     let stored = { ...fullPair(), updatedAt: token, ownerUserId: EDITOR_OWNER, lastSaveId: null as string | null };
     const committed = Promise.withResolvers<void>();

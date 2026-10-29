@@ -31,6 +31,84 @@ maybe('pgMediaStore (integration)', () => {
   const add = (key: string, over: Record<string, unknown> = {}) =>
     store.upsert({ key, status: 'ready', width: 800, height: 600, origBytes: 10, exif: noExif, uploadedBy: null, ...over });
 
+
+  it('atomically admits one of two concurrent same-field conditional writers', async () => {
+    await add('conditional');
+    const attempts = await Promise.allSettled(['First', 'Second'].map((title) => store.patchConditional('conditional', {
+      version: 1, patch: { title, folder: title + '/Child', alt: { de: title } },
+      expect: { title: '', folder: '', alt: { de: '' } },
+    })));
+    expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+    const saved = await store.get('conditional');
+    expect(saved?.folder).toBe(saved?.title + '/Child');
+    expect(saved?.alt.de).toBe(saved?.title);
+    expect(attempts.find((attempt) => attempt.status === 'rejected')).toMatchObject({
+      reason: { code: 'media_changed', current: { title: saved?.title, folder: saved?.folder } },
+    });
+    expect(await store.folders()).toEqual([saved?.title, saved?.title + '/Child']);
+  });
+
+  it('concurrent independent locale edits survive and canonical expectations match persisted values', async () => {
+    await add('conditional', { title: 'ab', tags: ['sea'] });
+    await Promise.all([
+      store.patchConditional('conditional', { version: 1, patch: { alt: { de: 'DE' } }, expect: { alt: { de: '' } } }),
+      store.patchConditional('conditional', { version: 1, patch: { alt: { en: 'EN' } }, expect: { alt: { en: '' } } }),
+    ]);
+    const saved = await store.patchConditional('conditional', {
+      version: 1, patch: { title: 'c\u0000d', tags: ['next', 'next'], caption: { de: 'x'.repeat(1005) } },
+      expect: { title: 'a\u0000b', tags: [' sea ', 'sea'], caption: { de: '' } },
+    });
+    expect(saved).toMatchObject({ title: 'cd', tags: ['next'], alt: { de: 'DE', en: 'EN' }, caption: { de: 'x'.repeat(1000) } });
+    await expect(store.patchConditional('missing', {
+      version: 1, patch: { title: 'new', folder: 'Absent' }, expect: { title: '', folder: '' },
+    })).rejects.toMatchObject({ code: 'not_found' });
+    expect(await store.folders()).toEqual([]);
+  });
+
+  it('conditional folder creation rolls the media update and all ancestors back on failure', async () => {
+    await add('conditional');
+    let inserts = 0;
+    const failing = {
+      query: pool.query.bind(pool),
+      async connect() {
+        const client = await pool.connect();
+        return Object.assign(Object.create(client), {
+          async query(text: string, values?: unknown[]) {
+            if (text.includes('INSERT INTO media_folders') && ++inserts === 2) throw new Error('folder write failed');
+            return client.query(text, values);
+          },
+        });
+      },
+    } as unknown as DbPool;
+    await expect(pgMediaStore(failing, { baseUrl: BASE }).patchConditional('conditional', {
+      version: 1, patch: { title: 'new', folder: 'Parent/Child' }, expect: { title: '', folder: '' },
+    })).rejects.toThrow('folder write failed');
+    expect(inserts).toBe(2);
+    expect(await store.get('conditional')).toMatchObject({ title: '', folder: '' });
+    expect(await store.folders()).toEqual([]);
+  });
+
+  it('returns its own UPDATE result rather than a later writer observed by a separate get', async () => {
+    await add('conditional');
+    let intervened = false;
+    const racing = {
+      async query(text: string, values?: unknown[]) {
+        const result = await pool.query(text, values);
+        if (!intervened && text.startsWith('UPDATE media SET')) {
+          intervened = true;
+          await store.patch('conditional', { title: 'later' });
+        }
+        return result;
+      },
+      connect: pool.connect.bind(pool),
+    } as unknown as DbPool;
+    const saved = await pgMediaStore(racing, { baseUrl: BASE }).patchConditional('conditional', {
+      version: 1, patch: { title: 'mine' }, expect: { title: '' },
+    });
+    expect(intervened).toBe(true);
+    expect(saved.title).toBe('mine');
+    expect((await store.get('conditional'))?.title).toBe('later');
+  });
   it('round-trips every column, including tags and EXIF', async () => {
     const saved = await add('library/2025/a', {
       folder: 'Island', title: 'Sunrise', tags: ['dawn', 'sea'],
