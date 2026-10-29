@@ -39,6 +39,8 @@ jobs:
             uploader/package-lock.json
             site/package-lock.json
       - run: npm ci
+      # Product boot/restore tests exercise the owned addon, not a PG-only substitute.
+      - run: npm run build:native
       # The draft-preview route (src/preview.ts) reuses site/src/lib markdown
       # modules, whose deps (@astrojs/markdown-satteri, unified, rehype-*) live
       # in site/node_modules — install them so typecheck + tests can compile.

@@ -66,8 +66,12 @@ maybe('backup round-trip (Postgres)', () => {
       titleImage: { ...base.de.titleImage, src: 'https://img.example/title-draft' } } });
     await pool.query(`INSERT INTO pages (key,locale,title,body_markdown) VALUES ('about','de','T','Body')
       ON CONFLICT (key,locale) DO UPDATE SET title=EXCLUDED.title, body_markdown=EXCLUDED.body_markdown`);
+    await pool.query(`UPDATE posts SET last_save_id='11111111-1111-4111-8111-111111111111', last_save_by=$1`, [u.id]);
+    await pool.query(`UPDATE pages SET last_save_id='11111111-1111-4111-8111-111111111111', last_save_by=$1`, [u.id]);
 
     const file = join(dir, await dumpDatabase(pool, dir));
+    const exported = await readDump(file);
+    expect(JSON.stringify(exported)).not.toMatch(/last_save_id|last_save_by|upload_receipts/);
     await pool.query('DELETE FROM posts');
     await pool.query('DELETE FROM sessions');
     await pool.query('DELETE FROM users');
@@ -85,6 +89,8 @@ maybe('backup round-trip (Postgres)', () => {
     const back = await users.findByUsername('simon');
     expect(back?.isAdmin).toBe(true);
     expect((await pool.query('SELECT count(*) AS n FROM sessions')).rows[0].n).toBe('0');
+    expect((await pool.query(`SELECT count(*) AS n FROM posts WHERE last_save_id IS NOT NULL OR last_save_by IS NOT NULL`)).rows[0].n).toBe('0');
+    expect((await pool.query(`SELECT count(*) AS n FROM pages WHERE last_save_id IS NOT NULL OR last_save_by IS NOT NULL`)).rows[0].n).toBe('0');
     const list = await posts.list();
     expect(list.length).toBe(1);
     const pg = (await pool.query(`SELECT title, body_markdown FROM pages WHERE key='about' AND locale='de'`)).rows[0];
@@ -229,11 +235,13 @@ maybe('backup round-trip (Postgres)', () => {
     const { writeFileSync } = await import('node:fs');
     await pool.query(`INSERT INTO pages (key,locale,title,body_markdown) VALUES ('about','en','keep','me')
       ON CONFLICT (key,locale) DO UPDATE SET title='keep', body_markdown='me'`);
+    await pool.query(`UPDATE pages SET last_save_id='11111111-1111-4111-8111-111111111111',
+      last_save_by='22222222-2222-4222-8222-222222222222' WHERE key='about'`);
     const v1 = join(dir, 'db-20250101-000000.json.gz');
     writeFileSync(v1, gzipSync(JSON.stringify({ version: 1, tables: { users: [], posts: [] } })));
     await restoreDatabase(pool, v1);
-    const kept = (await pool.query(`SELECT title FROM pages WHERE key='about' AND locale='en'`)).rows[0];
-    expect(kept.title).toBe('keep');
+    const kept = (await pool.query(`SELECT title,last_save_id,last_save_by FROM pages WHERE key='about' AND locale='en'`)).rows[0];
+    expect(kept).toEqual({ title: 'keep', last_save_id: null, last_save_by: null });
     const language = (await pool.query('SELECT * FROM site_language')).rows;
     expect(language).toEqual([expect.objectContaining({
       primary_locale: 'de', enabled_locales: ['de', 'en'], locked_at: null, updated_at: expect.any(Date),

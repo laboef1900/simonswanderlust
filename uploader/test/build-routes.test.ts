@@ -1,3 +1,4 @@
+import { injectAuthoring } from './authoring-request.js';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -175,7 +176,7 @@ describe('build reporting HTTP contract', () => {
       committed = page.updatedAt ?? undefined;
       await f.pages.save({ key: 'about', de: { ...page.de, title: 'Later writer' } }, page.updatedAt ?? undefined);
     };
-    const response = await f.app.inject({ method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: {
+    const response = await injectAuthoring(f.app, { method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: {
       de: { locale: 'de', title: 'Submitted', bodyMarkdown: 'Text', images: {} },
       en: { locale: 'en', title: 'About', bodyMarkdown: 'Text', images: {} },
     } });
@@ -200,7 +201,7 @@ describe('build reporting HTTP contract', () => {
     expect(bulk.json()).toMatchObject({ succeeded: 1, failed: 0, build: report });
     const deleted = await f.app.inject({ method: 'DELETE', url: `/posts/${f.tk}`, cookies: f.cookies });
     expect(deleted.json()).toMatchObject({ deleted: true, build: report });
-    const saved = await f.app.inject({ method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: {
+    const saved = await injectAuthoring(f.app, { method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: {
       de: { locale: 'de', title: 'Über', bodyMarkdown: 'Text', images: {} },
       en: { locale: 'en', title: 'About', bodyMarkdown: 'Text', images: {} },
     } });
@@ -237,7 +238,7 @@ const databaseUrl = process.env.TEST_DATABASE_URL;
         return { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') };
       },
     } });
-    const response = await f.app.inject({ method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: {
+    const response = await injectAuthoring(f.app, { method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: {
       de: { locale: 'de', title: 'Submitted', bodyMarkdown: 'Original', images: {} },
       en: { locale: 'en', title: 'About', bodyMarkdown: 'Original', images: {} },
     } });

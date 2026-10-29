@@ -41,7 +41,7 @@ window.WriteRecovery = (function () {
     function render() {
       box.hidden = !status && !paused && !comparison;
       message.textContent = paused ? copy.writeOwnerChanged : status;
-      check.hidden = attempts.length === 0; check.disabled = busy || paused;
+      check.hidden = !owner || !resource(); check.disabled = busy || paused;
       login.hidden = !paused; resume.hidden = !paused; resume.disabled = busy;
       compare.hidden = !comparison;
       if (comparison) {
@@ -90,8 +90,10 @@ window.WriteRecovery = (function () {
     }
     function content(body) { return options.kind === 'pages' && body.saved ? body.saved : body; }
     function validContent(body) {
-      return body && typeof body === 'object' && body.de && body.en && validDate(body.updatedAt)
-        && (options.kind !== 'posts' || body.translationKey === resource());
+      return body && typeof body === 'object' && body.de && body.en
+        && (validDate(body.updatedAt) || options.kind === 'pages' && body.updatedAt === null)
+        && (options.kind !== 'posts' || body.translationKey === resource())
+        && (options.kind !== 'pages' || body.key === resource());
     }
     async function adopt(body, attempt, acknowledged) {
       if (!uuid.test(body?.ownerUserId)) return false;
@@ -144,6 +146,7 @@ window.WriteRecovery = (function () {
       busy = true;
       const sentPayload = structuredClone(payload);
       if (options.kind === 'posts') sentPayload.translationKey = resource();
+      if (options.resourceId()) sentPayload.updatedAt = options.base();
       const baseUpdatedAt = options.base();
       const prior = attempts.find(attempt => attempt.resource === resource() && attempt.baseUpdatedAt === baseUpdatedAt
         && attempt.generation === generation && JSON.stringify(attempt.sentPayload) === JSON.stringify(sentPayload));
@@ -186,11 +189,17 @@ window.WriteRecovery = (function () {
     });
     useStored.addEventListener('click', async () => {
       if (!comparison || paused || busy) return;
+      busy = true;
       options.guard.freshContext();
       const saved = comparison;
-      attempts = []; comparison = null;
-      await options.useStored(saved);
-      status = ''; render();
+      try {
+        await options.useStored(saved);
+        if (!canAdopt(saved.ownerUserId)) return;
+        attempts = []; comparison = null; status = '';
+      } catch (_) {
+        status = copy.writeUnknown;
+        options.guard.stashNow();
+      } finally { busy = false; render(); }
     });
     window.addEventListener('focus', async () => {
       if (!owner) return;

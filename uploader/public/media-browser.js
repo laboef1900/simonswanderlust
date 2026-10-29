@@ -794,8 +794,14 @@
       if (busy) return;
       busy = true; check.hidden = true; again.hidden = true;
       try {
-        if (operation.kind === 'folder') await client.createFolder(operation.path);
-        else await client.move(operation.keys, operation.folder);
+        var acknowledged = operation.kind === 'folder'
+          ? await client.createFolder(operation.path)
+          : await client.move(operation.keys, operation.folder);
+        if (!acknowledged || acknowledged.ok !== true
+          || operation.kind === 'folder' && (!Array.isArray(acknowledged.folders) || acknowledged.folders.indexOf(operation.path) === -1)
+          || operation.kind === 'move' && (!Number.isSafeInteger(acknowledged.moved) || acknowledged.moved < 0 || acknowledged.moved > operation.keys.length)) {
+          throw Object.assign(new Error('invalid_response'), { unknown: true });
+        }
         // A valid acknowledgement is displayed separately from this optional refresh.
         message.textContent = operation.kind === 'folder' ? copy.folderPresent : copy.moveStored;
         void reload().catch(function () {});

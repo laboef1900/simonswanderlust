@@ -1,3 +1,4 @@
+import { webcrypto, randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -27,6 +28,10 @@ interface Api {
   makeSequence(): { next(): number; isCurrent(ticket: number): boolean };
   makeClient(opts: Record<string, unknown>): Record<string, (...args: never[]) => Promise<unknown>>;
   createUploadQueue(client: unknown, opts?: Record<string, unknown>): {
+    initialize(ownerId: string): void;
+    observeOwner(ownerId: string | null): void;
+    resume(): Promise<unknown>;
+    check(id: number): Promise<void>;
     add(files: unknown[], fields?: Record<string, string>): void;
     retryFailed(): void;
     clearFinished(): void;
@@ -42,8 +47,8 @@ class FakeFormData {
 }
 
 function load(extraGlobals: Record<string, unknown> = {}): Api {
-  const windowStub: Record<string, unknown> = { fetch: () => {}, FormData: FakeFormData, XMLHttpRequest: class {} };
-  vm.runInNewContext(src, { window: windowStub, FormData: FakeFormData, ...extraGlobals });
+  const windowStub: Record<string, unknown> = { fetch: () => {}, FormData: FakeFormData, XMLHttpRequest: class {}, crypto: webcrypto };
+  vm.runInNewContext(src, { window: windowStub, FormData: FakeFormData, AbortController, setTimeout, clearTimeout, ...extraGlobals });
   return windowStub.MediaApi as Api;
 }
 
@@ -132,7 +137,7 @@ function fakeXhrClass(script: { status?: number; body?: unknown; fail?: boolean 
     status = 200;
     responseText = '{}';
     open(): void {}
-    send(): void {
+    send(form: FakeFormData): void {
       const step = script[call++] ?? { status: 200, body: {} };
       let settled = false;
       instances.push({
@@ -142,7 +147,10 @@ function fakeXhrClass(script: { status?: number; body?: unknown; fail?: boolean 
           this.upload.onprogress?.({ lengthComputable: true, loaded: 5, total: 10 });
           if (step.fail) { this.onerror?.(); return; }
           this.status = step.status ?? 200;
-          this.responseText = JSON.stringify(step.body ?? {});
+          const fields = Object.fromEntries(form.parts);
+          const accepted = { state: 'accepted', ownerUserId: fields.expectedOwnerId, uploadId: fields.uploadId,
+            key: 'k', src: 'https://images.test/k', width: 800, height: 600 };
+          this.responseText = JSON.stringify(this.status >= 200 && this.status < 300 ? { ...accepted, ...step.body as object } : step.body ?? {});
           this.onload?.();
         },
       });
@@ -165,6 +173,7 @@ describe('MediaApi upload queue', () => {
     const client = api.makeClient({ XMLHttpRequest: FakeXhr, fetch: async () => ({ status: 200, ok: true, json: async () => ({}) }) });
     const snaps: QueueSnapshot[] = [];
     const q = api.createUploadQueue(client, { concurrency: 2, onChange: (s: QueueSnapshot) => snaps.push(s) });
+    q.initialize(randomUUID());
     q.add([file('a.jpg'), file('b.jpg'), file('c.jpg')]);
     // Browser uploads are transfer-bound, so 3 by default — but the cap is
     // honoured whatever it is set to.
@@ -177,23 +186,46 @@ describe('MediaApi upload queue', () => {
     expect(snaps.length).toBeGreaterThan(0);
   });
 
-  it('tracks failed UPLOADS separately and can retry just those', async () => {
+  it('tracks definitely refused uploads separately and retries only those', async () => {
     const api = load();
-    const { FakeXhr, instances } = fakeXhrClass([{ status: 503, body: { error: 'unavailable' } }, { status: 200, body: { key: 'k' } }]);
+    const { FakeXhr, instances } = fakeXhrClass([{ status: 413, body: { error: 'too large' } }, { status: 200, body: { key: 'k' } }]);
     const client = api.makeClient({ XMLHttpRequest: FakeXhr, fetch: async () => ({ status: 200, ok: true, json: async () => ({}) }) });
     const q = api.createUploadQueue(client, { concurrency: 1 });
+    q.initialize(randomUUID());
     q.add([file('a.jpg')]);
     instances[0]!.resolve();
     await flush();
     expect(q.snapshot().failed).toBe(1);
-    expect(q.snapshot().items[0]!.error).toBe('unavailable');
+    expect(q.snapshot().items[0]!.error).toBe('too large');
 
-    // One laptop sleep in a 100-file batch must not leave the author guessing.
+    // Explicit retry is safe only for a refusal; network/5xx stay Unknown.
     q.retryFailed();
     expect(q.snapshot().failed).toBe(0);
     instances[1]!.resolve();
     await flush();
     expect(q.snapshot().done).toBe(1);
+  });
+
+  it('probes a 503 once and never resends its unknown file through Retry failed', async () => {
+    const api = load();
+    const { FakeXhr, instances } = fakeXhrClass([{ status: 503, body: { error: 'unavailable' } }]);
+    let probes = 0;
+    const client = api.makeClient({ XMLHttpRequest: FakeXhr, fetch: async () => {
+      probes++;
+      return { status: 404, ok: false, json: async () => ({ error: 'not found' }) };
+    } });
+    const q = api.createUploadQueue(client, { concurrency: 1 });
+    q.initialize(randomUUID());
+    q.add([file('a.jpg')]);
+    instances[0]!.resolve();
+    await flush();
+    expect(q.snapshot().items[0]!.state).toBe('unknown');
+    expect(probes).toBe(1);
+    q.retryFailed();
+    await flush();
+    expect(instances).toHaveLength(1);
+    expect(probes).toBe(1);
+    expect(q.snapshot().items[0]!.state).toBe('unknown');
   });
 
   // @ai-warning: XMLHttpRequest is the ONE admin request path that bypasses
@@ -207,6 +239,7 @@ describe('MediaApi upload queue', () => {
       fetch: async () => ({ status: 200, ok: true, json: async () => ({}) }),
     });
     const q = api.createUploadQueue(client, { concurrency: 1 });
+    q.initialize(randomUUID());
     q.add([file('a.jpg')]);
     instances[0]!.resolve();
     await flush();
@@ -215,14 +248,42 @@ describe('MediaApi upload queue', () => {
 
   it('clearFinished drops completed items but keeps failures visible', async () => {
     const api = load();
-    const { FakeXhr, instances } = fakeXhrClass([{ status: 200, body: {} }, { status: 500, body: { error: 'boom' } }]);
+    const { FakeXhr, instances } = fakeXhrClass([{ status: 200, body: {} }, { status: 400, body: { error: 'invalid image' } }]);
     const client = api.makeClient({ XMLHttpRequest: FakeXhr, fetch: async () => ({ status: 200, ok: true, json: async () => ({}) }) });
     const q = api.createUploadQueue(client, { concurrency: 2 });
+    q.initialize(randomUUID());
     q.add([file('a.jpg'), file('b.jpg')]);
     instances.forEach((i) => i.resolve());
     await flush();
     q.clearFinished();
     expect(q.snapshot().items.map((i) => i.state)).toEqual(['failed']);
+  });
+
+  it('pauses a mid-batch 401 in place and resumes only explicitly as its captured owner', async () => {
+    const owner = randomUUID(); let signedIn = owner; let refused = false;
+    const calls: { name: string; fields: Record<string, unknown> }[] = [];
+    const client = {
+      me: async () => ({ userId: signedIn }),
+      uploadOne: async (file: { name: string }, fields: Record<string, unknown>) => {
+        calls.push({ name: file.name, fields });
+        if (file.name === 'b.jpg' && !refused) { refused = true; throw Object.assign(new Error('unauthorized'), { status: 401 }); }
+        return { ownerUserId: fields.expectedOwnerId, uploadId: fields.uploadId, state: 'accepted',
+          key: file.name, src: 'https://images.test/' + file.name, width: 8, height: 6 };
+      },
+      receipt: async () => { throw new Error('Unexpected automatic receipt read for a refusal'); },
+    };
+    const q = load().createUploadQueue(client, { concurrency: 1 });
+    q.initialize(owner); q.add([file('a.jpg'), file('b.jpg'), file('c.jpg')]); await flush();
+    expect(q.snapshot().items.map(item => item.state)).toEqual(['done', 'needs-auth', 'queued']);
+    signedIn = randomUUID(); expect(await q.resume()).toBe(false);
+    expect(calls.map(call => call.name)).toEqual(['a.jpg', 'b.jpg']);
+    signedIn = owner; q.observeOwner(owner); await flush();
+    expect(calls).toHaveLength(2); // focus/sign-in alone never resumes
+    await q.resume(); await flush();
+    expect(q.snapshot().done).toBe(3);
+    expect(calls.map(call => call.name)).toEqual(['a.jpg', 'b.jpg', 'b.jpg', 'c.jpg']);
+    expect(calls[1]!.fields).toEqual(calls[2]!.fields);
+    expect(calls.every(call => call.fields.expectedOwnerId === owner)).toBe(true);
   });
 });
 

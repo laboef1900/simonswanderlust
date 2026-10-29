@@ -20,6 +20,7 @@ import { memorySecretsStore } from '../src/secrets.js';
 /** This suite only exercises host routing, so the queue never needs to run. */
 const noopQueue = (): EncodeQueue => ({
   withAdmission: (_key, operation) => operation(),
+  availableCapacity: () => 100, onCapacity: () => () => {},
   enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {}, idle: async () => {},
   quiesce: async () => {},
   stats: () => ({ pending: 0, running: 0 }),

@@ -155,6 +155,64 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   (`docker compose exec app node --import tsx src/cli.ts set-password <username>`), which also
   invalidates all of that user's sessions — recovery procedure in `ARCHITECTURE.md`.
 
+## Ambiguous writes and local recovery (#305)
+
+The owner-approved [weak-connection contract](docs/superpowers/specs/2026-10-27-issue-304-weak-connection-write-contract.md)
+adds no anonymous surface and does not renew sessions. `POST /posts` requires a
+client-generated UUID and is create-only; post/page saves require a UUID `saveId` and
+the form's captured `expectedOwnerId`. The latter is compared with the authenticated
+session before mutation; it is correlation, never authorization. Store transactions
+stamp the requesting writer and return content/token/receipt from one snapshot.
+Reads expose a last-save ID only to that writer. Import, publication, unpublication,
+GPX/token-changing writes and offline restore invalidate this evidence.
+
+Every upload caller supplies a captured owner, UUID upload ID and retry generation.
+Receipts bind one account/ID to one byte hash, canonical request identity and frozen
+encoding profile/key for the account's lifetime; account deletion cascades them.
+They contain no photo bytes, EXIF/GPS, credentials or session tokens. A receipt hit
+does not repeat metadata changes. A pending receipt is not success, a missing receipt
+is not permission to resend, and age never grants takeover. `GET /upload/receipts/:uploadId`
+is authenticated, owner-scoped, no-store and read-only. The selected-key folder probe
+(`POST /media/lookup`, 1–100 unique validated keys) is also authenticated/no-store and
+returns only key plus folder or an explicit missing marker, independently of listing
+pagination; existing GPS/uploader redaction remains unchanged.
+
+`data-owner.ts` holds the owned Node-API filesystem lock **before** acquiring the
+existing PostgreSQL owner. The stable lock file is `.storage-owner.lock` in the
+canonical parent of `STORAGE_DIR`. It must be a private, singly linked regular file;
+symlinks, failed acquisition or ownership changes fail closed. Never remove or replace
+this inode. The descriptor has CLOEXEC and remains strongly owned after a PG disconnect
+and until admitted asynchronous work quiesces. App, offline upload and restore/maintenance
+entry points use the same order. Receipt recovery uses receipt ownership followed by
+the existing #348 media-key admission boundary, with bounded pages, capacity wakeups
+and explicit admin Rescan. Deletion atomically makes receipts terminal with DB removal.
+
+The Media batch pauses in place on session loss. Login opens another tab; resuming is
+explicit and restricted to the original account. No File queue is persisted. Post/About
+reconciliation performs at most one automatic bounded read after an unknown response or
+receipt-check conflict; **Check again** is manual and never replays a write. Acknowledgement
+adoption checks owner, attempt identity and exact form generation, preserving newer edits.
+Local records contain owner/resource/context, base/attempt metadata and form snapshots,
+not credentials. Logout and expiry preserve drafts. Legacy unknown-owner bytes are
+neither exposed nor deleted, including for admins; private browser-profile recovery is
+manual. Someone with access to the same browser profile can still inspect its storage.
+
+**Qualification and deployment restriction:** inherited native-binding evidence covers
+macOS arm64/APFS and native DHI Node 26.12.1/glibc amd64+arm64 on inspected ext4 bind mounts
+and Docker local named volumes (CI run 40866450527). This is not an execution claim for
+the integrated #305 product. The actual deployment mount remains unqualified and MUST
+pass the process/descriptor/PG-loss/restore matrix before deployment or enablement.
+NFS/SMB/FUSE, musl and Docker Desktop sharing are not approved. This gate is operational:
+successful lock acquisition does not identify or qualify a filesystem.
+
+**Containment/rollback:** there is no safe mixed-version online downgrade. Stop admission,
+drain or terminate all writers, retire open sessions/clients and deploy compatible
+client/server code together before authenticated reload. Keep local records and additive
+schema; reconcile by compatible roll-forward rather than treating ignored IDs as safety.
+Offline native restore clears post/page receipts and the upload table in its content
+transaction, including pages preserved by legacy v1 restore. Raw SQL/filesystem recovery
+must invalidate the same operational evidence offline before traffic resumes.
+
 ## Authorization
 
 - `requireAuth` gates all CMS/editor/upload endpoints.

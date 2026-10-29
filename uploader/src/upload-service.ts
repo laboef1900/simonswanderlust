@@ -104,7 +104,7 @@ export function createUploadService(opts: Options): UploadService {
   async function pending(r: UploadReceipt, retained: boolean, reason: UploadReceipt['reason']): Promise<void> {
     await replace(r, { reason, originalRetained: retained });
   }
-  async function accept(r: UploadReceipt, item: MediaItem, applyMetadata: boolean): Promise<void> {
+  async function accept(r: UploadReceipt, item: MediaItem, applyMetadata: boolean, duplicate = applyMetadata): Promise<void> {
     assertWritable();
     const committed = await opts.receipts.accept(r, async (client) => {
       let stored = item;
@@ -116,7 +116,7 @@ export function createUploadService(opts: Options): UploadService {
           ...(r.identity.alt ? { alt: { de: item.alt.de || r.identity.alt, en: item.alt.en || r.identity.alt } } : {}),
         }, client);
       }
-      return resultOf(r, stored, applyMetadata);
+      return resultOf(r, stored, duplicate);
     });
     if (!committed) throw new Error('Upload receipt finalization was not confirmed.');
   }
@@ -133,7 +133,8 @@ export function createUploadService(opts: Options): UploadService {
       await pending(r, true, 'queue_full');
       return false;
     }
-    await accept(r, { ...item, status: 'processing' }, false);
+    await accept(r, { ...item, status: 'processing' }, false,
+      prior?.status === 'processing' || prior?.status === 'failed' && prior.error === 'queue_full');
     return true;
   }
   async function execute(r: UploadReceipt, input: UploadInput, exif: MediaExif): Promise<void> {
@@ -165,7 +166,7 @@ export function createUploadService(opts: Options): UploadService {
           return;
         }
       }
-      if (opts.queue.isActive(r.mediaKey)) { await accept(r, item, false); return; }
+      if (opts.queue.isActive(r.mediaKey)) { await accept(r, { ...item, status: 'processing' }, false, true); return; }
       await enqueue(r, item, existing);
     });
   }
@@ -187,7 +188,7 @@ export function createUploadService(opts: Options): UploadService {
         return true;
       }
       if (evidence !== 'matching' || !item) { await pending(r, evidence === 'matching', 'recovery_required'); return false; }
-      if (opts.queue.isActive(r.mediaKey)) { await accept(r, item, false); return true; }
+      if (opts.queue.isActive(r.mediaKey)) { await accept(r, { ...item, status: 'processing' }, false); return true; }
       return enqueue(r, item, item);
     }));
   }
@@ -221,7 +222,7 @@ export function createUploadService(opts: Options): UploadService {
     running = pass;
     void pass.then(async (report) => {
       running = undefined;
-      const next = !blockedPass && (wakeup || report.accepted > 0 && report.continuationAvailable);
+      const next = !blockedPass && (wakeup || report.continuationAvailable && (report.accepted > 0 || cursor !== null));
       wakeup = false;
       if (next && !stopped && opts.isWritable() && opts.queue.availableCapacity() > 0) { await yieldTurn(); trigger(); }
     }, () => { running = undefined; wakeup = false; });
@@ -237,14 +238,23 @@ export function createUploadService(opts: Options): UploadService {
       try { assertSafeFolder(identity.folder); } catch { return { statusCode: 400, body: { error: 'invalid folder' } }; }
       const hash = digest(input.bytes);
       const key = token(input.userId, input.uploadId);
+      if (active.has(key)) {
+        const current = await opts.receipts.get(input.userId, input.uploadId);
+        if (current && (current.sha256 !== hash || !sameIdentity(current.identity, identity))) return { statusCode: 409, body: { code: 'upload_id_reused' } };
+        if (current && current.state !== 'gone' && current.generation !== input.retryGeneration) return { statusCode: 409, body: { code: 'upload_generation_changed', ...envelope(current) } };
+        if (current?.state === 'accepted') return { statusCode: 200, body: { ...current.result, ...envelope(current) } };
+        if (current?.state === 'gone') return { statusCode: 410, body: envelope(current) };
+        return { statusCode: 202, body: { ownerUserId: input.userId, uploadId: input.uploadId,
+          state: 'pending', originalRetained: current?.originalRetained ?? false } };
+      }
       return exclusive(key, async () => {
         let probe: ImageProbe | undefined;
         let r = await opts.receipts.get(input.userId, input.uploadId);
         if (r) {
           if (r.sha256 !== hash || !sameIdentity(r.identity, identity)) return { statusCode: 409, body: { code: 'upload_id_reused' } };
-          if (r.state === 'accepted') return { statusCode: 200, body: { ...r.result, ...envelope(r) } };
           if (r.state === 'gone') return { statusCode: 410, body: envelope(r) };
           if (r.generation !== input.retryGeneration) return { statusCode: 409, body: { code: 'upload_generation_changed', ...envelope(r) } };
+          if (r.state === 'accepted') return { statusCode: 200, body: { ...r.result, ...envelope(r) } };
           if (r.state === 'pending') return { statusCode: 202, body: envelope(r) };
           r = await replace(r, { state: 'pending', incarnation, claim: randomUUID(), reason: null });
         } else {
@@ -276,12 +286,13 @@ export function createUploadService(opts: Options): UploadService {
       unsubscribe = opts.queue.onCapacity(trigger);
       const first = page();
       running = first;
-      try { return await first; }
+      let report: UploadRecoveryReport | undefined;
+      try { report = await first; return report; }
       finally {
         running = undefined;
-        const next = wakeup && !blockedPass;
+        const next = !blockedPass && (wakeup || report?.continuationAvailable && (report.accepted > 0 || cursor !== null));
         wakeup = false;
-        if (next) { await yieldTurn(); trigger(); }
+        if (next && opts.queue.availableCapacity() > 0) { await yieldTurn(); trigger(); }
       }
     },
     recover,

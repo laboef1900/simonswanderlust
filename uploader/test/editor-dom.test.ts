@@ -1,3 +1,4 @@
+import { webcrypto } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -66,6 +67,7 @@ interface EditorApi {
 }
 
 
+const EDITOR_OWNER = '11111111-1111-4111-8111-111111111111';
 function loadEditor(options: EditorOptions = {}) {
   const dom = editorDocument(markup);
   let dirty = 0;
@@ -93,9 +95,17 @@ function loadEditor(options: EditorOptions = {}) {
     };
   };
   const local = storage();
-  if (options.stash) local.setItem(options.stash.key, JSON.stringify({
-    savedAt: '2026-10-01T12:00:00Z', payload: options.stash.payload,
-  }));
+  if (options.stash) {
+    const context = webcrypto.randomUUID(), recordId = webcrypto.randomUUID(), createKey = webcrypto.randomUUID();
+    const resource = 'post:' + options.stash.key.replace(/^swl:draft:/, '');
+    const key = `swl:draft:u:${EDITOR_OWNER}:${resource}:${context}:record:${recordId}`;
+    local.setItem(key, JSON.stringify({
+      version: 1, ownerUserId: EDITOR_OWNER, resource, context, recordId, generation: 1,
+      savedAt: '2026-10-01T12:00:00Z', payload: options.stash.payload,
+      recovery: { version: 1, expectedOwnerId: EDITOR_OWNER, kind: 'posts', resource: resource.slice(5), createKey,
+        baseUpdatedAt: null, attempts: [] },
+    }));
+  }
   class EasyMDE {
     private text = '';
     private readonly changes: (() => void)[] = [];
@@ -174,9 +184,21 @@ function loadEditor(options: EditorOptions = {}) {
     history: { replaceState() {} },
     sessionStorage: storage(),
     localStorage: local,
-    fetch: (url: string, init: RequestInit = {}) => {
+    fetch: async (url: string, init: RequestInit = {}) => {
       requests.push({ url: String(url), options: init });
-      return options.fetch?.(String(url), init) ?? Promise.reject(new Error('no network in test'));
+      const reply = await (options.fetch?.(String(url), init) ?? Promise.reject(new Error('no network in test')));
+      // Existing feature fixtures speak the current receipt protocol. Dedicated
+      // write-recovery cases exercise malformed/foreign acknowledgements unchanged.
+      if (reply.ok && (url === '/posts' || /^\/posts\/[^/]+$/.test(url))) {
+        const body: unknown = await reply.clone().json();
+        if (body && typeof body === 'object' && 'de' in body && 'en' in body) {
+          const sent = init.body ? JSON.parse(String(init.body)) : null;
+          return response({ ownerUserId: EDITOR_OWNER, lastSaveId: null, updatedAt: '2026-10-01T00:00:00.000Z',
+            ...body, ...(sent ? { saveId: sent.saveId } : {}),
+            ...(init.method === 'POST' ? { translationKey: sent.translationKey } : {}) }, reply.status);
+        }
+      }
+      return reply;
     },
     setTimeout: () => 0,
     clearTimeout() {},
@@ -187,6 +209,7 @@ function loadEditor(options: EditorOptions = {}) {
     URL,
     AbortController,
     structuredClone,
+    crypto: webcrypto,
     Event: EditorEvent,
     KeyboardEvent: EditorEvent,
     console,
@@ -201,7 +224,7 @@ function loadEditor(options: EditorOptions = {}) {
         editors.push(this);
       }
     },
-    Auth: { ensureAuthed: async () => options.isAdmin === undefined ? null : { isAdmin: options.isAdmin }, renderHeader() {} },
+    Auth: { ensureAuthed: async () => options.isAdmin === undefined ? null : { userId: EDITOR_OWNER, isAdmin: options.isAdmin }, renderHeader() {} },
     AdminConfirm: { ask: async () => options.confirm === true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     MediaPicker: { open(settings: PickerSettings) {
       // A gallery picker is kept for the test to drive; a single-photo picker
@@ -246,6 +269,7 @@ function loadEditor(options: EditorOptions = {}) {
   vm.runInContext(readFileSync('public/language.js', 'utf8'), ctx, { filename: 'language.js' });
   vm.runInContext('SiteLanguage.accept(languageFixture)', ctx);
   vm.runInContext(readFileSync('public/draft-guard.js', 'utf8'), ctx, { filename: 'draft-guard.js' });
+  vm.runInContext(readFileSync('public/write-recovery.js', 'utf8'), ctx, { filename: 'write-recovery.js' });
   const safety = ctx.DraftGuard as {
     createDraftGuard(options: { storageKey: string; collect: () => unknown; onChange?: (dirty: boolean) => void }): {
       markDirty(): void; redirectToLogin(): void;
@@ -266,7 +290,7 @@ function loadEditor(options: EditorOptions = {}) {
   if (options.review) (ctx.LLM as { reviewStory: Review }).reviewStory = options.review;
   vm.runInContext(script, ctx);
   // Unit cases bypass authentication deliberately; give them the loaded configuration.
-  if (options.isAdmin === undefined) vm.runInContext('language = SiteLanguage.config(); loadBlocked = false', ctx);
+  if (options.isAdmin === undefined) vm.runInContext(`language = SiteLanguage.config(); loadBlocked = false; writeRecovery.initialize('${EDITOR_OWNER}')`, ctx);
   const api = vm.runInContext('({ populateForm, buildPayload, loadPost, doSaveDraft, renderAltAudit })', ctx) as EditorApi;
   return {
     api, el, editors, created: dom.created, document: dom.document, requests, local, galleryPickers,
@@ -392,6 +416,9 @@ describe('complete bilingual conflict reload', () => {
       de: { ...stored.de, title: 'New DE', bodyMarkdown: 'New German body' },
       en: { ...stored.en, title: 'New EN must survive', bodyMarkdown: 'New English body must survive' } };
     expect(await h.api.doSaveDraft()).toBe(false); // conflict then explicit Reload
+    const useStored = h.document.querySelector('.write-recovery details button')!;
+    useStored.click();
+    await settle();
     expect(h.api.buildPayload().updatedAt).toBe(stored.updatedAt);
     expect(h.el('enTitle').value).toBe(stored.en.title);
     expect(await h.api.doSaveDraft()).toBe(true);
@@ -419,6 +446,8 @@ describe('complete bilingual conflict reload', () => {
       return result;
     };
     expect(await h.api.doSaveDraft()).toBe(false);
+    h.document.querySelector('.write-recovery details button')!.click();
+    await settle();
     expect(h.api.buildPayload().updatedAt).toBe(local.updatedAt);
     expect(h.el('actionError').textContent).toBe(ui.en['editor.chrome.reloadFailed']);
     expect(h.requests.filter((request) => request.options.method === 'PUT')).toHaveLength(1);
@@ -2103,7 +2132,7 @@ describe('manuscript-first editor refinements', () => {
     await settle();
     expect(h.el('deTitle').value).toBe('Recovered local title');
     expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveUnsaved']);
-    expect(h.local.getItem('swl:draft:tk1')).not.toBeNull();
+    expect(Array.from({ length: h.local.length }, (_, i) => h.local.key(i)).some(key => key?.startsWith(`swl:draft:u:${EDITOR_OWNER}:post:tk1:`))).toBe(true);
   });
 });
 

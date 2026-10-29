@@ -39,7 +39,6 @@
       if (ended) return;
       ended = true;
       active.delete(attempt);
-      root.removeEventListener('focus', observe);
       controls.remove(); note.remove(); button.disabled = false;
       finish(result);
     }
@@ -62,11 +61,6 @@
         check.textContent = item.state === 'retryable' ? copy.uploadRetry : copy.uploadCheckAgain;
       }
     }
-    async function observe() {
-      try { recovery.observeOwner((await client.me()).userId); }
-      catch (error) { if (error.status === 401) recovery.observeOwner(null); }
-    }
-    root.addEventListener('focus', observe);
     check.addEventListener('click', async () => {
       if (checkingOwner) return;
       checkingOwner = true; check.disabled = true;

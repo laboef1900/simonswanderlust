@@ -1,3 +1,4 @@
+import { webcrypto } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -156,11 +157,13 @@ async function about(primary: Locale, prepareLocale?: Locale, route?: (url: stri
     return element;
   };
   const page = {
+    key: 'about',
     updatedAt: stamp,
     de: { locale: 'de', title: 'Aktiver Inhalt', bodyMarkdown: 'Deutscher Text', images: {} },
     en: { locale: 'en', title: 'Existing heading', bodyMarkdown: 'English text', images: {} },
   };
   const requests: { url: string; init: RequestInit }[] = [];
+  const owner = '11111111-1111-4111-8111-111111111111';
   const cleaned: unknown[] = [];
   class EasyMDE {
     private text = '';
@@ -168,27 +171,37 @@ async function about(primary: Locale, prepareLocale?: Locale, route?: (url: stri
     value(value?: string) { if (value !== undefined) this.text = value; return this.text; }
   }
   const context: Record<string, unknown> = {
-    document: dom.document, URLSearchParams, EasyMDE,
-    location: { origin: 'https://journal.test', search: prepareLocale ? '?prepareLocale=' + prepareLocale : '' },
-    Auth: { ensureAuthed: async () => ({ isAdmin: true }), renderHeader() {} },
+    document: dom.document, URLSearchParams, EasyMDE, crypto: webcrypto, structuredClone, AbortController,
+    setTimeout: () => 0, clearTimeout() {}, addEventListener: dom.document.addEventListener,
+    location: { origin: 'https://journal.test', pathname: '/admin/about.html', search: prepareLocale ? '?prepareLocale=' + prepareLocale : '' },
+    Auth: { ensureAuthed: async () => ({ userId: owner, isAdmin: true }), renderHeader() {} },
     AdminConfirm: { ask: async () => true },
     DraftGuard: { createDraftGuard: () => ({
+      initialize: () => true, stashNow() {}, isDirty: () => false, freshContext() {},
       markDirty() {}, snapshot: () => ({ title: el(primary + 'Title').value }), markClean: (snap: unknown) => cleaned.push(snap), tryRestore: () => null,
     }) },
     fetch: async (url: string, init: RequestInit = {}) => {
       requests.push({ url, init });
-      if (route && url !== '/language') return route(url, init);
-      if (url === '/language') return response(state(primary, [primary]));
-      if (url.endsWith('/revisions')) return response([]);
-      if (init.method === 'PUT') return response({ saved: { updatedAt: '2026-10-28T00:00:00.000Z' }, build: { ok: true } });
-      return response(page);
+      let result;
+      if (route && url !== '/language') result = await route(url, init);
+      else if (url === '/language') result = response(state(primary, [primary]));
+      else if (url.endsWith('/revisions')) result = response([]);
+      else if (init.method === 'PUT') result = response({ saved: { ...page, updatedAt: '2026-10-28T00:00:00.000Z' }, build: { ok: true } });
+      else result = response(page);
+      if (result.ok && url === '/pages/about') {
+        const body = await result.json() as Record<string, unknown>;
+        const sent = init.body ? JSON.parse(String(init.body)) : null;
+        return response({ ownerUserId: owner, lastSaveId: null, key: 'about', ...body,
+          ...(sent ? { saveId: sent.saveId, saved: { ...page, ...sent, ...(body.saved as object) } } : {}) }, result.status);
+      }
+      return result;
     },
   };
   context.window = context;
   context.EditorCopy = editorCopy;
   context.BuildCopy = buildCopy;
   vm.createContext(context);
-  for (const file of ['build-reporting.js', 'language.js', 'tabs.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
+  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'write-recovery.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
   const start = html.lastIndexOf('<script>') + '<script>'.length;
   vm.runInContext(html.slice(start, html.lastIndexOf('</script>')), context);
   await settle();
@@ -209,6 +222,7 @@ describe('About inactive translation preparation', () => {
     const payload = JSON.parse(String(request.init.body));
     expect(payload).toEqual({
       updatedAt: stamp, prepareLocale: secondary,
+      expectedOwnerId: expect.any(String), saveId: expect.any(String),
       [secondary]: { ...h.page[secondary], title: 'Prepared title' },
     });
     expect(payload[primary]).toBeUndefined();
@@ -224,7 +238,7 @@ describe('About inactive translation preparation', () => {
     h.el('saveBtn').click();
     await settle();
     const payload = JSON.parse(String(h.requests.find(({ init }) => init.method === 'PUT')!.init.body));
-    expect(payload).toEqual({ updatedAt: stamp, [primary]: h.page[primary] });
+    expect(payload).toEqual({ updatedAt: stamp, [primary]: h.page[primary], expectedOwnerId: expect.any(String), saveId: expect.any(String) });
     expect(h.el('actionStatus').textContent).toContain('Saved in the CMS');
     expect(h.el('actionStatus').textContent).toContain('Live release status is unavailable');
     expect(h.el('actionStatus').textContent).not.toContain('Live:');

@@ -1,3 +1,4 @@
+import { injectAuthoring } from './authoring-request.js';
 import { idleBuildState } from './build-fixture.js';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
@@ -56,6 +57,7 @@ function stubBackup(): DbBackup {
 
 const queue: EncodeQueue = {
   withAdmission: (_key, operation) => operation(),
+  availableCapacity: () => 0, onCapacity: () => () => {},
   enqueue: () => { throw new BacklogFullError(); },
   isActive: () => false,
   recover: async () => 0,
@@ -162,7 +164,7 @@ describe('per-post comments flag via the editor payload (#207)', () => {
   it('an author can save shared.commentsEnabled:false and it persists, without a build', async () => {
     const b = build();
     const cookie = await b.authed(false);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, headers: json, payload: draft(false) });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, headers: json, payload: draft(false) });
     expect(created.statusCode).toBe(200);
     const tk = created.json().translationKey as string;
     expect((await b.posts.get(tk))?.shared.commentsEnabled).toBe(false);
@@ -170,7 +172,7 @@ describe('per-post comments flag via the editor payload (#207)', () => {
     expect(loaded.json().shared.commentsEnabled).toBe(false);
 
     // Re-ticking it is an ordinary draft save, same as any other shared field.
-    const reopened = await b.app.inject({ method: 'PUT', url: `/posts/${tk}`, cookies: cookie, headers: json, payload: { ...draft(true), translationKey: tk, updatedAt: loaded.json().updatedAt } });
+    const reopened = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, cookies: cookie, headers: json, payload: { ...draft(true), translationKey: tk, updatedAt: loaded.json().updatedAt } });
     expect(reopened.statusCode).toBe(200);
     expect((await b.posts.get(tk))?.shared.commentsEnabled).toBe(true);
     expect(b.buildCalls).toEqual([]);
@@ -179,7 +181,7 @@ describe('per-post comments flag via the editor payload (#207)', () => {
   it('a payload without the field (old editor / old row) defaults to enabled', async () => {
     const b = build();
     const cookie = await b.authed(true);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, headers: json, payload: draft() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, headers: json, payload: draft() });
     expect(created.statusCode).toBe(200);
     expect((await b.posts.get(created.json().translationKey))?.shared.commentsEnabled).not.toBe(false);
   });

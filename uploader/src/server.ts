@@ -262,7 +262,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const route = req.routeOptions.url;
     if (route === '/language' || route === '/auth/me' || route === '/onboarding' || route === '/settings' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
       || route === '/posts/:tk/publish' || route === '/posts/bulk' || route === '/posts' || route === '/posts/:tk'
-      || route === '/pages/:key' || route === '/upload' || route === '/upload/receipts/:uploadId' || route === '/media/lookup') reply.header('Cache-Control', 'no-store');
+      || route === '/pages/:key' || route === '/upload' || route === '/upload/receipts/:uploadId' || route === '/media/lookup'
+      || route === '/media/folders') reply.header('Cache-Control', 'no-store');
     if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
       reply.header('Referrer-Policy', 'no-referrer');
@@ -585,7 +586,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   });
 
   app.get('/media/folders', { preHandler: requireAuth }, async (_req, reply) =>
-    reply.send(await cfg.media.folders()));
+    reply.header('Cache-Control', 'no-store').send(await cfg.media.folders()));
 
   app.post('/media/folders', { preHandler: requireAuth }, async (req, reply) => {
     const b = (req.body ?? {}) as { path?: unknown };

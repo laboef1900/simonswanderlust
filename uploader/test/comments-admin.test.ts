@@ -29,6 +29,7 @@ function fakeSettings(): SettingsStore {
 
 const queue: EncodeQueue = {
   withAdmission: (_key, operation) => operation(),
+  availableCapacity: () => 100, onCapacity: () => () => {},
   enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {}, idle: async () => {},
   quiesce: async () => {},
   stats: () => ({ pending: 0, running: 0 }),

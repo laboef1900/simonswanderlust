@@ -542,6 +542,7 @@
       let excerptAssist = null;
       let reviewIsAdmin = false;
       let pendingSaves = 0;
+      let confirmingSave = false;
       let writeRecovery = null;
       let populatingBody = false;
       const deImages = {};        // src → {width, height}
@@ -647,9 +648,13 @@
           setStatus('');
         },
         useStored: async (body) => {
-          currentTk = body.translationKey;
+          await loadPost(body.translationKey, body);
+          if (loadBlocked || !writeRecovery.canAdopt(body.ownerUserId)) throw new Error(editorCopy.reloadFailed);
           guard.setResource('post:' + currentTk);
-          await loadPost(currentTk);
+          gpxEditor.noteCreated(currentTk);
+          const url = new URL(location.href);
+          url.searchParams.set('tk', currentTk);
+          history.replaceState(null, '', url.toString());
           guard.markClean();
         },
       });
@@ -1761,7 +1766,7 @@
       // Persists the current on-screen form. Returns true on success so Publish
       // can save first and validate exactly what's on screen.
       async function doSaveDraft({ gpxAttach = false } = {}) {
-        if (pendingSaves) return false;
+        if (pendingSaves || confirmingSave) return false;
         if (loadBlocked) {
           showErr(editorCopy.reloadFailed);
           return false;
@@ -1779,12 +1784,16 @@
           const lines = renamed.map((l) => SiteLanguage.names[l] + ': '
             + SiteLanguage.publicPath(language, l, 'story', loadedSlugs[l]) + ' → '
             + SiteLanguage.publicPath(language, l, 'story', payload[l].slug));
-          const ok = await AdminConfirm.ask({
-            title: 'Change this post’s URL?',
-            body: 'This save changes the post\'s URL:\n\n' + lines.join('\n') + '\n\nIf the old slug is a live WordPress URL, links and search rankings break.',
-            confirmLabel: 'Change URL',
-            danger: true,
-          });
+          confirmingSave = true;
+          let ok;
+          try {
+            ok = await AdminConfirm.ask({
+              title: 'Change this post’s URL?',
+              body: 'This save changes the post\'s URL:\n\n' + lines.join('\n') + '\n\nIf the old slug is a live WordPress URL, links and search rankings break.',
+              confirmLabel: 'Change URL',
+              danger: true,
+            });
+          } finally { confirmingSave = false; }
           if (!ok) {
             setStatus('');
             showErr('Not saved — the slug change was cancelled. Set the slug back to keep the URL.');
@@ -2034,19 +2043,22 @@
 
       // Returns false only when it redirected to /login (callers must stop);
       // true otherwise — even on a failed load, so a local stash can still be offered.
-      async function loadPost(tk) {
+      async function loadPost(tk, snapshot) {
         loadBlocked = true;
         setStatus('Loading…');
         let post;
         try {
-          const res = await fetch('/posts/' + encodeURIComponent(tk));
-          if (res.status === 401) { guard.redirectToLogin(); return false; }
-          if (!res.ok) {
-            showErr('Could not load post: ' + res.status);
-            setStatus('');
-            return true;
+          if (snapshot) post = snapshot;
+          else {
+            const res = await fetch('/posts/' + encodeURIComponent(tk));
+            if (res.status === 401) { guard.redirectToLogin(); return false; }
+            if (!res.ok) {
+              showErr('Could not load post: ' + res.status);
+              setStatus('');
+              return true;
+            }
+            post = await res.json();
           }
-          post = await res.json();
           if (!writeRecovery.canAdopt(post.ownerUserId)) {
             writeRecovery.observeOwner(post.ownerUserId);
             showErr(editorCopy.writeOwnerChanged);

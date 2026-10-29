@@ -88,6 +88,7 @@
       let editableLocales = [];
       let writeRecovery = null;
       let loadBlocked = true;
+      let confirmingSave = false;
 
       // EasyMDE's built-in autosave stays disabled — DraftGuard below stashes the
       // full form (both locales) instead.
@@ -120,6 +121,7 @@
           else setStatus(BuildReporting.text('unknown'));
         },
         useStored: async (saved) => {
+          loadBlocked = true;
           fill('de', saved.de); fill('en', saved.en);
           loadedUpdatedAt = saved.updatedAt;
           loadBlocked = false;
@@ -177,14 +179,18 @@
       }
 
       $('saveBtn').addEventListener('click', async () => {
-        if (!language || loadBlocked || $('saveBtn').disabled) return;
-        const ok = await AdminConfirm.ask({
-          title: prepareLocale ? SiteLanguage.text('PrepTitle') : 'Publish the About page?',
-          body: prepareLocale
-            ? SiteLanguage.text('PrepConfirm', { language: SiteLanguage.names[prepareLocale] })
-            : 'The About page is saved, then the public journal rebuilds. This can take several minutes. Live pages stay unchanged until the rebuild finishes.',
-          confirmLabel: prepareLocale ? SiteLanguage.text('PrepSave') : 'Publish',
-        });
+        if (!language || loadBlocked || confirmingSave || $('saveBtn').disabled) return;
+        confirmingSave = true;
+        let ok;
+        try {
+          ok = await AdminConfirm.ask({
+            title: prepareLocale ? SiteLanguage.text('PrepTitle') : 'Publish the About page?',
+            body: prepareLocale
+              ? SiteLanguage.text('PrepConfirm', { language: SiteLanguage.names[prepareLocale] })
+              : 'The About page is saved, then the public journal rebuilds. This can take several minutes. Live pages stay unchanged until the rebuild finishes.',
+            confirmLabel: prepareLocale ? SiteLanguage.text('PrepSave') : 'Publish',
+          });
+        } finally { confirmingSave = false; }
         if (!ok) return;
         showErr(''); setStatus('Publishing…');
         const snap = guard.snapshot();
