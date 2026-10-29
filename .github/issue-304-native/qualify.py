@@ -181,6 +181,17 @@ def interrupted(signum, frame):
 
 signal.signal(signal.SIGTERM, interrupted)
 signal.signal(signal.SIGINT, interrupted)
+def excludes_elf(entry):
+    """Allow bytecode handlers only when their exact prefix cannot match ELF."""
+    fields = dict(line.split(' ', 1) for line in entry.splitlines() if ' ' in line)
+    magic = fields.get('magic', '').lower()
+    mask = fields.get('mask', 'ff' * (len(magic) // 2)).lower()
+    return (fields.get('offset') == '0'
+            and re.fullmatch(r'(?:[0-9a-f]{2}){4,}', magic) is not None
+            and re.fullmatch(r'(?:[0-9a-f]{2}){4,}', mask) is not None
+            and mask[:8] == 'ffffffff' and magic[:8] != '7f454c46')
+
+
 try:
     assert platform.system() == 'Linux'
     assert platform.machine() == {'amd64': 'x86_64', 'arm64': 'aarch64'}[arch]
@@ -192,7 +203,12 @@ try:
     entries = {p.name: p.read_text() for p in binfmt.iterdir() if p.name not in ('register', 'status')} if binfmt.exists() else {}
     stage = 'host-binfmt'
     provenance['enabledBinfmtNames'] = [name for name, value in entries.items() if 'enabled' in value]
-    assert not any('enabled' in v for v in entries.values())
+    # Standard runners register Python/LLVM bytecode. They cannot intercept
+    # native ELF binaries; reject ELF-capable and unclassified handlers.
+    provenance['binfmtAdmission'] = {
+        name: {'entry': value, 'excludesElf': excludes_elf(value)}
+        for name, value in entries.items() if 'enabled' in value}
+    assert all(value['excludesElf'] for value in provenance['binfmtAdmission'].values())
     context = json.loads(docker('context', 'inspect').stdout)[0]
     assert context['Endpoints']['docker']['Host'] == 'unix:///var/run/docker.sock'
     info = json.loads(docker('info', '--format', '{{json .}}').stdout)
