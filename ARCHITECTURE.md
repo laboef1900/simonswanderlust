@@ -517,8 +517,14 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   are recorded and logged, never crash the app.
 - **Images archive safety (#113,
   [spec](docs/superpowers/specs/2026-09-05-images-archive-safety-design.md))** — the incremental
-  `images-*.tar` is streamed to a `.<pid>.tmp` that is unlinked on any failure, including the
-  process exiting mid-stream; stale temps from a SIGKILL are swept at boot and before each run.
+  `images-*.tar` is streamed to a `.<pid>.tmp`. Since [#430](docs/superpowers/specs/2026-10-28-image-archive-stream-settlement-design.md),
+  the owned pack/destination pipeline waits for pending destination open, writes and close before
+  unlinking failed output or atomically activating a successful archive. The original error survives
+  cleanup; an unlink failure is logged for the next sweep. Exit cleanup remains best-effort; stale
+  temps from SIGKILL are swept at boot and before each run. Backup quiescence waits for writer
+  settlement, and cancellation prevents activation/cutoff advancement. Private tar input jobs can
+  still finish read-only work after pack destruction, but cannot write the closed destination.
+  Recovery is a new attempt after settlement, **not deleting prior archives**.
   The archive refuses (recorded as `lastError`, cutoff unchanged) when its estimated size plus the
   same 2 GiB reserve `/upload` keeps would not fit. Since [#335](docs/superpowers/specs/2026-10-25-image-archive-publication-boundary-design.md),
   selection includes content mtime **or publication ctime**, excluding atomic-write `.part-*`
@@ -540,9 +546,18 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   `GET /backups/:name` is `no-store`, accepts only strict dump/archive basenames and opens
   regular, single-link files without following symlinks.
 - **Restore is CLI-only** (destructive, so no web button):
-  Stop the app and wait for its work and database sessions to drain; keep Postgres running.
-  Then run the same configured image/volumes without starting the app service:
-  `docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore [--yes] /data/backup/db/<file>`.
+  Confirm the intended image, database and `/data` bind path privately (do not publish secrets
+  from Compose configuration). Retain the input dump and its manifest-paired private archive.
+  Stop **every** app instance and maintenance writer sharing that database/storage; wait for
+  process exit and database sessions to drain. Keep Postgres running. With the actual dump
+  basename substituted, use the same configured image/volumes without service ports:
+
+  ```sh
+  docker compose stop app
+  docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore /data/backup/db/db-YYYYMMDD-HHmmss.json.gz
+  ```
+
+  Do not add `--service-ports`; keep ingress closed for a fresh or unsafe recovery target.
   A running app holds the ownership lease, so `docker compose exec app … restore` is refused.
   Outside Docker, stop the configured app process and run `node --import tsx src/cli.ts restore <file>`
   with the same database/storage settings. Do not run other maintenance writers concurrently.
@@ -551,16 +566,21 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   an unsupported dump `version`; prints the target database (`host:port/dbname`, never the
   credentials), the dump's `createdAt` and per-table counts, and the **live** per-table counts
   about to be replaced; then asks for the literal line `yes` — `--yes` skips the prompt for
-  scripted use, and EOF/anything else aborts with nothing changed. It then writes a
+  scripted use, and EOF/anything else aborts with nothing changed. `--yes` bypasses neither
+  exclusive ownership nor source validation nor the verified undo backup. Never kill database
+  sessions or disable fencing to force admission. The CLI then writes a
   **pre-restore recovery set** of the current state into `BACKUP_DIR/db/`, verifies that
   set, and aborts if it cannot be safely restored. A v10 input is fully validated against its
   paired archive before database replacement. Originals stage under fresh identities, then
   database replacement commits in one transaction. Missing/corrupt/degraded originals are
   reported rather than silently reconstructed. Lost COMMIT acknowledgement retains both
   source sets; do not manually delete them while the outcome is unresolved.
-  Deleting users invalidates every login. Start the app again only after the CLI exits;
-  then sign in and explicitly rebuild the site. The prior static release remains unchanged
-  until that rebuild. The CLI prints the verified undo dump path.
+  Deleting users invalidates every login. Only after successful CLI exit and inspection of
+  the result, run `docker compose up -d app`; reconcile settings.json and the matching master
+  key before remote AI use, then sign in and explicitly rebuild the site through Settings.
+  The prior static release remains unchanged until that rebuild. The CLI prints the verified
+  undo dump path. On failure or ambiguous completion leave the app stopped, retain input,
+  undo and staged recovery sets, and investigate; do not blindly retry or erase recovery files.
 - **Storage lease loss:** `/health` returns 503 with `storageWritable: false`; mutations
   return `storage_read_only`. Static pages/images remain available. Confirm Postgres is
   healthy and no restore is running, then restart the same app configuration
@@ -605,6 +625,14 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   `/data/images` written or published since the previous filesystem boundary are tarred into
   `/data/backup/db/images-<YYYYMMDD-HHmmss>.tar` (mtime/ctime-incremental; when nothing qualifies,
   no file is written). Archives are **never pruned** — each can hold a unique slice of the library.
+  They contain public variants **and private full-resolution originals**, which may retain
+  EXIF/GPS and other source metadata. Treat image archives as sensitive recovery material,
+  like database dumps; downloads remain admin-only. Deleting a photo from the media library
+  does **not** purge earlier archives or their offsite copies. The read-only
+  [`audit-exif` command](SECURITY.md#published-image-metadata-allow-list) audits public variants,
+  not private originals or historical archives: a clean result does not certify those copies
+  GPS-free and does not erase anything. Private GPX originals are stored in separate companion
+  route archives referenced by v10 dump manifests, not part of these image tars.
   Metadata changes and conservative full recovery can repeat files and increase backup space; the offsite host-level backup
   above remains the real DR protection. To rebuild the images dir from archives, untar them
   **oldest-first** into an empty `images/` (later duplicates simply overwrite earlier ones).
@@ -631,21 +659,39 @@ docker exec -i blog-db-1 psql -U images -d images < pg-upgrade-dump.sql
 docker compose up -d
 ```
 
-**App-native alternative** (JSON backup instead of `pg_dump`/`psql`): while **still on the OLD
-version**, take a fresh dump first (admin Settings → **Back up now**, or `POST /backups` —
-`backupSchedule` defaults to `off`, so don't assume one exists) and confirm the file is present
-under `/data/backup/db` **before** running `docker compose down` / `docker volume rm`. After
-`docker compose up -d` on the new major, the app's boot-time `ensureSchema` recreates all tables
-on the fresh cluster, so that `/data/backup/db/db-*.json.gz` dump (see
-[Database backups](#database-backups)) can be restored with the shell-less exec-form CLI:
-`docker compose exec app node --import tsx src/cli.ts restore /data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`.
-Note the database has **zero users** until the restore completes, which re-opens first-run
-`POST /setup` to anyone who can reach port 3000 — run the restore immediately after the app is
-healthy, or keep the port unreachable (reverse proxy off / firewall) during the window.
-The restore covers `users`, `posts`, and `pages` only — sessions are disposable and app settings
-live on disk under `/data`, but every login is invalidated, so log in again and trigger a rebuild
-(`/admin/settings.html` → **Rebuild site now**, or `POST /rebuild`). Prefer the `pg_dump`/`psql`
-path above as primary — it captures the whole database with full fidelity.
+**App-native alternative** (JSON backup instead of `pg_dump`/`psql`):
+
+1. While **still on the OLD version**, take and verify a fresh dump (admin Settings →
+   **Back up now**, or `POST /backups`; `backupSchedule` defaults to `off`). Retain its paired
+   private route archive, image recovery material, settings.json and separate master-key escrow.
+   Confirm the target app supports the dump version. A file merely existing is not verification.
+   Preserve the old cluster while preparing an isolated new target; this alternative does not
+   authorize deletion of the old volume or an in-place major upgrade.
+2. Keep **all ingress blocked** on the new target for the entire zero-user window: an empty
+   database reopens `POST /setup`. Boot the configured app once against the new Postgres so
+   `ensureSchema` creates the tables. Health alone does not prove schema/content recovery;
+   the restore CLI itself does not initialize tables, and needs them for counts and its undo set.
+3. Stop the app, wait for exit and drained sessions, and leave the new Postgres running.
+   Follow the [offline restore procedure](#database-dumps), using the actual dump basename:
+
+   ```sh
+   docker compose stop app
+   docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore /data/backup/db/db-YYYYMMDD-HHmmss.json.gz
+   ```
+
+   Inspect the credential-free target and row counts before typing literal `yes`. The same
+   exclusive-owner, source validation and verified pre-restore backup safeguards apply.
+4. Only after confirmed success, run `docker compose up -d app`, reconcile settings/key escrow,
+   sign in again and explicitly rebuild (**Settings → Rebuild site now**, or `POST /rebuild`).
+   Verify restored content before reopening ingress. On failure keep the app stopped and
+   preserve recovery evidence.
+
+Current v10 dumps cover `users`, `posts`, `pages`, `media`, `media_folders`, `app_secrets`,
+`comments` and `post_routes`, plus manifest-paired private originals. See
+[Database dumps](#database-dumps) for version-specific absent-field behavior: old dumps are
+not equivalent to v10. `settings.json` is external; sessions are never restored and every
+login is invalidated. Prefer the `pg_dump`/`psql` path above as primary for full database
+fidelity; neither database format replaces image/private-file recovery or settings/key escrow.
 
 ## Packaging & release pipeline
 
@@ -676,6 +722,15 @@ warns about.
 On the server: pull the GHCR image directly (no `dhi.io` login needed there — that's CI-only), set
 `IMAGE_TAG` in `.env`, then `docker compose pull && docker compose up -d`. Cutting a release = bump
 the `IMAGE_TAG` defaults (`docker-compose.yml`, `uploader/.env.example`), commit, tag, push the tag.
+
+**Native codec updates (#347):** record the current image digest before an owner-controlled
+upgrade, then release and deploy a newly built image; changing `package-lock.json` or running
+Rebuild site does not replace loaded codecs. The verified sharp 0.35.5 candidate uses libheif
+1.23.5, librsvg 2.63.2 and libvips 8.18.7 in both trees on both supported Linux architectures.
+The previous digest is diagnostic/recovery evidence, **not** authorization to restore vulnerable
+codecs: #347 recovery is roll-forward only. No schema/data migration or re-encoding is required;
+the existing originals, variants and static releases remain intact. Release/deployment is a
+separate owner action, not part of the dependency PR.
 
 ## Configuration (environment)
 

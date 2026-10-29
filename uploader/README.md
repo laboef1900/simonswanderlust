@@ -486,8 +486,9 @@ deploying: rollback is the older image + that dump + the `.pre-ai-registry` copy
 **Recovery:** v6 and later DB dumps include encrypted secrets, not the master key or settings.json.
 Escrow the master key separately offsite and keep historical keys for historical dumps.
 Absent secrets in legacy v1–v5 preserve live rows; an empty v6-or-later array intentionally clears
-them. Restore is still CLI-only, confirmed, with a pre-restore undo dump. Pause AI/settings
-edits during restore and reconcile the providers in settings.json before resuming; a restored
+them. Follow the [offline restore procedure](../ARCHITECTURE.md#database-dumps): stop every app
+and maintenance writer, confirm the CLI's target/counts, and retain its verified undo set.
+Reconcile the providers in settings.json before restarting remote use; a restored
 pre-registry `ai_api_key` row is never read — re-enter keys per provider.
 
 To rotate a provider key, replace it in that provider's form then revoke the old one externally.
