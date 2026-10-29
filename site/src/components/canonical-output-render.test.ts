@@ -69,7 +69,7 @@ for (const language of modes) {
         expect(structured.mainEntityOfPage).toBe(origin + path);
         expect(structured.image.url).toBe('https://images.example/photo-1600.webp');
         expect(document.querySelector('meta[property="og:image"]')?.getAttribute('content')).toBe(structured.image.url);
-        const response = await feed({ site: new URL(origin), props: { locale } });
+        const response = await feed({ site: new URL(origin), currentLocale: locale });
         const xml = documentOf(await response.text(), true);
         expect(xml.querySelector('channel > link')?.textContent).toBe(origin + homePath(locale));
         expect(xml.querySelector('item > link')?.textContent).toBe(origin + path);
