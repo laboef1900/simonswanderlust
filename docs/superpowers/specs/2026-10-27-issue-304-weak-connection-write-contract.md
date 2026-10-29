@@ -1039,11 +1039,37 @@ npx astro check
 npm run build
 ```
 
-`build:native` uses the owned qualified C/recipe and pinned Node 26.12.1 headers; CI builds
-the binding before uploader tests. The production Dockerfile builds it in a separate DHI
-stage and copies only the artifact/provenance/license into the runtime. Qualification
-workers/helpers are not shipped as runtime lock owners. Preserve the native proof source
-and canonical qualification artifacts when evaluating the cutover.
+`build:native` uses `.github/native-owner/` and pinned Node 26.12.1 headers; CI builds
+the binding before uploader tests. The qualified `owned-flock.c`, `build-native.mjs`
+and `container-toolchain.mjs` were moved byte-for-byte from the temporary #304 packet.
+Their SHA-256 identities are respectively:
+
+- `ac6ee84b387ff60b2d28f6dc8260f358f338eade17eaec207f27c05805d1ab47`
+- `ee5a282642f000e07d02f2848c3a73fde07902ef7b9c13876f95399f88f5014c`
+- `ecff9a333a190a33c2e06c2b72d8e7f7d40360eafde20d5a1b4876c976b9a77b`
+
+Their historical qualification comments and `/proof` scratch path remain intentionally
+unchanged. The production Dockerfile retains the qualified DHI index digests and Debian
+snapshot, builds in a separate stage, and copies only the native artifact, ABI/build record,
+header/license provenance and license into the runtime. It removes the uploader native
+build driver and test tree before copying the uploader runtime.
+
+The temporary #304 workflow, frozen-source harness, proof workers, image inventory and
+diagnostic-export helpers have been removed from active source. Canonical private
+qualification artifacts and historical PR #470 remain unchanged. Necessary descriptor
+boundary/lifetime coverage now lives in `data-owner.integration.test.ts`: invalid arity,
+types/ranges, closed/non-file descriptors, live and stopped contention, clean close,
+SIGKILL, stable inode, ordinary-child noninheritance, explicit-inheritance last-close
+negative control and cleanup after PG admission refusal. Existing real PG-loss and
+main/offline-restore drain tests remain in the product suites. Forced ENOLCK and a
+deliberately non-CLOEXEC rejection probe remain unexercised, as in the inherited record.
+
+Permanent `owned flock · native amd64` and `owned flock · native arm64` jobs in `ci.yml`
+use the current checkout, standard public native Ubuntu runners and their own disposable
+Postgres service. They retain the public/same-repository guard, require no DHI credentials,
+and upload no fixtures/logs/artifacts. Existing required uploader/site job names remain
+unchanged. Host-runner results cannot qualify the packaged DHI runtime or a deployment
+mount; production-image integration below remains a separate parent-owned gate.
 
 The combined parent wave must additionally exercise:
 
@@ -1075,3 +1101,38 @@ source changes, tests being present, or a green combined CI run. Containment and
 documented in `SECURITY.md` and `ARCHITECTURE.md`: stop writers first, keep backups and receipt
 evidence, never delete the stable lock inode, and do not roll back only one side of this
 fail-closed client/server protocol.
+
+## #306 source implementation handoff
+
+The #306 branch extends the frozen #305 implementation, rather than introducing another
+draft or receipt convention. These are source notes, **not verification or deployment proof**.
+
+- DraftGuard keeps immutable owner/resource/context/record storage; all recovery entry points
+  are inert before owner initialization. Logout never offers deletion. Unknown-owner legacy
+  bytes remain private, unchanged and unavailable to admins. The workflow and security guide
+  describe private author/custodian recovery and precise disposal after backup.
+- The shared post/page recovery controller retains the actual restored base. Invalid/missing
+  bases cannot borrow an initial server load's token; one read opens comparison instead.
+  Explicit rebase and stored-version loading preserve a separate full local record first.
+  The story editor and all four generic page keys use these same controls. Receipt restoration
+  resets to the captured generation, so an own landed attempt can clean only its matching
+  generation, never newer recovered edits. Online/offline signals display information only.
+- `media-conditional.js` is the shared pure text/tag/folder canonicalizer. Public PATCH
+  requires the v1 envelope and identical nonempty patch/expect leaf sets. Internal fill-only
+  `MediaStore.patch` remains explicit and unchanged; `patchConditional` performs one atomic
+  conditional UPDATE with RETURNING (memory parity), with transactional folder creation.
+  Success carries `conditionalVersion: 1`; conflict current values use normal role redaction.
+- Detail, single-photo AI and bulk AI use the same conditional transport and one bounded
+  item read after Unknown, comparing each field without replay or partial patch. Missing
+  version acknowledgement or malformed evidence cannot clean local work.
+
+Parent verification: full uploader typecheck/Vitest against disposable PostgreSQL, site
+Vitest/i18n and Astro checks/build, plus real-browser two-tab and request-drop/offline scenarios.
+Exercise each page key with stale, missing and malformed restored bases; own late receipt
+adoption with newer text; same-account interleaved record cleanup/re-keying; A→B author/admin,
+logout/expiry and legacy quarantine; storage-quota refusal of replacement; conflict rebase and
+stored reload with both locales and images. Media scenarios must include same-field races,
+unrelated-field success, canonical tags/controls, old/new client-server envelopes, malformed
+acknowledgements and reads, mixed unknown results, detail edits during requests, single/bulk
+AI empty-fill races, and session-end pause/no navigation. No worker ran checks or browser
+sessions for this handoff. The actual deployment-mount restriction above is unchanged.

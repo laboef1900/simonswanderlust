@@ -649,6 +649,20 @@
           refreshAltAudit().catch(() => {});
           setStatus('');
         },
+        rebase: (body) => {
+          currentTk = body.translationKey;
+          loadedUpdatedAt = body.updatedAt;
+          loadedSlugs.de = body.de?.slug || '';
+          loadedSlugs.en = body.en?.slug || '';
+          guard.setResource('post:' + currentTk);
+          gpxEditor.noteCreated(currentTk);
+          const url = new URL(location.href);
+          url.searchParams.set('tk', currentTk);
+          history.replaceState(null, '', url.toString());
+          loadBlocked = false;
+          showErr('');
+          renderDraftState();
+        },
         useStored: async (body) => {
           await loadPost(body.translationKey, body);
           if (loadBlocked || !writeRecovery.canAdopt(body.ownerUserId)) throw new Error(editorCopy.reloadFailed);
@@ -2117,7 +2131,7 @@
         refreshAltAudit().catch(() => {});
 
         // Initial loading must not erase a recovery stash before it is offered.
-        // A deliberate reload after a conflict does discard the dirty form.
+        // Conflict replacement already preserved the local copy in a separate context.
         if (guard.isDirty()) guard.markClean();
         renderDraftState();
         setStatus(isPublished
@@ -2262,12 +2276,12 @@
             if (!guard.adopt(stash)) return;
             storyReview?.invalidate();
             populateForm(stash.payload);
+            guard.restoreGeneration(stash.generation);
             if (!writeRecovery.restore(stash.recovery)) {
               loadBlocked = true;
               showErr(editorCopy.writeUnsafeBase);
-            } else {
-              await writeRecovery.probe();
             }
+            await writeRecovery.probe();
             renderDraftState();
             setStatus(editorCopy.writeRestored);
           } else {

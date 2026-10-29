@@ -1,3 +1,5 @@
+// @ai-note Multi-account recovery is private to the immutable authenticated owner.
+// Logout keeps drafts; even an administrator cannot recover unknown-owner legacy text.
 // Local recovery is best-effort, owner-scoped and never an executable write queue.
 // Unknown-owner legacy records are deliberately neither read nor removed.
 window.DraftGuard = (function () {
@@ -77,6 +79,7 @@ window.DraftGuard = (function () {
       } catch (_) { return null; }
     }
     function adopt(stash) {
+      if (!owner) return false;
       try {
         const s = parse(stash.key, localStorage.getItem(stash.key));
         if (!s || s.raw !== stash.raw) return false;
@@ -87,11 +90,13 @@ window.DraftGuard = (function () {
       } catch (_) { return false; }
     }
     function dismissRestore(stash) {
+      if (!owner) return;
       dirty = false; cancelTimer();
       try { if (stash) sessionStorage.setItem(stash.key + ':dismissed', stash.recordId); } catch (_) { /* best effort */ }
       opts.onChange?.(dirty);
     }
     function wasDismissed(stash) {
+      if (!owner) return false;
       try { return !!stash && sessionStorage.getItem(stash.key + ':dismissed') === stash.recordId; }
       catch (_) { return false; }
     }

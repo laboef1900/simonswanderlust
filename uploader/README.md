@@ -167,6 +167,30 @@ For an isolated feature worktree, set absolute writable paths for `STORAGE_DIR`,
 integration tests require a different `TEST_DATABASE_URL`, never the content database.
 An empty `SITE_DIR` starts a build from `SITE_APP_DIR`, so check both paths before launch.
 
+The production build inputs live in `.github/native-owner/`: the owned C binding and
+its qualified compiler/container recipes are preserved byte-for-byte. The historical
+qualification wording and `/proof` build-stage path in those files are retained to
+preserve that source identity; they do not install a proof worker in the app.
+`npm run build:native` uses pinned Node 26.12.1 headers and writes the addon, ABI/build
+record, header/license provenance and Node license into `uploader/native/`. The root
+Dockerfile builds these with the pinned DHI indices and Debian snapshot in an isolated
+stage; neither its native build driver nor the test subprocesses ship in the runtime.
+
+The permanent `owned flock · native amd64` / `owned flock · native arm64` CI jobs build
+the current checkout on standard public native Ubuntu runners and run:
+
+```sh
+# From uploader/, after dependencies in both trees and build:native are installed.
+# TEST_DATABASE_URL must name an owned, disposable PostgreSQL 18 fixture.
+npm test -- --project integration test/data-owner.integration.test.ts test/storage-owner.integration.test.ts test/gpx-main-boot.integration.test.ts
+```
+
+These are host-runner regressions, not production-image or deployment-mount qualification.
+The descriptor suite covers invalid/closed/non-file descriptors, live/stopped contention,
+stable inodes, clean close, SIGKILL, ordinary-child noninheritance and deliberately inherited
+last-close exclusion. Product ownership/main suites retain real PG-loss, admission failure,
+draining app/offline-restore exclusion and graceful native release coverage.
+
 Native binding qualification inherited from #304 covers macOS arm64/APFS and native
 DHI/glibc amd64+arm64 ext4 bind/named volumes. The actual deployment mount must pass the
 same process/descriptor/PG-loss/restore matrix before deployment or enablement; a successful
