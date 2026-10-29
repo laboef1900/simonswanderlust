@@ -243,7 +243,7 @@
         const button = $(action + 'Btn'); button.disabled = true; showErr('');
         try {
           const result = await PagesUI.request('/' + KEY + '/' + action, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ updatedAt: loadedUpdatedAt }) });
-          acceptSaved(result.saved); guard.markClean(guard.snapshot());
+          acceptSaved(result.saved);
           setStatus(PagesUI.text('LiveSaved', { paths: result.saved.status === 'published' ? PagesUI.paths(result.saved, language).join(' · ') : PagesUI.text('None') }));
         } catch (error) { if (error.body?.persisted) acceptSaved(error.body.saved); showErr(error.message); }
         finally { button.disabled = false; }

@@ -884,11 +884,11 @@ No new root segment is registered, so the app reservation set is unchanged by th
 | Independent review F7/F9 | Correctness clarifications incorporated; not a claim that the earlier review was clean |
 | Q12 / review F8 | Approved **“Prepare translations before activation”** after PR #407 head `93619a0ccb665c27152dff67fce496b779a3b38d` and PR #406 head `8542d78fa1f9168c0313d2cffdef3d17830eba6d`; option A only |
 
-## #288 implementation interface — verification pending
+## #288 implementation interface and scoped qualification
 
 This appendix records the implemented storage/CMS boundary for downstream #289 and
 #309. It does not change the approved scope or claim that public generic routes,
-navigation settings, tests or a production migration have been exercised.
+navigation settings or a production migration have been exercised.
 
 ### Shared modules and stored representation
 
@@ -992,18 +992,33 @@ are refreshed during restore so an open pre-restore editor cannot overwrite it.
 Containment is unpublish/delete (not About), or repair/rebuild; preserve the last
 successful release and the approved compatible recovery image/set.
 
-### Acceptance evidence to run at integration
+### Observed #288 acceptance evidence (2026-10-29)
 
-Regression coverage is added for memory/Postgres lifecycle parity, namespace races
-and retained snapshots, explicit preparation/activation, transactional deletion
-failure, API permissions/sanitized preview/foreign-image gates/rebuild failure,
-real editor DOM confirmation/stale state/preparation, WXR no-fetch refusal,
-legacy/app reservation equality, and v13/legacy recovery validation. None was run
-by the implementation worker. Parent must run the affected full suites, TypeScript
-and Astro checks against a disposable database, then real admin/browser scenarios
-for both primary-language modes and a failed-build/rebuild recovery. #289 must
-add public output/build collision/nav resolution evidence before deployment;
-successful #288 CMS publication alone does not establish those public routes.
+Complete uploader/PostgreSQL suites and TypeScript, site suites, Astro check and
+real build passed after the cancellation-focus regression fix
+(`wave-two-results-1793284517645_74185.json`).
+
+Actual `main.ts`, desktop/320px managed-browser and CLI scenarios covered catalog
+permissions, reserved/reverse/grandfathered claims, no-fetch WXR refusal, page
+history/conflicts/deletion scope, inactive translation preparation/activation,
+post-commit build failure and explicit recovery, restart preservation, and real
+v13 dump/restore with separately synthetic v12/v11/v10/v1 compatibility inputs.
+The corrected source `c90f1142befaf6ac5529462f96c3ec4375aa2e7c` restores enabled
+Delete-button focus after both Escape and Cancel; cancelled operations preserve
+exact page/revision state. Uploaded responsive media was rendered successfully.
+
+The canonical ignored evidence index is `issue-288-runtime-final.json` under
+`.local/backlog-execution-2026-10-27/`. Earlier successful phases retain their
+`a4acb88` source attribution. Earlier `/about-me/` equal-404 comparisons are
+explicitly excluded: supplemental failure proof requires actual `/uber-mich/`
+HTTP 200 with identical SHA-256 and byte length while the prior release remains.
+Fixtures and private recovery sets were retained; only owned services/browsers
+were stopped. No owner content or data was changed.
+
+This qualifies the CMS boundary, not #285's public language-mode routes or #289's
+non-About rendering/navigation. Those downstream public build/browser checks,
+independent actual-PR review, exact-head CI and stack integration remain distinct
+gates. Successful CMS publication alone does not establish the new public routes.
 
 ## #289 public-output and navigation interface — verification pending
 
