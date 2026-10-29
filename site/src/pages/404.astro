@@ -2,22 +2,28 @@
 import Base from '../layouts/Base.astro';
 import { useTranslations } from '../i18n/ui';
 
-const tDe = useTranslations('de');
-const tEn = useTranslations('en');
+import { siteLanguage } from '../lib/site-language';
+import { homePath } from '../lib/paths';
+
+const language = siteLanguage();
+const title = language.locales.map((locale) => useTranslations(locale)('notFound.title')).join(' / ');
 ---
 
 <Base
-  title={`${tDe('notFound.title')} / ${tEn('notFound.title')}`}
-  description={`${tDe('notFound.title')} / ${tEn('notFound.title')}`}
-  locale="de"
+  title={title}
+  description={title}
+  locale={language.primary}
 >
   <section class="mx-auto max-w-3xl px-5 py-24 text-center">
     <p class="text-6xl font-extrabold text-navy">404</p>
-    <h1 lang="de" class="mt-4 text-2xl font-extrabold">{tDe('notFound.title')}</h1>
-    <p lang="en" class="mt-1 text-ink/60">{tEn('notFound.title')}</p>
+    <h1 lang={language.primary} class="mt-4 text-2xl font-extrabold">{useTranslations(language.primary)('notFound.title')}</h1>
+    {language.locales.filter((locale) => locale !== language.primary).map((locale) => (
+      <p lang={locale} class="mt-1 text-ink/60">{useTranslations(locale)('notFound.title')}</p>
+    ))}
     <p class="mt-6 flex justify-center gap-6 text-sm">
-      <a href="/" class="font-medium text-brand-red hover:underline">{tDe('notFound.home')}</a>
-      <a href="/en/" class="font-medium text-brand-red hover:underline">{tEn('notFound.home')}</a>
+      {language.locales.map((locale) => (
+        <a lang={locale} href={homePath(locale)} class="font-medium text-brand-red hover:underline">{useTranslations(locale)('notFound.home')}</a>
+      ))}
     </p>
   </section>
 </Base>

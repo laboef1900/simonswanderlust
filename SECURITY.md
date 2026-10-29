@@ -740,8 +740,8 @@ sanitizer cannot distinguish a Shiki `<span style="color:…">` from an author-t
 author-typed `style="position:fixed;inset:0;background:url(https://evil/…)"` would overlay every
 reader page (defacement) and fire a third-party request per view (reader IP leak), on the draft
 preview as well, so publish review would not catch it. Shiki therefore no longer emits inline
-styles at all: `site/src/lib/shiki-classes.ts` registers a transformer (in both
-`astro.config.mjs` and `MARKDOWN_OPTIONS`, lockstep-tested) that rewrites each colour into a
+styles at all: `site/src/lib/shiki-classes.ts` supplies the transformer registered in
+`MARKDOWN_OPTIONS`, shared directly by Astro configuration and draft previews, which rewrites each colour into a
 class, and `SHIKI_CSS` — generated from the same theme object — is inlined by `Base.astro` and
 by the draft preview. `style` is off the schema for every element; the gallery `--r` ratios and
 the hero focal point are the only inline styles on a page, and both are injected post-sanitize
