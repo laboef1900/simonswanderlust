@@ -8,6 +8,7 @@ import type * as FsModule from 'node:fs';
 import type * as TarModule from 'tar';
 import type * as DiskModule from '../src/disk.js';
 import { archiveImages, createDbBackup, readState, type Connectable } from '../src/backup.js';
+import { identityDumpRow } from './site-identity-fixture.js';
 
 // Only I/O scheduling/faults are substituted: real Pack, WriteStream, files and extraction.
 const hooks = vi.hoisted(() => ({
@@ -36,10 +37,9 @@ vi.mock('../src/disk.js', async (original) => ({
   },
 }));
 
-const db: Connectable = {
-  query: async () => ({ rows: [] }),
-  connect: async () => ({ query: async () => ({ rows: [] }), release() {} }),
-};
+const query = async (sql: string) => ({ rows: sql.includes('to_regclass')
+  ? [{ present: true }] : sql.includes('FROM site_identity ORDER') ? [identityDumpRow()] : [] });
+const db: Connectable = { query, connect: async () => ({ query, release() {} }) };
 let root: string;
 let storage: string;
 let backups: string;

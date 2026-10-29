@@ -601,6 +601,22 @@ blog/
   admin, and images from one process and runs `astro build` in-process; added a scheduled/on-demand,
   retention-pruned Postgres backup feature (CLI-only restore). See `ARCHITECTURE.md` and
   `docs/superpowers/specs/2026-07-03-single-app-container-design.md`.
+- **Implemented, integration qualification pending:** #279 first-run Desk checklist under the
+  owner-approved #278 Q1–Q5/P1–P2 contract and separately approved `GET /auth/me` context.
+  Postgres `onboarding_state` is install-wide operational state; Identity is optional and
+  only Photo/Story/Publish count toward explicit permanent Finish. Hide survives restarts;
+  Show is Desk-only; authors retain ordinary draft/upload affordances. Boot captures prior
+  evidence before cleanup and classifies before listen. Every supported restore retires via
+  the permanent off-DB `onboarding.restore-retired` fence: native restore before GPX staging,
+  SQL/host/clone recovery before replacement/activation. Fresh native targets use offline
+  `prepare-native-restore`; `onboarding-retire` is fence-only and its lease ends on exit.
+  Keep all writers stopped with auto-start disabled across recovery commands. No reset or
+  data-deletion shortcut. `/setup`, `/login`, `/auth/status`, auth limits and session policy
+  remain unchanged. The recorded pre-merge uploader suite/typecheck and actual browser
+  setup → upload → draft → publish → Finish with unsaved identity passed their exercised scope;
+  merged-head integration checks, CI and final implementation review are not claimed here.
+  See `ARCHITECTURE.md`, `SECURITY.md`, `DESIGN.md` and
+  `docs/superpowers/specs/2026-10-27-issue-278-first-run-onboarding.md` for contract/evidence limits.
 - **Done:** Editable About page + baked-in travel map basemap (v0.5.0).
 - **Done:** AI feature removal + conformance hardening (July 2026) — removed the LM Studio
   caption/batch-uploader feature entirely; settings endpoints became admin-only; a global error

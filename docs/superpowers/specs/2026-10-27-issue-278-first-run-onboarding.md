@@ -1,20 +1,22 @@
 # First-run onboarding: Postgres state and restore-safe exclusion (#278)
 
 **Date:** 2026-10-27; redesigned 2026-10-28.
-**Status: OWNER-APPROVED DESIGN, 2026-10-28; IMPLEMENTATION AND INTEGRATION EVIDENCE OUTSTANDING.**
+**Status: OWNER-APPROVED DESIGN, 2026-10-28; #279 IMPLEMENTED WITH SCOPED LOCAL EVIDENCE, 2026-10-29; MERGED-HEAD QUALIFICATION/FINAL REVIEW PENDING.**
 The owner approved optional Identity, install-wide Hide / Desk-only Show / explicit permanent
 Finish, conservative all-restore retirement and admin-only checklists with role-safe author
 empty states, then approved **P1: “Approve Postgres contract”** and **P2: the permanent off-DB
 retirement marker and managed restore protocol** after the corrected 685-line contract passed
 independent full re-review. The former `onboarding.json` progress/state design remains withdrawn.
 
-**Issue:** design-only #278, parent #277; its owner-approval gate is satisfied. #279 still requires
-dependent integration and implementation evidence. #280 can use the inventory/role rule
-independently; #281 remains conditional on the language work.
+**Issue:** design-only #278, parent #277; its owner-approval gate is satisfied. #279 has the
+implementation and scoped evidence recorded in §12.1; this is not a final integration/CI
+qualification. #280 can use the inventory/role rule independently; #281 remains conditional
+on the language work.
 **Risk:** high: schema, boot, `/data` operational metadata and offline restore boundaries.
-**Baseline:** worktree source based on `origin/dev` at `11e16d1`; #271 is merged and the baseline
-app-native `DUMP_VERSION` is 10 (private GPX recovery sets). This approved design specifies changes;
-it does not claim they exist. No app code, tests, runtime or owner data changed for this design.
+**Design baseline:** `origin/dev` at `11e16d1`, with #271 and app-native dump version 10.
+The approved contract below remains normative. #279 now integrates #274 identity (dump v11)
+and the separately approved `/auth/me` context; the design-only task itself changed no code,
+runtime or owner data. Implementation evidence and its limits are recorded separately below.
 
 ## 1. Outcome and fixed boundaries
 
@@ -234,10 +236,10 @@ provenance. Installations on earlier versions that never completed setup remain 
 ownership is lost, or the initial commit is uncertain, abort startup before listen/background
 work. Do not serve a process-only eligible state, rely on bootstrap to disqualify next boot,
 or quietly treat a DB outage as success. A later boot reads durable state anew. Preserve corrupt
-metadata for diagnosis; operator repair may only retire, never reset to eligible. This changes
-the old proposal's in-memory fallback and is part of approved P1, not already exercised
-behaviour. Existing schema/ownership boot failures already abort startup; authentication
-failures after boot remain sanitized failures rather than anonymous fallback.
+metadata for diagnosis; operator repair may only retire, never reset to eligible. This replaces
+the withdrawn proposal's in-memory fallback and is implemented under approved P1. Existing
+schema/ownership boot failures already abort startup; authentication failures after boot
+remain sanitized failures rather than anonymous fallback.
 
 ## 6. Approved restore-persistence contract (P2, 2026-10-28)
 
@@ -366,8 +368,8 @@ singletons; table existence alone is insufficient. No native dump validation is 
 
 The two commands do not share a lifetime lease, so keep services stopped between them. A
 successful preparation followed by cancellation or failure leaves onboarding retired
-intentionally. This shared initialization/command procedure is part of approved P2, not a
-claim that the baseline CLI can restore into an uninitialized schema.
+intentionally. #279 implements this shared initialization/command procedure under approved P2;
+the ordinary native restore command alone still does not initialize an empty target.
 
 ### 6.4 `psql`, host recovery, partial restore and clone protocol
 
@@ -469,7 +471,7 @@ owner-approved scope, not something a Postgres tombstone or `isWritable()` imple
 
 ## 8. Approved onboarding route contract (no authn changes)
 
-These are the approved #279 route requirements, not implemented by this design task.
+These are the approved #279 route requirements, implemented in the #279 worktree.
 
 **GET `/onboarding`:** `requireAdmin`, `Cache-Control: no-store`. Read the singleton after
 authentication. Retired → `200 { "status": "retired" }`, with no progress reads. Eligible →
@@ -533,11 +535,11 @@ Rollback is a code rollback of this endpoint/helper and Desk activation together
 retain the onboarding retirement state and restore fences. This independent approval
 satisfies only the shared-context prerequisite, not the broader #304/#305/#306 proposals.
 
-Independent full specification review and P1/P2 owner approval are complete. Remaining
-implementation order: land the approved identity and independently approved context
-prerequisites; implement onboarding schema + boot + all restore integration/procedures together;
-then enable the checklist only with the required implementation evidence. No partial shipping
-of a checklist whose SQL/host restore retirement is only future work. #279 remains high risk.
+Independent full specification review and P1/P2 owner approval are complete. #279 integrates
+identity, the independently approved shared context, onboarding schema/boot, native restore,
+offline preparation and the SQL/host/clone operating procedures together. The checklist is
+implemented; remaining merged-head qualification and implementation review are separate from
+the design approval and scoped evidence below. #279 remains high risk.
 
 ## 10. Empty-state inventory for #280
 
@@ -607,7 +609,7 @@ Invariants:
 
 ## 12. Acceptance and verification plan (implementation only)
 
-No implementation verification was executed for this design-only assignment. #279 must supply:
+The design-only assignment executed no implementation verification. The required matrix is:
 
 - Unit/store parity: constrained row decoding, missing vs invalid, all monotonic transitions,
   duplicate actions, exact action/response shapes, optional identity, each photo state and
@@ -650,6 +652,50 @@ JSON restore, offline schema preparation, SQL/host/clone recovery and rollback),
 checklist/optional identity) and `CLAUDE.md` status. Fix the contradictory live-app native
 major-upgrade example; do not leave two mutually incompatible recovery procedures.
 
+### 12.1 Implementation and observed evidence (2026-10-29)
+
+Implementation commit `9ec60f2` and dependency merge `f77721a` are the documentation handoff
+baseline. `onboarding-bootstrap.ts` captures pre-migration evidence, shares schema/required
+identity seeding between normal boot and offline preparation, and initializes before listen.
+`onboarding.ts` owns the constrained state/progress/action transactions; `onboarding-fence.ts`
+owns the fixed permanent fence; `onboarding-restore.ts` places retirement before native
+staging and implements bootstrap-only preparation. `cli.ts` provides
+`prepare-native-restore [--yes]`, fence-only `onboarding-retire [--yes]` (immediate, no prompt),
+and the guarded `restore [--yes] <file>` integration. No language/navigation singleton or
+language checklist step is fabricated. The shared initializer currently runs `ensureSchema`
+and the installed `seedSiteIdentity`; later installed required singletons must join it.
+
+The canonical local evidence directory is `.local/backlog-execution-2026-10-27/` in the
+primary checkout (not copied worktree `.local` directories):
+
+- `ledger.json`, issue `279`, records a passing complete uploader check at
+  `wave-two-results-1793267622600_45976.json`: uploader TypeScript `--noEmit` exited 0;
+  `npm test -- --maxWorkers=1 --fileParallelism=false` exited 0, **115 files / 2,687 tests**,
+  with an isolated Postgres test database. These checks preceded the dependency merge above;
+  they are not evidence for the final merged head.
+- `issue-279-runtime/qualification-report.json` records actual `src/main.ts` boot from a
+  pristine synthetic database, actual setup form, Media upload/ready encode, bilingual editor
+  draft, explicit Publish/runtime build, working local DE/EN pages and image response, and
+  explicit permanent Finish **without saving identity**. Visiting the optional identity tab
+  did not complete it. Publish at 3/3 did not auto-finish; cancelling Finish kept it open.
+- That runtime slice also exercised Hide across graceful restart and a second browser,
+  Desk-only Show and heading focus, keyboard focus/Enter, complete-but-hidden state,
+  unpublish regression and server-side `409 onboarding_incomplete`, subsequent Finish and
+  `409 onboarding_retired`, and post-Finish unpublish without reopening. Author UI/API denial
+  and anonymous 401 were observed.
+- Controlled page-local fetch interception exercised loading, failed GET/read-only retry,
+  unavailable auth context without logout, and lost POST acknowledgement after real dismiss
+  followed by GET reconciliation. Captures include desktop, 390px and 320px checklist states;
+  the report identifies an unsettled early mobile capture that must not be used as layout proof.
+  Screen-reader coverage and every photo processing/failure state were not exhaustively tested.
+
+The browser report does **not** qualify upgrade/restore integration or fault injection; use the
+canonical automated/restore evidence for those obligations, not the successful authoring flow.
+The recorded full uploader pass is not a claim that every §12 case has independent runtime
+proof. Final merged-head affected checks, remaining acceptance-evidence reconciliation,
+implementation review and CI remain gates; none is claimed complete by this documentation
+update. No deployment, owner-data operation or merge is authorized by these results.
+
 ## 13. Compatibility, rollback and containment
 
 The table is additive and ignored by old binaries. Preserve it and the fence when rolling back
@@ -668,8 +714,8 @@ required for its actual existing ownership guard.
 
 Security reconfirmation: `SECURITY.md` First-admin setup's zero-user gate and per-process lock,
 Rate limiting's login/setup budgets and HttpOnly/SameSite session policy remain unchanged.
-“Content-side-effect free” does not mean no metadata writes: explicit onboarding state/fence
-writes and offline schema preparation are documented approved design boundaries, not delivered code.
+“Content-side-effect free” does not mean no metadata writes: onboarding state/fence writes and
+offline schema preparation are implemented approved boundaries, not additional auth permissions.
 
 ## 14. Approval record and remaining implementation gates
 
@@ -702,9 +748,9 @@ corrected **685-line contract** after ReviewOnboardingWrites' clean independent 
 Q1/Q3/Q4/Q5 remain settled. #278's owner-approval acceptance is satisfied; no new onboarding
 policy decision is outstanding for this contract. The shared-context prerequisite received
 its separate narrow approval on 2026-10-29 (§9); broader #304/#305/#306 policy remains outside
-this approval. Required dependency integration, code, automated tests, real Postgres/restore/
-fault-injection/browser evidence and implementation review remain outstanding as specified
-in §9 and §12. Design approval is not a claim that #279 is verified or ready to ship.
+this approval. #279 code, automated coverage, operator documentation and scoped runtime evidence
+are now recorded in §12.1; remaining merged-head qualification and implementation review must
+still satisfy §12. Design approval or a successful browser journey alone is not shipping approval.
 
 These decisions authorize the documented design for implementation subject to those gates,
 not a merge, deployment, owner-data operation, login/session-policy change or revival of the
