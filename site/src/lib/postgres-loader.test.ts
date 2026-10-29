@@ -13,6 +13,7 @@ const db = vi.hoisted(() => ({
   rows: [] as Record<string, unknown>[],
   media: [] as Record<string, unknown>[],
   sql: [] as string[],
+  language: { primary_locale: 'de', enabled_locales: ['de', 'en'] },
 }));
 
 // The loader creates its own pool (`loaderPool`, over `pg`), so mock `pg` and act
@@ -29,6 +30,7 @@ vi.mock('pg', () => ({
         db.sql.push(sql);
         if (!/^\s*SELECT\b/.test(sql)) return { rows: [] };
         if (/\bFROM media\b/.test(sql)) return { rows: db.media };
+        if (/\bFROM site_language\b/.test(sql)) return { rows: [db.language] };
         let rows = db.rows;
         if (/status\s*=\s*'published'/.test(sql)) rows = rows.filter((r) => r.status === 'published');
         if (/published_snapshot\s+IS\s+NOT\s+NULL/.test(sql)) {
@@ -152,6 +154,32 @@ describe('postgresTripsLoader load()', () => {
     db.rows = [];
     db.media = [];
     db.sql = [];
+    db.language = { primary_locale: 'de', enabled_locales: ['de', 'en'] };
+  });
+
+  it.each(['de', 'en'] as const)('excludes disabled snapshots before parsing or rendering in %s-only mode', async (locale) => {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    vi.stubEnv('SITE_LANGUAGE_JSON', JSON.stringify({ primary: locale, locales: [locale] }));
+    db.language = { primary_locale: locale, enabled_locales: [locale] };
+    db.rows = ['de', 'en'].map((code) => ({
+      status: 'published',
+      published_snapshot: { ...row, locale: code, body_markdown: code === locale ? 'Public body' : 'PRIVATE disabled body' },
+    }));
+    const { entries, ctx } = fakeLoadContext();
+    await postgresTripsLoader().load(ctx);
+    expect([...entries.keys()]).toEqual([`${locale}/${row.slug}`]);
+    expect([...entries.values()].map((entry) => entry.body)).toEqual(['Public body']);
+  });
+
+  it('fails before reading content when language changed after standalone configuration', async () => {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    vi.stubEnv('SITE_LANGUAGE_JSON', '{"primary":"de","locales":["de","en"]}');
+    db.language = { primary_locale: 'de', enabled_locales: ['de'] };
+    const { entries, ctx } = fakeLoadContext();
+    await expect(postgresTripsLoader().load(ctx)).rejects.toThrow('Site language changed');
+    expect(entries.size).toBe(0);
+    expect(db.sql.some((sql) => /FROM posts|FROM media/.test(sql))).toBe(false);
+    expect(db.sql.at(-1)).toBe('ROLLBACK');
   });
 
   // The load-bearing guarantee of issue #20: a draft save over a published

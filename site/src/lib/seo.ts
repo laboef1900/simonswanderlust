@@ -3,6 +3,14 @@ import { largestVariant } from './images.js';
 import type { Locale } from '../i18n/ui';
 
 import { identity } from './build-identity';
+import { siteLanguage, type SiteLanguage } from './site-language';
+
+export type Alternates = Record<Locale, string>;
+
+/** Fixed pages have counterparts only in bilingual installations. */
+export function localeAlternates(path: (locale: Locale, language: SiteLanguage) => string, language: SiteLanguage = siteLanguage()): Alternates | undefined {
+  return language.locales.length === 2 ? { de: path('de', language), en: path('en', language) } : undefined;
+}
 
 /**
  * Production origin — fallback base URL when `Astro.site` is unset.

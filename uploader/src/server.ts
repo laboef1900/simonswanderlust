@@ -50,7 +50,7 @@ import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, comment
 import type { CommentStore } from './comments.js';
 import { registerPublicComments } from './comments-public.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
-import { legacyRedirect } from './redirects.js';
+import { legacyRedirectForRelease } from './redirects.js';
 import { compressionHook } from './compress.js';
 import { CommentError, isCommentStatus, withPublicLocaleMetadata, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
 import { ui } from '../../site/src/i18n/ui.js';
@@ -64,6 +64,7 @@ import { IdentityConflictError, type SiteIdentityStore } from './site-identity.j
 import { IdentityError, neutralIdentity } from '../../site/src/lib/site-identity.js';
 import { LanguageError, validateLanguage, type LanguageConfig, type LanguageStore, type LanguageLocale } from './language.js';
 import { publicPath } from './public-paths.js';
+import { NavigationError, type NavigationStore } from './navigation.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -78,6 +79,7 @@ export interface ServerConfig {
   onRoute?: (route: RouteOptions) => void;
   posts: PostStore;
   pages: PageStore;
+  navigation?: NavigationStore;
   imgHost: string;   // Host header that serves image variants (img subdomain)
   siteDir: string;   // release root; the blog is served from `${siteDir}/current`
   mapDir?: string;   // PMTiles/glyph assets; omit to disable /map/
@@ -257,7 +259,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
     const route = req.routeOptions.url;
-    if (route === '/language' || route === '/settings' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
+    if (route === '/language' || route === '/settings' || route === '/settings/navigation' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
       || route === '/posts/:tk/publish' || route === '/posts/bulk') reply.header('Cache-Control', 'no-store');
     if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
@@ -959,6 +961,31 @@ export function buildServer(cfg: ServerConfig): AppServer {
         code: error.code, error: error.message, ...(error.blockers ? { blockers: error.blockers } : {}),
         ...(error.owner ? { owner: error.owner } : {}),
       });
+      throw error;
+    }
+  });
+  // Navigation is content in the existing Postgres site_nav singleton, not settings.json.
+  app.get('/settings/navigation', { preHandler: requireAdmin }, async (_req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    if (!cfg.navigation) return reply.code(503).send({ error: 'Navigation unavailable.' });
+    return { ...await cfg.navigation.get(), socialLinks: cfg.identityStore?.get().identity.socialLinks ?? [] };
+  });
+  app.put('/settings/navigation', { preHandler: requireAdmin }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    if (!cfg.navigation) return reply.code(503).send({ error: 'Navigation unavailable.' });
+    try {
+      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) throw new NavigationError('invalid_navigation');
+      const body = req.body as Record<string, unknown>;
+      if (Object.keys(body).some((key) => key !== 'config' && key !== 'updatedAt')) throw new NavigationError('invalid_navigation');
+      const saved = await cfg.navigation.save(body.config, body.updatedAt);
+      // Locks are released. A failed build acknowledges the committed token, not a failed save.
+      try {
+        const build = await cfg.builder.build();
+        if (build.ok) return { saved, build };
+      } catch (error) { console.error('Navigation persisted; rebuild failed:', error); }
+      return reply.code(502).send({ code: 'navigation_build_failed', error: 'Navigation was saved, but the rebuild failed. Retry Rebuild site now.', persisted: true, saved });
+    } catch (error) {
+      if (error instanceof NavigationError) return reply.code(error.code === 'conflict' ? 409 : 400).send({ code: error.code, error: error.message });
       throw error;
     }
   });
@@ -2329,19 +2356,20 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // before any 404/503 — see redirects.ts (issue #35). Static files always
     // win: this handler only runs after @fastify/static misses. Explicit
     // code+header instead of reply.redirect() (its signature changed in v5).
-    const target = legacyRedirect(req.raw.url ?? '');
-    if (target) return reply.code(301).header('location', target).send();
-    if (!cfg.builder.hasRelease()) {
-      return reply
-        .code(503)
-        .header('retry-after', '30')
-        .type('text/html')
-        .send('<!doctype html><meta charset="utf-8"><title>Building…</title><h1>Site is building</h1><p>The first build is in progress — try again in a moment.</p>');
-    }
-    return readFile(join(currentDir, '404.html'), 'utf8').then(
-      (html) => reply.code(404).type('text/html').send(html),
-      () => reply.code(404).send('Not found'),
-    );
+    return legacyRedirectForRelease(req.raw.url ?? '', currentDir).then((target) => {
+      if (target) return reply.code(301).header('location', target).send();
+      if (!cfg.builder.hasRelease()) {
+        return reply
+          .code(503)
+          .header('retry-after', '30')
+          .type('text/html')
+          .send('<!doctype html><meta charset="utf-8"><title>Building…</title><h1>Site is building</h1><p>The first build is in progress — try again in a moment.</p>');
+      }
+      return readFile(join(currentDir, '404.html'), 'utf8').then(
+        (html) => reply.code(404).type('text/html').send(html),
+        () => reply.code(404).send('Not found'),
+      );
+    });
   });
 
   return Object.assign(app, { quiesceMutations });

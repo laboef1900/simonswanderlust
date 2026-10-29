@@ -18,6 +18,9 @@ import { randomUUID } from 'node:crypto';
 import { memorySessionStore, type SessionStore } from '../src/sessions.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { memoryPageStore, type PageStore } from '../src/pages.js';
+import { memoryLanguageStore } from '../src/language.js';
+import { memoryNavigationStore } from '../src/navigation.js';
+import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
 import { BacklogFullError, createEncodeQueue, type EncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock, type WorkLock } from '../src/work-lock.js';
@@ -124,6 +127,59 @@ async function authed(b: Built, opts: { isAdmin?: boolean; username?: string } =
   const token = await b.sessions.create(u.id, 60_000);
   return { user: u, cookie: { sid: token } };
 }
+
+describe('Postgres navigation API boundary', () => {
+  it('requires admin, validates URLs, detects stale tokens and builds once after a valid save', async () => {
+    const language = memoryLanguageStore();
+    const navigation = memoryNavigationStore(language);
+    const s = stubBuilder();
+    const b = build({ language, navigation, builder: s.builder });
+    try {
+      const admin = await authed(b);
+      const author = await authed(b, { isAdmin: false, username: 'author' });
+      for (const method of ['GET', 'PUT'] as const) {
+        expect((await b.app.inject({ method, url: '/settings/navigation' })).statusCode).toBe(401);
+        expect((await b.app.inject({ method, url: '/settings/navigation', cookies: author.cookie })).statusCode).toBe(403);
+      }
+      const loaded = await b.app.inject({ url: '/settings/navigation', cookies: admin.cookie });
+      expect(loaded.headers['cache-control']).toBe('no-store');
+      expect(loaded.json().config).toEqual(DEFAULT_NAVIGATION);
+      const updatedAt = loaded.json().updatedAt;
+      for (const href of ['javascript:alert(1)', 'data:text/html,x', '//evil.test']) {
+        const bad = await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: admin.cookie,
+          payload: { updatedAt, config: { ...DEFAULT_NAVIGATION, header: [{ kind: 'external', href: { de: href }, label: { de: 'Link' } }] } } });
+        expect(bad.statusCode).toBe(400);
+      }
+      expect(s.calls).toHaveLength(0);
+      const payload = { updatedAt, config: { ...DEFAULT_NAVIGATION, legal: [{ kind: 'page', target: 'privacy' }] } };
+      const saved = await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: admin.cookie, payload });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json().saved.config.legal).toEqual(payload.config.legal);
+      expect(saved.json().saved.updatedAt).not.toBe(updatedAt);
+      expect(s.calls).toHaveLength(1);
+      expect((await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: admin.cookie, payload })).statusCode).toBe(409);
+      expect(s.calls).toHaveLength(1);
+    } finally { await b.app.close(); }
+  });
+  it.each(['outcome', 'throw'] as const)('acknowledges committed state on a %s rebuild failure', async (failure) => {
+    const language = memoryLanguageStore();
+    const navigation = memoryNavigationStore(language);
+    const builder = stubBuilder({ ok: false, error: 'not public' }).builder;
+    if (failure === 'throw') builder.build = async () => { throw new Error('private infrastructure detail'); };
+    const b = build({ language, navigation, builder });
+    try {
+      const { cookie } = await authed(b);
+      const updatedAt = (await navigation.get()).updatedAt.toISOString();
+      const saved = await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: cookie,
+        payload: { updatedAt, config: { ...DEFAULT_NAVIGATION, footer: [] } } });
+      expect(saved.statusCode).toBe(502);
+      expect(saved.json()).toMatchObject({ persisted: true, code: 'navigation_build_failed', saved: { config: { footer: [] } } });
+      expect(saved.body).not.toContain('infrastructure');
+      expect((await navigation.get()).updatedAt.toISOString()).toBe(saved.json().saved.updatedAt);
+      expect((await navigation.get()).config.footer).toEqual([]);
+    } finally { await b.app.close(); }
+  });
+});
 
 async function jpeg(): Promise<Buffer> {
   return sharp({ create: { width: 1000, height: 800, channels: 3, background: '#444' } }).jpeg().toBuffer();
@@ -1426,6 +1482,7 @@ describe('blog serving is DB-independent (#129)', () => {
     down.find = async () => { throw new Error('pg: connection to db:5432 refused'); };
     await mkdir(join(dir, 'site', 'current', 'de'), { recursive: true });
     await writeFile(join(dir, 'site', 'current', 'de', 'index.html'), '<h1>de</h1>');
+    await writeFile(join(dir, 'site', 'current', 'index.html'), '<!doctype html><html lang="de"><body>home</body></html>');
     const b = build({ sessions: down });
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -1690,6 +1747,7 @@ describe('security headers', () => {
   it('the public blog, its 404 page, legacy redirects and the image host get nosniff only', async () => {
     await mkdir(join(dir, 'site', 'current', 'de'), { recursive: true });
     await writeFile(join(dir, 'site', 'current', 'de', 'index.html'), '<h1>de</h1>');
+    await writeFile(join(dir, 'site', 'current', 'index.html'), '<!doctype html><html lang="de"><body>home</body></html>');
     await mkdir(join(dir, 'map'), { recursive: true });
     await writeFile(join(dir, 'map', 'tiles.pmtiles'), 'x');
     const b = build({ mapDir: join(dir, 'map') });
