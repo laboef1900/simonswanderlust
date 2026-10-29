@@ -308,6 +308,10 @@ signed):
   since-published row is refused by the freeze rule (§7.3), never applied around it.
   `RevisionSummary.titleDe` becomes the primary-locale title (clean cutover of the field name in
   #284).
+  Draft-slug-change consent considers enabled locales only: an older revision's disabled
+  locale payload cannot demand confirmation for a value the save will ignore. Retained disabled
+  slug/body values stay unchanged; enabled draft renames still require consent and published
+  locale slugs stay locked.
 - **Published snapshot (#20):** unchanged per row. Omitted rows never get one (CHECK).
   A never-published, non-omitted secondary may also have no snapshot: it is a requested draft,
   not committed publication. A draft save leaves existing published snapshots/status unchanged.
@@ -731,6 +735,10 @@ CREATE TABLE IF NOT EXISTS site_language (
   the language row before pair locks too; no path may invert that order or validate against a
   cached mode. #287 page publish, published PUT and page mutations affecting activation preflight
   join the same language-first order so preflight cannot race a page save.
+  Publication/About image-readiness and activation-validation callbacks reuse that transaction's
+  checked-out client, including title-image existence checks. They never acquire a second pool
+  connection while holding the language row: other writers can consume the remaining pool
+  connections waiting for that row, otherwise deadlocking the validating writer.
 - No transaction above acquires or waits for the build/encode work lock. Release DB locks before
   calling the builder, which acquires the work lock **once**, opens the shared exported
   read snapshot below, and builds. The current work lock protects build/encode resource use;

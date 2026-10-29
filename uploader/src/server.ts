@@ -6,6 +6,7 @@ import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, ty
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
+import type { DbClient } from './db.js';
 import { encodeVariant, normalizeProcessOptions, outputFormatForExtension, probeImage, type ImageProbe } from './pipeline.js';
 import { WIDTHS } from './variants.js';
 import { contentHashKey, storeOriginal, heroSnippet, assertSafeKey } from './storage.js';
@@ -955,7 +956,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
         const blockers: LanguageBlocker[] = [];
         for (const row of about) {
           if (!candidate.locales.includes(row.locale)) continue;
-          const reason = await pageImageFailure(row.body_markdown, row.images, candidate, row.locale);
+          const reason = await pageImageFailure(row.body_markdown, row.images, candidate, row.locale, client);
           if (reason) blockers.push({ key: 'about', locale: row.locale, field: 'images', reason });
         }
         if (blockers.length) throw new LanguageError('Prepare the page images before activating this language.', 'language_pages_incomplete', blockers);
@@ -1513,16 +1514,16 @@ export function buildServer(cfg: ServerConfig): AppServer {
    * URLs with NO media row do not block: WordPress-imported and legacy files
    * predate the library and exist on disk perfectly well.
    */
-  async function notReadyPhotos(pair: StoredPostPair, keys: string[], mode: LanguageConfig): Promise<string[]> {
+  async function notReadyPhotos(pair: StoredPostPair, keys: string[], mode: LanguageConfig, client?: DbClient): Promise<string[]> {
     if (keys.length === 0) return [];
-    const notReady = await cfg.media.notReadyKeys(keys);
+    const notReady = await cfg.media.notReadyKeys(keys, client);
     // Title images are new library selections, not pre-library legacy heroes.
     // Unknown keys must not slip through notReadyKeys' legacy exception.
     for (const locale of mode.locales.filter((locale) => !pair[locale].omitted)) {
       const image = pair[locale].titleImage;
       if (!image) continue;
       const key = srcToKey(image.src, imageBase);
-      if (key !== null && !(await cfg.media.get(key))) notReady.add(key);
+      if (key !== null && !(await cfg.media.get(key, client))) notReady.add(key);
     }
     return [...notReady];
   }
@@ -1533,12 +1534,12 @@ export function buildServer(cfg: ServerConfig): AppServer {
     return `${n} image(s) in the body or title banner are not hosted here — replace them with library photos or re-host imported body images, then publish again`;
   }
 
-  async function pageImageFailure(body: string, images: Record<string, ImageDims>, mode: LanguageConfig, locale: LanguageLocale): Promise<string | null> {
+  async function pageImageFailure(body: string, images: Record<string, ImageDims>, mode: LanguageConfig, locale: LanguageLocale, client?: DbClient): Promise<string | null> {
     const analyzed = await analyzeBodyImages(body, images, imageBase);
     if (analyzed.foreign.length) return foreignImagesMessage(analyzed.foreign.length);
     const url = new URL(publicPath(mode, locale, 'about'), imageBase).href;
     const keys = analyzed.sources.map((src) => bodyImageKey(src, imageBase, url)).filter((key): key is string => key !== null);
-    const notReady = await cfg.media.notReadyKeys(keys);
+    const notReady = await cfg.media.notReadyKeys(keys, client);
     return notReady.size ? `${notReady.size} photo(s) are not ready to publish.` : null;
   }
   class PublicationImageError extends PostError {
@@ -1548,10 +1549,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
       foreign.length ? 'foreign_images' : 'images_not_ready');
     }
   }
-  async function validatePublication(pair: StoredPostPair, mode: LanguageConfig): Promise<void> {
+  async function validatePublication(pair: StoredPostPair, mode: LanguageConfig, client?: DbClient): Promise<void> {
     const { foreign, keys } = await publicationImages(pair, mode);
     if (foreign.length) throw new PublicationImageError(foreign, []);
-    const notReady = await notReadyPhotos(pair, keys, mode);
+    const notReady = await notReadyPhotos(pair, keys, mode, client);
     if (notReady.length) throw new PublicationImageError([], notReady);
   }
 
@@ -1608,7 +1609,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
       // non-string title etc. are 400s naming the field, never a TypeError or
       // a Postgres 22P02/23502 surfacing as a sanitized 500.
       const raw = req.body ?? {};
-      validateDraft(raw, await language.get());
+      const mode = await language.get();
+      validateDraft(raw, mode);
       // `updatedAt` is the optimistic-concurrency echo (the value the editor
       // loaded), not part of the pair itself — strip it before storing. It is
       // optional: callers without it (new posts, WP importer) skip the check.
@@ -1635,7 +1637,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       // says it meant to. Filling an unset ('') slug needs no consent; published
       // posts are still refused outright by the store (slug_locked).
       if (existing && !confirmSlugChange) {
-        for (const locale of ['de', 'en'] as const) {
+        for (const locale of mode.locales) {
           if (existing[locale].publishedAt) continue;
           const from = existing[locale].slug;
           const to = pair[locale].slug ?? '';
@@ -2067,9 +2069,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
     try {
       const saved = await cfg.pages.save(pair, baseUpdatedAt, {
         prepareLocale: b.prepareLocale,
-        validate: async (candidate, mode) => {
+        validate: async (candidate, mode, client) => {
           for (const locale of mode.locales) {
-            const reason = await pageImageFailure(candidate[locale].bodyMarkdown, candidate[locale].images, mode, locale);
+            const reason = await pageImageFailure(candidate[locale].bodyMarkdown, candidate[locale].images, mode, locale, client);
             if (reason) throw new PageError(reason, 'images_not_ready');
           }
         },
