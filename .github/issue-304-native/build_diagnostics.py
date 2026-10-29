@@ -16,6 +16,15 @@ DIAGNOSTIC = re.compile(
     r'error|fail|fatal|exception|assert|not found|no such file|unable|cannot|could not|'
     r'invalid|expired|not valid|release file|signature|certificate|permission denied|'
     r'unsupported|mismatch|^Dockerfile\.proof:\d+|^#\d+ \[[^\]]+\] RUN ', re.I)
+# Apt's useful package/version conflict lines often contain none of the generic
+# error words above. Select only dependency relationships and solver decisions,
+# not arbitrary neighbouring output; apply the same disclosure checks below.
+APT_PACKAGE = r'[a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?'
+APT_CONFLICT = re.compile(
+    r'^(?:#\d+\s+\d+(?:\.\d+)?\s+)?\s*(?:'
+    rf'(?:{APT_PACKAGE}\s*:\s*)?(?:PreDepends|Depends|Conflicts|Breaks):\s+|'
+    rf'\d+\.\s+{APT_PACKAGE}(?:=\S+)?\s+'
+    r'(?:Depends\s+|is (?:not )?selected\b|conflicts with other versions\b))')
 SENSITIVE = re.compile(
     r'password|postgres(?:ql)?://|\bauth\w*\b|\btoken\b|\bsecret\w*\b|'
     r'credential|cookie|api[_ -]?key|private[_ -]?key|database_url|'
@@ -34,7 +43,7 @@ def excerpt(text, fixture_password):
     selected = []
     withheld = 0
     for line in text.splitlines():
-        if not DIAGNOSTIC.search(line):
+        if not (DIAGNOSTIC.search(line) or APT_CONFLICT.search(line)):
             continue
         if (fixture_password in line or SENSITIVE.search(line)
                 or any(ord(c) < 32 or ord(c) > 126 for c in line)):

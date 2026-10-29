@@ -17,6 +17,15 @@ const sources = '/proof/inputs/proof.sources.list';
 writeFileSync(sources, `deb https://snapshot.debian.org/archive/debian/${process.env.DEBIAN_SNAPSHOT}/ ${suite} main\n`, { flag: 'wx' });
 const options = ['-o', `Dir::Etc::sourcelist=${sources}`, '-o', 'Dir::Etc::sourceparts=-', '-o', 'Acquire::Retries=0'];
 execFileSync('apt-get', [...options, 'update'], { stdio: 'inherit' });
-execFileSync('apt-get', [...options, 'install', '-y', '--no-install-recommends', 'gcc', 'libc6-dev', 'binutils'], { stdio: 'inherit', env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' } });
+// DHI's installed +dhi revisions cannot satisfy Debian development packages'
+// exact-version dependencies. Align this disposable build stage's six-package
+// dependency closure with the immutable snapshot; never copy these libraries to
+// the runtime stage, which retains its original digest-pinned DHI packages.
+const packages = [
+  'gcc=4:14.2.0-1', 'libc6-dev=2.41-12+deb13u4', 'binutils=2.44-3',
+  'gcc-14-base=14.2.0-19', 'libgcc-s1=14.2.0-19', 'libstdc++6=14.2.0-19',
+  'libatomic1=14.2.0-19', 'libc6=2.41-12+deb13u4', 'libcrypt1=1:4.4.38-1',
+];
+execFileSync('apt-get', [...options, 'install', '-y', '--no-install-recommends', '--no-remove', '--allow-downgrades', ...packages], { stdio: 'inherit', env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' } });
 writeFileSync('/proof/inputs/toolchain-packages.txt', execFileSync('dpkg-query', ['-W', '-f=${Package}\t${Version}\t${Architecture}\n']), { flag: 'wx' });
 writeFileSync('/proof/inputs/build-os-release.txt', os, { flag: 'wx' });

@@ -26,6 +26,41 @@ class BuildDiagnosticTests(unittest.TestCase):
         self.assertEqual(result['lines'][2:], lines[2:4])
         self.assertEqual(result['withheldLines'], 0)
 
+    def test_keeps_apt_exact_version_conflicts_and_solver_decisions(self):
+        lines = [
+            '#13 2.423  cpp-14 : Depends: gcc-14-base (= 14.2.0-19) but 14.2.0-19+dhi5 is to be installed',
+            '#13 2.423  libc6-dev : Depends: libc6 (= 2.41-12+deb13u4) but 2.41-12+deb13u4+dhi1 is to be installed',
+            '             Depends: libcrypt-dev but it is not going to be installed',
+            '   1. libc6:arm64=2.41-12+deb13u4 is not selected for install',
+            '   2. libc6:amd64=2.41-12+deb13u4 is selected as a downgrade because:',
+            '      2. libc6-dev:arm64 Depends libc6 (= 2.41-12+deb13u4)',
+            '      2. gcc-14-base:arm64=14.2.0-19 conflicts with other versions of itself',
+        ]
+        result = excerpt('\n'.join(lines + [
+            'Unrelated neighbouring output',
+            '  gcc libc6-dev binutils',
+            '  1. Download completed',
+        ]), FIXTURE_PASSWORD)
+        self.assertEqual(result['lines'], lines)
+        self.assertEqual(result['withheldLines'], 0)
+
+    def test_new_apt_selection_preserves_disclosure_checks(self):
+        unsafe = [
+            ' libc6-dev : Depends: password short-value',
+            ' Depends: ' + FIXTURE_PASSWORD,
+            '#13 2.423 1. libc6:arm64 is selected https://unknown.example/a',
+            ' Depends: https://owner:short-value@snapshot.debian.org/a',
+            ' Depends: https://snapshot.debian.org/a?access=short-value',
+            ' Depends: \x1b[31mhidden-control',
+            ' Depends: non-ASCII \u202ehidden',
+        ]
+        result = excerpt('\n'.join(unsafe), FIXTURE_PASSWORD)
+        self.assertEqual(result['lines'], [])
+        self.assertEqual(result['withheldLines'], len(unsafe))
+        opaque = 'aB01' * 16
+        self.assertEqual(excerpt(' Depends: ' + opaque, FIXTURE_PASSWORD)['lines'],
+                         [' Depends: [opaque-value-withheld]'])
+
     def test_withholds_sensitive_lines_before_export(self):
         lines = [
             'ERROR password: short-value',
