@@ -41,14 +41,15 @@ async function loadPages() {
       const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'btn-remove'; remove.textContent = PagesUI.text('Delete');
       remove.addEventListener('click', async () => {
         remove.disabled = true; errorEl.hidden = true;
+        let cancelled = false;
         try {
           const result = await PagesUI.remove(page.key);
           if (result) {
             BuildReporting.renderOutcome(document.getElementById('pagesOutcome'), 'delete', result, { title: PagesUI.kind(page.key) });
             await loadPages();
-          }
+          } else cancelled = true;
         } catch (error) { showError(error); }
-        finally { remove.disabled = false; }
+        finally { remove.disabled = false; if (cancelled) remove.focus(); }
       }); actions.append(remove);
     }
     if (!page.deletable) { const fixed = document.createElement('p'); fixed.className = 'muted'; fixed.textContent = PagesUI.text('Fixed'); actions.append(fixed); }
