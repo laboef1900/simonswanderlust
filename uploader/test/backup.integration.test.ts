@@ -260,6 +260,7 @@ maybe('backup round-trip (Postgres)', () => {
       oldPost('de', 'legacy-reise', 'published', 'Live DE'),
       oldPost('en', 'legacy-trip', 'published', 'Live EN'),
       { ...oldPost('de', 'entwurf', 'draft', 'Draft body'), translation_key: 'legacy-draft' },
+      { ...oldPost('en', 'draft-story', 'draft', 'Draft body EN'), translation_key: 'legacy-draft' },
     ];
     const pre = join(dir, 'db-20260601-000000.json.gz');
     writeFileSync(pre, gzipSync(JSON.stringify({ version: 2, tables: { users: [], posts } })));
