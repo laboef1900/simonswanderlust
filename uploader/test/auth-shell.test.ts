@@ -372,10 +372,16 @@ describe('Auth navigation shell', () => {
     const editor = shellSandbox('/admin/editor.html');
     expect(editor.html.match(/aria-current="page"/g)).toHaveLength(1);
     expect(editor.html).toMatch(/href="\/admin\/posts\.html" class="cms-nav-item" aria-current="page"/);
+
+    for (const path of ['/admin/pages.html', '/admin/about.html']) {
+      const pages = shellSandbox(path);
+      expect(pages.html.match(/aria-current="page"/g)).toHaveLength(1);
+      expect(pages.html).toMatch(/href="\/admin\/pages\.html" class="cms-nav-item" aria-current="page"/);
+    }
   });
 
   it('offers the admin pages in the sidebar to admins only', () => {
-    const adminOnly = ['about', 'comments', 'import', 'settings', 'users']
+    const adminOnly = ['pages', 'comments', 'import', 'settings', 'users']
       .map((page) => '/admin/' + page + '.html');
     const [admin, author] = [true, false].map((isAdmin) => shellSandbox('/admin/', { isAdmin }));
     const [adminLinks, authorLinks] = [admin!, author!].map((shell) =>

@@ -314,6 +314,34 @@ describe.skipIf(!url)('onboarding PostgreSQL boot and snapshot boundary', () => 
     expect((await pool.query('SELECT * FROM upload_receipts')).rows).toEqual([]);
     expect((await pool.query('SELECT last_save_id, last_save_by FROM pages')).rows.every(row => row.last_save_id === null && row.last_save_by === null)).toBe(true);
   });
+  it.each(['navigation-table', 'navigation-seed', 'page-columns'] as const)('repairs only genuinely absent generic page metadata: %s', async missing => {
+    await ensureSchema(pool);
+    await assertBootstrapOnlyTarget(pool, guard);
+    if (missing === 'navigation-table') await pool.query('DROP TABLE site_nav');
+    else if (missing === 'navigation-seed') await pool.query('DELETE FROM site_nav');
+    else await pool.query('ALTER TABLE pages DROP COLUMN slug, DROP COLUMN status, DROP COLUMN published_at');
+    await assertBootstrapOnlyTarget(pool, guard);
+    expect(await prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).toBe(true);
+    await assertBootstrapOnlyTarget(pool, guard);
+    expect((await pool.query('SELECT id FROM site_nav')).rows).toEqual([{ id: 1 }]);
+    expect((await pool.query("SELECT status FROM pages WHERE key='about'")).rows.every(row => row.status === 'published')).toBe(true);
+  });
+  it.each([
+    'ALTER TABLE pages DROP CONSTRAINT pages_status_check',
+    "ALTER TABLE pages ALTER COLUMN status SET DEFAULT 'published'",
+    'ALTER TABLE pages ALTER COLUMN published_at SET DEFAULT now()',
+    'ALTER TABLE site_nav DROP CONSTRAINT site_nav_id_check',
+    'ALTER TABLE site_nav ALTER COLUMN config DROP NOT NULL',
+    'DROP INDEX pages_locale_slug_idx; CREATE INDEX pages_locale_slug_idx ON pages(locale,slug)',
+    `UPDATE site_nav SET config='{"version":1,"header":[],"footer":[],"legal":[]}'::jsonb`,
+  ])('refuses altered generic page catalogue or owner navigation before fencing: %s', async sql => {
+    await ensureSchema(pool);
+    await assertBootstrapOnlyTarget(pool, guard);
+    await pool.query(sql);
+    await expect(prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).rejects.toThrow();
+    expect(await readRestoreFence(paths.storageDir)).toBe(false);
+    expect((await pool.query('SELECT * FROM site_identity')).rows).toEqual([]);
+  });
   it.each(['table', 'seed', 'omitted-column'] as const)('repairs only genuinely absent language bootstrap metadata: %s', async (missing) => {
     await ensureSchema(pool);
     await assertBootstrapOnlyTarget(pool, guard);

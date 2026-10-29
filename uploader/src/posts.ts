@@ -10,6 +10,7 @@ import { GpxError } from './gpx-errors.js';
 import { publishedTrackOf, type PublishedTrackRow, type PublishedTrackProjection } from './published-track.js';
 import { DEFAULT_LANGUAGE, assertLanguageNamespace, memoryLanguageStore, pgLanguageStore, readLanguage, type LanguageConfig, type LanguageState, type LanguageStore } from './language.js';
 import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js';
+import { lockContentNamespaces, registerMemoryClaims, memorySlugOwner } from './content-namespace.js';
 
 export type Locale = 'de' | 'en';
 /**
@@ -179,6 +180,8 @@ function assertDraftLanguage(language: LanguageState, baseUpdatedAt?: Date): voi
 
 export interface PostStore {
   readonly language: LanguageStore;
+  /** Preflight only; upsertDraft repeats the check under its transaction. */
+  pageSlugOwner(locale: Locale, slug: string): Promise<string | null>;
   list(): Promise<PostSummary[]>;
   get(translationKey: string): Promise<StoredPostPair | null>;
   getForSave(translationKey: string, ownerUserId: string): Promise<SaveRead<StoredPostPair> | null>;
@@ -590,6 +593,13 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
   const byKey = new Map<string, Stored>();
   const receipts = new Map<string, SaveReceipt>();
   const language = opts.language ?? memoryLanguageStore();
+  registerMemoryClaims(language, function* () {
+    for (const pair of byKey.values()) for (const locale of ['de', 'en'] as const) {
+      yield { type: 'story' as const, name: pair.translationKey, locale, slug: pair[locale].slug, bodyMarkdown: pair[locale].bodyMarkdown };
+      const snapshot = pair.publishedSnapshot[locale];
+      if (snapshot) yield { type: 'story' as const, name: pair.translationKey, locale, slug: snapshot.slug, bodyMarkdown: snapshot.bodyMarkdown };
+    }
+  });
   language.onChange((current, next) => {
     assertLanguageNamespace(current, next, [...byKey.values()].flatMap((p) =>
       (['de', 'en'] as const).map((locale) => ({ locale, slug: p[locale].slug }))));
@@ -624,6 +634,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
 
   return {
     language,
+    async pageSlugOwner(locale, slug) { return memorySlugOwner(language, locale, slug, 'page')?.name ?? null; },
     async list() {
       return language.runExclusive(async (mode) => {
       const secondary = mode.locales.find((locale) => locale !== mode.primary);
@@ -720,6 +731,9 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
           if (reserved) {
             throw new PostError(`${localeName(locale)}: slug is reserved`, 'reserved_slug', { type: reserved.owner, name: reserved.pageKind ?? reserved.segment });
           }
+          const page = pair[locale].slug !== existing?.[locale].slug
+            ? memorySlugOwner(language, locale, pair[locale].slug, 'page') : null;
+          if (page) throw new PostError(`${localeName(locale)}: slug is reserved by page ${page.name}`, 'reserved_slug', { type: 'page', name: page.name });
           pair[locale].publishedAt = existing?.[locale].publishedAt ?? null;
         }
         if (existing) {
@@ -1013,6 +1027,10 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
   }
   return {
     language: pgLanguageStore(pool),
+    async pageSlugOwner(locale, slug) {
+      if (!slug) return null;
+      return (await pool.query<{ key: string }>('SELECT key FROM pages WHERE locale=$1 AND slug=$2 LIMIT 1', [locale, slug])).rows[0]?.key ?? null;
+    },
     async list() {
       return consistentRead(async (client, language) => {
       const { rows } = await client.query<PostListRow>(
@@ -1118,6 +1136,7 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         assertDraftLanguage(language, options.baseLanguageUpdatedAt);
         validateDraft(pair, language);
         const existing = await readPostPair(client, tk, language, true);
+        await lockContentNamespaces(client);
         pair = draftWithDefaults(pair, language, existing);
         if (!existing && baseUpdatedAt) throw new PostError('post not found', 'not_found');
         if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
@@ -1134,6 +1153,10 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
             ? reservation(namespaceOf(locale, language), slug, language) : null;
           if (reserved) {
             throw new PostError(`${localeName(locale)}: slug is reserved`, 'reserved_slug', { type: reserved.owner, name: reserved.pageKind ?? reserved.segment });
+          }
+          if (slug && slug !== existing?.[locale].slug) {
+            const page = await client.query<{ key: string }>('SELECT key FROM pages WHERE locale=$1 AND slug=$2 LIMIT 1', [locale, slug]);
+            if (page.rows[0]) throw new PostError(`${localeName(locale)}: slug is reserved by page ${page.rows[0].key}`, 'reserved_slug', { type: 'page', name: page.rows[0].key });
           }
         }
         if (existing) {

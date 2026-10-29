@@ -57,7 +57,7 @@ describe('Language Settings', () => {
     const secondary = primary === 'de' ? 'en' : 'de';
     const h = settings(state(primary, [primary], stamp));
     await h.init();
-    expect(h.el('prepareLanguage').href).toBe('/admin/about.html?prepareLocale=' + secondary);
+    expect(h.el('prepareLanguage').href).toBe('/admin/pages.html?prepareLocale=' + secondary);
     expect(h.el('prepareLanguage').hidden).toBe(false);
     for (const option of h.el('languageMode').querySelectorAll('option')) {
       const value = option.value;
@@ -157,10 +157,9 @@ async function about(primary: Locale, prepareLocale?: Locale, route?: (url: stri
     return element;
   };
   const page = {
-    key: 'about',
-    updatedAt,
-    de: { locale: 'de', title: 'Aktiver Inhalt', bodyMarkdown: 'Deutscher Text', images: {} },
-    en: { locale: 'en', title: 'Existing heading', bodyMarkdown: 'English text', images: {} },
+    key: 'about', status: 'published', updatedAt,
+    de: { locale: 'de', title: 'Aktiver Inhalt', bodyMarkdown: 'Deutscher Text', images: {}, slug: '' },
+    en: { locale: 'en', title: 'Existing heading', bodyMarkdown: 'English text', images: {}, slug: '' },
   };
   const requests: { url: string; init: RequestInit }[] = [];
   const owner = '11111111-1111-4111-8111-111111111111';
@@ -183,7 +182,8 @@ async function about(primary: Locale, prepareLocale?: Locale, route?: (url: stri
     fetch: async (url: string, init: RequestInit = {}) => {
       requests.push({ url, init });
       let result;
-      if (route && url !== '/language') result = await route(url, init);
+      if (url === '/pages') result = response({ pages: [{ key: 'about', known: true, defaults: { de: '', en: '' } }] });
+      else if (route && url !== '/language') result = await route(url, init);
       else if (url === '/language') result = response(state(primary, [primary]));
       else if (url.endsWith('/revisions')) result = response([]);
       else if (init.method === 'PUT') result = response({ saved: { ...page, updatedAt: '2026-10-28T00:00:00.000Z' }, build: { ok: true } });
@@ -201,7 +201,7 @@ async function about(primary: Locale, prepareLocale?: Locale, route?: (url: stri
   context.EditorCopy = editorCopy;
   context.BuildCopy = buildCopy;
   vm.createContext(context);
-  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'write-recovery.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
+  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'pages-ui.js', 'write-recovery.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
   const start = html.lastIndexOf('<script>') + '<script>'.length;
   vm.runInContext(html.slice(start, html.lastIndexOf('</script>')), context);
   await settle();
@@ -228,7 +228,8 @@ describe('About inactive translation preparation', () => {
       [secondary]: { ...h.page[secondary], title: 'Prepared title' },
     });
     expect(payload[primary]).toBeUndefined();
-    expect(h.el('actionStatus').textContent).toContain('not public');
+    expect(h.el('preparationNotice').textContent).toContain('not public');
+    expect(h.el('actionStatus').textContent).toContain('Saved in the CMS');
     expect(h.requests.some(({ url, init }) => url === '/language' && init.method === 'PUT')).toBe(false);
   });
 

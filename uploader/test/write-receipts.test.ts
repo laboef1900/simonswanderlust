@@ -13,7 +13,7 @@ const story = (): PostPair => {
     bodyMarkdown: 'Complete story', images: {}, heroImage: { src: 'https://images.test/hero', width: 800, height: 600, alt: 'Landscape' } });
   return { translationKey: randomUUID(), status: 'draft', shared: { date: '2026-10-27', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 2 } }, de: locale('de'), en: locale('en') };
 };
-const page = (): PagePair => ({ key: 'about', de: { locale: 'de', title: 'About', bodyMarkdown: 'Local text', images: {} }, en: { locale: 'en', title: 'About', bodyMarkdown: 'English', images: {} } });
+const page = (key = 'contact'): PagePair => ({ key, de: { locale: 'de', title: 'Contact', slug: key === 'about' ? '' : key + '-de', bodyMarkdown: 'Local text', images: {} }, en: { locale: 'en', title: 'Contact', slug: key === 'about' ? '' : key + '-en', bodyMarkdown: 'English', images: {} } });
 async function fixture(database: boolean) {
   if (!database) { const posts = memoryPostStore(); return { posts, pages: memoryPageStore(posts.language) }; }
   const schema = `receipts_${randomUUID().replaceAll('-', '')}`;
@@ -86,6 +86,23 @@ for (const database of [false, true]) {
       if (snapshot.lastSaveId === receipt.saveId) expect(snapshot.content).toEqual(saved);
       else expect(snapshot).toEqual({ content: next, ownerUserId, lastSaveId: null });
       expect((await pages.getForSave(input.key, ownerUserId)).lastSaveId).toBeNull();
+    });
+    it.each(['contact', 'privacy', 'legal'])('clears %s receipts on publish, unpublish and deletion, keeping revisions private', async (key) => {
+      const { pages } = await fixture(database); const ownerUserId = randomUUID();
+      const receipt = { ownerUserId, saveId: randomUUID() };
+      let saved = await pages.save(page(key), undefined, { receipt, expectAbsent: true });
+      expect((await pages.getForSave(key, ownerUserId)).lastSaveId).toBe(receipt.saveId);
+      saved = await pages.publish(key, saved.updatedAt!);
+      expect((await pages.getForSave(key, ownerUserId)).lastSaveId).toBeNull();
+      saved = await pages.save(saved, saved.updatedAt!, { receipt });
+      saved = await pages.unpublish(key, saved.updatedAt!);
+      expect((await pages.getForSave(key, ownerUserId)).lastSaveId).toBeNull();
+      saved = await pages.save(saved, saved.updatedAt!, { receipt });
+      for (const revision of await pages.listRevisions(key)) {
+        expect(JSON.stringify(await pages.getRevision(key, revision.id))).not.toMatch(/lastSaveId|ownerUserId|last_save/);
+      }
+      await pages.remove(key, saved.updatedAt!);
+      expect(await pages.getForSave(key, ownerUserId)).toMatchObject({ content: { updatedAt: null }, lastSaveId: null });
     });
   });
 }

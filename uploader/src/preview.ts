@@ -15,6 +15,8 @@ import { SHIKI_CSS } from '../../site/src/lib/shiki-classes.js';
 import { focusPosition, sourceFormats, srcset, fallbackSrc } from '../../site/src/lib/images.js';
 import { coordsLabel, dateLabel } from '../../site/src/lib/format.js';
 import type { HeroImage, Locale, PostPair } from './posts.js';
+import type { StoredPagePair } from './pages.js';
+import { ui } from '../../site/src/i18n/ui.js';
 
 // @ai-warning: several fields escaped here (hero.alt, keyFacts labels/values,
 // coordinate/date strings) are typed as string but come from untyped jsonb
@@ -224,4 +226,14 @@ ${body}
 </body>
 </html>
 `;
+}
+
+/** Page preview uses the same sanitized body and local gallery overlay as story preview. */
+export async function renderPagePreviewHtml(pair: StoredPagePair, locale: Locale, imageOrigin: string, metadata?: GalleryMetadata): Promise<string> {
+  const row = pair[locale];
+  const body = transformBodyImages(await renderMarkdown(row.bodyMarkdown), row.images, imageOrigin, metadata);
+  return `<!doctype html><html lang="${locale}"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
+<title>${escapeHtml(row.title)} · ${escapeHtml(ui[locale]['pages.preview'])}</title><style>${STYLE}</style></head>
+<body><div class="banner">${escapeHtml(ui[locale]['pages.preview'])}</div><main><h1>${escapeHtml(row.title)}</h1><article>${body}</article></main></body></html>`;
 }

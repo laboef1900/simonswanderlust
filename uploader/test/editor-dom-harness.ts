@@ -56,6 +56,7 @@ export class EditorElement {
   readOnly = false;
   target = '';
   rel = '';
+  returnValue = '';
   selectionStart = 0;
   selectionEnd = 0;
 

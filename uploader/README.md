@@ -274,6 +274,28 @@ For offline restore, verified undo sets and `storage_read_only` recovery, follow
 [Database dumps](../ARCHITECTURE.md#database-dumps). A running app prevents restore;
 do not bypass the ownership/session drain checks.
 
+## Editable pages
+
+The admin-only **Pages** catalogue at `/admin/pages.html` opens the incumbent
+`about.html?key=…` editor for the closed About/Contact/Privacy/Legal kinds. About
+keeps its fixed URLs and cannot be unpublished/deleted. Other pages start as
+drafts; publication locks each enabled locale's slug permanently through unpublish.
+Draft saves do not build; published saves/revision restores, Publish, unpublish
+and published deletion commit then build once. A committed HTTP 200 response with
+`build.ok: false` means the new DB state is saved and the old release is still
+serving: retry **Rebuild site now** after repair. PUT includes its owner/save receipt;
+an actual 5xx remains Unknown and follows the one-probe/manual-check contract.
+
+Language settings' **Prepare translations** opens the explicit inactive-locale
+workflow without exposing those fields in ordinary editing. Activation validates
+all published pages and stamps newly public locales atomically. Deletion confirms
+paths, revisions, inbound navigation and possible body links; only typed navigation
+references and page revisions are removed. Photos and prose links are untouched.
+Logical dump v13 preserves page lifecycle metadata and `site_nav`; MDX is still
+posts-only. Public generic pages/navigation rendering is #289, not this API slice.
+See [authoring](../docs/authoring-workflow.md#editable-pages) and the
+[#287 implementation interface](../docs/superpowers/specs/2026-10-27-issue-287-pages-navigation.md).
+
 ## Media library
 
 `/admin/media.html` is the browsable store behind every photo the blog serves — one row per

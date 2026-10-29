@@ -7,11 +7,12 @@ import { neutralIdentity } from '../../site/src/lib/site-identity.js';
 import { readOnboardingState, type RetiredReason } from './onboarding.js';
 import { readRestoreFence } from './onboarding-fence.js';
 import { DEFAULT_LANGUAGE, languageFromRow, type LanguageRow } from './language.js';
+import { DEFAULT_NAVIGATION, validateNavigation } from '../../site/src/lib/navigation.js';
 
 export interface OnboardingPaths { storageDir: string; settingsPath: string; backupDir: string; siteDir: string }
 export interface BootEvidence { priorSchema: boolean; accounts: boolean; content: boolean }
 const CONTENT_TABLES = ['posts', 'post_revisions', 'post_routes', 'route_cleanup', 'media', 'media_folders', 'comments', 'import_jobs', 'app_secrets', 'page_revisions', 'site_identity_assets', 'upload_receipts'] as const;
-const CORE_TABLES = ['users', 'sessions', ...CONTENT_TABLES, 'pages', 'site_identity', 'site_language'] as const;
+const CORE_TABLES = ['users', 'sessions', ...CONTENT_TABLES, 'pages', 'site_identity', 'site_language', 'site_nav'] as const;
 type Query = Pick<DbClient, 'query'>;
 
 async function tableInventory(db: Query): Promise<Map<string, string>> {
@@ -33,6 +34,15 @@ async function inspectEvidence(db: Query, tables: Map<string, string>): Promise<
       const seed = ABOUT_SEED[row.locale as 'de' | 'en'];
       return row.title !== seed.title || row.body_markdown !== seed.body || !isDeepStrictEqual(row.images, {});
     });
+  }
+  if (tables.has('site_nav')) {
+    const navigation = await db.query('SELECT id, config FROM site_nav');
+    if (navigation.rows.length > 1) throw new Error('Invalid navigation singleton.');
+    for (const row of navigation.rows) {
+      if (row.id !== 1) throw new Error('Invalid navigation singleton.');
+      validateNavigation(row.config);
+      evidence.content ||= !isDeepStrictEqual(row.config, DEFAULT_NAVIGATION);
+    }
   }
   if (tables.has('site_identity')) {
     const identities = await db.query<IdentityRow>('SELECT * FROM site_identity');
@@ -163,7 +173,8 @@ const BOOTSTRAP_COLUMNS: Record<string, Record<string, string>> = {
   post_revisions: { id: 'uuid', translation_key: 'text', snapshot: 'jsonb', saved_at: 'timestamp with time zone' },
   post_routes: { translation_key: 'text', version: 'uuid', geometry: 'jsonb', source_id: 'uuid', source_sha256: 'text', source_bytes: 'integer', updated_at: 'timestamp with time zone' },
   route_cleanup: { source_id: 'uuid', pair_hash: 'text', requested_at: 'timestamp with time zone' },
-  pages: { key: 'text', locale: 'text', title: 'text', body_markdown: 'text', images: 'jsonb', updated_at: 'timestamp with time zone', last_save_id: 'uuid', last_save_by: 'uuid' },
+  pages: { key: 'text', locale: 'text', title: 'text', body_markdown: 'text', images: 'jsonb', updated_at: 'timestamp with time zone', slug: 'text', status: 'text', published_at: 'timestamp with time zone', last_save_id: 'uuid', last_save_by: 'uuid' },
+  site_nav: { id: 'smallint', config: 'jsonb', updated_at: 'timestamp with time zone' },
   page_revisions: { id: 'uuid', key: 'text', snapshot: 'jsonb', saved_at: 'timestamp with time zone' },
   media: { key: 'text', folder: 'text', title: 'text', alt_de: 'text', alt_en: 'text', caption_de: 'text', caption_en: 'text', tags: 'text[]', width: 'integer', height: 'integer', orig_bytes: 'bigint', variant_bytes: 'bigint', status: 'text', error: 'text', taken_at: 'timestamp with time zone', camera: 'text', lens: 'text', lat: 'double precision', lng: 'double precision', format: 'text', encoding: 'jsonb', uploaded_at: 'timestamp with time zone', uploaded_by: 'uuid' },
   media_folders: { path: 'text', created_at: 'timestamp with time zone' },
@@ -176,10 +187,10 @@ const BOOTSTRAP_COLUMNS: Record<string, Record<string, string>> = {
   onboarding_state: { singleton: 'boolean', schema_version: 'smallint', state: 'text', reason: 'text', evaluated_at: 'timestamp with time zone', dismissed_at: 'timestamp with time zone', retired_at: 'timestamp with time zone' },
   upload_receipts: { user_id: 'uuid', upload_id: 'uuid', media_key: 'text', sha256: 'text', identity: 'jsonb', frozen: 'jsonb', state: 'text', incarnation: 'uuid', claim: 'uuid', generation: 'integer', reason: 'text', original_retained: 'boolean', result: 'jsonb' },
 };
-const ADDITIVE_COLUMNS: Record<string, readonly string[]> = { posts: ['published_snapshot','published_at','categories','tags','scheduled_at','title_image','featured','comments_enabled','omitted','last_save_id','last_save_by'], pages: ['last_save_id','last_save_by'], media: ['format','encoding'], comments: ['is_author'] };
+const ADDITIVE_COLUMNS: Record<string, readonly string[]> = { posts: ['published_snapshot','published_at','categories','tags','scheduled_at','title_image','featured','comments_enabled','omitted','last_save_id','last_save_by'], pages: ['slug','status','published_at','last_save_id','last_save_by'], media: ['format','encoding'], comments: ['is_author'] };
 const NULLABLE_COLUMNS: Record<string, readonly string[]> = {
   posts: ['title_image','stops','route','key_facts','published_snapshot','published_at','scheduled_at','last_save_id','last_save_by'],
-  pages: ['last_save_id','last_save_by'], upload_receipts: ['reason','result'],
+  pages: ['published_at','last_save_id','last_save_by'], upload_receipts: ['reason','result'],
   post_routes: ['geometry'], media: ['error','taken_at','camera','lens','lat','lng','format','encoding','uploaded_by'],
   import_jobs: ['finished_at','summary','error'], site_identity: ['saved_at','canonical_origin'],
   comments: ['email','sender_hash'], onboarding_state: ['dismissed_at','retired_at'],
@@ -191,12 +202,14 @@ const PRIMARY_KEYS: Record<string, readonly string[]> = {
   import_jobs: ['id'], app_secrets: ['key'], site_identity: ['id'], site_identity_assets: ['role'], site_language: ['id'],
   comments: ['id'], onboarding_state: ['singleton'],
   upload_receipts: ['user_id','upload_id'],
+  site_nav: ['id'],
 };
 const BOOTSTRAP_DEFAULTS: Record<string, Record<string, string>> = {
   users: { is_admin: 'false', created_at: 'now()' }, sessions: { created_at: 'now()' },
   posts: { images: "'{}'::jsonb", status: "'draft'::text", featured: 'false', comments_enabled: 'true', created_at: 'now()', updated_at: 'now()', categories: "'{}'::text[]", tags: "'{}'::text[]", omitted: 'false' },
   post_revisions: { saved_at: 'now()' }, route_cleanup: { requested_at: 'now()' },
-  pages: { title: "''::text", body_markdown: "''::text", images: "'{}'::jsonb", updated_at: 'now()' },
+  pages: { title: "''::text", body_markdown: "''::text", images: "'{}'::jsonb", updated_at: 'now()', slug: "''::text", status: "'draft'::text" },
+  site_nav: { updated_at: 'now()' },
   page_revisions: { saved_at: 'now()' },
   media: { folder: "''::text", title: "''::text", alt_de: "''::text", alt_en: "''::text", caption_de: "''::text", caption_en: "''::text", tags: "'{}'::text[]", width: '0', height: '0', orig_bytes: '0', variant_bytes: '0', status: "'processing'::text", uploaded_at: 'now()' },
   media_folders: { created_at: 'now()' }, import_jobs: { started_at: 'now()', updated_at: 'now()' },
@@ -230,7 +243,11 @@ const BOOTSTRAP_CHECKS: Record<string, { columns: readonly string[]; expression:
     { columns: ['source_bytes'], expression: '((source_bytes >= 1) AND (source_bytes <= 5242880))' },
   ],
   route_cleanup: [{ columns: ['pair_hash'], expression: "(pair_hash ~ '^[0-9a-f]{64}$'::text)" }],
-  pages: [{ columns: ['locale'], expression: "(locale = ANY (ARRAY['de'::text, 'en'::text]))" }],
+  pages: [
+    { columns: ['locale'], expression: "(locale = ANY (ARRAY['de'::text, 'en'::text]))" },
+    { columns: ['status'], expression: "(status = ANY (ARRAY['draft'::text, 'published'::text]))" },
+  ],
+  site_nav: [{ columns: ['id'], expression: '(id = 1)' }],
   media: [
     { columns: ['status'], expression: "(status = ANY (ARRAY['processing'::text, 'ready'::text, 'failed'::text, 'missing'::text]))" },
     { columns: ['format'], expression: "((format IS NULL) OR (format = 'jpeg'::text))" },
@@ -340,6 +357,7 @@ const BOOTSTRAP_INDEXES: Record<string, Record<string, { unique: boolean; defini
     posts_tk_locale_idx: { unique: true, definition: 'btree (translation_key, locale)' },
   },
   post_revisions: { post_revisions_tk_saved_idx: { unique: false, definition: 'btree (translation_key, saved_at DESC)' } },
+  pages: { pages_locale_slug_idx: { unique: true, definition: "btree (locale, slug) WHERE (slug <> ''::text)" } },
   page_revisions: { page_revisions_key_saved_idx: { unique: false, definition: 'btree (key, saved_at DESC)' } },
   media: {
     media_folder_idx: { unique: false, definition: 'btree (folder)' },
@@ -413,7 +431,7 @@ export async function assertBootstrapOnlyTarget(pool: DbPool, assertOwner: () =>
       if (policies.rows.length) throw new Error('Preparation refuses row policies or rewrite rules.');
       const triggers = await client.query('SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass($1) AND NOT tgisinternal LIMIT 1', [table]);
       if (triggers.rows.length) throw new Error('Preparation refuses application triggers.');
-      if (table !== 'pages' && table !== 'site_identity' && table !== 'site_language' && table !== 'onboarding_state'
+      if (table !== 'pages' && table !== 'site_identity' && table !== 'site_language' && table !== 'site_nav' && table !== 'onboarding_state'
         && (await client.query(`SELECT EXISTS(SELECT 1 FROM ${table}) AS found`)).rows[0].found) throw new Error('Preparation requires an empty bootstrap-only target.');
     }
     const evidence = await inspectEvidence(client, tables);

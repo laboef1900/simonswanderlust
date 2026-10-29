@@ -430,6 +430,7 @@ describe('admin page wiring', () => {
     expect(auth).toContain(".cms-user-name').textContent = s.username");
   });
 
+
   it('the desk is a publishing home, not a second uploader', () => {
     const index = readFileSync('public/index.html', 'utf8');
     expect(index).toContain('<h1>Desk</h1>');

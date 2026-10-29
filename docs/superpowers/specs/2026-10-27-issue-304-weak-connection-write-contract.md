@@ -1000,14 +1000,18 @@ actual deployment mount passed.
 | Native lifetime ownership, filesystem-before-PG admission, no lease fallback | `data-owner.ts` wraps the qualified owned N-API binding; main and offline storage-writing CLI paths hold its descriptor until explicit quiescence/exit | `data-owner.integration.test.ts`, strengthened real-main PG-loss/restore test in `gpx-main-boot.integration.test.ts`; native production-image matrix below |
 | Folder/move reconciliation independent of visible pagination | Bounded reads; one no-store, authenticated `/media/lookup` query for 1–100 keys; explicit missing entries; per-operation panels survive list refresh | `server.test.ts`, `media-browser-dom.test.ts` (lost create, incomplete lookup, malformed 2xx, later filter change) |
 | Paused Media batch, explicit same-owner resume and no persisted Files | Queue pause is distinct from in-flight evidence; focus/login never replay; Unknown cannot transfer; page-exit warning remains active | `media-api.test.ts`, `upload-recovery.test.ts`, parent second-tab/browser scenarios |
-| Strict bootstrap/restore compatibility | `onboarding-bootstrap.ts` extends the merged #280 language catalog with exact receipt types, defaults, nullability, CHECKs, indexes and FK semantics | `onboarding.integration.test.ts`, `backup.integration.test.ts`; exact PG18.6 receipt catalog was supplied by parent from a disposable empty database |
+| Strict bootstrap/restore compatibility | `onboarding-bootstrap.ts` extends the merged #280 catalog with exact receipt and actual #288 page/navigation types, defaults, nullability, CHECKs, indexes and FK semantics | `onboarding.integration.test.ts`, `backup.integration.test.ts`; parent supplied exact disposable PG18 receipt and page/navigation catalogs; unrelated journey tables are not admitted |
 
 The local stack integrates the actual #348 queue-recovery branch and actual #280
 empty-state/language-catalog branch (including #285 public-output work), rather than copying
 their patches. #284's consent race fence is retained as
 `PostSaveOptions.baseLanguageUpdatedAt`; there is no Date/options compatibility overload.
-The #288 generic-page branch is **not** copied into this branch. Its later integration must
-use the same key-agnostic page receipt/options contract and migrate its actual callers.
+The actual #288 generic-page branch is integrated, not copied: all four registry keys use
+the same page receipt/options contract, generic editor and upload identity. Publish,
+unpublish, deletion and language activation invalidate receipts. Draft saves do not build;
+committed actions use #297 HTTP 200/projected build outcomes, while real 5xx remain Unknown.
+The merged generic-page lifecycle/DOM tests, `write-receipts.test.ts` and strict bootstrap
+tests cover those integration boundaries; no worker execution is claimed.
 #306 retains ownership of conditional media PATCH/offline/full conflict-dialog work; it is
 not a deferral of the preserve-and-compare behavior implemented here.
 
