@@ -1020,7 +1020,22 @@ non-About rendering/navigation. Those downstream public build/browser checks,
 independent actual-PR review, exact-head CI and stack integration remain distinct
 gates. Successful CMS publication alone does not establish the new public routes.
 
-## #289 public-output and navigation interface — verification pending
+
+Independent PR review subsequently found two additional UI defects: lifecycle
+responses could clear edits typed during rebuilding, and catalogue Delete
+cancellation lost focus. Both regressions failed before the repair and pass with
+the real DraftGuard/native confirmation implementations. Complete suites/type
+checks/Astro build passed at `c18f516` (wave `1793287726371_82151`).
+The actual-main/browser supplement `issue-288-runtime-c18f516-supplement.json`
+held genuine Publish and Unpublish acknowledgements after real builds: unsent
+titles, recovery stashes and native unload warnings survived both responses,
+while persisted titles stayed unchanged. Catalogue Escape and Cancel restored
+enabled-opener focus at 1440px and 320px without page/history mutations.
+Independent re-review found no remaining findings; both required CI jobs passed
+on `c18f516`. Final documentation CI and eventual stack qualification remain
+separate from this exact-source evidence.
+
+## #289 public-output and navigation interface
 
 The implementation extends the existing #285 `[...path].astro` catalogue, not
 parallel fixed route files. `pages` and `navigation` Content Layer collections
@@ -1109,10 +1124,42 @@ The actual-output suite asserts emitted/sitemap equality, all enabled page paths
 no private bytes, one About/title per locale, correct canonical/alternate links,
 seed link preservation, escaped hostile labels, external attributes/indicator,
 current-page semantics, absent dangling/draft links and the preserved social slot.
-Parent still must exercise real admin save/reload/conflict/rebuild recovery,
-keyboard focus and 320px/desktop rendering, including long localized labels and
-single-locale modes. Existing design-context metadata is stale; the worker used
-the current DESIGN/spec and inspected the synthetic incumbent About UI, without
-mutating its content. This appendix records implemented contracts and unrun
-evidence, not approval of a scope change or a claim of completed runtime proof.
+The implementing worker did not run these checks. The parent and separate runtime
+worker subsequently exercised the matrix below, using the current DESIGN/spec and
+independent synthetic content. No incumbent owner content was changed.
 
+### Observed #289 qualification (2026-10-29)
+
+Product source `7c0d21457b8be3ccfdffd5243db1d305aec10848` passed uploader
+type checking and the complete PostgreSQL-enabled suite, Astro check, the complete
+site suite and a real Astro build (`wave-two-results-1793288559109_86513.json`).
+The runtime worker then built all eight real artifact sets through `createSiteBuilder`
+and its exported PostgreSQL snapshot. The parent ran the built-page contract against
+those retained outputs: all four mode cases passed. All 452 artifact files were
+scanned without `PRIVATE289` bytes.
+
+Four actual main-process instances supported 36 Contact/Legal/About browser captures
+over enabled locales at 1440px and 320px. Actual sitemap-listed HTML routes and six
+RSS endpoints returned 200. Canonical/alternate links, literal hostile labels,
+responsive pictures, optional legal links, keyboard navigation, long labels and
+horizontal fit were exercised; screenshot contact sheets were visually inspected.
+
+Settings browser scenarios exercised navigation creation/editing/reorder, persisted
+order, scope confirmation, Escape/Cancel focus, stale-token 409 with explicit reload,
+invalid-scheme 400, author GET/PUT 403, inactive-field retention and transport failure.
+A real `/karte/` collision (`page:legal:de` versus `site:map:de`) failed the build after
+navigation committed, returning 502 with `persisted: true`. The previous `/kontakt/`
+still returned 200 with identical 12,148 bytes and SHA-256. Explicit UI Rebuild then
+recovered with 200 without resaving navigation.
+
+Canonical evidence: `issue-289-runtime-final.json` in the ignored execution ledger;
+the eight outputs remain under the issue worktree's `.issue-runtime/page-artifacts`.
+Only owned services/browsers were stopped; four private synthetic databases and
+recovery evidence remain retained. Reserved verification databases, earlier fixtures
+and owner content were untouched.
+
+This source retains the incumbent fixed canonical origin; #276 integration is a
+separate dependency qualification, not claimed by this proof. Likewise, manual
+screen-reader assessment, actual-target collision/deployment qualification,
+independent implementation-PR review, exact-final-head CI and resulting-stack
+qualification remain distinct. No merge, release or deployment is authorized.
