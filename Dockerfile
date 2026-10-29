@@ -42,7 +42,7 @@ ARG NODE_RUNTIME
 ENV NODE_BUILD=${NODE_BUILD} NODE_RUNTIME=${NODE_RUNTIME} DEBIAN_SNAPSHOT=20261029T000000Z
 USER 0
 WORKDIR /proof
-COPY .github/issue-304-native/owned-flock.c .github/issue-304-native/build-native.mjs .github/issue-304-native/container-toolchain.mjs ./
+COPY .github/native-owner/owned-flock.c .github/native-owner/build-native.mjs .github/native-owner/container-toolchain.mjs ./
 RUN ["node", "-e", "require('node:fs').mkdirSync('/proof/inputs', { recursive: true })"]
 RUN ["node", "container-toolchain.mjs"]
 COPY uploader/scripts/build-native.mjs /app/uploader/scripts/build-native.mjs
@@ -55,6 +55,8 @@ COPY uploader/package.json uploader/package-lock.json ./
 RUN npm ci --omit=dev
 COPY uploader/ .
 RUN node scripts/copy-fonts.mjs && node scripts/copy-easymde.mjs && node scripts/copy-vendor.mjs
+# The build driver and descriptor-test subprocesses are not runtime inputs.
+RUN ["node", "-e", "const fs = require('node:fs'); fs.rmSync('scripts/build-native.mjs'); fs.rmSync('test', { recursive: true, force: true });"]
 
 # --- site deps (full install: Astro build needs devDependencies at runtime) ---
 FROM ${NODE_BUILD} AS site-build

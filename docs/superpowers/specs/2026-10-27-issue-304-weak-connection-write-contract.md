@@ -1039,11 +1039,37 @@ npx astro check
 npm run build
 ```
 
-`build:native` uses the owned qualified C/recipe and pinned Node 26.12.1 headers; CI builds
-the binding before uploader tests. The production Dockerfile builds it in a separate DHI
-stage and copies only the artifact/provenance/license into the runtime. Qualification
-workers/helpers are not shipped as runtime lock owners. Preserve the native proof source
-and canonical qualification artifacts when evaluating the cutover.
+`build:native` uses `.github/native-owner/` and pinned Node 26.12.1 headers; CI builds
+the binding before uploader tests. The qualified `owned-flock.c`, `build-native.mjs`
+and `container-toolchain.mjs` were moved byte-for-byte from the temporary #304 packet.
+Their SHA-256 identities are respectively:
+
+- `ac6ee84b387ff60b2d28f6dc8260f358f338eade17eaec207f27c05805d1ab47`
+- `ee5a282642f000e07d02f2848c3a73fde07902ef7b9c13876f95399f88f5014c`
+- `ecff9a333a190a33c2e06c2b72d8e7f7d40360eafde20d5a1b4876c976b9a77b`
+
+Their historical qualification comments and `/proof` scratch path remain intentionally
+unchanged. The production Dockerfile retains the qualified DHI index digests and Debian
+snapshot, builds in a separate stage, and copies only the native artifact, ABI/build record,
+header/license provenance and license into the runtime. It removes the uploader native
+build driver and test tree before copying the uploader runtime.
+
+The temporary #304 workflow, frozen-source harness, proof workers, image inventory and
+diagnostic-export helpers have been removed from active source. Canonical private
+qualification artifacts and historical PR #470 remain unchanged. Necessary descriptor
+boundary/lifetime coverage now lives in `data-owner.integration.test.ts`: invalid arity,
+types/ranges, closed/non-file descriptors, live and stopped contention, clean close,
+SIGKILL, stable inode, ordinary-child noninheritance, explicit-inheritance last-close
+negative control and cleanup after PG admission refusal. Existing real PG-loss and
+main/offline-restore drain tests remain in the product suites. Forced ENOLCK and a
+deliberately non-CLOEXEC rejection probe remain unexercised, as in the inherited record.
+
+Permanent `owned flock · native amd64` and `owned flock · native arm64` jobs in `ci.yml`
+use the current checkout, standard public native Ubuntu runners and their own disposable
+Postgres service. They retain the public/same-repository guard, require no DHI credentials,
+and upload no fixtures/logs/artifacts. Existing required uploader/site job names remain
+unchanged. Host-runner results cannot qualify the packaged DHI runtime or a deployment
+mount; production-image integration below remains a separate parent-owned gate.
 
 The combined parent wave must additionally exercise:
 
