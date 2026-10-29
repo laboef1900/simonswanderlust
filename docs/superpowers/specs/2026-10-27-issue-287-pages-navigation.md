@@ -884,11 +884,11 @@ No new root segment is registered, so the app reservation set is unchanged by th
 | Independent review F7/F9 | Correctness clarifications incorporated; not a claim that the earlier review was clean |
 | Q12 / review F8 | Approved **“Prepare translations before activation”** after PR #407 head `93619a0ccb665c27152dff67fce496b779a3b38d` and PR #406 head `8542d78fa1f9168c0313d2cffdef3d17830eba6d`; option A only |
 
-## #288 implementation interface — verification pending
+## #288 implementation interface and scoped qualification
 
 This appendix records the implemented storage/CMS boundary for downstream #289 and
 #309. It does not change the approved scope or claim that public generic routes,
-navigation settings, tests or a production migration have been exercised.
+navigation settings or a production migration have been exercised.
 
 ### Shared modules and stored representation
 
@@ -992,16 +992,174 @@ are refreshed during restore so an open pre-restore editor cannot overwrite it.
 Containment is unpublish/delete (not About), or repair/rebuild; preserve the last
 successful release and the approved compatible recovery image/set.
 
-### Acceptance evidence to run at integration
+### Observed #288 acceptance evidence (2026-10-29)
 
-Regression coverage is added for memory/Postgres lifecycle parity, namespace races
-and retained snapshots, explicit preparation/activation, transactional deletion
-failure, API permissions/sanitized preview/foreign-image gates/rebuild failure,
-real editor DOM confirmation/stale state/preparation, WXR no-fetch refusal,
-legacy/app reservation equality, and v13/legacy recovery validation. None was run
-by the implementation worker. Parent must run the affected full suites, TypeScript
-and Astro checks against a disposable database, then real admin/browser scenarios
-for both primary-language modes and a failed-build/rebuild recovery. #289 must
-add public output/build collision/nav resolution evidence before deployment;
-successful #288 CMS publication alone does not establish those public routes.
+Complete uploader/PostgreSQL suites and TypeScript, site suites, Astro check and
+real build passed after the cancellation-focus regression fix
+(`wave-two-results-1793284517645_74185.json`).
 
+Actual `main.ts`, desktop/320px managed-browser and CLI scenarios covered catalog
+permissions, reserved/reverse/grandfathered claims, no-fetch WXR refusal, page
+history/conflicts/deletion scope, inactive translation preparation/activation,
+post-commit build failure and explicit recovery, restart preservation, and real
+v13 dump/restore with separately synthetic v12/v11/v10/v1 compatibility inputs.
+The corrected source `c90f1142befaf6ac5529462f96c3ec4375aa2e7c` restores enabled
+Delete-button focus after both Escape and Cancel; cancelled operations preserve
+exact page/revision state. Uploaded responsive media was rendered successfully.
+
+The canonical ignored evidence index is `issue-288-runtime-final.json` under
+`.local/backlog-execution-2026-10-27/`. Earlier successful phases retain their
+`a4acb88` source attribution. Earlier `/about-me/` equal-404 comparisons are
+explicitly excluded: supplemental failure proof requires actual `/uber-mich/`
+HTTP 200 with identical SHA-256 and byte length while the prior release remains.
+Fixtures and private recovery sets were retained; only owned services/browsers
+were stopped. No owner content or data was changed.
+
+This qualifies the CMS boundary, not #285's public language-mode routes or #289's
+non-About rendering/navigation. Those downstream public build/browser checks,
+independent actual-PR review, exact-head CI and stack integration remain distinct
+gates. Successful CMS publication alone does not establish the new public routes.
+
+
+Independent PR review subsequently found two additional UI defects: lifecycle
+responses could clear edits typed during rebuilding, and catalogue Delete
+cancellation lost focus. Both regressions failed before the repair and pass with
+the real DraftGuard/native confirmation implementations. Complete suites/type
+checks/Astro build passed at `c18f516` (wave `1793287726371_82151`).
+The actual-main/browser supplement `issue-288-runtime-c18f516-supplement.json`
+held genuine Publish and Unpublish acknowledgements after real builds: unsent
+titles, recovery stashes and native unload warnings survived both responses,
+while persisted titles stayed unchanged. Catalogue Escape and Cancel restored
+enabled-opener focus at 1440px and 320px without page/history mutations.
+Independent re-review found no remaining findings; both required CI jobs passed
+on `c18f516`. Final documentation CI and eventual stack qualification remain
+separate from this exact-source evidence.
+
+## #289 public-output and navigation interface
+
+The implementation extends the existing #285 `[...path].astro` catalogue, not
+parallel fixed route files. `pages` and `navigation` Content Layer collections
+import the same exported snapshot already used by trips/identity/language.
+Eligibility is applied before row parsing; Zod then rejects malformed published
+registry rows, missing enabled counterparts and invalid images. The original
+sanitized body is checked for foreign image origins before portability rewriting
+and guarded responsive-picture/gallery rendering. About stays the existing
+resource and fixed localized route exactly once, including its fallback text.
+Generic pages have canonical/sitemap/actual-counterpart hreflang, not story feeds.
+The existing #288 sanitized saved-draft preview remains the preview surface.
+
+`publicRoutes` is the one full emitted HTML catalogue. Its deterministic guard
+names both competing owners and rejects page/story/static/locale collisions
+regardless of input creation order. Page reservations are strict; grandfathered
+app/legacy story names retain the approved warning policy. Navigation accepts only
+the existing version-1 schema, resolves each enabled locale against this catalogue
+(plus actual RSS/sitemap/error artifacts), omits unavailable page targets and warns
+on non-emitted relative paths. External URLs retain only the validator's HTTPS
+form and render escaped labels with the approved new-tab semantics. Footer legal
+links are optional; the existing identity social slot remains separate.
+
+### Owner editing and response contract
+
+- `GET /settings/navigation`: admin-only/no-store; `{ config, updatedAt, language,
+  socialLinks }`. `socialLinks` is the current read-only identity list, not a second
+  navigation setting.
+- `PUT /settings/navigation`: admin-only/no-store; strict `{ config, updatedAt }`
+  payload. Lock `site_language` first, then `site_nav`, validate the complete
+  document and active-locale URL/label pairs against that locked mode, compare the
+  optimistic token, save and commit. No model/provider/browser-storage involvement.
+- After commit and lock release, build once. Success is `{ saved, build }`; failed
+  returned or thrown builds are `502 { code: "navigation_build_failed",
+  persisted: true, saved, error }`, retaining the last successful release. Invalid
+  input is 400; stale token is 409 with no write/build.
+- Settings → Navigation edits header/footer/legal in stored order, bounded by
+  5/8/4 items, with all four kinds, target choice and enabled-locale label/URL
+  fields. Disabled-locale values survive ordinary edits. Move actions preserve
+  focus; removal/reload/rebuild use the existing confirmation helper. Missing
+  targets are author notices. Failed-build acknowledgements adopt the saved token;
+  conflicts or unacknowledged transport failures retain edits and require reload.
+  Retry rebuild does not resave. Social links link back to Site identity.
+
+### Deterministic evidence matrix for integration owner
+
+No checks/builds were run by the implementation worker. Run the full affected site
+and uploader suites/type checks once after integration, with `TEST_DATABASE_URL`
+set for actual PostgreSQL coverage. New focused suites cover page schema/filtering,
+all-mode routes/collisions, malicious navigation URLs, loader snapshot rejection,
+sanitized image rendering, navigation API roles/tokens/failure acknowledgement,
+memory/Postgres writer races and the real Settings DOM.
+
+`navigation-snapshot.integration.test.ts` uses a disposable schema and real exported
+snapshot for both primary languages. Its builder seam pauses after capture,
+mutates live page/navigation/identity/language rows, then imports the captured
+snapshot through actual page/navigation/trip loaders. A queued failed successor
+must preserve the earlier release; an expired supplied snapshot must fail without
+new-row fallback. This is a real database/loader/release test, not a claim that an
+Astro subprocess or browser has been exercised.
+
+For actual Astro output, build `BUILT_PAGE_CONTRACT_ROOT/<mode>/{seed,configured}`
+for `de-bilingual`, `en-bilingual`, `de-only`, `en-only`. Use the same disposable
+identity/trips as the #285 fixture matrix, plus:
+
+1. About keeps its existing row, empty slug and fixed route. Publish Contact
+   (`de: kontakt`, `en: contact`) and Legal (`de: impressum`, `en: legal`) with
+   nonempty localized title/body. Keep Privacy draft (`datenschutz`/`privacy`) with
+   `PRIVATE289` in its body. In single-locale builds put `PRIVATE289` in every
+   retained inactive page title/body, not enabled content. No real legal text.
+2. Identity social links contain `{ label: "Author", url:
+   "https://social.example/author" }`. No provider credentials or owner data.
+3. `seed` uses `DEFAULT_NAVIGATION`; configured header is Contact page, a relative
+   path to the locale's actual map URL, then external
+   `https://example.org/source?lang=<locale>` labeled literally
+   `<img src=x onerror=alert(289)> & source` in each locale. Configured footer keeps
+   About plus a missing relative `/missing-289/` and draft Privacy target; legal
+   contains Legal plus draft Privacy. Give relative paths nonempty localized
+   labels. Respect each slot's schema bounds.
+4. Run `BUILT_PAGE_CONTRACT_ROOT=... npx vitest run --config
+   vitest.built.config.ts test/built/pages.test.ts`. This project deliberately
+   refuses missing artifacts. Existing #285 route inventory tests use their own
+   `BUILT_ROUTE_CONTRACT_ROOT` without the new generic-page fixture; run separately
+   or supply both roots when running the entire built project.
+
+The actual-output suite asserts emitted/sitemap equality, all enabled page paths,
+no private bytes, one About/title per locale, correct canonical/alternate links,
+seed link preservation, escaped hostile labels, external attributes/indicator,
+current-page semantics, absent dangling/draft links and the preserved social slot.
+The implementing worker did not run these checks. The parent and separate runtime
+worker subsequently exercised the matrix below, using the current DESIGN/spec and
+independent synthetic content. No incumbent owner content was changed.
+
+### Observed #289 qualification (2026-10-29)
+
+Product source `7c0d21457b8be3ccfdffd5243db1d305aec10848` passed uploader
+type checking and the complete PostgreSQL-enabled suite, Astro check, the complete
+site suite and a real Astro build (`wave-two-results-1793288559109_86513.json`).
+The runtime worker then built all eight real artifact sets through `createSiteBuilder`
+and its exported PostgreSQL snapshot. The parent ran the built-page contract against
+those retained outputs: all four mode cases passed. All 452 artifact files were
+scanned without `PRIVATE289` bytes.
+
+Four actual main-process instances supported 36 Contact/Legal/About browser captures
+over enabled locales at 1440px and 320px. Actual sitemap-listed HTML routes and six
+RSS endpoints returned 200. Canonical/alternate links, literal hostile labels,
+responsive pictures, optional legal links, keyboard navigation, long labels and
+horizontal fit were exercised; screenshot contact sheets were visually inspected.
+
+Settings browser scenarios exercised navigation creation/editing/reorder, persisted
+order, scope confirmation, Escape/Cancel focus, stale-token 409 with explicit reload,
+invalid-scheme 400, author GET/PUT 403, inactive-field retention and transport failure.
+A real `/karte/` collision (`page:legal:de` versus `site:map:de`) failed the build after
+navigation committed, returning 502 with `persisted: true`. The previous `/kontakt/`
+still returned 200 with identical 12,148 bytes and SHA-256. Explicit UI Rebuild then
+recovered with 200 without resaving navigation.
+
+Canonical evidence: `issue-289-runtime-final.json` in the ignored execution ledger;
+the eight outputs remain under the issue worktree's `.issue-runtime/page-artifacts`.
+Only owned services/browsers were stopped; four private synthetic databases and
+recovery evidence remain retained. Reserved verification databases, earlier fixtures
+and owner content were untouched.
+
+This source retains the incumbent fixed canonical origin; #276 integration is a
+separate dependency qualification, not claimed by this proof. Likewise, manual
+screen-reader assessment, actual-target collision/deployment qualification,
+independent implementation-PR review, exact-final-head CI and resulting-stack
+qualification remain distinct. No merge, release or deployment is authorized.
