@@ -38,6 +38,96 @@ interface Row { locale: Locale; slug: string; status: string; omitted: boolean; 
     return (await pool.query<Row>('SELECT locale,slug,status,omitted,published_at,published_snapshot FROM posts WHERE translation_key=$1 ORDER BY locale', [tk])).rows;
   }
 
+  it('keeps no-op saves and reverted edits clean while preserving revisions and snapshot identity', async () => {
+    const posts = pgPostStore(pool);
+    const saved = await posts.upsertDraft(story()); const tk = saved.translationKey;
+    await posts.publish(tk, await publishTokens(posts, tk));
+    const original = (await posts.get(tk))!;
+    const originalFacts = (await posts.publicationFacts())[0]!;
+    const noOp = await posts.upsertDraft(original);
+    expect(noOp.updatedAt.getTime()).toBeGreaterThan(original.updatedAt.getTime());
+    expect(await posts.listRevisions(tk)).toHaveLength(1);
+    expect(noOp.publication).toMatchObject({ availability: 'available', draftDiffers: false });
+    expect(await posts.publicationFacts()).toEqual([originalFacts]);
+    for (const edit of [
+      { ...original, de: { ...original.de, bodyMarkdown: 'Changed body' } },
+      { ...original, en: { ...original.en, title: 'Changed title' } },
+      { ...original, shared: { ...original.shared, featured: true } },
+      { ...original, shared: { ...original.shared, tags: ['changed'] } },
+      { ...original, shared: { ...original.shared, categories: ['changed'] } },
+      { ...original, shared: { ...original.shared, scheduledAt: '2027-01-01T00:00:00Z' } },
+      { ...original, de: { ...original.de, titleImage: original.de.heroImage } },
+    ]) {
+      expect((await posts.upsertDraft(edit)).publication).toMatchObject({ draftDiffers: true });
+      expect((await posts.list())[0]?.publication).toMatchObject({ draftDiffers: true });
+      expect((await posts.publicationFacts())[0]).toMatchObject({ draftDiffers: true, rowDigest: originalFacts.rowDigest });
+      expect((await posts.upsertDraft(original)).publication).toMatchObject({ draftDiffers: false });
+      expect(await posts.publicationFacts()).toEqual([originalFacts]);
+    }
+    expect((await posts.upsertDraft({ ...original, shared: { ...original.shared, commentsEnabled: false } })).publication)
+      .toMatchObject({ draftDiffers: false });
+    expect(originalFacts.rowDigest).toEqual({ de: expect.stringMatching(/^[a-f0-9]{64}$/), en: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    expect(noOp.publication).not.toHaveProperty('rowDigest');
+  });
+
+  it('compares legacy snapshots against absence defaults and excludes transformed track geometry', async () => {
+    const posts = pgPostStore(pool);
+    const saved = await posts.upsertDraft(story()); const tk = saved.translationKey;
+    await posts.publish(tk, await publishTokens(posts, tk));
+    await pool.query(`UPDATE posts SET published_snapshot =
+      (published_snapshot - ARRAY['title_image','featured','categories','tags','scheduled_at']::text[])
+      || '{"track":{"version":1}}'::jsonb WHERE translation_key=$1`, [tk]);
+    const original = (await posts.get(tk))!;
+    expect(original.publication).toMatchObject({ draftDiffers: false });
+    expect((await posts.list())[0]?.publication).toMatchObject({ draftDiffers: false });
+    for (const edit of [
+      { ...original, shared: { ...original.shared, featured: true } },
+      { ...original, shared: { ...original.shared, categories: ['changed'] } },
+      { ...original, shared: { ...original.shared, tags: ['changed'] } },
+      { ...original, shared: { ...original.shared, scheduledAt: '2027-01-01T00:00:00Z' } },
+      { ...original, de: { ...original.de, titleImage: original.de.heroImage } },
+    ]) {
+      expect((await posts.upsertDraft(edit)).publication).toMatchObject({ draftDiffers: true });
+      expect((await posts.upsertDraft(original)).publication).toMatchObject({ draftDiffers: false });
+    }
+  });
+
+  it('marks replacing and removing a private route pending until publication', async () => {
+    const posts = pgPostStore(pool, { publicTrackWorker: worker });
+    const routes = pgGpxStore(pool);
+    const saved = await posts.upsertDraft(story()); const tk = saved.translationKey;
+    const geometry = { version: 1 as const, segments: [{ points: [{ lng: 2, lat: 1 }, { lng: 2.01, lat: 1.01 }] }] };
+    const source = { translationKey: tk, sourceId: randomUUID(), sha256: 'a'.repeat(64), bytes: 100 };
+    const first = await routes.attach(tk, { baseVersion: null, baseUpdatedAt: saved.updatedAt.toISOString() }, geometry, source, false);
+    await posts.publish(tk, await publishTokens(posts, tk));
+    expect((await posts.publicationFacts())[0]?.draftDiffers).toBe(false);
+    const beforeReplace = (await posts.get(tk))!;
+    const replaced = await routes.attach(tk, { baseVersion: first.version, baseUpdatedAt: beforeReplace.updatedAt.toISOString() },
+      geometry, { ...source, sourceId: randomUUID() }, true);
+    expect((await posts.get(tk))?.publication).toMatchObject({ draftDiffers: true });
+    expect((await posts.list())[0]?.publication).toMatchObject({ draftDiffers: true });
+    await posts.publish(tk, await publishTokens(posts, tk));
+    expect((await posts.publicationFacts())[0]?.draftDiffers).toBe(false);
+    const beforeRemove = (await posts.get(tk))!;
+    await routes.detach(tk, { baseVersion: replaced.version, baseUpdatedAt: beforeRemove.updatedAt.toISOString() });
+    expect((await posts.get(tk))?.publication).toMatchObject({ draftDiffers: true });
+    expect((await posts.publicationFacts())[0]?.draftDiffers).toBe(true);
+    await posts.publish(tk, await publishTokens(posts, tk));
+    expect((await posts.publicationFacts())[0]?.draftDiffers).toBe(false);
+  });
+
+  it('does not report available publication when the published primary lacks a committed snapshot', async () => {
+    const posts = pgPostStore(pool);
+    const saved = await posts.upsertDraft(story()); const tk = saved.translationKey;
+    await posts.publish(tk, await publishTokens(posts, tk));
+    await pool.query("UPDATE posts SET published_snapshot=NULL WHERE translation_key=$1 AND locale='de'", [tk]);
+    expect((await posts.get(tk))?.publication).toEqual({ availability: 'unavailable' });
+    expect((await posts.list())[0]?.publication).toEqual({ availability: 'unavailable' });
+    expect((await posts.publicationFacts())[0]).toMatchObject({
+      primaryLocale: 'de', status: 'published', committedLocales: ['en'], rowDigest: { de: null },
+    });
+  });
+
   it.each(['de', 'en'] as const)('refuses reassignment of a %s-secondary draft into a reserved root namespace', async (secondary) => {
     const primary = secondary === 'de' ? 'en' : 'de';
     const language = pgLanguageStore(pool);
@@ -73,6 +163,15 @@ interface Row { locale: Locale; slug: string; status: string; omitted: boolean; 
     expect(saved[mode.primary].publishedAt).toBeNull();
     await posts.publish(tk, await publishTokens(posts, tk));
     expect(await posts.getPublishedLocales(tk)).toEqual(mode.locales);
+    expect((await posts.get(tk))?.publication).toEqual({
+      availability: 'available', status: 'published',
+      requestedLocales: [...mode.locales].sort(), committedLocales: [...mode.locales].sort(),
+      draftDiffers: false, live: { de: 'unknown', en: 'unknown' },
+    });
+    expect((await posts.publicationFacts())[0]).toMatchObject({
+      primaryLocale: mode.primary, requestedLocales: [...mode.locales].sort(),
+      committedLocales: [...mode.locales].sort(), draftDiffers: false,
+    });
     const committed = await rows(tk);
     for (const row of committed) {
       expect(row.status).toBe(mode.locales.includes(row.locale) ? 'published' : 'draft');
@@ -132,21 +231,34 @@ interface Row { locale: Locale; slug: string; status: string; omitted: boolean; 
     const saved = await posts.upsertDraft(input); const tk = saved.translationKey;
     await posts.publish(tk, await publishTokens(posts, tk));
     const baseline = (await rows(tk)).find((row) => row.locale === primary)!.published_snapshot;
+    expect((await posts.publicationFacts())[0]).toMatchObject({
+      primaryLocale: primary, status: 'published', requestedLocales: [primary], committedLocales: [primary], draftDiffers: false,
+    });
     const translated = await posts.upsertDraft({ ...saved, [secondary]: { ...saved[secondary], omitted: false, slug: `translated-${secondary}`, bodyMarkdown: '' } });
-    expect(translated.hasUnpublishedChanges).toBe(true);
+    expect(translated.publication).toMatchObject({ availability: 'available', draftDiffers: true });
     expect(translated[secondary].publishedAt).toBeNull();
-    expect((await posts.list())[0]?.hasUnpublishedChanges).toBe(true);
+    expect((await posts.list())[0]?.publication).toMatchObject({ availability: 'available', draftDiffers: true });
     expect(await posts.getPublishedLocales(tk)).toEqual([primary]);
     await expect(posts.publish(tk, await publishTokens(posts, tk))).rejects.toThrow(/body required/);
+    expect((await posts.publicationFacts())[0]).toMatchObject({
+      status: 'published', requestedLocales: ['de', 'en'], committedLocales: [primary], draftDiffers: true,
+      rowDigest: { [secondary]: null },
+    });
+    const omittedAgain = await posts.upsertDraft({ ...translated, [secondary]: { ...translated[secondary], omitted: true } });
+    expect(omittedAgain.publication).toMatchObject({ requestedLocales: [primary], committedLocales: [primary], draftDiffers: false });
     await posts.upsertDraft({ ...translated, [secondary]: { ...translated[secondary], bodyMarkdown: 'Translation' } });
     await expect(posts.publish(tk, await publishTokens(posts, tk), async () => { throw new Error('image gate'); })).rejects.toThrow('image gate');
     expect(await posts.getPublishedLocales(tk)).toEqual([primary]);
     expect((await rows(tk)).find((row) => row.locale === primary)!.published_snapshot).toEqual(baseline);
     expect((await posts.getPublishedTrack(tk)).locales).toEqual([primary]);
+    expect((await posts.publicationFacts())[0]?.draftDiffers).toBe(true);
     await posts.publish(tk, await publishTokens(posts, tk));
     expect(await posts.getPublishedLocales(tk)).toEqual([primary, secondary]);
     const current = (await posts.get(tk))!;
-    expect(current.hasUnpublishedChanges).toBe(false);
+    expect(current.publication).toMatchObject({ availability: 'available', draftDiffers: false });
+    expect((await posts.publicationFacts())[0]).toMatchObject({
+      requestedLocales: ['de', 'en'], committedLocales: ['de', 'en'], draftDiffers: false,
+    });
     await expect(posts.upsertDraft({ ...current, [secondary]: { ...current[secondary], omitted: true } })).rejects.toMatchObject({ code: 'locale_published' });
     await posts.unpublish(tk);
     await expect(posts.upsertDraft({ ...current, [secondary]: { ...current[secondary], omitted: true } })).rejects.toMatchObject({ code: 'locale_published' });

@@ -92,9 +92,10 @@ window.PostsFilter = (function () {
     var region = text(o.region);
     var country = text(o.country);
     var filtered = (posts || []).filter(function (p) {
-      if (status === 'unpublished' && p.hasUnpublishedChanges !== true) return false;
+      if (status === 'unpublished' && (PublicationState.publicationState(p.publication) === 'unavailable' || p.publication.draftDiffers !== true)) return false;
       if (status === 'missing-secondary' && p.secondaryStatus !== 'empty') return false;
-      if (status && status !== 'unpublished' && status !== 'missing-secondary' && p.status !== status) return false;
+      if (status && status !== 'unpublished' && status !== 'missing-secondary'
+        && (PublicationState.publicationState(p.publication) === 'unavailable' || p.publication.status !== status)) return false;
       if (region && p.region !== region) return false;
       if (country && p.country !== country) return false;
       return matchesQuery(p, needle);

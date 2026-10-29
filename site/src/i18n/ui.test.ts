@@ -38,6 +38,9 @@ describe('ui dictionaries', () => {
   const IDENTICAL_ON_PURPOSE: readonly UIKey[] = [
     'editor.chrome.studioName',
     'editor.chrome.onboardingOptional', // “Optional” is the same adjective in DE and EN.
+    'editor.chrome.publicationLive', // “Live” is also the German status term.
+    'editor.chrome.publicationFactLive',
+    'editor.chrome.publicationLocaleFact', // Locale code + translated fact; only punctuation is shared.
   ];
 
   it('flags untranslated values (identical in DE and EN) outside the allow-list', () => {

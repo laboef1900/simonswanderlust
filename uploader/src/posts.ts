@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { heroImageError, imageMarkdown, imagesMapError, normalizeGalleryFences, rewriteOutsideGalleries, type ImageMeta } from './body-content.js';
 import { lockPostPair, touchPostPair } from './post-pair-lock.js';
 import { safePairHash, type GpxFiles } from './gpx-files.js';
@@ -12,6 +13,8 @@ import { DEFAULT_LANGUAGE, assertLanguageNamespace, memoryLanguageStore, pgLangu
 import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js';
 import { lockContentNamespaces, registerMemoryClaims, memorySlugOwner } from './content-namespace.js';
 import { registerMemoryJourneyPosts, scrubMemoryJourneyReferences, scrubJourneyReferences } from './journey-cleanup.js';
+import type { Publication, PublicationFact } from './publication-contract.js';
+import { PUBLISHED_SNAPSHOT_DIGEST_SQL } from '../../site/src/lib/publication-manifest.js';
 
 export type Locale = 'de' | 'en';
 /**
@@ -86,13 +89,11 @@ export interface PostPair {
   shared: PostShared; de: PostLocale; en: PostLocale;
 }
 /**
- * A stored pair as returned by get()/upsertDraft(): the WORKING copy (what the
- * editor edits) plus `hasUnpublishedChanges` — true when a published post has
- * draft edits saved after its last Publish (the live site keeps serving the
- * published snapshot until the next Publish; see issue #20) — and `updatedAt`,
- * which the editor echoes back on save for optimistic concurrency (issue #28).
+ * A stored pair returns the working copy and observed publication facts.
+ * Release membership remains unknown until the server enriches the projection.
+ * `updatedAt` belongs to this content version, not a later projection read.
  */
-export interface StoredPostPair extends PostPair { hasUnpublishedChanges: boolean; updatedAt: Date }
+export interface StoredPostPair extends PostPair { publication: Publication; updatedAt: Date }
 /** Operational evidence, never part of content, revisions or exports. */
 export interface SaveReceipt { readonly saveId: string; readonly ownerUserId: string }
 export interface SaveRead<T> { content: T; ownerUserId: string; lastSaveId: string | null }
@@ -108,7 +109,7 @@ export interface PostRevision extends RevisionSummary { snapshot: RevisionSnapsh
 export const REVISION_CAP = 20;
 export interface PostSummary {
   translationKey: string; title: string; slugs: Record<Locale, string>;
-  status: PostStatus; updatedAt: Date; hasUnpublishedChanges: boolean;
+  status: PostStatus; updatedAt: Date; publication: Publication;
   secondaryStatus: 'none' | 'omitted' | 'empty' | 'started';
   /**
    * Hero base URL, intrinsic width and optional JPEG-only marker for the list
@@ -184,6 +185,8 @@ export interface PostStore {
   /** Preflight only; upsertDraft repeats the check under its transaction. */
   pageSlugOwner(locale: Locale, slug: string): Promise<string | null>;
   list(): Promise<PostSummary[]>;
+  /** Internal consistent mode/row facts; digests must never reach author responses. */
+  publicationFacts(): Promise<PublicationFact[]>;
   get(translationKey: string): Promise<StoredPostPair | null>;
   getForSave(translationKey: string, ownerUserId: string): Promise<SaveRead<StoredPostPair> | null>;
   getPublishState(translationKey: string): Promise<PublishState | null>;
@@ -249,7 +252,7 @@ interface Stored extends PostPair {
   updatedAt: Date;
   rowStatus: Record<Locale, PostStatus>;
   publishedSnapshot: Partial<Record<Locale, PostLocale>>;
-  hasUnpublishedChanges: boolean;
+  snapshotContent: Partial<Record<Locale, Record<string, unknown>>>;
 }
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -579,6 +582,54 @@ function draftWithDefaults(pair: PostPair, language: LanguageConfig, existing?: 
   };
 }
 
+/** Match POST_SNAPSHOT_SQL, including its null/default normalization. */
+function memorySnapshot(pair: PostPair, locale: Locale): Record<string, unknown> {
+  const row = pair[locale], shared = pair.shared;
+  return JSON.parse(JSON.stringify({
+    translation_key: pair.translationKey, locale, slug: row.slug, title: row.title,
+    date: shared.date, country: row.country, country_code: shared.countryCode,
+    region: shared.region, excerpt: row.excerpt, hero_image: row.heroImage,
+    title_image: row.titleImage ?? null, coordinates: shared.coordinates,
+    stops: shared.stops?.length ? shared.stops : null, route: shared.route ?? null,
+    key_facts: row.keyFacts ?? null, body_markdown: row.bodyMarkdown, images: row.images,
+    categories: shared.categories ?? [], tags: shared.tags ?? [],
+    scheduled_at: shared.scheduledAt ? new Date(shared.scheduledAt).toISOString() : null,
+    featured: shared.featured ?? false,
+  })) as Record<string, unknown>;
+}
+
+/** Memory counterpart of §6's jsonb comparison, also covering legacy snapshots. */
+export function snapshotDraftDiffers(snapshot: Record<string, unknown>, working: Record<string, unknown>): boolean {
+  const published = { ...snapshot }, draft = { ...working };
+  delete published.track;
+  const defaults: Record<string, unknown> = {
+    title_image: null, featured: false, categories: [], tags: [], scheduled_at: null,
+  };
+  for (const [key, value] of Object.entries(defaults)) {
+    if (!Object.hasOwn(published, key) && isDeepStrictEqual(draft[key], value)) delete draft[key];
+  }
+  return !isDeepStrictEqual(published, draft);
+}
+
+// Memory snapshots have no PostgreSQL jsonb serialization. This identity is local
+// to the memory store, never substituted for the SQL digest in persisted releases.
+function memoryDigest(snapshot: Record<string, unknown>): string {
+  const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical)
+    : value && typeof value === 'object'
+      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)]))
+      : value;
+  return createHash('sha256').update(JSON.stringify(canonical(snapshot))).digest('hex');
+}
+
+function publicationWithoutRelease(fact: PublicationFact): Publication {
+  if (fact.status === 'published' && !fact.committedLocales.includes(fact.primaryLocale)) return { availability: 'unavailable' };
+  return {
+    availability: 'available', status: fact.status,
+    requestedLocales: fact.requestedLocales, committedLocales: fact.committedLocales,
+    draftDiffers: fact.draftDiffers, live: { de: 'unknown', en: 'unknown' },
+  };
+}
+
 /**
  * Delete-with-post hook for the memory store. pgPostStore deletes a post's
  * comments inside its own transaction; the memory store has no table to reach,
@@ -615,9 +666,21 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
       p.status = p.rowStatus[next.primary];
     }
   });
-  const publicPair = (p: Stored): StoredPostPair => structuredClone({
+  const facts = (p: Stored, mode: LanguageConfig): PublicationFact => {
+    const rows = (['de', 'en'] as const).map((locale) => {
+      const snapshot = p.snapshotContent[locale];
+      return {
+        locale, omitted: p[locale].omitted ?? false, status: p.rowStatus[locale],
+        has_snapshot: !!snapshot, row_digest: snapshot ? memoryDigest(snapshot) : null,
+        draft_differs: !!snapshot && snapshotDraftDiffers(snapshot, memorySnapshot(p, locale)),
+        route_changed: false,
+      };
+    });
+    return publicationFact(p.translationKey, rows, mode);
+  };
+  const publicPair = (p: Stored, mode: LanguageConfig): StoredPostPair => structuredClone({
     translationKey: p.translationKey, status: p.status, shared: p.shared, de: p.de, en: p.en,
-    hasUnpublishedChanges: p.hasUnpublishedChanges, updatedAt: p.updatedAt,
+    publication: publicationWithoutRelease(facts(p, mode)), updatedAt: p.updatedAt,
   });
   // Revisions per translation_key, oldest first (append order) — mirrors the
   // pg store's post_revisions table so server tests exercise the same semantics.
@@ -636,6 +699,9 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
 
   return {
     language,
+    async publicationFacts() {
+      return language.runExclusive(async (mode) => [...byKey.values()].map((p) => facts(p, mode)));
+    },
     async pageSlugOwner(locale, slug) { return memorySlugOwner(language, locale, slug, 'page')?.name ?? null; },
     async list() {
       return language.runExclusive(async (mode) => {
@@ -648,7 +714,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
           const hero = primary.heroImage?.src ? primary.heroImage : other?.heroImage;
           return {
             translationKey: p.translationKey, title: primary.title, slugs: { de: p.de.slug, en: p.en.slug },
-            status: p.status, updatedAt: p.updatedAt, hasUnpublishedChanges: p.hasUnpublishedChanges,
+            status: p.status, updatedAt: p.updatedAt, publication: publicationWithoutRelease(facts(p, mode)),
             secondaryStatus: !other ? 'none' as const : other.omitted ? 'omitted' as const : other.bodyMarkdown.trim() ? 'started' as const : 'empty' as const,
             heroSrc: hero?.src ?? '', heroWidth: hero?.width ?? 0,
             ...(hero?.format === 'jpeg' ? { heroFormat: hero.format } : {}),
@@ -661,22 +727,22 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
       });
     },
     async get(tk) {
-      return language.runExclusive(() => {
+      return language.runExclusive((mode) => {
         const p = byKey.get(tk);
-        return Promise.resolve(p ? publicPair(p) : null);
+        return Promise.resolve(p ? publicPair(p, mode) : null);
       });
     },
     async getForSave(tk, ownerUserId) {
-      return language.runExclusive(async () => {
+      return language.runExclusive(async (mode) => {
         const p = byKey.get(tk);
         const receipt = receipts.get(tk);
-        return p ? { content: publicPair(p), ownerUserId, lastSaveId: receipt?.ownerUserId === ownerUserId ? receipt.saveId : null } : null;
+        return p ? { content: publicPair(p, mode), ownerUserId, lastSaveId: receipt?.ownerUserId === ownerUserId ? receipt.saveId : null } : null;
       });
     },
     async getPublishState(tk) {
       return language.runExclusive(async (mode) => {
         const p = byKey.get(tk);
-        return p ? { pair: publicPair(p), routeVersion: null, language: structuredClone(mode) } : null;
+        return p ? { pair: publicPair(p, mode), routeVersion: null, language: structuredClone(mode) } : null;
       });
     },
     async getPublishedTrack(tk) {
@@ -752,21 +818,21 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
           ...structuredClone(pair), translationKey: key, status, updatedAt: nextTime(existing?.updatedAt),
           rowStatus: existing?.rowStatus ?? { de: 'draft', en: 'draft' },
           publishedSnapshot: existing?.publishedSnapshot ?? {},
-          hasUnpublishedChanges: status === 'published',
+          snapshotContent: existing?.snapshotContent ?? {},
         };
         byKey.set(key, stored);
         if (receipt) receipts.set(key, receipt);
         else receipts.delete(key);
-        return publicPair(stored);
+        return publicPair(stored, mode);
       }));
     },
     async publish(tk, tokens, validate) {
       return language.runExclusive((mode) => withPair(tk, async () => {
         const p = byKey.get(tk);
         if (!p) throw new PostError('post not found', 'not_found');
-        assertPublishTokens({ pair: p, routeVersion: null, language: mode }, tokens);
+        assertPublishTokens({ pair: publicPair(p, mode), routeVersion: null, language: mode }, tokens);
         validateForPublish(p, mode);
-        await validate?.(publicPair(p), structuredClone(mode));
+        await validate?.(publicPair(p, mode), structuredClone(mode));
         await language.markPublished();
         p.updatedAt = nextTime(p.updatedAt);
         receipts.delete(tk);
@@ -774,9 +840,9 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
           p.rowStatus[locale] = 'published';
           p[locale].publishedAt = new Date(p.updatedAt);
           p.publishedSnapshot[locale] = structuredClone(p[locale]);
+          p.snapshotContent[locale] = memorySnapshot(p, locale);
         }
         p.status = p.rowStatus[mode.primary];
-        p.hasUnpublishedChanges = false;
         return { updatedAt: new Date(p.updatedAt) };
       }));
     },
@@ -787,7 +853,6 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         const previousUpdatedAt = new Date(p.updatedAt);
         p.status = 'draft';
         p.rowStatus = { de: 'draft', en: 'draft' };
-        p.hasUnpublishedChanges = false;
         p.updatedAt = nextTime(p.updatedAt);
         receipts.delete(tk);
         return { previousUpdatedAt, updatedAt: new Date(p.updatedAt) };
@@ -854,7 +919,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
 
 import { POST_SNAPSHOT_SQL, REGIONS, type DbClient, type DbPool } from './db.js';
 
-interface PostRow {
+interface PostRow extends PublicationRow {
   translation_key: string; locale: Locale; slug: string; title: string; date: Date | string;
   country: string; country_code: string; region: string; excerpt: string;
   hero_image: HeroImage; coordinates: { lat: number; lng: number };
@@ -871,7 +936,7 @@ interface PostRow {
   comments_enabled: boolean;
 }
 
-interface PostListRow {
+interface PostListRow extends PublicationRow {
   translation_key: string; locale: Locale; slug: string; title: string;
   status: PostStatus; updated_at: Date; published_at: Date | null;
   hero_image: HeroImage | null; date: Date | string; country: string; region: string;
@@ -885,20 +950,49 @@ interface PostListRow {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** True when a published row's working copy was saved after its last publish. */
-function rowHasUnpublishedChanges(
-  r: Pick<PostRow, 'status' | 'published_at' | 'updated_at'> | undefined,
-): boolean {
-  return !!r && r.status === 'published' && r.published_at !== null && r.updated_at.getTime() > r.published_at.getTime();
+interface PublicationRow {
+  locale: Locale; status: PostStatus; omitted: boolean;
+  has_snapshot: boolean; draft_differs: boolean; route_changed: boolean;
+  row_digest: string | null;
 }
 
-function rowsHaveUnpublishedChanges(rows: { locale: Locale; omitted: boolean; status: PostStatus; published_at: Date | null; updated_at: Date; has_snapshot: boolean }[], language: LanguageConfig): boolean {
-  if (rows.find((row) => row.locale === language.primary)?.status !== 'published') return false;
-  return rows.some((row) => {
-    const requested = language.locales.includes(row.locale) && !row.omitted;
-    const committed = language.locales.includes(row.locale) && row.status === 'published' && row.has_snapshot;
-    return requested !== committed || (requested && rowHasUnpublishedChanges(row));
-  });
+// Missing legacy keys equal their loader defaults, never a non-default working
+// value. Track is worker-produced; the private route's same-clock timestamp
+// covers replacement/removal instead of trying to recreate public geometry.
+const ABSENT_DEFAULTS_SQL = `array_remove(ARRAY[
+  CASE WHEN NOT published_snapshot ? 'title_image' AND title_image IS NULL THEN 'title_image' END,
+  CASE WHEN NOT published_snapshot ? 'featured' AND featured = false THEN 'featured' END,
+  CASE WHEN NOT published_snapshot ? 'categories' AND categories = '{}'::text[] THEN 'categories' END,
+  CASE WHEN NOT published_snapshot ? 'tags' AND tags = '{}'::text[] THEN 'tags' END,
+  CASE WHEN NOT published_snapshot ? 'scheduled_at' AND scheduled_at IS NULL THEN 'scheduled_at' END
+]::text[], NULL)`;
+const PUBLICATION_COLUMNS_SQL = `
+  published_snapshot IS NOT NULL AS has_snapshot,
+  ${PUBLISHED_SNAPSHOT_DIGEST_SQL} AS row_digest,
+  (status = 'published' AND published_snapshot IS NOT NULL AND
+    ((published_snapshot - 'track') - ${ABSENT_DEFAULTS_SQL})
+      IS DISTINCT FROM (${POST_SNAPSHOT_SQL} - ${ABSENT_DEFAULTS_SQL})) AS draft_differs,
+  COALESCE((SELECT r.updated_at FROM post_routes r WHERE r.translation_key=posts.translation_key)
+    > published_at, false) AS route_changed`;
+
+function publicationFact(tk: string, rows: PublicationRow[], language: LanguageConfig): PublicationFact {
+  const primary = rows.find((row) => row.locale === language.primary);
+  const requested = rows.filter((row) => language.locales.includes(row.locale) && !row.omitted);
+  const committed = rows.filter((row) => language.locales.includes(row.locale) && row.status === 'published' && row.has_snapshot);
+  const requestedLocales = (['de', 'en'] as const).filter((locale) => requested.some((row) => row.locale === locale));
+  const committedLocales = (['de', 'en'] as const).filter((locale) => committed.some((row) => row.locale === locale));
+  const status = primary?.status ?? 'draft';
+  return {
+    translationKey: tk, primaryLocale: language.primary, status, requestedLocales, committedLocales,
+    draftDiffers: status === 'published' && (
+      requestedLocales.join(',') !== committedLocales.join(',')
+      || requested.some((row) => row.status === 'published' && row.has_snapshot && row.draft_differs)
+      || !!primary?.route_changed),
+    rowDigest: {
+      de: rows.find((row) => row.locale === 'de')?.row_digest ?? null,
+      en: rows.find((row) => row.locale === 'en')?.row_digest ?? null,
+    },
+  };
 }
 
 function dateText(date: Date | string | null | undefined): string {
@@ -951,7 +1045,7 @@ function localeParams(tk: string, status: string, shared: PostShared, p: PostLoc
 
 async function readPostPair(client: DbPool | DbClient, tk: string, language: LanguageConfig, lock = false): Promise<StoredPostPair | null> {
   const { rows } = await client.query<PostRow>(
-    `SELECT * FROM posts WHERE translation_key=$1 ORDER BY locale${lock ? ' FOR UPDATE' : ''}`, [tk],
+    `SELECT *, ${PUBLICATION_COLUMNS_SQL} FROM posts WHERE translation_key=$1 ORDER BY locale${lock ? ' FOR UPDATE' : ''}`, [tk],
   );
   return postPairFromRows(tk, rows, language);
 }
@@ -963,7 +1057,7 @@ function postPairFromRows(tk: string, rows: PostRow[], language: LanguageConfig)
   const primary = language.primary === 'de' ? de : en;
   return {
     translationKey: tk, status: primary.status, shared: rowShared(primary), de: rowLocale(de), en: rowLocale(en),
-    hasUnpublishedChanges: rowsHaveUnpublishedChanges(rows.map((row) => ({ ...row, has_snapshot: row.published_snapshot !== null })), language),
+    publication: publicationWithoutRelease(publicationFact(tk, rows, language)),
     updatedAt: new Date(Math.max(de.updated_at.getTime(), en.updated_at.getTime())),
   };
 }
@@ -971,9 +1065,10 @@ function postPairFromRows(tk: string, rows: PostRow[], language: LanguageConfig)
 /** One statement sees both locales and the route version at the same MVCC snapshot. */
 async function readPublishState(client: DbPool | DbClient, tk: string, language: LanguageState, geometry = false) {
   const { rows } = await client.query<PostRow & { route_version: string | null; route_geometry?: PrivateGeometry | null }>(
-    `SELECT p.*, r.version AS route_version${geometry ? ', r.geometry AS route_geometry' : ''}
-       FROM posts p LEFT JOIN post_routes r USING (translation_key)
-      WHERE p.translation_key=$1 ORDER BY p.locale`, [tk],
+    `SELECT posts.*, ${PUBLICATION_COLUMNS_SQL},
+       (SELECT r.version FROM post_routes r WHERE r.translation_key=posts.translation_key) AS route_version
+       ${geometry ? ', (SELECT r.geometry FROM post_routes r WHERE r.translation_key=posts.translation_key) AS route_geometry' : ''}
+       FROM posts WHERE translation_key=$1 ORDER BY locale`, [tk],
   );
   const pair = postPairFromRows(tk, rows, language);
   const row = rows[0];
@@ -1037,7 +1132,7 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
     async list() {
       return consistentRead(async (client, language) => {
       const { rows } = await client.query<PostListRow>(
-        `SELECT translation_key, locale, slug, title, status, updated_at, published_at, omitted, published_snapshot IS NOT NULL AS has_snapshot,
+        `SELECT translation_key, locale, slug, title, status, updated_at, published_at, omitted, ${PUBLICATION_COLUMNS_SQL},
                 hero_image, date, country, region, btrim(body_markdown) <> '' AS has_body,
                 categories, tags, scheduled_at
            FROM posts ORDER BY updated_at DESC`,
@@ -1053,7 +1148,7 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
           translationKey: tk, title: shared?.title ?? '', slugs: { de: e.de?.slug ?? '', en: e.en?.slug ?? '' },
           status: shared?.status ?? 'draft',
           updatedAt: new Date(Math.max(e.de?.updated_at?.getTime() ?? 0, e.en?.updated_at?.getTime() ?? 0)),
-          hasUnpublishedChanges: rowsHaveUnpublishedChanges(Object.values(e), language),
+          publication: publicationWithoutRelease(publicationFact(tk, Object.values(e), language)),
           secondaryStatus: !other ? 'none' as const : other.omitted ? 'omitted' as const : other.has_body ? 'started' as const : 'empty' as const,
           heroSrc: hero?.src ?? '', heroWidth: hero?.width ?? 0,
           ...(hero?.format === 'jpeg' ? { heroFormat: hero.format } : {}),
@@ -1065,10 +1160,22 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
       });
       });
     },
+    publicationFacts: () => consistentRead(async (client, language) => {
+      const { rows } = await client.query<PublicationRow & { translation_key: string }>(
+        `SELECT translation_key, locale, status, omitted, ${PUBLICATION_COLUMNS_SQL} FROM posts ORDER BY translation_key, locale`,
+      );
+      const pairs = new Map<string, PublicationRow[]>();
+      for (const row of rows) {
+        const pair = pairs.get(row.translation_key) ?? [];
+        pair.push(row);
+        pairs.set(row.translation_key, pair);
+      }
+      return [...pairs].map(([tk, pair]) => publicationFact(tk, pair, language));
+    }),
     get: (tk) => consistentRead((client, language) => readPostPair(client, tk, language)),
     getForSave: (tk, ownerUserId) => consistentRead(async (client, language) => {
       const { rows } = await client.query<PostRow & { last_save_id: string | null; last_save_by: string | null }>(
-        'SELECT * FROM posts WHERE translation_key=$1 ORDER BY locale', [tk],
+        `SELECT *, ${PUBLICATION_COLUMNS_SQL} FROM posts WHERE translation_key=$1 ORDER BY locale`, [tk],
       );
       const content = postPairFromRows(tk, rows, language);
       const receipt = rows[0];

@@ -9,11 +9,15 @@ window.Desk = (function () {
   }
 
   function nextDraft(posts) {
-    return (posts || []).filter(function (p) { return p && p.status === 'draft'; }).sort(byUpdated)[0] || null;
+    return (posts || []).filter(function (p) { return p && p.publication?.availability === 'available' && p.publication.status === 'draft'; }).sort(byUpdated)[0] || null;
   }
 
   function unpublished(posts) {
-    return (posts || []).filter(function (p) { return p && p.hasUnpublishedChanges; }).sort(byUpdated);
+    return (posts || []).filter(function (p) { return p && PublicationState.newer(p.publication); }).sort(byUpdated);
+  }
+
+  function attention(posts) {
+    return (posts || []).filter((p) => PublicationState.attention(p.publication)).sort(byUpdated);
   }
 
   function encodeCount(stats) {
@@ -75,6 +79,7 @@ window.Desk = (function () {
   return {
     nextDraft,
     unpublished,
+    attention,
     encodeCount,
     releaseState,
     releaseFromResponse,

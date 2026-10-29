@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { ui } from '../../site/src/i18n/ui.js';
+import { publication, loadPublicationState, type AvailablePublication } from './publication-client-fixture.js';
 
 const src = readFileSync('public/desk.js', 'utf8');
 interface Post {
   status: 'draft' | 'published';
   updatedAt: string;
-  hasUnpublishedChanges: boolean;
+  publication: AvailablePublication;
   translationKey: string;
 }
 interface SectionView<T> {
@@ -29,6 +30,7 @@ interface Api {
 function load(): Api {
   const ctx: Record<string, unknown> = {
     EditorCopy: { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])) },
+    PublicationState: loadPublicationState(),
   };
   ctx.window = ctx;
   vm.createContext(ctx);
@@ -41,7 +43,7 @@ function load(): Api {
 
 const post = (o: Partial<Post>): Post => ({
   translationKey: 'tk', status: 'draft', updatedAt: '2025-01-01T00:00:00.000Z',
-  hasUnpublishedChanges: false, ...o,
+  publication: publication(o.status || 'draft'), ...o,
 });
 
 describe('Desk.nextDraft', () => {
@@ -64,8 +66,8 @@ describe('Desk.unpublished', () => {
   const api = load();
 
   it('lists published pairs with unpublished edits, newest first', () => {
-    const a = post({ translationKey: 'a', status: 'published', hasUnpublishedChanges: true, updatedAt: '2024-01-01T00:00:00.000Z' });
-    const b = post({ translationKey: 'b', status: 'published', hasUnpublishedChanges: true, updatedAt: '2025-01-01T00:00:00.000Z' });
+    const a = post({ translationKey: 'a', status: 'published', publication: publication('published', true), updatedAt: '2024-01-01T00:00:00.000Z' });
+    const b = post({ translationKey: 'b', status: 'published', publication: publication('published', true), updatedAt: '2025-01-01T00:00:00.000Z' });
     const clean = post({ translationKey: 'c', status: 'published' });
     expect(api.unpublished([a, clean, b]).map((p) => p.translationKey)).toEqual(['b', 'a']);
   });

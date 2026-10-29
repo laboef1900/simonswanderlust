@@ -17,6 +17,7 @@ import { createEncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock } from '../src/work-lock.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { renderGpxCopy } from '../src/gpx-copy.js';
+import { publication, loadPublicationState } from './publication-client-fixture.js';
 
 // posts.html, settings.html and comments.html run their actions as plain
 // top-level browser code. Load each inline script in a vm context backed by a
@@ -55,6 +56,7 @@ interface Element {
   remove(index: number): void;
   listeners: Record<string, ((event?: Record<string, unknown>) => Promise<void> | void)[]>;
   addEventListener(type: string, fn: (event?: Record<string, unknown>) => Promise<void> | void): void;
+  removeEventListener(type: string, fn: (event?: Record<string, unknown>) => Promise<void> | void): void;
   click(): Promise<void>;
   fire(type: string, event?: Record<string, unknown>): Promise<void>;
   appendChild(child?: Element): void;
@@ -85,6 +87,7 @@ function element(): Element {
     add(option) { this.options.push(option); },
     remove(index) { this.options.splice(index, 1); },
     addEventListener(type, fn) { (listeners[type] ??= []).push(fn); },
+    removeEventListener(type, fn) { listeners[type] = (listeners[type] || []).filter((listener) => listener !== fn); },
     async click() { await this.fire('click'); },
     async fire(type, event = {}) {
       for (const fn of listeners[type] ?? []) await fn({ preventDefault() {}, ...event });
@@ -98,6 +101,16 @@ function element(): Element {
     querySelectorAll() { return []; },
     focus() { this.focused = true; },
   };
+  let markup = '';
+  Object.defineProperty(e, 'innerHTML', {
+    get: () => markup,
+    set: (value: string) => { markup = value; e.children.length = 0; },
+  });
+  let text = '';
+  Object.defineProperty(e, 'textContent', {
+    get: () => text,
+    set: (value: string) => { text = value; e.children.length = 0; },
+  });
   return e;
 }
 
@@ -163,6 +176,9 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
     },
     history: { replaceState() {} },
     addEventListener: (type: string, fn: Listener) => { (windowListeners[type] ??= []).push(fn); },
+    removeEventListener: (type: string, fn: Listener) => { windowListeners[type] = (windowListeners[type] || []).filter((listener) => listener !== fn); },
+    AbortController, Date,
+    setTimeout: () => 0, clearTimeout() {},
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     URL,
     URLSearchParams,
@@ -189,6 +205,8 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
   vm.createContext(ctx);
   vm.runInContext(renderGpxCopy(), ctx);
   vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), ctx);
+  vm.runInContext(readFileSync('public/publication-state.js', 'utf8'), ctx);
+  vm.runInContext(readFileSync('public/publication-refresh.js', 'utf8'), ctx);
   vm.runInContext(readFileSync('public/language.js', 'utf8'), ctx);
   vm.runInContext(`SiteLanguage.accept({primary:'de',locales:['de','en'],lockedAt:null,updatedAt:'2026-10-27T00:00:00.000Z'});
     SiteLanguage.get = async () => SiteLanguage.config();`, ctx);
@@ -198,7 +216,7 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
 }
 
 function loadPosts(extraGlobals: Record<string, unknown> = {}) {
-  return loadPage('public/posts.html', {
+  const page = loadPage('public/posts.html', {
     PostsFilter: {
       apply: (posts: unknown[]) => posts,
       REGIONS: [],
@@ -210,6 +228,8 @@ function loadPosts(extraGlobals: Record<string, unknown> = {}) {
     },
     ...extraGlobals,
   });
+  vm.runInContext('listStale = false', page.ctx);
+  return page;
 }
 
 describe('ordinary Desk empty states', () => {
@@ -224,7 +244,7 @@ describe('ordinary Desk empty states', () => {
   });
 });
 
-const post = { translationKey: 'tk1', title: 'Bukarest', slugs: { de: 'bukarest', en: 'bucharest' }, status: 'published' };
+const post = { translationKey: 'tk1', title: 'Bukarest', slugs: { de: 'bukarest', en: 'bucharest' }, status: 'published', publication: publication() };
 
 describe('posts.html actions survive a dropped connection', () => {
   it('deletePost re-enables the row button and names the failure', async () => {
@@ -267,7 +287,7 @@ describe('posts.html actions survive a dropped connection', () => {
     const { ctx, el } = loadPosts();
     const load = vm.runInContext('load', ctx) as (statusMsg?: string) => Promise<void>;
     await expect(load()).resolves.toBeUndefined();
-    expect(el('out').textContent).toBe('Could not load posts: TypeError: Failed to fetch');
+    expect(el('loadMsg').textContent).toBe(ui.en['editor.chrome.publicationStale']);
   });
 
   it('a failed refresh keeps the action outcome the caller already reported', async () => {
@@ -276,7 +296,8 @@ describe('posts.html actions survive a dropped connection', () => {
     const { ctx, el } = loadPosts();
     const load = vm.runInContext('load', ctx) as (statusMsg?: string) => Promise<void>;
     await load('Unpublished "Bukarest". Rebuild failed: astro exited 1');
-    expect(el('out').textContent).toBe('Unpublished "Bukarest". Rebuild failed: astro exited 1\nCould not load posts: TypeError: Failed to fetch');
+    expect(el('out').textContent).toBe('Unpublished "Bukarest". Rebuild failed: astro exited 1');
+    expect(el('loadMsg').textContent).toBe(ui.en['editor.chrome.publicationStale']);
   });
 });
 
@@ -476,7 +497,7 @@ describe('posts.html selection, recovery and disclosures', () => {
     expect(newHref.searchParams.get('returnTo')).toBe('/admin/posts.html?q=Rhodes+%26+sun&status=missing-secondary');
   });
 
-  it('removes stale actions on load failure and Retry reaches a clean loaded state', async () => {
+  it('disables retained stale actions on load failure and Retry preserves the selection', async () => {
     let offline = true;
     const { ctx, el } = loadPosts({
       fetch: async () => {
@@ -490,11 +511,13 @@ describe('posts.html selection, recovery and disclosures', () => {
     const load = vm.runInContext('load', ctx) as () => Promise<void>;
     await load();
 
-    expect(el('postsTable').hidden).toBe(true);
-    expect(el('bulkBar').hidden).toBe(true);
+    expect(el('postsTable').hidden).toBe(false);
+    expect(el('bulkPublish').disabled).toBe(true);
+    expect(el('bulkUnpublish').disabled).toBe(true);
+    expect(el('bulkDelete').disabled).toBe(true);
     expect(el('retryLoad').hidden).toBe(false);
-    expect(el('loadMsg').textContent).toBe('Posts could not be loaded.');
-    expect(vm.runInContext('selected.size', ctx)).toBe(0);
+    expect(el('loadMsg').textContent).toBe(ui.en['editor.chrome.publicationStale']);
+    expect(vm.runInContext('selected.size', ctx)).toBe(1);
 
     offline = false;
     await el('retryLoad').click();
@@ -576,14 +599,14 @@ describe('posts.html status views and language states', () => {
   // The real helper, not a stub: counts and filtering are its contract.
   const realFilter = () => {
     const windowStub: Record<string, unknown> = {};
-    vm.runInNewContext(readFileSync('public/posts-filter.js', 'utf8'), { window: windowStub, URLSearchParams });
+    vm.runInNewContext(readFileSync('public/posts-filter.js', 'utf8'), { window: windowStub, URLSearchParams, PublicationState: loadPublicationState() });
     return windowStub.PostsFilter;
   };
   const library = [
-    { ...post, translationKey: 'a', title: 'Altstadt', status: 'draft', country: 'Romania', region: 'europe', secondaryStatus: 'started' },
-    { ...post, translationKey: 'b', title: 'Parks', status: 'published', hasUnpublishedChanges: true, country: 'Romania', region: 'europe', secondaryStatus: 'empty' },
+    { ...post, translationKey: 'a', title: 'Altstadt', status: 'draft', publication: publication('draft'), country: 'Romania', region: 'europe', secondaryStatus: 'started' },
+    { ...post, translationKey: 'b', title: 'Parks', status: 'published', publication: publication('published', true), country: 'Romania', region: 'europe', secondaryStatus: 'empty' },
     { ...post, translationKey: 'c', title: 'Donau', status: 'published', country: 'Hungary', region: 'europe', secondaryStatus: 'started' },
-    { ...post, translationKey: 'd', title: 'Burg', status: 'draft', country: 'Hungary', region: 'europe' },
+    { ...post, translationKey: 'd', title: 'Burg', status: 'draft', publication: publication('draft'), country: 'Hungary', region: 'europe' },
   ];
   const views = (el: (id: string) => Element) => el('statusViews').children.map((button) => ({
     status: button.attrs['data-status'],
@@ -645,13 +668,20 @@ describe('posts.html status views and language states', () => {
     expect(views(el).map((v) => v.pressed)).toEqual(['false', 'false', 'false', 'false', 'true']);
   });
 
-  it('hides the views and drops their counts when a reload fails', async () => {
-    const { ctx, el } = await loadedPage('');
-    expect(el('statusViews').hidden).toBe(false);
+  it('retains filter context on a failed refresh while disabling stale publication actions', async () => {
+    const { ctx, el } = await loadedPage('?country=Romania&sort=title');
+    const before = views(el);
     ctx.fetch = () => Promise.reject(NETWORK_DOWN);
     await (vm.runInContext('load', ctx) as () => Promise<void>)();
-    expect(el('statusViews').hidden).toBe(true);
-    expect(views(el).map((v) => v.count)).toEqual(['', '', '', '', '']);
+    expect(el('statusViews').hidden).toBe(false);
+    expect(views(el)).toEqual(before);
+    expect(el('fCountry').value).toBe('Romania');
+    expect(el('fSort').value).toBe('title');
+    expect(el('loadMsg').attrs.role).toBe('alert');
+    expect(el('retryLoad').hidden).toBe(false);
+    expect(el('bulkPublish').disabled).toBe(true);
+    expect(el('bulkUnpublish').disabled).toBe(true);
+    expect(el('bulkDelete').disabled).toBe(true);
   });
 
   it('reports secondary body state without claiming publish readiness, and keeps trip meta', () => {
@@ -716,13 +746,13 @@ describe('posts.html row actions', () => {
 
   it('gives an author Edit alone, never an empty More actions menu', () => {
     const { ctx, el } = loadPosts();
-    expect(rowActions(ctx, el, false, [post, { ...post, translationKey: 'd', status: 'draft' }]))
+    expect(rowActions(ctx, el, false, [post, { ...post, translationKey: 'd', status: 'draft', publication: publication('draft') }]))
       .toEqual([['Edit'], ['Edit']]);
   });
 
-  it('gives an admin Unpublish on a live trip and Delete on every trip', () => {
+  it('gives an admin Unpublish on a CMS-published trip and Delete on every trip', () => {
     const { ctx, el } = loadPosts();
-    expect(rowActions(ctx, el, true, [post, { ...post, translationKey: 'd', status: 'draft' }]))
+    expect(rowActions(ctx, el, true, [post, { ...post, translationKey: 'd', status: 'draft', publication: publication('draft') }]))
       .toEqual([['Edit', ['Unpublish', 'Delete']], ['Edit', ['Delete']]]);
   });
 });
@@ -994,22 +1024,26 @@ describe('settings.html actions survive a dropped connection', () => {
 describe('Settings rebuild report and independent status', () => {
   it.each([true, false])('shows promoted=%s separately from the latest attempt and live observation', async (ok) => {
     const requests: string[] = [];
-    const { el } = loadSettingsPage({
+    const { el, ctx } = loadSettingsPage({
       fetch: async (url: string) => {
         requests.push(url);
         if (url === '/rebuild') return Response.json({ ok, release: ok ? '1793000000000-1-0001' : undefined, code: 'build_failed', error: 'SECRET', liveRelease: null });
         if (url === '/rebuild/status') return Response.json({ record: 'unreadable', running: null, last: null, live: { release: '1793000000000-1-0001', stampedAt: '2026-10-26T00:00:00Z' } });
+        if (url === '/publication/summary') return Response.json({ availability: 'unavailable' });
         throw new Error('Unexpected ' + url);
       },
     });
+    vm.runInContext('publicationRefresh.start(false)', ctx);
     await el('rebuild').click();
-    expect(requests).toEqual(['/rebuild', '/rebuild/status']);
+    await (vm.runInContext('publicationRefresh.refresh()', ctx) as Promise<void>);
+    expect(requests).toEqual(['/rebuild', '/publication/summary', '/rebuild/status']);
     expect(el('out').textContent).toContain(ok ? 'was promoted' : 'failed before a release was promoted');
     expect(el('out').textContent).toContain('No live release yet');
     expect(el('out').textContent).not.toContain('SECRET');
     expect(el('buildStatus').textContent).toContain('record could not be read');
     expect(el('buildStatus').textContent).toContain('observed serving');
     expect(el('buildStatus').textContent).not.toContain('succeeded');
+    vm.runInContext('publicationRefresh.stop()', ctx);
   });
 });
 
@@ -2120,4 +2154,185 @@ describe('import language summary', () => {
     expect(el('counts').textContent).toContain('Failed: 6');
     expect(el('importRejected').textContent).toContain('missing primary-language story');
   });
+});
+
+describe('publication refresh in list, Desk and Settings consumers', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const textOf = (node: Element): string => node.textContent + node.children.map(textOf).join(' ');
+  const clockGlobals = () => ({ setTimeout, clearTimeout, Date });
+  const startClock = () => vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+  const flush = async () => {
+    for (let i = 0; i < 8; i++) {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setImmediate(resolve);
+      await promise;
+    }
+  };
+
+  it('refreshes list facts while preserving search/selection and disabling stale mutation controls after a failure', async () => {
+    startClock();
+    let fresh = publication(), failure = false;
+    const page = loadPosts({ ...clockGlobals(), fetch: async (url: string) => {
+      if (failure) throw NETWORK_DOWN;
+      return Response.json(url === '/posts' ? [{ ...post, publication: fresh }] : { record: 'missing' });
+    } });
+    vm.runInContext("me = { isAdmin: true }; selected.add('tk1')", page.ctx);
+    await (vm.runInContext('load', page.ctx) as () => Promise<void>)();
+    page.el('fSearch').value = 'Bukarest';
+    vm.runInContext("render(true); $('out').textContent = 'Acknowledged save'", page.ctx);
+    fresh = { ...publication('draft'), live: { de: 'live', en: 'unknown' } };
+    await vi.advanceTimersByTimeAsync(30000);
+    await flush();
+    expect(textOf(page.el('postsList'))).toContain('Draft in the CMS — still on the live site');
+    expect(page.el('fSearch').value).toBe('Bukarest');
+    expect(vm.runInContext('[...selected]', page.ctx)).toEqual(['tk1']);
+    failure = true;
+    await vi.advanceTimersByTimeAsync(30000);
+    await flush();
+    expect(textOf(page.el('postsList'))).toContain('Publication status unavailable');
+    expect(page.el('bulkDelete').disabled).toBe(true);
+    expect(page.el('out').textContent).toBe('Acknowledged save');
+    expect(page.el('fSearch').value).toBe('Bukarest');
+    expect(vm.runInContext('[...selected]', page.ctx)).toEqual(['tk1']);
+    failure = false;
+    await page.el('retryLoad').click();
+    await flush();
+    expect(page.el('bulkDelete').disabled).toBe(false);
+    expect(page.el('out').textContent).toBe('Acknowledged save');
+    vm.runInContext('publicationRefresh.stop()', page.ctx);
+  });
+
+  it('discards a delayed pre-action list after a delete receipt and drops the deleted selection', async () => {
+    startClock();
+    const old = Promise.withResolvers<Response>();
+    let pending = false, deleted = false;
+    const page = loadPosts({ ...clockGlobals(), fetch: async (url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') {
+        deleted = true;
+        return Response.json({ deleted: true, publication: { availability: 'missing' } });
+      }
+      if (url !== '/posts') return Response.json({ record: 'missing' });
+      if (pending && !deleted) return old.promise;
+      return Response.json(deleted ? [] : [post]);
+    } });
+    vm.runInContext('me = { isAdmin: true }', page.ctx);
+    await (vm.runInContext('load', page.ctx) as () => Promise<void>)();
+    vm.runInContext("selected.add('tk1')", page.ctx);
+    pending = true;
+    await vi.advanceTimersByTimeAsync(30000);
+    await (vm.runInContext('deletePost', page.ctx) as (p: unknown, b: Element) => Promise<void>)(post, element());
+    old.resolve(Response.json([post]));
+    await flush();
+    expect(vm.runInContext('allPosts.length', page.ctx)).toBe(0);
+    expect(vm.runInContext('selected.size', page.ctx)).toBe(0);
+    expect(textOf(page.el('postsList'))).not.toContain('Bukarest');
+    vm.runInContext('publicationRefresh.stop()', page.ctx);
+  });
+
+  it.each([true, false])('refreshes Desk facts without author requests for admin summary/build data (admin=%s)', async (admin) => {
+    startClock();
+    let fresh = publication('published', true);
+    const urls: string[] = [];
+    const page = loadPage('public/index.html', { ...clockGlobals(), fetch: async (url: string) => {
+      urls.push(url);
+      if (url === '/posts') return Response.json([{ ...post, publication: fresh }]);
+      if (url === '/publication/summary') return Response.json({ availability: 'available', release: 'unknown', posts: null, galleryDescriptions: null });
+      return Response.json({ record: 'missing' });
+    } }, ['public/desk.js']);
+    vm.runInContext(`isAdmin = ${admin}; authenticatedContext = { isAdmin: ${admin} }; publicationRefresh.start()`, page.ctx);
+    await flush();
+    expect(textOf(page.el('deskUnpub'))).toContain('Live — newer draft saved');
+    expect(urls.includes('/publication/summary')).toBe(admin);
+    expect(urls.includes('/rebuild/status')).toBe(admin);
+    if (admin) expect(page.el('deskPublicationSummary').textContent).toContain('counts are unavailable');
+    fresh = { ...publication(), live: { de: 'not-live', en: 'live' } };
+    await vi.advanceTimersByTimeAsync(30000);
+    await flush();
+    if (admin) expect(textOf(page.el('deskAttention'))).toContain('Published, not yet live');
+    else expect(textOf(page.el('deskUnpub'))).toContain('No newer drafts');
+    vm.runInContext('publicationRefresh.stop()', page.ctx);
+  });
+
+  it('refreshes Settings counts after a local rebuild without touching dirty fields or the acknowledged outcome', async () => {
+    startClock();
+    let photos = 2;
+    const page = loadSettingsPage({ ...clockGlobals(), fetch: async (url: string, init?: RequestInit) => {
+      if (url === '/rebuild' && init?.method === 'POST') {
+        photos = 0;
+        return Response.json({ ok: true, release: '1793000000000-1-0001', liveRelease: null });
+      }
+      if (url === '/publication/summary') return Response.json({ availability: 'available', release: 'known',
+        posts: { notLive: 0, olderVersionLive: 0, unexpectedLocaleLive: 0, unpublishedStillLive: 0, deletedStillLive: 0 },
+        galleryDescriptions: { photos, stories: photos ? 1 : 0 } });
+      return Response.json({ record: 'missing' });
+    } });
+    page.el('backupRetention').value = '37';
+    vm.runInContext('publicationRefresh.start()', page.ctx);
+    await flush();
+    expect(page.el('publicationSummary').textContent).toContain('2 photos in 1 stories');
+    await page.el('rebuild').click();
+    await flush();
+    expect(page.el('publicationSummary').textContent).toContain('0 photos in 0 stories');
+    expect(page.el('backupRetention').value).toBe('37');
+    const outcome = page.el('out').textContent;
+    await vi.advanceTimersByTimeAsync(30000);
+    await flush();
+    expect(page.el('out').textContent).toBe(outcome);
+    vm.runInContext('publicationRefresh.stop()', page.ctx);
+  });
+});
+
+it.each(['posts', 'desk', 'settings'] as const)('keeps fresh %s facts when optional build history stalls', async (surface) => {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+  try {
+    const history = Promise.withResolvers<Response>();
+    let signal: AbortSignal | null = null;
+    const globals = { setTimeout, clearTimeout, Date, fetch: async (url: string, init?: RequestInit) => {
+      if (url === '/rebuild/status') { signal = init?.signal ?? null; return history.promise; }
+      if (url === '/posts') return Response.json([{ ...post, publication: publication('published', true) }]);
+      return Response.json({ availability: 'available', release: 'known',
+        posts: { notLive: 0, olderVersionLive: 0, unexpectedLocaleLive: 0, unpublishedStillLive: 0, deletedStillLive: 0 },
+        galleryDescriptions: { photos: 2, stories: 1 } });
+    } };
+    const page = surface === 'posts' ? loadPosts(globals)
+      : surface === 'desk' ? loadPage('public/index.html', globals, ['public/desk.js'])
+        : loadSettingsPage(globals);
+    if (surface === 'posts') vm.runInContext('me = { isAdmin: true }', page.ctx);
+    if (surface === 'desk') vm.runInContext('isAdmin = true; authenticatedContext = { isAdmin: true }', page.ctx);
+    vm.runInContext('publicationRefresh.start()', page.ctx);
+    await vi.advanceTimersByTimeAsync(10000);
+    const textOf = (node: Element): string => node.textContent + node.children.map(textOf).join(' ');
+    if (surface === 'posts') {
+      expect(textOf(page.el('postsList'))).toContain('Live — newer draft saved');
+      expect(vm.runInContext('listStale', page.ctx)).toBe(false);
+    } else if (surface === 'desk') {
+      expect(textOf(page.el('deskUnpub'))).toContain('Live — newer draft saved');
+      expect(page.el('deskPublicationSummary').textContent).toContain('2 photos in 1 stories');
+    } else expect(page.el('publicationSummary').textContent).toContain('2 photos in 1 stories');
+    expect((signal as AbortSignal | null)?.aborted).toBe(true);
+    history.resolve(Response.json({ record: 'missing' }));
+    await vi.advanceTimersByTimeAsync(0);
+    vm.runInContext('publicationRefresh.stop()', page.ctx);
+  } finally { vi.useRealTimers(); }
+});
+
+it.each([true, false])('Desk rebuild remains an explicit admin action and refreshes independent publication facts (admin=%s)', async (admin) => {
+  const requests: { url: string; method: string }[] = [];
+  const page = loadPage('public/index.html', { fetch: async (url: string, init?: RequestInit) => {
+    requests.push({ url, method: init?.method || 'GET' });
+    if (url === '/rebuild') return Response.json({ ok: false, code: 'build_failed', liveRelease: null });
+    if (url === '/posts') return Response.json([]);
+    if (url === '/publication/summary') return Response.json({ availability: 'available', release: 'none', posts: null, galleryDescriptions: null });
+    return Response.json({ record: 'missing' });
+  } }, ['public/desk.js']);
+  vm.runInContext(`isAdmin = ${admin}; authenticatedContext = { isAdmin: ${admin} }; publicationRefresh.start(false)`, page.ctx);
+  await page.el('deskRebuild').click();
+  if (admin) {
+    await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
+    expect(requests.filter(({ method }) => method !== 'GET')).toEqual([{ url: '/rebuild', method: 'POST' }]);
+    expect(page.el('deskRebuildOutcome').textContent).toContain('failed before a release was promoted');
+    expect(page.el('deskPublicationSummary').textContent).toContain('No live release');
+    expect(page.el('deskRebuild').disabled).toBe(false);
+  } else expect(requests).toEqual([]);
+  vm.runInContext('publicationRefresh.stop()', page.ctx);
 });

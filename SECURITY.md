@@ -252,6 +252,23 @@ must invalidate the same operational evidence offline before traffic resumes.
   and their batch form **`POST /posts/bulk`** (`{action, keys[]}` — the `action` is checked
   against a fixed allow-list and `keys` is capped at 100 per request, since an unbounded array
   is an authenticated N-round-trip amplifier against the process that also serves the blog).
+- **Publication observations (#317)** — authenticated post reads/mutation responses expose only
+  the exact availability/status/locale-coverage/draft-difference/live-state union. Snapshot
+  digests and release stamps never enter author payloads. `GET /publication/summary` is
+  admin-only and `no-store`; it exposes aggregate counts, not deleted titles or build details.
+  Build history remains independently gated by #297. Optional projection failure preserves
+  known committed mutations and their own concurrency tokens, returning unavailable rather
+  than turning a successful write into an error. Read-only refresh never adopts foreign tokens
+  or writes content; stale/unknown actions are disabled until fresh facts are available.
+
+  Release manifests are unserved `site/manifests/<stamp>.json` files, strictly validated with
+  an 8 MiB cap and exact stamp/schema/types. They contain public render observations and internal
+  digests, no private route geometry, EXIF, uploader fields or credentials. Creation, publication
+  before the current flip, pruning and orphan cleanup obey the storage ownership guard. A
+  manifest write/read failure cannot block promotion, initiate a build or undo a committed CMS
+  action. The existing irreversible promotion boundary is unchanged. Host write access to `/data`
+  remains trusted; rollback reverts feature code without rewriting data or downgrading codecs.
+  See the owner-approved #316 contract and `ARCHITECTURE.md`.
 - **Media library** — browsing (`GET /media`, `GET /media/items/*`) and editing a photo's own
   metadata are **session-level**, a deliberate downgrade from the admin-only `GET /images` they
   replace: the gallery picker needs authors to browse. What makes that safe is the redaction
@@ -432,6 +449,11 @@ time are kept — they are useful and carry no location.
 > for the author. Serving those through a gate that any author can pass would reintroduce
 > exactly the exposure the allow-list removed. `server.test.ts` asserts the redaction itself,
 > not merely the status code.
+
+The #317 shared gallery-description summary reads only the existing four localized description
+columns and rendered manifest occurrences. It does not widen Media item serialization or change
+this redaction contract. The approved #318 projection-key amendment remains separate from
+existing whole-item camera/lens/capture access; #317 adds no Media detail impact/pending response.
 
 ### Upload preconditions
 

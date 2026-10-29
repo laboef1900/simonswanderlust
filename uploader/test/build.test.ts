@@ -9,17 +9,22 @@ import {
 import type * as FileSystem from 'node:fs/promises';
 import { buildFailureMessage, projectBuildReport } from '../src/build-state.js';
 import { StorageReadOnlyError } from '../src/storage-owner.js';
+import { writeReleaseManifest } from '../../site/src/lib/publication-manifest.js';
+import { createReleaseManifestReader } from '../src/release-manifest.js';
 
 // Inject faults at the real filesystem boundaries, without relying on uid or
 // permission semantics. All successful copies, promotions and removals stay real.
 const pruneFaults = vi.hoisted(() => ({
   promoted: false,
-  beforePromotion: undefined as (() => void) | undefined,
+  beforePromotion: undefined as (() => Promise<void> | void) | undefined,
   afterPromotion: undefined as (() => Promise<void> | void) | undefined,
   enumerate: undefined as (() => void) | undefined,
   current: undefined as (() => string | void) | undefined,
   remove: undefined as ((path: string) => Promise<void> | void) | undefined,
   recordWrite: undefined as (() => void) | undefined,
+  manifestRemove: undefined as ((path: string) => Promise<void> | void) | undefined,
+  manifestMkdir: undefined as (() => void) | undefined,
+  manifestSourceRemove: undefined as ((path: string) => Promise<void> | void) | undefined,
 }));
 vi.mock('node:fs/promises', async (original) => {
   const fs = await original<typeof FileSystem>();
@@ -28,12 +33,16 @@ vi.mock('node:fs/promises', async (original) => {
     rename: async (from: string, to: string) => {
       if (to.endsWith('/build-state.json')) pruneFaults.recordWrite?.();
       const promoting = to.endsWith('/current');
-      if (promoting) pruneFaults.beforePromotion?.();
+      if (promoting) await pruneFaults.beforePromotion?.();
       await fs.rename(from, to);
       if (promoting) {
         pruneFaults.promoted = true;
         await pruneFaults.afterPromotion?.();
       }
+    },
+    mkdir: async (...args: Parameters<typeof fs.mkdir>) => {
+      if (String(args[0]).endsWith('/manifests')) pruneFaults.manifestMkdir?.();
+      return fs.mkdir(...args);
     },
     readdir: async (path: string) => {
       if (pruneFaults.promoted) pruneFaults.enumerate?.();
@@ -44,7 +53,11 @@ vi.mock('node:fs/promises', async (original) => {
       return replacement ?? fs.readlink(path);
     },
     rm: async (...args: Parameters<typeof fs.rm>) => {
-      if (pruneFaults.promoted) await pruneFaults.remove?.(String(args[0]));
+      if (/\.manifest\.json(?:\.partial)?$/.test(String(args[0]))) await pruneFaults.manifestSourceRemove?.(String(args[0]));
+      if (pruneFaults.promoted) {
+        if (String(args[0]).includes('/manifests/')) await pruneFaults.manifestRemove?.(String(args[0]));
+        else await pruneFaults.remove?.(String(args[0]));
+      }
       return fs.rm(...args);
     },
   };
@@ -66,14 +79,18 @@ afterEach(() => {
   pruneFaults.current = undefined;
   pruneFaults.remove = undefined;
   pruneFaults.recordWrite = undefined;
+  pruneFaults.manifestRemove = undefined;
+  pruneFaults.manifestMkdir = undefined;
+  pruneFaults.manifestSourceRemove = undefined;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
 // Fake astro build: writes a marker file into the requested outDir.
-const fakeBuild = (marker: string) => async (outDir: string) => {
+const fakeBuild = (marker: string) => async (outDir: string, manifestPath?: string) => {
   await mkdir(outDir, { recursive: true });
   await writeFile(join(outDir, 'index.html'), marker);
+  if (manifestPath) await writeReleaseManifest([], manifestPath);
 };
 
 // Manual gate for holding a fake build in-flight until the test opens it.
@@ -327,9 +344,11 @@ describe('post-promotion pruning', () => {
   async function fixture(options: { signal?: AbortSignal; isWritable?: () => boolean } = {}) {
     const releasesRoot = join(root, 'site');
     const releases = join(releasesRoot, 'releases');
+    await disk.mkdir(join(releasesRoot, 'manifests'), { recursive: true });
     for (const stamp of old) {
       await disk.mkdir(join(releases, stamp), { recursive: true });
       await disk.writeFile(join(releases, stamp, 'index.html'), 'previous');
+      await disk.writeFile(join(releasesRoot, 'manifests', `${stamp}.json`), JSON.stringify({ schema: 1, stamp, posts: [] }));
     }
     await disk.symlink(join(releases, old[0]!), join(releasesRoot, 'current'));
     const removals: string[] = [];
@@ -694,6 +713,10 @@ describe('durable build reporting', () => {
     expect(await builder.status()).toMatchObject({ record: 'not_persisted', last: { result: 'succeeded', release: outcome.release } });
     const reboot = createSiteBuilder({ siteAppDir: siteApp, releasesRoot, runBuild: fakeBuild('later') });
     expect(await reboot.status()).toMatchObject({ record: 'ok', live: { release: outcome.release }, last: { result: 'interrupted', attemptId: outcome.attemptId, beforeBoot: true } });
+    // A crash before the completion record does not erase the promoted content.
+    expect(await createReleaseManifestReader(releasesRoot).read()).toMatchObject({
+      release: 'known', manifest: { stamp: outcome.release },
+    });
   });
 
   it('invalidates stale history if start persistence fails, then restores durable history at completion', async () => {
@@ -744,5 +767,164 @@ describe('durable build reporting', () => {
     const stored = JSON.parse(await disk.readFile(join(releasesRoot, 'build-state.json'), 'utf8'));
     expect(stored.running.attemptId).toBe(result.attemptId);
     expect(stored.last).toBeNull();
+  });
+});
+
+describe('publication manifest deployment boundaries', () => {
+  it('publishes unserved manifest after release rename and before the irreversible flip', async () => {
+    const site = join(root, 'site');
+    let observed = false;
+    pruneFaults.beforePromotion = async () => {
+      const [stamp] = await disk.readdir(join(site, 'releases'));
+      expect(await disk.readFile(join(site, 'releases', stamp!, 'index.html'), 'utf8')).toBe('new');
+      expect(JSON.parse(await disk.readFile(join(site, 'manifests', `${stamp}.json`), 'utf8'))).toEqual({ schema: 1, stamp, posts: [] });
+      expect(await createReleaseManifestReader(site).read()).toEqual({ release: 'none' });
+      await expect(disk.readdir(join(site, 'releases', stamp!, 'manifests'))).rejects.toMatchObject({ code: 'ENOENT' });
+      observed = true;
+    };
+    const result = await createSiteBuilder({ siteAppDir: siteApp, releasesRoot: site, runBuild: fakeBuild('new') }).build('rebuild');
+    expect(observed).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(await createReleaseManifestReader(site).read()).toEqual({ release: 'known', manifest: { schema: 1, stamp: result.release, posts: [] } });
+  });
+
+  it('keeps optional scratch cleanup failures nonfatal and sweeps the leftover on the next build', async () => {
+    const site = join(root, 'site');
+    let refused = '';
+    pruneFaults.manifestSourceRemove = (path) => {
+      if (!path.endsWith('.manifest.json')) return;
+      refused = path;
+      throw Object.assign(new Error('scratch cleanup failure'), { code: 'EACCES' });
+    };
+    const builder = createSiteBuilder({ siteAppDir: siteApp, releasesRoot: site, runBuild: fakeBuild('new') });
+    const first = await builder.build('rebuild');
+    expect(first.ok).toBe(true);
+    expect(await createReleaseManifestReader(site).read()).toMatchObject({ release: 'known', manifest: { stamp: first.release } });
+    expect(await disk.readFile(refused, 'utf8')).toBeTruthy();
+    pruneFaults.manifestSourceRemove = undefined;
+    expect((await builder.build('rebuild')).ok).toBe(true);
+    expect(await disk.readdir(join(siteApp, '.build-tmp'))).toEqual([]);
+    await expect(disk.readFile(refused)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('admits no second scratch removal or flip after ownership is lost during the first removal', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const site = join(root, 'site');
+    let writable = true;
+    const removals: string[] = [];
+    pruneFaults.manifestSourceRemove = (path) => { removals.push(path); writable = false; };
+    const result = await createSiteBuilder({ siteAppDir: siteApp, releasesRoot: site,
+      isWritable: () => writable, runBuild: fakeBuild('new') }).build('rebuild');
+    expect(result).toMatchObject({ ok: false, code: 'build_stopped' });
+    expect(removals).toHaveLength(1);
+    expect(removals[0]).toMatch(/\.manifest\.json$/);
+    expect(await createReleaseManifestReader(site).read()).toEqual({ release: 'none' });
+    await expect(disk.readlink(join(site, 'current'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('retains previous current manifest after a pre-flip failure', async () => {
+    const site = join(root, 'site');
+    const builder = createSiteBuilder({ siteAppDir: siteApp, releasesRoot: site, runBuild: fakeBuild('new') });
+    const first = await builder.build('rebuild');
+    pruneFaults.beforePromotion = () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); };
+    const failed = await builder.build('rebuild');
+    expect(failed.ok).toBe(false);
+    expect(await createReleaseManifestReader(site).read()).toMatchObject({ release: 'known', manifest: { stamp: first.release } });
+    expect(await disk.readdir(join(site, 'manifests'))).toContain(`${failed.attemptId}.json`);
+  });
+
+  it('promotes with unknown publication when manifest directory is unwritable', async () => {
+    const site = join(root, 'site');
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    pruneFaults.manifestMkdir = () => { throw Object.assign(new Error('/private/secret'), { code: 'EACCES' }); };
+    const result = await createSiteBuilder({ siteAppDir: siteApp, releasesRoot: site, runBuild: fakeBuild('new') }).build('rebuild');
+    expect(result.ok).toBe(true);
+    expect(await createReleaseManifestReader(site).read()).toEqual({ release: 'unknown' });
+    expect(warning).toHaveBeenCalledWith('Release publication manifest unavailable; publication status may be unknown.');
+    expect(JSON.stringify(warning.mock.calls)).not.toContain('/private/secret');
+  });
+
+  it.each(['failure', 'loss'] as const)('retains old manifest after release deletion %s without downgrading promotion', async (mode) => {
+    const site = join(root, 'site');
+    let writable = true;
+    const builder = createSiteBuilder({ siteAppDir: siteApp, releasesRoot: site, keep: 1, isWritable: () => writable, runBuild: fakeBuild('new') });
+    const first = await builder.build('rebuild');
+    const deletedManifests: string[] = [];
+    pruneFaults.manifestRemove = (path) => { deletedManifests.push(path); };
+    pruneFaults.remove = (path) => {
+      if (path !== join(site, 'releases', first.release!)) return;
+      if (mode === 'loss') writable = false;
+      else throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+    };
+    const second = await builder.build('rebuild');
+    expect(second.ok).toBe(true);
+    expect(deletedManifests).toEqual([]);
+    expect(await disk.readFile(join(site, 'manifests', `${first.release}.json`), 'utf8')).toBeTruthy();
+    expect(await createReleaseManifestReader(site).read()).toMatchObject({ release: 'known', manifest: { stamp: second.release } });
+  });
+
+  it('sweeps orphan and temporary manifests, prunes release/manifest together, preserves build history', async () => {
+    const site = join(root, 'site');
+    const builder = createSiteBuilder({ siteAppDir: siteApp, releasesRoot: site, keep: 1, runBuild: fakeBuild('new') });
+    const first = await builder.build('rebuild');
+    await disk.writeFile(join(site, 'manifests', '1-1-0000.json'), '{}');
+    await disk.writeFile(join(site, 'manifests', '.1-1-0001.partial'), 'partial');
+    const second = await builder.build('rebuild');
+    expect(second.ok).toBe(true);
+    expect(await disk.readdir(join(site, 'manifests'))).toEqual([`${second.release}.json`]);
+    await expect(disk.readFile(join(site, 'manifests', `${first.release}.json`))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(JSON.parse(await disk.readFile(join(site, 'build-state.json'), 'utf8'))).toBeTruthy();
+  });
+
+  it.each([false, true])('observes only loader-read entries across coalescing (queued failure: %s)', async (failQueued) => {
+    const site = join(root, 'site');
+    const firstRead = Promise.withResolvers<void>();
+    const finishFirst = Promise.withResolvers<void>();
+    const secondRead = Promise.withResolvers<void>();
+    const finishSecond = Promise.withResolvers<void>();
+    let calls = 0;
+    const builder = createSiteBuilder({
+      siteAppDir: siteApp, releasesRoot: site,
+      runBuild: async (outDir, manifestPath) => {
+        const call = ++calls;
+        await fakeBuild('new')(outDir);
+        await writeReleaseManifest(call === 1 ? [] : [{ translationKey: 'later-commit', locale: 'de', slug: 'story', digest: 'a'.repeat(64), gallery: [] }], manifestPath);
+        if (call === 1) { firstRead.resolve(); await finishFirst.promise; }
+        else { secondRead.resolve(); await finishSecond.promise; if (failQueued) throw new Error('build failed'); }
+      },
+    });
+    const first = builder.build('rebuild');
+    await firstRead.promise;
+    const queued = builder.build('publish');
+    finishFirst.resolve();
+    expect((await first).ok).toBe(true);
+    await secondRead.promise;
+    const reader = createReleaseManifestReader(site);
+    expect(await reader.read()).toMatchObject({ release: 'known', manifest: { posts: [] } });
+    finishSecond.resolve();
+    expect((await queued).ok).toBe(!failQueued);
+    const observation = await reader.read();
+    expect(observation.release).toBe('known');
+    if (observation.release === 'known') expect(observation.manifest.posts.map((post) => post.translationKey)).toEqual(failQueued ? [] : ['later-commit']);
+  });
+
+  it('passes only the per-build manifest path to children, never inherited operator state', async () => {
+    vi.stubEnv('SITE_RELEASE_MANIFEST', '/private/operator-path');
+    const script = "require('node:fs').writeFileSync('manifest-env.json', JSON.stringify({ path: process.env.SITE_RELEASE_MANIFEST ?? null }))";
+    await runChildBuild(process.execPath, ['-e', script], root, 10_000);
+    expect(JSON.parse(await disk.readFile(join(root, 'manifest-env.json'), 'utf8'))).toEqual({ path: null });
+    await runChildBuild(process.execPath, ['-e', script], root, 10_000, undefined, { manifestPath: '/run/1-1-0000.manifest.json' });
+    expect(JSON.parse(await disk.readFile(join(root, 'manifest-env.json'), 'utf8'))).toEqual({ path: '/run/1-1-0000.manifest.json' });
+  });
+  it('keeps promotion successful when old manifest cleanup fails', async () => {
+    const site = join(root, 'site');
+    const builder = createSiteBuilder({ siteAppDir: siteApp, releasesRoot: site, keep: 1, runBuild: fakeBuild('new') });
+    const first = await builder.build('rebuild');
+    pruneFaults.manifestRemove = () => { throw Object.assign(new Error('busy'), { code: 'EBUSY' }); };
+    const second = await builder.build('rebuild');
+    expect(second.ok).toBe(true);
+    await expect(disk.readdir(join(site, 'releases', first.release!))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await disk.readFile(join(site, 'manifests', `${first.release}.json`), 'utf8')).toBeTruthy();
+    expect(await createReleaseManifestReader(site).read()).toMatchObject({ release: 'known', manifest: { stamp: second.release } });
   });
 });
