@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { editorDocument } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 
@@ -173,14 +173,15 @@ describe('Site identity settings form', () => {
     const h = await page({ route: () => Response.json({ ok: true, release: '1793000000000-1-0001', liveRelease: null }) });
     h.edit('identitySiteName', 'Not saved');
     h.el('identityRebuild').click();
-    await settle();
+    await vi.waitFor(() => {
+      expect(h.el('buildStatus').textContent).toContain(ui.en['admin.build.missing']);
+    });
     expect(h.requests[1]).toEqual({ url: '/rebuild', method: 'POST', body: undefined });
     expect(h.confirms).toHaveLength(1);
     expect(h.el('identitySiteName').value).toBe('Not saved');
     expect(h.el('identityStatus').textContent).toContain('Release 1793000000000-1-0001 was promoted');
     expect(h.el('identityStatus').textContent).toContain('No live release yet');
     expect(h.requests[2]?.url).toBe('/rebuild/status');
-    expect(h.el('buildStatus').textContent).toContain('No rebuild attempt on record');
   });
 
   it('reports a stopped rebuild without exposing diagnostics or urging an unsafe retry', async () => {

@@ -100,7 +100,9 @@ describe('language API', () => {
     expect(response.headers['cache-control']).toBe('no-store');
     expect(response.json()).toMatchObject({ ...mode, lockedAt: null });
     expect(await f.language.get()).toMatchObject(mode);
-    expect((await f.app.inject({ method: 'GET', url: '/language', cookies: f.cookies })).json()).toEqual(response.json());
+    const { build, ...storedLanguage } = response.json();
+    expect(build).toMatchObject({ ok: true, attemptId: 'language-release', release: 'language-release' });
+    expect((await f.app.inject({ method: 'GET', url: '/language', cookies: f.cookies })).json()).toEqual(storedLanguage);
     expect(f.build).toHaveBeenCalledTimes(1);
     const saved = await f.language.get();
     expect((await f.put(mode)).statusCode).toBe(200);

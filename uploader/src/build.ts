@@ -6,7 +6,7 @@ import { createWorkLock, type WorkLock } from './work-lock.js';
 import { assertWorkWritable, cancellableSleep, createWorkCancellation, isWorkWritable, type WorkCancellationOptions } from './work-cancellation.js';
 import type pg from 'pg';
 import { parseIdentitySnapshot } from '../../site/src/lib/site-identity.js';
-import { withBuildSnapshot, writeBuildAssets, type BuildSnapshot } from './build-snapshot.js';
+import { BuildSnapshotTimeoutError, withBuildSnapshot, writeBuildAssets, type BuildSnapshot } from './build-snapshot.js';
 import { DEFAULT_LANGUAGE } from './language.js';
 import { StorageReadOnlyError } from './storage-owner.js';
 import { buildFailureMessage, createBuildState, observeLiveRelease, type BuildFailureCode, type BuildReport, type BuildStatusResponse, type BuildTrigger } from './build-state.js';
@@ -56,7 +56,7 @@ export class BuildUnavailableError extends Error {
 
 function failureCode(error: unknown, deploymentStarted: boolean): BuildFailureCode {
   if (error instanceof StorageReadOnlyError) return 'build_stopped';
-  if (error instanceof BuildTimeoutError) return 'build_timeout';
+  if (error instanceof BuildTimeoutError || error instanceof BuildSnapshotTimeoutError) return 'build_timeout';
   if (error instanceof BuildChildError) return 'build_failed';
   if (error instanceof BuildUnavailableError) return 'build_unavailable';
   if (deploymentStarted && error && typeof error === 'object' && 'code' in error && typeof error.code === 'string') {
