@@ -46,7 +46,7 @@ import { createImportRunner, memoryImportJobStore, ImportBusyError, type ImportR
 import { createRehostResume } from './wp-images.js';
 import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, commentLimiters, type RateLimiter, type AccountLimiter } from './rate-limit.js';
 import type { CommentStore } from './comments.js';
-import { registerPublicComments } from './comments-public.js';
+import { commentAuthorityOrigin, commentOrigin, registerPublicComments } from './comments-public.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
 import { compressionHook } from './compress.js';
@@ -60,8 +60,10 @@ import { ROUTE_ARCHIVE_RE } from './gpx-backup.js';
 import { StorageReadOnlyError } from './storage-owner.js';
 import { IdentityConflictError, type SiteIdentityStore } from './site-identity.js';
 import { IdentityError, neutralIdentity } from '../../site/src/lib/site-identity.js';
+import type { TrustPolicy } from './trusted-proxy.js';
 
 export interface ServerConfig {
+  trustProxy: TrustPolicy['trust'];
   storageDir: string;
   baseUrl: string;
   users: UserStore;
@@ -127,8 +129,8 @@ export interface ServerConfig {
   /** Site-wide comments switch. Defaults to OFF (fail closed): POST answers 409. */
   commentsEnabled?: () => boolean;
   /**
-   * Exact Origin a browser POST /comments must carry. Defaults to the origin
-   * of `baseUrl` (PUBLIC_BASE_URL). Compared by equality, never prefix.
+   * Explicit blog-origin override for POST /comments. Invalid values fail closed.
+   * Otherwise use trusted protocol + raw Host, excluding production image hosts.
    */
   commentsOrigin?: string;
   /** Injectable for tests; defaults to fresh `commentLimiters()` maps. */
@@ -173,15 +175,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // @fastify/static requires an absolute root; tolerate a relative STORAGE_DIR
   // (e.g. ./data/images from env) by resolving against the process cwd.
   const storageDir = resolve(cfg.storageDir);
-  // @ai-warning: trustProxy makes Fastify read X-Forwarded-* (so req.ip and the
-  // cookie `secure` flag reflect the real client). `trustProxy: 1` trusts exactly
-  // ONE hop — the reverse proxy in front of the container — so req.ip is the
-  // RIGHTMOST X-Forwarded-For entry, the one that proxy appended; any leftmost,
-  // client-supplied entries are ignored. `true` trusted every hop, which made
-  // req.ip (and with it the per-IP auth limiter) spoofable by a client that
-  // rotates the header (#108). A second proxy layer needs `2`, never `true`.
-  // The compose file publishes port 3000 on loopback only, so the host proxy
-  // is the sole ingress and the one hop this trusts.
+  // @ai-warning: validate the immediate socket address AND stop at hop zero.
+  // Never use `true`, a bare hop count, or a hop-only function: they let an
+  // untrusted peer forge req.ip and req.protocol. A second proxy layer needs
+  // a new spec, not a larger number (#369 dependency/proxy-trust spec).
   // @ai-note: http.Server#requestTimeout bounds how long the server waits to
   // fully RECEIVE a request (headers + body) — it does not bound how long a
   // handler then takes to process it (e.g. encoding an upload). Fastify sets
@@ -189,7 +186,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // default, so without an explicit value a stalled request would never time
   // out at this layer. 120s is generous for even a large multipart upload
   // over a slow connection while still bounding one that stalls outright.
-  const app = Fastify({ logger: false, trustProxy: 1, requestTimeout: 120_000 });
+  const app = Fastify({ logger: false, trustProxy: cfg.trustProxy, requestTimeout: 120_000 });
   const { users, sessions } = cfg;
   let mutationsClosed = false;
   const activeMutations = new Set<Promise<void>>();
@@ -269,9 +266,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // immutable by construction — while `${siteDir}/current` is a symlink a
     // publish repoints, which is exactly why the DOCUMENT must not be cached:
     // it is what points at the new asset names.
-    // @ai-note Set here rather than via the mount's `setHeaders`, which
-    // @fastify/static overwrites with its own cacheControl value (see the
-    // image mount below); an onSend `reply.header` is the last writer.
+    // Apply the fingerprint-specific policy after static serving; the rest of
+    // the blog mount retains its native revalidation policy.
     if (path.startsWith('/_astro/') && reply.statusCode < 400) {
       reply.header('cache-control', 'public, max-age=31536000, immutable');
     }
@@ -346,9 +342,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // (wp-images.ts) stay deterministic so re-imports are idempotent, so
   // re-importing a remote image that changed since the first import is the one
   // residual path that can rewrite bytes under an immutable-cached URL —
-  // accepted trade-off. (A custom setHeaders is overwritten by
-  // @fastify/static's own cacheControl, so use the native maxAge + immutable
-  // options instead.)
+  // accepted trade-off. Use the native maxAge + immutable options.
   app.register(fastifyStatic, {
     root: storageDir,
     prefix: '/',
@@ -358,7 +352,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     constraints: { host: cfg.imgHost },
     // Public variants must be readable by the editor on a different origin.
     // Scope CORS to this file mount, never authenticated APIs or private originals.
-    setHeaders: (res) => { res.setHeader('Access-Control-Allow-Origin', '*'); },
+    setHeaders: (reply) => { reply.header('Access-Control-Allow-Origin', '*'); },
     // Only finished variants (`<key>-<width>.<avif|webp|jpeg>`) are web assets.
     // Untouched full-resolution originals (`<key>-orig.<ext>`) live in
     // storageDir so the incremental backup tar captures them, but they are a
@@ -1879,10 +1873,33 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // The limiter maps are the comment route's own, never `loginLimiter`.
   {
     const fresh = commentLimiters();
+    const imageOrigin = new URL(cfg.baseUrl).origin;
+    const imageAuthority = new URL(imageOrigin).host;
+    // Preserve alternate-scheme exclusions, including an explicitly configured
+    // default port, without excluding unrelated ports on the same hostname.
+    const servingImageAuthorities = ['http', 'https'].map((protocol) => {
+      const origin = commentAuthorityOrigin(protocol, cfg.imgHost);
+      return origin === null ? null : new URL(origin).host;
+    });
     registerPublicComments(app, {
       comments: cfg.comments,
       posts: cfg.posts,
-      allowedOrigin: cfg.commentsOrigin ?? new URL(cfg.baseUrl).origin,
+      allowedOrigin: (req) => {
+        if (cfg.commentsOrigin !== undefined) return commentOrigin(cfg.commentsOrigin);
+        // #276 inserts the CURRENT validated identity.canonicalOrigin here, not
+        // a boot snapshot. Until then, do not infer identity from reader input.
+        const origin = commentAuthorityOrigin(req.protocol, req.headers.host);
+        if (origin === null) return null;
+        if (servingImageAuthorities.some((authority) => authority === null)) return null;
+        // Normalize every authority under the actual request protocol. A default
+        // port in either image setting must not evade the image-host exclusion.
+        const servesImages = servingImageAuthorities.some((authority) =>
+          commentAuthorityOrigin(req.protocol, authority) === origin);
+        if (commentAuthorityOrigin(req.protocol, imageAuthority) === origin || servesImages) {
+          return imgHostServesBlog && servesImages && origin === imageOrigin ? origin : null;
+        }
+        return origin;
+      },
       // Falls back to the persisted global switch (default false = fail closed).
       commentsEnabled: cfg.commentsEnabled ?? (() => cfg.settings.get().commentsEnabled === true),
       ipLimiter: cfg.commentIpLimiter ?? fresh.ip,
