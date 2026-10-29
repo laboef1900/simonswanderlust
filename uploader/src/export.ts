@@ -4,6 +4,7 @@ import { galleryFencesToMdx, rewriteOutsideGalleries, unescapeAltText } from './
 import { markdownImages } from './wp-content.js';
 import type { HeroImage, Locale, PostLocale, PostPair } from './posts.js';
 import { validatePublicTrack, type PublicTrack } from '../public/gpx-public-track.js';
+import type { PublishedTrackProjection } from './published-track.js';
 
 // YAML single-quoted scalar: a literal quote is escaped by doubling it ('' ),
 // never with a backslash. Mirrors storage.ts so exported MDX re-parses cleanly.
@@ -84,17 +85,23 @@ export function renderPostToMdx(pair: PostPair, locale: Locale, track?: PublicTr
   return lines.join('\n');
 }
 
-export async function exportPost(pair: PostPair, baseDir: string, track?: PublicTrack): Promise<string[]> {
+export async function exportPost(pair: PostPair, baseDir: string, projection: PublishedTrackProjection): Promise<string[]> {
+  // Resolve every artifact before the first filesystem write. In particular a
+  // newly requested translation must not inherit the primary's retained track.
+  const track = projection.track === undefined ? undefined : validatePublicTrack(projection.track);
+  const artifacts = projection.language.locales
+    .filter(locale => !pair[locale].omitted && pair[locale].slug !== '')
+    .map(locale => ({
+      locale,
+      slug: pair[locale].slug,
+      content: renderPostToMdx(pair, locale, projection.locales.includes(locale) ? track : undefined),
+    }));
   const out: string[] = [];
-  for (const locale of ['de', 'en'] as Locale[]) {
-    const slug = pair[locale].slug;
-    // An unset slug (DE-first draft without an EN title, issue #119) has no
-    // filename — writing `trips/en/.mdx` would just be a hidden file.
-    if (slug === '') continue;
+  for (const { locale, slug, content } of artifacts) {
     const dir = join(baseDir, 'trips', locale);
     await mkdir(dir, { recursive: true });
     const path = join(dir, `${slug}.mdx`);
-    await writeFile(path, renderPostToMdx(pair, locale, track), 'utf8');
+    await writeFile(path, content, 'utf8');
     out.push(path);
   }
   return out;
@@ -103,12 +110,12 @@ export async function exportPost(pair: PostPair, baseDir: string, track?: Public
 export async function exportAll(
   pairs: PostPair[],
   baseDir: string,
-  readTrack: (translationKey: string) => Promise<PublicTrack | undefined>,
+  readTrack: (translationKey: string) => Promise<PublishedTrackProjection>,
 ): Promise<string[]> {
   const out: string[] = [];
   for (const pair of pairs) {
-    // Snapshot retrieval validates BOTH locale artifacts before this pair writes
-    // anything. Working-copy route edits/detachment must never reach this path.
+    // The store validates the complete retained snapshot set, independently of
+    // working-copy route edits, detachment, or newly requested translations.
     const track = await readTrack(pair.translationKey);
     out.push(...(await exportPost(pair, baseDir, track)));
   }

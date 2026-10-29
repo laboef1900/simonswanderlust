@@ -16,7 +16,16 @@ describe('parseWxr', () => {
     expect(attachments.get('100')).toBe('https://wp.example/uploads/hero.jpg');
   });
 
-  it('skips (not crashes) a published post that has a language but no post_translations group', () => {
+  it.each(['de', 'en'] as const)('keys untagged single-language posts by WordPress id in %s', (primary) => {
+    const body = `<rss><channel><item><wp:post_type>post</wp:post_type><wp:status>publish</wp:status>
+      <wp:post_id>123</wp:post_id><wp:post_name>story</wp:post_name><title>Story</title></item></channel></rss>`;
+    expect(parseWxr(body, { primary, locales: [primary] }).posts).toMatchObject([
+      { group: 'wp:123', locale: primary, slug: 'story' },
+    ]);
+    expect(parseWxr(body).rejected).toEqual([{ slug: 'story', reason: 'no language' }]);
+  });
+
+  it('reports an ambiguous published post without a translation group as rejected', () => {
     const noGroupWxr = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:wp="http://wordpress.org/export/1.2/" xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/">
   <channel>
@@ -32,6 +41,7 @@ describe('parseWxr', () => {
 </rss>`;
     expect(() => parseWxr(noGroupWxr)).not.toThrow();
     expect(parseWxr(noGroupWxr).posts).toHaveLength(0);
+    expect(parseWxr(noGroupWxr).rejected).toEqual([{ slug: 'non-bilingual-post', reason: 'no language' }]);
   });
 
   // Issue #143: the parser's own throws (a truncated download cuts a CDATA or

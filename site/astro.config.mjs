@@ -4,6 +4,13 @@ import mdx from '@astrojs/mdx';
 import sitemap from '@astrojs/sitemap';
 import tailwindcss from '@tailwindcss/vite';
 import { SHIKI_THEME, shikiStyleToClass } from './src/lib/shiki-classes.js';
+import { loadEnv } from 'vite';
+import { resolveBuildLanguage } from './src/lib/build-language.js';
+
+const databaseUrl = process.env.DATABASE_URL || loadEnv(process.env.NODE_ENV || 'development', process.cwd(), 'DATABASE_URL').DATABASE_URL;
+const language = await resolveBuildLanguage(databaseUrl);
+process.env.DATABASE_URL = databaseUrl;
+process.env.SITE_LANGUAGE_JSON = JSON.stringify(language);
 
 export default defineConfig({
   site: 'https://simonswanderlust.com',
@@ -16,8 +23,8 @@ export default defineConfig({
   compressHTML: true,
   trailingSlash: 'always',
   i18n: {
-    defaultLocale: 'de',
-    locales: ['de', 'en'],
+    defaultLocale: language.primary,
+    locales: [...language.locales],
     routing: { prefixDefaultLocale: false },
   },
   // @ai-warning: keep in lockstep with MARKDOWN_OPTIONS in

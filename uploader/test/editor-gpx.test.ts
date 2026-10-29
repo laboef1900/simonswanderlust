@@ -267,12 +267,13 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
   };
   context.window = context;
   vm.createContext(context);
-  for (const file of ['draft-guard.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js',
+  for (const file of ['language.js', 'draft-guard.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js',
     'gallery-fence.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js',
     'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js',
     'editor-review.js', 'editor-inspector.js', 'editor-gpx.js']) {
     vm.runInContext(readFileSync('public/' + file, 'utf8'), context, { filename: file });
   }
+  vm.runInContext(`SiteLanguage.accept({primary:'de',locales:['de','en'],lockedAt:null,updatedAt:'2026-10-27T00:00:00.000Z'})`, context);
   // Supply the real shared geometry module through the controller's dependency
   // seam: Node's VM cannot resolve the browser-only /admin module URL.
   const controller = context.GpxEditor as { wire(host: Record<string, unknown>): unknown };
@@ -280,6 +281,7 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
   controller.wire = (host) => wire({ ...host, loadGeometry: async () => browserGeometry, loadPublicTrack: async () => browserPublicTrack });
   const inline = html.slice(html.indexOf("'use strict'", html.lastIndexOf('<script>')), html.lastIndexOf('</script>'));
   vm.runInContext(inline, context, { filename: 'editor.html' });
+  vm.runInContext('language = SiteLanguage.config(); loadBlocked = false', context);
   const editor = vm.runInContext('({ buildPayload, doSaveDraft, guard, gpxEditor, deMDE, addStopRow })', context) as {
     buildPayload(): Omit<PostPair, 'status'>;
     doSaveDraft(): Promise<boolean>;

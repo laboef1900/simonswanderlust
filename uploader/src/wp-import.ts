@@ -9,6 +9,8 @@ import { insufficientSpaceForImport, type DiskSpace } from './disk.js';
 import type { WorkLock } from './work-lock.js';
 import { normalizeProcessOptions, type ProcessOptions } from './pipeline.js';
 import { assertWorkWritable, cancellableSleep, type WorkCancellationOptions } from './work-cancellation.js';
+import { DEFAULT_LANGUAGE, type LanguageConfig } from './language.js';
+import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js';
 
 /** Per-image accounting, so a partial import cannot masquerade as a clean one. */
 export interface ImportImageCounts {
@@ -25,6 +27,8 @@ export interface ImportSummary {
   updated: number;
   /** Already published before this run; deliberately not overwritten. A success, not a problem. */
   skippedPublished: number;
+  /** Tagged items in disabled locales; never fetched or stored. */
+  skippedLocale: number;
   /**
    * Rejected at the import boundary: a missing translation, a slug the importer refuses
    * (path-traversal defence), or a slug conflict with an existing post whose (DE, EN) slug
@@ -39,6 +43,8 @@ export interface ImportSummary {
 
 export interface ImportDeps extends WorkCancellationOptions {
   postStore: PostStore; storageDir: string; baseUrl: string;
+  /** Preflight mode; the post store revalidates current mode under its write lock. */
+  language?: LanguageConfig;
   /** Immutable image profile snapshot for this prepared import. */
   encoding?: ProcessOptions;
   rehost?: (url: string, key: string, alt: string, signal?: AbortSignal) => Promise<RehostResult>;
@@ -441,10 +447,11 @@ interface PlannedRehost {
  * this map is the #96 cap's quantity; its keys feed the #94 resume-aware
  * free-space estimate. `test/wp-import.test.ts` pins both against the run.
  */
-function rehostPlan(de: ParsedPost, en: ParsedPost, attachments: Map<string, string>, includeHero: boolean): Map<string, PlannedRehost> {
+function rehostPlan(de: ParsedPost | undefined, en: ParsedPost | undefined, attachments: Map<string, string>, includeHero: boolean): Map<string, PlannedRehost> {
   const plan = new Map<string, PlannedRehost>();
   const legacyOwners = new Map<string, number>();
   for (const p of [de, en]) {
+    if (!p) continue;
     const hero = includeHero && p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
     for (const url of rehostUrlSet(p, attachments, includeHero)) {
       if (plan.has(url)) continue;
@@ -578,6 +585,16 @@ async function buildLocale(
   };
 }
 
+function emptyLocale(locale: 'de' | 'en', language: LanguageConfig): BuiltLocale {
+  return {
+    locale: {
+      locale, slug: '', title: '', excerpt: '', country: '', bodyMarkdown: '', images: {},
+      heroImage: { ...PLACEHOLDER_HERO }, omitted: !language.locales.includes(locale),
+    },
+    rehosted: new Map(),
+  };
+}
+
 /**
  * Fetch the export's featured image for this pair? Only when the pair has NO
  * stored hero at all. The decision is per PAIR, not per locale: both locales
@@ -650,7 +667,8 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   let boundary: WorkCancellationOptions = { signal: deps.signal, isWritable: deps.isWritable };
   const assertWritable = () => assertWorkWritable(boundary);
   assertWritable();
-  const { attachments, posts } = parseWxr(xml);
+  const language = deps.language ?? DEFAULT_LANGUAGE;
+  const { attachments, posts, skippedLocale, rejected } = parseWxr(xml, language);
   const log = deps.log ?? console.log;
   const encoding = normalizeProcessOptions(deps.encoding);
   const baseRehost: RehostFn = async (url, key, alt) => {
@@ -665,6 +683,8 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   };
   const images: ImportImageCounts = { total: 0, hosted: 0, failed: 0 };
   const warnings = warningSink();
+  for (const item of skippedLocale) warnings.push(`${item.slug}: ${item.locale} locale disabled — skipped`);
+  for (const item of rejected) warnings.push(`${item.slug}: ${item.reason} — rejected`);
 
   // @ai-note The defaults here are the INERT ones (no delay, no retry) and the
   // ROUTE passes the configured values, mirroring `cfg.loginLimiter ??
@@ -750,8 +770,9 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   };
 
   // One bucket per outcome (issue #100): every group lands in exactly one, so
-  // imported + updated + skippedPublished + rejected + failed === group count.
-  const summary = { imported: 0, updated: 0, skippedPublished: 0, rejected: 0, failed: 0 };
+  // imported + updated + skippedPublished + skippedLocale + rejected + failed === group count.
+  // A filtered disabled item is its own outcome, even when its enabled sibling is imported.
+  const summary = { imported: 0, updated: 0, skippedPublished: 0, skippedLocale: skippedLocale.length, rejected: rejected.length, failed: 0 };
 
   // Existing posts by slug, ANY locale → the posts using it (idempotency + published-skip).
   //
@@ -767,7 +788,7 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   assertWritable();
   const owners = new Map<string, PostSummary[]>();
   for (const s of existing) {
-    for (const slug of new Set([s.slugDe, s.slugEn])) {
+    for (const slug of new Set([s.slugs.de, s.slugs.en])) {
       if (slug) owners.set(slug, [...(owners.get(slug) ?? []), s]);
     }
   }
@@ -781,17 +802,21 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   // counts EXACTLY the groups that will be imported — no more, no less.
   // `stored` is the pair a MERGE run will write into (issue #126): resolved here,
   // before the count, because whether the hero is fetched depends on it.
-  const pending: { de: ParsedPost; en: ParsedPost; prior: Pick<PostSummary, 'translationKey' | 'status' | 'updatedAt'> | undefined; stored: StoredPostPair | null }[] = [];
+  const pending: { de: ParsedPost | undefined; en: ParsedPost | undefined; prior: Pick<PostSummary, 'translationKey' | 'status' | 'updatedAt'> | undefined; stored: StoredPostPair | null }[] = [];
   for (const [group, members] of groups) {
     assertWritable();
     const de = members.find((m) => m.locale === 'de');
     const en = members.find((m) => m.locale === 'en');
-    if (!de || !en) { summary.rejected++; warnings.push(`group ${group}: missing ${de ? 'en' : 'de'} translation (${members.map((m) => m.slug).join(', ')})`); continue; }
+    if (!(language.primary === 'de' ? de : en)) {
+      summary.rejected++; warnings.push(`group ${group}: missing ${language.primary} translation (${members.map((m) => m.slug).join(', ')})`); continue;
+    }
+    const deSlug = de?.slug ?? '';
+    const enSlug = en?.slug ?? '';
     // @ai-warning: validate slugs at the import boundary BEFORE re-hosting images
     // or writing to the DB — an unsafe slug would otherwise become a storage path
     // segment (traversal) and a live URL.
-    if (!isSafeSlug(de.slug) || !isSafeSlug(en.slug)) {
-      summary.rejected++; warnings.push(`group ${group}: unsafe slug (${de.slug} / ${en.slug}) — rejected`); continue;
+    if ((de && !isSafeSlug(de.slug)) || (en && !isSafeSlug(en.slug))) {
+      summary.rejected++; warnings.push(`group ${group}: unsafe slug (${deSlug} / ${enSlug}) — rejected`); continue;
     }
     // Pair identity is the (DE slug, EN slug) tuple as a UNIT: exactly one existing
     // post touches either slug AND it owns both. Binding on a single matching slug
@@ -799,22 +824,30 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
     // the author never meant to touch; a cross-locale namesake shares the image
     // storage namespace. Every such overlap is for the author to resolve in the
     // editor, not here.
-    const touching = [...new Set([...(owners.get(de.slug) ?? []), ...(owners.get(en.slug) ?? [])])];
-    const prior = touching.length === 1 && touching[0]!.slugDe === de.slug && touching[0]!.slugEn === en.slug ? touching[0] : undefined;
+    const touching = [...new Set([...(owners.get(deSlug) ?? []), ...(owners.get(enSlug) ?? [])])];
+    const prior = touching.length === 1 && touching[0]!.slugs.de === deSlug && touching[0]!.slugs.en === enSlug ? touching[0] : undefined;
     if (!prior && touching.length > 0) {
       summary.rejected++;
-      warnings.push(`${de.slug}/${en.slug}: slug conflict with an existing post (${touching.map((t) => `${t.slugDe}/${t.slugEn}`).join(', ')}) — rejected, nothing overwritten`);
+      warnings.push(`${deSlug}/${enSlug}: slug conflict with an existing post (${touching.map((t) => `${t.slugs.de}/${t.slugs.en}`).join(', ')}) — rejected, nothing overwritten`);
       continue;
     }
-    const earlier = claimed.get(de.slug) ?? claimed.get(en.slug);
+    if (!prior) {
+      const reserved = members.find((member) => reservation(namespaceOf(member.locale, language), member.slug, language));
+      if (reserved) {
+        summary.rejected++;
+        warnings.push(`group ${group}: ${reserved.locale} slug "${reserved.slug}" is reserved — rejected, nothing fetched`);
+        continue;
+      }
+    }
+    const earlier = claimed.get(deSlug) ?? claimed.get(enSlug);
     if (earlier) {
       summary.rejected++;
-      warnings.push(`${de.slug}/${en.slug}: slug conflict within this export (also used by ${earlier}) — rejected, nothing written`);
+      warnings.push(`${deSlug}/${enSlug}: slug conflict within this export (also used by ${earlier}) — rejected, nothing written`);
       continue;
     }
-    claimed.set(de.slug, `${de.slug}/${en.slug}`);
-    claimed.set(en.slug, `${de.slug}/${en.slug}`);
-    if (prior?.status === 'published') { summary.skippedPublished++; warnings.push(`${de.slug}/${en.slug}: already published — not overwritten`); continue; }
+    if (deSlug) claimed.set(deSlug, `${deSlug}/${enSlug}`);
+    if (enSlug) claimed.set(enSlug, `${deSlug}/${enSlug}`);
+    if (prior?.status === 'published') { summary.skippedPublished++; warnings.push(`${deSlug}/${enSlug}: already published — not overwritten`); continue; }
     // A re-run over an existing draft MERGES by default: the stored pair is the
     // author's work, and the export only contributes the photos it re-hosts.
     // `overwriteDrafts` restores the wholesale rebuild for "I changed it in
@@ -882,16 +915,16 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
         assertWritable();
         // One cache per pair: de and en describe the same trip and share photos.
         const pairRehost = sharedRehost(runRehost);
-        const freshDe = await buildLocale(de, attachments, pairRehost, includeHero(stored));
+        const freshDe = de ? await buildLocale(de, attachments, pairRehost, includeHero(stored)) : emptyLocale('de', language);
         assertWritable();
-        const freshEn = await buildLocale(en, attachments, pairRehost, includeHero(stored));
+        const freshEn = en ? await buildLocale(en, attachments, pairRehost, includeHero(stored)) : emptyLocale('en', language);
         assertWritable();
         const pair: PostPair = stored
           ? { translationKey: stored.translationKey, status: 'draft', shared: stored.shared, de: mergeLocale(stored.de, freshDe), en: mergeLocale(stored.en, freshEn) }
           : {
             translationKey: prior?.translationKey ?? '',
             status: 'draft',
-            shared: { date: de.date, countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } },
+            shared: { date: (language.primary === 'de' ? de! : en!).date, countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } },
             de: freshDe.locale,
             en: freshEn.locale,
           };
@@ -906,8 +939,8 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
         // sequence`, `ECONNREFUSED db:5432` — which goes to stdout instead, the
         // same split `failureReason` makes for photos (issue #143).
         const reason = e instanceof PostError ? e.message : 'could not be saved (see server logs)';
-        warnings.push(`${de.slug}/${en.slug}: ${reason}`);
-        log(`import: ${de.slug}/${en.slug} failed: ${(e as Error).message}`);
+        warnings.push(`${de?.slug ?? ''}/${en?.slug ?? ''}: ${reason}`);
+        log(`import: ${de?.slug ?? ''}/${en?.slug ?? ''} failed: ${(e as Error).message}`);
       }
       progress.groups.done++;
       tick();
@@ -920,11 +953,11 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
     // abandoned (issue #72); the job row and GET /import/status now carry the
     // summary too, but the log line stays the channel that survives everything.
     log(`import finished: imported=${summary.imported} updated=${summary.updated} `
-      + `skippedPublished=${summary.skippedPublished} rejected=${summary.rejected} failed=${summary.failed} `
+      + `skippedPublished=${summary.skippedPublished} skippedLocale=${summary.skippedLocale} rejected=${summary.rejected} failed=${summary.failed} `
       + `images=${images.hosted}/${images.total} hosted, ${images.failed} failed`);
 
     return { ...summary, images, warnings: warnings.finish() };
   };
 
-  return { groups: groups.size, planned: progress, run };
+  return { groups: groups.size + skippedLocale.length + rejected.length, planned: progress, run };
 }

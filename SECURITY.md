@@ -289,8 +289,9 @@ time are kept — they are useful and carry no location.
 able to run — see `uploader/src/disk.ts`. A full `/data` otherwise fails mid-pipeline and can
 leave a partial variant set with no complete record. The incremental images archive — the
 largest single writer on the volume — applies the same reserve on its way in (#113): it refuses
-when its estimated size would not leave that room, and its temp file never survives a failed or
-interrupted run, so the backup feature cannot fill the disk it shares with the site. Free space
+when its estimated size would not leave that room. Failed output is removed only after its
+writer settles; exit cleanup is best-effort and SIGKILL leftovers are swept on the next run.
+An unlink failure is logged for the next sweep, not reported as a successful archive. Free space
 is also reported on `/health` — **only to an admin session** (#132): the route itself is public
 because the compose healthcheck polls it without a cookie, but `free`/`total` for `/data` would
 let anyone on the internet watch the volume fill up and time a disk-exhaustion attempt against
@@ -307,6 +308,15 @@ clock rollback, foreign nested mounts and arbitrary network filesystems are outs
 timestamp protocol. Legacy, missing or corrupt cutoff provenance forces a full archive with
 the existing reserve, retaining old archives rather than guessing from filenames. Admin-only
 backup access, private original/EXIF handling, storage ownership and key guards are unchanged.
+
+Writer settlement was reconfirmed for #430 (2026-10-28): an owned tar pack and Node destination
+pipeline await destination open/write/close before failure cleanup or successful activation.
+Cancellation cannot activate the archive or advance its cutoff, and backup quiescence waits
+for that settlement before storage ownership is released. Tar may finish admitted **read-only**
+input work after its pack is destroyed; pipeline error listeners remain installed and the closed
+destination cannot receive further bytes. This does not claim every private tar input descriptor
+has closed at rejection. Prior completed archives, originals, dumps and route companions are
+not failure-cleanup targets. Authorization, restore validation and persisted formats are unchanged.
 
 `POST /import` has the same precondition (issue #94), with the same 507 and the same reserve, but
 sized from a **count** rather than a byte total — a WXR declares URLs, not sizes — using the

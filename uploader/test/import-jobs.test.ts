@@ -5,7 +5,7 @@ import {
 } from '../src/import-jobs.js';
 import type { ImportProgress, ImportSummary } from '../src/wp-import.js';
 
-const OK: ImportSummary = { imported: 1, updated: 0, skippedPublished: 0, rejected: 0, failed: 0, images: { total: 2, hosted: 2, failed: 0 }, warnings: [] };
+const OK: ImportSummary = { imported: 1, updated: 0, skippedPublished: 0, skippedLocale: 0, rejected: 0, failed: 0, images: { total: 2, hosted: 2, failed: 0 }, warnings: [] };
 const planned = (): ImportProgress => ({ groups: { total: 1, done: 0 }, images: { planned: 2, hosted: 0, failed: 0 } });
 
 /** The repo's resolvable-gate idiom. */

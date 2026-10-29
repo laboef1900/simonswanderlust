@@ -17,6 +17,7 @@ import { memorySecretsStore } from '../src/secrets.js';
 import { memoryCommentAdminStore, type AdminComment } from '../src/comments-admin.js';
 import { memorySiteIdentityStore } from '../src/site-identity.js';
 import { neutralIdentity } from '../../site/src/lib/site-identity.js';
+import { memoryLanguageStore } from '../src/language.js';
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'cadm-')); });
@@ -47,7 +48,7 @@ function pending(over: Partial<AdminComment> = {}): AdminComment {
 function build(extra: Partial<ServerConfig> = {}) {
   const users = memoryUserStore();
   const sessions = memorySessionStore();
-  const store = memoryCommentAdminStore();
+  const store = memoryCommentAdminStore([], extra.language);
   const app = buildServer({
     trustProxy: TEST_TRUST,
     storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
@@ -157,7 +158,7 @@ describe('admin comment moderation routes (SPEC-ADM-001)', () => {
     b.store.add(c);
     const res = await b.app.inject({ method: 'POST', url: `/moderation/comments/${c.id}/reply`, cookies: admin, payload: { body: 'Thanks for reading!' } });
     expect(res.statusCode).toBe(201);
-    expect(res.json()).toMatchObject({ status: 'approved', isAuthor: true, translationKey: 'trip-x', locale: 'en', name: 'Ada', body: 'Thanks for reading!' });
+    expect(res.json()).toMatchObject({ status: 'approved', isAuthor: true, translationKey: 'trip-x', locale: 'de', name: 'Ada', body: 'Thanks for reading!' });
     expect(res.json()).not.toHaveProperty('parentId');
     const rows = b.store.all();
     expect(rows).toHaveLength(2);
@@ -172,6 +173,21 @@ describe('admin comment moderation routes (SPEC-ADM-001)', () => {
     // Parent gone → 404; empty body → 400.
     expect((await b.app.inject({ method: 'POST', url: `/moderation/comments/${ID}/reply`, cookies: admin, payload: { body: 'x' } })).statusCode).toBe(404);
     expect((await b.app.inject({ method: 'POST', url: `/moderation/comments/${c.id}/reply`, cookies: admin, payload: { body: '   ' } })).statusCode).toBe(400);
+  });
+
+  it.each(['de', 'en'] as const)('defaults the actual moderation reply route to %s rather than the parent locale', async (primary) => {
+    const secondary = primary === 'de' ? 'en' : 'de';
+    const language = memoryLanguageStore({ primary, locales: [primary, secondary] });
+    const b = build({ language });
+    const admin = await authed(b, true);
+    const parent = pending({ locale: secondary });
+    b.store.add(parent);
+    const response = await b.app.inject({ method: 'POST', url: `/moderation/comments/${parent.id}/reply`,
+      cookies: admin, payload: { body: 'Author response' } });
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({ translationKey: parent.translationKey, locale: primary, isAuthor: true, status: 'approved' });
+    expect(b.store.all().find((row) => row.id === parent.id)?.locale).toBe(secondary);
+    await b.app.close();
   });
 
   it('answers 503 without a store, but only AFTER authz', async () => {

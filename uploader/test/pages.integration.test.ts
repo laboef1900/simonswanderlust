@@ -14,7 +14,12 @@ const maybe = url ? describe : describe.skip;
 
 maybe('pgPageStore (Postgres)', () => {
   let pool: DbPool;
-  beforeAll(async () => { pool = createPool(url as string); await ensureSchema(pool); });
+  beforeAll(async () => {
+    pool = createPool(url as string);
+    await ensureSchema(pool);
+    await pool.query(`UPDATE site_language SET primary_locale='de', enabled_locales=ARRAY['de','en'],
+      locked_at=(SELECT min(published_at) FROM posts), updated_at=clock_timestamp() WHERE id=true`);
+  });
   afterAll(async () => { await pool.end(); });
 
   it('saves and reads back both locales with images', async () => {
@@ -70,10 +75,10 @@ maybe('pgPageStore (Postgres)', () => {
     for (let i = 1; i <= REVISION_CAP + 1; i++) await store.save(about(`rev-${i}`));
     const revs = await store.listRevisions('about');
     expect(revs).toHaveLength(REVISION_CAP);
-    expect(revs[0]!.titleDe).toBe(`rev-${REVISION_CAP}`);
+    expect(revs[0]!.title).toBe(`rev-${REVISION_CAP}`);
     // The oldest survivor is rev-1 (the pre-loop state was pruned).
-    expect(revs.map((r) => r.titleDe)).not.toContain(before);
-    expect(revs[REVISION_CAP - 1]!.titleDe).toBe('rev-1');
+    expect(revs.map((r) => r.title)).not.toContain(before);
+    expect(revs[REVISION_CAP - 1]!.title).toBe('rev-1');
     const full = await store.getRevision('about', revs[0]!.id);
     expect(full!.snapshot.de.bodyMarkdown).toBe(`DE rev-${REVISION_CAP}`);
     expect(full!.snapshot.en.bodyMarkdown).toBe('EN body');

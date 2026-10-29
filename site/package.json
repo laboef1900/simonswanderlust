@@ -10,7 +10,8 @@
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:built-routes": "vitest run --config vitest.built.config.ts"
   },
   "dependencies": {
     "@astrojs/markdown-satteri": "0.4.5",

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DbPool } from './db.js';
 import type { Locale } from './posts.js';
+import { DEFAULT_LANGUAGE, readLanguage, type LanguageStore } from './language.js';
 
 /**
  * Reader comments store (spec docs/superpowers/specs/2026-09-14-comments-design.md,
@@ -154,7 +155,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const toPublic = (r: Comment): PublicComment => ({ id: r.id, name: r.name, body: r.body, isAuthor: r.isAuthor, createdAt: r.createdAt });
 
-export function memoryCommentStore(): CommentStore & { all(): Comment[]; removeForPost(tk: string): void } {
+export function memoryCommentStore(language?: Pick<LanguageStore, 'get'>): CommentStore & { all(): Comment[]; removeForPost(tk: string): void } {
   const rows: (Comment & { seq: number })[] = [];
   let seq = 0;
   const strip = ({ seq: _s, ...r }: Comment & { seq: number }): Comment => ({ ...r });
@@ -193,7 +194,7 @@ export function memoryCommentStore(): CommentStore & { all(): Comment[]; removeF
     async replyAsAuthor(input, authorName) {
       const row = {
         id: randomUUID(), translationKey: cleanKey(input.translationKey),
-        locale: input.postedLocale === undefined ? 'de' as const : cleanLocale(input.postedLocale),
+        locale: input.postedLocale === undefined ? (language ? await language.get() : DEFAULT_LANGUAGE).primary : cleanLocale(input.postedLocale),
         name: cleanName(authorName || 'Author'), email: null, body: cleanBody(input.body),
         status: 'approved' as const, isAuthor: true, createdAt: new Date(), seq: seq++,
       };
@@ -271,7 +272,7 @@ export function pgCommentStore(pool: DbPool): CommentStore {
     approve(id) { return store.setStatus(id, 'approved'); },
     async replyAsAuthor(input, authorName) {
       const tk = cleanKey(input.translationKey);
-      const locale = input.postedLocale === undefined ? 'de' : cleanLocale(input.postedLocale);
+      const locale = input.postedLocale === undefined ? (await readLanguage(pool)).primary : cleanLocale(input.postedLocale);
       const body = cleanBody(input.body);
       const { rows } = await pool.query<Row>(
         `INSERT INTO comments (id, translation_key, locale, name, email, body, status, is_author, sender_hash)
