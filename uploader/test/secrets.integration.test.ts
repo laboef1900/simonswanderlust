@@ -1,7 +1,7 @@
 import { seedSiteIdentity } from '../src/site-identity.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { randomBytes } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,8 @@ import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgSecretsStore } from '../src/secrets.js';
 import { dumpDatabase, listBackups, readDump, restoreDatabase, type Connectable } from '../src/backup.js';
 import { runCli } from './run-cli.js';
+import { readRestoreFence } from '../src/onboarding-fence.js';
+import { readOnboardingState } from '../src/onboarding.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -21,7 +23,9 @@ maybe('encrypted secrets and current backups (Postgres)', () => {
     pool = createPool(url as string);
     await ensureSchema(pool);
     await seedSiteIdentity(pool);
-    dir = await mkdtemp(join(tmpdir(), 'secrets-int-'));
+    // Recovery rejects symlink ancestors (including macOS /var); use the real
+    // private fixture root rather than the CLI's production /data/images default.
+    dir = await mkdtemp(join(await realpath(tmpdir()), 'secrets-int-'));
   });
   beforeEach(async () => { await pool.query('DELETE FROM app_secrets'); });
   afterAll(async () => { await pool.end(); await rm(dir, { recursive: true, force: true }); });
@@ -190,8 +194,11 @@ maybe('encrypted secrets and current backups (Postgres)', () => {
     const file = join(dir, await dumpDatabase(pool, dir));
     await store.set('ai_api_key', 'undo-fixture');
     const backupDir = join(dir, 'undo');
-    const result = await runCli(['restore', '--yes', file], { DATABASE_URL: url!, BACKUP_DIR: backupDir });
+    const storageDir = join(dir, 'images');
+    const result = await runCli(['restore', '--yes', file], { DATABASE_URL: url!, BACKUP_DIR: backupDir, STORAGE_DIR: storageDir });
     expect(result.code).toBe(0);
+    expect(await readRestoreFence(storageDir)).toBe(true);
+    expect(await readOnboardingState(pool)).toMatchObject({ state: 'retired' });
     expect(result.stdout).toContain('app_secrets: replace 1 live rows with 1 encrypted rows');
     expect(result.stdout).not.toContain('incoming-fixture');
     expect(result.stdout).not.toContain('undo-fixture');
@@ -206,8 +213,11 @@ maybe('encrypted secrets and current backups (Postgres)', () => {
     await store.set('ai_api_key', 'legacy-preserved-fixture');
     const file = join(dir, 'db-20260103-000000.json.gz');
     await writeFile(file, gzipSync(JSON.stringify({ version: 5, tables: { users: [], posts: [] } })));
-    const result = await runCli(['restore', '--yes', file], { DATABASE_URL: url!, BACKUP_DIR: join(dir, 'legacy-undo') });
+    const storageDir = join(dir, 'images');
+    const result = await runCli(['restore', '--yes', file], { DATABASE_URL: url!, BACKUP_DIR: join(dir, 'legacy-undo'), STORAGE_DIR: storageDir });
     expect(result.code).toBe(0);
+    expect(await readRestoreFence(storageDir)).toBe(true);
+    expect(await readOnboardingState(pool)).toMatchObject({ state: 'retired' });
     expect(result.stdout).toContain('app_secrets preserved: absent from dump.');
     expect(result.stdout).not.toContain('app_secrets: replace');
     expect(await store.get('ai_api_key')).toBe('legacy-preserved-fixture');

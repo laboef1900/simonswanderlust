@@ -52,8 +52,10 @@ text with a theme colour. No class has layout, positioning, or URL semantics.
    Shiki emits to classes, and **drops everything else**. Unknown declarations are never passed
    through — "unknown → keep as style" is the hole being closed. `SHIKI_CSS` is generated from the
    same theme object (`@shikijs/themes/github-dark`) so palette and mapping cannot drift.
-2. **Both Markdown configs** (`astro.config.mjs` and `MARKDOWN_OPTIONS`) register the transformer;
-   `render-markdown.test.ts` keeps asserting they are equal.
+2. **Shared Markdown configuration:** `MARKDOWN_OPTIONS` registers the transformer and
+   `astro.config.mjs` imports those options directly (since #285). The rendering regression
+   corpus below checks gallery markers and class-based colours without importing DB-backed
+   build configuration; there is no second configuration copy to compare.
 3. **`BODY_SCHEMA`** allows `style` on no element. `code` keeps the default constrained
    `className`; Shiki puts its classes on `pre` and `span`, which fall to `'*'`.
 4. **Stylesheet delivery.** `Base.astro` inlines `<style>${SHIKI_CSS}</style>` (unlayered, so it

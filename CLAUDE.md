@@ -102,10 +102,15 @@ exception merely to make a check pass. Record accepted exceptions in the relevan
    `site/src/lib/` and `site/src/i18n/` is covered by Vitest; `uploader/` logic by its own Vitest
    suites in `uploader/test/`. Run `npm test` and `npx astro check` before claiming done.
    Non-behavioral changes (docs, formatting) require proportionate evidence instead.
-2. **SEO Slug Contract (Critical)** — Live WordPress slugs MUST be preserved exactly: DE at root,
-   EN under `/en/`. Encoded and tested in `site/src/lib/paths.ts` and `trips.ts`, and mirrored by
-   MDX filenames. **Never rename a slug or route** without explicit authorization — it breaks live
-   URLs and SEO.
+2. **SEO Slug Contract (Critical)** — Published slugs and routes MUST be preserved exactly.
+   simonswanderlust.com, and every install whose primary language is German, keep the live
+   WordPress layout: DE at root, EN under `/en/`. An install whose primary language is English
+   (EN-only, or DE+EN EN-primary; owner-authorized 2026-10-27, see
+   `docs/superpowers/specs/2026-10-27-issue-283-language-mode-contract.md`) serves EN at root and
+   DE under `/de/`. The primary language is locked at the first publish
+   (`language_primary_locked`); no language-mode change moves a published URL. Encoded and tested
+   in `site/src/lib/paths.ts` and `trips.ts`, and mirrored by MDX filenames. **Never rename a slug
+   or route** without explicit authorization — it breaks live URLs and SEO.
 3. **Data Safety (Critical)** — Postgres is the content source of truth (`posts`, `pages`,
    `users`), and `/data` (bind-mounted from `uploader/data`) holds image originals/variants, site
    releases, and backups. NEVER wipe persistent data without explicit user authorization: no
@@ -165,7 +170,7 @@ Classify a change before implementing it:
 | **Content** | Postgres (loaded at build time by `site/src/lib/postgres-loader.ts`); authored in the in-admin editor — MDX files are export-only backups (the original stubs were imported once via `site/scripts/migrate-stub-posts.mjs`) |
 | **i18n** | Astro i18n routing — `defaultLocale: 'de'` (no prefix), `en` under `/en/` |
 | **Fonts** | Inter Variable (sans), IBM Plex Mono (expedition-log accents) |
-| **Markdown** | Shiki syntax highlighting (`syntaxHighlight: { type: 'shiki', excludeLangs: ['math', 'gallery'] }`) — keep `site/astro.config.mjs` and `MARKDOWN_OPTIONS` in `site/src/lib/render-markdown.ts` in lockstep; `render-markdown.test.ts` asserts they agree |
+| **Markdown** | Shiki syntax highlighting (`syntaxHighlight: { type: 'shiki', excludeLangs: ['math', 'gallery'] }`) — `site/astro.config.mjs` imports `MARKDOWN_OPTIONS` directly from `site/src/lib/render-markdown.ts`; `render-markdown.test.ts` exercises gallery markers and class-based highlighting without loading database-backed build configuration |
 | **Testing** | Vitest (both trees); `@astrojs/check` (`astro check`) for types |
 | **Infrastructure** | Self-hosted Docker: one `app` image (repo-root `Dockerfile`) runs `uploader/` Fastify, which builds `site/` in-process and serves it — plus `db` (Postgres), via root `docker-compose.yml` |
 
@@ -601,6 +606,22 @@ blog/
   admin, and images from one process and runs `astro build` in-process; added a scheduled/on-demand,
   retention-pruned Postgres backup feature (CLI-only restore). See `ARCHITECTURE.md` and
   `docs/superpowers/specs/2026-07-03-single-app-container-design.md`.
+- **Implemented, integration qualification pending:** #279 first-run Desk checklist under the
+  owner-approved #278 Q1–Q5/P1–P2 contract and separately approved `GET /auth/me` context.
+  Postgres `onboarding_state` is install-wide operational state; Identity is optional and
+  only Photo/Story/Publish count toward explicit permanent Finish. Hide survives restarts;
+  Show is Desk-only; authors retain ordinary draft/upload affordances. Boot captures prior
+  evidence before cleanup and classifies before listen. Every supported restore retires via
+  the permanent off-DB `onboarding.restore-retired` fence: native restore before GPX staging,
+  SQL/host/clone recovery before replacement/activation. Fresh native targets use offline
+  `prepare-native-restore`; `onboarding-retire` is fence-only and its lease ends on exit.
+  Keep all writers stopped with auto-start disabled across recovery commands. No reset or
+  data-deletion shortcut. `/setup`, `/login`, `/auth/status`, auth limits and session policy
+  remain unchanged. The recorded pre-merge uploader suite/typecheck and actual browser
+  setup → upload → draft → publish → Finish with unsaved identity passed their exercised scope;
+  merged-head integration checks, CI and final implementation review are not claimed here.
+  See `ARCHITECTURE.md`, `SECURITY.md`, `DESIGN.md` and
+  `docs/superpowers/specs/2026-10-27-issue-278-first-run-onboarding.md` for contract/evidence limits.
 - **Done:** Editable About page + baked-in travel map basemap (v0.5.0).
 - **Done:** AI feature removal + conformance hardening (July 2026) — removed the LM Studio
   caption/batch-uploader feature entirely; settings endpoints became admin-only; a global error

@@ -25,6 +25,7 @@ import { fixedWindowLimiter, accountLockoutLimiter } from '../src/rate-limit.js'
 import type { SiteBuilder, BuildOutcome } from '../src/build.js';
 import { memorySecretsStore, SecretsError } from '../src/secrets.js';
 import type { AiProvider, AiProviderKind } from '../src/ai-providers.js';
+import { memoryOnboardingStore, type OnboardingProgress, type OnboardingState } from '../src/onboarding.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -1426,6 +1427,7 @@ describe('blog serving is DB-independent (#129)', () => {
     down.find = async () => { throw new Error('pg: connection to db:5432 refused'); };
     await mkdir(join(dir, 'site', 'current', 'de'), { recursive: true });
     await writeFile(join(dir, 'site', 'current', 'de', 'index.html'), '<h1>de</h1>');
+    await writeFile(join(dir, 'site', 'current', 'index.html'), '<!doctype html><html lang="de"><body>home</body></html>');
     const b = build({ sessions: down });
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -1443,10 +1445,11 @@ describe('blog serving is DB-independent (#129)', () => {
       expect(spy).not.toHaveBeenCalled();
       // The CMS on the same server is honestly down: the session cannot be
       // checked, so these fail (sanitized), rather than pretending "logged out".
-      for (const url of ['/auth/status', '/posts']) {
+      for (const url of ['/auth/status', '/auth/me', '/posts']) {
         const res = await b.app.inject({ method: 'GET', url, cookies: { sid: 'admin-cookie' } });
         expect(res.statusCode, url).toBe(500);
         expect(res.json()).toEqual({ error: 'internal server error' });
+        if (url === '/auth/me') expect(res.headers['cache-control']).toBe('no-store');
       }
       // Anonymous callers of the CMS surface never needed the store.
       expect((await b.app.inject({ method: 'GET', url: '/auth/status' })).json()).toMatchObject({ authenticated: false });
@@ -1458,6 +1461,37 @@ describe('blog serving is DB-independent (#129)', () => {
 });
 
 describe('auth endpoints', () => {
+  it.each([true, false])('GET /auth/me returns only the authenticated context, admin=%s', async (isAdmin) => {
+    const b = build();
+    const { user, cookie } = await authed(b, { isAdmin });
+    const res = await b.app.inject({ url: '/auth/me', cookies: cookie });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['set-cookie']).toBeUndefined();
+    expect(res.json()).toEqual({ authenticated: true, userId: user.id, username: user.username, isAdmin, needsSetup: false });
+    // The public setup/login probe keeps its exact existing shape.
+    expect((await b.app.inject({ url: '/auth/status', cookies: cookie })).json()).toEqual({
+      authenticated: true, username: user.username, isAdmin, needsSetup: false,
+    });
+  });
+
+  it('GET /auth/me refuses anonymous, invalid and revoked sessions without setup information', async () => {
+    const b = build();
+    for (const cookies of [undefined, { sid: 'unknown-session' }]) {
+      const res = await b.app.inject({ url: '/auth/me', cookies });
+      expect(res.statusCode).toBe(401);
+      expect(res.json()).toEqual({ error: 'unauthorized' });
+      expect(res.headers['cache-control']).toBe('no-store');
+    }
+    expect((await b.app.inject({ url: '/auth/status' })).json()).toEqual({ authenticated: false, needsSetup: true });
+    const { cookie } = await authed(b);
+    await b.app.inject({ method: 'POST', url: '/logout', cookies: cookie });
+    const res = await b.app.inject({ url: '/auth/me', cookies: cookie });
+    expect(res.statusCode).toBe(401);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect((await b.app.inject({ url: '/auth/status' })).json()).toEqual({ authenticated: false, needsSetup: false });
+  });
+
   it('GET /auth/status reports needsSetup on an empty store', async () => {
     const b = build();
     const res = await b.app.inject({ method: 'GET', url: '/auth/status' });
@@ -1677,7 +1711,7 @@ describe('security headers', () => {
   // that is not one of the public static mounts gets them, so a new admin or
   // API route can no longer ship without them because a prefix list was not
   // updated. Before #130, /api/* was exactly that gap.
-  const ADMIN_URLS = ['/auth/status', '/api/cms/stats', '/api/categories', '/admin/', '/login', '/health', '/media', '/posts/no-such-post'];
+  const ADMIN_URLS = ['/auth/status', '/auth/me', '/api/cms/stats', '/api/categories', '/admin/', '/login', '/health', '/media', '/posts/no-such-post'];
   it.each(ADMIN_URLS)('%s carries nosniff + frame + referrer protection', async (url) => {
     const b = build();
     const { cookie } = await authed(b);
@@ -1690,6 +1724,7 @@ describe('security headers', () => {
   it('the public blog, its 404 page, legacy redirects and the image host get nosniff only', async () => {
     await mkdir(join(dir, 'site', 'current', 'de'), { recursive: true });
     await writeFile(join(dir, 'site', 'current', 'de', 'index.html'), '<h1>de</h1>');
+    await writeFile(join(dir, 'site', 'current', 'index.html'), '<!doctype html><html lang="de"><body>home</body></html>');
     await mkdir(join(dir, 'map'), { recursive: true });
     await writeFile(join(dir, 'map', 'tiles.pmtiles'), 'x');
     const b = build({ mapDir: join(dir, 'map') });
@@ -3727,5 +3762,101 @@ describe('POST /settings/image-preview', () => {
     expect((await first).statusCode).toBe(200);
     // The slot is released once the first finishes.
     expect((await preview(b, cookie, { format: 'webp', quality: '75' })).statusCode).toBe(200);
+  });
+});
+
+describe('admin onboarding metadata boundary', () => {
+  const initial: OnboardingState = {
+    schemaVersion: 1, state: 'eligible', reason: 'fresh',
+    evaluatedAt: '2026-10-27T12:00:00.000Z', dismissedAt: null, retiredAt: null,
+  };
+  const empty: OnboardingProgress = {
+    identity: false, ready: false, processing: false, attention: false,
+    story: false, published: false, newest: null, newestDraft: null,
+  };
+  it('requires admin for reads/actions before consulting state and does not issue cookies', async () => {
+    const onboarding = memoryOnboardingStore({ state: initial, progress: () => empty });
+    const read = vi.spyOn(onboarding, 'read');
+    const act = vi.spyOn(onboarding, 'act');
+    const b = build({ onboarding });
+    try {
+      for (const method of ['GET', 'POST'] as const) {
+        const res = await b.app.inject({ method, url: '/onboarding', ...(method === 'POST' ? { payload: { action: 'dismiss' } } : {}) });
+        expect(res.statusCode).toBe(401);
+        expect(res.headers['cache-control']).toBe('no-store');
+        expect(res.headers['set-cookie']).toBeUndefined();
+      }
+      const author = await authed(b, { isAdmin: false });
+      for (const method of ['GET', 'POST'] as const) {
+        const res = await b.app.inject({ method, url: '/onboarding', cookies: author.cookie, ...(method === 'POST' ? { payload: { action: 'dismiss' } } : {}) });
+        expect(res.statusCode).toBe(403);
+      }
+      expect(read).not.toHaveBeenCalled();
+      expect(act).not.toHaveBeenCalled();
+    } finally { await b.app.close(); }
+  });
+  it('shares hide/show across admins, preserves auth status shape and has no content/account/build side effects', async () => {
+    const progress = { ...empty, ready: true, story: true, published: true };
+    const onboarding = memoryOnboardingStore({ state: initial, progress: () => progress });
+    const builder = stubBuilder();
+    const b = build({ onboarding, builder: builder.builder });
+    try {
+      const first = await authed(b, { username: 'first' });
+      const second = await authed(b, { username: 'second' });
+      const mutations = [
+        vi.spyOn(b.users, 'create'), vi.spyOn(b.sessions, 'create'),
+        vi.spyOn(b.posts, 'upsertDraft'), vi.spyOn(b.posts, 'publish'),
+        vi.spyOn(b.pages, 'save'), vi.spyOn(b.media, 'upsert'),
+      ];
+      const post = (action: string) => b.app.inject({ method: 'POST', url: '/onboarding', cookies: first.cookie, payload: { action } });
+      expect((await post('dismiss')).json()).toMatchObject({ status: 'dismissed', complete: true });
+      expect((await b.app.inject({ url: '/onboarding', cookies: second.cookie })).json()).toMatchObject({ status: 'dismissed' });
+      expect((await post('resume')).json()).toMatchObject({ status: 'open' });
+      const finish = await post('finish');
+      expect(finish.json()).toEqual({ status: 'retired' });
+      expect(finish.headers['set-cookie']).toBeUndefined();
+      expect((await post('resume')).statusCode).toBe(409);
+      expect((await b.app.inject({ url: '/onboarding', cookies: second.cookie })).json()).toEqual({ status: 'retired' });
+      const status = await b.app.inject({ url: '/auth/status', cookies: first.cookie });
+      expect(status.json()).toEqual({ authenticated: true, username: 'first', isAdmin: true, needsSetup: false });
+      expect(mutations.every((spy) => spy.mock.calls.length === 0)).toBe(true);
+      expect(builder.calls).toEqual([]);
+    } finally { await b.app.close(); }
+  });
+  it('strictly rejects action shapes, enforces the body cap and rechecks completion', async () => {
+    const b = build({ onboarding: memoryOnboardingStore({ state: initial, progress: () => empty }) });
+    try {
+      const { cookie } = await authed(b);
+      for (const payload of [{}, [], { action: 'reset' }, { action: 'dismiss', extra: true }, { action: null }]) {
+        const res = await b.app.inject({ method: 'POST', url: '/onboarding', cookies: cookie, payload });
+        expect(res.statusCode).toBe(400);
+        expect(res.json()).toEqual({ error: 'invalid_onboarding_action' });
+      }
+      const large = await b.app.inject({ method: 'POST', url: '/onboarding', cookies: cookie, payload: { action: 'x'.repeat(1025) } });
+      expect(large.statusCode).toBe(413);
+      const finish = await b.app.inject({ method: 'POST', url: '/onboarding', cookies: cookie, payload: { action: 'finish' } });
+      expect(finish.statusCode).toBe(409);
+      expect(finish.json()).toEqual({ error: 'onboarding_incomplete' });
+    } finally { await b.app.close(); }
+  });
+  it('fails closed for absent state, DB failure and owner loss without borrowing the login limiter', async () => {
+    const onboarding = memoryOnboardingStore({ state: null, progress: () => empty });
+    const loginLimiter = { check: vi.fn(() => true) };
+    let writable = true;
+    const b = build({ onboarding, loginLimiter, isWritable: () => writable });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { cookie } = await authed(b);
+      expect((await b.app.inject({ url: '/onboarding', cookies: cookie })).statusCode).toBe(500);
+      vi.spyOn(onboarding, 'read').mockRejectedValue(new Error('private DB details'));
+      const failed = await b.app.inject({ url: '/onboarding', cookies: cookie });
+      expect(failed.statusCode).toBe(500);
+      expect(failed.body).not.toContain('private DB details');
+      writable = false;
+      const refused = await b.app.inject({ method: 'POST', url: '/onboarding', cookies: cookie, payload: { action: 'dismiss' } });
+      expect(refused.statusCode).toBe(503);
+      expect(refused.json()).toMatchObject({ error: 'storage_read_only' });
+      expect(loginLimiter.check).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); await b.app.close(); }
   });
 });

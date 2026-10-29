@@ -76,6 +76,7 @@ describe('reserved public namespaces', () => {
       expect([...seen].sort()).toEqual([...APP_SEGMENTS].sort());
       expect(seen.has('gpx')).toBe(true);
       expect(seen.has('map')).toBe(true);
+      expect(seen.has('onboarding')).toBe(true);
     } finally {
       await app.close();
       await rm(root, { recursive: true, force: true });

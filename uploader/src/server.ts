@@ -50,7 +50,7 @@ import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, comment
 import type { CommentStore } from './comments.js';
 import { registerPublicComments } from './comments-public.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
-import { legacyRedirect } from './redirects.js';
+import { legacyRedirectForRelease } from './redirects.js';
 import { compressionHook } from './compress.js';
 import { CommentError, isCommentStatus, withPublicLocaleMetadata, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
 import { ui } from '../../site/src/i18n/ui.js';
@@ -64,6 +64,7 @@ import { IdentityConflictError, type SiteIdentityStore } from './site-identity.j
 import { IdentityError, neutralIdentity } from '../../site/src/lib/site-identity.js';
 import { LanguageError, validateLanguage, type LanguageConfig, type LanguageStore, type LanguageLocale } from './language.js';
 import { publicPath } from './public-paths.js';
+import { OnboardingError, type OnboardingStore } from './onboarding.js';
 
 export interface ServerConfig {
   storageDir: string;
@@ -76,6 +77,7 @@ export interface ServerConfig {
   language?: LanguageStore;
   /** Observe the real registered table for reserved-root namespace parity. */
   onRoute?: (route: RouteOptions) => void;
+  onboarding?: OnboardingStore;
   posts: PostStore;
   pages: PageStore;
   imgHost: string;   // Host header that serves image variants (img subdomain)
@@ -257,7 +259,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
     const route = req.routeOptions.url;
-    if (route === '/language' || route === '/settings' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
+    if (route === '/language' || route === '/auth/me' || route === '/onboarding' || route === '/settings' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
       || route === '/posts/:tk/publish' || route === '/posts/bulk') reply.header('Cache-Control', 'no-store');
     if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
@@ -962,6 +964,25 @@ export function buildServer(cfg: ServerConfig): AppServer {
       throw error;
     }
   });
+  app.get('/onboarding', { preHandler: requireAdmin }, async () => {
+    if (!cfg.onboarding) throw new Error('Onboarding state unavailable.');
+    return cfg.onboarding.read();
+  });
+  app.post('/onboarding', { preHandler: requireAdmin, bodyLimit: 1024 }, async (req, reply) => {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)
+      || Object.keys(body).length !== 1 || !('action' in body)
+      || (body.action !== 'dismiss' && body.action !== 'resume' && body.action !== 'finish')) {
+      return reply.code(400).send({ error: 'invalid_onboarding_action' });
+    }
+    if (!cfg.onboarding) throw new Error('Onboarding state unavailable.');
+    try { return await cfg.onboarding.act(body.action); }
+    catch (error) {
+      if (error instanceof OnboardingError) return reply.code(409).send({ error: error.code });
+      throw error;
+    }
+  });
+
   app.get('/settings/identity', { preHandler: requireAdmin }, async (_req, reply) => {
     if (!cfg.identityStore) return reply.code(503).send({ error: 'Site identity unavailable.' });
     return { ...cfg.identityStore.get(), locales: (await language.get()).locales };
@@ -1257,6 +1278,11 @@ export function buildServer(cfg: ServerConfig): AppServer {
       return { authenticated: true, username: req.authUser.username, isAdmin: req.authUser.isAdmin, needsSetup: false };
     }
     return { authenticated: false, needsSetup: (await users.count()) === 0 };
+  });
+
+  app.get('/auth/me', { preHandler: requireAuth }, async (req) => {
+    const user = req.authUser!;
+    return { authenticated: true, userId: user.id, username: user.username, isAdmin: user.isAdmin, needsSetup: false };
   });
 
   // Serialize setup so the count()-then-create() check is atomic across
@@ -2329,19 +2355,20 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // before any 404/503 — see redirects.ts (issue #35). Static files always
     // win: this handler only runs after @fastify/static misses. Explicit
     // code+header instead of reply.redirect() (its signature changed in v5).
-    const target = legacyRedirect(req.raw.url ?? '');
-    if (target) return reply.code(301).header('location', target).send();
-    if (!cfg.builder.hasRelease()) {
-      return reply
-        .code(503)
-        .header('retry-after', '30')
-        .type('text/html')
-        .send('<!doctype html><meta charset="utf-8"><title>Building…</title><h1>Site is building</h1><p>The first build is in progress — try again in a moment.</p>');
-    }
-    return readFile(join(currentDir, '404.html'), 'utf8').then(
-      (html) => reply.code(404).type('text/html').send(html),
-      () => reply.code(404).send('Not found'),
-    );
+    return legacyRedirectForRelease(req.raw.url ?? '', currentDir).then((target) => {
+      if (target) return reply.code(301).header('location', target).send();
+      if (!cfg.builder.hasRelease()) {
+        return reply
+          .code(503)
+          .header('retry-after', '30')
+          .type('text/html')
+          .send('<!doctype html><meta charset="utf-8"><title>Building…</title><h1>Site is building</h1><p>The first build is in progress — try again in a moment.</p>');
+      }
+      return readFile(join(currentDir, '404.html'), 'utf8').then(
+        (html) => reply.code(404).type('text/html').send(html),
+        () => reply.code(404).send('Not found'),
+      );
+    });
   });
 
   return Object.assign(app, { quiesceMutations });

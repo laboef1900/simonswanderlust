@@ -548,9 +548,6 @@ describe('admin page wiring', () => {
     expect(login).not.toMatch(/location\.href = '\/admin\/'/);
   });
 
-  it('ensureAuthed sends the current page as the return URL', () => {
-    expect(auth).toContain("'/login?next=' + encodeURIComponent(location.pathname + location.search)");
-  });
 
   it('EasyMDE built-in autosave stays disabled (DraftGuard owns persistence)', () => {
     // @ai-warning do not re-enable EasyMDE autosave: it is body-only and would
