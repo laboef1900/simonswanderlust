@@ -1,7 +1,6 @@
 import rss from '@astrojs/rss';
 import { getCollection } from 'astro:content';
 import type { APIContext } from 'astro';
-import type { Locale } from '../../i18n/ui';
 import { identitySiteName, identityTagline } from '../../lib/build-identity';
 import { byLocale, pathOf } from '../../lib/trips';
 import { homePath, localePrefix } from '../../lib/paths';
@@ -11,13 +10,15 @@ export function getStaticPaths() {
   const language = siteLanguage();
   return language.locales.map((locale) => ({
     params: { locale: localePrefix(locale, language).slice(1) || undefined },
-    props: { locale },
   }));
 }
 
-export async function GET(context: Pick<APIContext<{ locale: Locale }>, 'site' | 'props'>) {
-  const { locale } = context.props;
+export async function GET(context: Pick<APIContext, 'site' | 'currentLocale'>) {
   const language = siteLanguage();
+  // Endpoint props can resolve to the root path in Astro's static prerenderer.
+  // currentLocale follows the request URL and the same captured i18n configuration.
+  const locale = language.locales.find((locale) => locale === context.currentLocale);
+  if (!locale) throw new Error('RSS endpoint has no enabled locale');
   const trips = byLocale(await getCollection('trips'), locale, language);
   return rss({
     title: identitySiteName(locale),
