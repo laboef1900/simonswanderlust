@@ -167,6 +167,12 @@ export function assertPublishTokens(state: PublishState, tokens: PublishTokens):
   }
 }
 
+function assertDraftLanguage(language: LanguageState, baseUpdatedAt?: Date): void {
+  if (baseUpdatedAt && language.updatedAt.getTime() !== baseUpdatedAt.getTime()) {
+    throw new PostError('language changed since validation; reload before saving', 'conflict');
+  }
+}
+
 export interface PostStore {
   readonly language: LanguageStore;
   list(): Promise<PostSummary[]>;
@@ -180,8 +186,10 @@ export interface PostStore {
    * 'conflict' if the stored pair was modified since — optimistic concurrency.
    * Omitting it skips the check (new posts, WP importer). Every overwrite of
    * an existing pair first snapshots the pre-save state into the revisions.
+   * Route-level slug consent uses this language token; recheck it under the
+   * language lock before a newly enabled locale can become writable.
    */
-  upsertDraft(pair: PostPair, baseUpdatedAt?: Date): Promise<StoredPostPair>;
+  upsertDraft(pair: PostPair, baseUpdatedAt?: Date, baseLanguageUpdatedAt?: Date): Promise<StoredPostPair>;
   publish(translationKey: string, tokens: PublishTokens, validate?: PublishValidation): Promise<{ updatedAt: Date }>;
   /** Flip a pair back to draft (the "emergency brake" — the live site drops it on the next build). */
   unpublish(translationKey: string): Promise<{ previousUpdatedAt: Date; updatedAt: Date }>;
@@ -677,9 +685,10 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         });
       });
     },
-    async upsertDraft(pair, baseUpdatedAt) {
+    async upsertDraft(pair, baseUpdatedAt, baseLanguageUpdatedAt) {
       const key = pair.translationKey || randomUUID();
       return language.runExclusive((mode) => withPair(key, () => {
+        assertDraftLanguage(mode, baseLanguageUpdatedAt);
         validateDraft(pair, mode);
         const existing = byKey.get(key);
         pair = draftWithDefaults(pair, mode, existing);
@@ -1061,13 +1070,14 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         ...(r.title_image ? { titleImage: r.title_image } : {}),
       }));
     },
-    async upsertDraft(pair, baseUpdatedAt) {
+    async upsertDraft(pair, baseUpdatedAt, baseLanguageUpdatedAt) {
       const tk = pair.translationKey || randomUUID();
       writable();
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
         const language = await readLanguage(client, true);
+        assertDraftLanguage(language, baseLanguageUpdatedAt);
         validateDraft(pair, language);
         await lockPostPair(client, tk);
         const existing = await readPostPair(client, tk, language, true);

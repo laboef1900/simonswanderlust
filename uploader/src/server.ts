@@ -1649,7 +1649,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
           }
         }
       }
-      return reply.send(await posts.upsertDraft(pair, baseUpdatedAt ?? existing?.updatedAt));
+      return reply.send(await posts.upsertDraft(pair, baseUpdatedAt ?? existing?.updatedAt, mode.updatedAt));
     } catch (e) {
       if (e instanceof PostError) {
         if (e.code === 'storage_read_only') return readOnly(reply);
