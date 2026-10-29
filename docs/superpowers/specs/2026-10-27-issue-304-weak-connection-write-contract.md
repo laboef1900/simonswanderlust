@@ -280,10 +280,11 @@ abort while asynchronous writes still run. Database disconnects/timeouts do not 
 Finalization checks the immutable claim/incarnation. Initialize exclusively owned recovery before
 new requests; its initial pass is bounded, and deferred work has the follow-on owner below.
 Receipt age never permits takeover. Shared-data multi-app deployments remain unsupported and must
-fail closed at this lock. This lock is a **missing implementation prerequisite**, not an existing
-repository facility or a promise that an available Node API implements it.
+fail closed at this lock. This lock requires the qualified native implementation described
+below; it is not an existing repository facility or a guessed Node API.
 
-**Concrete lock feasibility and prerequisite (static research, not runtime proof).**
+**Concrete lock feasibility and prerequisite (original research; qualification and approved
+sequencing update recorded in “Native-lock qualification status” below).**
 
 - The inspected `uploader/src/storage-owner.ts:29-124` holds a dedicated **PostgreSQL session
   advisory lock**, with heartbeat loss latching writes read-only and ending that connection.
@@ -317,10 +318,11 @@ repository facility or a promise that an available Node API implements it.
   writes, so any helper alternative needs a demonstrated lifetime/exclusion protocol first.
   Specify the canonical lock path and acquire it in every app/restore entry point **before**
   admission; retain the existing PG ownership/quiescence protocol as well, in one consistent
-  acquisition order. Qualify the actual data mount with two-process contention, live-owner
+  acquisition order. Qualify real data mounts with two-process contention, live-owner
   stall, DB disconnect, process death, inherited-descriptor and restore tests. Native macOS
-  local disk and the deployed Linux volume need evidence separately; Docker Desktop sharing,
-  NFS/SMB and other unqualified mounts are not presumed equivalent.
+  local disk and Linux volumes need separate evidence. Under the approved sequencing
+  amendment below, the actual deployment mount must pass before deployment or enablement;
+  Docker Desktop sharing, NFS/SMB and other unqualified mounts are not presumed equivalent.
 - **Owner tradeoff within D2:** accepting automatic crash recovery requires this native
   dependency/build/mount-validation cost. If it is declined, an explicitly amended design must
   keep pending receipts blocked until an operator has established offline exclusion; it cannot
@@ -871,7 +873,7 @@ Explicit owner answers recorded 2026-10-29:
 |---|---|---|
 | Auth context | Approve read-only context independently for #279. | Authenticated, no-store `GET /auth/me`; migrate the existing protected-page helper. Login/setup/`/auth/status` unchanged; network/5xx are not logout. |
 | D1 | Approve the write contract. | Required create-only identities, captured-owner fences, writer-only receipts, consistent reads and fail-closed compatibility remain inseparable. |
-| D2 | Approve qualified native locking. | Account-lifetime minimal upload identity retention; prove native API, packaging and real mount/process-lifetime exclusion before dependent implementation. No PG-only substitute, age-based takeover or expiry-as-failure. |
+| D2 | Approve qualified native locking. | Account-lifetime minimal upload identity retention; prove native API, packaging and development/CI mount/process-lifetime exclusion before dependent implementation. The approved sequencing amendment below retains actual deployment-mount qualification before deployment or enablement. No PG-only substitute, age-based takeover or expiry-as-failure. |
 | D3 | Approve explicit resume. | Pause in place, second-tab login, explicit same-owner resume; another owner may take only known-unsent/definitely-refused files with new IDs. No persisted File queue. |
 | D4 | **Always keep drafts.** | No logout deletion choice; logout and expiry delete nothing. Private browser-profile access remains a disclosed risk. |
 | D5 | Approve private quarantine. | Unknown-owner legacy bytes stay unchanged and inaccessible to every account, including admins; recovery/disposal is private manual profile work. |
@@ -917,8 +919,10 @@ answers recorded above. The selected D4 policy supersedes the earlier Keep/Delet
 throughout this contract. The narrow authenticated-context approval permits #279 to reuse the
 shared endpoint/helper before the broader write work.
 
-The native filesystem-lock selection, packaging and real mount/lifetime evidence in §5.3 remain
-a separate implementation prerequisite; policy approval and static review do not satisfy it.
+The native filesystem-lock selection, packaging and development/CI mount/lifetime evidence
+in §5.3 remain an implementation prerequisite; policy approval and static review do not
+satisfy it. The separately approved sequencing amendment below moves only actual
+deployment-mount qualification to the pre-deployment/pre-enablement gate.
 Implementation must update `SECURITY.md` as specified in §9 and preserve §10's containment.
 No merge, deployment, production restore or owner-data mutation is authorized by this approval.
 
@@ -942,21 +946,19 @@ a deliberately non-CLOEXEC rejection probe were not exercised; no NFS/SMB/FUSE, 
 Docker Desktop shared mount or uninspected deployment mount is qualified by these results.
 Artifacts remain in the gitignored ledger's `issue-304-native-ci-40866450527/`.
 
-**The current approval still requires actual deployment-mount qualification before #305
-implementation.** CI success alone does not remove that gate. No product integration,
-deployment, owner-data access or assumption of deployment equivalence follows from this record.
+**Owner-approved sequencing amendment, 2026-10-29.** The owner explicitly selected
+“Approve sequencing amendment” after reviewing the proposal at PR #470 head `8d8b409`
+and its operational, rather than mechanically enforced, deployment restriction.
 
-### Proposed sequencing amendment — pending owner decision
+### Approved sequencing amendment
 
-One option is to permit #305 implementation and review against the already exercised native
-binding, packaging and development/CI filesystem contract, while keeping actual target-mount
-qualification mandatory **before any deployment or enablement**. This changes only the
-timing of the existing target-mount gate, not its tests or required outcome. It authorizes
-no merge, release, deployment or enablement, and defines no deployable-but-disabled mode.
-The original before-implementation gate remains binding unless the owner explicitly
-approves this amendment.
+#305 implementation and review may proceed against the already exercised native binding,
+packaging and development/CI filesystem contract. Actual target-mount qualification remains
+mandatory **before any deployment or enablement**. This changes only the timing of the
+existing target-mount gate, not its tests or required outcome. It authorizes no merge,
+release, deployment or enablement, and defines no deployable-but-disabled mode.
 
-Under that option, PR documentation must name the exact tested platforms/filesystems and
+PR documentation must name the exact tested platforms/filesystems and
 unqualified deployment target. The app/restore entry points must still hold the native lock
 before admission, preserve the PG/session fence and lock order, fail closed on acquisition
 or ownership failure, never unlink/replace a held lock inode, and never substitute receipt
@@ -969,6 +971,6 @@ could be overgeneralized to different storage. The postponed qualification gate 
 **operational, not mechanically enforced**: successful runtime lock acquisition does not
 detect or approve an unqualified mount. Containment is explicit deployment restrictions,
 platform-specific evidence and withheld deployment authorization, alongside the unchanged
-runtime ownership safeguards. The alternative is to keep #305 blocked until an owner
-provides an authorized disposable target directory on the actual deployment filesystem;
-no existing production content is a qualification fixture.
+runtime ownership safeguards. Before deployment qualification, the owner must provide an
+authorized disposable target directory on the actual deployment filesystem; no existing
+production content is a qualification fixture.
