@@ -775,7 +775,8 @@
         }
         render();
       }
-      function applyPosts({ posts, status }) {
+      function applyPosts({ posts, status, language }) {
+        const lang = SiteLanguage.accept(language);
         allPosts = posts;
         buildStatus = status;
         listStale = false;
@@ -789,7 +790,6 @@
           setFilterControls(PostsFilter.fromSearch(location.search, countries));
           filtersInitialized = true;
         }
-        const lang = SiteLanguage.config();
         const secondary = lang.locales.find((locale) => locale !== lang.primary);
         const missingOption = $('missingSecondaryOption');
         missingOption.hidden = !secondary;
@@ -810,19 +810,22 @@
       }
       const publicationRefresh = PublicationRefresh.create({
         async read(signal, publish) {
-          const [posts, status] = await Promise.all([
-            PublicationRefresh.json('/posts', signal).then((posts) => {
+          const [facts, status] = await Promise.all([
+            Promise.all([
+              PublicationRefresh.json('/posts', signal),
+              PublicationRefresh.json('/language', signal),
+            ]).then(([posts, language]) => {
               if (!Array.isArray(posts)) throw new Error('invalid_posts');
-              publish({ posts, status: null });
-              return posts;
+              const facts = { posts, language, status: null };
+              publish(facts);
+              return facts;
             }),
             me?.isAdmin ? PublicationRefresh.json('/rebuild/status', signal).catch((error) => {
               if (error.status === 401) throw error;
               return null;
             }) : null,
           ]);
-          if (!Array.isArray(posts)) throw new Error('invalid_posts');
-          return { posts, status };
+          return { ...facts, status };
         },
         apply: applyPosts,
         unavailable() {
@@ -895,7 +898,6 @@
         me = await Auth.ensureAuthed();
         if (!me) return;
         Auth.renderHeader(me);
-        await SiteLanguage.get();
         publicationRefresh.start();
       })();
     </script>

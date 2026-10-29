@@ -29,8 +29,8 @@ window.PublicationRefresh = (function () {
       const { promise: bounded, resolve, reject } = Promise.withResolvers();
       const publish = (value) => {
         if (!current()) return;
-        received = true;
         options.apply(value);
+        received = true;
       };
       controller.signal.addEventListener('abort', () => reject(new Error('publication_read_aborted')), { once: true });
       deadline = setTimeout(() => controller.abort(), 10000);
@@ -55,12 +55,23 @@ window.PublicationRefresh = (function () {
       if (document.hidden) invalidate();
       else focus();
     }
+    function restore(event) {
+      if (!event.persisted) return;
+      start(false);
+      if (active) settledRefresh = true;
+      else refresh();
+    }
+    function hide(event) {
+      const resume = started && event.persisted;
+      stop();
+      if (resume) window.addEventListener('pageshow', restore, { once: true });
+    }
     function start(initial = true) {
       if (started) return;
       started = true;
       window.addEventListener('focus', focus);
       document.addEventListener('visibilitychange', visibility);
-      window.addEventListener('pagehide', stop);
+      window.addEventListener('pagehide', hide);
       schedule();
       if (initial) refresh();
     }
@@ -68,7 +79,8 @@ window.PublicationRefresh = (function () {
       started = false; invalidate(); clearTimeout(timer);
       window.removeEventListener('focus', focus);
       document.removeEventListener('visibilitychange', visibility);
-      window.removeEventListener('pagehide', stop);
+      window.removeEventListener('pagehide', hide);
+      window.removeEventListener('pageshow', restore);
     }
     function beginAction() {
       if (!actions) actionRefresh = false;

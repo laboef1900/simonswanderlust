@@ -1032,6 +1032,37 @@ describe('media conditional save recovery in real consumers', () => {
     }
   });
 
+  it.each(['a', 'Newer'])('saves newer title %s against acknowledged leaves without echoing untouched fields', async (nextTitle) => {
+    const pending = Promise.withResolvers<unknown>();
+    const writes: unknown[] = [];
+    const original = { ...item('a'), alt: { de: 'Original DE', en: 'Original EN' } };
+    const acknowledged = { ...original, title: 'Submitted', folder: 'Moved elsewhere',
+      alt: { de: 'Submitted DE', en: 'Changed elsewhere' }, conditionalVersion: 1 };
+    const page = loadPage({ request: (_url, init) => {
+      if (init?.method !== 'PATCH') return;
+      writes.push(JSON.parse(init.body!));
+      return writes.length === 1 ? pending.promise
+        : response(200, { ...acknowledged, title: nextTitle, alt: { ...acknowledged.alt, de: 'Original DE' } });
+    } });
+    await open(page, original);
+    change(page, 'dTitle', 'Submitted');
+    change(page, 'dAltDe', 'Submitted DE');
+    page.el('dSave').click(); await page.flush();
+    change(page, 'dTitle', nextTitle);
+    change(page, 'dAltDe', 'Original DE');
+    pending.resolve(await response(200, acknowledged)); await page.flush();
+    expect(page.el('dTitle').value).toBe(nextTitle);
+    expect(page.el('dAltEn').value).toBe('Original EN');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    page.el('dSave').click(); await page.flush();
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual({ conditional: { version: 1,
+      patch: { title: nextTitle, alt: { de: 'Original DE' } },
+      expect: { title: 'Submitted', alt: { de: 'Submitted DE' } } } });
+    expect(page.el('dUnsaved').hidden).toBe(true);
+    expect(page.el('dAltEn').value).toBe('Changed elsewhere');
+  });
+
   it('preserves dirty details and the media page on a refused 401', async () => {
     let writes = 0;
     const page = loadPage({ request: (_url, init) => {

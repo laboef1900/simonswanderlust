@@ -858,15 +858,24 @@
         return;
       }
       var saved = await api.savePatch(client, key, patch, api.expectations(patch, current || state.detailItem));
-      if ($('detail').dataset.key === key) {
-        state.detailChanged = saved.changedDescriptions || null;
-        renderImpact();
-      }
-      if ($('detail').dataset.key !== key || state.detailGeneration !== generation) {
+      state.items = state.items.map(function (item) { return item.key === key ? saved : item; });
+      if ($('detail').dataset.key !== key) return;
+      state.detailChanged = saved.changedDescriptions || null;
+      renderImpact();
+      if (state.detailGeneration !== generation) {
+        // Advance only acknowledged leaves. Newer inputs stay untouched, and
+        // unrelated values in the response must not become unintended edits.
+        var acknowledged = api.expectations(patch, saved);
+        state.detailItem = Object.assign({}, state.detailItem);
+        Object.keys(acknowledged).forEach(function (field) {
+          state.detailItem[field] = field === 'alt' || field === 'caption'
+            ? Object.assign({}, state.detailItem[field], acknowledged[field]) : acknowledged[field];
+        });
+        state.detailRecovery = null;
+        $('dCompare').innerHTML = '';
         say(copy.mediaConditionalNewer);
         return;
       }
-      state.items = state.items.map(function (item) { return item.key === key ? saved : item; });
       state.detailDirty = false;
       renderDetail();
       say(copy.mediaConditionalSaved);
