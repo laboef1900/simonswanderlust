@@ -985,3 +985,26 @@ F2–F6 remain correctness clarifications of the approved invariants, not new pr
   simonswanderlust.com URL or slug may be renamed.
 - **Review:** first EN-primary production install or 2027-10-27, whichever comes first.
 - Release, deployment and production/owner-content changes remain outside this authorization.
+
+## 21. #285 public-output qualification (2026-10-29)
+
+The actual-build matrix compares a pre-change DE-primary bilingual baseline with all
+four approved modes using synthetic published stories and retained inactive-locale
+content. Five built-route contract cases pass, covering HTML/RSS inventories, locale
+links, SEO, comments configuration and absence of inactive content. The RSS endpoint
+uses Astro's URL-derived `currentLocale`: actual prerendering reused primary-locale
+endpoint props for the secondary feed, which the real-build assertion caught.
+
+Managed-browser qualification of those outputs passed 138 desktop/mobile page cases,
+48 reciprocal switcher round trips and 62 HTTP cases; 208 image instances decoded
+without horizontal overflow or unexpected network failures. Eight map fallback links
+were exercised. Evidence is retained under
+`.local/backlog-execution-2026-10-27/issue-285-runtime/` (`results.json`,
+`browser-results.json` and screenshots). The fixture serves real build output with
+production PostgreSQL comment stores and the production redirect resolver; it is not
+a full `buildServer`/authentication/deployment proof, and intentionally absent basemap
+assets do not establish rendered-basemap qualification.
+
+Existing singular-count copy (“1 COMMENTS” / “1 KOMMENTARE”) was also observed on the
+baseline and is not a routing regression. #284's independent authoring/publishing
+qualification, final PR review and required CI remain separate gates.
