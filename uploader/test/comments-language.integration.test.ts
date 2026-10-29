@@ -30,7 +30,7 @@ maybe('committed comment locale projection (PostgreSQL)', () => {
       const comments = pgCommentStore(pool);
       const moderation = pgCommentAdminStore(pool);
       registerPublicComments(app, {
-        posts, comments, allowedOrigin: 'https://example.test', commentsEnabled: () => true,
+        posts, comments, allowedOrigin: () => 'https://example.test', commentsEnabled: () => true,
         ipLimiter: fixedWindowLimiter({ max: 1000, windowMs: 60_000 }),
         globalLimiter: fixedWindowLimiter({ max: 1000, windowMs: 60_000 }),
       });
